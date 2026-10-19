@@ -94,9 +94,7 @@ pub(crate) async fn send_grpc_trailers_only_frame(
         let mut trailers = HeaderMap::new();
         trailers.insert(
             "grpc-status",
-            grpc_status
-                .to_string()
-                .parse()
+            http::HeaderValue::try_from(grpc_status.to_string())
                 .expect("u16 decimal string is always a valid HeaderValue"),
         );
         if let Some(msg) = grpc_message {

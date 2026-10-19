@@ -271,47 +271,55 @@ async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invari
 
 #[tokio::test]
 async fn grpc_web_exact_reply_strips_conflicting_status_headers_and_encodes_canonical_trailer() {
-    let (mut session, mut client) = live_grpc_web_session().await;
-    let mut ctx = EdgionHttpContext::new();
-    for op in [
-        PendingHeaderOp::Append {
-            name: "x-ext-proc".to_string(),
-            value: http::HeaderValue::from_static("allowed"),
-        },
-        PendingHeaderOp::Set {
-            name: "grpc-status".to_string(),
-            value: http::HeaderValue::from_static("1"),
-        },
-        PendingHeaderOp::Set {
-            name: "grpc-message".to_string(),
-            value: http::HeaderValue::from_static("conflict"),
-        },
-    ] {
-        ctx.queue_pending_response_header_op(op);
-    }
+    for grpc_status in [0, 8, 16] {
+        let (mut session, mut client) = live_grpc_web_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        for op in [
+            PendingHeaderOp::Append {
+                name: "x-ext-proc".to_string(),
+                value: http::HeaderValue::from_static("allowed"),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-status".to_string(),
+                value: http::HeaderValue::from_static("1"),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-message".to_string(),
+                value: http::HeaderValue::from_static("conflict"),
+            },
+        ] {
+            ctx.queue_pending_response_header_op(op);
+        }
 
-    send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
+        send_grpc_status_trailers_only(
+            &mut session,
+            &mut ctx,
+            &ServerHeaderOpts::default(),
+            grpc_status,
+            Some("quota"),
+        )
         .await
         .unwrap();
 
-    let written = session.response_written().expect("gRPC-Web response header");
-    assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
-    assert!(written.headers.get("grpc-status").is_none());
-    assert!(written.headers.get("grpc-message").is_none());
+        let written = session.response_written().expect("gRPC-Web response header");
+        assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
+        assert!(written.headers.get("grpc-status").is_none());
+        assert!(written.headers.get("grpc-message").is_none());
 
-    let mut wire = Vec::new();
-    while let Ok(Ok(read)) =
-        tokio::time::timeout(std::time::Duration::from_millis(20), client.read_buf(&mut wire)).await
-    {
-        if read == 0 {
-            break;
+        let mut wire = Vec::new();
+        while let Ok(Ok(read)) =
+            tokio::time::timeout(std::time::Duration::from_millis(20), client.read_buf(&mut wire)).await
+        {
+            if read == 0 {
+                break;
+            }
         }
+        let wire = String::from_utf8_lossy(&wire);
+        assert!(wire.contains("x-ext-proc: allowed\r\n"));
+        assert!(!wire.contains("grpc-status: 1\r\n"));
+        assert!(!wire.contains("grpc-message: conflict\r\n"));
+        assert!(wire.contains(&format!("grpc-status:{grpc_status}\r\ngrpc-message:quota\r\n")));
     }
-    let wire = String::from_utf8_lossy(&wire);
-    assert!(wire.contains("x-ext-proc: allowed\r\n"));
-    assert!(!wire.contains("grpc-status: 1\r\n"));
-    assert!(!wire.contains("grpc-message: conflict\r\n"));
-    assert!(wire.contains("grpc-status:8\r\ngrpc-message:quota\r\n"));
 }
 
 #[tokio::test]

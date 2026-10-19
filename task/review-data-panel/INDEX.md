@@ -6224,3 +6224,28 @@ Fresh verification passed 178 session-adapter, 123 plugin-runtime-filtered,
 26 response-filter, 11 upstream-response-filter and 16 fail-to-proxy tests (354
 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. No full workspace test or live integration suite was run.
+
+## Transfer the gRPC-Web terminal status buffer
+
+The shared terminal frame writer now transfers its decimal grpc-status String
+into HeaderValue on the gRPC-Web branch instead of parsing a borrowed string
+and copying its bytes. Native gRPC, message encoding, conflict-field removal,
+header/trailer order and error propagation retain their existing paths.
+
+Independent plan review approved three files. A standalone allocator probe linked
+the locked http artifact and compared every u16 value (65,536 cases). Decimal
+Strings had exact capacity, values and unset sensitivity matched, and owned
+conversion retained the input pointer with zero conversion allocations. Complete
+formatting plus conversion requested one allocation of the output length instead
+of two allocations totaling twice that length. These are requested allocations
+on this build, not physical heap size or a throughput measurement; wider u16
+probe inputs do not expand the supported gRPC status vocabulary.
+
+The existing real duplex/bridge wire test now covers status 0, 8 and 16, keeping
+queued conflicting status/message removal and ordinary-header preservation
+assertions. All three cases passed against the original writer before editing.
+
+Fresh verification passed 15 server error-response, 16 fail-to-proxy and 178
+session-adapter tests (209 total), formatting, workspace check/Clippy and seven
+guards. Existing unrelated warnings remain. No live integration or throughput
+benchmark was run; the byte-level cases use the existing in-process bridge fixture.
