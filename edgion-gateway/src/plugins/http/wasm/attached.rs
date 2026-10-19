@@ -82,10 +82,7 @@ impl UpstreamResponse for Arc<WasmPlugin> {
             return self.fail_mode(session, log, "response installation");
         }
         if (hooks.body || hooks.trailers)
-            && !session.install_upstream_response_trailer(Box::new(WasmResponseObserver {
-                binding: binding.clone(),
-                hooks,
-            }))
+            && !session.install_upstream_response_trailer(Box::new(WasmResponseObserver { binding, hooks }))
         {
             return self.fail_mode(session, log, "trailer installation");
         }

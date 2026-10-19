@@ -5464,3 +5464,20 @@ test additionally checks original pointer reuse at the outcome call for spaceles
 reasons. Fresh serial verification passed all 264 Gateway Wasm tests. Formatting,
 workspace check/Clippy and seven repository guards passed; existing unrelated
 Clippy warnings remain. No live transport or throughput benchmark ran.
+
+## Wasm trailer companion binding transfer
+
+Attached response setup moves its last local WasmRequestBinding Arc into the
+trailer companion instead of cloning and dropping the local handle. The earlier
+body companion clone remains necessary. ExecutionLoan already owns an independent
+Arc and still completes or aborts through that owner; rejected installation can
+drop the offered observer before fail_mode without releasing the live execution.
+No-hooks, header EOS, callback ordering, cancellation and terminal cleanup retain
+their existing branches. This removes one Arc increment/decrement when trailer
+installation is attempted, not a heap allocation.
+
+Independent plan review approved the two-file scope. All four existing attached
+SDK lifecycle tests passed before the change. Fresh serial verification passed
+all 264 Gateway Wasm tests. Formatting, workspace check/Clippy and seven repository
+guards passed; existing unrelated Clippy warnings remain. No live transport or
+throughput benchmark ran.
