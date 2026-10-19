@@ -5481,3 +5481,22 @@ SDK lifecycle tests passed before the change. Fresh serial verification passed
 all 264 Gateway Wasm tests. Formatting, workspace check/Clippy and seven repository
 guards passed; existing unrelated Clippy warnings remain. No live transport or
 throughput benchmark ran.
+
+## Wasm local-response deduplication keys
+
+Local-response replay now borrows header names without ASCII uppercase letters
+as HashSet Cow keys. Names requiring case folding retain the same lowercase
+String construction after a preliminary scan. The original local header vector
+already lives across the entire synchronous loop, so borrowing adds no payload
+lifetime extension. Original spelling reaches the same first-set/later-append
+writers in the same order, including best-effort failure handling.
+
+This removes temporary normalized-name copies for unchanged names, not the set
+allocation or response-map storage. ReplaceAll's consuming pair loop, guest ABI
+admission and deferred snapshot sharing remain outside this two-file scope.
+Independent plan review passed. Three existing local-response regressions passed
+on the original implementation, including mixed-case repeated cookies applied to
+a real ResponseHeader, empty bodies and non-UTF-8 bodies. Fresh serial verification
+passed all 264 Gateway Wasm tests. Formatting, workspace check/Clippy and seven
+repository guards passed; existing unrelated Clippy warnings remain. No live
+transport or throughput benchmark ran.

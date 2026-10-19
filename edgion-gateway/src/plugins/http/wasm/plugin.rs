@@ -724,9 +724,14 @@ fn finish_local_response(
     // carried-over value) and every later occurrence with append semantics, so
     // non-combinable fields like Set-Cookie survive instead of collapsing to
     // the last value. Set-semantics-for-all would drop every value but the last.
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<Cow<'_, str>> = HashSet::new();
     for (name, value) in &local.headers {
-        let _ = if seen.insert(name.to_ascii_lowercase()) {
+        let normalized = if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            Cow::Owned(name.to_ascii_lowercase())
+        } else {
+            Cow::Borrowed(name.as_str())
+        };
+        let _ = if seen.insert(normalized) {
             session.set_response_header(name, value)
         } else {
             session.append_response_header(name, value)
