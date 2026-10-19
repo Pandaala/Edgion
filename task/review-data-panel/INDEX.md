@@ -4831,3 +4831,31 @@ GraphQL evaluation, four guard, five rate-limit, nine Resources REST configurati
 19 frontend and 27 cost-model tests. Formatting, workspace check/Clippy and seven
 repository guards passed; existing unrelated warnings remain outside the diff.
 No live integration or performance benchmark ran.
+
+## JSON value profile number length counting
+
+Tracing request JSON processing into the shared Resources value profiler found
+Number::to_string used only to measure its length. profile_json_value now sends
+the same Number Display output into a private saturating byte counter, removing
+one temporary String per numeric node. Gateway ProxyRewrite, REST bindings and
+gRPC JSON conversion retain this canonical profiler; cold validation consumers
+receive the same change without a second implementation.
+
+Traversal order, saturating totals and depth/node rejection are unchanged. The
+strict parser's separately collected accounting is deliberately untouched and is
+not an oracle for already-parsed value profiling. Number Display in the current
+serde_json dependency delegates to write_str after stack formatting; the counter
+always succeeds. A defensive formatting error maps to Malformed rather than
+panicking. The traversal worklist still allocates, and no whole-profile
+allocation-free or measured latency/heap/RSS claim is made.
+
+Baseline-first tests compare lengths with Number::to_string across signed/unsigned
+extremes, signed zero, finite float extremes, subnormals, exponents and deterministic
+finite bit-pattern samples. Mixed-tree exact accounting and exact/over-limit
+node/depth tests preserve the profiler's admission boundaries.
+
+Fresh serial verification passed 172 tests: 25 Resources schema/profile, nine REST
+configuration, 21 rewrite configuration and 28 gRPC codec tests; nine Gateway
+schema, 21 rewrite, ten REST adapter, 26 transcoder and 23 form transformer tests.
+Formatting, workspace check/Clippy and seven repository guards passed, with existing
+warnings outside the diff. No full integration or performance benchmark ran.

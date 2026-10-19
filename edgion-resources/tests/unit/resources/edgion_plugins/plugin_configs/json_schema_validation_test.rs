@@ -394,3 +394,70 @@ fn extracted_strict_parser_preserves_resource_limits_and_error_priority() {
     let many = format!("[{}]", std::iter::repeat_n("0", 5000).collect::<Vec<_>>().join(","));
     assert!(parse_json_instance(many.as_bytes()).is_ok());
 }
+
+#[test]
+fn value_profile_matches_number_display_lengths() {
+    let mut numbers = vec![
+        serde_json::Number::from(i64::MIN),
+        serde_json::Number::from(i64::MAX),
+        serde_json::Number::from(u64::MAX),
+        serde_json::Number::from(0),
+        serde_json::Number::from(-1),
+    ];
+    for value in [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        f64::MAX,
+        f64::MIN,
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        1e-20,
+        1e20,
+    ] {
+        numbers.push(serde_json::Number::from_f64(value).unwrap());
+    }
+    let mut bits = 1_u64;
+    for _ in 0..4096 {
+        bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1);
+        if let Some(number) = serde_json::Number::from_f64(f64::from_bits(bits)) {
+            numbers.push(number);
+        }
+    }
+    for number in numbers {
+        let expected = number.to_string().len() as u64;
+        let profile = profile_json_value(&Value::Number(number)).unwrap();
+        assert_eq!(profile.text_bytes, expected);
+        assert_eq!(profile.node_count, 1);
+        assert_eq!(profile.max_depth, 1);
+    }
+}
+
+#[test]
+fn value_profile_preserves_mixed_accounting_and_structural_limits() {
+    let value = json!([123,"abc",null,true,{"key":-45}]);
+    let profile = profile_json_value(&value).unwrap();
+    assert_eq!(profile.text_bytes, 12);
+    assert_eq!(profile.node_count, 7);
+    assert_eq!(profile.max_depth, 3);
+    let mut deep = json!(1);
+    for _ in 1..MAX_JSON_INSTANCE_DEPTH {
+        deep = Value::Array(vec![deep]);
+    }
+    assert_eq!(profile_json_value(&deep).unwrap().max_depth, MAX_JSON_INSTANCE_DEPTH);
+    assert_eq!(
+        profile_json_value(&Value::Array(vec![deep])).unwrap_err(),
+        StrictJsonError::DepthLimit
+    );
+    let mut nodes = vec![Value::Null; MAX_JSON_INSTANCE_NODES as usize - 1];
+    assert_eq!(
+        profile_json_value(&Value::Array(nodes.clone())).unwrap().node_count,
+        MAX_JSON_INSTANCE_NODES
+    );
+    nodes.push(Value::Null);
+    assert_eq!(
+        profile_json_value(&Value::Array(nodes)).unwrap_err(),
+        StrictJsonError::NodeLimit
+    );
+}

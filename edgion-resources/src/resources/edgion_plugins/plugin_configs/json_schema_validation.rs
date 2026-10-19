@@ -1,6 +1,7 @@
 //! Bounded Draft 2020-12 JSON Schema validation shared by Controller and Gateway.
 
 use std::collections::HashSet;
+use std::fmt::{self, Write as _};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use jsonschema::{Draft, PatternOptions, Retrieve, Uri, Validator};
@@ -183,6 +184,16 @@ pub fn parse_json_instance_with_limits(
     })
 }
 
+#[derive(Default)]
+struct FormattedByteCount(u64);
+
+impl fmt::Write for FormattedByteCount {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0 = self.0.saturating_add(text.len() as u64);
+        Ok(())
+    }
+}
+
 /// Validate and profile an already parsed JSON value using the same depth and
 /// node limits as [`parse_json_instance`].
 pub fn profile_json_value(value: &Value) -> Result<JsonValueProfile, StrictJsonError> {
@@ -201,7 +212,11 @@ pub fn profile_json_value(value: &Value) -> Result<JsonValueProfile, StrictJsonE
         }
         max_depth = max_depth.max(depth);
         match value {
-            Value::Number(value) => text_bytes = text_bytes.saturating_add(value.to_string().len() as u64),
+            Value::Number(value) => {
+                let mut count = FormattedByteCount::default();
+                write!(&mut count, "{value}").map_err(|_| StrictJsonError::Malformed)?;
+                text_bytes = text_bytes.saturating_add(count.0);
+            }
             Value::String(value) => {
                 text_bytes = text_bytes.saturating_add(value.len() as u64);
             }
