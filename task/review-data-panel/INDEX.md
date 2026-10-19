@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Template JSON escape run batching](template-01-json-run-batching.md)
+
 - [Outbound URL serialization ownership](outbound-02-url-serialization-storage.md)
 
 - [gRPC single-record callback output](grpc-04-single-record-output.md)
@@ -5256,3 +5258,20 @@ plugin-local AI guard filters matched zero tests; the replacement ai::guards
 filter verified both current request and semantic owners. Formatting, workspace
 check/Clippy and seven repository guards passed. Existing unrelated warnings
 remain; no live network integration or throughput benchmark ran.
+
+## Template JSON append-run inspection
+
+Traced canonical append_json through the outbound JSON consumer. Safe-span
+batching could reduce per-character append work but changes growth requests.
+An isolated writer probe with initial capacity 32 and 70 plain bytes plus an
+escaped quote produced equal 72-byte output with scalar/batched capacities
+128/140, for both uncapped and 256-byte-capped modes. Current outbound JSON uses
+uncapped rendering; bounded JSON remains a supported tested writer capability.
+The storage tradeoff is deferred in template-01, with no production edits or
+performance claim. Private partial output on failure is discarded, so its shape
+alone is not an external regression.
+
+Fresh serial verification passed 23 template and 122 shared outbound tests.
+Formatting, workspace check/Clippy, agent-doc validation and diff checks passed;
+existing unrelated Clippy warnings remain. The isolated capacity probe is not
+a full-template allocation, live network or throughput benchmark.
