@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [ASCII character-count fast path](usage-01-ascii-character-count.md)
+
 - [Prepared Service endpoint eligibility lookup](backend-02-runtime-eligibility-lookup.md)
 
 - [Backend SAN inspection without full display projection](tls-05-backend-san-inspection.md)
@@ -6971,3 +6973,17 @@ fresh final verification passed 112 tests: 35 dispatch, 25 attempt-runtime and
 52 usage-accounting tests. Formatting, workspace check/Clippy and seven guards
 passed with existing unrelated warnings. No full suite or live provider/Redis
 integration test ran.
+
+
+## Non-SSE usage character-count fast-path audit
+
+Followed the AI response processor into the incremental non-SSE UTF-8 counter.
+An all-ASCII/no-pending fast path avoids per-byte state transitions, but an
+exploratory extracted-counter probe showed workload-dependent timing: ASCII
+improved while end-position multibyte cases took longer. Fixed execution order,
+synthetic chunks and excluded parser work limit that evidence. The proposal and
+required split-state/callback benchmarks are deferred in usage-01, with no
+runtime or test changes. The separate SSE and native Responses policies remain
+unchanged. Fresh baseline checks passed 52 usage and 13 finalization tests,
+formatting, workspace check/Clippy and document consistency; existing warnings
+are unrelated. Baseline tests do not prove candidate equivalence.
