@@ -672,3 +672,39 @@ fn regex_uri_raw_captures_keep_named_dollars_literal() {
         Some(&captures),
     );
 }
+
+#[test]
+fn regex_uri_capture_markers_preserve_sequential_and_unmatched_behavior() {
+    // Preserve observed staging here; rewrite-01 tracks the separate grammar decision.
+    for (pattern, path, replacement, expected) in [
+        (
+            "^/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)$",
+            "/a/b/c/d/e/f/g/h/i/j",
+            "/$10/$1/$2",
+            "/a0/a/b?keep=1",
+        ),
+        ("^/(a)?(b)?(c)?(d)?(e)?(f)?(g)?(h)?(i)?(j)$", "/j", "/$10", "/j?keep=1"),
+        ("^/(a)?(b)$", "/b", "/$1/$2", "/$1/b?keep=1"),
+    ] {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "regexUri": {"pattern": pattern, "replacement": replacement}
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let regex = Regex::new(pattern).unwrap();
+        let captures = regex.captures(path).unwrap();
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_upstream_uri()
+            .with(mockall::predicate::eq(expected))
+            .times(1)
+            .returning(|_| Ok(()));
+        plugin.rewrite_uri(
+            &mut session,
+            &mut PluginLog::new("ProxyRewrite"),
+            path,
+            Some("keep=1"),
+            Some(&captures),
+        );
+    }
+}

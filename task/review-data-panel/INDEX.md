@@ -8312,3 +8312,19 @@ Fresh verification passed all 24 AllEndpointStatus tests, formatting, workspace
 check/Clippy and seven repository guards with existing unrelated Clippy warnings.
 This removes copied error-text buffers only; response JSON and other endpoint
 fields still allocate. No live probe integration or throughput benchmark ran.
+
+## Format ProxyRewrite capture markers in stack storage
+
+The regex-URI capture loop now formats each present capture's dollar-prefixed
+index into a bounded stack buffer instead of a temporary String. Capacity covers
+one dollar plus every decimal digit of usize (21 bytes on 64-bit targets); only
+ASCII primitive formatting reaches the two statically justified expect calls.
+Replacement order, capture-dollar escaping, unmatched groups and query handling
+are unchanged. The separate rewrite-01 grammar decision remains open.
+
+The new regression passed against the old implementation before the change and
+covers two-digit indices, sequential prefix replacement and unmatched groups.
+Final verification passed all 22 ProxyRewrite tests, formatting, workspace
+check/Clippy and seven repository guards with existing unrelated Clippy warnings.
+This removes temporary marker allocations, not replacement-result allocations.
+No full suite or throughput benchmark ran.

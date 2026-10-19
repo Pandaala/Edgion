@@ -8,7 +8,9 @@ use bytes::Bytes;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::borrow::Cow;
+use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::str::from_utf8;
 use std::sync::LazyLock;
 
 use crate::link_sys::template::{evaluate_template_bounded, TemplateEvaluationError};
@@ -253,7 +255,13 @@ impl ProxyRewrite {
                 let mut result = regex_uri.replacement.clone();
                 for (i, cap) in caps.iter().enumerate().skip(1) {
                     if let Some(m) = cap {
-                        result = result.replace(&format!("${}", i), &Self::escape_dollar(Cow::Borrowed(m.as_str())));
+                        let mut marker = [0u8; 2 + usize::MAX.ilog10() as usize];
+                        let mut remaining = &mut marker[..];
+                        write!(&mut remaining, "${i}").expect("dollar plus usize decimal text fits in marker buffer");
+                        let remaining_len = remaining.len();
+                        let written = marker.len() - remaining_len;
+                        let marker = from_utf8(&marker[..written]).expect("dollar and decimal digits are valid ASCII");
+                        result = result.replace(marker, &Self::escape_dollar(Cow::Borrowed(m.as_str())));
                     }
                 }
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
