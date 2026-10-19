@@ -16,8 +16,11 @@ use edgion_resources::resources::edgion_plugins::compile_claim_header_projection
 
 #[test]
 fn claim_header_array_formatting_is_bounded_and_preserves_scalar_order() {
-    let value = json!(["alpha", {"ignored": true}, 7, false]);
-    let expected = "alpha,7,false";
+    let value = json!([
+        "alpha", {"ignored": true}, 7, false, null, ["ignored"],
+        i64::MIN, u64::MAX, -0.5, true, ""
+    ]);
+    let expected = "alpha,7,false,-9223372036854775808,18446744073709551615,-0.5,true,";
 
     assert_eq!(
         format_claim_header_value(&value, expected.len(), expected.len())

@@ -7862,3 +7862,21 @@ Existing expiration, fractional-date, group-isolation and redaction regressions
 remain intact. Fresh verification passed 47 JWT and 36 shared-auth tests,
 formatting, workspace check/Clippy and seven repository guards with existing
 unrelated warnings. No full suite or throughput benchmark ran.
+
+## Select admitted claim-array scalars without measuring again
+
+The shared auth claim-header materializer now selects String, Number and Bool
+array entries by their JSON variants instead of calling scalar_measure again.
+The sole caller still measures the complete immutable candidate, checks unsafe
+bytes and admits per-value/aggregate budgets before materialization. This removes
+one redundant string control-byte scan and one number formatting pass per such
+array element; measurement and final rendering remain. Commas, empty scalar
+entries, skipped objects/null/nested arrays, source order, UTF-8 byte limits,
+failed-write accounting and skip-versus-stop precedence are unchanged.
+
+The existing array regression now covers every JSON variant, both booleans,
+integer extremes, a float and a trailing empty string at exact and undersized
+caps. Fresh verification passed 36 shared-auth, 47 JWT, 150 OIDC and 20 JWE tests;
+16 OIDC tests retained their existing ignored status. Formatting, workspace
+check/Clippy and seven repository guards passed with existing unrelated warnings.
+No full suite or throughput benchmark ran.

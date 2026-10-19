@@ -503,7 +503,10 @@ fn materialize_claim_header_value(value: &serde_json::Value, measured_bytes: usi
     if let serde_json::Value::Array(values) = value {
         let mut has_scalar = false;
         for value in values {
-            if scalar_measure(value).is_none() {
+            if !matches!(
+                value,
+                serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_)
+            ) {
                 continue;
             }
             if has_scalar {
