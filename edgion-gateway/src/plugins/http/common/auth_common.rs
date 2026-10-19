@@ -195,17 +195,8 @@ pub async fn send_gateway_auth_error_response(
     let realm = escape_quoted_string(realm);
     let mut resp = ResponseHeader::build(status, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
-    let www_auth = match error_code {
-        Some(code) => format!(
-            "{} realm=\"{}\", error=\"{}\", error_description=\"{}\"",
-            scheme,
-            realm,
-            code,
-            escape_quoted_string(body)
-        ),
-        None => format!("{} realm=\"{}\"", scheme, realm),
-    };
-    resp.insert_header("WWW-Authenticate", &www_auth)?;
+    let www_auth = build_auth_challenge(scheme, &realm, error_code, body);
+    resp.insert_header("WWW-Authenticate", www_auth)?;
 
     session.write_response_header(Box::new(resp), false).await?;
     session
@@ -213,6 +204,35 @@ pub async fn send_gateway_auth_error_response(
         .await?;
     session.shutdown().await;
     Ok(())
+}
+
+/// Assemble a challenge from an already escaped realm and the existing error fields.
+fn build_auth_challenge(scheme: &str, escaped_realm: &str, error_code: Option<&str>, body: &str) -> String {
+    const REALM_PREFIX: &str = " realm=\"";
+    const ERROR_PREFIX: &str = ", error=\"";
+    const DESCRIPTION_PREFIX: &str = ", error_description=\"";
+    let error = error_code.map(|code| (code, escape_quoted_string(body)));
+    let capacity = scheme.len()
+        + REALM_PREFIX.len()
+        + escaped_realm.len()
+        + 1
+        + error.as_ref().map_or(0, |(code, description)| {
+            ERROR_PREFIX.len() + code.len() + 1 + DESCRIPTION_PREFIX.len() + description.len() + 1
+        });
+    let mut challenge = String::with_capacity(capacity);
+    challenge.push_str(scheme);
+    challenge.push_str(REALM_PREFIX);
+    challenge.push_str(escaped_realm);
+    challenge.push('"');
+    if let Some((code, description)) = error {
+        challenge.push_str(ERROR_PREFIX);
+        challenge.push_str(code);
+        challenge.push('"');
+        challenge.push_str(DESCRIPTION_PREFIX);
+        challenge.push_str(&description);
+        challenge.push('"');
+    }
+    challenge
 }
 
 /// Build and send a plain (non-`WWW-Authenticate`) error response for the gateway plane.

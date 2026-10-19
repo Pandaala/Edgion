@@ -6116,3 +6116,26 @@ Independent plan review approved two documents. Fresh baseline checks passed 32
 shared-auth, 14 KeyAuth, 47 JwtAuth and four OIDC cookie-strip tests (97 total),
 formatting check, workspace check/Clippy and agent-doc validation. Existing
 unrelated warnings remain; no alternative implementation was benchmarked.
+
+## Build exact-capacity authentication challenges and transfer ownership
+
+The canonical gateway auth-error response now assembles WWW-Authenticate with an
+exact-capacity private builder and moves that String into the header. Realm
+validation/escaping retains its position before response construction; optional
+error-description escaping, raw scheme/code bytes and both wire forms are
+unchanged. Header/body/shutdown sequencing and response payloads remain unchanged.
+This removes the challenge payload copy and avoids spare-capacity Shared metadata
+on the pinned http/bytes conversion path.
+
+Independent plan review approved four files. Five existing realm-filtered tests
+passed before editing. A new 1,680-case matrix compares the old formatting bytes,
+exact capacity, owned/borrowed rejection and valid buffer identity, measuring zero
+conversion allocations. Selected clean-description construction needs one exact
+output allocation; escaping descriptions can allocate separately, and None does
+not process the body. No whole-response zero-allocation or throughput claim is made.
+
+Fresh verification passed 34 shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth,
+56 HMAC-filtered, 20 JweDecrypt and one LDAP unauthorized-outcome test (191 total),
+formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
+remain. The owning security realm knowledge records this ownership boundary;
+no live integration suite was run.

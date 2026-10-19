@@ -96,3 +96,22 @@ validation. Historical checks from the Bearer attribute fix are not current test
 
 - D0039 / `harden-auth-challenge-realm-quoted-strings`: corrected and verified on
   2026-09-07; the original disposition was deferred, not accepted risk.
+
+## Exact-capacity challenge ownership
+
+The shared response helper retains realm validation/escaping before constructing
+the response header. Its private challenge builder sizes the output from the
+already escaped realm and, only when an error code exists, the escaped description.
+Literal separators, raw scheme/code bytes and both challenge forms remain the
+same. The completed String moves into WWW-Authenticate instead of being copied
+through a borrowed conversion. Response header/body/shutdown ordering is unchanged.
+
+The byte-parity matrix compares the previous formatting expressions across 1,680
+combinations, checks exact capacity and compares owned/borrowed header validation.
+Valid owned conversions retain the source pointer and all measured conversions
+allocate zero times on pinned http/bytes. Selected clean-description cases build
+the challenge in one allocation requesting exactly its length; descriptions that
+require escaping can allocate separately. A None code does not escape the body.
+Existing async regressions retain realm rejection before writes and exact response
+headers, body and write ordering. This is not an allocation-free response callback
+or a throughput claim.

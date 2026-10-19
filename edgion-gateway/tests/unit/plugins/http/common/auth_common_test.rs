@@ -605,3 +605,60 @@ fn sensitive_typed_header_write_preserves_storage_and_setter_result() {
         assert_eq!(result.is_err(), fail_setter);
     }
 }
+
+#[test]
+fn auth_challenge_exact_capacity_preserves_bytes_and_header_conversion() {
+    let long = "x".repeat(4096);
+    for scheme in ["Basic", "ApiKey", "Bearer", "hmac", "ldap", "TLSCert", "", "bad\rname"] {
+        for realm in [
+            "edgion",
+            "",
+            "Partner \"API\"",
+            "path\\",
+            "a, b=c",
+            "café €",
+            long.as_str(),
+        ] {
+            let escaped_realm = escape_quoted_string(realm);
+            for code in [None, Some(""), Some("invalid_token"), Some("a\"b"), Some("bad\0code")] {
+                for body in ["Denied", "", "a\"b\\c", "a\r\n\tb", "café €", long.as_str()] {
+                    let expected = match code {
+                        Some(code) => format!(
+                            "{} realm=\"{}\", error=\"{}\", error_description=\"{}\"",
+                            scheme,
+                            escaped_realm,
+                            code,
+                            escape_quoted_string(body)
+                        ),
+                        None => format!("{} realm=\"{}\"", scheme, escaped_realm),
+                    };
+                    let value = super::build_auth_challenge(scheme, &escaped_realm, code, body);
+                    assert_eq!(value, expected);
+                    assert_eq!(value.capacity(), value.len());
+                    let input_ptr = value.as_ptr();
+                    let borrowed = http::HeaderValue::from_str(&value);
+                    let (owned, stats) =
+                        crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(value));
+                    assert_eq!(owned.is_ok(), borrowed.is_ok());
+                    if let (Ok(owned), Ok(borrowed)) = (owned, borrowed) {
+                        assert_eq!(owned, borrowed);
+                        assert_eq!(owned.as_bytes().as_ptr(), input_ptr);
+                    }
+                    assert_eq!(stats.calls, 0);
+                    assert_eq!(stats.requested_bytes, 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn auth_challenge_plain_fields_need_one_exact_output_allocation() {
+    for (code, body) in [(None, "ignored\"\\\r\n"), (Some("invalid_token"), "Denied café")] {
+        let (challenge, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            super::build_auth_challenge("Bearer", "edgion", code, body)
+        });
+        assert_eq!(stats.calls, 1);
+        assert_eq!(stats.requested_bytes, challenge.len());
+    }
+}
