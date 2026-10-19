@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [DynamicInternalUpstream input ownership](routing-01-dynamic-internal-input-ownership.md)
+
 - [RegionRoute prepared lookup indexes](region-01-prepared-lookup-indexes.md)
 
 - [Precomputed backend TLS pool-identity composition](tls-02-precomputed-pool-composition.md)
@@ -4495,3 +4497,16 @@ GraphQL router, 104 upstream-peer and 14 backend-runtime tests. Formatting,
 workspace check/Clippy, seven repository guards and document/diff validation
 passed; existing warnings remain outside the diff. No live transport or throughput
 benchmark ran.
+
+## DynamicInternalUpstream input-ownership audit
+
+Traced owned source extraction, borrowed regex capture, direct/configured target
+lifetimes, canonical admission, jump publication and success receipt. Rules input
+can potentially stay borrowed, while direct targets currently retain their input
+owner across mutable publication. [routing-01](routing-01-dynamic-internal-input-ownership.md)
+records staged ownership alternatives and mode/source-specific copy tradeoffs;
+the current borrow conflict does not establish that optimization is impossible.
+Production code and tests are unchanged. Fresh serial verification passed 83 tests:
+10 plugin, six resource configuration and 67 shared condition tests. Formatting,
+workspace check/Clippy and document/diff validation passed. No prototype, live
+transport or throughput benchmark ran.
