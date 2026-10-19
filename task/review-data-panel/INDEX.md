@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Lazy HMAC missing-header diagnostics](hmac-04-lazy-missing-header-diagnostic.md)
+
 - [JSON Patch execution ownership](rewrite-02-json-patch-execution-ownership.md)
 
 - [Lazy dye outcome value formatting](dye-02-lazy-outcome-value-formatting.md)
