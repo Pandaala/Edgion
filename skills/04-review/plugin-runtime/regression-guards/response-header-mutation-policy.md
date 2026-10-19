@@ -125,3 +125,13 @@ the prepared owner. Invalid direct construction remains a logged no-op, and
 publication continues to reject invalid configuration through existing gates.
 Do not infer that header names, queues, response maps or plugin logs allocate
 nothing from the zero-allocation prepared-value clone tests.
+
+ResponseRewrite also prepares each rename's protected-name decision using the
+canonical predicate for both immutable names. Runtime checks the stored decision
+before reading or mutating response state; rejection logs and action order are
+unchanged. Configuration validation still precedes preparation, and session write
+guards remain in place. Each prepared rename adds a boolean and possible layout
+padding. This removes repeated policy scans, not dynamic value reads or copies.
+Tests cover both protected sides, mixed case, Proxy-Connection, pseudo-headers,
+and independence from subsequent caller-configuration changes. Response value
+fidelity remains a separate review boundary.

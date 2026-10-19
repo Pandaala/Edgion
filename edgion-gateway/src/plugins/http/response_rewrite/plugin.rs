@@ -19,10 +19,24 @@ struct PreparedResponseRewrite {
 }
 
 struct PreparedResponseHeaders {
-    rename: Option<Vec<HeaderRename>>,
+    rename: Option<Vec<PreparedHeaderRename>>,
     add: Vec<PreparedHeader>,
     set: Vec<PreparedHeader>,
     remove: Option<Vec<String>>,
+}
+
+struct PreparedHeaderRename {
+    entry: HeaderRename,
+    protected: bool,
+}
+
+impl PreparedHeaderRename {
+    fn new(entry: &HeaderRename) -> Self {
+        Self {
+            entry: entry.clone(),
+            protected: is_protected_response_header(&entry.from) || is_protected_response_header(&entry.to),
+        }
+    }
 }
 
 impl PreparedResponseHeaders {
@@ -34,7 +48,10 @@ impl PreparedResponseHeaders {
                 .collect()
         }
         Ok(Self {
-            rename: headers.rename.clone(),
+            rename: headers
+                .rename
+                .as_ref()
+                .map(|entries| entries.iter().map(PreparedHeaderRename::new).collect()),
             add: prepare(headers.add.as_deref().unwrap_or_default())?,
             set: prepare(headers.set.as_deref().unwrap_or_default())?,
             remove: headers.remove.clone(),
@@ -103,11 +120,12 @@ impl ResponseRewrite {
 
             // 1. Rename headers first
             if let Some(ref rename_headers) = headers.rename {
-                for entry in rename_headers {
-                    if is_protected_response_header(&entry.from) || is_protected_response_header(&entry.to) {
+                for rename in rename_headers {
+                    if rename.protected {
                         plugin_log.push_err("header rename fail");
                         continue;
                     }
+                    let entry = &rename.entry;
                     if let Some(value) = session.get_response_header(&entry.from) {
                         if let Err(_e) = session.set_response_header(&entry.to, &value) {
                             plugin_log.push_err("header rename fail");

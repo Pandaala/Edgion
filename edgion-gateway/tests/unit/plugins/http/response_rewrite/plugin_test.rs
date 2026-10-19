@@ -36,7 +36,10 @@ fn prepared_generation_is_independent_from_caller_config() {
             set: Some(vec![header("X-Prepared", "original")]),
             add: None,
             remove: None,
-            rename: None,
+            rename: Some(vec![HeaderRename {
+                from: "X-Source".into(),
+                to: "X-Destination".into(),
+            }]),
         }),
     };
     let plugin = ResponseRewrite::new(&config);
@@ -45,6 +48,9 @@ fn prepared_generation_is_independent_from_caller_config() {
     let entry = &mut config.headers.as_mut().unwrap().set.as_mut().unwrap()[0];
     entry.name = "X-Mutated".to_string();
     entry.value = "changed".to_string();
+    let rename = &mut config.headers.as_mut().unwrap().rename.as_mut().unwrap()[0];
+    rename.from = "Content-Length".into();
+    rename.to = "Connection".into();
 
     let ResponseRewriteState::Valid(prepared) = &plugin.state else {
         panic!("valid configuration must build a prepared generation");
@@ -54,6 +60,10 @@ fn prepared_generation_is_independent_from_caller_config() {
     let prepared_entry = &prepared.headers.as_ref().unwrap().set[0];
     assert_eq!(prepared_entry.name(), "X-Prepared");
     assert_eq!(prepared_entry.value(), "original");
+    let prepared_rename = &prepared.headers.as_ref().unwrap().rename.as_ref().unwrap()[0];
+    assert_eq!(prepared_rename.entry.from, "X-Source");
+    assert_eq!(prepared_rename.entry.to, "X-Destination");
+    assert!(!prepared_rename.protected);
 }
 
 #[test]
@@ -161,7 +171,16 @@ fn missing_rename_source_is_a_silent_noop() {
 
 #[test]
 fn response_policy_rejects_either_rename_side_before_any_mutation() {
-    for (from, to) in [("Content-Length", "x-copy"), ("x-copy", "Connection")] {
+    for (from, to) in [
+        ("Content-Length", "x-copy"),
+        ("x-copy", "Connection"),
+        ("cOnNeCtIoN", "x-copy"),
+        ("x-copy", "cOnTeNt-LeNgTh"),
+        ("PrOxY-CoNnEcTiOn", "x-copy"),
+        ("x-copy", "PrOxY-CoNnEcTiOn"),
+        (":status", "x-copy"),
+        ("x-copy", ":status"),
+    ] {
         let prepared = PreparedResponseRewrite {
             status_code: None,
             status_log: None,
@@ -169,10 +188,10 @@ fn response_policy_rejects_either_rename_side_before_any_mutation() {
                 set: Vec::new(),
                 add: Vec::new(),
                 remove: None,
-                rename: Some(vec![HeaderRename {
+                rename: Some(vec![PreparedHeaderRename::new(&HeaderRename {
                     from: from.into(),
                     to: to.into(),
-                }]),
+                })]),
             }),
         };
         let mut session = MockPluginSession::new();

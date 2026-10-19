@@ -5381,3 +5381,23 @@ Independent plan review approved the two-file scope. The existing 21 ProxyRewrit
 tests passed both before and after the change. Formatting, workspace check/Clippy
 and seven repository guards passed; existing unrelated Clippy warnings remain.
 No live integration, whole-path allocation or throughput measurement ran.
+
+## ResponseRewrite prepared rename protection
+
+The response-header callback's rename operations now carry a protected-name
+decision computed by the canonical predicate during immutable plugin construction.
+Both names, entry order and duplicate operations remain owned by that generation.
+Runtime rejection still precedes the dynamic source read and preserves static
+failure logs and continued processing. Validation runs before preparation, and
+session writer protection remains unchanged. The dynamic value fidelity decision
+in response-02 is unaffected.
+
+This removes repeated name-policy scans at the cost of one boolean and possible
+layout padding per configured rename. No total-memory or throughput improvement
+is claimed. The independent plan review approved four files. The original ten
+ResponseRewrite tests passed before the change. Fresh verification passed ten
+Gateway ResponseRewrite, six Resources response-policy and 15 Resources
+ResponseRewrite tests. Coverage includes both protected sides, mixed case,
+Proxy-Connection, pseudo-headers and caller-configuration mutation. Formatting,
+workspace check/Clippy and seven repository guards passed; existing unrelated
+Clippy warnings remain. No live integration or throughput benchmark ran.
