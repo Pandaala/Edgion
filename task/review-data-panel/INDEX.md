@@ -7740,3 +7740,21 @@ multibyte strings, and a long model. Fresh targeted tests passed 80 request-guar
 and two renderer cases. Formatting, workspace check/Clippy and seven repository
 guards passed with existing unrelated warnings. No full suite or performance
 benchmark ran; the benefit is removal of the extra model String copy.
+
+## Serialize request evaluator spans without a projection Vec
+
+AiGuard's evaluator now serializes the borrowed post-mask span slice through a
+length-known iterator instead of collecting a second Vec of wire spans. Each
+item retains the original RequestSpan/WirePart serializer, so wire field order,
+text escaping and key projection stay unchanged. Empty/all-empty short circuits,
+CappedWriter admission and error labels, encoding before the timeout/permit, and
+strict decision parsing retain their existing boundaries.
+
+A differential test compares the collected reference and direct encoding at
+zero, below-exact, exact and above-exact caps, including empty lists, mixed span
+kinds, unordered/duplicate keys, maximum indices and escaped/multibyte text.
+Fresh verification passed 81 request-guard and two renderer tests, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. The removed allocation is the temporary wire-span Vec; final request
+bytes and the earlier post-mask projection remain owned. No full suite or
+throughput benchmark ran.

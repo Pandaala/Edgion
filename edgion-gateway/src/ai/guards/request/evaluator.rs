@@ -37,7 +37,16 @@ const MAX_REASON_BYTES: usize = 256;
 #[serde(rename_all = "camelCase")]
 struct DecisionRequest<'a> {
     version: &'static str,
-    spans: &'a [RequestSpan<'a>],
+    #[serde(serialize_with = "serialize_spans")]
+    spans: &'a [(GuardSpanKey, &'a str)],
+}
+
+fn serialize_spans<S: serde::Serializer>(spans: &[(GuardSpanKey, &str)], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(spans.iter().map(|(key, current)| RequestSpan {
+        message_index: key.message_index,
+        part: key.part.into(),
+        current,
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,15 +160,7 @@ impl CompiledEvaluator {
         // Data minimization: only the selected bounded span text and its
         // structural key leave the gateway. No raw body, headers, model,
         // provider identity, or backend address.
-        let payload: Vec<RequestSpan<'_>> = spans
-            .iter()
-            .map(|(key, current)| RequestSpan {
-                message_index: key.message_index,
-                part: key.part.into(),
-                current,
-            })
-            .collect();
-        let request = encode_request(&payload, self.max_request_bytes)?;
+        let request = encode_request(spans, self.max_request_bytes)?;
 
         let timeout = self.client.timeout;
         let call = async {
@@ -192,7 +193,7 @@ impl CompiledEvaluator {
     }
 }
 
-fn encode_request(spans: &[RequestSpan<'_>], cap: usize) -> Result<Bytes, &'static str> {
+fn encode_request(spans: &[(GuardSpanKey, &str)], cap: usize) -> Result<Bytes, &'static str> {
     let mut writer = CappedWriter::new(cap);
     DecisionRequest { version: "v1", spans }
         .serialize(&mut serde_json::Serializer::new(&mut writer))

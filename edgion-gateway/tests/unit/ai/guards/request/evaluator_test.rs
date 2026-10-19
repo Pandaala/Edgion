@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn direct_span_encoding_matches_collected_projection_and_caps() {
+    #[derive(Serialize)]
+    struct CollectedRequest<'a> {
+        version: &'static str,
+        spans: &'a [RequestSpan<'a>],
+    }
+    let content = GuardSpanKey {
+        message_index: 2,
+        part: GuardPart::Content,
+    };
+    let part = GuardSpanKey {
+        message_index: u32::MAX,
+        part: GuardPart::TextPart(u32::MAX),
+    };
+    for spans in [
+        Vec::new(),
+        vec![(content, "plain")],
+        vec![(part, "café-π\n\"\\"), (content, ""), (part, "duplicate key")],
+    ] {
+        let collected: Vec<_> = spans
+            .iter()
+            .map(|(key, current)| RequestSpan {
+                message_index: key.message_index,
+                part: key.part.into(),
+                current,
+            })
+            .collect();
+        let reference = CollectedRequest {
+            version: "v1",
+            spans: &collected,
+        };
+        let expected = serde_json::to_vec(&reference).unwrap();
+        for cap in [0, expected.len() - 1, expected.len(), expected.len() + 1] {
+            let mut writer = CappedWriter::new(cap);
+            let legacy = reference
+                .serialize(&mut serde_json::Serializer::new(&mut writer))
+                .map_err(|_| "evaluator request too large")
+                .map(|()| Bytes::from(writer.into_inner()));
+            assert_eq!(encode_request(&spans, cap), legacy, "cap={cap}");
+        }
+        assert_eq!(encode_request(&spans, expected.len()).unwrap().as_ref(), expected);
+    }
+}
+
+#[test]
 fn strict_envelope_rejects_malformed_decisions() {
     assert_eq!(
         parse_decision(br#"{"version":"v1","action":"pass"}"#, 64),
@@ -29,11 +74,13 @@ fn duplicate_replacement_keys_are_rejected() {
 
 #[test]
 fn request_encoding_is_capped_inclusively() {
-    let spans = vec![RequestSpan {
-        message_index: 0,
-        part: WirePart::Content,
-        current: "hello",
-    }];
+    let spans = vec![(
+        GuardSpanKey {
+            message_index: 0,
+            part: GuardPart::Content,
+        },
+        "hello",
+    )];
     let encoded = encode_request(&spans, 1024).expect("encodes");
     assert_eq!(encode_request(&spans, encoded.len()).expect("exact cap"), encoded);
     assert!(encode_request(&spans, encoded.len() - 1).is_err());
@@ -54,11 +101,13 @@ fn only_single_json_success_responses_are_accepted() {
 
 #[test]
 fn request_payload_carries_only_span_text_and_keys() {
-    let spans = vec![RequestSpan {
-        message_index: 2,
-        part: WirePart::TextPart { part_index: 1 },
-        current: "prompt",
-    }];
+    let spans = vec![(
+        GuardSpanKey {
+            message_index: 2,
+            part: GuardPart::TextPart(1),
+        },
+        "prompt",
+    )];
     let encoded = encode_request(&spans, 4096).expect("encodes");
     let text = String::from_utf8(encoded.to_vec()).expect("utf8");
     assert!(text.contains("\"version\":\"v1\""));
