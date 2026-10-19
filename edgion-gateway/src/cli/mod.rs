@@ -198,7 +198,7 @@ impl EdgionGatewayCli {
         // One process-wide adaptive publisher. Request paths only update
         // captured atomics; no per-request task is created.
         tokio::spawn(run_adaptive_telemetry_ticker(
-            get_adaptive_telemetry_store(),
+            Arc::clone(get_adaptive_telemetry_store()),
             shutdown_rx.clone(),
         ));
 

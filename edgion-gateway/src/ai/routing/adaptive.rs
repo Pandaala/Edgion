@@ -66,8 +66,8 @@ static GLOBAL_ADAPTIVE_TELEMETRY_STORE: LazyLock<Arc<AdaptiveTelemetryStore>> =
 static GLOBAL_ADAPTIVE_CONTRIBUTIONS: LazyLock<ParkingMutex<AdaptiveContributionIndex>> =
     LazyLock::new(|| ParkingMutex::new(AdaptiveContributionIndex::default()));
 
-pub fn get_adaptive_telemetry_store() -> Arc<AdaptiveTelemetryStore> {
-    Arc::clone(&GLOBAL_ADAPTIVE_TELEMETRY_STORE)
+pub fn get_adaptive_telemetry_store() -> &'static Arc<AdaptiveTelemetryStore> {
+    &GLOBAL_ADAPTIVE_TELEMETRY_STORE
 }
 
 /// Stable adaptive-state identity. The terminal route UID prevents a

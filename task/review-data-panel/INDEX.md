@@ -4377,3 +4377,22 @@ tests are unchanged. Fresh serial verification passed 58 network-free tests:
 22 peer-builder, 33 policy and three Gateway TLS store tests. Formatting,
 workspace check/Clippy and document/diff validation passed. No prototype,
 throughput benchmark or live TLS/pool verification ran.
+
+## Borrowed adaptive telemetry store accessor
+
+AI request planning now borrows the process-global AdaptiveTelemetryStore Arc
+instead of creating a temporary owned handle. The auxiliary ticker explicitly
+clones that same Arc at its existing ownership boundary; the global Arc and local
+independent store construction remain available. Admin and cold reconciliation
+callers continue using borrowed methods.
+
+Only redundant outer reference-count operations are removed. Request-owned
+telemetry-state Arcs, immutable publications, selection sequence, generation
+cleanup, ticker cadence and shutdown remain unchanged. This does not remove a
+heap allocation or establish a throughput improvement.
+
+Fresh verification passed 72 network-free tests: 22 adaptive telemetry,
+21 AI HTTP proxy and 29 AI backend-store tests, all serially. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed.
+Existing warnings remain outside changed code. No live transport or throughput
+benchmark ran.
