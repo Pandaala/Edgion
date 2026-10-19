@@ -39,7 +39,7 @@ impl RequestFilter for OpenidConnect {
                 "",
                 self.build_cookie_attr_suffix(session, 0, self.callback_path())
             );
-            let cookies = vec![clear_session_cookie, clear_state_cookie];
+            let cookies = [clear_session_cookie, clear_state_cookie];
             let _ = self
                 .send_redirect_with_cookies(session, &logout_redirect_target, &cookies)
                 .await;
@@ -227,7 +227,7 @@ impl RequestFilter for OpenidConnect {
 
                     match self.build_authorization_redirect(session, &discovery) {
                         Ok((location, cookie)) => {
-                            let cookies = vec![cookie];
+                            let cookies = [cookie];
                             let _ = self.send_redirect_with_cookies(session, &location, &cookies).await;
                         }
                         Err(err) => {

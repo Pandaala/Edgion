@@ -7991,3 +7991,18 @@ path. Fresh verification passed 151 OIDC tests with 16 existing ignores,
 formatting, workspace check/Clippy and seven repository guards with existing
 unrelated warnings. This removes the temporary redirect-target allocation, not
 the response header allocation. No full suite or throughput benchmark ran.
+
+## Use fixed cookie arrays for OIDC redirects
+
+Authorization redirect, callback completion and logout now pass fixed arrays to
+the existing cookie-slice writer instead of constructing one- or two-element
+Vecs. Cookie order, first-header insertion and subsequent append behavior,
+owned cookie text, response headers and failure handling remain unchanged.
+Each selected branch avoids the outer Vec heap allocation. The two-element array
+stores more String descriptors inline than a Vec handle, so this is not a claim
+of measured net-memory or throughput improvement; string/header allocations remain.
+
+Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. Existing redirect/logout tests retain their cookie and response checks.
+No collection-shape-only test, full suite or throughput benchmark was added/run.

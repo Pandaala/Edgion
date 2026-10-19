@@ -356,7 +356,7 @@ impl OpenidConnect {
             self.build_cookie_attr_suffix(session, 0, self.callback_path())
         );
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
-        let cookies = vec![session_cookie, clear_state_cookie];
+        let cookies = [session_cookie, clear_state_cookie];
         let _ = self
             .send_redirect_with_cookies(session, redirect_target, &cookies)
             .await;
