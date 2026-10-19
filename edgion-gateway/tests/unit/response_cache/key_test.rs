@@ -162,24 +162,17 @@ fn response_cache_vary_normalization_is_case_independent_bounded_and_exclusions_
     assert!(VaryCertificate::parse(&headers).is_none());
     headers.clear();
     headers.insert("connection", "x-hop".parse().unwrap());
-    assert!(!variation_is_representable(
-        &headers,
-        &RequestTraceId::default(),
-        false,
-        "x-hop"
-    ));
-    assert!(!variation_is_representable(
-        &headers,
-        &RequestTraceId::default(),
-        true,
-        "access_log"
-    ));
-    assert!(variation_is_representable(
-        &headers,
-        &RequestTraceId::default(),
-        false,
-        "access_log"
-    ));
+    let trace = RequestTraceId::default();
+    let exclusions = Exclusions::parse(&headers, &trace, false).unwrap();
+    for name in ["x-hop", "X-HOP", "host", "content-length"] {
+        assert!(exclusions.contains(name));
+    }
+    for name in ["x-public", "x-other", "access_log"] {
+        assert!(!exclusions.contains(name));
+    }
+    assert!(Exclusions::parse(&headers, &trace, true)
+        .unwrap()
+        .contains("access_log"));
 }
 
 #[test]
@@ -198,7 +191,7 @@ fn bounded_connection_index_borrows_all_slots_and_deduplicates_without_allocatin
     let ((key, representable), calls) = crate::test_allocation_counter::count_allocations(|| {
         (
             digest(&headers, false),
-            variation_is_representable(&headers, &trace, false, "X-HOP-15"),
+            !Exclusions::parse(&headers, &trace, false).unwrap().contains("X-HOP-15"),
         )
     });
     assert_eq!(key, Some(empty));

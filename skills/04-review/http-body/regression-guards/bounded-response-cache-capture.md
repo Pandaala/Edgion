@@ -44,7 +44,9 @@ headers, raw POST bytes SHA/length, selected successful GraphQL query proof,
 runtime identities, publication epoch, Service/discovery and policy proofs.
 Connection nominations reuse the canonical token iterator after bounded grammar
 validation. A fixed borrowed index retains case-insensitive first-occurrence
-membership within each synchronous lookup. Managed trace and integration-only
+membership within each synchronous lookup. Configured variations share one index
+within their nonempty synchronous loop, freshly parsed after any request-body
+scan; it never crosses an await, header mutation or callback boundary. Managed trace and integration-only
 access_log are excluded; arbitrary x-* headers remain material. Vary can refer
 only to represented fields. Header-name certificate hashes retain the same domain
 prefix and ASCII-lowercased byte stream; bounded stack chunks batch digest updates

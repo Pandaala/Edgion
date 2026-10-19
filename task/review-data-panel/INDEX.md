@@ -6353,3 +6353,22 @@ Fresh verification passed seven cache-key, 21 storage and seven lifecycle tests
 (35 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. No full test suite, live integration or throughput benchmark ran;
 verification-01's broader cache admission fixture remains outside this change.
+
+## Reuse configured cache variation exclusions
+
+RequestState::bind now parses the canonical borrowed Connection exclusion index
+once for a nonempty configured variation loop, after any asynchronous request-body
+scan. Each field uses that local index without crossing an await, header mutation
+or callback boundary. Empty lists still skip parsing. Grammar bounds, exclusion
+case behavior, key framing and header-certificate updates are unchanged. The
+integration-testing flag follows its existing startup-only contract.
+
+Independent plan review approved five files. Existing key tests now exercise
+multiple allowed/excluded names against one index and retain grammar, capacity
+and zero-allocation coverage. This removes repeated bounded parsing for multiple
+variations; it adds no heap allocation and makes no throughput claim.
+
+Fresh verification passed seven cache-key, 21 storage and seven lifecycle tests
+(35 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. No full test suite or live integration ran; verification-01's
+broader cache admission fixture remains outside this change.

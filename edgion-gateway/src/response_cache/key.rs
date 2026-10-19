@@ -210,14 +210,14 @@ fn header_digest(name: &str) -> [u8; 32] {
     digest.finalize().into()
 }
 
-struct Exclusions<'a> {
+pub(super) struct Exclusions<'a> {
     connection: [&'a str; 16],
     connection_count: usize,
     trace: &'a RequestTraceId,
     testing: bool,
 }
 impl<'a> Exclusions<'a> {
-    fn parse(headers: &'a HeaderMap, trace: &'a RequestTraceId, testing: bool) -> Option<Self> {
+    pub(super) fn parse(headers: &'a HeaderMap, trace: &'a RequestTraceId, testing: bool) -> Option<Self> {
         let mut exclusions = Self {
             connection: [""; 16],
             connection_count: 0,
@@ -276,7 +276,7 @@ impl<'a> Exclusions<'a> {
         }
         Some(exclusions)
     }
-    fn contains(&self, name: &str) -> bool {
+    pub(super) fn contains(&self, name: &str) -> bool {
         crate::plugins::http::common::HOP_BY_HOP_HEADERS.contains(&name)
             || matches!(
                 name,
@@ -292,15 +292,6 @@ impl<'a> Exclusions<'a> {
                 .any(|token| name.eq_ignore_ascii_case(token))
     }
 }
-pub(super) fn variation_is_representable(
-    headers: &HeaderMap,
-    trace: &RequestTraceId,
-    testing: bool,
-    name: &str,
-) -> bool {
-    Exclusions::parse(headers, trace, testing).is_some_and(|exclusions| !exclusions.contains(name))
-}
-
 pub(super) struct Builder {
     hash: Sha256,
     used: usize,

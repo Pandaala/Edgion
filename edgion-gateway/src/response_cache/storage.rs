@@ -539,7 +539,7 @@ impl RequestState {
         session: &mut pingora_proxy::Session,
         ctx: &mut crate::EdgionHttpContext,
     ) -> Option<()> {
-        use super::key::{Builder, OriginStamp, TlsResult, WORK_LIMIT};
+        use super::key::{Builder, Exclusions, OriginStamp, TlsResult, WORK_LIMIT};
         use crate::backends::discovery::get_service_discovery_coordinator;
         use crate::plugins::runtime::PingoraSessionAdapter;
         // C0 external fixtures construct a bound state directly. Production
@@ -743,27 +743,29 @@ impl RequestState {
                 key.frame(&profile)?;
             }
         }
-        for source in &policy.vary {
-            let edgion_resources::common::KeyGet::Header { name } = source else {
-                return None;
-            };
-            if !super::key::variation_is_representable(
+        if !policy.vary.is_empty() {
+            let exclusions = Exclusions::parse(
                 &session.req_header().headers,
                 &ctx.request_info.trace_id,
                 edgion_common::test_mode::is_integration_testing_mode(),
-                name,
-            ) {
-                return None;
+            )?;
+            for source in &policy.vary {
+                let edgion_resources::common::KeyGet::Header { name } = source else {
+                    return None;
+                };
+                if exclusions.contains(name) {
+                    return None;
+                }
+                key.frame(name.as_bytes())?;
+                self.header_certificate.as_mut()?.add(name)?;
+                let value = session
+                    .req_header()
+                    .headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok());
+                key.number(u64::from(value.is_some()))?;
+                key.frame(value.unwrap_or("").as_bytes())?;
             }
-            key.frame(name.as_bytes())?;
-            self.header_certificate.as_mut()?.add(name)?;
-            let value = session
-                .req_header()
-                .headers
-                .get(name)
-                .and_then(|value| value.to_str().ok());
-            key.number(u64::from(value.is_some()))?;
-            key.frame(value.unwrap_or("").as_bytes())?;
         }
         self.key = key.finish();
         self.expected_origin = Some(OriginStamp {
