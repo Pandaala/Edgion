@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [gRPC-Web trailer frame buffer ownership](grpc-web-01-trailer-frame-buffer.md)
+
 - [Compression algorithm preference storage](compression-01-accept-encoding-storage.md)
 
 - [Elasticsearch header reuse across flush and retries](log-04-es-index-header-reuse.md)
@@ -5659,3 +5661,18 @@ passed 45 cases: two module-registration, 17 early-request and 26 response-filte
 tests. Formatting, workspace check/Clippy and agent-doc validation passed with
 existing unrelated warnings. These are Edgion gate tests, not a fresh allocation
 probe, complete fork parser suite or compressed-wire delivery benchmark.
+
+## gRPC-Web downstream bridge buffer audit
+
+Traced the locked bridge's request/response header normalization and trailer
+framing. Header rewriting uses global replacement, so no prefix-only shortcut was
+selected. Trailer split/unsplit ownership is deferred in grpc-web-01: same-owner
+adjacent buffers rejoin without payload copy, while growth can force copying.
+A single-buffer alternative must include freeze metadata and retained capacities
+in its measurements; no net allocation saving is established by source alone.
+
+Independent plan review approved the two-file documentation scope. Fresh serial
+verification passed 30 tests: two module-registration, 17 early-request and 11
+upstream-trailer tests. Formatting, workspace check/Clippy and agent-doc validation
+passed with existing unrelated warnings. No fork mutation, dependency update,
+allocation probe or live gRPC-Web transport run occurred in this batch.
