@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Attached ExtProc summary rendering](log-05-attached-summary-rendering.md)
+
 - [Typed gRPC terminal status evidence](grpc-08-typed-terminal-status-evidence.md)
 
 - [Listener specificity lookup indexing](routing-02-listener-specificity-index.md)
@@ -6725,3 +6727,17 @@ Independent plan review approved two documents. Fresh baseline passed 27
 transcoder, 11 upstream-trailer and six response-callback tests (44 total),
 formatting check, workspace check/Clippy and agent-doc validation. Existing
 unrelated warnings remain; no full suite, live integration or benchmark ran.
+
+## Attached ExtProc summary rendering audit
+
+Traced terminal summary claim, immutable scalar capture, owned formatting and
+first-match PluginLog insertion. Recorded a typed-snapshot/canonical-formatter
+alternative in log-05, preserving claim even without a destination and bounded
+log behavior. The existing lock-shortening change remains intact. Short inline
+rendering may avoid temporary storage, while larger entries can spill; no
+unconditional allocation or throughput improvement is claimed.
+
+Independent plan review approved two documents. Fresh baseline passed 143
+ExtProc and ten terminal-logging tests (153 total), formatting check, workspace
+check/Clippy and agent-doc validation. Existing unrelated warnings remain; no
+full suite, live integration or benchmark ran.
