@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Shared relay idle-reset coalescing](relay-01-idle-reset-coalescing.md)
+
 - [ASCII character-count fast path](usage-01-ascii-character-count.md)
 
 - [Prepared Service endpoint eligibility lookup](backend-02-runtime-eligibility-lookup.md)
@@ -7069,3 +7071,17 @@ borrow identity, transferred generic TLV ownership, repeated-build equality,
 output survival after hostname/builder destruction and empty authority bytes.
 Formatting, workspace check/Clippy and seven guards passed with existing
 unrelated warnings. No full suite or live integration ran.
+
+
+## Shared relay idle-reset audit
+
+Followed TCP/TLS relay progress into the shared idle timer. Each successful
+read or advancing write samples time and resets Sleep; both directions can
+produce two resets in a sweep. Deferred sweep-local coalescing in relay-01:
+retaining the last progress timestamp still needs expiry/wakeup review and
+workload evidence, while sampling once per sweep changes the deadline policy.
+The locked Tokio 1.53.1 traditional timer already has an atomic extension fast
+path, so repeated resets are not necessarily repeated wheel registration.
+Runtime and tests remain unchanged. Fresh baseline verification passed 21 relay
+tests, formatting, workspace check/Clippy and document consistency with existing
+unrelated warnings. No candidate benchmark or live integration ran.
