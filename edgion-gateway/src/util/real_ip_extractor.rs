@@ -41,7 +41,8 @@ pub struct RealIpExtractor {
 /// Intentionally does not implement `Debug` so the resolved address cannot be
 /// accidentally formatted outside the sensitivity-aware access-log path.
 pub(crate) struct RealIpResolution {
-    pub(crate) remote_ip: String,
+    /// Preserve the selected address family; consumers own textual normalization.
+    pub(crate) remote_ip: IpAddr,
     pub(crate) downstream_trusted: bool,
 }
 
@@ -74,9 +75,9 @@ impl RealIpExtractor {
         let remote_ip = if downstream_trusted {
             header_value
                 .map(|value| self.resolve_from_header(value, &downstream_peer_ip, &mut is_trusted))
-                .unwrap_or_else(|| downstream_peer_ip.to_string())
+                .unwrap_or(downstream_peer_ip)
         } else {
-            downstream_peer_ip.to_string()
+            downstream_peer_ip
         };
 
         RealIpResolution {
@@ -100,7 +101,7 @@ impl RealIpExtractor {
         header_value: &str,
         downstream_peer_ip: &IpAddr,
         is_trusted: &mut impl FnMut(&IpAddr) -> bool,
-    ) -> String {
+    ) -> IpAddr {
         let iter = || header_value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
         if self.recursive {
@@ -111,7 +112,7 @@ impl RealIpExtractor {
                 if let Ok(ip_addr) = ip_str.parse::<IpAddr>() {
                     leftmost = Some(ip_addr);
                     if !is_trusted(&ip_addr) {
-                        return ip_addr.to_string();
+                        return ip_addr;
                     }
                     // Trusted hop — count it, and stop if we've hit the cap.
                     trusted_hops_skipped += 1;
@@ -119,22 +120,20 @@ impl RealIpExtractor {
                         if trusted_hops_skipped >= cap {
                             // Caller configured a hop cap; return this (trusted) IP
                             // rather than continuing leftward into potentially-forged territory.
-                            return ip_addr.to_string();
+                            return ip_addr;
                         }
                     }
                 }
             }
             // All trusted (no cap hit): return leftmost IP (Nginx behavior)
-            leftmost
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| downstream_peer_ip.to_string())
+            leftmost.unwrap_or(*downstream_peer_ip)
         } else {
             // Non-recursive: take the rightmost IP directly
             let rightmost = iter().rev().find_map(|s| s.parse::<IpAddr>().ok());
             match rightmost {
-                Some(ip) if is_trusted(&ip) => downstream_peer_ip.to_string(),
-                Some(ip) => ip.to_string(),
-                None => downstream_peer_ip.to_string(),
+                Some(ip) if is_trusted(&ip) => *downstream_peer_ip,
+                Some(ip) => ip,
+                None => *downstream_peer_ip,
             }
         }
     }

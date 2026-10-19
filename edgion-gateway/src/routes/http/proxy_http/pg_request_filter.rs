@@ -558,7 +558,7 @@ async fn build_request_metadata(
         let resolved = policy
             .resolve_in(&view, &ctx.request_info.downstream_peer_ip, header)
             .remote_ip;
-        crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved)
+        crate::ctx::canonicalize_ip(resolved)
     } else {
         // Transport extraction above already canonicalized this address (or returned empty).
         ctx.request_info.downstream_peer_ip.clone()

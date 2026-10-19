@@ -101,14 +101,15 @@ impl RequestFilter for RealIp {
             plugin_log.push("trusted proxy:miss");
         }
 
-        let remote_ip_changed = session.remote_ip() != resolution.remote_ip.as_str();
+        let remote_ip = resolution.remote_ip.to_string();
+        let remote_ip_changed = session.remote_ip() != remote_ip.as_str();
         if remote_ip_changed {
-            if let Err(_e) = session.set_remote_ip(&resolution.remote_ip) {
+            if let Err(_e) = session.set_remote_ip(&remote_ip) {
                 plugin_log.push_err("set remote IP failed");
                 return PluginRunningResult::GoodNext;
             }
 
-            plugin_log.push_fmt("ip updated: {}", la![sensitive(&resolution.remote_ip)]);
+            plugin_log.push_fmt("ip updated: {}", la![sensitive(&remote_ip)]);
         } else {
             plugin_log.push("ip unchanged");
         }

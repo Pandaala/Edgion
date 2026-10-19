@@ -1574,6 +1574,7 @@ fn global_real_ip_valid_invalid_clean_publication_and_live_visibility_recovery()
         policy
             .resolve_in(&store.capture_snapshot(), "127.0.0.1:123", Some("203.0.113.7"))
             .remote_ip
+            .to_string()
     };
     assert_eq!(resolve(), "127.0.0.1");
     publish("Cluster");
@@ -1582,7 +1583,10 @@ fn global_real_ip_valid_invalid_clean_publication_and_live_visibility_recovery()
     publish("Namespace");
     assert_eq!(resolve(), "127.0.0.1");
     assert_eq!(
-        policy.resolve_in(&held, "127.0.0.1", Some("203.0.113.7")).remote_ip,
+        policy
+            .resolve_in(&held, "127.0.0.1", Some("203.0.113.7"))
+            .remote_ip
+            .to_string(),
         "203.0.113.7"
     );
     publish("Cluster");

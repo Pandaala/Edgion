@@ -131,7 +131,8 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
     assert!(xff.real_ip_header().eq_ignore_ascii_case("x-forwarded-for"));
     assert_eq!(
         xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref(), trusted)
-            .remote_ip,
+            .remote_ip
+            .to_string(),
         "203.0.113.7"
     );
 
@@ -144,7 +145,8 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
                 request.headers.get("x-client-ip").and_then(|v| v.to_str().ok()),
                 trusted
             )
-            .remote_ip,
+            .remote_ip
+            .to_string(),
         "198.51.100.9"
     );
 
@@ -152,7 +154,8 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
     let snapshot = snapshot_x_forwarded_for(&invalid, Some(200));
     assert_eq!(
         xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref(), trusted)
-            .remote_ip,
+            .remote_ip
+            .to_string(),
         "192.168.1.4"
     );
 }

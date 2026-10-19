@@ -284,20 +284,23 @@ fn actual_owner_policies_require_every_list_and_recover_without_rebuilding() {
             )
         };
         assert_eq!(
-            resolve(&held).remote_ip,
+            resolve(&held).remote_ip.to_string(),
             "203.0.113.7",
             "partial-good IpList entries remain usable"
         );
         store.full_set(&std::collections::HashMap::new());
-        assert_eq!(resolve(&store.capture_snapshot()).remote_ip, "192.168.1.254");
         assert_eq!(
-            resolve(&held).remote_ip,
+            resolve(&store.capture_snapshot()).remote_ip.to_string(),
+            "192.168.1.254"
+        );
+        assert_eq!(
+            resolve(&held).remote_ip.to_string(),
             "203.0.113.7",
             "held view covers peer and all hops"
         );
         let missing_secondary = trust_store(Some((&["192.168.0.0/16"], "Cluster")), None);
         assert_eq!(
-            resolve(&missing_secondary.capture_snapshot()).remote_ip,
+            resolve(&missing_secondary.capture_snapshot()).remote_ip.to_string(),
             "192.168.1.254",
             "a matching first list cannot hide a missing later list"
         );
@@ -305,15 +308,21 @@ fn actual_owner_policies_require_every_list_and_recover_without_rebuilding() {
             Some((&["192.168.0.0/16"], "Cluster")),
             Some((&["198.51.100.0/24"], "Cluster")),
         );
-        assert_eq!(resolve(&restored.capture_snapshot()).remote_ip, "203.0.113.7");
+        assert_eq!(
+            resolve(&restored.capture_snapshot()).remote_ip.to_string(),
+            "203.0.113.7"
+        );
         let empty = trust_store(Some((&["invalid-cidr"], "Cluster")), Some((&[], "Cluster")));
-        assert_eq!(resolve(&empty.capture_snapshot()).remote_ip, "192.168.1.254");
+        assert_eq!(
+            resolve(&empty.capture_snapshot()).remote_ip.to_string(),
+            "192.168.1.254"
+        );
         let private = trust_store(
             Some((&["192.168.0.0/16"], "Namespace")),
             Some((&["198.51.100.0/24"], "Namespace")),
         );
         assert_eq!(
-            resolve(&private.capture_snapshot()).remote_ip,
+            resolve(&private.capture_snapshot()).remote_ip.to_string(),
             if global { "192.168.1.254" } else { "203.0.113.7" }
         );
     }
@@ -380,7 +389,8 @@ fn test_invalid_cidrs_skipped() {
                 "192.168.1.254:45678",
                 Some("203.0.113.1, 10.0.0.1")
             )
-            .remote_ip,
+            .remote_ip
+            .to_string(),
         "203.0.113.1"
     );
 }
@@ -394,7 +404,8 @@ fn test_all_invalid_cidrs() {
     assert_eq!(
         policy
             .resolve_in(&store.capture_snapshot(), "192.168.1.1:45678", Some("203.0.113.1"))
-            .remote_ip,
+            .remote_ip
+            .to_string(),
         "192.168.1.1"
     );
 }
@@ -429,4 +440,39 @@ async fn unavailable_plugin_trust_replaces_an_earlier_global_remote_ip_with_effe
         plugin.run_request(&mut session, &mut log).await,
         PluginRunningResult::GoodNext
     );
+}
+
+#[tokio::test]
+async fn mapped_ipv6_keeps_text_comparison_and_setter_boundary() {
+    const MAPPED: &str = "::ffff:203.0.113.1";
+    for (current, changed) in [("203.0.113.1", true), (MAPPED, false)] {
+        let plugin = create_plugin(&create_test_config());
+        let mut session = MockPluginSession::new();
+        trust_mock(&mut session);
+        setup_header_mocks(&mut session, &[("x-forwarded-for", MAPPED)]);
+        session
+            .expect_downstream_peer_ip()
+            .times(1)
+            .return_const("192.168.1.254".to_string());
+        session.expect_remote_ip().times(1).return_const(current.to_string());
+        session
+            .expect_set_remote_ip()
+            .with(eq(MAPPED))
+            .times(usize::from(changed))
+            .returning(|_| Ok(()));
+        let mut log = PluginLog::new(plugin.name());
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        let serialized = serde_json::to_value(&log).unwrap();
+        let entries = serialized["log"].as_array().unwrap();
+        assert_eq!(entries[0], "header xff");
+        assert_eq!(entries[1], "trusted proxy:match");
+        if changed {
+            assert!(entries[2].as_str().unwrap().starts_with("ip updated: "));
+        } else {
+            assert_eq!(entries[2], "ip unchanged");
+        }
+    }
 }

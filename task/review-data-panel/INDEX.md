@@ -7392,3 +7392,30 @@ already tracked in verification-01-cache-policy-fixture.md. Final transport
 identity tests passed four and RealIp tests passed 32. Formatting, workspace
 check/Clippy and seven guards passed with existing unrelated warnings. No full
 suite or live traffic test ran; the pre-existing cache fixture remains deferred.
+
+## Keep RealIp extraction typed until its consumer boundary
+
+RealIpResolution now retains the selected IpAddr instead of allocating its
+Display text. Header traversal returns the already parsed address, preserving
+membership-call order, recursive/nonrecursive selection, hop caps and fallback.
+Global request metadata passes that address directly to canonicalize_ip, removing
+the former Display-to-String, parse and second-format sequence. The RealIp plugin
+still renders ordinary Display text before its existing comparison, setter and
+sensitive log; mapped IPv6 is deliberately not collapsed before that boundary.
+No session API, trust snapshot, schema, log field or GeoIP invalidation changed.
+
+Independent plan review covered all consumers, including configuration-publication
+fixtures. Existing textual expectations remain unchanged. Added tests prove zero
+extractor allocation with an allocation-free membership callback across IPv4,
+IPv6, mapped IPv6, invalid input and cap/fallback cases; final canonical projection
+matches the old text round trip. A plugin regression preserves setter invocation
+when canonical IPv4 differs textually from mapped IPv6, and the unchanged branch
+when mapped text already matches. This does not claim zero allocations in policy
+lookup, plugins, final address formatting or the complete request callback.
+
+Baseline RealIp tests passed 32; final RealIp tests passed 34, including global
+publication and visibility recovery. The request-filter group passed 45 and
+retained the same known response-cache ancestor-policy fixture failure recorded
+in verification-01-cache-policy-fixture.md. Formatting, workspace check/Clippy
+and seven guards passed with existing unrelated warnings. No full suite, live
+traffic or throughput benchmark ran.
