@@ -4728,3 +4728,35 @@ Fresh serial baseline verification passed 60 tests: 27 Resources cost-model,
 Formatting, workspace check/Clippy and document/diff validation passed; existing
 warnings remain outside the scope. These checks do not establish index performance
 or memory benefit. No prototype, live Redis or benchmark ran.
+
+## Borrowed plain GraphQL query components
+
+The canonical GraphQL/REST query decoder now returns Cow text. Components without
+percent or plus escapes borrow their original str; escaped components retain the
+original byte decoder and owned UTF-8 result. The byte-only escape precheck scans
+at most remaining budget plus one, with saturating arithmetic. Plain over-budget
+input returns TooLarge and leaves the remaining budget at zero exactly as before;
+no str slice is taken at a possible interior UTF-8 boundary.
+
+GraphQL GET retains owned final Map keys and query/operation-name strings, while
+unescaped JSON parameters can be parsed directly from borrowed text. REST query
+preflight can retain borrowed names and discard validated borrowed values without
+constructing temporary decoded strings. Mixed owned/borrowed duplicate names still
+compare by content. No body, URI, parser, budget or error ownership changes.
+The supporting cross-crate scope is graphql_request/envelope.rs, its new mounted
+test module and the existing REST configuration tests.
+
+An independent original-decoder oracle first passed against the baseline, then
+against the new implementation. It compares output, error and exact remaining
+budget for plain/multibyte/escaped/malformed inputs, budget boundaries inside
+UTF-8 and around percent escapes, long inputs, zero and usize::MAX. Ownership tests
+verify plain source-pointer identity and owned escaped results. REST duplicate
+coverage now exercises raw/escaped names in both orders.
+
+Fresh serial verification passed 85 tests: 19 Resources frontend, 27 cost-model,
+nine REST configuration, seven Gateway shared evaluation, four guard, five
+rate-limit, one safelist, four router and nine REST adapter tests. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed; existing
+warnings remain outside the diff. Final JSON ownership still allocates as needed,
+and the additional bounded precheck is not claimed to reduce CPU on every escaped
+input. No live transport, allocation or throughput benchmark ran.

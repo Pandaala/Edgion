@@ -121,7 +121,7 @@ fn native_pointer_values_and_explicit_json_lists_are_typed_and_bounded() {
 
 #[test]
 fn entry_query_preflight_rejects_decoded_duplicates_encoding_and_pair_limits() {
-    for query in ["n=1&%6e=2", "n=%GG", "n=%ff", "n=%", "n=%C3"] {
+    for query in ["n=1&%6e=2", "%6e=1&n=2", "n=%GG", "n=%ff", "n=%", "n=%C3"] {
         assert!(validate_rest_query(query, 65536).is_err());
     }
     assert!(validate_rest_query("q=hello%20world&n=10", 65536).is_ok());

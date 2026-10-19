@@ -1,6 +1,7 @@
 use super::{GraphqlError, MAX_ENVELOPE_BYTES};
 use crate::resources::edgion_plugins::plugin_configs::parse_json_instance_with_limits;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 pub(super) struct Envelope<'a> {
     pub(super) query: &'a str,
@@ -41,7 +42,19 @@ fn strict_json(bytes: &[u8]) -> Result<Value, GraphqlError> {
         .map(|p| p.into_value())
         .map_err(|_| GraphqlError::Invalid)
 }
-pub(crate) fn decode(source: &str, remaining: &mut usize) -> Result<String, GraphqlError> {
+pub(crate) fn decode<'a>(source: &'a str, remaining: &mut usize) -> Result<Cow<'a, str>, GraphqlError> {
+    let scan_len = source.len().min(remaining.saturating_add(1));
+    if !source.as_bytes()[..scan_len]
+        .iter()
+        .any(|byte| matches!(*byte, b'%' | b'+'))
+    {
+        if source.len() > *remaining {
+            *remaining = 0;
+            return Err(GraphqlError::TooLarge);
+        }
+        *remaining -= source.len();
+        return Ok(Cow::Borrowed(source));
+    }
     let source = source.as_bytes();
     let mut result = Vec::new();
     let mut i = 0;
@@ -71,7 +84,9 @@ pub(crate) fn decode(source: &str, remaining: &mut usize) -> Result<String, Grap
         *remaining -= 1;
         i += 1;
     }
-    String::from_utf8(result).map_err(|_| GraphqlError::Invalid)
+    String::from_utf8(result)
+        .map(Cow::Owned)
+        .map_err(|_| GraphqlError::Invalid)
 }
 
 pub(super) fn post(bytes: &[u8], limit: usize) -> Result<Value, GraphqlError> {
@@ -91,18 +106,23 @@ pub(super) fn get(query: &str, limit: usize) -> Result<Value, GraphqlError> {
     for pair in query.split('&') {
         let (key, value) = pair.split_once('=').ok_or(GraphqlError::Invalid)?;
         let key = decode(key, &mut remaining)?;
-        if !matches!(key.as_str(), "query" | "operationName" | "variables" | "extensions") || params.contains_key(&key)
+        if !matches!(key.as_ref(), "query" | "operationName" | "variables" | "extensions")
+            || params.contains_key(key.as_ref())
         {
             return Err(GraphqlError::Invalid);
         }
         let value = decode(value, &mut remaining)?;
-        let value = if matches!(key.as_str(), "variables" | "extensions") {
+        let value = if matches!(key.as_ref(), "variables" | "extensions") {
             strict_json(value.as_bytes())?
         } else {
-            Value::String(value)
+            Value::String(value.into_owned())
         };
-        params.insert(key, value);
+        params.insert(key.into_owned(), value);
     }
     let value = Value::Object(params);
     Ok(value)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/graphql_request/envelope_test.rs"]
+mod tests;
