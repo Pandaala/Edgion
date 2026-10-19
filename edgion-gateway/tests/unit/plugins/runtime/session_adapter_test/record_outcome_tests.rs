@@ -3129,3 +3129,26 @@ async fn current_raw_query_borrows_live_uri_without_copying() {
         assert_eq!(adapter.get_query_param_ref("frozen"), Some("yes"));
     }
 }
+
+#[tokio::test]
+async fn dye_value_borrows_clean_success_without_borrowing_adapter() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    let plan = compile_plan("response:\n  - name: X-O\n", "canary");
+    let template_plan = compile_plan("response:\n  - name: X-O\n    value: 'fixed'\n", "canary");
+    let raw = String::from("selected-value");
+    let value = {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let value = adapter.dye_rule_value(&plan.response[0], "canary", DyeOutcome::Success, &raw);
+        assert!(matches!(value, Cow::Borrowed(_)));
+        assert_eq!(value.as_ptr(), raw.as_ptr());
+        adapter.set_request_header("x-selected", &value).unwrap();
+        let failure = adapter.dye_rule_value(&plan.response[0], "canary", DyeOutcome::FailOpen, "bad\r\ncause");
+        assert!(matches!(failure, Cow::Owned(ref value) if value == "canary:fail-open:badcause"));
+        let rendered = adapter.dye_rule_value(&template_plan.response[0], "canary", DyeOutcome::Success, &raw);
+        assert!(matches!(rendered, Cow::Owned(ref value) if value == "fixed"));
+        value
+    };
+    assert_eq!(value, "selected-value");
+    assert_eq!(session.req_header().headers["x-selected"], "selected-value");
+}

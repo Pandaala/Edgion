@@ -5,6 +5,8 @@
 //! the shared `${type:name}` engine (secretRef excluded — client-visible
 //! output). See skills/01-architecture/02-gateway/entry-level-dye.md.
 
+use std::borrow::Cow;
+
 use super::conditions::PluginConditions;
 use crate::gwapi_types::is_valid_header_token;
 use crate::resources::common::request_template::{CompiledTemplate, SecretPolicy, TemplateAdmission, VariablePolicy};
@@ -100,10 +102,16 @@ pub struct DyeSuite {
 }
 
 /// HTTP field-value byte filter: keeps tab and visible bytes, drops CR/LF/NUL/DEL.
-pub fn sanitize_field_value(v: &str) -> String {
-    v.chars()
-        .filter(|c| *c == '\t' || (*c as u32 >= 0x20 && *c as u32 != 0x7f))
-        .collect()
+pub fn sanitize_field_value(v: &str) -> Cow<'_, str> {
+    if is_valid_field_value(v) {
+        Cow::Borrowed(v)
+    } else {
+        Cow::Owned(
+            v.chars()
+                .filter(|c| *c == '\t' || (*c as u32 >= 0x20 && *c as u32 != 0x7f))
+                .collect(),
+        )
+    }
 }
 
 fn is_valid_field_value(value: &str) -> bool {

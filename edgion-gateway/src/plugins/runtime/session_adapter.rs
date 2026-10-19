@@ -756,11 +756,17 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// a glance. Renders BEFORE any mutation of `self` so the immutable
     /// `evaluate_template` borrow never overlaps the later `&mut self` header
     /// write.
-    fn dye_rule_value(&mut self, rule: &CompiledDyeRule, prefix: &str, outcome: DyeOutcome, raw: &str) -> String {
+    fn dye_rule_value<'raw>(
+        &mut self,
+        rule: &CompiledDyeRule,
+        prefix: &str,
+        outcome: DyeOutcome,
+        raw: &'raw str,
+    ) -> Cow<'raw, str> {
         match &rule.value {
-            Some(tpl) => sanitize_field_value(&evaluate_template(tpl, self)),
+            Some(tpl) => Cow::Owned(sanitize_field_value(&evaluate_template(tpl, self)).into_owned()),
             None if outcome == DyeOutcome::Success => sanitize_field_value(raw),
-            None => format!("{}:{}:{}", prefix, outcome.as_str(), sanitize_field_value(raw)),
+            None => Cow::Owned(format!("{}:{}:{}", prefix, outcome.as_str(), sanitize_field_value(raw))),
         }
     }
 

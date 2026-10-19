@@ -43,6 +43,13 @@ reordered subscription lists preserve their previous Boolean membership semantic
 the source configuration and schema validation are unchanged. A new outcome must
 extend the exhaustive mapping as well as the existing capability/producer guards.
 
+The canonical dye field-value sanitizer borrows already-valid text and retains
+the existing owned character-filter path for controls. Valid recorded Success
+values remain borrowed until the normal Header setter copies them; failure
+formatting owns its prefixed result and template rendering owns its sanitized
+result. No Session or template borrow crosses a Header mutation. Invalid text
+incurs an extra precheck; allocation removal is not a universal CPU speedup claim.
+
 ## Alternatives and limits
 
 Capabilities describe statically supported producer paths, not arbitrary script,

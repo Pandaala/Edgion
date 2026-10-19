@@ -145,3 +145,39 @@ fn sanitize_field_value_strips_control_bytes() {
     assert_eq!(sanitize_field_value("a\r\nb\u{0}c\u{7f}d"), "abcd");
     assert_eq!(sanitize_field_value("tab\tok"), "tab\tok");
 }
+
+#[test]
+fn sanitizer_matches_character_filter_for_ascii_and_multibyte_text() {
+    let all_ascii: String = (0u8..=127).map(char::from).collect();
+    for text in [
+        String::new(),
+        all_ascii,
+        "plain\ttext éñ€©π".into(),
+        "a\r\nb\u{0}c\u{7f}é".into(),
+    ] {
+        let expected: String = text
+            .chars()
+            .filter(|c| *c == '\t' || (*c as u32 >= 0x20 && *c as u32 != 0x7f))
+            .collect();
+        assert_eq!(sanitize_field_value(&text), expected);
+    }
+    for byte in 0u8..=127 {
+        let text = char::from(byte).to_string();
+        let expected: String = text
+            .chars()
+            .filter(|c| *c == '\t' || (*c as u32 >= 0x20 && *c as u32 != 0x7f))
+            .collect();
+        assert_eq!(sanitize_field_value(&text), expected);
+    }
+}
+
+#[test]
+fn sanitizer_borrows_valid_input_and_owns_filtered_input() {
+    for input in ["", "plain text", "tab\tok", "éñ€©π"] {
+        let sanitized = sanitize_field_value(input);
+        assert!(matches!(sanitized, Cow::Borrowed(_)));
+        assert_eq!(sanitized.as_ptr(), input.as_ptr());
+        assert_eq!(sanitized, input);
+    }
+    assert!(matches!(sanitize_field_value("a\r\nb"), Cow::Owned(value) if value == "ab"));
+}

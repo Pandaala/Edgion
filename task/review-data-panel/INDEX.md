@@ -5297,3 +5297,29 @@ selections overlap and are not a unique aggregate count. The old-plan baseline
 passed five plan tests. Formatting, workspace check/Clippy and seven repository
 guards passed. Existing unrelated Clippy warnings remain; no live network or
 throughput benchmark ran.
+
+## Borrowed valid dye field values
+
+The canonical Resources sanitizer now returns Cow, borrowing text accepted by its
+existing field-value predicate and retaining the same character filter/collection
+for invalid input. This supporting cross-crate edit is limited to that helper and
+its tests. The Gateway dye renderer borrows clean recorded Success text through
+its ordinary Header setter, and avoids a temporary sanitized String when formatting
+clean failure causes. Template results still become independent owned sanitized
+text; their original spare capacity is not transferred. Prefix handling, template
+precedence, invalid-control removal, header errors and queued ownership are unchanged.
+
+An ASCII/control and permitted multibyte differential first passed with the old
+sanitizer. New Cow/pointer checks cover valid empty/tab/multibyte text and owned
+filtering. A real-adapter test retains a raw-value borrow across a Header write
+and after adapter release while checking owned template/failure results. Invalid
+text adds a precheck before filtering; no universal CPU or throughput gain is
+claimed. Final headers, queued operations and rendered templates still allocate.
+
+Fresh serial verification passed 31 Resources dye tests, 24 Gateway dye tests and
+177 full Session adapter tests (overlapping selections). The initial Gateway
+compile caught a shadowed method lifetime; renaming it to an independent raw-value
+lifetime resolved the error. On corrected source, formatting and workspace
+check/Clippy passed. Seven repository guards passed, with documentation, tracing
+and unit layout checked again after correction. Existing unrelated warnings
+remain; no live network integration or throughput benchmark ran.
