@@ -8328,3 +8328,21 @@ Final verification passed all 22 ProxyRewrite tests, formatting, workspace
 check/Clippy and seven repository guards with existing unrelated Clippy warnings.
 This removes temporary marker allocations, not replacement-result allocations.
 No full suite or throughput benchmark ran.
+
+## Borrow literal JSON Patch expected values
+
+ProxyRewrite's patch-value resolver now returns Cow: configured JSON literals
+borrow their immutable compiled owner, while rendered templates remain owned.
+The read-only Test operation no longer deep-copies its expected literal tree.
+Add/Replace retain their required owned values through into_owned after the same
+profile and work checks; their successful clone count is unchanged, while a
+rejected literal no longer incurs that discarded clone. Profiling, comparison,
+failure ordering, request-body publication and physical limits remain unchanged.
+
+A focused actual-operation regression checks literal loan provenance, nested
+equality/mismatch, exact and exceeded profiling/comparison work budgets, and an
+unchanged document. Existing tests cover ordered operations, atomic publication
+failure and bounded template strings. Fresh verification passed all 23
+ProxyRewrite tests, formatting, workspace check/Clippy and seven repository
+guards with existing unrelated Clippy warnings. Profiler traversal and mutable
+patch operations still allocate; no full suite or throughput benchmark ran.

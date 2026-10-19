@@ -3,6 +3,7 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 use edgion_resources::resources::edgion_plugins::{JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation};
 use http::header::CONTENT_TYPE;
 use http::{HeaderMap, HeaderValue};
+use std::ptr;
 
 fn request_headers(content_type: &'static str) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -267,6 +268,63 @@ fn copy_replacing_root_uses_the_final_shape_budget() {
         .apply_json_operation(&mut document, operation, &session, &mut work)
         .unwrap();
     assert_eq!(document, serde_json::Value::String(source));
+}
+
+#[test]
+fn literal_patch_test_borrows_expected_and_preserves_work_boundaries() {
+    let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "jsonBody": {"operations": [
+            {"op": "test", "path": "/target", "value": {"items": ["payload", true]}}
+        ]}
+    }))
+    .unwrap();
+    let plugin = plugin(&config);
+    let operation = &plugin.config.compiled_json_body.as_ref().unwrap().operations[0];
+    let CompiledJsonPatchOperation::Test { value, .. } = operation else {
+        panic!("configured test operation");
+    };
+    let CompiledJsonPatchValue::Literal(literal) = value else {
+        panic!("configured literal value");
+    };
+    let session = MockPluginSession::new();
+    let mut work = 0;
+    let expected = plugin.resolve_patch_value(value, &session, &mut work).unwrap();
+    assert!(matches!(expected, Cow::Borrowed(actual) if ptr::eq(actual, literal)));
+    // Four nodes, five key bytes and seven string bytes; equality visits four nodes.
+    assert_eq!(work, 16);
+    let original = serde_json::json!({"target": {"items": ["payload", true]}});
+    for (initial_work, expected_result, final_work) in [
+        (0, Ok(()), 20),
+        (MAX_MUTATION_WORK - 20, Ok(()), MAX_MUTATION_WORK),
+        (
+            MAX_MUTATION_WORK - 19,
+            Err(JsonRewriteFailure::BadRequest),
+            MAX_MUTATION_WORK + 1,
+        ),
+        (
+            MAX_MUTATION_WORK - 15,
+            Err(JsonRewriteFailure::BadRequest),
+            MAX_MUTATION_WORK + 1,
+        ),
+    ] {
+        let mut document = original.clone();
+        let mut work = initial_work;
+        assert_eq!(
+            plugin.apply_json_operation(&mut document, operation, &session, &mut work),
+            expected_result
+        );
+        assert_eq!(work, final_work);
+        assert_eq!(document, original);
+    }
+    let mut mismatch = serde_json::json!({"target": {"items": ["payload", false]}});
+    let original = mismatch.clone();
+    let mut work = 0;
+    assert_eq!(
+        plugin.apply_json_operation(&mut mismatch, operation, &session, &mut work),
+        Err(JsonRewriteFailure::BadRequest)
+    );
+    assert_eq!(work, 20);
+    assert_eq!(mismatch, original);
 }
 
 use edgion_resources::resources::edgion_plugins::RegexUri;

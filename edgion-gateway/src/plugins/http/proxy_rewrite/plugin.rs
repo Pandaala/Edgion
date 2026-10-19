@@ -505,7 +505,7 @@ impl ProxyRewrite {
                 validate_add_target(document, path)?;
                 PatchOperation::Add(AddOperation {
                     path: path.clone(),
-                    value: self.resolve_patch_value(value, session, work)?,
+                    value: self.resolve_patch_value(value, session, work)?.into_owned(),
                 })
             }
             CompiledJsonPatchOperation::Remove { path } => {
@@ -516,7 +516,7 @@ impl ProxyRewrite {
                 path.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
                 PatchOperation::Replace(ReplaceOperation {
                     path: path.clone(),
-                    value: self.resolve_patch_value(value, session, work)?,
+                    value: self.resolve_patch_value(value, session, work)?.into_owned(),
                 })
             }
             CompiledJsonPatchOperation::Move { from, path } => {
@@ -543,7 +543,7 @@ impl ProxyRewrite {
             CompiledJsonPatchOperation::Test { path, value } => {
                 let expected = self.resolve_patch_value(value, session, work)?;
                 let actual = path.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
-                if !rfc_json_equal(actual, &expected, work)? {
+                if !rfc_json_equal(actual, expected.as_ref(), work)? {
                     return Err(JsonRewriteFailure::BadRequest);
                 }
                 return Ok(());
@@ -560,14 +560,14 @@ impl ProxyRewrite {
         }
     }
 
-    fn resolve_patch_value(
+    fn resolve_patch_value<'a>(
         &self,
-        value: &CompiledJsonPatchValue,
+        value: &'a CompiledJsonPatchValue,
         session: &dyn PluginSession,
         work: &mut u64,
-    ) -> Result<serde_json::Value, JsonRewriteFailure> {
+    ) -> Result<Cow<'a, serde_json::Value>, JsonRewriteFailure> {
         let value = match value {
-            CompiledJsonPatchValue::Literal(value) => value.clone(),
+            CompiledJsonPatchValue::Literal(value) => Cow::Borrowed(value),
             CompiledJsonPatchValue::Template(template) => {
                 let value =
                     evaluate_template_bounded(template, session, self.json_body_limit as usize).map_err(|error| {
@@ -578,7 +578,7 @@ impl ProxyRewrite {
                             | TemplateEvaluationError::UnavailableVariable => JsonRewriteFailure::Internal,
                         }
                     })?;
-                serde_json::Value::String(value)
+                Cow::Owned(serde_json::Value::String(value))
             }
         };
         let profile = profile_json_value(&value).map_err(|_| JsonRewriteFailure::BadRequest)?;
