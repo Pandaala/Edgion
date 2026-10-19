@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Typed gRPC terminal status evidence](grpc-08-typed-terminal-status-evidence.md)
+
 - [Listener specificity lookup indexing](routing-02-listener-specificity-index.md)
 
 - [ClientHello inspection buffer capacity](tls-04-clienthello-buffer-capacity.md)
@@ -6709,3 +6711,17 @@ buffer and convert it without another allocation, retaining byte identity and
 buffer address. Formatting, workspace check/Clippy and seven guards passed with
 existing unrelated warnings. No full suite, live integration or throughput
 benchmark ran.
+
+## gRPC trailer evidence representation audit
+
+Traced original status capture through mutable trailer companions, the response
+driver lease and transcoder settlement. Valid evidence currently constructs a
+one-entry HeaderMap and is parsed again; invalid/missing evidence retains its
+empty-map and outer presence semantics. Recorded typed-evidence alternatives
+in grpc-08 because the shared public processor trait and terminal ownership
+require an explicit scope decision. No runtime change was selected.
+
+Independent plan review approved two documents. Fresh baseline passed 27
+transcoder, 11 upstream-trailer and six response-callback tests (44 total),
+formatting check, workspace check/Clippy and agent-doc validation. Existing
+unrelated warnings remain; no full suite, live integration or benchmark ran.
