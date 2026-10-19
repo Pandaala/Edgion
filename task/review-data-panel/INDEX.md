@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [JSON Patch execution ownership](rewrite-02-json-patch-execution-ownership.md)
+
 - [Lazy dye outcome value formatting](dye-02-lazy-outcome-value-formatting.md)
 
 - [Endpoint probe forwarded-header preparation](endpoint-04-forwarded-header-preparation.md)
