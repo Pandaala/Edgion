@@ -201,8 +201,15 @@ fn test_validate_key_valid() {
     assert!(metadata.is_some());
 
     let meta = metadata.unwrap();
-    assert_eq!(meta.headers.get("X-Consumer-Username"), Some(&"jack".to_string()));
-    assert_eq!(meta.headers.get("X-Customer-ID"), Some(&"cust-001".to_string()));
+    assert_eq!(meta.username.as_deref(), Some("jack"));
+    assert!(meta
+        .headers
+        .iter()
+        .any(|(name, value)| name == "X-Consumer-Username" && value == "jack"));
+    assert!(meta
+        .headers
+        .iter()
+        .any(|(name, value)| name == "X-Customer-ID" && value == "cust-001"));
 }
 
 #[test]
@@ -506,5 +513,71 @@ fn borrowed_key_sources_preserve_policy_and_empty_fallback() {
             (None, None) => {}
             _ => panic!("unexpected credential source selection"),
         }
+    }
+}
+
+#[test]
+fn prepared_metadata_preserves_forwarding_operations_and_raw_username() {
+    for username in ["alice", "", "private\nuser", "private\u{7f}user", "café"] {
+        let mut metadata = metadata_with_group("partner-a", Some(username));
+        for (name, value) in [
+            ("x-consumer-username", "case-collision"),
+            ("X-Empty", ""),
+            ("X-Tab", "a\tb"),
+            ("X-Unicode", "café"),
+            ("X-CR", "a\rb"),
+            ("X-LF", "a\nb"),
+            ("X-Nul", "a\0b"),
+            ("X-Control", "a\u{1}b"),
+            ("X-DEL", "a\u{7f}b"),
+            ("X-Bad\rName", "valid"),
+            ("X-Bad\nName", "valid"),
+            ("X-Bad\0Name", "valid"),
+            ("Bad Name", "still-attempted"),
+            ("", "still-attempted"),
+        ] {
+            metadata.headers.insert(name.to_owned(), value.to_owned());
+        }
+        // Run the old projection against this exact map before consuming it.
+        let mut expected = Vec::new();
+        let mut reference = MockPluginSession::new();
+        reference.expect_set_request_header_value().returning(|_, _| Ok(()));
+        for (name, value) in &metadata.headers {
+            if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
+                continue;
+            }
+            if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
+                continue;
+            }
+            if set_sensitive_request_header(&mut reference, name, value).is_ok() {
+                expected.push((name.clone(), value.clone()));
+            }
+        }
+        let prepared = PreparedKeyMetadata::new(metadata);
+        assert_eq!(prepared.group, "partner-a");
+        assert_eq!(prepared.username.as_deref(), Some(username));
+        assert_eq!(prepared.headers.len(), expected.len());
+        let mut session = MockPluginSession::new();
+        let mut sequence = Sequence::new();
+        for ((name, value), (expected_name, expected_value)) in prepared.headers.iter().zip(expected) {
+            assert_eq!(name, &expected_name);
+            assert_eq!(value.as_bytes(), expected_value.as_bytes());
+            assert!(value.is_sensitive());
+            let original_ptr = value.as_bytes().as_ptr() as usize;
+            session
+                .expect_set_request_header_value()
+                .withf(move |name, value| {
+                    name == expected_name
+                        && value.as_bytes() == expected_value.as_bytes()
+                        && value.is_sensitive()
+                        && (value.is_empty() || value.as_bytes().as_ptr() as usize == original_ptr)
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                // Failed writes must not prevent later fields from being attempted.
+                .returning(|_, _| Err("test setter rejection".into()));
+        }
+        let auth = KeyAuth::from_config(&create_test_config());
+        auth.set_upstream_headers(&mut session, &prepared);
     }
 }

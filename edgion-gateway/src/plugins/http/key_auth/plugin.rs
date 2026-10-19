@@ -27,8 +27,42 @@ fn sha256_of(s: &str) -> [u8; 32] {
     Sha256::digest(s.as_bytes()).into()
 }
 
-fn hash_keys(raw: HashMap<String, KeyMetadata>) -> HashMap<[u8; 32], KeyMetadata> {
-    raw.into_iter().map(|(k, v)| (sha256_of(&k), v)).collect()
+struct PreparedKeyMetadata {
+    group: String,
+    username: Option<String>,
+    headers: Vec<(String, http::HeaderValue)>,
+}
+
+impl PreparedKeyMetadata {
+    fn new(metadata: KeyMetadata) -> Self {
+        // Logging retains the exact-case username even when forwarding skips it.
+        let username = metadata.headers.get("X-Consumer-Username").cloned();
+        let headers = metadata
+            .headers
+            .into_iter()
+            .filter_map(|(name, value)| {
+                if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+                    || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+                {
+                    return None;
+                }
+                let mut value = http::HeaderValue::from_str(&value).ok()?;
+                value.set_sensitive(true);
+                Some((name, value))
+            })
+            .collect();
+        Self {
+            group: metadata.group,
+            username,
+            headers,
+        }
+    }
+}
+
+fn hash_keys(raw: HashMap<String, KeyMetadata>) -> HashMap<[u8; 32], PreparedKeyMetadata> {
+    raw.into_iter()
+        .map(|(k, v)| (sha256_of(&k), PreparedKeyMetadata::new(v)))
+        .collect()
 }
 
 /// Key Authentication plugin
@@ -44,7 +78,7 @@ pub struct KeyAuth {
     forward_anonymous_username: bool,
     /// SHA-256(key) → Metadata mapping. Keys are stored as hashes to avoid keeping
     /// plaintext API keys in process memory after initialization.
-    keys: HashMap<[u8; 32], KeyMetadata>,
+    keys: HashMap<[u8; 32], PreparedKeyMetadata>,
 }
 
 impl KeyAuth {
@@ -104,21 +138,15 @@ impl KeyAuth {
         None
     }
 
-    fn validate_key(&self, key: &str) -> Option<&KeyMetadata> {
+    fn validate_key(&self, key: &str) -> Option<&PreparedKeyMetadata> {
         self.keys.get(&sha256_of(key))
     }
 
     /// Set upstream headers from key metadata (whitelist controlled)
-    fn set_upstream_headers(&self, session: &mut dyn PluginSession, metadata: &KeyMetadata) {
+    fn set_upstream_headers(&self, session: &mut dyn PluginSession, metadata: &PreparedKeyMetadata) {
         for (name, value) in &metadata.headers {
-            if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                continue;
-            }
-            if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                continue;
-            }
-            // Use set (not append) to prevent client header forgery
-            let _ = set_sensitive_request_header(session, name, value);
+            // Keep the live setter's replacement and deferred-mutation semantics.
+            let _ = session.set_request_header_value(name, value.clone());
         }
     }
 
@@ -193,7 +221,7 @@ impl RequestFilter for KeyAuth {
         plugin_log.push(key_source_label);
 
         // Log OK with group attribution + optional username
-        if let Some(username) = metadata.headers.get("X-Consumer-Username") {
+        if let Some(username) = &metadata.username {
             plugin_log.push_fmt("OK group={} user {}", la![metadata.group.as_ref(), sensitive(username)]);
         } else {
             plugin_log.push_fmt("OK group={}", la![metadata.group.as_ref()]);

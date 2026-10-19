@@ -7775,3 +7775,25 @@ Existing known/unknown dispatch and pinned-generation regressions cover the
 control-flow and lifetime boundary. Fresh verification passed 20 BasicAuth and
 36 shared-auth tests, formatting, workspace check/Clippy and seven repository
 guards with existing unrelated warnings. No full suite or benchmark ran.
+
+## Prepare KeyAuth metadata header values once
+
+KeyAuth now prepares metadata HeaderValues at construction instead of scanning
+and parsing the same immutable name/value strings after each successful lookup.
+Prepared values are marked sensitive immediately and cloned through the existing
+live session setter. Raw names and source-map iteration order are retained,
+including case collisions; failed writes still do not stop subsequent fields.
+RPC sealing, deferred-credential mutation handling, authentication, failure delay
+and credential hiding keep their existing owners. Exact-case username text is
+retained separately before filtering so skipped values keep the same masked log
+behavior and group attribution.
+
+A differential regression compares the previous projection's attempted writes
+with prepared writes for invalid names/values, control bytes, empty/tab/multibyte
+values and case collisions. It checks sensitivity, shared payload identity and
+continuation after setter failure. Fresh verification passed 16 KeyAuth,
+36 shared-auth and one real typed-header adapter test, formatting, workspace
+check/Clippy and seven repository guards with existing unrelated warnings.
+This removes repeated validation and value payload copies; it does not eliminate
+header-name work or promise zero allocations, lower total resident memory or
+measured throughput. No full suite or benchmark ran.
