@@ -7145,3 +7145,23 @@ alongside exact result/log assertions. A fixture-only unsupported Default use
 was corrected before final verification. Formatting, workspace check/Clippy and
 seven guards passed with existing unrelated warnings. No full suite or live
 integration ran.
+
+## Reuse equal-address GeoIP slots without a second parse
+
+After parsing and normalizing the current address successfully, resolve_geo
+now recognizes identical raw address strings before parsing the other slot's
+address. This skips the second SocketAddr/IpAddr parse only when a cached other
+slot exists and the valid strings match. Different textual representations
+retain the existing normalized comparison, including mapped IPv4 and ports.
+Invalid current input still returns NotFound before consulting the cache.
+Lazy ownership, Found Arc sharing, RealIp invalidation and logging are unchanged.
+Unequal strings incur an additional comparison; no overall throughput claim is
+made and no parsed-address cache is introduced.
+
+Independent plan review passed. The former equal-result test now seeds a Found
+value and checks Arc identity through both accessor orders for identical and
+equivalent address spellings. Negative cases cover identical invalid input,
+invalid other input and different hosts. Baseline context tests passed (3);
+fresh verification passed 59 tests: 4 GeoIP context, 23 HTTP/Stream GeoIP and
+32 RealIp-filtered tests. Formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. No full suite or live integration ran.

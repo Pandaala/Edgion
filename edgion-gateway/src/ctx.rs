@@ -3593,7 +3593,8 @@ impl EdgionHttpContext {
         let ip = normalize_addr(ip);
 
         if let Some(cached) = other_slot.get() {
-            if parse_ip_str(other_addr).map(normalize_addr) == Some(ip) {
+            // The current address is already valid; identical text needs no second parse.
+            if addr == other_addr || parse_ip_str(other_addr).map(normalize_addr) == Some(ip) {
                 return cached.clone();
             }
         }
