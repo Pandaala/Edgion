@@ -5801,3 +5801,31 @@ accounting tests. Formatting, workspace check/Clippy and seven repository guards
 passed with existing unrelated warnings after correcting a new test-only lint.
 The known native DNS/TLS fixture issue remains in verification-03; this batch did
 not rerun or claim the full native-dispatch suite or live integration coverage.
+
+## Selective captured LB policy copying
+
+ServicePeerInput now carries only borrowed Service/TLS identity. The owned LB
+policy copy is created inside the EndpointSlice branch, immediately before
+selection and subsequent transfer into upstream metadata. Self-resolved
+ExternalName and earlier TLS/discovery/path failures no longer copy a named
+ConsistentHash value they never use. EndpointSlice still owns one policy copy.
+
+The source remains backend_context.effective_policy from the request capture,
+not a live policy store. No await occurs before this branch; discovery cache
+recording only touches response-cache state, and Service capture, path selection
+and degrade-policy reads cannot replace the captured policy. Existing selection,
+sticky behavior, metadata ownership and error ordering are preserved.
+
+Independent plan review approved the four-file scope. A new allocation regression
+passed identity/snapshot assertions on old production and then failed with one
+allocation versus zero; after the change input construction has zero calls and
+requested bytes. The HTTP/gRPC actual dispatch matrix now supplies a named
+captured policy and verifies both retained snapshot identity and EndpointSlice
+versus self-DNS upstream policy values; it passed before and after the change.
+
+Fresh serial verification passed 14 tests: five selected-input, one actual
+HTTP/gRPC dispatch matrix, one policy-transfer matrix and seven LB accounting
+tests. Formatting, workspace check/Clippy and seven repository guards passed
+with existing unrelated warnings. The broader native-dispatch fixture issue in
+verification-03 remains separate. No whole-request allocation count, live DNS
+transport, full integration run or throughput improvement is claimed.

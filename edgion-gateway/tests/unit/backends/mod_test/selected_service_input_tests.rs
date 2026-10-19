@@ -114,3 +114,46 @@ fn selected_service_identity_and_final_input_borrow_without_allocations() {
     assert_eq!(allocations.calls, 0);
     assert_eq!(allocations.requested_bytes, 0);
 }
+
+pub(super) fn named_captured_policy() -> Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy> {
+    use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+    use edgion_resources::resources::lb_policy::ConsistentHashOn;
+
+    Arc::new(EffectiveBackendTrafficPolicy {
+        ancestor_admission: Some(PreparedPolicyAncestorAdmission::Unrestricted),
+        resolved_target_class: ResolvedPolicyTargetClass::Service,
+        winning_policy_key: "default/captured".to_owned(),
+        load_balancer: Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
+            "x-routing-key".to_owned(),
+        ))),
+        degrade_threshold_override: None,
+        upstream_authority: None,
+        upstream_authority_config: None,
+        retry_budget: None,
+        retry_constraint: None,
+        circuit_breaker_limit: None,
+        connect_timeout: None,
+        outlier_detection: None,
+        ai_credential_outlier: None,
+        logical_circuit_breaker: None,
+    })
+}
+
+#[test]
+fn selected_input_does_not_copy_named_captured_policy() {
+    let selected = selected_service("service-a");
+    let mut context = backend_context("tenant/service-a");
+    let policy = named_captured_policy();
+    context.effective_policy = Some(Arc::clone(&policy));
+    context.effective_policy_captured = true;
+    let (input, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        selected_http_service_input(&selected, Some(&context)).unwrap()
+    });
+    assert_eq!(input.service.key(), "tenant/service-a");
+    assert!(Arc::ptr_eq(context.effective_policy.as_ref().unwrap(), &policy));
+    assert_eq!(captured_lb_policy(Some(&context)), policy.load_balancer);
+    assert_eq!(allocations.calls, 0);
+    assert_eq!(allocations.requested_bytes, 0);
+}

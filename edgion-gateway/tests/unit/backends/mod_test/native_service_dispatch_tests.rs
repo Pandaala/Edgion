@@ -91,7 +91,6 @@ fn input(selected: &SelectedServiceBackend) -> ServicePeerInput<'_> {
     ServicePeerInput {
         service: selected.logical().service_target().unwrap(),
         backend_tls_policy: selected.backend_tls_policy(),
-        lb_policy: None,
     }
 }
 
@@ -108,6 +107,10 @@ async fn actual_http_and_grpc_default_owner_reach_standard_external_name_peer() 
         for grpc in [false, true] {
             let selected = SelectedLogicalBackend::Service(selected(None, 443, BackendTlsPolicyLookup::Absent));
             let mut ctx = context("default/backend");
+            let policy = super::selected_service_input_tests::named_captured_policy();
+            let backend = ctx.backend_context.as_mut().unwrap();
+            backend.effective_policy = Some(Arc::clone(&policy));
+            backend.effective_policy_captured = true;
             if grpc {
                 ctx.selected_grpc_backend = Some(grpc_selected(None, 443, BackendTlsPolicyLookup::Absent));
             }
@@ -127,6 +130,18 @@ async fn actual_http_and_grpc_default_owner_reach_standard_external_name_peer() 
             assert_eq!(peer._address.as_inet().unwrap().to_string(), expected);
             assert!(!peer.is_tls(), "absence must stay plaintext even at port 443");
             assert_eq!(reads.get(), 1);
+            assert!(Arc::ptr_eq(
+                ctx.backend_context.as_ref().unwrap().effective_policy.as_ref().unwrap(),
+                &policy
+            ));
+            assert_eq!(
+                ctx.get_current_upstream().unwrap().lb_policy,
+                if kind == Some("ExternalName") {
+                    None
+                } else {
+                    policy.load_balancer.clone()
+                }
+            );
         }
     }
 }

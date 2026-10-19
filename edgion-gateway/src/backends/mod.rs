@@ -72,7 +72,6 @@ use selector::{extract_hash_key, CapturedServiceSelection, ResolvedServiceEndpoi
 struct ServicePeerInput<'a> {
     service: &'a CompiledServiceTarget,
     backend_tls_policy: &'a BackendTlsPolicyLookup,
-    lb_policy: Option<ParsedLBPolicy>,
 }
 
 pub(crate) fn service_context_matches(
@@ -99,7 +98,6 @@ fn selected_http_service_input<'a>(
     Ok(ServicePeerInput {
         service,
         backend_tls_policy: selected.backend_tls_policy(),
-        lb_policy: captured_lb_policy(backend_context),
     })
 }
 
@@ -164,7 +162,6 @@ where
         ServicePeerInput {
             service,
             backend_tls_policy: selected.backend_tls_policy(),
-            lb_policy: captured_lb_policy(ctx.backend_context.as_ref()),
         }
     } else {
         match selected_http {
@@ -188,22 +185,23 @@ where
     let degrade_policy = captured_degrade_policy(ctx.backend_context.as_ref());
     match native_service_path(&captured)? {
         ExternalNamePath::EndpointSlice => {
+            let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
             // Only ConsistentHash consumes RemoteIp; other algorithms keep the
             // existing allocation-free request input preparation.
-            let remote_ip = if matches!(input.lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
                 ctx.request_info.remote_ip.clone()
             } else {
                 String::new()
             };
             let query = ctx.query(session.req_header());
             let endpoint = take_sp_target_or_select(ctx, &captured, || {
-                captured.select(&input.lb_policy, degrade_policy, Some(session), &remote_ip, query)
+                captured.select(&lb_policy, degrade_policy, Some(session), &remote_ip, query)
             })?;
             build_peer_from_lb_selection(
                 ctx,
                 session,
                 input.service.key(),
-                input.lb_policy,
+                lb_policy,
                 input.backend_tls_policy,
                 endpoint,
                 gateway_key_ref,
