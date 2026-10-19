@@ -7624,3 +7624,21 @@ hex/NanoId alphabets. Fresh verification passed 29 request-trace-ID, 15 RequestI
 and 17 early-request-filter tests (61 total), formatting, workspace check/Clippy
 and seven guards with existing unrelated warnings. No full suite or allocation/
 throughput benchmark ran; no fixed allocation count or capacity saving is claimed.
+
+## Retain ProxyRewrite strings after unmatched regex stages
+
+The argument, numeric-capture and named-path substitution stages now retain their
+input String when regex returns Cow::Borrowed, accepting a new String only for
+Cow::Owned. Locked regex 1.13.1 returns the original haystack on no match; matches
+still build an owned result even when a replacement callback returns an unchanged
+span. All regex calls, callbacks, getters, stage order, encoding and sentinel
+handling remain intact. The initial URI replacement and final restoration are
+unchanged, and staged-template compilation remains deferred separately.
+
+Independent plan review approved the runtime change and the owning knowledge
+sentence correction. The existing 21 ProxyRewrite tests passed before and after,
+including both contexts, injected dollars, exact named spans and URI/header sinks.
+Formatting, workspace check/Clippy and seven guards passed with existing unrelated
+warnings. This removes no-match text copies but retains prior String capacity;
+no retained-memory, total-allocation or throughput improvement is claimed.
+No full suite, live integration or benchmark ran.

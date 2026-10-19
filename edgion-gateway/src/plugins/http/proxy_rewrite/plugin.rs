@@ -157,30 +157,30 @@ impl ProxyRewrite {
         //        values this is identity, so the header rewrite UX is unchanged.
         //    Escape $ in each query param value so step 4 does not re-interpret
         //    them as variable references.
-        result = ARG_PATTERN
-            .replace_all(&result, |caps: &regex::Captures| {
-                let param_name = &caps[1];
-                let value = session.get_query_param_ref(param_name).unwrap_or_default();
-                let encoded = Self::url_encode(value);
-                Self::escape_dollar(Cow::Owned(encoded)).into_owned()
-            })
-            .into_owned();
+        if let Cow::Owned(replaced) = ARG_PATTERN.replace_all(&result, |caps: &regex::Captures| {
+            let param_name = &caps[1];
+            let value = session.get_query_param_ref(param_name).unwrap_or_default();
+            let encoded = Self::url_encode(value);
+            Self::escape_dollar(Cow::Owned(encoded)).into_owned()
+        }) {
+            result = replaced;
+        }
 
         // 3. Replace capture groups $1-$9.
         //    Escape $ in each capture value so step 4 cannot treat it as $<name>.
         if let Some(caps) = captures {
-            result = CAPTURE_PATTERN
-                .replace_all(&result, |c: &regex::Captures| {
-                    let idx: usize = c[1].parse().unwrap_or(0);
-                    let value = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
-                    let encoded = match context {
-                        // Both contexts encode today. Keeping the match form makes a future
-                        // context-specific divergence touch exactly this site.
-                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
-                    };
-                    Self::escape_dollar(Cow::Owned(encoded)).into_owned()
-                })
-                .into_owned();
+            if let Cow::Owned(replaced) = CAPTURE_PATTERN.replace_all(&result, |c: &regex::Captures| {
+                let idx: usize = c[1].parse().unwrap_or(0);
+                let value = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
+                let encoded = match context {
+                    // Both contexts encode today. Keeping the match form makes a future
+                    // context-specific divergence touch exactly this site.
+                    TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
+                };
+                Self::escape_dollar(Cow::Owned(encoded)).into_owned()
+            }) {
+                result = replaced;
+            }
         }
 
         // 4. Replace path parameters $<name> captured at route match.
@@ -188,28 +188,28 @@ impl ProxyRewrite {
         // Skip if the matched name is "uri" (already handled) or starts with "arg_".
         if result.contains('$') {
             let stage_input = result.as_str();
-            result = PATH_PARAM_PATTERN
-                .replace_all(stage_input, |caps: &regex::Captures| {
-                    let Some(matched) = caps.get(0) else {
-                        return Cow::Borrowed("");
-                    };
-                    let original = &stage_input[matched.start()..matched.end()];
-                    let param_name = &caps[1];
-                    // Injected dollars stay literal, even beside an original token of the same name.
-                    if (matched.start() > 0 && stage_input.as_bytes()[matched.start() - 1] == b'\0')
-                        || param_name == "uri"
-                        || param_name.starts_with("arg_")
-                    {
-                        return Cow::Borrowed(original);
-                    }
-                    match session.get_path_param_ref(param_name) {
-                        Some(value) => Cow::Owned(match context {
-                            TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
-                        }),
-                        None => Cow::Borrowed(original),
-                    }
-                })
-                .into_owned();
+            if let Cow::Owned(replaced) = PATH_PARAM_PATTERN.replace_all(stage_input, |caps: &regex::Captures| {
+                let Some(matched) = caps.get(0) else {
+                    return Cow::Borrowed("");
+                };
+                let original = &stage_input[matched.start()..matched.end()];
+                let param_name = &caps[1];
+                // Injected dollars stay literal, even beside an original token of the same name.
+                if (matched.start() > 0 && stage_input.as_bytes()[matched.start() - 1] == b'\0')
+                    || param_name == "uri"
+                    || param_name.starts_with("arg_")
+                {
+                    return Cow::Borrowed(original);
+                }
+                match session.get_path_param_ref(param_name) {
+                    Some(value) => Cow::Owned(match context {
+                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
+                    }),
+                    None => Cow::Borrowed(original),
+                }
+            }) {
+                result = replaced;
+            }
         }
 
         // Restore any escaped $ signs that were produced by earlier substitution steps.
