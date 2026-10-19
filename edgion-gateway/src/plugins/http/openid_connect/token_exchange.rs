@@ -133,14 +133,14 @@ impl OpenidConnect {
                     OidcOperation::TokenExchange,
                     OidcDependencyFailure::MissingEndpoint,
                 ))?;
-        let mut params: Vec<(&str, String)> = vec![
-            ("grant_type", "authorization_code".to_string()),
-            ("code", code.to_string()),
-            ("redirect_uri", redirect_uri.to_string()),
-            ("client_id", self.config.client_id.clone()),
+        let mut params: Vec<(&str, &str)> = vec![
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("client_id", self.config.client_id.as_str()),
         ];
         if let Some(verifier) = code_verifier {
-            params.push(("code_verifier", verifier.to_string()));
+            params.push(("code_verifier", verifier));
         }
 
         Self::admit_idp_url(token_endpoint, OidcOperation::TokenExchange)?;
@@ -157,7 +157,7 @@ impl OpenidConnect {
                     .basic_auth(self.config.client_id.as_str(), Some(client_secret))
                     .form(&params),
                 EndpointAuthMethod::ClientSecretPost => {
-                    params.push(("client_secret", client_secret.to_string()));
+                    params.push(("client_secret", client_secret));
                     base_request.form(&params)
                 }
             }
@@ -193,22 +193,22 @@ impl OpenidConnect {
             let client_secret = self.client_secret().ok_or_else(Self::credential_failure)?;
             match self.config.token_endpoint_auth_method {
                 EndpointAuthMethod::ClientSecretBasic => {
-                    let mut form: Vec<(&str, String)> = vec![("token", token.to_string())];
+                    let mut form: Vec<(&str, &str)> = vec![("token", token)];
                     if let Some(hint) = token_type_hint {
-                        form.push(("token_type_hint", hint.to_string()));
+                        form.push(("token_type_hint", hint));
                     }
                     base_request
                         .basic_auth(self.config.client_id.as_str(), Some(client_secret))
                         .form(&form)
                 }
                 EndpointAuthMethod::ClientSecretPost => {
-                    let mut form: Vec<(&str, String)> = vec![
-                        ("token", token.to_string()),
-                        ("client_id", self.config.client_id.clone()),
-                        ("client_secret", client_secret.to_string()),
+                    let mut form: Vec<(&str, &str)> = vec![
+                        ("token", token),
+                        ("client_id", self.config.client_id.as_str()),
+                        ("client_secret", client_secret),
                     ];
                     if let Some(hint) = token_type_hint {
-                        form.push(("token_type_hint", hint.to_string()));
+                        form.push(("token_type_hint", hint));
                     }
                     base_request.form(&form)
                 }
@@ -292,10 +292,10 @@ impl OpenidConnect {
                     OidcOperation::Refresh,
                     OidcDependencyFailure::MissingEndpoint,
                 ))?;
-        let mut params: Vec<(&str, String)> = vec![
-            ("grant_type", "refresh_token".to_string()),
-            ("refresh_token", refresh_token.to_string()),
-            ("client_id", self.config.client_id.clone()),
+        let mut params: Vec<(&str, &str)> = vec![
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", self.config.client_id.as_str()),
         ];
 
         Self::admit_idp_url(token_endpoint, OidcOperation::Refresh)?;
@@ -312,7 +312,7 @@ impl OpenidConnect {
                     .basic_auth(self.config.client_id.as_str(), Some(client_secret))
                     .form(&params),
                 EndpointAuthMethod::ClientSecretPost => {
-                    params.push(("client_secret", client_secret.to_string()));
+                    params.push(("client_secret", client_secret));
                     base_request.form(&params)
                 }
             }

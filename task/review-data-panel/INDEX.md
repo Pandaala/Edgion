@@ -7919,3 +7919,20 @@ and cannot distinguish the selected destination. Fresh verification passed
 151 OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and
 seven repository guards with existing unrelated warnings. No full suite or
 throughput benchmark ran.
+
+## Borrow OIDC token-operation form values
+
+Authorization-code exchange, token refresh and revocation now borrow form values
+from their arguments and immutable plugin generation instead of allocating a
+String for each value before encoding. Field order, optional PKCE/hint fields,
+Basic/Post authentication branches, endpoint admission and failure handling are
+unchanged. The locked reqwest 0.12.28 form builder synchronously serializes the
+values into its owned request body; prepared-secret access holds no lock.
+The form Vec and encoded body still allocate. Introspection already borrows its
+form values and needed no change.
+
+Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards. Existing unrelated Clippy
+warnings remain. Serialization equivalence follows from unchanged tuple order
+and serde's String/str serialize_str implementations; no new mirror test or
+network fixture was added. No full suite or throughput benchmark ran.
