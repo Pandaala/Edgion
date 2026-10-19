@@ -5231,3 +5231,28 @@ Fresh serial verification passed 122 shared outbound tests, 13 ForwardAuth tests
 and 45 Webhook provider tests. Formatting, workspace check/Clippy and seven
 repository guards passed. Existing unrelated Clippy warnings remain outside the
 diff; no live network integration or throughput benchmark ran.
+
+## Canonical template variable borrowing
+
+The canonical resolver now uses private Cow values: Header, decoded Query,
+current/entry path, method, remote IP and resolved Secret text borrow their
+existing owners until the synchronous output append. Cookie, ctx, URI and
+matched-route results remain owned. Final output still owns independent text;
+no consumer-local walker, new cache or Secret lookup was added. Typed Header
+sensitivity is recorded before invalid-text filtering as before, including
+opaque sensitive fields. Missing/empty distinctions, Request/Trusted capability
+errors, Secret denial, escaping and bounded output growth are unchanged.
+
+Coherent query mocks and the opaque-sensitive Header assertion first passed on
+the old resolver. New pointer/Cow assertions cover borrowed sources and retained
+owned cases; a rendered result remains valid after dropping session and Secret
+owners. This eliminates selected intermediate String copies, not final rendered
+storage or all template allocations; no throughput gain is measured.
+
+Fresh serial verification passed 361 tests: 23 template, 122 shared outbound,
+13 ForwardAuth, 45 Webhook provider, 114 canonical AI guard, 21 ProxyRewrite,
+12 CtxSet, 4 dye, 6 authority and one real-adapter sensitive-source case. The old
+plugin-local AI guard filters matched zero tests; the replacement ai::guards
+filter verified both current request and semantic owners. Formatting, workspace
+check/Clippy and seven repository guards passed. Existing unrelated warnings
+remain; no live network integration or throughput benchmark ran.

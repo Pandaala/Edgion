@@ -28,6 +28,14 @@ header-source and cookie-substitution sensitivity as well as origin,
 static-field, cookie and typed-forwarding protection. Prior blanket marking was
 already safe for Secret-derived headers; this task did not establish a prior leak.
 
+The resolver borrows Header, decoded Query, current/entry path, method, remote IP
+and resolved Secret text until the synchronous walker appends it. Cookie, ctx,
+URI and matched-route accessors retain their owned results. The final rendered
+String remains independent of both session and Secret-map lifetimes. Header
+sensitivity is captured before text filtering, including opaque sensitive values;
+Secret substitutions remain sensitive even when absent or empty. This removes
+intermediate copies without changing source selection, budgets or capabilities.
+
 ## Alternatives and limits
 
 The Task 06 cancellation repair adds explicit `TemplateContext::Request` and

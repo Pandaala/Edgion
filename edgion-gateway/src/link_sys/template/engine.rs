@@ -3,6 +3,8 @@
 //! Compiled segments are never reparsed. The output budget bounds rendered UTF-8
 //! bytes, not owned source values returned by session accessors or allocator rounding.
 
+use std::borrow::Cow;
+
 use crate::plugins::runtime::{traits::session::RouteProto, PluginSession};
 use edgion_resources::resources::common::{
     external_http::ResolvedSecrets,
@@ -219,17 +221,17 @@ pub fn evaluate_template_bounded(
     .map(RenderedTemplate::into_string)
 }
 
-struct ResolvedVariable {
-    value: Option<String>,
+struct ResolvedVariable<'a> {
+    value: Option<Cow<'a, str>>,
     sensitive: bool,
 }
 
-fn resolve_var(
+fn resolve_var<'a>(
     var_type: &TemplateVarType,
     name: Option<&str>,
-    context: TemplateContext<'_>,
-    secrets: SecretCapability<'_>,
-) -> Result<ResolvedVariable, TemplateEvaluationError> {
+    context: TemplateContext<'a>,
+    secrets: SecretCapability<'a>,
+) -> Result<ResolvedVariable<'a>, TemplateEvaluationError> {
     // Cookie accessors do not expose per-cookie metadata. Preserve the same
     // conservative protection as reconstructed outbound Cookie headers.
     let mut sensitive = matches!(var_type, TemplateVarType::SecretRef | TemplateVarType::Cookie);
@@ -238,32 +240,38 @@ fn resolve_var(
             let headers = context.request_session()?.request_header_map();
             name.and_then(|name| headers.get(name)).and_then(|value| {
                 sensitive = value.is_sensitive();
-                value.to_str().ok().map(str::to_string)
+                value.to_str().ok().map(Cow::Borrowed)
             })
         }
         TemplateVarType::Query => {
             let session = context.request_session()?;
-            name.and_then(|name| session.get_query_param(name))
+            name.and_then(|name| session.get_query_param_ref(name).map(Cow::Borrowed))
         }
         TemplateVarType::Cookie => {
             let session = context.request_session()?;
-            name.and_then(|name| session.get_cookie(name))
+            name.and_then(|name| session.get_cookie(name).map(Cow::Owned))
         }
-        TemplateVarType::Ctx => name.and_then(|n| context.ctx_var(n)),
-        TemplateVarType::Path => Some(context.request_session()?.get_path().to_string()),
-        TemplateVarType::Uri => Some(context.request_session()?.get_uri()),
-        TemplateVarType::RequestPath => Some(context.request_session()?.get_request_path().to_string()),
-        TemplateVarType::RequestUri => Some(context.request_session()?.get_request_uri()),
-        TemplateVarType::Method => Some(context.request_session()?.get_method().to_string()),
+        TemplateVarType::Ctx => name.and_then(|n| context.ctx_var(n)).map(Cow::Owned),
+        TemplateVarType::Path => Some(Cow::Borrowed(context.request_session()?.get_path())),
+        TemplateVarType::Uri => Some(Cow::Owned(context.request_session()?.get_uri())),
+        TemplateVarType::RequestPath => Some(Cow::Borrowed(context.request_session()?.get_request_path())),
+        TemplateVarType::RequestUri => Some(Cow::Owned(context.request_session()?.get_request_uri())),
+        TemplateVarType::Method => Some(Cow::Borrowed(context.request_session()?.get_method())),
         TemplateVarType::RemoteIp => {
             let ip = context.remote_ip();
-            (!ip.is_empty()).then(|| ip.to_string())
+            (!ip.is_empty()).then_some(Cow::Borrowed(ip))
         }
-        TemplateVarType::MatchedHttpRoute => name.and_then(|n| context.matched_route_meta(RouteProto::Http, n)),
-        TemplateVarType::MatchedGrpcRoute => name.and_then(|n| context.matched_route_meta(RouteProto::Grpc, n)),
+        TemplateVarType::MatchedHttpRoute => name
+            .and_then(|n| context.matched_route_meta(RouteProto::Http, n))
+            .map(Cow::Owned),
+        TemplateVarType::MatchedGrpcRoute => name
+            .and_then(|n| context.matched_route_meta(RouteProto::Grpc, n))
+            .map(Cow::Owned),
         TemplateVarType::SecretRef => match secrets {
             SecretCapability::Denied => return Err(TemplateEvaluationError::SecretNotAllowed),
-            SecretCapability::Resolved(resolved) => name.and_then(|n| resolved?.0.get(n).cloned()),
+            SecretCapability::Resolved(resolved) => {
+                name.and_then(|n| resolved?.0.get(n).map(|value| Cow::Borrowed(value.as_str())))
+            }
         },
     };
     Ok(ResolvedVariable { value, sensitive })

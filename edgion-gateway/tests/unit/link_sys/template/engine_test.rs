@@ -6,8 +6,9 @@ fn compile(raw: &str) -> CompiledTemplate {
     CompiledTemplate::compile(raw).expect("template should compile")
 }
 
-fn named_session(value: Option<&str>) -> MockPluginSession {
+fn named_session(value: Option<&'static str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
+    session.expect_get_query_param_ref().returning(move |_| value);
     let value = value.map(str::to_string);
     let mut headers = http::HeaderMap::new();
     if let Some(value) = &value {
@@ -222,12 +223,16 @@ fn header_sensitivity_preserves_first_value_and_utf8_filtering() {
     headers.insert("x-visible", http::HeaderValue::from_static("visible"));
     headers.insert("x-empty", http::HeaderValue::from_static(""));
     headers.insert("x-raw", http::HeaderValue::from_bytes(&[0xff]).unwrap());
+    let mut opaque_sensitive = http::HeaderValue::from_bytes(&[0xff]).unwrap();
+    opaque_sensitive.set_sensitive(true);
+    headers.insert("x-private-raw", opaque_sensitive);
     session.expect_request_header_map().return_const(headers);
     for (name, expected, sensitive) in [
         ("x-private", "private", true),
         ("x-visible", "visible", false),
         ("x-empty", "", false),
         ("x-raw", "", false),
+        ("x-private-raw", "", true),
         ("x-absent", "", false),
     ] {
         let tpl = compile(&format!("prefix-${{header:{name}}}"));
@@ -330,6 +335,10 @@ fn test_resolve_present_variable() {
         .expect_get_query_param()
         .withf(|n| n == "id")
         .return_const(Some("42".to_string()));
+    session
+        .expect_get_query_param_ref()
+        .withf(|n| n == "id")
+        .returning(|_| Some("42"));
     let value = resolve_var(
         &TemplateVarType::Query,
         Some("id"),
@@ -520,4 +529,77 @@ fn trusted_context_retains_explicit_secret_capability_and_sensitivity() {
         ),
         Err(TemplateEvaluationError::SecretNotAllowed)
     ));
+}
+
+#[test]
+fn resolved_variables_borrow_existing_sources_until_rendered() {
+    let mut session = named_session(Some("source"));
+    session.expect_get_path().return_const("/live".to_owned());
+    session.expect_get_request_path().return_const("/entry".to_owned());
+    session.expect_get_method().return_const("POST".to_owned());
+    session.expect_remote_ip().return_const("192.0.2.1".to_owned());
+    let secrets = ResolvedSecrets(std::collections::BTreeMap::from([(
+        "ns/key:value".into(),
+        "secret-value".into(),
+    )]));
+    let sources = [
+        (
+            TemplateVarType::Header,
+            Some("x"),
+            session.request_header_map()["x"].to_str().unwrap(),
+        ),
+        (
+            TemplateVarType::Query,
+            Some("x"),
+            session.get_query_param_ref("x").unwrap(),
+        ),
+        (TemplateVarType::Path, None, session.get_path()),
+        (TemplateVarType::RequestPath, None, session.get_request_path()),
+        (TemplateVarType::Method, None, session.get_method()),
+        (TemplateVarType::RemoteIp, None, session.remote_ip()),
+        (
+            TemplateVarType::SecretRef,
+            Some("ns/key:value"),
+            secrets.0["ns/key:value"].as_str(),
+        ),
+    ];
+    for (kind, name, expected) in sources {
+        let resolved = resolve_var(
+            &kind,
+            name,
+            TemplateContext::Request(&session),
+            SecretCapability::Resolved(Some(&secrets)),
+        )
+        .unwrap();
+        let value = resolved.value.unwrap();
+        assert!(matches!(value, Cow::Borrowed(_)));
+        assert_eq!(value.as_ptr(), expected.as_ptr());
+        assert_eq!(value, expected);
+        assert_eq!(resolved.sensitive, matches!(kind, TemplateVarType::SecretRef));
+    }
+    for kind in [
+        TemplateVarType::Cookie,
+        TemplateVarType::Ctx,
+        TemplateVarType::MatchedHttpRoute,
+        TemplateVarType::MatchedGrpcRoute,
+    ] {
+        let resolved = resolve_var(
+            &kind,
+            Some("x"),
+            TemplateContext::Request(&session),
+            SecretCapability::Denied,
+        )
+        .unwrap();
+        assert!(matches!(resolved.value, Some(Cow::Owned(value)) if value == "source"));
+    }
+    let rendered = render_template(
+        &compile("${header:x}/${secretRef:ns/key:value}"),
+        &session,
+        RenderPolicy::EMPTY,
+        SecretCapability::Resolved(Some(&secrets)),
+    )
+    .unwrap();
+    drop(session);
+    drop(secrets);
+    assert_eq!(rendered.into_parts(), ("source/secret-value".into(), true));
 }
