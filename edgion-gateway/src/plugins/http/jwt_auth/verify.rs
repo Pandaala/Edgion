@@ -102,7 +102,7 @@ pub(super) fn verify_jwt<'a>(
         }
     };
     let verified_iss = match decoded.claims.get("iss").and_then(Value::as_str) {
-        Some(iss) if !iss.is_empty() => iss.to_string(),
+        Some(iss) if !iss.is_empty() => iss,
         _ => {
             plugin_log.push("Deny missing iss");
             return Err(VerifyDeny::MissingIss);
@@ -127,7 +127,7 @@ pub(super) fn verify_jwt<'a>(
 
     Ok(VerifyOk {
         group: cached_group,
-        iss: verified_iss,
+        iss: verified_iss.to_owned(),
         claims: decoded.claims,
     })
 }

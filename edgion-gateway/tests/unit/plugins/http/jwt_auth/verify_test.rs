@@ -52,6 +52,8 @@ fn verify_hits_correct_group_by_iss() {
 
     let token = make_token(Algorithm::HS256, "k1", "https://a.example", secret);
     let ok = verify_jwt(&token, &store, &config, &mut log).unwrap();
+    drop(token);
+    assert_eq!(ok.claims["iss"], "https://a.example");
     assert_eq!(ok.iss, "https://a.example");
     assert_eq!(ok.group.group, "partner-a");
 }

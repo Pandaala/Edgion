@@ -7846,3 +7846,19 @@ formatting, workspace check/Clippy and seven repository guards. After correcting
 a new fixture initialization warning, HMAC tests and workspace check/Clippy
 passed again; only existing unrelated warnings remain. No full suite or
 throughput benchmark ran.
+
+## Copy verified JWT issuer only after expiration admission
+
+JWT verification now borrows the issuer from its verified claims while applying
+the existing maximumExpiration checks, then copies it when constructing the
+owned success result. InvalidNumericDate and ExpTooFar returns avoid the unused
+issuer String. Issuer extraction remains before those checks; issuer routing,
+algorithm and scoped-key binding, signature validation, clock reads, numeric-date
+rounding, denial precedence and logs are unchanged. Successful results still own
+both the issuer copy and complete claims; this does not remove either JWT decode.
+
+The existing success test now drops the token before inspecting issuer and claims.
+Existing expiration, fractional-date, group-isolation and redaction regressions
+remain intact. Fresh verification passed 47 JWT and 36 shared-auth tests,
+formatting, workspace check/Clippy and seven repository guards with existing
+unrelated warnings. No full suite or throughput benchmark ran.
