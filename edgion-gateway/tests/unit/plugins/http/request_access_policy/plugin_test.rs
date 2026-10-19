@@ -473,22 +473,28 @@ profiles:
             }),
         ])),
     }]);
-    let run = |direct: &'static str, remote: &'static str, config: RequestAccessPolicyConfig| async move {
+    let run = |direct: &'static str, remote: &'static str, remote_reads: usize, config: RequestAccessPolicyConfig| async move {
         let plugin = RequestAccessPolicy::create(&config, "default", None);
         let mut session = ip_session();
-        session.expect_direct_peer_ip().return_const(direct.to_string());
-        session.expect_remote_ip().return_const(remote.to_string());
+        session
+            .expect_direct_peer_ip()
+            .times(1)
+            .return_const(direct.to_string());
+        session
+            .expect_remote_ip()
+            .times(remote_reads)
+            .return_const(remote.to_string());
         session.expect_get_path().return_const("/callback".to_string());
         setup_header_mocks(&mut session, &[("host", "callbacks.example.com")]);
         let mut log = PluginLog::new("RequestAccessPolicy");
         plugin.run_request(&mut session, &mut log).await
     };
     assert_eq!(
-        run("192.0.2.10", "203.0.113.8", config.clone()).await,
+        run("192.0.2.10", "203.0.113.8", 1, config.clone()).await,
         PluginRunningResult::GoodNext
     );
     assert!(matches!(
-        run("203.0.113.8", "192.0.2.10", config).await,
+        run("203.0.113.8", "192.0.2.10", 0, config).await,
         PluginRunningResult::ErrResponse { status: 403, .. }
     ));
 }
@@ -839,4 +845,48 @@ fn ip_session() -> MockPluginSession {
         .expect_ip_list_contains()
         .returning(move |key, ip| view.ip_list_contains(key, ip));
     session
+}
+
+#[tokio::test]
+async fn profile_reads_only_primary_ip_sources_once_before_url_fallback() {
+    use serde_json::json;
+    for (direct, remote) in [(false, false), (true, false), (false, true), (true, true)] {
+        let url = json!({"name": "fallback", "type": "url", "config": {
+            "paths": [{"type": "Exact", "value": "/allowed"}]
+        }});
+        let mut rules = Vec::new();
+        for (needed, kind) in [(direct, "directPeerIp"), (remote, "remoteIp")] {
+            if needed {
+                for index in 0..2 {
+                    rules.push(json!({"name": format!("{kind}-{index}"), "type": kind,
+                        "config": {"ipRefs": [{"name": "unbound"}]}}));
+                }
+            }
+        }
+        rules.push(url.clone());
+        let config: RequestAccessProfile = serde_json::from_value(json!({"requiredRuleGroups": [
+            {"name": "url-first", "anyOfRules": [url]},
+            {"name": "sources", "anyOfRules": rules}
+        ]}))
+        .unwrap();
+        let profile = RuntimeProfile::new(&config, None, None).unwrap();
+        for (direct_text, remote_text) in [("192.0.2.10", "2001:db8::1"), ("", "invalid")] {
+            let mut session = MockPluginSession::new();
+            session
+                .expect_direct_peer_ip()
+                .times(usize::from(direct))
+                .return_const(direct_text.to_string());
+            session
+                .expect_remote_ip()
+                .times(usize::from(remote))
+                .return_const(remote_text.to_string());
+            session.expect_get_path().times(1).return_const("/allowed".to_string());
+            setup_header_mocks(&mut session, &[]);
+            let mut log = PluginLog::new("RequestAccessPolicy");
+            assert!(matches!(
+                profile.allows(&mut session, &mut log).await,
+                PolicyMatch::Matched
+            ));
+        }
+    }
 }

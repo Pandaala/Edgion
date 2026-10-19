@@ -248,6 +248,8 @@ struct RuntimeRuleGroup(Vec<RuntimeRule>);
 struct RuntimeProfile {
     groups: Vec<RuntimeRuleGroup>,
     url_index: RuntimeUrlIndex,
+    needs_direct_peer_ip: bool,
+    needs_remote_ip: bool,
 }
 
 impl RuntimeProfile {
@@ -297,15 +299,31 @@ impl RuntimeProfile {
             }
             groups.push(RuntimeRuleGroup(rules));
         }
+        let needs_direct_peer_ip = groups
+            .iter()
+            .flat_map(|group| &group.0)
+            .any(|rule| matches!(rule, RuntimeRule::DirectPeerIp { .. }));
+        let needs_remote_ip = groups
+            .iter()
+            .flat_map(|group| &group.0)
+            .any(|rule| matches!(rule, RuntimeRule::RemoteIp { .. }));
         Ok(Self {
             groups,
             url_index: RuntimeUrlIndex::compile(url_candidates, body_requirement, ip)?,
+            needs_direct_peer_ip,
+            needs_remote_ip,
         })
     }
 
     async fn allows(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PolicyMatch {
-        let direct_peer_ip = session.direct_peer_ip().parse::<IpAddr>().ok();
-        let remote_ip = session.remote_ip().parse::<IpAddr>().ok();
+        let direct_peer_ip = self
+            .needs_direct_peer_ip
+            .then(|| session.direct_peer_ip().parse::<IpAddr>().ok())
+            .flatten();
+        let remote_ip = self
+            .needs_remote_ip
+            .then(|| session.remote_ip().parse::<IpAddr>().ok())
+            .flatten();
         // One profile-wide path index is queried before host or secondary-rule checks.
         let matched_urls = if self.url_index.candidates.is_empty() {
             Vec::new()

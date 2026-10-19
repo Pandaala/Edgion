@@ -7432,3 +7432,27 @@ This is separate from the completed local typed RealIp result optimization.
 No runtime code changed. Formatting, workspace check/Clippy and documentation
 validation passed with existing unrelated warnings. No runtime tests or benchmark
 were added or run for this documentation-only decision record.
+
+## Prepare RequestAccessPolicy primary IP demand
+
+RuntimeProfile records whether its compiled primary rules use DirectPeerIp or
+RemoteIp. Profile evaluation parses only needed sources, retaining their existing
+entry-time snapshot before URL lookup and asynchronous supplemental conditions.
+URL-only profiles no longer read or parse either address merely to pass unused
+arguments. Supplemental conditions retain their own session reads and short
+circuiting; they do not cause an unused primary snapshot. Flags are derived from
+all compiled groups once, with no request-path rule scan or shared IP cache.
+
+Independent plan review passed. Two cold profile booleans (and possible padding)
+replace repeated unused getter/parse work; request context layout is unchanged.
+The new matrix covers neither, either and both source demands, repeated rules
+in a later group, distinct IPv4/IPv6 inputs and empty/invalid inputs reaching URL
+fallback. The imported-URL supplemental-condition regression now requires exactly
+one direct read and either one remote read or zero on direct-condition failure.
+Existing group ordering, required-reference gates and profile selection remain.
+
+Baseline RAP tests passed 18. Final verification passed 19 RAP tests, 68 shared
+condition tests and 34 RealIp tests (121 total). Formatting, workspace check/Clippy
+and seven guards passed with existing unrelated warnings. No full suite, live
+traffic or throughput benchmark ran. The deferred shared session address
+projection remains separate; this change adds no cached request identity.
