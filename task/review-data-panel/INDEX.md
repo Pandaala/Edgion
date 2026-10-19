@@ -4884,3 +4884,26 @@ nine Gateway schema, 21 rewrite, ten REST adapter, 26 transcoder and 23 form.
 Formatting check, workspace check/Clippy and documentation/diff checks passed;
 existing warnings remain outside this documentation-only batch. These results
 validate the current baseline, not any proposed traversal representation.
+
+## gRPC field selector root descriptor borrowing
+
+The shared transcoder field resolver now starts with Cow::Borrowed on its supplied
+MessageDescriptor and switches to Cow::Owned only when the existing nested-message
+descent returns a new descriptor. This avoids the initial descriptor handle clone
+and drop for each selector lookup, including query binding and cold path/body
+compilation. prost-reflect's MessageDescriptor clone copies an index and an
+Arc-backed DescriptorPool handle; this is not a descriptor-byte or heap-allocation
+removal claim. Returned FieldDescriptors retain their own existing ownership.
+
+The baseline-first resolver regression covers proto/JSON aliases, flat/nested
+paths, terminal list/map/message acceptance, prohibited traversal through list,
+map or scalar fields, malformed/unknown/case-mismatched names, the 32/33-segment
+boundary and overlong selectors. Returned descriptors remain usable after the
+input descriptor and pool leave scope. Lookup priority, all failure gates, path
+vectors, binding overlap rules, normalization, admission and output are unchanged.
+No new descriptor cache or compiled selector index is introduced.
+
+Fresh serial verification passed 55 tests: 29 Resources transcoding and 26 Gateway
+transcoder tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing unrelated warnings remain outside the diff. No real-socket gRPC
+integration, allocation benchmark or throughput measurement ran.

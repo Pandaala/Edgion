@@ -233,7 +233,7 @@ fn resolve_field(input: &MessageDescriptor, name: &str) -> Result<Vec<FieldDescr
     if name.len() > 4096 {
         return Err(TranscodingError::Invalid);
     }
-    let mut message = input.clone();
+    let mut message = Cow::Borrowed(input);
     let mut result = Vec::new();
     let mut parts = name.split('.').peekable();
     while let Some(part) = parts.next() {
@@ -251,7 +251,7 @@ fn resolve_field(input: &MessageDescriptor, name: &str) -> Result<Vec<FieldDescr
             let Kind::Message(next) = f.kind() else {
                 return Err(TranscodingError::Invalid);
             };
-            message = next;
+            message = Cow::Owned(next);
         }
         result.push(f);
     }
