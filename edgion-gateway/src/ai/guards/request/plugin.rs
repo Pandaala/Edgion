@@ -152,13 +152,15 @@ struct RequestFacts {
 fn request_facts(body: &[u8]) -> RequestFacts {
     // Best-effort: only used to render a dialect-correct refusal. A body that
     // cannot be read here is separately reported as unguardable.
-    let value: Option<serde_json::Value> = serde_json::from_slice(body).ok();
+    let mut value: Option<serde_json::Value> = serde_json::from_slice(body).ok();
     let model = value
-        .as_ref()
-        .and_then(|value| value.get("model"))
-        .and_then(|model| model.as_str())
-        .unwrap_or_default()
-        .to_string();
+        .as_mut()
+        .and_then(|value| value.get_mut("model"))
+        .and_then(|model| match model {
+            serde_json::Value::String(model) => Some(std::mem::take(model)),
+            _ => None,
+        })
+        .unwrap_or_default();
     let streaming = value
         .as_ref()
         .and_then(|value| value.get("stream"))

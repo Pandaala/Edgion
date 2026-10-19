@@ -7722,3 +7722,19 @@ escaped/control and permitted multibyte model names, including 128/129-scalar
 boundaries. Fresh targeted tests passed two error-renderer and 79 request-guard
 cases. Formatting, workspace check/Clippy and seven repository guards passed;
 existing unrelated warnings remain. No throughput benchmark or full suite ran.
+
+## Move the decoded request-guard refusal model
+
+AiGuard request_facts now takes the decoded model String from its private,
+soon-dropped JSON Value instead of copying it. Complete serde_json parsing,
+object-only field lookup, last-duplicate-key behavior, non-string defaults and
+subsequent stream-boolean lookup are unchanged. Rendering still owns the
+128-scalar truncation; extraction retains the full decoded model. The full JSON
+tree allocation remains and no selective-parser optimization is claimed.
+
+The new fact-extraction matrix covers malformed/trailing input, non-object
+roots, wrong field types, duplicate model/stream keys, escaped and permitted
+multibyte strings, and a long model. Fresh targeted tests passed 80 request-guard
+and two renderer cases. Formatting, workspace check/Clippy and seven repository
+guards passed with existing unrelated warnings. No full suite or performance
+benchmark ran; the benefit is removal of the extra model String copy.

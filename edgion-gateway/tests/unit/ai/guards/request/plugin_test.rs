@@ -8,6 +8,41 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::request_body::BodyStorage;
 use crate::EdgionHttpContext;
 
+#[test]
+fn refusal_facts_preserve_json_types_defaults_and_duplicate_keys() {
+    for (body, model, streaming) in [
+        ("", "", false),
+        ("null", "", false),
+        ("[]", "", false),
+        ("42", "", false),
+        (r#""model""#, "", false),
+        ("{}", "", false),
+        (r#"{"model":"m","stream":true}"#, "m", true),
+        (r#"{"model":false,"stream":true}"#, "", true),
+        (r#"{"model":{},"stream":"true"}"#, "", false),
+        (r#"{"model":"café-π","stream":false}"#, "café-π", false),
+        (r#"{"model":"a\"b\\c\n","stream":true}"#, "a\"b\\c\n", true),
+        (
+            r#"{"model":null,"model":"last","stream":false,"stream":true}"#,
+            "last",
+            true,
+        ),
+        (r#"{"model":"first","model":null,"stream":true,"stream":0}"#, "", false),
+        (r#"{"model":"m","stream":true} trailing"#, "", false),
+        (r#"{"model":"m","stream":true,"other":[}"#, "", false),
+    ] {
+        let facts = request_facts(body.as_bytes());
+        assert_eq!(facts.model, model, "body={body}");
+        assert_eq!(facts.streaming, streaming, "body={body}");
+    }
+    // Refusal rendering owns truncation; fact extraction retains the full model.
+    let model = "é".repeat(1024);
+    let body = serde_json::json!({"model": model, "stream": true}).to_string();
+    let facts = request_facts(body.as_bytes());
+    assert_eq!(facts.model, model);
+    assert!(facts.streaming);
+}
+
 fn config(rules: &str, extra: &str) -> AiGuardConfig {
     serde_yaml::from_str(&format!("rules:\n{rules}{extra}")).expect("configuration parses")
 }
