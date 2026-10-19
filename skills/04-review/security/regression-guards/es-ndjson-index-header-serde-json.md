@@ -13,11 +13,21 @@ knowledge_type: regression-guards
 
 When reviewing findings of the form "the Elasticsearch bulk NDJSON index-action header is built with a raw `format!` string / a special character in the index name could break the NDJSON wire body / the `{"index":{"_index":"..."}}` line is not JSON-escaped": **fixed (gateway-infra-02, 2026-05-24)**.
 
-ES bulk NDJSON index-action header now built via `serde_json::json!({"index":{"_index":index_name}})` + `to_string` (hoisted out of the per-doc loop, constant per batch) instead of raw `format!(r#"{{"index":{{"_index":"{}"}}}}"#, index_name)`. `build_ndjson_body` (`edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs`) escapes any `"`/`\` in the index name so the wire body stays valid NDJSON. Not remotely exploitable today (`index_name` = operator `index_prefix` + chrono date, no user input); the value was robustness against an operator typo / future dynamic index name breaking the whole batch. Output is byte-identical for valid names (no behavior change). Unit regression `test_ndjson_body_escapes_special_chars_in_index_name`. Document bodies were already safe (`AccessLogEntry::to_json()` uses serde_json).
+ES bulk NDJSON index-action header now uses borrowed typed `IndexAction` / `IndexMetadata` serialization through `serde_json::to_string` (hoisted out of the per-doc loop, constant per batch) instead of raw `format!(r#"{{"index":{{"_index":"{}"}}}}"#, index_name)`. `build_ndjson_body` (`edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs`) escapes any `"`/`\` in the index name so the wire body stays valid NDJSON. Not remotely exploitable today (`index_name` = operator `index_prefix` + chrono date, no user input); the value was robustness against an operator typo / future dynamic index name breaking the whole batch. Output is byte-identical for valid names (no behavior change). Unit regression `test_ndjson_body_escapes_special_chars_in_index_name`. Document bodies were already safe (`AccessLogEntry::to_json()` uses serde_json).
 
 Distinct from link-sys-F002 (`max_body_bytes` sub-batch partitioning in the same file) — gateway-infra-02 is the NDJSON header escaping; link-sys-F002 is the request-body size enforcement. The shared `ndjson_header_line` helper that link-sys-F002 introduced is the single header-format source that carries this escaping.
 
 Re-reports of the raw-`format!` form are not accepted; verify the current `build_ndjson_body` uses serde_json before re-reporting.
+
+The original escaping fix used a temporary serde_json Value tree. The current
+helper borrows the index name in two single-field structs, removing that tree
+without changing keys, order, escaping or the serialized String owner. The same
+helper still supplies partition byte overhead and request headers. The mirrored
+`ndjson_header_matches_value_serialization_with_less_temporary_storage` regression
+compares exact bytes and round-trip names with the former Value implementation
+for empty, quoted, escaped, control-character, UTF-8 and long inputs. Its allocation
+counter covers header construction only; it does not measure worker throughput,
+whole-request allocation, live delivery or partition/retry changes.
 
 ## Historical resolution evidence: link-sys-F002
 

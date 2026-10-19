@@ -5603,3 +5603,25 @@ Fresh serial verification passed 38 tests: 30 Kafka provider and eight access-
 logger tests. No live Kafka broker, integration or throughput benchmark ran.
 Formatting, workspace check/Clippy and seven repository guards passed with
 existing unrelated Clippy warnings.
+
+## Elasticsearch borrowed index-action serialization
+
+The background bulk worker's canonical ndjson_header_line now serializes two
+single-field borrowed structs instead of first building a serde_json Value tree.
+This removes temporary map/key/index-name storage while retaining the same serde
+escaping and owned output String. Partition overhead and body construction still
+share the helper; body capacity, retry selection, date failure policy and health
+remain unchanged. This is header construction work, not a per-document or
+whole-request allocation/throughput claim. The owning security knowledge page
+now describes the typed serializer and retains historical escaping evidence.
+
+Independent plan review approved the four-file scope. Existing 60 Elasticsearch
+tests passed before modification. The new six-input matrix passed exact-byte and
+round-trip assertions on unchanged production, then failed its allocation
+reduction assertion (first case: header=5, reference=5). After the change all six
+inputs allocate less than their original Value-based reference, including empty,
+quoted/escaped, control-character, permitted UTF-8 and long names.
+Fresh serial verification passed 69 tests: 61 Elasticsearch and eight access-
+logger tests. Formatting, workspace check/Clippy and seven repository guards
+passed with existing unrelated warnings. No live Elasticsearch delivery or
+throughput benchmark ran.

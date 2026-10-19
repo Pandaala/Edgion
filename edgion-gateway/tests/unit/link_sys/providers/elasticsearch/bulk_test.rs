@@ -774,3 +774,33 @@ async fn cancelling_pending_bulk_reception_drops_stream_without_replay_or_health
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert!(!health.load());
 }
+
+#[test]
+fn ndjson_header_matches_value_serialization_with_less_temporary_storage() {
+    let names = [
+        String::new(),
+        "test-logs-2026.02.11".into(),
+        "quote\"and\\slash".into(),
+        "controls\n\r\t\0".into(),
+        "accent-é-and-π".into(),
+        "long-index-".repeat(1024),
+    ];
+    let mut measurements = Vec::new();
+    for name in &names {
+        let (expected, reference_allocations) = crate::test_allocation_counter::count_allocations(|| {
+            serde_json::to_string(&serde_json::json!({ "index": { "_index": name } })).unwrap()
+        });
+        let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| ndjson_header_line(name));
+        assert_eq!(actual, expected);
+        assert!(!actual.contains('\n'));
+        let decoded: serde_json::Value = serde_json::from_str(&actual).unwrap();
+        assert_eq!(decoded["index"]["_index"], name.as_str());
+        measurements.push((allocations, reference_allocations));
+    }
+    for (allocations, reference_allocations) in measurements {
+        assert!(
+            allocations < reference_allocations,
+            "header={allocations}, reference={reference_allocations}"
+        );
+    }
+}

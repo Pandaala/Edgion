@@ -546,7 +546,17 @@ pub fn build_ndjson_body<S: AsRef<str>>(docs: &[S], index_name: &str) -> String 
 /// `\`) are correctly escaped and the NDJSON stays valid. The line is constant
 /// for a given index name, so callers hoist it out of the per-document loop.
 fn ndjson_header_line(index_name: &str) -> String {
-    let header = serde_json::json!({ "index": { "_index": index_name } });
+    #[derive(serde::Serialize)]
+    struct IndexAction<'a> {
+        index: IndexMetadata<'a>,
+    }
+    #[derive(serde::Serialize)]
+    struct IndexMetadata<'a> {
+        _index: &'a str,
+    }
+    let header = IndexAction {
+        index: IndexMetadata { _index: index_name },
+    };
     serde_json::to_string(&header).unwrap_or_default()
 }
 
