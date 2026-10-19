@@ -29,6 +29,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 // ============================================================================
 // KeyGet - Read values from request context
@@ -129,21 +130,21 @@ pub enum KeyGet {
 }
 
 impl KeyGet {
-    /// Get a short string representation for logging
-    pub fn as_log_str(&self) -> String {
+    /// Get a short logging representation, borrowing fixed source names.
+    pub fn as_log_str(&self) -> Cow<'static, str> {
         match self {
-            KeyGet::RemoteIp => "remote-ip".to_string(),
-            KeyGet::DirectPeerIp => "direct-peer-ip".to_string(),
-            KeyGet::Host => "host".to_string(),
-            KeyGet::TraceId => "trace-id".to_string(),
-            KeyGet::Header { name } => format!("hdr:{}", name),
-            KeyGet::Cookie { name } => format!("cookie:{}", name),
-            KeyGet::Query { name } => format!("query:{}", name),
-            KeyGet::Path => "path".to_string(),
-            KeyGet::Method => "method".to_string(),
-            KeyGet::Ctx { name } => format!("ctx:{}", name),
-            KeyGet::RemoteIpAndPath => "remote-ip+path".to_string(),
-            KeyGet::RequestPath => "request-path".to_string(),
+            KeyGet::RemoteIp => Cow::Borrowed("remote-ip"),
+            KeyGet::DirectPeerIp => Cow::Borrowed("direct-peer-ip"),
+            KeyGet::Host => Cow::Borrowed("host"),
+            KeyGet::TraceId => Cow::Borrowed("trace-id"),
+            KeyGet::Header { name } => Cow::Owned(format!("hdr:{}", name)),
+            KeyGet::Cookie { name } => Cow::Owned(format!("cookie:{}", name)),
+            KeyGet::Query { name } => Cow::Owned(format!("query:{}", name)),
+            KeyGet::Path => Cow::Borrowed("path"),
+            KeyGet::Method => Cow::Borrowed("method"),
+            KeyGet::Ctx { name } => Cow::Owned(format!("ctx:{}", name)),
+            KeyGet::RemoteIpAndPath => Cow::Borrowed("remote-ip+path"),
+            KeyGet::RequestPath => Cow::Borrowed("request-path"),
         }
     }
 

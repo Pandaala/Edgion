@@ -4435,3 +4435,22 @@ Warmed inline scratch formatting allocates zero. Fresh serial verification
 passed 57 tests: 34 canonical PluginLog and 23 RegionRoute tests. Formatting,
 workspace check/Clippy, seven repository guards and diff hygiene passed; existing
 warnings remain outside the diff. No live transport or throughput benchmark ran.
+
+## Borrowed fixed KeyGet log labels
+
+RegionRoute source diagnostics now obtain borrowed literal labels for the eight
+fixed KeyGet variants through the canonical resources-layer as_log_str method.
+Its Cow return retains owned formatting for Header, Cookie, Query and Ctx names;
+all existing callers accept the result without changes. Condition descriptors
+still own their final combined text. KeySet formatting, source extraction,
+selection policy, logging masks and schema/transport representation are unchanged.
+No resident descriptor cache or parallel source-label implementation was added.
+
+The exact supporting cross-crate scope is the KeyGet method and its unit tests.
+New tests cover every variant's bytes and ownership, including empty, mixed-case
+and UTF-8 dynamic names whose output survives destruction of the source enum.
+Fresh serial verification passed 134 tests: 17 key-accessor, 27 resource-condition,
+23 RegionRoute and 67 Gateway-condition tests. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed; existing warnings remain outside
+the diff. The claim is removal of temporary String allocation for fixed labels;
+no live transport or throughput benchmark ran.

@@ -3,6 +3,37 @@ use super::*;
 // ========== KeyGet Tests ==========
 
 #[test]
+fn key_get_log_labels_preserve_bytes_and_ownership() {
+    for (key, expected) in [
+        (KeyGet::RemoteIp, "remote-ip"),
+        (KeyGet::DirectPeerIp, "direct-peer-ip"),
+        (KeyGet::Host, "host"),
+        (KeyGet::TraceId, "trace-id"),
+        (KeyGet::Path, "path"),
+        (KeyGet::Method, "method"),
+        (KeyGet::RemoteIpAndPath, "remote-ip+path"),
+        (KeyGet::RequestPath, "request-path"),
+    ] {
+        let label = key.as_log_str();
+        assert_eq!(label, expected);
+        assert!(matches!(label, Cow::Borrowed(_)));
+    }
+    for name in ["", "X-Mixed-Case", "café"] {
+        for (key, prefix) in [
+            (KeyGet::Header { name: name.into() }, "hdr:"),
+            (KeyGet::Cookie { name: name.into() }, "cookie:"),
+            (KeyGet::Query { name: name.into() }, "query:"),
+            (KeyGet::Ctx { name: name.into() }, "ctx:"),
+        ] {
+            let label = key.as_log_str();
+            drop(key);
+            assert_eq!(label, format!("{prefix}{name}"));
+            assert!(matches!(label, Cow::Owned(_)));
+        }
+    }
+}
+
+#[test]
 fn test_key_get_as_log_str() {
     assert_eq!(KeyGet::RemoteIp.as_log_str(), "remote-ip");
     assert_eq!(KeyGet::DirectPeerIp.as_log_str(), "direct-peer-ip");
