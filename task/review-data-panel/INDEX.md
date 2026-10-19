@@ -7975,3 +7975,19 @@ redirect construction and ID-token hints. No new mirror test, full suite or
 throughput benchmark ran. Moving the final Url serialization was not included:
 the spare-capacity ownership tradeoff already identified in outbound-02 also
 requires assessment for these redirect outputs.
+
+## Borrow the sanitized OIDC callback redirect target
+
+sanitize_redirect_target now returns its accepted input slice or the static root
+path instead of allocating a String. Its sole production caller owns the decoded
+state cookie throughout response delivery and passes the borrowed target directly
+to the existing redirect writer. The path predicates and resulting bytes remain
+unchanged, including backslash and protocol-relative rejection; Location still
+receives its independently owned header value. No lock or cache was introduced.
+
+The existing cross-origin regression retains its identity and security cases,
+adds empty/relative inputs, and checks pointer identity for an accepted owned
+path. Fresh verification passed 151 OIDC tests with 16 existing ignores,
+formatting, workspace check/Clippy and seven repository guards with existing
+unrelated warnings. This removes the temporary redirect-target allocation, not
+the response header allocation. No full suite or throughput benchmark ran.

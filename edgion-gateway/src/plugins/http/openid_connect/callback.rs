@@ -358,7 +358,7 @@ impl OpenidConnect {
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
         let cookies = vec![session_cookie, clear_state_cookie];
         let _ = self
-            .send_redirect_with_cookies(session, &redirect_target, &cookies)
+            .send_redirect_with_cookies(session, redirect_target, &cookies)
             .await;
 
         plugin_log.push("OIDC callback exchanged code and established session");

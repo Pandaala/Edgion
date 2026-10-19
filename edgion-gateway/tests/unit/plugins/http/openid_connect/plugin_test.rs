@@ -606,10 +606,15 @@ fn sanitize_redirect_target_rejects_cross_origin_forms() {
         r"/\\evil.example/path",
         "//evil.example/path",
         "https://evil.example/path",
+        "",
+        "orders?x=1",
     ] {
         assert_eq!(OpenidConnect::sanitize_redirect_target(target), "/");
     }
-    assert_eq!(OpenidConnect::sanitize_redirect_target("/orders?x=1"), "/orders?x=1");
+    let original_url = String::from("/orders?x=1");
+    let target = OpenidConnect::sanitize_redirect_target(&original_url);
+    assert_eq!(target, "/orders?x=1");
+    assert_eq!(target.as_ptr(), original_url.as_ptr());
 }
 
 #[test]
