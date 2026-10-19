@@ -5421,3 +5421,28 @@ verification passed four leaf response tests and 50 Gateway WAF tests. Formattin
 workspace check/Clippy and seven repository guards passed; existing unrelated
 Clippy warnings remain. No live integration, throughput or whole-path allocation
 measurement ran.
+
+## WAF response completion reachability
+
+The only Gateway call to execute_response_window is WafPlugin's completion hook,
+which passes an empty terminal window. There is no Gateway response-chunk feed
+to that leaf API. Positive/non-excluded RESPONSE_BODY targets are classified as
+unavailable FullResponseBody and rejected by strict compilation; support reports
+do not authorize publication. The leaf API's nonempty-window capability is not
+evidence that the Gateway uses it on streamed response chunks.
+
+For the current empty window, owned_copy creates an empty Vec, reserves zero and
+extends an empty slice. There is no payload allocation to remove at that site.
+This does not imply that phase execution, matchers or outcome summaries allocate
+nothing. Completion claims the selected owner's phase, moves its transaction out,
+executes phase four and then logging, and does not reinstall the transaction.
+Logging still executes after a successful phase-four intervention; only a runtime
+error returns early. The final intervention prefers phase four via Option::or.
+Owner mismatch and duplicate claims skip execution. These ownership and ordering
+boundaries were retained, not optimized away.
+
+Direct WAF completion wiring is inspected; deeper engine operators and full
+response-chain coverage remain open. This documentation-only batch passed
+independent plan review and fresh serial tests: 50 Gateway WAF, four leaf response
+and 33 Resources WAF tests. Formatting and workspace check/Clippy passed with
+existing unrelated warnings. No live transport or performance benchmark ran.
