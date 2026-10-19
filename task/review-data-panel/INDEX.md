@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Generation-owned OIDC decoding keys](oidc-06-prepared-jwks-keys.md)
+
 - [OIDC introspection claims ownership](oidc-05-introspection-claims-ownership.md)
 
 - [OIDC cookie attribute preparation](oidc-04-cookie-attribute-formatting.md)
