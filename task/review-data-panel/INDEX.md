@@ -8255,3 +8255,18 @@ passed all 21 JWE tests, formatting, workspace check/Clippy and seven repository
 guards with existing unrelated Clippy warnings. The change removes per-name
 String allocations for unescaped names; the HashSet and escaped-name allocations
 remain. No full suite or throughput benchmark ran.
+
+## Avoid repeated lookup when merging extra OIDC claims
+
+Claims::into_value now uses the JSON map Entry API for each owned extra field,
+replacing contains_key followed by insert. Vacant keys avoid a second lookup;
+occupied standard claims still win, including an explicit null audience. Missing
+standard fields still accept their extra counterparts, non-object extras remain
+ignored, and existing key/value buffers move without cloning. OIDC token
+verification remains the only production consumer of this Claims conversion.
+
+Existing precedence/fallback and buffer-identity tests cover this change without
+new mirrored tests. Fresh shared-auth and OIDC tests, formatting, workspace
+check/Clippy and seven repository guards passed with existing unrelated Clippy
+warnings and 16 existing OIDC ignores. This reduces map lookup work, not claims
+serialization or overall allocation count. No full suite or benchmark ran.

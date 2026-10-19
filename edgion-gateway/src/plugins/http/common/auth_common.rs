@@ -373,9 +373,7 @@ impl Claims {
 
         if let serde_json::Value::Object(extra) = self.extra {
             for (k, v) in extra {
-                if !out.contains_key(&k) {
-                    out.insert(k, v);
-                }
+                out.entry(k).or_insert(v);
             }
         }
 
