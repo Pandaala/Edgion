@@ -5323,3 +5323,26 @@ lifetime resolved the error. On corrected source, formatting and workspace
 check/Clippy passed. Seven repository guards passed, with documentation, tracing
 and unit layout checked again after correction. Existing unrelated warnings
 remain; no live network integration or throughput benchmark ran.
+
+## Borrowed already-folded MatchCore lookup
+
+The canonical Resources MatchCore insensitive HashSet branch now borrows input
+without ASCII uppercase bytes instead of unconditionally allocating its lowercase
+copy. Inputs with uppercase bytes retain the same owned ASCII conversion. This
+supporting cross-crate change is limited to the hot matcher and its tests; compiled
+set contents, the 16-value threshold, case-sensitive and linear paths, original-text
+regex fallback and shared payload validation remain unchanged. Non-ASCII UTF-8
+bytes are never Unicode-folded by either path.
+
+A baseline-first differential compares hashed and linear results against the
+source values, including empty/missing values, ASCII cases, permitted multibyte
+text and uppercase case-sensitive regex fallback. A real compiled Gateway condition
+uses 17 values and borrowed query input; warmed lowercase/empty/multibyte hit/miss
+cases allocate zero calls/bytes. Uppercase lookup remains covered without a zero
+allocation claim. Its additional uppercase precheck is not a universal CPU win;
+no throughput benchmark ran.
+
+Fresh serial verification passed 132 tests: 28 Resources conditions, 68 Gateway
+conditions, 18 RequestRestriction and 18 RequestAccessPolicy. Formatting, workspace
+check/Clippy and seven repository guards passed. Existing unrelated Clippy warnings
+remain; no live network integration or end-to-end throughput benchmark ran.

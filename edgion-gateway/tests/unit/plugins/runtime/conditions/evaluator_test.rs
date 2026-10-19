@@ -1404,3 +1404,43 @@ fn borrowed_query_conditions_keep_present_empty_and_missing_distinct() {
     };
     assert!(condition.evaluate(&session, None));
 }
+
+#[test]
+fn insensitive_hashed_condition_borrows_already_folded_query_values() {
+    let mut values: Vec<String> = (0..16).map(|i| format!("value{i}")).collect();
+    values.push("é".into());
+    let conditions = CompiledPluginConditions::new(PluginConditions {
+        skip: None,
+        run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
+            key: KeyGet::Query { name: "mode".into() },
+            core: MatchCore {
+                values: Some(values),
+                case_sensitive: false,
+                ..Default::default()
+            },
+            negate: false,
+            descriptor: Box::from(""),
+        })])),
+    });
+    for (input, expected) in [
+        ("value1", EvaluationResult::Run),
+        ("absent", EvaluationResult::Skip),
+        ("é", EvaluationResult::Run),
+        ("éx", EvaluationResult::Skip),
+        ("", EvaluationResult::Skip),
+        ("VALUE1", EvaluationResult::Run),
+    ] {
+        let mut session = MockPluginSession::new();
+        session.expect_get_query_param_ref().returning(move |_| Some(input));
+        session.expect_get_query_param().never();
+        assert_eq!(conditions.evaluate(&session), expected);
+        let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(conditions.evaluate(&session))
+        });
+        assert_eq!(result, expected);
+        if !input.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            assert_eq!(allocations.calls, 0);
+            assert_eq!(allocations.requested_bytes, 0);
+        }
+    }
+}

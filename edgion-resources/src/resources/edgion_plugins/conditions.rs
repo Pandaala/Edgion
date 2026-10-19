@@ -321,8 +321,15 @@ impl MatchCore {
                 if set.contains(value) {
                     return true;
                 }
-            } else if set.contains(&value.to_ascii_lowercase()) {
-                return true;
+            } else {
+                let folded = if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                    std::borrow::Cow::Owned(value.to_ascii_lowercase())
+                } else {
+                    std::borrow::Cow::Borrowed(value)
+                };
+                if set.contains(folded.as_ref()) {
+                    return true;
+                }
             }
         } else if let Some(values) = &self.values {
             for v in values {

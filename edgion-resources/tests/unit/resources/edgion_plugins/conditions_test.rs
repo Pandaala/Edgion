@@ -745,3 +745,42 @@ fn jwt_claim_and_mtls_descriptors_are_value_free() {
         );
     }
 }
+
+#[test]
+fn hashed_match_values_preserve_ascii_folding_and_original_regex_input() {
+    let mut values: Vec<String> = (0..20).map(|i| format!("value{i}")).collect();
+    values.extend(["éX".into(), "".into(), "π".into()]);
+    for case_sensitive in [false, true] {
+        let mut hashed = MatchCore {
+            values: Some(values.clone()),
+            regex: Some(vec!["^REGEX-HIT$".into()]),
+            case_sensitive,
+            ..Default::default()
+        };
+        hashed.compile(false).unwrap();
+        assert!(hashed.values_set.is_some());
+        let mut linear = hashed.clone();
+        linear.values_set = None;
+        for input in [
+            "value1",
+            "VALUE1",
+            "éx",
+            "éX",
+            "π",
+            "",
+            "missing",
+            "REGEX-HIT",
+            "regex-hit",
+        ] {
+            let expected = values.iter().any(|v| {
+                if case_sensitive {
+                    input == v
+                } else {
+                    input.eq_ignore_ascii_case(v)
+                }
+            }) || input == "REGEX-HIT";
+            assert_eq!(hashed.matches(input), expected);
+            assert_eq!(linear.matches(input), expected);
+        }
+    }
+}
