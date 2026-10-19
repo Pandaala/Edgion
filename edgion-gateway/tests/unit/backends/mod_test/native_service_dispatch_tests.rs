@@ -539,13 +539,13 @@ async fn sticky_validation_uses_captured_section_and_self_dns_ignores_stale_targ
     );
     let mut ctx = context("default/backend");
     ctx.ensure_session_persistence().target_addr = Some("192.0.2.8:8080".parse().unwrap());
-    let endpoint = take_sp_target_or_select(&mut ctx, &old, || panic!("captured sticky slot must win")).unwrap();
+    let endpoint = take_sp_target_or_select(&mut ctx, &old, |_| panic!("captured sticky slot must win")).unwrap();
     assert_eq!(endpoint.serving_port.get(), 8080);
     assert!(ctx.session_persistence().unwrap().sticky_consumed);
     let current = capture(&coordinator, &chosen);
     ctx.ensure_session_persistence().target_addr = Some("192.0.2.8:8080".parse().unwrap());
     assert!(matches!(
-        take_sp_target_or_select(&mut ctx, &current, || panic!(
+        take_sp_target_or_select(&mut ctx, &current, |_| panic!(
             "missing sticky is a terminal result here"
         )),
         Err(EdgionErrorCode::StickyBackendUnhealthy)
@@ -1029,4 +1029,52 @@ async fn cold_service_candidate_observes_live_httpdns_replacement_and_removal() 
         previous.unwrap().is_ready(),
         "already borrowed generation completes normally"
     );
+}
+
+#[tokio::test]
+async fn ordinary_selection_borrows_request_inputs_after_sticky_check() {
+    use edgion_resources::resources::lb_policy::ConsistentHashOn;
+
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    publish(&coordinator, service(None, None, None, 80), Some(true));
+    let captured = capture(&coordinator, &chosen);
+    let session = session().await;
+    let policy = Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp));
+    for has_persistence in [false, true] {
+        for remote_ip in ["192.0.2.42", "2001:db8::42", ""] {
+            let mut ctx = context("default/backend");
+            ctx.request_info.remote_ip = remote_ip.to_owned();
+            if has_persistence {
+                ctx.ensure_session_persistence();
+            }
+            let original = ctx.request_info.remote_ip.as_ptr();
+            let calls = Cell::new(0);
+            let endpoint = take_sp_target_or_select(&mut ctx, &captured, |ctx| {
+                calls.set(calls.get() + 1);
+                let borrowed = ctx.request_info.remote_ip.as_str();
+                assert_eq!(borrowed.as_ptr(), original);
+                assert_eq!(
+                    selector::extract_hash_key(&session, &policy, borrowed, ctx.query(session.req_header())),
+                    remote_ip.as_bytes()
+                );
+                captured.select(
+                    &policy,
+                    ServiceDegradePolicy::CapturedOverride(None),
+                    Some(&session),
+                    borrowed,
+                    ctx.query(session.req_header()),
+                )
+            })
+            .unwrap();
+            assert_eq!(calls.get(), 1);
+            assert_eq!(endpoint.backend.addr.as_inet().unwrap().to_string(), "192.0.2.8:8080");
+            assert_eq!(ctx.session_persistence().is_some(), has_persistence);
+            if let Some(persistence) = ctx.session_persistence() {
+                assert!(persistence.target_addr.is_none());
+                assert!(!persistence.sticky_consumed);
+            }
+            assert_eq!(ctx.request_info.remote_ip.as_ptr(), original);
+        }
+    }
 }

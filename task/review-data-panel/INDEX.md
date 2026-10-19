@@ -5829,3 +5829,27 @@ tests. Formatting, workspace check/Clippy and seven repository guards passed
 with existing unrelated warnings. The broader native-dispatch fixture issue in
 verification-03 remains separate. No whole-request allocation count, live DNS
 transport, full integration run or throughput improvement is claimed.
+
+## Borrow Service selection request inputs after sticky handling
+
+The private sticky-selection helper now passes an immutable request context to
+its ordinary-selection callback after consuming any sticky target. EndpointSlice
+ConsistentHash selection borrows the original RemoteIp instead of cloning its
+String before that helper. Nonempty RemoteIp therefore loses one temporary
+String allocation/copy per such attempt, including attempts resolved by sticky
+handling. Other algorithms retain the empty input. Query access is pure and now
+occurs only for ordinary selection. The test-mode metadata copy is unchanged.
+
+Sticky target consumption, eligibility, captured membership, error propagation
+and the caller's strict/non-strict fallback ordering remain unchanged. The callback
+is synchronous and its endpoint owns its existing Arcs; no request borrow escapes.
+Independent plan review approved this three-file scope.
+
+Fresh serial verification passed 118 tests: one new borrowed-input matrix, one
+existing sticky dispatch regression, 12 selector tests and 104 upstream-peer tests.
+The matrix covers IPv4, IPv6 and empty input with absent or empty sticky context,
+checks original buffer identity and hash bytes, exactly-once ordinary selection,
+and unchanged persistence state. The existing sticky regression also passed on
+unchanged production. Formatting, workspace check/Clippy and seven repository
+guards passed with existing unrelated warnings. No whole-request allocation
+count, throughput benchmark or live integration run is claimed.

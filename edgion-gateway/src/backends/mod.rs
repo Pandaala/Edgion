@@ -186,16 +186,15 @@ where
     match native_service_path(&captured)? {
         ExternalNamePath::EndpointSlice => {
             let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
-            // Only ConsistentHash consumes RemoteIp; other algorithms keep the
-            // existing allocation-free request input preparation.
-            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                ctx.request_info.remote_ip.clone()
-            } else {
-                String::new()
-            };
-            let query = ctx.query(session.req_header());
-            let endpoint = take_sp_target_or_select(ctx, &captured, || {
-                captured.select(&lb_policy, degrade_policy, Some(session), &remote_ip, query)
+            let endpoint = take_sp_target_or_select(ctx, &captured, |ctx| {
+                // Borrow request inputs after sticky target consumption releases its mutable borrow.
+                let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+                    ctx.request_info.remote_ip.as_str()
+                } else {
+                    ""
+                };
+                let query = ctx.query(session.req_header());
+                captured.select(&lb_policy, degrade_policy, Some(session), remote_ip, query)
             })?;
             build_peer_from_lb_selection(
                 ctx,
@@ -430,7 +429,7 @@ fn take_sp_target_or_select<F>(
     select_fn: F,
 ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode>
 where
-    F: FnOnce() -> Result<ResolvedServiceEndpoint, EdgionErrorCode>,
+    F: FnOnce(&EdgionHttpContext) -> Result<ResolvedServiceEndpoint, EdgionErrorCode>,
 {
     if let Some(target_addr) = ctx
         .session_persistence_mut()
@@ -457,7 +456,7 @@ where
             None => return Err(EdgionErrorCode::StickyBackendUnhealthy),
         }
     }
-    select_fn()
+    select_fn(ctx)
 }
 
 /// Shared logic for ordinary and controller-resolved ExternalName Services.
