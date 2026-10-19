@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Transcoder terminal logging owner borrow](grpc-05-terminal-log-owner-borrow.md)
+
 - [gRPC-Web trailer frame buffer ownership](grpc-web-01-trailer-frame-buffer.md)
 
 - [Compression algorithm preference storage](compression-01-accept-encoding-storage.md)
@@ -5694,3 +5696,17 @@ All 16 failure-reply tests passed before and after the change. Fresh serial
 verification also passed 56 Chat-to-Anthropic converter tests (72 total after the
 change). Formatting, workspace check/Clippy and seven repository guards passed
 with existing unrelated warnings. No live provider or throughput benchmark ran.
+
+## Transcoder terminal logging owner borrow audit
+
+The terminal callback clones its plan to call a finalizer requiring the whole
+mutable context. Grpc-05 records a narrower disjoint-borrow interface as a value
+decision: one Arc increment/decrement versus changes across context, transport
+and logging. A take/restore shortcut needs separate unwind ownership analysis.
+No runtime change was made. Existing lock scope, first-match logging, validated
+status publication and output cleanup remain intact.
+
+Independent plan review approved the two-document scope. Fresh serial baseline
+verification passed 36 tests: 27 transcoder and nine logging tests. Formatting
+check, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No candidate implementation or performance measurement ran.
