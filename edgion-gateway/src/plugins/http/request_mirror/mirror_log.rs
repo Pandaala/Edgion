@@ -21,6 +21,9 @@ pub struct MirrorLogEntry {
 
 pub async fn emit_mirror_log(entry: MirrorLogEntry) {
     if let Some(logger) = get_access_logger() {
+        if logger.sender_count() == 0 {
+            return;
+        }
         if let Ok(data) = serde_json::to_string(&entry) {
             logger.send(data).await
         }

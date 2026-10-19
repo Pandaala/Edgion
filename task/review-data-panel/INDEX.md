@@ -6888,3 +6888,18 @@ Fresh baseline and final verification each passed 13 redirect tests, including
 in-memory wire and connection-reuse cases. Formatting, workspace check/Clippy
 and six specialized guards passed with existing unrelated warnings. No full
 suite, external-network integration or allocation/throughput benchmark ran.
+
+## Disabled redirect and mirror log rendering
+
+The redirect logging callback now returns before timestamp/error projection and
+JSON serialization when its logger has zero senders. The mirror emitter checks
+the same condition after resolving the existing optional logger and before JSON
+serialization. Its caller still records mirror metrics and releases admission
+permits after the helper returns; request execution and entry construction are
+unchanged. Nonempty unhealthy loggers still dispatch and count loss. Active
+log formatting, redaction and serialization failure handling remain unchanged.
+
+Independent plan review passed. Fresh verification passed 13 redirect, 27 mirror
+and eight logger tests (48 total), formatting, workspace check/Clippy and six
+specialized guards, with existing unrelated warnings. No new full suite, live
+network integration or allocation/throughput benchmark ran.
