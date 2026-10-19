@@ -218,3 +218,43 @@ fn bounded_connection_index_borrows_all_slots_and_deduplicates_without_allocatin
     assert!(result.is_none(), "the grammar counts duplicates before deduplication");
     assert_eq!(calls, 0);
 }
+
+#[test]
+fn header_name_digest_preserves_bytewise_framing_without_allocations() {
+    fn reference(name: &str) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"edgion response cache header name\0");
+        for byte in name.bytes() {
+            digest.update([byte.to_ascii_lowercase()]);
+        }
+        digest.finalize().into()
+    }
+    let mut names = Vec::new();
+    for length in (0..=257).chain([511, 512, 513, 4096, 16384]) {
+        let alphabet = b"AbCd-X_09!%";
+        names.push(
+            (0..length)
+                .map(|index| char::from(alphabet[index % alphabet.len()]))
+                .collect::<String>(),
+        );
+    }
+    names.extend(["vary", "VARY", "", "X-Café", "x-π", "x-\0\n\t"].map(str::to_owned));
+    for prefix in [62, 63, 64, 126, 127, 128] {
+        for suffix in ["é", "π", "€"] {
+            names.push(format!("{}{}Z", "A".repeat(prefix), suffix));
+        }
+    }
+    for name in names {
+        let expected = reference(&name);
+        let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| header_digest(&name));
+        assert_eq!(
+            actual,
+            expected,
+            "digest must preserve all bytes at length {}",
+            name.len()
+        );
+        assert_eq!(allocations, 0);
+    }
+    assert_eq!(header_digest("X-Public"), header_digest("x-public"));
+    assert_ne!(header_digest("x-public"), header_digest("x-private"));
+}

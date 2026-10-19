@@ -6294,3 +6294,25 @@ Fresh final verification passed 21 cache-storage and seven cache-lifecycle tests
 (28 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. The broader cache policy-fixture issue recorded in verification-01
 was not changed or claimed resolved; no live integration or full test suite ran.
+
+## Batch response-cache header-name digest updates
+
+The canonical header-name digest now lowercases input bytes into a fixed 64-byte
+stack buffer and feeds each populated slice to SHA-256. The domain prefix and
+resulting byte stream are unchanged. HeaderCertificate and VaryCertificate retain
+one shared implementation, with the same validation, capacity, deduplication,
+sorting and permission rules. No heap buffer or retained state was added.
+
+Independent plan review approved four files. A 287-input differential matrix
+against the original bytewise updater passed before editing. It covers empty and
+mixed-case names, punctuation/control bytes, lengths around chunk boundaries,
+long inputs and UTF-8 encodings crossing the 64-byte boundary, while asserting
+zero allocations. Helper-only invalid-name fixtures do not broaden admission.
+Name-part digest updates decrease from n to ceil(n / 64); short inputs also gain
+stack initialization/copy work, so no universal CPU or throughput claim is made.
+
+Fresh verification passed seven cache-key, 21 cache-storage and seven
+cache-lifecycle tests (35 total), formatting, workspace check/Clippy and seven
+guards. Existing unrelated warnings remain. The broader cache policy-fixture
+failure in verification-01 remains outside this change; no full test suite,
+live integration or throughput benchmark was run.

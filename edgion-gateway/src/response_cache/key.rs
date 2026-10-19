@@ -200,8 +200,12 @@ impl VaryCertificate {
 fn header_digest(name: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"edgion response cache header name\0");
-    for byte in name.bytes() {
-        digest.update([byte.to_ascii_lowercase()]);
+    let mut lowercase = [0u8; 64];
+    for chunk in name.as_bytes().chunks(lowercase.len()) {
+        let output = &mut lowercase[..chunk.len()];
+        output.copy_from_slice(chunk);
+        output.make_ascii_lowercase();
+        digest.update(output);
     }
     digest.finalize().into()
 }

@@ -46,7 +46,9 @@ Connection nominations reuse the canonical token iterator after bounded grammar
 validation. A fixed borrowed index retains case-insensitive first-occurrence
 membership within each synchronous lookup. Managed trace and integration-only
 access_log are excluded; arbitrary x-* headers remain material. Vary can refer
-only to represented fields.
+only to represented fields. Header-name certificate hashes retain the same domain
+prefix and ASCII-lowercased byte stream; bounded stack chunks batch digest updates
+without changing normalization, admission limits or certificate identity.
 Contextual upstream-authority templates bypass before lookup; eligible literal
 templates reuse canonical bounded rendering and actual consumed-result stamps.
 Actual discovery/TLS/traffic/authority reports must match the expected contract
