@@ -5101,3 +5101,24 @@ Fresh serial verification passed 153 tests: 142 ExtProc and 11 upstream response
 trailer-driver tests. Formatting, workspace check/Clippy and seven repository
 guards passed; existing unrelated warnings remain outside the diff. No live
 ExtProc interoperability or performance benchmark ran.
+
+## ExtProc terminal summary lock scope
+
+Logging terminalization now acquires the summary mutex once after releasing the
+state mutex. It preserves the guarded pending-to-cancelled/logging-fallback update
+and drops the redundant preliminary summary read. Finished/Failed owners with a
+pending summary previously acquired that mutex twice; other paths already acquired
+it once. Lazy/Open still become Finished, and no state/summary guards overlap.
+
+A baseline-first state/outcome table covers pending and settled summaries across
+Lazy/Finished/Failed states, including previously emitted summaries, repeated
+terminalization, retained counters/reasons and single emission. The final test also
+explicitly checks Finished state after lazy retirement. Existing stream cleanup
+and logging integration coverage remains. This preserves the conditional transition,
+not identical thread scheduling or an atomic combined state/summary snapshot.
+No new tracing, metrics, log bytes or allocation/throughput claim is introduced.
+
+Fresh serial verification passed 152 tests: 143 ExtProc and nine terminal logging
+tests. Formatting, workspace check/Clippy and seven repository guards passed;
+existing unrelated warnings remain outside the diff. No live integration,
+contention benchmark or performance measurement ran.

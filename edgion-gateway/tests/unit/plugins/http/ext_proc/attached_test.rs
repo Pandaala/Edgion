@@ -440,3 +440,51 @@ impl AttachedExtProc {
         )
     }
 }
+
+#[tokio::test]
+async fn logging_terminalization_preserves_settled_summaries_and_emission() {
+    for state in ["lazy", "finished", "failed"] {
+        for outcome in ["pending", "success", "dependency-failure"] {
+            for emitted in [false, true] {
+                let owner = override_owner(ConfigProcessingMode::default(), false, Vec::new());
+                *owner.state.lock() = match state {
+                    "lazy" => StreamState::Lazy,
+                    "finished" => StreamState::Finished,
+                    _ => StreamState::Failed,
+                };
+                *owner.summary.lock() = Summary {
+                    phases: 3,
+                    input_bytes: 17,
+                    output_bytes: 29,
+                    outcome,
+                    reason: "prior-reason",
+                    emitted,
+                };
+                for _ in 0..2 {
+                    owner.terminalize_for_logging();
+                    assert_eq!(matches!(*owner.state.lock(), StreamState::Failed), state == "failed");
+                    assert_eq!(matches!(*owner.state.lock(), StreamState::Finished), state != "failed");
+                    let summary = owner.summary.lock();
+                    assert_eq!(summary.phases, 3);
+                    assert_eq!(summary.input_bytes, 17);
+                    assert_eq!(summary.output_bytes, 29);
+                    assert_eq!(summary.emitted, emitted);
+                    assert_eq!(
+                        summary.outcome,
+                        if outcome == "pending" { "cancelled" } else { outcome }
+                    );
+                    assert_eq!(
+                        summary.reason,
+                        if outcome == "pending" {
+                            "logging-fallback"
+                        } else {
+                            "prior-reason"
+                        }
+                    );
+                }
+                assert_eq!(owner.take_summary_line().is_some(), !emitted);
+                assert!(owner.take_summary_line().is_none());
+            }
+        }
+    }
+}

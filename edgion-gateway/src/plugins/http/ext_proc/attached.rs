@@ -296,21 +296,16 @@ impl AttachedExtProc {
     }
 
     pub(crate) fn terminalize_for_logging(&self) {
-        let was_open = {
+        {
             let mut state = self.state.lock();
             if matches!(*state, StreamState::Lazy | StreamState::Open(_)) {
                 *state = StreamState::Finished;
-                true
-            } else {
-                false
             }
-        };
-        if was_open || self.summary.lock().outcome == "pending" {
-            let mut summary = self.summary.lock();
-            if summary.outcome == "pending" {
-                summary.outcome = "cancelled";
-                summary.reason = "logging-fallback";
-            }
+        }
+        let mut summary = self.summary.lock();
+        if summary.outcome == "pending" {
+            summary.outcome = "cancelled";
+            summary.reason = "logging-fallback";
         }
     }
 
