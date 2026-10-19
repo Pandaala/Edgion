@@ -6803,3 +6803,18 @@ prepared-backend, ten backend-SAN, 18 certificate-extractor and 12 outbound
 verifier tests (42 total), formatting check, workspace check/Clippy and agent-doc
 validation. Existing unrelated warnings remain; no full suite, live TLS
 integration or benchmark ran.
+
+## Disabled connection-establishment log projection
+
+The successful-connect callback now checks the canonical logger's existing
+sender count before constructing the gRPC-Web/WebSocket connection-established
+entry. A zero-sender logger already silently discarded the serialized string;
+this avoids the unused projection and JSON allocation. SAN validation,
+connection timing and LB commit still run before this condition. Nonempty
+unhealthy loggers retain dispatch and dropped-counter behavior. No other
+logging callback or logger ownership contract changed.
+
+Independent plan review passed. Fresh baseline and final verification each
+passed 63 access-log tests and seven LB-attempt tests (70 total). Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated
+warnings. No full suite, live connection test or throughput benchmark ran.

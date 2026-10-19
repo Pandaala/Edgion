@@ -47,7 +47,7 @@ pub async fn connected_to_upstream(
 
     // For gRPC-Web or WebSocket, log connection establishment immediately
     if let Some(protocol) = &ctx.request_info.discover_protocol {
-        if protocol == "grpc-web" || protocol == "websocket" {
+        if (protocol == "grpc-web" || protocol == "websocket") && edgion_http.access_logger.sender_count() != 0 {
             let mut entry = AccessLogEntry::from_context(ctx);
             entry.set_conn_est();
 
