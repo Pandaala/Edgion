@@ -1,8 +1,8 @@
 use super::*;
 
 impl OpenidConnect {
-    pub(super) fn http_client(&self) -> Arc<reqwest::Client> {
-        self.client.clone()
+    pub(super) fn http_client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     pub(super) fn admit_idp_url(url: &str, operation: OidcOperation) -> Result<(), OidcVerifyError> {

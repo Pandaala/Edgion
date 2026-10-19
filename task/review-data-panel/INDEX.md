@@ -8057,3 +8057,20 @@ Existing authorization-parameter response tests remain. Fresh verification passe
 153 OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and
 seven repository guards with existing unrelated warnings. No full suite or
 throughput benchmark ran.
+
+## Borrow the OIDC HTTP client accessor
+
+OpenidConnect::http_client now borrows its generation-owned reqwest Client rather
+than cloning the outer Arc. Its five production uses immediately construct
+requests for token exchange, refresh, revocation, introspection and userinfo.
+Reqwest's request builder still owns its internal Client clone. Plugin/provider
+Arc ownership, per-instance isolation, connection pools, TLS/egress policy and
+request cancellation remain unchanged. This removes the accessor's outer Arc
+increment/decrement, not reqwest's request ownership or a payload allocation.
+
+The existing distinct-client test retains its Arc identity check and verifies
+that each accessor points into its own client. Fresh verification passed 153
+OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. No full suite or throughput
+benchmark ran. JWKS/discovery snapshot Arcs remain necessary for caller ownership
+outside provider state locks and were not replaced by borrowed cache references.

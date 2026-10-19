@@ -2482,7 +2482,9 @@ fn test_two_openid_instances_get_distinct_clients() {
     let a = OpenidConnect::new(&base_config(), "default".to_string());
     let b = OpenidConnect::new(&base_config(), "default".to_string());
     // Each instance builds its own reqwest::Client.
-    assert!(!std::sync::Arc::ptr_eq(&a.http_client(), &b.http_client()));
+    assert!(!std::sync::Arc::ptr_eq(&a.client, &b.client));
+    assert!(std::ptr::eq(a.http_client(), a.client.as_ref()));
+    assert!(std::ptr::eq(b.http_client(), b.client.as_ref()));
 }
 
 #[tokio::test]
