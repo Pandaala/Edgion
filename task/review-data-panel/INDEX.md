@@ -6003,3 +6003,24 @@ throughput benefit or whole-parser zero-allocation claim is made.
 Fresh serial verification passed 55 HMAC-filtered and 68 condition-system tests
 (the filters overlap), formatting, workspace check/Clippy and seven repository
 guards with existing unrelated warnings. No live integration suite was run.
+
+## Iterate HMAC authorization segments without a temporary Vec
+
+The sole production consumer of split_auth_params processes segments once in
+forward order. The helper now yields trimmed slices using the same quote/escape
+state transitions through str::split. Empty input, trailing delimiters, escaped
+commas and unfinished quotes retain their segmentation; quoted-value validation
+and parser error precedence remain with the existing caller. Early rejection
+omits only an unobserved, side-effect-free scan of remaining input.
+
+Independent plan review approved the four-file scope. A differential unit test
+checks the former scanner against 9,331 exhaustive short strings plus five longer
+boundary cases. All semantic comparisons passed on original production before
+the final zero-allocation assertion failed as expected. The iterator passes both
+semantics and zero allocation calls/requested bytes during segment consumption.
+Other parser structures and outputs still allocate; no throughput claim is made.
+
+Fresh serial verification passed 56 HMAC-filtered and 68 condition-system tests
+(the filters overlap), formatting, workspace check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. The owning HMAC wire-contract
+knowledge records the iterator boundary. No integration suite was run.

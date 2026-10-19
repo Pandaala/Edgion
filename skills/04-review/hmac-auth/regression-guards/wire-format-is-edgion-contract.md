@@ -106,3 +106,18 @@ Resources unit tests exercise every ASCII case permutation of the three names
 and malformed boundaries. The Gateway allocation regression checks zero allocated
 calls/bytes for selected valid and invalid names. These checks cover algorithm
 selection only; the complete Authorization parser still owns its other outputs.
+
+## Forward-only parameter segmentation
+
+`split_auth_params` yields trimmed input slices through a forward-only iterator
+instead of collecting a temporary Vec. Its quote/backslash state transitions,
+empty and trailing segments, and permissive handling of unfinished quotes remain
+unchanged; quoted-value validation still belongs to `parse_quoted_value`.
+The sole production caller consumes segments in order and retains its existing
+error precedence. Returning early skips only a side-effect-free tail scan.
+
+A differential regression compares the previous scanner over all 9,331 strings
+of length zero through five from a six-character alphabet, plus longer escaped
+and whitespace cases. It measures zero allocation calls and requested bytes for
+segment iteration only. The complete Authorization parser still allocates its
+parameter map and owned results; this is not a throughput benchmark.

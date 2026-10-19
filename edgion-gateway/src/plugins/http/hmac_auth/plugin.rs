@@ -302,35 +302,26 @@ impl HmacAuth {
         let _ = set_sensitive_request_header(session, "X-Consumer-Username", username);
     }
 
-    fn split_auth_params(input: &str) -> Vec<&str> {
-        let mut parts = Vec::new();
+    fn split_auth_params(input: &str) -> impl Iterator<Item = &str> {
         let mut in_quotes = false;
         let mut escaped = false;
-        let mut start = 0usize;
-
-        for (idx, ch) in input.char_indices() {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if in_quotes && ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == '"' {
-                in_quotes = !in_quotes;
-                continue;
-            }
-            if ch == ',' && !in_quotes {
-                parts.push(input[start..idx].trim());
-                start = idx + 1;
-            }
-        }
-
-        if start <= input.len() {
-            parts.push(input[start..].trim());
-        }
-        parts
+        input
+            .split(move |ch| {
+                if escaped {
+                    escaped = false;
+                    return false;
+                }
+                if in_quotes && ch == '\\' {
+                    escaped = true;
+                    return false;
+                }
+                if ch == '"' {
+                    in_quotes = !in_quotes;
+                    return false;
+                }
+                ch == ',' && !in_quotes
+            })
+            .map(str::trim)
     }
 
     fn parse_quoted_value(raw: &str) -> Result<Cow<'_, str>, &'static str> {

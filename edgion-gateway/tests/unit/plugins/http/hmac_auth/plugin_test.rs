@@ -923,3 +923,73 @@ fn authorization_parameter_keys_keep_ascii_only_case_folding() {
     assert_eq!(params.username, "alice");
     assert_eq!(params.signature, b"a");
 }
+
+#[test]
+fn authorization_parameter_splitting_preserves_segments_without_allocations() {
+    fn reference(input: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut in_quotes = false;
+        let mut escaped = false;
+        let mut start = 0usize;
+
+        for (idx, ch) in input.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if in_quotes && ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_quotes = !in_quotes;
+                continue;
+            }
+            if ch == ',' && !in_quotes {
+                parts.push(input[start..idx].trim());
+                start = idx + 1;
+            }
+        }
+
+        if start <= input.len() {
+            parts.push(input[start..].trim());
+        }
+        parts
+    }
+    fn matches<'a>(parts: impl IntoIterator<Item = &'a str>, expected: &[&str]) -> bool {
+        parts.into_iter().eq(expected.iter().copied())
+    }
+    let alphabet = ['a', ',', '"', '\\', ' ', 'é'];
+    let mut allocation_free = true;
+    let mut check = |input: &str| {
+        let expected = reference(input);
+        let (equal, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            matches(HmacAuth::split_auth_params(input), &expected)
+        });
+        assert!(equal, "segment mismatch for {input:?}");
+        allocation_free &= stats.calls == 0 && stats.requested_bytes == 0;
+    };
+    for len in 0..=5u32 {
+        for mut encoded in 0..alphabet.len().pow(len) {
+            let mut input = String::new();
+            for _ in 0..len {
+                input.push(alphabet[encoded % alphabet.len()]);
+                encoded /= alphabet.len();
+            }
+            check(&input);
+        }
+    }
+    for input in [
+        "\t a \t,\n b ,",
+        r#"username="a\",b", headers="date", signature="YQ==""#,
+        r#"username="a\\", headers="date""#,
+        r#"username="unterminated\"#,
+        "a,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,b,",
+    ] {
+        check(input);
+    }
+    assert!(
+        allocation_free,
+        "splitting must not allocate a temporary segment container"
+    );
+}
