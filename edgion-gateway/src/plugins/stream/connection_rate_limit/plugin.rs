@@ -155,7 +155,7 @@ impl ConnectionRateLimitPlugin {
     async fn redis_dimension(
         &self,
         dimension: &'static str,
-        limit_key: &str,
+        limit_key: impl FnOnce() -> String,
         rate: u64,
         interval_ms: u64,
         on_failure: &OnRedisFailure,
@@ -174,10 +174,11 @@ impl ConnectionRateLimitPlugin {
             record_connection_rate_limit_redis_failure(dimension, "unavailable");
             return matches!(on_failure, OnRedisFailure::Allow);
         }
+        let limit_key = limit_key();
         let policies = [self.one_policy(rate, interval_ms)];
         let fut = self
             .core
-            .check(&client, &policies, &self.scoped_key_prefix, 1, 4096, limit_key);
+            .check(&client, &policies, &self.scoped_key_prefix, 1, 4096, &limit_key);
         match tokio::time::timeout(self.redis_timeout, fut).await {
             Ok(Ok(result)) => result.allowed,
             _ => {
@@ -207,9 +208,14 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
                 return StreamPluginResult::Deny("connrate:deny:listener:local".into());
             }
             if self.pl_redis_distributed {
-                let key = format!("lst:{port}");
                 let allowed = self
-                    .redis_dimension("listener", &key, rate, self.pl_interval_ms, &self.pl_on_redis_failure)
+                    .redis_dimension(
+                        "listener",
+                        || format!("lst:{port}"),
+                        rate,
+                        self.pl_interval_ms,
+                        &self.pl_on_redis_failure,
+                    )
                     .await;
                 if !allowed {
                     record_connection_rate_limit_reject("listener", "redis");
@@ -220,9 +226,14 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 
         // ---- Step 2: perSourceIp (Redis) ----
         if let Some(rate) = self.ip_rate {
-            let key = format!("ip:{}:{}", port, ctx.direct_peer_ip);
             let allowed = self
-                .redis_dimension("source_ip", &key, rate, self.ip_interval_ms, &self.ip_on_redis_failure)
+                .redis_dimension(
+                    "source_ip",
+                    || format!("ip:{}:{}", port, ctx.direct_peer_ip),
+                    rate,
+                    self.ip_interval_ms,
+                    &self.ip_on_redis_failure,
+                )
                 .await;
             if !allowed {
                 record_connection_rate_limit_reject("source_ip", "redis");

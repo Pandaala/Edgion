@@ -23,6 +23,30 @@ fn cfg_local_only(rate: u64) -> ConnectionRateLimitConfig {
 }
 
 #[tokio::test]
+async fn unavailable_redis_does_not_build_dimension_keys() {
+    let mut plugin = ConnectionRateLimitPlugin::new(&cfg_local_only(1), "default/lazy-dimension-key/#0");
+    for reference in [None, Some("default/lazy-dimension-key-unregistered")] {
+        // Missing configuration is a defensive helper branch; on_connection
+        // still rejects invalid distributed configurations before this helper.
+        plugin.redis_ref = reference.map(str::to_owned);
+        for dimension in ["listener", "source_ip"] {
+            for failure in [OnRedisFailure::Allow, OnRedisFailure::Deny] {
+                let allowed = plugin
+                    .redis_dimension(
+                        dimension,
+                        || panic!("unavailable Redis must not construct a key"),
+                        1,
+                        1000,
+                        &failure,
+                    )
+                    .await;
+                assert_eq!(allowed, matches!(failure, OnRedisFailure::Allow));
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn reload_keeps_local_budget_independent_of_redis_prefix_and_old_parameters() {
     let mut cfg = cfg_local_only(1);
     cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();

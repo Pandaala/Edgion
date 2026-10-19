@@ -7248,3 +7248,28 @@ and old-snapshot collection, retaining valid/invalid route-reference assertions.
 Final formatting, workspace check/Clippy and all seven guards passed with existing
 unrelated warnings. No full suite, live integration or throughput measurement ran;
 the unrelated layout failure tracked in verification-04 was not rerun here.
+
+## Delay connection-rate Redis dimension keys until client availability
+
+ConnectionRateLimit passes a statically dispatched key constructor into its
+private Redis dimension helper. Missing references, absent published clients and
+the existing unhealthy-client fast exit now return before formatting listener
+or source-IP keys. The helper builds the same owned key once after those checks,
+then uses the unchanged canonical Redis core and timeout. Local admission still
+precedes Redis, Redis denial never refunds a token, and source dimensions keep
+their existing failure policy. No cache, clock, registry or metric was added.
+
+The adjacent Stream attachment audit retained selected CompiledStreamPlugins
+ownership across awaits: callers deliberately release the larger scope and
+publication first, and TLS also needs declared-stage metadata. Local gate Arc
+ownership likewise releases the port-map lock before bucket locking; this is
+not a mechanical clone-to-borrow candidate.
+
+Independent plan review passed. Baseline plugin tests passed (9); final connection
+rate-limit verification passed 32 with one existing measurement case ignored,
+and shared Redis-core verification passed 29. The new panic-factory matrix proves
+missing/absent clients do not build keys and preserves both failure results.
+Its missing-reference helper case does not bypass production invalid-config
+rejection, which remains covered separately. Formatting, workspace check/Clippy
+and seven guards passed with existing unrelated warnings. No live Redis exchange,
+full suite, allocation benchmark or throughput measurement ran.
