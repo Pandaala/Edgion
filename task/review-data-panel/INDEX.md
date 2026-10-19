@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
+
 - [Empty-role terminal finalizer locks](body-06-empty-terminal-role-locks.md)
 
 - [Response-cache Age header construction](cache-02-age-header-construction.md)
@@ -5560,3 +5562,20 @@ Fresh serial verification passed 72 tests: three response-driver, 34 AI HTTP and
 35 semantic-guard tests. Formatting, workspace check/Clippy and agent-doc checks
 passed with existing unrelated Clippy warnings. These tests do not prove the
 proposed lock elision safe; no new concurrency probe or live transport test ran.
+
+## OTLP terminal logger construction audit
+
+AccessLogger moves its serialized payload to the first healthy sender; OTLP keeps
+method/path metadata borrowed until constructing the queued record. The SDK
+logger is currently acquired for every emit. Log-03 records potential per-pipeline
+reuse and its shutdown equivalence boundary: new logger acquisition can select a
+no-op provider after shutdown starts, while an existing logger visits its retained
+provider processors. No live race or throughput benefit is asserted.
+
+The static scope name is borrowed, provider acquisition clones an Arc, and SDK
+batch enqueue independently clones its record into a boxed item. Logger caching
+must not be advertised as eliminating that payload copy. No runtime change was
+selected. Independent plan review passed. Fresh serial verification passed 27
+tests: 19 OTLP provider and eight access-logger tests. Formatting, workspace
+check/Clippy and agent-doc validation passed with existing unrelated warnings.
+No live OTLP transport test or concurrent shutdown experiment ran in this batch.
