@@ -6,7 +6,7 @@
 //! - clock skew validation via Date / X-Date
 //! - enforceHeaders validation
 
-use crate::plugins::http::common::auth_common::set_sensitive_request_header;
+use crate::plugins::http::common::auth_common::{prepare_sensitive_headers, set_sensitive_request_header};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -67,12 +67,28 @@ struct PreparedEnforcedHeader {
     configured: String,
 }
 
+struct PreparedHmacCredential {
+    secret: Vec<u8>,
+    headers: Vec<(String, http::HeaderValue)>,
+    group: String,
+}
+
+impl PreparedHmacCredential {
+    fn new(credential: HmacCredential) -> Self {
+        Self {
+            secret: credential.secret,
+            headers: prepare_sensitive_headers(credential.headers),
+            group: credential.group,
+        }
+    }
+}
+
 pub(crate) struct HmacVerifier {
     algorithms: Vec<HmacAlgorithm>,
     clock_skew: u64,
     enforce_headers: Option<Vec<PreparedEnforcedHeader>>,
     validate_request_body: bool,
-    credentials: Arc<HashMap<String, HmacCredential>>,
+    credentials: Arc<HashMap<String, PreparedHmacCredential>>,
     body_requirement: BodyRequirement,
     logical_limit_bytes: Option<u64>,
 }
@@ -137,7 +153,15 @@ impl HmacVerifier {
                     .collect()
             }),
             validate_request_body: config.validate_request_body,
-            credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
+            credentials: Arc::new(
+                config
+                    .resolved_credentials
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(username, credential)| (username, PreparedHmacCredential::new(credential)))
+                    .collect(),
+            ),
             body_requirement,
             logical_limit_bytes,
         }
@@ -147,7 +171,7 @@ impl HmacVerifier {
         &self.body_requirement
     }
 
-    fn credential(&self, username: &str) -> Option<&HmacCredential> {
+    fn credential(&self, username: &str) -> Option<&PreparedHmacCredential> {
         self.credentials.get(username)
     }
 
@@ -167,7 +191,7 @@ impl HmacVerifier {
         clock_skew: u64,
         enforce_headers: Option<&[PreparedEnforcedHeader]>,
         validate_request_body: bool,
-        credentials: Option<&HashMap<String, HmacCredential>>,
+        credentials: Option<&HashMap<String, PreparedHmacCredential>>,
         session: &dyn PluginSession,
     ) -> HmacVerifyOutcome {
         let Some(auth_header) = session
@@ -618,15 +642,9 @@ impl HmacAuth {
         Ok(())
     }
 
-    fn set_upstream_headers(&self, session: &mut dyn PluginSession, credential: &HmacCredential) {
+    fn set_upstream_headers(&self, session: &mut dyn PluginSession, credential: &PreparedHmacCredential) {
         for (name, value) in &credential.headers {
-            if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                continue;
-            }
-            if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                continue;
-            }
-            let _ = set_sensitive_request_header(session, name, value);
+            let _ = session.set_request_header_value(name, value.clone());
         }
     }
 

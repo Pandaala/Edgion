@@ -13,6 +13,26 @@ use std::time::Duration;
 
 use crate::plugins::runtime::PluginSession;
 
+/// Prepare immutable authentication metadata while preserving source iteration order.
+/// Keep raw names for the live setter's validation and mutation policy.
+pub(crate) fn prepare_sensitive_headers(
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> Vec<(String, http::HeaderValue)> {
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+                || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+            {
+                return None;
+            }
+            let mut value = http::HeaderValue::from_str(&value).ok()?;
+            value.set_sensitive(true);
+            Some((name, value))
+        })
+        .collect()
+}
+
 /// Materialize an authentication credential or identity without losing its sensitivity.
 pub fn set_sensitive_request_header(
     session: &mut dyn PluginSession,

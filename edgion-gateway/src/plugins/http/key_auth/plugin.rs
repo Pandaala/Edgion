@@ -3,7 +3,7 @@
 //! Validates requests using API keys from various sources (header, query, cookie, etc.).
 //! Keys and metadata are loaded from Kubernetes Secrets.
 
-use crate::plugins::http::common::auth_common::set_sensitive_request_header;
+use crate::plugins::http::common::auth_common::{prepare_sensitive_headers, set_sensitive_request_header};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -37,20 +37,7 @@ impl PreparedKeyMetadata {
     fn new(metadata: KeyMetadata) -> Self {
         // Logging retains the exact-case username even when forwarding skips it.
         let username = metadata.headers.get("X-Consumer-Username").cloned();
-        let headers = metadata
-            .headers
-            .into_iter()
-            .filter_map(|(name, value)| {
-                if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
-                    || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
-                {
-                    return None;
-                }
-                let mut value = http::HeaderValue::from_str(&value).ok()?;
-                value.set_sensitive(true);
-                Some((name, value))
-            })
-            .collect();
+        let headers = prepare_sensitive_headers(metadata.headers);
         Self {
             group: metadata.group,
             username,

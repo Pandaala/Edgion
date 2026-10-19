@@ -7816,3 +7816,33 @@ contract knowledge now describes the actual ownership boundary. Fresh runs
 passed 56 HMAC-filtered, 68 condition-system and 36 shared-auth tests (filters
 overlap), formatting, workspace check/Clippy and seven repository guards with
 existing unrelated warnings. No full suite or throughput benchmark ran.
+
+## Prepare HMAC metadata through the shared auth helper
+
+HMAC now replaces its runtime credential's raw metadata map with prepared
+sensitive HeaderValues. KeyAuth and HMAC share one cold preparation helper,
+preserving the prior CR/LF/NUL filter, HeaderValue parse result, raw header names
+and source-map iteration order. Each successful request clones values through
+the existing live setter, retaining RPC sealing, deferred mutation handling and
+continuation after a failed write. Secret bytes and group remain independently
+owned by the same immutable verifier generation; no second credential index or
+cache was introduced. Signature initialization is unchanged.
+
+The Controller resolves condition HMAC with an empty metadata whitelist, so
+ordinary condition credentials require no prepared-header backing allocation.
+Directly constructed nonempty condition metadata still has no publication path.
+This removes repeated metadata scans, parsing and value payload copies on
+standalone successful requests, without promising zero request allocations or
+lower total resident memory for every configuration.
+
+A differential HMAC regression covers source-config independence, secret/group
+ownership, case collisions and write order, skipped control/invalid values,
+invalid names passed to the live setter, sensitive shared payload clones,
+continued writes after errors and zero header capacity for empty metadata.
+KeyAuth's existing differential regression covers the shared preparation too.
+Fresh verification passed 57 HMAC-filtered, 16 KeyAuth, 36 shared-auth,
+68 condition-system and one typed-header adapter test (filters overlap),
+formatting, workspace check/Clippy and seven repository guards. After correcting
+a new fixture initialization warning, HMAC tests and workspace check/Clippy
+passed again; only existing unrelated warnings remain. No full suite or
+throughput benchmark ran.

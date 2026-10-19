@@ -1001,3 +1001,91 @@ fn authorization_parameter_splitting_preserves_segments_without_allocations() {
         "splitting must not allocate a temporary segment container"
     );
 }
+
+#[test]
+fn prepared_metadata_preserves_source_policy_and_live_setter_operations() {
+    let headers: HashMap<String, String> = [
+        ("X-User", "alice"),
+        ("x-user", "case-collision"),
+        ("X-Empty", ""),
+        ("X-Tab", "a\tb"),
+        ("X-Unicode", "café"),
+        ("X-CR", "a\rb"),
+        ("X-LF", "a\nb"),
+        ("X-Nul", "a\0b"),
+        ("X-DEL", "a\u{7f}b"),
+        ("X-Bad\nName", "valid"),
+        ("Bad Name", "still-attempted"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    let mut config = HmacAuthConfig {
+        match_config: HmacMatchConfig {
+            resolved_credentials: Some(HashMap::from([(
+                "alice".to_owned(),
+                HmacCredential {
+                    secret: b"independent-runtime-secret".to_vec(),
+                    headers,
+                    group: "partners".to_owned(),
+                },
+            )])),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let original = serde_json::to_value(&config).unwrap();
+    let source = &config.resolved_credentials.as_ref().unwrap()["alice"];
+    let mut expected = Vec::new();
+    let mut reference = MockPluginSession::new();
+    reference.expect_set_request_header_value().returning(|_, _| Ok(()));
+    for (name, value) in &source.headers {
+        if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+            || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+        {
+            continue;
+        }
+        if set_sensitive_request_header(&mut reference, name, value).is_ok() {
+            expected.push((name.clone(), value.clone()));
+        }
+    }
+    let plugin = HmacAuth::new(&config);
+    assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    let credential = plugin.verifier.credential("alice").unwrap();
+    assert_eq!(credential.secret, source.secret);
+    assert_ne!(credential.secret.as_ptr(), source.secret.as_ptr());
+    assert_eq!(credential.group, source.group);
+    assert_eq!(credential.headers.len(), expected.len());
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    for ((name, value), (expected_name, expected_value)) in credential.headers.iter().zip(expected) {
+        assert_eq!(name, &expected_name);
+        assert_eq!(value.as_bytes(), expected_value.as_bytes());
+        assert!(value.is_sensitive());
+        let original_ptr = value.as_bytes().as_ptr() as usize;
+        session
+            .expect_set_request_header_value()
+            .withf(move |name, value| {
+                name == expected_name
+                    && value.as_bytes() == expected_value.as_bytes()
+                    && value.is_sensitive()
+                    && (value.is_empty() || value.as_bytes().as_ptr() as usize == original_ptr)
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Err("test setter rejection".into()));
+    }
+    plugin.set_upstream_headers(&mut session, credential);
+
+    // Empty metadata, as resolved for conditions, needs no header backing storage.
+    config
+        .resolved_credentials
+        .as_mut()
+        .unwrap()
+        .get_mut("alice")
+        .unwrap()
+        .headers
+        .clear();
+    let verifier = HmacVerifier::new(&config.match_config, None);
+    assert_eq!(verifier.credential("alice").unwrap().headers.capacity(), 0);
+}
