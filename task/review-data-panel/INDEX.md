@@ -7358,3 +7358,14 @@ Baseline CSRF verification passed 19 tests; final verification passed all 20,
 including zero digest allocations at every tested timestamp boundary. Formatting,
 workspace check/Clippy and seven guards passed with existing unrelated warnings.
 No full suite, live integration or throughput benchmark ran.
+
+## Defer CSRF response cookie storage transfer
+
+[csrf-01-cookie-header-ownership.md](csrf-01-cookie-header-ownership.md) records
+the temporary cookie String copied through the session string appender. Owned
+transfer, retained capacity and exact formatting remain a user decision, separate
+from pending-operation replay ownership. The task preserves append/order,
+validation, direct-versus-queued invalid-value handling and token redaction.
+No runtime code changed. Formatting, workspace check/Clippy and documentation
+validation passed; existing unrelated Clippy warnings remain. No new runtime
+test or throughput benchmark ran for this documentation-only decision record.
