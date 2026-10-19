@@ -4907,3 +4907,23 @@ Fresh serial verification passed 55 tests: 29 Resources transcoding and 26 Gatew
 transcoder tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing unrelated warnings remain outside the diff. No real-socket gRPC
 integration, allocation benchmark or throughput measurement ran.
+
+## gRPC selected binding handle borrowing
+
+CompiledGrpcTranscoder::bind now borrows the selected Arc from its immutable
+binding collection through the existing second-match ambiguity check and the
+synchronous inner bind. The inner CompiledBinding::bind still clones its Arc
+into BoundRequest only on success. This removes one redundant transient Arc
+increment/decrement without weakening returned-generation ownership or changing
+method/path matching, length admission, query decoding or error ordering.
+
+A baseline-first regression drops the compiled owner before encoding the returned
+bound request and verifies its field payload. It also exercises wrong-method and
+missing-path NotFound, overlong-path Invalid and runtime duplicate-match Invalid;
+the latter deliberately bypasses cold disjointness admission only inside the test.
+No payload-copy, heap-allocation or measured throughput improvement is claimed.
+
+Fresh serial verification passed 56 tests: 30 Resources transcoding and 26 Gateway
+transcoder tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing warnings remain outside the diff. No real-socket integration or
+performance benchmark ran.

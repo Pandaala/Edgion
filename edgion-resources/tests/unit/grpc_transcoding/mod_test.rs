@@ -983,3 +983,41 @@ fn ignored_unknown_queries_still_require_strict_percent_and_utf8_decoding() {
         );
     }
 }
+
+#[test]
+fn selected_binding_outlives_compiled_owner_and_preserves_ambiguity_gate() {
+    let (bound, limits) = {
+        let compiled = config().compile().unwrap();
+        (compiled.bind("GET", "/v1/hello/owned", None).unwrap(), compiled.limits)
+    };
+    let (binding, frame) = bound.encode(b"", limits).unwrap();
+    assert_eq!(binding.rpc_path, "/test.TestService/SayHello");
+    let message = prost_reflect::DynamicMessage::decode(binding.method.input(), &frame[5..]).unwrap();
+    assert_eq!(message.get_field_by_name("name").unwrap().as_str(), Some("owned"));
+
+    let mut compiled = config().compile().unwrap();
+    assert!(matches!(
+        compiled.bind("DELETE", "/v1/hello/owned", None),
+        Err(TranscodingError::NotFound)
+    ));
+    assert!(matches!(
+        compiled.bind("GET", "/unmapped", None),
+        Err(TranscodingError::NotFound)
+    ));
+    assert!(matches!(
+        compiled.bind("GET", &"/".repeat(65537), None),
+        Err(TranscodingError::Invalid)
+    ));
+    // Bypass cold disjointness admission only to exercise the runtime defense.
+    let duplicate = compiled
+        .bindings
+        .iter()
+        .find(|binding| binding.http_method == "GET" && binding.regex.is_match("/v1/hello/owned"))
+        .unwrap()
+        .clone();
+    compiled.bindings.push(duplicate);
+    assert!(matches!(
+        compiled.bind("GET", "/v1/hello/owned", None),
+        Err(TranscodingError::Invalid)
+    ));
+}

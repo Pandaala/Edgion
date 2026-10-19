@@ -308,7 +308,7 @@ impl CompiledGrpcTranscoder {
             .bindings
             .iter()
             .filter(|b| b.http_method == method && b.regex.is_match(path));
-        let binding = matched.next().ok_or(TranscodingError::NotFound)?.clone();
+        let binding = matched.next().ok_or(TranscodingError::NotFound)?;
         if matched.next().is_some() {
             return Err(TranscodingError::Invalid);
         }
