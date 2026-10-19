@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Compression algorithm preference storage](compression-01-accept-encoding-storage.md)
+
 - [Elasticsearch header reuse across flush and retries](log-04-es-index-header-reuse.md)
 
 - [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
@@ -5642,3 +5644,18 @@ No runtime change was selected. Independent plan review approved the two-file
 documentation scope. Fresh serial verification passed all 61 Elasticsearch tests.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No lifetime probe, live delivery or throughput benchmark ran.
+
+## Downstream compression preference storage audit
+
+Traced registration and captured-switch application into the locked fork's
+request parser and response decision. Exact gzip pushes a nonzero-sized enum into
+an initially empty Vec; compression-01 records inline storage as a fork-scoped
+candidate with layout, overflow and parser-semantics tradeoffs. The general sfv
+parser remains a separate owner. Seven enum variants do not bound repeated input
+list length. No negotiation correction or dependency mutation was made.
+
+Independent plan review approved the documentation scope. Fresh serial tests
+passed 45 cases: two module-registration, 17 early-request and 26 response-filter
+tests. Formatting, workspace check/Clippy and agent-doc validation passed with
+existing unrelated warnings. These are Edgion gate tests, not a fresh allocation
+probe, complete fork parser suite or compressed-wire delivery benchmark.
