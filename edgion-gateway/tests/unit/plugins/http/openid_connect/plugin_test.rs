@@ -3488,6 +3488,51 @@ fn signing_policy_token(audience: &str, nonce: &str) -> String {
 }
 
 #[tokio::test]
+async fn jwt_exp_is_required_even_when_expiration_comparison_is_disabled() {
+    use super::super::error::{AuthFailure, OidcVerifyError};
+    use super::super::jwks_provider::ScriptedHttp;
+
+    let mut config = base_config();
+    config.token_signing_alg = Some("HS256".to_string());
+    config.allowed_signing_algs = Some(vec!["HS256".to_string()]);
+    config.clock_skew_seconds = 0;
+    let plugin = OpenidConnect::new(&config, "default".to_string());
+    plugin.jwks_provider.install_scripted_http(signing_policy_script());
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("policy-key".to_string());
+    let future = OpenidConnect::now_unix_secs() + 3600;
+    for (exp, validate_exp, expected) in [
+        (None, true, Err(OidcVerifyError::Auth(AuthFailure::InvalidToken))),
+        (None, false, Err(OidcVerifyError::Auth(AuthFailure::InvalidToken))),
+        (Some(future), true, Ok(())),
+        (Some(future), false, Ok(())),
+        (Some(1), true, Err(OidcVerifyError::Expired)),
+        (Some(1), false, Ok(())),
+    ] {
+        // Leave nbf, aud and sub absent: they are not required claims.
+        let mut claims = json!({"iss": ScriptedHttp::origin()});
+        if let Some(exp) = exp {
+            claims["exp"] = json!(exp);
+        }
+        let token = jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(b"signing-policy-test-secret"),
+        )
+        .unwrap();
+        let mut session = MockPluginSession::new();
+        assert_eq!(
+            plugin
+                .verify_jwt_token_internal(&mut session, &token, true, None, validate_exp)
+                .await
+                .map(|_| ()),
+            expected,
+            "exp={exp:?}, validate_exp={validate_exp}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn prepared_signing_policy_preserves_header_first_and_cold_provider_rejection() {
     use super::super::error::{AuthFailure, OidcVerifyError};
     use super::super::jwks_provider::{DISCOVERY_PATH, JWKS_PATH};

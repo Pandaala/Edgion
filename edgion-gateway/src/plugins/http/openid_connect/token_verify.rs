@@ -120,7 +120,7 @@ impl OpenidConnect {
         validation.leeway = self.config.clock_skew_seconds;
         validation.validate_exp = validate_exp;
         validation.validate_nbf = true;
-        validation.set_required_spec_claims(&["exp"]);
+        // Validation::new requires exp independently of the validate_exp switch.
 
         if let Some(ref issuers) = self.config.issuers {
             if !issuers.is_empty() {

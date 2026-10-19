@@ -8162,3 +8162,22 @@ and a real encrypted cookie with a changed nonce returning InvalidCookieSignatur
 Existing roundtrips remain. Fresh verification passed 157 OIDC tests with 16
 existing ignores, formatting, workspace check/Clippy and seven repository guards
 with existing unrelated warnings. No full suite or throughput benchmark ran.
+
+## Retain the default OIDC JWT required-claim set
+
+OIDC JWT verification no longer replaces Validation::new's required-claim set
+with another identical set containing exp. Locked jsonwebtoken 9.3.1 constructs
+that set and owned claim name in new; the removed setter allocated replacements.
+The per-verification Validation object and all issuer, audience, algorithm, time
+and nonce policies remain unchanged. A source comment preserves the requirement
+that exp remains mandatory even when expiration comparison is disabled.
+
+A six-case real-signature test through the network-free scripted JWKS provider
+covers missing/future/past exp with validate_exp enabled and disabled. Missing exp
+still returns InvalidToken in both modes; expired tokens return Expired only when
+comparison is enabled. Successful cases omit nbf, aud and sub to preserve their
+non-required status. Existing tests remain. Fresh verification passed 158 OIDC
+tests with 16 existing ignores, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. This removes redundant
+HashSet/String construction, not all validation allocations. No full suite or
+throughput benchmark ran.
