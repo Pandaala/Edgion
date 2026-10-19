@@ -416,7 +416,13 @@ pub fn set_claims_headers(
 
         let added_bytes = entry.header_name().len() + header_value.len();
 
-        if set_sensitive_request_header(session, entry.header_name(), &header_value).is_ok() {
+        let header_value = match header_value {
+            Cow::Borrowed(value) => http::HeaderValue::from_str(value),
+            Cow::Owned(value) => http::HeaderValue::try_from(value),
+        };
+        if header_value
+            .is_ok_and(|value| set_sensitive_request_header_value(session, entry.header_name(), value).is_ok())
+        {
             total_bytes += added_bytes;
         }
     }

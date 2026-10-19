@@ -181,16 +181,18 @@ fn invalid_header_value_does_not_consume_aggregate_budget() {
         ("safe".to_string(), "x-b".to_string()),
     ]);
     let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
-    let claims = json!({"unsafe": "bad\u{7f}", "safe": "2"});
-    let mut session = MockPluginSession::new();
+    for unsafe_value in [json!("bad\u{7f}"), json!(["bad\u{7f}"])] {
+        let claims = json!({"unsafe": unsafe_value, "safe": "2"});
+        let mut session = MockPluginSession::new();
 
-    session
-        .expect_set_request_header_value()
-        .withf(|name, value| name == "x-b" && value == "2" && value.is_sensitive())
-        .times(1)
-        .returning(|_, _| Ok(()));
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-b" && value == "2" && value.is_sensitive())
+            .times(1)
+            .returning(|_, _| Ok(()));
 
-    set_claims_headers(&mut session, &claims, &plan, 4, 7);
+        set_claims_headers(&mut session, &claims, &plan, 4, 7);
+    }
 }
 
 #[tokio::test]

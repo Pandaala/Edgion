@@ -8270,3 +8270,20 @@ new mirrored tests. Fresh shared-auth and OIDC tests, formatting, workspace
 check/Clippy and seven repository guards passed with existing unrelated Clippy
 warnings and 16 existing OIDC ignores. This reduces map lookup work, not claims
 serialization or overall allocation count. No full suite or benchmark ran.
+
+## Transfer rendered claim values into sensitive headers
+
+The shared claims projection now transfers its owned number/array String into
+HeaderValue instead of copying its text again. Borrowed string/boolean values
+keep the existing from_str path. Both conversions use the same byte validation
+and the canonical private sensitive-header setter; failed conversion or mutation
+still skips the write without charging the aggregate budget. Plan order, safety
+checks and pre-materialization byte caps are unchanged.
+
+The existing invalid-header budget regression now covers both borrowed text and
+an owned array rendering containing DEL. Fresh verification passed 38 shared-auth,
+159 OIDC, 47 JWT and 21 JWE tests (16 existing OIDC ignores), formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+Clippy warnings. This eliminates a second payload copy for owned renderings;
+Bytes metadata allocation can still depend on retained capacity. No universal
+allocation-count or measured throughput claim is made. No full suite ran.
