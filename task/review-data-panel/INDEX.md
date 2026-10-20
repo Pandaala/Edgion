@@ -8706,7 +8706,27 @@ for malformed lengths; it is not an allocation reduction claim.
 Knowledge follow-up outside this batch: the typical CSRF example in
 `skills/04-review/security/mandatory-design/iron-rules.md` assumes the nonce is
 unknown to the caller. Here `CsrfToken::decode` obtains `random` from the supplied
-token and verification uses those bytes. That rationale needs a separate review
-and correction; it does not justify this optimization or establish exploitability.
+token and verification uses those bytes. That rationale did not justify this optimization or establish exploitability.
+The subsequent knowledge-correction batch below resolves this follow-up.
 The owning signature-input knowledge now states the actual public-length proof.
 Final independent code and knowledge review passed.
+
+## Correct CSRF timing-review knowledge
+
+Revalidated the header/cookie agreement, client token decoding and signature
+verification chain. Corrected the security timing table and its duplicated
+historical P0-04 rationale: supplied nonce entropy does not make the nonce an
+unknown secret. Noise and query restrictions require evidence rather than
+blanket non-exploitability claims. The linked auth-timing page now qualifies its
+old whole-surface table as historical, removes the same nonce premise and permits
+re-evaluation of existing paths with contrary evidence.
+
+The current source checks lifetime, rejects public non-64-byte lengths and then
+uses HMAC plus a full XOR fold. This correction claims neither machine-code
+constant-time verification nor an exploit. Unrelated historical cases and runtime
+code are unchanged. Independent plan review passed; no runtime tests or timing
+benchmarks ran in this documentation-only batch.
+
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+checks passed with existing unrelated warnings. Final independent code-evidence
+and knowledge review passed.

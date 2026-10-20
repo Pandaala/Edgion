@@ -1,6 +1,6 @@
 ---
 name: constant-time-is-not-time-measurement
-description: Use when a finding proposes adding constant-time comparison (subtle / ct_eq) to time/duration code such as access-log relative timestamps, request-latency, or duration metrics; explains that constant-time comparison applies only to secret equality checks, not to wall-clock measurement, and records the 2026-06 whole-surface audit that found no constant-time gaps beyond admin_auth.
+description: Use when a finding proposes adding constant-time comparison (subtle / ct_eq) to time/duration code such as access-log relative timestamps, request-latency, or duration metrics; explains that constant-time comparison applies only to secret equality checks, not to wall-clock measurement, and records a historical 2026-06 audit that requires current revalidation.
 knowledge_type: review-evidence
 ---
 
@@ -36,26 +36,26 @@ data*, not to processing time.
   There is no second value to compare against, no secret, and no equality gate.
   `subtle::ConstantTimeEq` does not even apply to `Duration`/`Instant` arithmetic.
 
-**2. Whole-surface audit (2026-06): no constant-time gaps exist beyond admin_auth.**
+**2. Historical whole-surface audit (2026-06).**
 
-A focused audit of every secret-comparison / signature-verification path
-confirmed they already use timing-safe primitives. Recorded here so the audit
-is not re-run as a "finding":
+The following table records earlier implementation observations. It is not a
+fresh whole-surface verification or a reason to suppress current contrary
+evidence. Recheck the code, dependencies and assumptions before using a row:
 
 | path | timing-safe primitive |
 |------|----------------------|
 | `gateway/api/admin_auth.rs` (admin bearer token) | `subtle::ConstantTimeEq` on SHA-256 digests |
 | `plugins/http/key_auth` | SHA-256 + `HashMap` lookup (see [key-auth-hashmap-not-ct.md](key-auth-hashmap-not-ct.md)) |
 | `plugins/http/hmac_auth` | `hmac::Mac::verify_slice` |
-| `plugins/http/csrf` (token sig) | CSPRNG nonce + constant-time XOR-fold (see [../security/iron-rules.md](../../security/mandatory-design/iron-rules.md) timing rules) |
+| `plugins/http/csrf` (token sig) | Full source-level XOR fold after lifetime and public-length checks; supplied nonce is not secret (see [timing rules](../../security/mandatory-design/iron-rules.md)) |
 | `plugins/http/basic_auth` (htpasswd) | constant-time XOR-fold (SHA-1 / MD5-crypt / APR1) |
 | `controller/authz` (admin/cli token) | SHA-256 (`sha256_hex`) + `HashMap` lookup (token-only admin auth; same class as `key_auth`) |
 | `jwt_auth` / `openid_connect` (gateway plugins) | `jsonwebtoken::decode` (lib-side constant-time MAC/sig) |
 | `header_cert_auth` | X.509 asymmetric `verify_signature` |
 
 The only site this project added `subtle` to is `admin_auth.rs`, and that was
-justified by its opt-in non-loopback exposure tier. No other secret comparison
-needs retrofitting.
+justified by its opt-in non-loopback exposure tier. This history does not establish that every current comparison
+is safe or needs no further review.
 
 **3. Industry precedent.** Envoy / Istio / Kong likewise apply constant-time
 compare only to credential/MAC verification, never to latency or access-log
@@ -67,14 +67,17 @@ timing fields. Access-log durations are emitted verbatim everywhere.
   — category error; no secret, no comparison; `ConstantTimeEq` does not apply to
   duration arithmetic.
 - "Add constant-time comparison to `key_auth` / `hmac_auth` / `csrf` / JWT paths"
-  — already timing-safe via the primitives in the table above; see the linked
-  per-method files. (For CSRF specifically, the CSPRNG nonce already defeats the
-  oracle regardless of the comparison.)
+  — do not infer a defect solely from the absence of a particular library API.
+  Verify the current primitive and threat model using the linked evidence.
+  CSRF nonce visibility does not eliminate the need to assess its comparison;
+  a full source-level fold is not by itself a machine-code timing proof.
 
 ## Re-evaluation Triggers
 
-Re-open only if:
+Re-evaluate when:
 
+- An existing implementation, dependency, compiler behavior or threat-model
+  assumption changes, or current evidence contradicts a historical conclusion.
 - A new auth path is added that compares an attacker-supplied value against a
   server-side secret using a naive `==` / `eq` (then it needs `ConstantTimeEq`
   or `verify_slice`, judged against the iron-rules entropy/jitter test).

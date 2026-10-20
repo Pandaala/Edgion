@@ -26,11 +26,18 @@ Do not classify "uses non-constant-time comparison" as high severity by itself. 
 
 | Check | Description |
 |-------|-------------|
-| Whether the compared value contains independent random entropy | If a CSPRNG nonce is included and verification requires all fields to match, a timing oracle cannot be exploited |
-| Whether network jitter swamps the timing difference | In gateway scenarios, millisecond-level jitter is far larger than nanosecond-level short-circuit differences; measured signal-to-noise ratio is extremely low |
-| Whether the attacker can control the input and retry at scale | Not exploitable when there is rate limiting or single-use token consumption |
+| Whether the compared value contains independent random entropy | Establish which values remain unknown and cannot be selected at the verification boundary; randomness visible in a supplied token does not establish that barrier |
+| Whether network jitter swamps the timing difference | Measure the relevant signal and noise under the actual query model; network jitter alone is not evidence that a timing signal cannot be extracted |
+| Whether the attacker can control the input and retry at scale | Verify actual enforcement and the resulting query budget; rate limiting or single-use consumption is not blanket immunity |
 
-**Typical false positive**: signature comparison for CSRF tokens. The token contains a CSPRNG random (256-bit); even if the sign can be guessed, it cannot be paired with the unknown random, so timing attacks cannot exploit it.
+**Current CSRF evidence**: `CsrfToken::decode` reads `random`, `expires` and
+`sign` from client-supplied Base64 JSON after the plugin checks header/cookie
+agreement. The nonce is not an unknown server secret. After lifetime checks,
+`verify_at` rejects public signature lengths other than 64 bytes, computes HMAC
+for the remaining inputs and compares all 64 bytes with an XOR fold. This is a
+source-level property, not a machine-code constant-time proof or an exploitability
+assessment. Preserve the full comparison; nonce entropy does not justify an
+early-exit secret comparison. See the [signature implementation evidence](../../csrf/regression-guards/signature-input-fragments.md).
 
 ---
 
@@ -94,7 +101,7 @@ When reviewing paths that rewrite or select upstreams, load [04-review/ssrf/mand
 
 | ID | Module | Description | Conclusion |
 |----|--------|-------------|------------|
-| P0-04 | `csrf/token.rs` | Non-constant-time `sign` comparison | Closed — 256-bit CSPRNG random blocks timing oracle exploitation |
+| P0-04 | `csrf/token.rs` | Non-constant-time `sign` comparison | Historical closure rationale superseded — supplied nonce is visible; use current CSRF evidence above |
 | P0-04b | `csrf/token.rs` | SHA-256 key mixing instead of HMAC | Closed — exact-match validation blocks length-extension exploitation |
 | P0-09 | `csrf/token.rs` | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` on hot path | Closed — requires clock pre-dating 1970; `unwrap_or(0)` would silently bypass expiry check |
 
@@ -102,7 +109,10 @@ Review conclusions live in semantic pages under `skills/04-review/<function>/<kn
 
 ## Historical resolution evidence: P0-04
 
-`csrf/token.rs` non-constant-time `sign` comparison: token contains 256-bit CSPRNG random; timing oracle cannot pair with random; closed
+The historical closure relied on an unknown-nonce premise. That rationale is
+superseded: the nonce is supplied in the token. Use the current CSRF evidence
+above and revalidate any timing finding against the actual comparison path; this
+record neither proves exploitability nor suppresses a new finding.
 
 ## Historical resolution evidence: P0-04b
 
