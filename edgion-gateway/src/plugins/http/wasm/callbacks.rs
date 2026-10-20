@@ -35,12 +35,12 @@ impl GuestCallbacks {
         }
     }
 
-    pub fn http(&self, hook: &str) -> Option<HttpHook> {
+    pub fn http(&self, hook: &str) -> Option<&HttpHook> {
         match hook {
-            "proxy_on_request_headers" => self.request_headers.clone(),
-            "proxy_on_request_body" => self.request_body.clone(),
-            "proxy_on_response_headers" => self.response_headers.clone(),
-            "proxy_on_response_body" => self.response_body.clone(),
+            "proxy_on_request_headers" => self.request_headers.as_ref(),
+            "proxy_on_request_body" => self.request_body.as_ref(),
+            "proxy_on_response_headers" => self.response_headers.as_ref(),
+            "proxy_on_response_body" => self.response_body.as_ref(),
             _ => None,
         }
     }

@@ -11592,3 +11592,30 @@ Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatti
 workspace all-target check/Clippy and agent-doc validation. Existing unrelated
 Clippy warnings remain. No destructor or contention benchmark was run.
 Final independent review passed.
+
+## Borrow prepared Wasm HTTP callback handles
+
+GuestCallbacks::http now returns a reference to its prepared typed handle. Its
+four consumers either check presence or synchronously call the handle while
+mutably borrowing the disjoint Store field. The VM retains GuestCallbacks for
+the entire call; guest imports operate on HostState and cannot mutate this table.
+No borrow spans an async suspension or replaces a required payload snapshot.
+
+The locked Wasmtime 49.0.2 TypedFunc clone clones FuncType; RegisteredType cloning
+increments its registry entry and shared Engine/type ownership. Returning a
+reference avoids this temporary clone/drop at HTTP hook lookup, including the
+presence checks. It does not remove guest payload copies or establish a measured
+allocation, latency or throughput reduction. Export lookup/type checking remain
+at instance initialization, and string dispatch, missing-hook results, epoch
+arming, trap isolation and context lifecycle remain unchanged.
+
+Independent plan review passed after inspecting the locked dependency sources.
+All 269 existing Gateway Wasm tests passed serially on the original code; these
+lifecycle/missing-hook/trap/body tests own the behavioral coverage. No duplicate
+implementation-shaped test or dependency change was added.
+
+Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
+trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.
