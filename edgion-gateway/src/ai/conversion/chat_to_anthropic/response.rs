@@ -1169,8 +1169,9 @@ fn clear_provider_headers(response: &mut ResponseHeader) {
     // provider's metadata or representation headers remain authoritative.
     // Normalization restores the small public contract below, while Edgion's
     // own response headers and response-plugin mutations run after this hook.
-    let names: Vec<_> = response.headers.keys().cloned().collect();
-    for name in names {
+    // The dense key iterator exposes its last entry directly. Removing that
+    // entry also avoids relocating another header while keeping CaseMap in sync.
+    while let Some(name) = response.headers.keys().last().cloned() {
         response.remove_header(&name);
     }
 }

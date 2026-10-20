@@ -10365,3 +10365,31 @@ and 26 response-filter tests (91 total), formatting, workspace all-target
 check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
 API transform, unit-layout and gateway no-tracing guards. Existing unrelated
 Clippy warnings remain. No live upstream exchange or throughput benchmark ran.
+
+## Clear translated provider headers without a name vector
+
+The streaming Anthropic normalization path now repeatedly takes the last header
+name and removes it through Pingora's existing remove_header operation. The
+pinned http key iterator delegates last() to its dense entry slice, so this
+does not scan the remaining table. Removing the last entry also avoids moving
+another value-map entry and repairing that moved entry's index.
+
+This removes the temporary Vec of cloned names while preserving Pingora's
+private case-name map cleanup. HeaderName handle cloning and keyed removal
+remain. The response object, status, HTTP version, custom reason, extensions
+and retained map capacities are unchanged. The unary fresh-header path and
+Retry-After's earlier owned snapshot remain separate and unchanged.
+
+The regression compares actual cleanup with the previous collected-name oracle
+using case-aware and no-case ResponseHeaders, zero/one/32 distinct names, and
+repeated opaque sensitive values. It checks empty maps, preserved metadata and
+capacity, lower nonempty allocation calls/requested bytes, and equal H1 header
+bytes after mixed-case reinsertion. Existing normalization status/Retry-After
+and conversion tests continue to cover the caller behavior. This is local
+allocation evidence, not a throughput or whole-callback zero-allocation claim.
+
+Fresh verification passed 58 Chat-to-Anthropic conversion, eight response-head
+and 26 response-filter tests (92 total), formatting, workspace all-target
+check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
+API transform, unit-layout and gateway no-tracing guards. Existing unrelated
+Clippy warnings remain. No live upstream exchange or throughput benchmark ran.

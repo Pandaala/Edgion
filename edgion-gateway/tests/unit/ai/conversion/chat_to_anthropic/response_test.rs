@@ -1331,3 +1331,64 @@ fn non_429_retry_after_has_no_extra_normalization_allocation() {
         assert_eq!(counts[0], counts[1], "status {status}");
     }
 }
+
+#[test]
+fn provider_header_clear_avoids_name_collection_and_preserves_response_metadata() {
+    fn fixture(case_sensitive: bool, names: usize) -> ResponseHeader {
+        let mut response = if case_sensitive {
+            ResponseHeader::build(201, Some(64)).unwrap()
+        } else {
+            ResponseHeader::build_no_case(201, Some(64)).unwrap()
+        };
+        response.set_version(http::Version::HTTP_10);
+        response.set_reason_phrase(Some("Fixture status")).unwrap();
+        response.extensions_mut().insert(42_u64);
+        for index in 0..names {
+            let name = format!("X-Fixture-{index}");
+            response.append_header(name.clone(), "first").unwrap();
+            let mut opaque = http::HeaderValue::from_bytes(&[0x80, b'x']).unwrap();
+            opaque.set_sensitive(true);
+            response.append_header(name, opaque).unwrap();
+        }
+        response
+    }
+
+    for case_sensitive in [false, true] {
+        for names in [0, 1, 32] {
+            let mut previous = fixture(case_sensitive, names);
+            let mut actual = fixture(case_sensitive, names);
+            let (_, previous_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                let names: Vec<_> = previous.headers.keys().cloned().collect();
+                for name in names {
+                    previous.remove_header(&name);
+                }
+            });
+            let (_, actual_stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| clear_provider_headers(&mut actual));
+            assert!(actual.headers.is_empty());
+            assert_eq!(actual.case_header_iter().count(), 0);
+            assert_eq!(actual.has_case(), case_sensitive);
+            assert_eq!(actual.headers.capacity(), previous.headers.capacity());
+            assert_eq!(actual.status.as_u16(), 201);
+            assert_eq!(actual.version, http::Version::HTTP_10);
+            assert_eq!(actual.get_reason_phrase(), Some("Fixture status"));
+            assert_eq!(actual.extensions.get::<u64>(), Some(&42));
+            if names == 0 {
+                assert_eq!(actual_stats.calls, 0);
+            } else {
+                assert!(actual_stats.calls < previous_stats.calls);
+                assert!(actual_stats.requested_bytes < previous_stats.requested_bytes);
+            }
+            for response in [&mut previous, &mut actual] {
+                response.append_header("x-fixture-0", "new-first").unwrap();
+                response.append_header("X-Fixture-0", "new-second").unwrap();
+                response.insert_header("Content-Type", "text/event-stream").unwrap();
+            }
+            let mut expected_wire = Vec::new();
+            let mut actual_wire = Vec::new();
+            previous.header_to_h1_wire(&mut expected_wire);
+            actual.header_to_h1_wire(&mut actual_wire);
+            assert_eq!(actual_wire, expected_wire);
+        }
+    }
+}
