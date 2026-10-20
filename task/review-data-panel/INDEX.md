@@ -9673,3 +9673,22 @@ Fresh verification passed 146 ExtProc, 11 upstream-trailer and six response-
 callback unit tests. Formatting, workspace all-target check/Clippy and the seven
 agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
 and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
+
+## Match canonical transcoder status bytes directly
+
+The gRPC transcoder's existing status parser accepts exactly the 17 ASCII
+spellings from 0 through 16. It now matches those one- or two-byte forms directly,
+removing text validation, a digit scan and general integer parsing. Missing and
+duplicate fields retain their prior results; leading zeros, opaque bytes, signs,
+whitespace and all other spellings still fail. This remains the same canonical
+parser for response headers, original trailer evidence and terminal consumption.
+The deferred typed-evidence interface decision remains untouched.
+
+A literal 17-entry oracle now checks every one- and two-byte value accepted by
+HeaderValue, alongside the existing empty/long, duplicate and zero-allocation
+checks. This reduces parsing work without claiming allocation or measured
+throughput savings. Fresh verification passed 28 transcoder, 11 upstream-trailer
+and six response-callback unit tests. Workspace all-target check/Clippy and the
+seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards passed. Existing unrelated Clippy
+warnings remain.

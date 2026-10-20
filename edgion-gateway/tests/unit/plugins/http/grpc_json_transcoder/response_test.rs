@@ -66,6 +66,32 @@ fn status_accepts_only_canonical_codes_without_allocating() {
     assert_eq!(status(&duplicate), Err(()));
 }
 
+#[test]
+fn status_matches_literal_codes_for_all_short_header_values() {
+    const CODES: [&[u8]; 17] = [
+        b"0", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9", b"10", b"11", b"12", b"13", b"14", b"15", b"16",
+    ];
+    let mut headers = HeaderMap::new();
+    let mut check = |bytes: &[u8]| {
+        let Ok(value) = http::HeaderValue::from_bytes(bytes) else {
+            return;
+        };
+        let expected = CODES
+            .iter()
+            .position(|code| *code == bytes)
+            .map(|code| Some(code as u8))
+            .ok_or(());
+        headers.insert("grpc-status", value);
+        assert_eq!(status(&headers), expected, "header bytes: {bytes:?}");
+    };
+    for first in 0..=u8::MAX {
+        check(&[first]);
+        for second in 0..=u8::MAX {
+            check(&[first, second]);
+        }
+    }
+}
+
 #[tokio::test]
 async fn streaming_fragmented_frames_and_real_status_emit_one_terminal() {
     let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);

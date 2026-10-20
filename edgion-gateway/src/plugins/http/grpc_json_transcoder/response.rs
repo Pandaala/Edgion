@@ -32,15 +32,11 @@ fn status(headers: &HeaderMap) -> Result<Option<u8>, ()> {
     if all.next().is_some() {
         return Err(());
     }
-    let text = value.to_str().map_err(|_| ())?;
-    if text.is_empty() || text.len() > 2 || !text.bytes().all(|c| c.is_ascii_digit()) {
-        return Err(());
+    match value.as_bytes() {
+        [digit @ b'0'..=b'9'] => Ok(Some(*digit - b'0')),
+        [b'1', digit @ b'0'..=b'6'] => Ok(Some(10 + *digit - b'0')),
+        _ => Err(()),
     }
-    let value = text.parse::<u8>().map_err(|_| ())?;
-    if value > 16 || (text.len() == 2 && text.starts_with('0')) {
-        return Err(());
-    }
-    Ok(Some(value))
 }
 
 /// Pin only validated transport status before mutable trailer companions run.
