@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Service outlier completion-token ownership](outlier-01-completion-token-ownership.md)
+
 - [Prepared configured session-persistence header names](lb-04-prepared-session-header-name.md)
 
 - [AI accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md)
@@ -10114,3 +10116,17 @@ Fresh verification passed the 24-case summary regression, 28 trace-ID and
 check/Clippy and all seven agent-doc, SSA-force, metrics, Pingora-source,
 Gateway API transform, unit-layout and gateway no-tracing guards. Existing
 unrelated Clippy warnings remain. No live traffic or throughput benchmark ran.
+
+## Outlier completion ownership audit
+
+Rechecked connection/proxy failure and success completion through the Service
+store and coordinator. Endpoint Arc ownership releases the success lookup's map
+guard before completion_lock; retaining that guard would invert the retirement
+lock order. Capturing a Service owner earlier in the completion token requires
+publication and retired-generation retention analysis, recorded in
+[outlier-01](outlier-01-completion-token-ownership.md). No runtime changes were made.
+
+Fresh baseline verification passed 36 outlier, 41 coordinator, nine connect-failure
+and 11 proxy-error tests (97 total), formatting, workspace all-target check/Clippy
+and agent-doc validation. Existing unrelated Clippy warnings remain. No new-handle
+concurrency test, live integration or performance measurement ran.
