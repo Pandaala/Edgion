@@ -1,5 +1,58 @@
 use super::*;
 
+#[test]
+fn range_preserves_bytes_and_borrowed_storage_across_fragment_layouts() {
+    let input = b"abcdefghijklmnop";
+    for lengths in [vec![16], vec![1; 16], vec![3, 1, 7, 5], vec![0, 4, 0, 4, 8, 0]] {
+        let mut chain = SliceChain::default();
+        let mut segments = Vec::new();
+        let mut offset = 0;
+        for length in lengths {
+            let bytes = Bytes::copy_from_slice(&input[offset..offset + length]);
+            if length != 0 {
+                segments.push((offset, offset + length, bytes.as_ptr()));
+            }
+            chain.push(bytes, 1024).unwrap();
+            offset += length;
+        }
+        assert_eq!(offset, input.len());
+        for start in 0..=input.len() {
+            for end in start..=input.len() {
+                let actual = chain.range(ByteRange::new(start, end)).unwrap();
+                assert_eq!(actual.as_ref(), &input[start..end]);
+                if start == end {
+                    assert!(matches!(actual, Cow::Borrowed(_)));
+                } else if let Some(&(left, _, pointer)) =
+                    segments.iter().find(|&&(left, right, _)| left <= start && end <= right)
+                {
+                    assert!(matches!(actual, Cow::Borrowed(_)));
+                    assert_eq!(actual.as_ptr(), pointer.wrapping_add(start - left));
+                } else {
+                    assert!(matches!(actual, Cow::Owned(_)));
+                }
+            }
+        }
+        assert!(chain.range(ByteRange::new(0, input.len() + 1)).is_none());
+        assert!(chain.range(ByteRange::new(input.len() + 1, input.len() + 1)).is_none());
+    }
+
+    let mut chain = SliceChain::default();
+    for _ in 0..=MAX_SLICE_HANDLES {
+        chain.push(Bytes::from_static(b"x"), 1024).unwrap();
+    }
+    assert_eq!(chain.coalesce_count(), 1);
+    let whole = chain.range(ByteRange::new(0, chain.len())).unwrap();
+    for (start, end) in [(0, chain.len()), (1, 3), (255, 257), (257, 257)] {
+        let actual = chain.range(ByteRange::new(start, end)).unwrap();
+        assert!(matches!(actual, Cow::Borrowed(_)));
+        assert_eq!(actual.as_ref(), &whole[start..end]);
+        if start != end {
+            assert_eq!(actual.as_ptr(), whole.as_ptr().wrapping_add(start));
+        }
+    }
+    assert!(SliceChain::default().range(ByteRange::new(0, 0)).unwrap().is_empty());
+}
+
 fn slack_slice(byte: u8) -> Bytes {
     let mut bytes = BytesMut::with_capacity(64);
     bytes.extend_from_slice(&[byte]);

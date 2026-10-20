@@ -8497,3 +8497,25 @@ were excluded from this unit-only run; no integration or full suite ran.
 This removes repeated suffix traversal, which can revisit the same tail across
 many decisions in a bounded batch. It does not make all window processing linear
 or establish a throughput or allocation improvement.
+
+## Stop impossible contiguous SSE range searches
+
+SliceChain::range now stops searching for a single containing slice as soon as
+the requested range crosses a slice boundary. Every later slice starts after
+the requested start, so it cannot supply the borrowed result. The existing
+canonical range walker still constructs the same owned fallback. Empty and
+out-of-bounds handling, coalesced storage, borrowed pointers, allocations,
+capacity admission and decoder/window lifecycle remain unchanged.
+
+The regression enumerates every valid range over four layouts, including empty
+input slices, and compares bytes against a contiguous oracle. It checks Cow
+ownership and exact borrowed pointers, plus coalesced storage and bounds. All
+five chain tests passed on the old implementation before the production edit.
+Final verification passed 88 SSE-filtered tests, 33 native Anthropic tests and
+56 Chat-to-Anthropic conversion tests, formatting, workspace check/Clippy and
+seven repository guards. Existing unrelated Clippy warnings remain.
+
+The change removes an impossible suffix search for fragmented ranges. It adds
+a branch to the sliced lookup and the table is already bounded at 256 handles;
+no universal CPU, allocation or throughput improvement is claimed. No full
+suite or live-provider integration test ran.

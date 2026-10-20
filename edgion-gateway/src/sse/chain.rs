@@ -372,6 +372,10 @@ impl SliceChain {
                     if range.start >= offset && range.end <= next {
                         return Some(Cow::Borrowed(&slice.bytes[range.start - offset..range.end - offset]));
                     }
+                    if range.start < next && range.end > next {
+                        // The range crosses this boundary; no later slice can contain it.
+                        break;
+                    }
                     offset = next;
                 }
                 let mut out = Vec::with_capacity(range.len());
