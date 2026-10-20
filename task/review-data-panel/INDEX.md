@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Webhook extraction path preparation](webhook-02-extraction-path-preparation.md)
+
 - [Webhook selective JSON projection](webhook-01-selective-json-projection.md)
 
 - [CtxSet extraction and trim projection ownership](ctx-02-extract-trim-projection.md)
