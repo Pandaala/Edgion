@@ -18,7 +18,7 @@ destination.
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
-| Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
+| Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Other concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
@@ -11338,4 +11338,44 @@ Fresh verification passed 29 Gateway transcoder, eight response-head and 26
 response-filter tests (63 total), formatting, workspace all-target check/Clippy
 and seven repository guards. Existing unrelated Clippy warnings remain. No live
 upstream exchange or throughput benchmark ran.
+Final independent review passed.
+
+## gRPC response framing and settlement ownership audit
+
+Traced GrpcResponseProcessor from body callbacks through feed, real-trailer
+settlement, held replacement and cleanup. A five-byte prefix spans input chunks;
+compression, message-size and unary extra-frame checks precede payload retention.
+Successful unary settlement requires exactly one message; a nonzero RPC status
+can produce its fixed error without a message. Unary storage is private and
+bounded. Streaming retains message slices in RawWindow, borrows contiguous input
+or materializes fragmented input for decode, resolves the generation and starts
+the next window. No full streaming response is accumulated.
+
+Completed records are bounded per callback, and lazy callback output has its own
+capped writer. The existing grpc-03 prepared-wire-schema and grpc-04 single-record
+output decisions remain deferred. Compiler descriptors, reflection admission and
+wire-codec internals are not newly claimed covered by this audit.
+
+Actual trailers or valid header-only end evidence own terminal status. Chunk EOS
+alone does not fabricate success. Incomplete framing, missing status and invalid
+media keep their existing failures. Repeated deadline/conflict checks observe
+mutable state and time; streaming expiry is callback-checked, not a guaranteed
+total wall-clock lifetime. Unary conversion completes before the held replacement,
+which consumes its template and normalizes the HTTP/1.1 status-line version.
+
+Reservation::output charges Vec capacity atomically. Its Bytes owner retains both
+the buffer and admission reservation through the last reference; dropping the
+plan's reservation does not refund live output. Error-terminal credit exhaustion
+has no uncapped fallback. Cleanup drops local buffers/window/output handles and
+preserves already decisive outcomes; separately held output keeps its own lifetime.
+
+Independent plan review passed. Existing fragmented/coalesced frame, real-status,
+missing/truncated/multiple-message, mutation/conflict, cancellation, output-credit
+and capacity tests are the verification owners. No new runtime change, alternative
+representation or performance claim was selected for this bounded audit.
+
+Fresh baseline verification passed 29 Gateway transcoder, 90 SSE/window, 11
+upstream-trailer and six response-callback tests (136 total), formatting,
+workspace all-target check/Clippy and agent-doc validation. Existing unrelated
+Clippy warnings remain. No live upstream exchange or benchmark ran.
 Final independent review passed.
