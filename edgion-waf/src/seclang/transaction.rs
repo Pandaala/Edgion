@@ -11,7 +11,8 @@ use json_inspection_runtime::{map_store_error, JsonPublication};
 use thiserror::Error;
 
 use crate::matcher::{
-    MatchScratch, MatcherScanError, MatcherStreamState, RegexBooleanScratch, RegexCaptureScratch, RegexScratchError,
+    CapturePhraseMatch, MatchScratch, MatcherScanError, MatcherStreamState, RegexBooleanScratch, RegexCaptureScratch,
+    RegexScratchError,
 };
 
 use super::super::body::{
@@ -3353,7 +3354,7 @@ fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver>(
             physical_operator_work(context, detection, transformed.len()).map_err(PredicateStageFailure::Physical)?;
         observer.operator_work(work).map_err(PredicateStageFailure::Observer)?;
     }
-    let (positive, fingerprint) = evaluate_operator(
+    let (positive, capture) = evaluate_operator(
         context.generation,
         context.request,
         context.tx,
@@ -3381,8 +3382,7 @@ fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver>(
             plan.operator,
             transformed,
             plan.limits,
-            plan.evaluation_mode,
-            fingerprint,
+            capture,
             observer,
             captures,
         )?;
@@ -3400,8 +3400,7 @@ fn extract_captures_into<O: PredicateStageObserver>(
     plan: super::CompiledOperatorPlan,
     input: &[u8],
     limits: RuntimeLimits,
-    evaluation_mode: EvaluationMode,
-    fingerprint: Option<crate::injection::Fingerprint>,
+    capture: Option<OperatorCapture>,
     observer: &mut O,
     captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
 ) -> Result<(), PredicateStageFailure<O::Error>> {
@@ -3489,16 +3488,10 @@ fn extract_captures_into<O: PredicateStageObserver>(
                 }
             }
         }
-        super::CompiledOperatorOperand::CapturePhrase(program) => {
-            let matcher = generation
-                .capture_phrases
-                .get(program)
-                .ok_or(RuntimeError::GenerationInvariant)?;
-            let matched = match evaluation_mode {
-                EvaluationMode::Accelerated => matcher.find(input),
-                EvaluationMode::Reference => matcher.find_reference(input),
-            }
-            .ok_or(RuntimeError::GenerationInvariant)?;
+        super::CompiledOperatorOperand::CapturePhrase(_) => {
+            let Some(OperatorCapture::Phrase(matched)) = capture else {
+                return Err(RuntimeError::GenerationInvariant.into());
+            };
             let value = CaptureSource::InputRange {
                 input,
                 start: matched.start(),
@@ -3516,7 +3509,9 @@ fn extract_captures_into<O: PredicateStageObserver>(
             )?;
         }
         super::CompiledOperatorOperand::DetectSqli { capture: true } => {
-            let fingerprint = fingerprint.ok_or(RuntimeError::GenerationInvariant)?;
+            let Some(OperatorCapture::Fingerprint(fingerprint)) = capture else {
+                return Err(RuntimeError::GenerationInvariant.into());
+            };
             push_capture(
                 captures,
                 CaptureKeySource::Numeric { index: 0, bytes: b"0" },
@@ -5022,6 +5017,11 @@ fn evaluate_matcher_operand_cached(
     Ok(result)
 }
 
+enum OperatorCapture {
+    Fingerprint(crate::injection::Fingerprint),
+    Phrase(CapturePhraseMatch),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_operator(
     generation: &CompiledGeneration,
@@ -5036,8 +5036,8 @@ fn evaluate_operator(
     evaluation_mode: EvaluationMode,
     scan_cache: Option<&mut StageScanCache>,
     json_budget: Option<&mut InspectionBudget>,
-) -> Result<(bool, Option<crate::injection::Fingerprint>), RuntimeError> {
-    let mut fingerprint = None;
+) -> Result<(bool, Option<OperatorCapture>), RuntimeError> {
+    let mut capture = None;
     let positive = match plan.operand {
         super::CompiledOperatorOperand::String { relation, template } => {
             let operand = template_operand(generation, request, tx, template, member_runtime_limit, json_budget)?;
@@ -5086,8 +5086,8 @@ fn evaluate_operator(
         super::CompiledOperatorOperand::ValidateUtf8Encoding => Ok(std::str::from_utf8(input).is_err()),
         super::CompiledOperatorOperand::Unconditional => Ok(true),
         super::CompiledOperatorOperand::DetectSqli { .. } => {
-            fingerprint = crate::injection::detect_sqli(input);
-            Ok(fingerprint.is_some())
+            capture = crate::injection::detect_sqli(input).map(OperatorCapture::Fingerprint);
+            Ok(capture.is_some())
         }
         super::CompiledOperatorOperand::DetectXss => Ok(crate::injection::detect_xss(input)),
         super::CompiledOperatorOperand::Regex(reference) => match reference {
@@ -5137,14 +5137,15 @@ fn evaluate_operator(
                 .capture_phrases
                 .get(program)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            Ok(match evaluation_mode {
+            capture = match evaluation_mode {
                 EvaluationMode::Accelerated => matcher.find(input),
                 EvaluationMode::Reference => matcher.find_reference(input),
             }
-            .is_some())
+            .map(OperatorCapture::Phrase);
+            Ok(capture.is_some())
         }
     }?;
-    Ok((positive, fingerprint))
+    Ok((positive, capture))
 }
 
 fn static_template_operand(

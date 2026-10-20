@@ -9229,3 +9229,36 @@ WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain; these checks do not measure compiled-mask performance or storage.
+
+## Reuse WAF phrase detection spans during capture extraction
+
+CapturePhrase detection already called the immutable phrase program's exact
+LeftmostLongest find/find_reference search and discarded its returned span.
+Extraction repeated that same search over the same transformed input. A local
+OperatorCapture enum now carries either the existing SQLi fingerprint or the
+phrase match into extraction. The phrase branch consumes that span after the
+unchanged before_captures and descriptor admission/capacity checkpoints; missing
+or mismatched metadata returns GenerationInvariant. No search is retried.
+
+The result exists only within one evaluation; no request/generation cache or
+retained state was added. The transient result is larger, so eliminating one
+phrase hit scan is not a whole-request allocation or throughput claim. Prefix
+callers still discard metadata. SQLi fingerprint behavior and regex boolean
+checking followed by capture extraction remain unchanged. This does not revive
+the rejected regex single-search prototype recorded in the fused JSON guard:
+phrase detection already used the exact-span search for both hits and misses.
+Capture-regex shadow detection cannot supply a phrase hit because the shared
+stage validates that optional shadow operands belong only to capture regexes.
+
+Literal expected-value tests cover overlapping/leftmost-longest/case-preserved
+matches, misses and negation in Accelerated and Reference modes, exact/one-less
+capture byte limits, and failed-chain rollback of captures and TX actions.
+Existing SQLi, capture admission and shared JSON/XML transaction tests remain.
+Budget charging, capture ownership and checkpoint order are unchanged. Wider
+operator and callback coverage remains open.
+
+Fresh verification passed: 826 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No new performance or allocator measurement was run.

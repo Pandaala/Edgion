@@ -1620,6 +1620,77 @@ fn skip_and_skip_after_move_only_the_phase_schedule_cursor() {
 }
 
 #[test]
+fn phrase_capture_spans_preserve_selection_negation_and_limits() {
+    for (patterns, input, expected) in [
+        ("ab abc", "xxABCab", Some("ABC")),
+        ("bc a", "Abc", Some("A")),
+        ("token", "Token token", Some("Token")),
+        ("needle", "missing", None),
+    ] {
+        for negated in [false, true] {
+            let operator_prefix = if negated { "!" } else { "" };
+            let g = generation(&format!(
+                "SecRule REQUEST_HEADERS:X-Probe \"{operator_prefix}@pm {patterns}\" \"id:1,phase:1,pass,capture\"\n"
+            ));
+            let required = expected.map_or(0, |value| value.len() + 1);
+            for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+                for limit in [required.saturating_sub(1), required] {
+                    let headers = [RequestHeader::new(b"X-Probe", input.as_bytes())];
+                    let mut tx = Transaction::new_with_modes(
+                        &g,
+                        request(&headers, b"/"),
+                        RuntimeLimits {
+                            max_capture_bytes: limit,
+                            ..RuntimeLimits::default()
+                        },
+                        mode,
+                        RuleEngineMode::On,
+                    )
+                    .unwrap();
+                    let outcome = tx.execute_request_headers();
+                    if !negated && expected.is_some() && limit < required {
+                        assert_eq!(outcome, Err(RuntimeError::CaptureByteLimit { limit }));
+                        assert_eq!(tx.tx_value(b"0"), None);
+                        assert_eq!(tx.next_phase(), Some(Phase::RequestHeaders));
+                    } else {
+                        assert_eq!(
+                            outcome.unwrap().findings().len(),
+                            usize::from(expected.is_some() != negated)
+                        );
+                        assert_eq!(
+                            tx.tx_value(b"0"),
+                            if negated { None } else { expected.map(str::as_bytes) }
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reused_phrase_capture_is_discarded_with_failed_chain() {
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@pm ab abc\" \"id:1,phase:1,pass,capture,chain,setvar:tx.leak=%{TX.0}\"\n",
+        "SecRule REQUEST_METHOD \"@streq POST\"\n",
+    ));
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let headers = [RequestHeader::new(b"X-Probe", b"ABC")];
+        let mut tx = Transaction::new_with_modes(
+            &g,
+            request(&headers, b"/"),
+            RuntimeLimits::default(),
+            mode,
+            RuleEngineMode::On,
+        )
+        .unwrap();
+        assert!(tx.execute_request_headers().unwrap().findings().is_empty());
+        assert_eq!(tx.tx_value(b"0"), None);
+        assert_eq!(tx.tx_value(b"leak"), None);
+    }
+}
+
+#[test]
 fn regex_and_phrase_captures_publish_bounded_tx_values_and_replace_prior_keys() {
     let generation = generation(concat!(
             "SecRule REQUEST_URI \"@rx ^/user/([a-z]+)-(?P<num>[0-9]+)\" \"id:50,phase:1,pass,capture,setvar:'tx.copy=%{TX.1}'\"\n",
@@ -4301,7 +4372,6 @@ fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
                 compiled.operator_plans[0].unwrap(),
                 input.as_bytes(),
                 transaction.limits,
-                EvaluationMode::Accelerated,
                 None,
                 &mut RangeCaptureProbe,
                 &mut ranged_builder,
