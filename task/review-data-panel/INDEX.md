@@ -9328,3 +9328,25 @@ See [consolidated response-head storage](waf-04-response-header-arena.md) for
 source evidence and acceptance criteria. No runtime change or measured benefit
 is claimed. The request-head arena precedent does not decide response budget
 policy. Broader callback coverage remains open.
+
+## Reuse WAF byte delimiter search for request-head projection
+
+query_part, request_filename and split_once now use the existing memchr primitive
+instead of scalar first-match searches. These helpers feed URI/path projection,
+query field publication and combined-size calculation, and cookie counting,
+projection and publication. They retain the same borrowed slice expressions,
+first delimiter, no-match fallbacks and empty-field semantics.
+
+The independent scalar oracle covers every byte delimiter, binary inputs, empty
+and absent markers, first/middle/last and repeated markers, and lengths around
+common scan boundaries. Nonempty results retain original-buffer pointer identity.
+Existing RequestState ordering, decoding, source aliases and exact/one-below
+retained admission tests remain. Segment iteration, trimming, decoding, budgets,
+allocation ownership and failure ordering are unchanged. This reuses an optimized
+scan primitive; no measured throughput gain is claimed. Wider coverage stays open.
+
+Fresh checks passed: 829 leaf WAF tests (six existing ignored), 90 Gateway WAF
+tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No allocator or throughput measurement was run.

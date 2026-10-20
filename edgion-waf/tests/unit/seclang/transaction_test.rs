@@ -665,6 +665,57 @@ fn request_decoders_preserve_scalar_bytes_ranges_and_reserved_capacity() {
 }
 
 #[test]
+fn request_delimiter_search_preserves_scalar_slices() {
+    fn same_slice(actual: &[u8], expected: &[u8]) {
+        assert_eq!(actual, expected);
+        if !expected.is_empty() {
+            assert_eq!(actual.as_ptr(), expected.as_ptr());
+        }
+    }
+
+    fn check(input: &[u8], delimiter: u8) {
+        let position = input.iter().position(|byte| *byte == delimiter);
+        let expected = position.map_or((input, &[][..]), |index| (&input[..index], &input[index + 1..]));
+        let actual = split_once(input, delimiter);
+        same_slice(actual.0, expected.0);
+        same_slice(actual.1, expected.1);
+
+        let query = input.iter().position(|byte| *byte == b'?');
+        same_slice(query_part(input), query.map_or(&[][..], |index| &input[index + 1..]));
+        same_slice(request_filename(input), &input[..query.unwrap_or(input.len())]);
+    }
+
+    let binary: Vec<_> = (0..=255_u8).collect();
+    for delimiter in 0..=255_u8 {
+        check(&binary, delimiter);
+        for len in [0, 1, 2, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 1024] {
+            let plain = vec![delimiter.wrapping_add(1); len];
+            check(&plain, delimiter);
+            if len != 0 {
+                for position in [0, len / 2, len - 1] {
+                    let mut input = plain.clone();
+                    input[position] = delimiter;
+                    check(&input, delimiter);
+                    input[len - 1] = delimiter;
+                    check(&input, delimiter);
+                }
+            }
+        }
+    }
+    for input in [
+        b"/path?name=value=tail??".as_slice(),
+        b"?",
+        b"??",
+        b"name==value",
+        b"=value",
+        b"name=",
+        b"/encoded%3Fpath?x=%3D",
+    ] {
+        check(input, b'=');
+    }
+}
+
+#[test]
 fn request_state_preserves_query_header_and_cookie_order() {
     let headers = [
         RequestHeader::new(b"X-Test", b"first"),

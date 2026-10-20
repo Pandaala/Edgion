@@ -5965,13 +5965,11 @@ fn is_header_name_byte(byte: u8) -> bool {
 }
 
 fn query_part(uri: &[u8]) -> &[u8] {
-    uri.iter()
-        .position(|byte| *byte == b'?')
-        .map_or(&[], |index| &uri[index + 1..])
+    memchr::memchr(b'?', uri).map_or(&[], |index| &uri[index + 1..])
 }
 
 fn request_filename(uri: &[u8]) -> &[u8] {
-    let end = uri.iter().position(|byte| *byte == b'?').unwrap_or(uri.len());
+    let end = memchr::memchr(b'?', uri).unwrap_or(uri.len());
     &uri[..end]
 }
 
@@ -6013,10 +6011,7 @@ fn count_cookies(headers: &[RequestHeader<'_>], limit: usize) -> Result<usize, R
 }
 
 fn split_once(value: &[u8], delimiter: u8) -> (&[u8], &[u8]) {
-    value
-        .iter()
-        .position(|byte| *byte == delimiter)
-        .map_or((value, &[]), |index| (&value[..index], &value[index + 1..]))
+    memchr::memchr(delimiter, value).map_or((value, &[]), |index| (&value[..index], &value[index + 1..]))
 }
 
 fn trim_ascii(mut value: &[u8]) -> &[u8] {
