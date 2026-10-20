@@ -11727,3 +11727,36 @@ ForwardAuth tests serially, formatting and workspace all-target check/Clippy.
 Existing unrelated Clippy warnings remain. No allocation/throughput benchmark or
 live network test ran; deeper outbound transport remains outside this audit.
 Agent-doc validation and final independent review passed.
+
+## Transfer the outbound request template into the final attempt
+
+The shared outbound loop now passes its remaining attempt count to
+request_for_attempt. Earlier attempts still clone the immutable template; the
+last permitted attempt takes it. A retry-capable call still rejects a streaming,
+non-replayable template on its first clone before transport, while a sole attempt
+continues to accept the same request. No later branch can retry after the template
+has been consumed. Backoff, deadlines, response caps, classification, passive
+health and diagnostics retain their existing order.
+
+Locked reqwest 0.12.28 clones the request URL, headers, extensions and replayable
+body. Moving the final template avoids that last clone and its temporary owners;
+it does not rebuild headers or discard their sensitivity. The canonical request
+builder supplies value-semantic timeout extensions. No custom extension lifecycle
+or public transport API changed, and no throughput improvement is claimed.
+
+Independent plan review passed. The existing replay test now checks method, URL,
+body, timeout, HTTP version and sensitive-header metadata across cloning and final
+transfer. Its enhanced assertions passed before production editing, as did all
+123 shared outbound baseline tests. Existing scripted-transport tests exercise
+actual retries without sockets; four shared consumers are included in verification.
+
+Final verification passed 123 outbound, 13 ForwardAuth, 47 Webhook and 120 canonical
+AI guard tests (303 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Initial AI guard execution had 119 passes and one failure in
+later_dependency_failure_preserves_accepted_replace_and_remaining_originals;
+its isolated rerun and the full serial 120-test rerun passed. That fixture uses
+no retries, whose request transfer is unchanged; the transient failure's cause
+was not established. Existing unrelated Clippy warnings remain. Scripted outbound
+coverage is network-free; existing semantic guard fixtures include local mock
+servers. No deployed integration or throughput benchmark ran.
+Final independent code review passed.

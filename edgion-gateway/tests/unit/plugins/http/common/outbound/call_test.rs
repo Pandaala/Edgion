@@ -217,17 +217,32 @@ fn retry_attempt_rejects_non_cloneable_request_without_consuming_template() {
 }
 
 #[test]
-fn retry_attempt_clones_replayable_request_without_consuming_template() {
+fn retry_attempt_preserves_request_fields_through_final_transfer() {
     let mut request = reqwest::Request::new(
         reqwest::Method::POST,
-        reqwest::Url::parse("http://example.com/").unwrap(),
+        reqwest::Url::parse("http://example.com/replay?mode=full").unwrap(),
     );
     *request.body_mut() = Some(Bytes::from_static(b"replayable body").into());
+    *request.timeout_mut() = Some(Duration::from_millis(750));
+    *request.version_mut() = http::Version::HTTP_2;
+    let mut credential = http::HeaderValue::from_static("test-credential");
+    credential.set_sensitive(true);
+    request.headers_mut().insert(http::header::AUTHORIZATION, credential);
     let mut template = Some(request);
 
-    assert!(request_for_attempt(&mut template, 2).is_some());
-    assert!(request_for_attempt(&mut template, 2).is_some());
+    let first = request_for_attempt(&mut template, 2).unwrap();
     assert!(template.is_some());
+    let final_request = request_for_attempt(&mut template, 1).unwrap();
+    assert!(template.is_none());
+    for request in [first, final_request] {
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url().as_str(), "http://example.com/replay?mode=full");
+        assert_eq!(request.timeout(), Some(&Duration::from_millis(750)));
+        assert_eq!(request.version(), http::Version::HTTP_2);
+        assert_eq!(request.headers()[http::header::AUTHORIZATION], "test-credential");
+        assert!(request.headers()[http::header::AUTHORIZATION].is_sensitive());
+        assert_eq!(request.body().unwrap().as_bytes(), Some(b"replayable body".as_slice()));
+    }
 }
 
 #[test]

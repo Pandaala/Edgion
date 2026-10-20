@@ -306,8 +306,8 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
     }
 
     // ── 3. Resolve base URL (with SSRF guard) and build the outbound request ─
-    //    The request is built once, moved into a sole attempt, or cloned for
-    //    each attempt when retries are configured.
+    //    The request is built once, cloned while retries remain, then moved
+    //    into the final permitted attempt.
     let base = client.dial_url().map_err(|_| OutboundCallError::Connect)?;
 
     // Dynamic upstream authority: for a Service anchor carrying an
@@ -385,7 +385,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
             }
         }
 
-        let Some(req) = request_for_attempt(&mut template_req, max_attempts) else {
+        let Some(req) = request_for_attempt(&mut template_req, max_attempts - attempt) else {
             return Err(OutboundCallError::Connect);
         };
 
@@ -588,11 +588,14 @@ fn resolve_timeout(client: &ManagedOutboundClient, context: TemplateContext<'_>)
 
 /// Select the request for one outbound attempt.
 ///
-/// A logical call with one attempt transfers ownership directly. Retry-capable
-/// calls retain the template and clone it for every attempt, preserving the
-/// existing rejection of non-replayable request bodies.
-fn request_for_attempt(template_req: &mut Option<reqwest::Request>, max_attempts: u32) -> Option<reqwest::Request> {
-    if max_attempts == 1 {
+/// Transfer ownership when no later attempt can use the template. Earlier
+/// attempts clone it, so a retry-capable call still rejects a non-replayable
+/// body before its first dispatch. The template is immutable between attempts.
+fn request_for_attempt(
+    template_req: &mut Option<reqwest::Request>,
+    remaining_attempts: u32,
+) -> Option<reqwest::Request> {
+    if remaining_attempts == 1 {
         template_req.take()
     } else {
         template_req.as_ref()?.try_clone()
