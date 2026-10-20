@@ -8897,3 +8897,23 @@ Independent plan review passed. Formatting, workspace all-target check/Clippy,
 agent-doc validation and diff checks passed with existing unrelated warnings.
 This documentation-only batch ran no runtime tests or performance measurements.
 Final independent review passed.
+
+
+## Use the stored trailer field count before byte validation
+
+ExtProc checked_map_size now checks HeaderMap::len against the field cap before
+walking bytes. The pinned http implementation counts every value, including
+repeated values, through entries.len plus extra_values.len. This replaces the
+per-value checked count and comparison and rejects field overflow without scanning
+content. The byte loop retains both checked additions and the inclusive cap,
+including the name bytes for every repeated value. All failures remain the same
+pure Err(()); projection, atomic mutations and failure-policy handling are unchanged.
+
+Independent plan review passed. All 143 existing ExtProc baseline tests passed.
+A new regression passed against the old production implementation, covering
+empty maps, 256/257 repeated values, removal/reappend, overwrite contraction and
+exact/over-byte-cap repeated values. No allocation or measured throughput benefit
+is claimed. Final verification passed 144 ExtProc and 11 upstream-trailer tests
+(155 total), formatting, workspace all-target check/Clippy and seven guards.
+Existing warnings remain outside changed code. No full suite, interoperability
+test or benchmark ran. Final independent review passed.

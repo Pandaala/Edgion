@@ -686,6 +686,36 @@ fn trailer_status_validation_preserves_cardinality_and_numeric_rules() {
 }
 
 #[test]
+fn trailer_size_counts_repeated_values_and_reused_entries() {
+    let mut map = HeaderMap::new();
+    assert_eq!(checked_map_size(&map), Ok(0));
+    for _ in 0..TRAILER_FIELD_CAP {
+        map.append("x", HeaderValue::from_static("v"));
+    }
+    assert_eq!(map.keys_len(), 1);
+    assert_eq!(checked_map_size(&map), Ok(TRAILER_FIELD_CAP * 2));
+    map.append("x", HeaderValue::from_static("v"));
+    assert!(checked_map_size(&map).is_err());
+
+    map.remove("x");
+    assert_eq!(checked_map_size(&map), Ok(0));
+    for _ in 0..TRAILER_FIELD_CAP {
+        map.append("y", HeaderValue::from_static("v"));
+    }
+    assert_eq!(checked_map_size(&map), Ok(TRAILER_FIELD_CAP * 2));
+    map.insert("y", HeaderValue::from_static("v"));
+    assert_eq!(checked_map_size(&map), Ok(2));
+
+    let half = HeaderValue::from_bytes(&vec![b'v'; TRAILER_BYTES_CAP / 2 - 1]).unwrap();
+    map.clear();
+    map.append("x", half.clone());
+    map.append("x", half);
+    assert_eq!(checked_map_size(&map), Ok(TRAILER_BYTES_CAP));
+    map.append("x", HeaderValue::from_static(""));
+    assert!(checked_map_size(&map).is_err());
+}
+
+#[test]
 fn trailer_status_validation_retains_whole_map_gates() {
     let mut map = HeaderMap::new();
     map.insert("grpc-status", HeaderValue::from_static("0"));

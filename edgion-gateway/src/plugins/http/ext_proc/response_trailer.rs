@@ -224,13 +224,14 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
 }
 
 fn checked_map_size(map: &HeaderMap) -> Result<usize, ()> {
-    let mut count = 0usize;
+    if map.len() > TRAILER_FIELD_CAP {
+        return Err(());
+    }
     let mut bytes = 0usize;
     for (name, value) in map.iter() {
-        count = count.checked_add(1).ok_or(())?;
         bytes = bytes.checked_add(name.as_str().len()).ok_or(())?;
         bytes = bytes.checked_add(value.as_bytes().len()).ok_or(())?;
-        if count > TRAILER_FIELD_CAP || bytes > TRAILER_BYTES_CAP {
+        if bytes > TRAILER_BYTES_CAP {
             return Err(());
         }
     }
