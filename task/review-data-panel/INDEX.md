@@ -17,7 +17,7 @@ destination.
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
-| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
+| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
@@ -11275,4 +11275,44 @@ and request-throughput benefits were not measured.
 Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+## WAF result-store allocation and cleanup audit
+
+Inspected json_inspection.rs record pools, BytePool, budget growth, receipt cleanup,
+sealing and abandonment. Record slots reuse generational identities; removal
+charges work before identity/generation checks and only then takes the value and
+advances the slot. Parent-owner checks before removal retain distinct error order.
+
+BytePool uses power-of-two small classes and page-rounded large classes. Small
+heads are fixed; large-class metadata is sorted and its search/insertion is charged.
+Freed blocks store the next free offset in their own bytes. Reuse retains backing
+capacity; freeing logical payload does not refund allocated capacity or spent work.
+Growth admits old storage plus a complete replacement, charges existing live bytes,
+and checks actual allocator capacity. The optional page remainder falls back to
+exact requested growth when its allowance is insufficient; unused spare bytes are
+not initialized merely because capacity was reserved.
+
+Shared outcome payloads retain whole-profile/candidate cleanup ownership. Sealing
+builds qualified names only for surviving match views and resolves first named
+values against compiled sorted demands. Sealed match/capture values remain opaque
+handles into immutable request-owned storage. Dynamic owned values are separate.
+
+An active operation failure invokes abandon before latching Failed. Eligible
+abandonment drops owned pools and resets live usage while preserving spent work,
+peak usage and externally owned scratch charges. Calls on already Abandoned or
+Failed stores are no-ops. Scratch release remains the caller's responsibility after
+its allocation is dropped; sealed replay budget failure is a separate sticky path.
+
+No additional runtime change was selected for this bounded audit. This is not
+complete collector, compiler, operator or WAF coverage. Independent plan review
+passed; the existing pool reuse, overflow, generation exhaustion, actual-capacity,
+page-hint fallback, shared-outcome and sticky-failure tests are the relevant owners.
+No alternate allocator, benchmark or general heap-bound claim accompanies this
+record. Remaining callback and dependency coverage stays open above.
+
+Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
+90 Gateway WAF tests, formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. These checks cover current
+code, not an alternative storage implementation.
 Final independent review passed.
