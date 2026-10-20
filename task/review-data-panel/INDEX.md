@@ -9537,3 +9537,25 @@ Fresh verification passed 160 algorithm-library tests, 19 HTTP match-unit tests,
 workspace all-target check/Clippy and the seven agent-doc, SSA-force, metrics,
 Pingora-source, Gateway API transform, unit-layout and gateway no-tracing guards
 passed. Existing unrelated Clippy warnings remain.
+
+## Reuse canonical path-radix child lookup in DFS
+
+Both match_all and the extended visitor now select a static child through the
+existing find_child helper instead of scanning the complete child array. The
+builder owns a BTreeMap keyed by first byte; flattening preserves sorted, unique
+entries. Thus at most one static child qualifies. Small arrays retain the existing
+linear lookup with an early hit; arrays above four use the existing binary lookup.
+No threshold, representation, allocation or separate search mechanism is added.
+
+Static children are still pushed before the parameter child, preserving LIFO
+parameter-first traversal, node value order and boundary kinds. Explicit sequence
+checks cover fanouts 0, 1, 4, 5, 26 and 62 with every alphanumeric first byte,
+a missing byte, complete segments, partial tails, slash boundaries and a prefix
+mismatch. Both value-only and extended collection APIs are checked. This reduces
+unnecessary child scanning without claiming measured throughput improvement.
+
+Fresh verification passed all 161 algorithm-library tests, 34 Gateway match-engine
+tests, 19 HTTP match-unit tests, 51 HTTP conf-handler tests and 23 request access
+policy tests. Formatting, workspace all-target check/Clippy and the seven agent-doc,
+SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout and gateway
+no-tracing guards passed. Existing unrelated Clippy warnings remain.

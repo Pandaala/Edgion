@@ -379,10 +379,9 @@ impl PathRadixTree {
                 let children_start = node.children_offset as usize;
                 let children_end = children_start + node.children_count as usize;
 
-                for child_entry in &self.children[children_start..children_end] {
-                    if child_entry.first_byte == next_byte {
-                        stack.push((child_entry.node_index as usize, after_match));
-                    }
+                let children = &self.children[children_start..children_end];
+                if let Some(index) = self.find_child(children, next_byte) {
+                    stack.push((children[index].node_index as usize, after_match));
                 }
 
                 // Try parameter child
@@ -456,10 +455,9 @@ impl PathRadixTree {
                 let children_start = node.children_offset as usize;
                 let children_end = children_start + node.children_count as usize;
 
-                for child_entry in &self.children[children_start..children_end] {
-                    if child_entry.first_byte == next_byte {
-                        stack.push((child_entry.node_index as usize, after_match));
-                    }
+                let children = &self.children[children_start..children_end];
+                if let Some(index) = self.find_child(children, next_byte) {
+                    stack.push((children[index].node_index as usize, after_match));
                 }
 
                 if node.param_child_idx != NO_PARAM_CHILD {

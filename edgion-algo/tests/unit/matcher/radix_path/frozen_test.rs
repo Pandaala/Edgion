@@ -216,3 +216,55 @@ fn visitor_preserves_more_than_inline_results() {
     assert_eq!(visited, expected);
     assert_eq!(tree.match_all_ext(&path).as_slice(), expected.as_slice());
 }
+
+#[test]
+fn static_child_lookup_preserves_dfs_results_across_fanouts() {
+    use PathMatchKind::{FullyConsumed, PartialSegment, SegmentBoundary};
+
+    let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    for fanout in [0, 1, 4, 5, 26, 62] {
+        let mut builder = PathRadixBuilder::new();
+        builder.insert("/fan/", 100).unwrap();
+        builder.insert("/fan/:value", 101).unwrap();
+        for (index, byte) in alphabet[..fanout].iter().enumerate() {
+            builder
+                .insert(&format!("/fan/{}", char::from(*byte)), index + 1)
+                .unwrap();
+        }
+        let tree = builder.freeze().unwrap();
+        for (index, byte) in alphabet.iter().chain(std::iter::once(&b'!')).enumerate() {
+            for suffix in ["", "tail", "/tail"] {
+                let path = format!("/fan/{}{suffix}", char::from(*byte));
+                let mut expected = vec![
+                    (100, SegmentBoundary),
+                    (
+                        101,
+                        if suffix.starts_with('/') {
+                            SegmentBoundary
+                        } else {
+                            FullyConsumed
+                        },
+                    ),
+                ];
+                if index < fanout {
+                    let kind = match suffix {
+                        "" => FullyConsumed,
+                        "/tail" => SegmentBoundary,
+                        _ => PartialSegment,
+                    };
+                    expected.push((index as u32 + 1, kind));
+                }
+                assert_eq!(
+                    tree.match_all_ext(&path).as_slice(),
+                    expected.as_slice(),
+                    "{fanout}: {path}"
+                );
+                let ids: Vec<_> = expected.iter().map(|&(value, _)| value).collect();
+                assert_eq!(tree.match_all(&path).as_slice(), ids.as_slice(), "{fanout}: {path}");
+            }
+        }
+        assert_eq!(tree.match_all_ext("/fan/").as_slice(), &[(100, FullyConsumed)]);
+        assert!(tree.match_all_ext("/other/a").is_empty());
+        assert!(tree.match_all("/other/a").is_empty());
+    }
+}
