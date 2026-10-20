@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Callback-local compression eligibility reuse](compression-04-response-eligibility-reuse.md)
+
 - [Prepared response-cache Content-Length](cache-04-prepared-content-length.md)
 
 - [Inactive downstream request-body module dispatch](context-02-request-body-module-dispatch.md)
@@ -8878,4 +8880,20 @@ or allocation improvement. Final verification passed 77 tests: 16 native dispatc
 (with that same explicit TLS-fixture exclusion), 41 coordinator and 20 DNS-cache
 tests. Formatting, workspace all-target check/Clippy and seven guards passed
 with existing unrelated warnings. No full suite, live DNS or benchmark ran.
+Final independent review passed.
+
+
+## Compression response classification reuse audit
+
+Traced the downstream module into the pinned fork's response-header callback.
+Enabled compression with absent Content-Encoding and nonempty preferences can
+classify the same response twice for Vary and action selection. Between those
+checks only Vary changes. Length parsing can repeat; MIME scanning repeats only
+when the length gate permits it. Compression-04 records callback-local reuse for
+user decision, preserving short circuits and exact negotiation/header behavior.
+No external checkout, dependency revision or runtime code changed.
+
+Independent plan review passed. Formatting, workspace all-target check/Clippy,
+agent-doc validation and diff checks passed with existing unrelated warnings.
+This documentation-only batch ran no runtime tests or performance measurements.
 Final independent review passed.
