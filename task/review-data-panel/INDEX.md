@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Outbound terminal classification ownership](outbound-04-terminal-classification-ownership.md)
+
 - [Shared outbound ready-endpoint projection](outbound-03-ready-endpoint-projection.md)
 
 - [Prepared ForwardAuth denial header names](forward-auth-01-prepared-denial-header-names.md)
@@ -11779,3 +11781,22 @@ Independent plan review passed. Fresh verification passed 123 shared outbound,
 workspace all-target check/Clippy. Existing unrelated Clippy warnings remain.
 No allocation/throughput benchmark or deployed integration ran.
 Agent-doc validation and final independent review passed.
+
+## Outbound terminal classification reuse audit
+
+The shared outbound loop computes terminal SuccessOutcome for retry and metric
+handling, then ForwardAuth and Webhook recompute it with the same client. Accepted
+JSON statuses with body predicates can therefore parse/evaluate the body twice.
+Status-only paths do not share that parsing cost. A classified-result owner could
+reuse the scalar outcome, but the existing publicly mutable response is not a safe
+unkeyed cache boundary. The [deferred decision](outbound-04-terminal-classification-ownership.md)
+records ownership, retry, telemetry and consumer gates. AI guard protocol decoding
+and Webhook extraction remain distinct operations, not redundant classification.
+Independent plan review passed; no runtime code or tests changed.
+
+Fresh baseline verification passed 123 shared outbound, 13 ForwardAuth, 47 Webhook
+and 20 Resources success-predicate tests (203 total), formatting, workspace
+all-target check/Clippy and agent-doc validation. Existing unrelated warnings
+remain. No classification-count or throughput benchmark ran; these tests verify
+current behavior, not a proposed result representation.
+Final independent review passed.
