@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below; deeper WAF rule/parser execution, other concrete streamed handlers and remaining storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Remaining finalizers, Redis sink internals and retry consumers remain open. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
@@ -10439,3 +10439,34 @@ Fresh baseline verification passed 60 conversion, eight response-head and 26
 response-filter tests (94 total), formatting and workspace all-target check/Clippy.
 Existing unrelated Clippy warnings remain. This documentation batch changes no
 runtime behavior and includes no new allocation or throughput experiment.
+
+## Quota sink and cumulative Redis core audit
+
+Traced RedisQuotaSink admission and updates into the shared cumulative quota
+executor, validation helpers, strict result parser and cumulative Lua source.
+Admission remains sequential: all denied targets contribute to the maximum
+retry duration, while execution errors and unexpected statuses stop the scan.
+Update calls remain concurrent under join_all and one timeout; complete result
+summarization preserves failure precedence over successful over-limit results.
+
+Each update computes bucket TTL from its target's absolute retention deadline
+and current Instant, then clamps it to the selected stored active/final marker
+TTL. Marker durations themselves are already prepared. The Lua duplicate, stale
+and conflict branches refresh expiries; suppressing these calls client-side
+would change lease behavior. Fixed target ownership does not justify caching
+current health, deadline-derived bucket TTL or remote result validation.
+
+Successful key/TTL/numeric validation and strict five-field result parsing use
+borrowed input and scalar state; error diagnostics allocate only on failure.
+The command key/argument containers remain owned across transport, with fallback
+snapshots already covered by [redis-02](redis-02-fallback-command-ownership.md).
+No new safe local optimization was selected in this slice, and no duplicate
+proposal or validation bypass was added.
+
+Coverage is limited to the direct sink/shared-core bodies and inspected Lua
+source. Fred transport/pool internals, remaining finalizers and retry consumers
+still need review. Fresh baseline verification passed 30 quota, 36 shared Redis
+core and 13 accounting-finalizer tests (79 total), formatting and workspace
+all-target check/Clippy. Existing unrelated Clippy warnings remain. This audit
+changes no runtime code and runs no live Redis, Cluster/failover, concurrency
+stress or throughput experiment; Rust unit results do not prove server execution.
