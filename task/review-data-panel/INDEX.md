@@ -22,7 +22,7 @@ destination.
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
-| TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
+| TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
 | TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
@@ -9350,3 +9350,35 @@ tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No allocator or throughput measurement was run.
+
+## Passthrough SNI parsing and connection-owned name audit
+
+In routes/tls/sni_parser.rs, extract_sni bounds the first ClientHello body by its
+declared handshake length and validates extension and SNI-list container
+boundaries before publishing a name. parse_sni_extension already borrows the
+first host_name bytes without allocating. The first SNI extension remains
+selected even if it contains no host_name; a later extension cannot repair it.
+Returning immediately on the first hostname would skip malformed trailing
+containers and change acceptance. This is structural validation, not full TLS
+handshake validation.
+
+Only after structural validation does the parser decode UTF-8 and use canonical
+normalize_route_sni. Its into_owned result moves into TlsContext.sni. That owner
+supports route/plugin work and disconnect logging after the inspection buffer
+has been consumed and dropped by replay_initial_bytes. Returning a buffer borrow
+would require a different lifetime design; it is not a disposable clone removal.
+The parser receives record_end bytes, while replay keeps every filled byte,
+including a coalesced tail. Neither boundary can replace the other.
+
+No runtime edit is justified by this local audit. The existing
+[ClientHello buffer-capacity proposal](tls-04-clienthello-buffer-capacity.md)
+remains deferred. The authoritative
+[ClientHello contract](../../skills/04-review/tls/regression-guards/sni-passthrough-clienthello-read.md)
+still applies. Route-selection normalization, matcher internals and broader
+transport dependencies are outside this completed parser inspection.
+
+Fresh verification: all 16 Gateway sni_parser unit tests passed, including
+malformed trailing containers, duplicate selection and record/body isolation.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+checks passed; existing unrelated Clippy warnings remain. No socket integration
+or performance measurement was run for this documentation-only audit.
