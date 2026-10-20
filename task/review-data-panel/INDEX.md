@@ -11800,3 +11800,36 @@ all-target check/Clippy and agent-doc validation. Existing unrelated warnings
 remain. No classification-count or throughput benchmark ran; these tests verify
 current behavior, not a proposed result representation.
 Final independent review passed.
+
+## Webhook variable resolution ownership and sequencing audit
+
+Traced WebhookKeyGet's request callback through each variable's current provider
+lookup, outbound exchange, result extraction and context write. Each variable
+resolves, emits its collected diagnostics and writes its outcome before the next
+variable begins. Later templates may read the context written by earlier variables;
+parallel calls or response reuse by webhook reference would change that contract.
+Each lookup observes the current typed publication rather than one plugin-lifetime
+client cache. Missing results preserve configured default versus unwritten behavior.
+
+resolve_webhook_key obtains an owned ManagedOutboundClient Arc and drops its
+provider lookup before awaiting the call. The selected managed owner supports
+completion and extraction across publication changes. Keeping the outer provider
+alive to borrow the inner client is a different ownership shape, not an automatic
+clone removal: it also retains provider metadata and changes its last-owner release.
+Explicit runtime retirement stops the health task independently of caller-held
+managed handles. This is not a proof of all provider cancellation interleavings.
+
+Header and cookie extraction traverse borrowed source values and return the owned
+String needed after response destruction. Cookie selection retains first matching
+field/value semantics. BodyText distinguishes an empty body (None) from nonempty
+whitespace (Some empty String), and rejects invalid UTF-8. JSON extraction already
+moves a selected String from its disposable tree; the earlier webhook-01/02 and
+outbound-04 tasks cover selective parsing, prepared paths and classification reuse.
+No new safe optimization or additional deferred task was selected here.
+
+Independent plan review passed. Fresh verification passed 47 Webhook provider and
+four WebhookKeyGet outcome tests (51 total), formatting and workspace all-target
+check/Clippy. The four outcome tests verify selection/writes; they are not an
+end-to-end multi-variable network or hot-reload test. Existing unrelated warnings
+remain. No code/tests changed, no lifecycle stress test or benchmark ran.
+Agent-doc validation and final independent review passed.
