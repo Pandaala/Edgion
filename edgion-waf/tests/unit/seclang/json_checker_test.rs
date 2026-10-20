@@ -1071,3 +1071,89 @@ fn nonroot_decoded_duplicates_replace_nested_receipts_and_fail_stickily() {
         assert_eq!(checker.lexical_usage().retained_bytes, 0);
     }
 }
+
+#[test]
+fn array_decimal_boundaries_preserve_paths_lengths_and_work_limits() {
+    for length in [0, 1, 9, 10, 11, 99, 100, 101] {
+        let source = format!("[{}]", vec!["null"; length].join(","));
+        let (baseline, expected) = run(source.as_bytes(), "json", true);
+        assert_eq!(expected.sealed.len(), length + 1);
+        for (index, fact) in expected.sealed[..length].iter().enumerate() {
+            assert_eq!(fact.0, format!("json.{index}").as_bytes());
+            assert!(fact.1.is_empty());
+            assert_eq!(fact.2, JsonScalarKind::Null);
+        }
+        assert_eq!(expected.sealed[length].0, b"json");
+        assert_eq!(expected.sealed[length].1, length.to_string().as_bytes());
+        assert_eq!(expected.sealed[length].2, JsonScalarKind::ArrayLength);
+        let work = baseline.usage().work;
+        for chunk in [1, 7, source.len()] {
+            for limit in [work - 1, work] {
+                let mut checker = checker(
+                    "json",
+                    JsonStructureLimits {
+                        max_work: limit,
+                        ..JsonStructureLimits::default()
+                    },
+                );
+                let mut sink = Sink {
+                    retain: true,
+                    ..Sink::default()
+                };
+                let result = source
+                    .as_bytes()
+                    .chunks(chunk)
+                    .try_for_each(|bytes| checker.feed(JsonStreamInput::Data(bytes), &mut sink))
+                    .and_then(|()| checker.feed(JsonStreamInput::Complete, &mut sink));
+                if limit == work {
+                    result.unwrap();
+                    assert_eq!(sink.sealed, expected.sealed);
+                    assert_eq!(sink.summary, expected.summary);
+                    assert_eq!(checker.usage().work, work);
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(JsonCheckerError::Limit {
+                            kind: JsonStructureLimit::Work,
+                            limit,
+                        })
+                    );
+                    assert_eq!(sink.abandoned, 1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn maximum_array_decimal_index_and_length_use_complete_digits() {
+    for length in [0, 9, 10, 99, 100, usize::MAX] {
+        let digits = length.to_string();
+        let mut index = checker("json", JsonStructureLimits::default());
+        let mut sink = Sink {
+            retain: true,
+            ..Sink::default()
+        };
+        index.feed(JsonStreamInput::Data(b"["), &mut sink).unwrap();
+        index.reducer.frames.last_mut().unwrap().container = Container::Array { length };
+        let before = index.usage().work;
+        let (restore, _) = index.reducer.begin().unwrap();
+        assert_eq!(restore, 4);
+        assert_eq!(index.reducer.path.as_slice(), format!("json.{length}").as_bytes());
+        assert_eq!(index.usage().work - before, 6 + 3 * digits.len());
+
+        let mut count = checker("json", JsonStructureLimits::default());
+        let mut sink = Sink {
+            retain: true,
+            ..Sink::default()
+        };
+        count.feed(JsonStreamInput::Data(b"["), &mut sink).unwrap();
+        count.reducer.frames.last_mut().unwrap().container = Container::Array { length };
+        count.feed(JsonStreamInput::Data(b"]"), &mut sink).unwrap();
+        count.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+        assert_eq!(
+            sink.sealed,
+            vec![(b"json".to_vec(), digits.into_bytes(), JsonScalarKind::ArrayLength)]
+        );
+    }
+}

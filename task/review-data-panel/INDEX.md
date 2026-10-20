@@ -11049,3 +11049,28 @@ Fresh baseline verification passed 839 WAF leaf tests (six existing ignored),
 validation. Existing unrelated Clippy warnings remain. These checks validate the
 current implementation, not an alternative profile index.
 Final independent review passed.
+
+
+## Reuse decimal scratch for WAF JSON array metadata
+
+The active JSON checker's array-index path and ArrayLength pseudo-value now use
+the canonical private usize decimal_bytes helper. They borrow its stack suffix
+instead of passing integer formatting through SmallText's io::Write copy. Both
+sites retain their digit-length work charge and subsequent path/scalar ordering.
+The helper's 40-byte buffer covers supported usize widths; the previous 64-byte
+formatter could not fail for these unsigned integers. Ordinary JSON number
+canonicalization retains SmallText and its existing write/error behavior.
+
+No persistent layout, heap ownership, body storage, admission limit or emitted
+bytes change. This removes formatting dispatch and an intermediate stack copy;
+no measured throughput improvement is claimed. The independent plan review
+passed. New regressions passed against the original implementation before edits,
+covering real arrays across decimal boundaries, whole/byte/mixed input schedules,
+exact/one-below work limits and direct maximum-usize index/length cases. The index
+case deliberately does not finish an element at usize::MAX, preserving the
+separate existing counter-overflow boundary.
+
+Fresh verification passed 841 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

@@ -590,17 +590,19 @@ impl<R: Copy> Reducer<R> {
         Budget::check(depth, self.budget.limits.max_depth, JsonStructureLimit::Depth)?;
         let restore = self.path.len();
         if let Some(frame) = self.frames.last().copied() {
-            let mut decimal = SmallText::new();
+            let digits;
+            let mut decimal: &[u8] = &[];
             let range = match frame.container {
                 Container::Object { pending: Some(id), .. } => Some(self.member(id)?.key),
                 Container::Array { length } => {
-                    write!(&mut decimal, "{length}").map_err(|_| JsonCheckerError::Arithmetic)?;
-                    self.budget.work(decimal.len)?;
+                    digits = super::decimal_bytes(length);
+                    decimal = &digits.0[digits.1..];
+                    self.budget.work(decimal.len())?;
                     None
                 }
                 _ => return Err(JsonCheckerError::State),
             };
-            let len = range.map_or(decimal.len, |range| range.len);
+            let len = range.map_or(decimal.len(), |range| range.len);
             let separator = usize::from(!(self.empty_root && depth == 1));
             let extra = add(separator, len)?;
             Budget::check(
@@ -620,7 +622,7 @@ impl<R: Copy> Reducer<R> {
                         .ok_or(JsonCheckerError::State)?,
                 );
             } else {
-                self.path.extend_from_slice(decimal.bytes());
+                self.path.extend_from_slice(decimal);
             }
             #[cfg(test)]
             measurements::record(Event::PathCopyBytes, extra);
@@ -741,10 +743,10 @@ impl<R: Copy> Reducer<R> {
                         self.join(frame.accumulated, members, sink)?
                     }
                     (JsonStreamToken::ArrayEnd, Container::Array { length }) => {
-                        let mut text = SmallText::new();
-                        write!(&mut text, "{length}").map_err(|_| JsonCheckerError::Arithmetic)?;
-                        self.budget.work(text.len)?;
-                        let scalar = self.scalar(text.bytes(), JsonScalarKind::ArrayLength, sink)?;
+                        let (digits, start) = super::decimal_bytes(length);
+                        let text = &digits[start..];
+                        self.budget.work(text.len())?;
+                        let scalar = self.scalar(text, JsonScalarKind::ArrayLength, sink)?;
                         self.join(frame.accumulated, scalar, sink)?
                     }
                     _ => return Err(JsonCheckerError::State),
