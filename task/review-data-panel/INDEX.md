@@ -9741,3 +9741,28 @@ Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No live Redis,
 Cluster/failover or full integration suite ran.
+
+## Build Redis script keys without an intermediate String Vec
+
+The six executor call sites synchronously consume their one- or two-key arrays
+through Fred's existing FromIterator implementation. The private executor now
+receives the completed MultipleKeys directly. Individual owned String creation,
+key order, duplicate admission keys, Value arguments and exact NOSCRIPT-only
+fallback remain unchanged. Arrays do not cross await; the same owned containers
+and shared byte owners support EVALSHA and its conditional EVAL fallback.
+
+The regression compares the previous Vec<String> conversion with direct array
+collection for empty, repeated, distinct, UTF-8 and long keys. Each path receives
+independently constructed strings with identical capacities, including spare
+capacity. It checks exact ordered bytes and nonempty payload pointer transfer.
+On the current target/toolchain, every tested shape saves one allocation and
+N * size_of::<String>() requested bytes. Key payload construction, final container
+storage and fallback clones remain; no throughput or async-frame-size gain is
+claimed.
+
+Fresh verification passed 34 shared Redis-core, 27 AI quota, 25 attempt-runtime
+and 32 connection-rate-limit tests; one existing measurement test remains ignored.
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No live Redis,
+Cluster/failover or full integration suite ran.

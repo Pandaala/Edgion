@@ -2,6 +2,50 @@ use super::*;
 use std::collections::HashMap;
 
 #[test]
+fn script_keys_keep_owned_bytes_without_intermediate_storage() {
+    fn check<const N: usize>(names: [&str; N]) {
+        for spare in [0, 17] {
+            let make_input = || {
+                names.map(|name| {
+                    let mut key = String::with_capacity(name.len() + spare);
+                    key.push_str(name);
+                    key
+                })
+            };
+            let old_input = make_input();
+            let new_input = make_input();
+            let pointers = new_input.each_ref().map(|key| key.as_ptr());
+            let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                MultipleKeys::from(std::hint::black_box(Vec::from(old_input)))
+            });
+            let (new, new_stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| script_keys(std::hint::black_box(new_input)));
+            assert_eq!(new, old);
+            let keys = new.inner();
+            assert_eq!(keys.len(), N);
+            for ((key, expected), pointer) in keys.iter().zip(names).zip(pointers) {
+                assert_eq!(key.as_bytes(), expected.as_bytes());
+                if !expected.is_empty() {
+                    assert_eq!(key.as_bytes().as_ptr(), pointer, "owned key bytes must transfer");
+                }
+            }
+            assert_eq!(new_stats.calls + 1, old_stats.calls);
+            assert_eq!(
+                new_stats.requested_bytes + N * std::mem::size_of::<String>(),
+                old_stats.requested_bytes
+            );
+        }
+    }
+    check([""]);
+    check(["quota:{slot}:window:42"]);
+    check(["same", "same"]);
+    check(["first", "second"]);
+    check(["é", ""]);
+    let long = "key".repeat(1024);
+    check([long.as_str(), "marker"]);
+}
+
+#[test]
 fn script_arguments_keep_integer_order_without_intermediate_storage() {
     fn check<const N: usize>(integers: [i64; N]) {
         let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {

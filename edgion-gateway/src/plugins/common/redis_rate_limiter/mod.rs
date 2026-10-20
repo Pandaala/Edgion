@@ -523,6 +523,10 @@ fn script_args<const N: usize>(args: [i64; N]) -> Vec<Value> {
     args.into_iter().map(Into::into).collect()
 }
 
+fn script_keys<const N: usize>(keys: [String; N]) -> MultipleKeys {
+    keys.into_iter().collect()
+}
+
 /// References process-shared script descriptors; remote cache misses are handled per invocation.
 pub struct RedisRateLimiter {
     scripts: &'static ScriptDescriptors,
@@ -546,10 +550,9 @@ impl RedisRateLimiter {
         &self,
         client: &RedisLinkClient,
         script: &ScriptDescriptor,
-        keys: Vec<String>,
+        keys: MultipleKeys,
         args: Vec<Value>,
     ) -> anyhow::Result<Vec<i64>> {
-        let keys = MultipleKeys::from(keys);
         let args = Value::Array(args);
         match client
             .pool()
@@ -581,7 +584,7 @@ impl RedisRateLimiter {
                 &self.scripts.cumulative_quota,
                 // Admission reads only KEYS[1]. Reusing it as KEYS[2] keeps the
                 // invocation valid in Redis Cluster without inventing a marker.
-                vec![quota_key.to_string(), quota_key.to_string()],
+                script_keys([quota_key.to_string(), quota_key.to_string()]),
                 script_args([0, limit as i64, 0, 0, 0, 0, 0]),
             )
             .await?;
@@ -624,7 +627,7 @@ impl RedisRateLimiter {
             .eval_script(
                 client,
                 &self.scripts.cumulative_quota,
-                vec![bucket_key.to_string(), marker_key.to_string()],
+                script_keys([bucket_key.to_string(), marker_key.to_string()]),
                 script_args([
                     mode.lua_code(),
                     limit as i64,
@@ -675,7 +678,7 @@ impl RedisRateLimiter {
             .eval_script(
                 client,
                 &self.scripts.credential_reservation,
-                vec![keys.bucket.clone(), keys.marker.clone()],
+                script_keys([keys.bucket.clone(), keys.marker.clone()]),
                 script_args([
                     operation.lua_code(),
                     limits.rpm.unwrap_or(0) as i64,
@@ -712,7 +715,7 @@ impl RedisRateLimiter {
                 let key = build_redis_key(key_prefix, "sw", policy_idx, limit_key, "");
                 let args = script_args([rate_arg, window_ms, now_ms, cost_arg]);
                 let v = self
-                    .eval_script(client, &self.scripts.sliding_window, vec![key], args)
+                    .eval_script(client, &self.scripts.sliding_window, script_keys([key]), args)
                     .await?;
                 RateLimitResult::from_lua_result(&v, rate)
             }
@@ -721,7 +724,7 @@ impl RedisRateLimiter {
                 let key = build_redis_key(key_prefix, "fw", policy_idx, limit_key, &window_id.to_string());
                 let args = script_args([rate_arg, window_ms, cost_arg]);
                 let v = self
-                    .eval_script(client, &self.scripts.fixed_window, vec![key], args)
+                    .eval_script(client, &self.scripts.fixed_window, script_keys([key]), args)
                     .await?;
                 RateLimitResult::from_lua_result(&v, rate)
             }
@@ -729,7 +732,7 @@ impl RedisRateLimiter {
                 let key = build_redis_key(key_prefix, "tb", policy_idx, limit_key, "");
                 let args = script_args([rate_arg, rate_arg, window_ms, now_ms, cost_arg]);
                 let v = self
-                    .eval_script(client, &self.scripts.token_bucket, vec![key], args)
+                    .eval_script(client, &self.scripts.token_bucket, script_keys([key]), args)
                     .await?;
                 RateLimitResult::from_lua_result(&v, rate)
             }
