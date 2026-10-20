@@ -5372,10 +5372,10 @@ fn ip_matches(address: std::net::IpAddr, network: super::CompiledIpNetwork) -> b
 fn invalid_url_encoding(input: &[u8]) -> bool {
     let mut index = 0_usize;
     while index < input.len() {
-        if input[index] != b'%' {
-            index += 1;
-            continue;
-        }
+        let Some(offset) = memchr::memchr(b'%', &input[index..]) else {
+            return false;
+        };
+        index += offset;
         if index + 2 >= input.len() || hex(input[index + 1]).is_none() || hex(input[index + 2]).is_none() {
             return true;
         }

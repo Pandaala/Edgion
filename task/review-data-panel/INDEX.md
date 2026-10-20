@@ -9179,3 +9179,28 @@ Fresh checks passed: 820 WAF leaf tests (six existing ignored), 90 Gateway WAF
 tests, formatting, workspace all-target check/Clippy and the seven existing
 agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-test
 layout and gateway no-tracing guards. Existing unrelated Clippy warnings remain.
+
+## Skip plain byte runs in WAF URL-encoding validation
+
+The ValidateUrlEncoding predicate now locates the next percent byte with the
+existing memchr dependency, then applies the unchanged two-hex-digit check and
+three-byte advance. It still treats plus and non-UTF8 bytes as ordinary bytes,
+performs no decoding, and rejects malformed/truncated escapes at the same point.
+No allocation, persistent state, work-budget change or new dependency is added.
+A scalar pre-change oracle covers exhaustive short escape/binary combinations
+and long plain runs with valid, invalid, adjacent and truncated escapes around
+63/64/65-byte boundaries. Real rules verify positive/negated binary-header results.
+This removes scalar traversal of plain runs; no measured throughput is claimed.
+
+The adjacent IP operator audit confirms input parsing occurs once and network
+bases are already normalized at semantic validation. Runtime mask preparation
+remains per tested same-family network. [Prepared mask representation](waf-03-prepared-ip-network-masks.md)
+is deferred for user decision because compiler layout/admission costs and actual
+request savings need evaluation. No IP matching or compiled representation changed.
+Broader operator and callback coverage remains open.
+
+Fresh verification passed: 822 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No IP representation measurement is claimed by these runtime checks.

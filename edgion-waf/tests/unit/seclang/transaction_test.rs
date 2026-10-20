@@ -1134,6 +1134,75 @@ fn detection_only_reports_deny_rules_without_short_circuiting_the_phase() {
 }
 
 #[test]
+fn url_encoding_scan_matches_scalar_oracle() {
+    let oracle = |input: &[u8]| {
+        let mut index = 0;
+        while index < input.len() {
+            if input[index] != b'%' {
+                index += 1;
+                continue;
+            }
+            if index + 2 >= input.len() || hex(input[index + 1]).is_none() || hex(input[index + 2]).is_none() {
+                return true;
+            }
+            index += 3;
+        }
+        false
+    };
+    let mut level = vec![Vec::new()];
+    assert!(!invalid_url_encoding(&[]));
+    for _ in 0..5 {
+        let mut next = Vec::new();
+        for prefix in &level {
+            for byte in [b'%', b'0', b'A', b'f', b'G', b'+', 255] {
+                let mut value = prefix.clone();
+                value.push(byte);
+                assert_eq!(invalid_url_encoding(&value), oracle(&value), "{value:?}");
+                next.push(value);
+            }
+        }
+        level = next;
+    }
+    for offset in [0, 63, 64, 65, 1024] {
+        for suffix in [
+            b"plain".as_slice(),
+            b"%00",
+            b"%2f",
+            b"%G0",
+            b"%0",
+            b"%",
+            b"%%",
+            b"%00%ff",
+            b"%00%",
+        ] {
+            let mut value = vec![255; offset];
+            value.extend_from_slice(suffix);
+            assert_eq!(invalid_url_encoding(&value), oracle(&value));
+        }
+    }
+}
+
+#[test]
+fn url_encoding_operator_preserves_binary_input_and_negation() {
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@validateUrlEncoding\" \"id:1,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"!@validateUrlEncoding\" \"id:2,phase:1,pass\"\n",
+    ));
+    for (input, expected) in [
+        (b"\xff+plain".as_slice(), 2),
+        (b"\xff%00%2F".as_slice(), 2),
+        (b"\xff%0".as_slice(), 1),
+        (b"\xff%00%GG".as_slice(), 1),
+    ] {
+        let headers = [RequestHeader::new(b"X-Probe", input)];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = tx.execute_request_headers().unwrap();
+        assert_eq!(outcome.findings().len(), 1);
+        assert_eq!(outcome.findings()[0].rule_id(), expected);
+    }
+}
+
+#[test]
 fn substring_search_matches_window_oracle_for_binary_and_repetitive_inputs() {
     let oracle = |haystack: &[u8], needle: &[u8]| {
         needle.is_empty() || haystack.windows(needle.len()).any(|window| window == needle)
