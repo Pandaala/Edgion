@@ -17,7 +17,7 @@ destination.
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
-| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. Deeper WAF rule/parser execution, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
+| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
@@ -10954,4 +10954,44 @@ or earlier publication was introduced.
 Fresh verification passed 838 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+## WAF materialized body publication audit boundaries
+
+Traced Gateway full inspection without an already published structured result:
+the plugin moves its Bytes into publish_request_body_with_json_limits. Preflight
+resolves the effective processor; JSON and XML dispatch to their separate owners,
+while raw/form/multipart use publish_non_json_body and the materialized builder.
+This inspection covers body.rs helpers and that direct handoff, not all structured
+parser, raw-stream, rule-execution or transport internals.
+
+BodyBuilder checks logical entry, name and decoded-byte limits before reserving
+descriptors and copying names/values. Plain form decoder scratch borrows input;
+publication still owns its data. Segment charging precedes tolerant decoding.
+Replacing published payloads with source ranges would change ownership and is
+not authorized by those temporary-borrow optimizations.
+
+Multipart validates every header and determines the final disposition before
+publishing headers in a second traversal. Removing that traversal by publishing
+early would change field-name association and failure order; retaining header
+slices would add metadata. Boundary preparation remains once per parse, with
+prepared line search and the bounded overlapping CR/LF path. Existing numeric
+scratch and disposition/search optimizations do not replace that strategy.
+
+DetectionOnly fallback applies only to Malformed and MultipartBoundary errors;
+resource errors propagate. Fallback retains explicit raw-body policy and rebuilds
+bounded metadata without derived parsing. publish_body_state verifies aggregate
+collection counts and retained charges before installing the publication and
+updating request counters/error metadata. BodyAccounting retained bytes are a
+logical decoded-length plus descriptor-count charge, not measured allocator
+capacity or RSS. Structured summary helpers preserve their existing ordered
+logical checks; that observation does not establish complete JSON/XML coverage.
+
+Independent plan review passed. No further runtime optimization was selected
+for this bounded audit; existing deferred WAF decisions remain open.
+
+Fresh verification passed 838 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and agent-document
+validation. Existing unrelated Clippy warnings remain. This is a source and
+local-test audit, not live transport or benchmark evidence.
 Final independent review passed.
