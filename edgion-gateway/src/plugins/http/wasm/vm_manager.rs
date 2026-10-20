@@ -1603,7 +1603,7 @@ impl VmLease {
         let result = (|| {
             let vm = self.vm_mut();
             vm.store.set_epoch_deadline(timeout / EPOCH_TICK_MS + 2);
-            let Some(f) = vm.callbacks.response_trailers.clone() else {
+            let Some(f) = vm.callbacks.response_trailers.as_ref() else {
                 return Ok(0);
             };
             run_guest_boundary(|| {
@@ -1732,7 +1732,7 @@ impl VmLease {
             let f = vm
                 .callbacks
                 .callout
-                .clone()
+                .as_ref()
                 .ok_or_else(|| "guest missing proxy_on_http_call_response".to_string())?;
             run_guest_boundary(|| {
                 f.call(&mut vm.store, (ctx_id, token as i32, num_headers, body_size, 0))
@@ -1761,7 +1761,7 @@ impl VmLease {
         let result = (|| -> Result<(), String> {
             let vm = self.vm.as_mut().expect("lease taken");
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            let Some(f) = vm.callbacks.tick.clone() else {
+            let Some(f) = vm.callbacks.tick.as_ref() else {
                 return Ok(());
             };
             run_guest_boundary(|| {
@@ -1791,14 +1791,14 @@ impl VmLease {
         let result = (|| -> Result<(), String> {
             let vm = self.vm.as_mut().expect("lease taken");
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            if let Some(f) = vm.callbacks.done.clone() {
+            if let Some(f) = vm.callbacks.done.as_ref() {
                 let done =
                     run_guest_boundary(|| f.call(&mut vm.store, ctx_id).map_err(|e| format!("proxy_on_done: {e}")))?;
                 if done == 0 {
                     return Err("wasm deferred completion is unsupported".into());
                 }
             }
-            if let Some(f) = vm.callbacks.delete.clone() {
+            if let Some(f) = vm.callbacks.delete.as_ref() {
                 run_guest_boundary(|| {
                     f.call(&mut vm.store, ctx_id)
                         .map_err(|e| format!("proxy_on_delete: {e}"))
@@ -1841,7 +1841,7 @@ impl VmLease {
             // hook call actually runs. `+2` ticks of slack so a call right
             // before a tick boundary still gets ~timeout_ms.
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            if let Some(f) = vm.callbacks.create.clone() {
+            if let Some(f) = vm.callbacks.create.as_ref() {
                 run_guest_boundary(|| {
                     f.call(&mut vm.store, (ctx_id, ROOT_CONTEXT_ID))
                         .map_err(|e| format!("proxy_on_context_create: {e}"))

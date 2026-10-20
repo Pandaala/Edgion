@@ -11619,3 +11619,28 @@ trailer tests (280 total), formatting, workspace all-target check/Clippy and sev
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
 Final independent review passed.
+
+## Borrow remaining prepared Wasm lifecycle callback handles
+
+The six direct typed-handle uses in VmLease now borrow response-trailer, callout,
+tick, done, delete and create callbacks. Each callback remains owned by the VM
+through its synchronous call, while the call mutably borrows the separate Store
+field. HostState imports cannot replace the callback table. As with HTTP handle
+lookup, this avoids temporary Wasmtime 49.0.2 TypedFunc/registered-type ownership
+clone/drop operations without changing payload ownership or adding unsafe code.
+
+Missing trailer/tick hooks remain no-ops; missing callout remains an error.
+Done returning zero or trapping still skips delete, and create must succeed before
+the HTTP hook. Epoch arming, panic isolation, poison decisions, diagnostics and
+context closure order remain unchanged. No borrow crosses an async suspension.
+
+Independent plan review passed. All 269 Gateway Wasm tests passed serially before
+editing. Existing lifecycle, deferred-completion, trap, attached trailer, SDK
+callout and timer tests own the behavior checks; no mirrored test was added.
+No payload-copy reduction or measured throughput improvement is claimed.
+
+Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
+trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.
