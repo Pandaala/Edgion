@@ -26,6 +26,11 @@ Its length check and XOR-fold compare the exact ASCII signature, preserving
 uppercase and non-hex rejection. The fixed-size encoding assertion follows
 hex 0.4.3's exact output-length contract: 32 input bytes require 64 output bytes.
 
+After lifetime checks, verification rejects supplied signatures whose byte
+length is not 64 before constructing HMAC or encoding its digest. This check
+depends only on public input shape. Every 64-byte input still receives the same
+HMAC calculation and complete XOR fold; no claim about nonce secrecy is needed.
+
 ## Evidence and limits
 
 The unit tests in `edgion-gateway/tests/unit/plugins/http/csrf/token_test.rs`

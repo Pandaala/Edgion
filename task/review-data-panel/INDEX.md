@@ -8686,3 +8686,27 @@ Independent plan review passed. This documentation-only batch passed formatting,
 workspace all-target check/Clippy, agent-doc validation and diff checks, with
 existing unrelated Clippy warnings. No runtime tests or benchmarks ran.
 Final independent review passed.
+
+## Reject malformed CSRF signature lengths before HMAC
+
+The request plugin decodes matching header/cookie tokens and calls verification.
+After the unchanged lifetime checks, verification now rejects signatures whose
+byte length is not 64 before HMAC construction and digest hex encoding. This
+uses only public supplied length. Every 64-byte input retains the original HMAC
+and full XOR fold, including uppercase/non-hex/mismatched inputs. Issuance,
+clock handling, nonce bytes, key material, response and log behavior are unchanged.
+
+Independent plan review passed. All 20 CSRF tests passed before and after the
+change, including 63/65-byte rejection, exact-length invalid signatures, known
+valid signatures and lifetime boundaries. Formatting, workspace all-target
+check/Clippy and seven guards passed with existing unrelated warnings. No full
+suite or throughput benchmark ran. The gain is avoiding cryptographic work only
+for malformed lengths; it is not an allocation reduction claim.
+
+Knowledge follow-up outside this batch: the typical CSRF example in
+`skills/04-review/security/mandatory-design/iron-rules.md` assumes the nonce is
+unknown to the caller. Here `CsrfToken::decode` obtains `random` from the supplied
+token and verification uses those bytes. That rationale needs a separate review
+and correction; it does not justify this optimization or establish exploitability.
+The owning signature-input knowledge now states the actual public-length proof.
+Final independent code and knowledge review passed.

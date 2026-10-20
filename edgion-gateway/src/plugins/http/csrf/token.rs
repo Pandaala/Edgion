@@ -100,15 +100,18 @@ impl CsrfToken {
         }
 
         // Verify signature (constant-time comparison to prevent timing attacks)
+        let a = self.sign.as_bytes();
+        if a.len() != 64 {
+            return false;
+        }
         let mut expected_sign = [0u8; 64];
         hex::encode_to_slice(
             Self::signature_bytes(&self.random, self.expires, key),
             &mut expected_sign,
         )
         .expect("32-byte SHA-256 digest encodes to exactly 64 hex bytes");
-        let a = self.sign.as_bytes();
         let b = &expected_sign;
-        if a.len() != b.len() || a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) != 0 {
+        if a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) != 0 {
             return false;
         }
 
