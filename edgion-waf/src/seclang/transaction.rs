@@ -5350,7 +5350,7 @@ fn parse_usize(value: &[u8]) -> Result<usize, RuntimeError> {
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    needle.is_empty() || haystack.windows(needle.len()).any(|window| window == needle)
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
 fn ip_matches(address: std::net::IpAddr, network: super::CompiledIpNetwork) -> bool {

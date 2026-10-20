@@ -9155,3 +9155,27 @@ Verification passed: 818 WAF leaf tests (six existing ignored), 90 Gateway WAF
 tests, formatting, workspace all-target check/Clippy and the seven existing
 agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-test
 layout and gateway no-tracing guards. Existing unrelated Clippy warnings remain.
+
+## Reuse bounded byte substring search for WAF string operators
+
+The transaction contains helper served both Contains(input, operand) and
+Within(operand, input) using a sliding-window byte comparison. It now calls the
+existing pinned memchr 2.8.3 memmem::find API, already used by WAF simple regex
+execution. Its source contract guarantees worst-case linear search time in both
+input lengths and constant space, avoiding repeated full-needle comparisons on
+long near matches. No prepared finder, compiled field, dependency or cache was
+added. This is a search-shape improvement, not measured Gateway throughput.
+
+Empty needles, arbitrary bytes, relation direction and negation are preserved.
+Template evaluation, transformation, error order, physical_operator_work charges,
+logical budgets, captures and TX actions are unchanged; faster search does not
+relax existing admission. The old comparison remains only as a mounted test
+oracle: exhaustive short binary inputs, 63/64/65-byte boundaries, long/oversized
+needles, repetitive near matches and tail hits agree. Compiled-rule tests also
+check static/dynamic Contains and Within operands and negated results. Broader
+operator and callback coverage remains open.
+
+Fresh checks passed: 820 WAF leaf tests (six existing ignored), 90 Gateway WAF
+tests, formatting, workspace all-target check/Clippy and the seven existing
+agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-test
+layout and gateway no-tracing guards. Existing unrelated Clippy warnings remain.

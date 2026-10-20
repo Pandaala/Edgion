@@ -1134,6 +1134,85 @@ fn detection_only_reports_deny_rules_without_short_circuiting_the_phase() {
 }
 
 #[test]
+fn substring_search_matches_window_oracle_for_binary_and_repetitive_inputs() {
+    let oracle = |haystack: &[u8], needle: &[u8]| {
+        needle.is_empty() || haystack.windows(needle.len()).any(|window| window == needle)
+    };
+    let mut inputs = vec![Vec::new()];
+    let mut level = vec![Vec::new()];
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for prefix in &level {
+            for byte in [0, b'a', 255] {
+                let mut value = prefix.clone();
+                value.push(byte);
+                next.push(value);
+            }
+        }
+        inputs.extend(next.iter().cloned());
+        level = next;
+    }
+    for haystack in &inputs {
+        for needle in &inputs {
+            assert_eq!(contains(haystack, needle), oracle(haystack, needle));
+        }
+    }
+    for size in [63, 64, 65, 255, 1024] {
+        let mut haystack = vec![b'a'; size];
+        haystack[size - 1] = b'b';
+        for needle_size in [0, 1, 2, 31, 64, 65, 256, 1025] {
+            let mut needle = vec![b'a'; needle_size];
+            for last in [b'a', b'b', b'c'] {
+                if let Some(byte) = needle.last_mut() {
+                    *byte = last;
+                }
+                assert_eq!(contains(&haystack, &needle), oracle(&haystack, &needle));
+            }
+        }
+        let binary: Vec<u8> = (0..size).map(|i| (i.wrapping_mul(37) % 256) as u8).collect();
+        for start in [0, size / 2, size - 1] {
+            for end in [start, size] {
+                assert_eq!(
+                    contains(&binary, &binary[start..end]),
+                    oracle(&binary, &binary[start..end])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn substring_operators_preserve_static_dynamic_direction_and_negation() {
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@contains hit\" \"id:1,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@contains %{ARGS.needle}\" \"id:2,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Token \"@within prefix-hit-suffix\" \"id:3,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Token \"@within %{ARGS.pool}\" \"id:4,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"!@contains absent\" \"id:5,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Probe \"@within hit\" \"id:6,phase:1,pass\"\n",
+    ));
+    let headers = [
+        RequestHeader::new(b"X-Probe", b"prefix-hit-suffix"),
+        RequestHeader::new(b"X-Token", b"hit"),
+    ];
+    let mut tx = Transaction::new(
+        &g,
+        request(&headers, b"/?needle=hit&pool=prefix-hit-suffix"),
+        RuntimeLimits::default(),
+    )
+    .unwrap();
+    let outcome = tx.execute_request_headers().unwrap();
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5]
+    );
+}
+
+#[test]
 fn negation_selector_exclusion_and_validation_operators_are_exact() {
     let generation = generation(concat!(
         "SecRule REQUEST_HEADERS|!REQUEST_HEADERS:Ignore \"!@contains forbidden\" \"id:10,phase:1,pass\"\n",
