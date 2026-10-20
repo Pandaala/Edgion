@@ -78,6 +78,64 @@ fn absent_cross_namespace_proof_cannot_read_a_new_private_target_or_visibility_f
 }
 
 #[test]
+fn denied_scope_stays_unavailable_until_the_owner_is_recompiled() {
+    let mut owner: EdgionPlugins = serde_json::from_value(json!({
+        "metadata":{"name":"policy","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"Mock","config":{"status":418},
+            "conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[
+                {"name":"networks"},{"name":"networks"}
+            ]}]}}
+        }]}
+    }))
+    .unwrap();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |mut leaf, _| {
+                leaf.set_read_scopes(&[IpReadScope::SameNamespace, IpReadScope::Denied])
+                    .unwrap()
+            },
+            |_, _| {},
+        )
+        .unwrap();
+    let denied = predicate(&owner);
+    let store = EdgionConfigDataStore::new();
+    assert!(!denied.available(&session(&store)));
+    publish(&store, "default", "192.0.2.0/24", "Namespace");
+    let held = store.capture_snapshot();
+    assert!(!denied.available_in(&held));
+    let reads = std::cell::Cell::new(0);
+    assert!(!denied.available_by(|key| {
+        reads.set(reads.get() + 1);
+        held.ip_list_availability(key)
+    }));
+    assert_eq!(reads.get(), 0, "immutable denied scope needs no snapshot reads");
+    assert_eq!(
+        denied.evaluate(&session(&store), Some("192.0.2.1".parse().unwrap()), true),
+        MatchState::Unresolved
+    );
+    store.full_set(&HashMap::new());
+    assert!(!denied.available_in(&held));
+    assert!(!denied.available(&session(&store)));
+    publish(&store, "default", "192.0.2.0/24", "Cluster");
+    assert!(!denied.available(&session(&store)));
+
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |mut leaf, _| leaf.set_read_scopes(&[IpReadScope::SameNamespace; 2]).unwrap(),
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(predicate(&owner).available(&session(&store)));
+    assert!(
+        !denied.available(&session(&store)),
+        "retained owner keeps its denied scope"
+    );
+}
+
+#[test]
 fn stale_permission_stamp_and_unbound_clone_are_not_usable() {
     let mut owner = owner("default", "default");
     let prepared = PreparedConditionReferences::from_plugins(&owner);
@@ -132,6 +190,48 @@ fn optional_rap_empty_union_keeps_primary_positive_and_secondary_negation() {
     let ip = Some("192.0.2.1".parse().unwrap());
     assert_eq!(predicates[0].evaluate(&session, ip, false), MatchState::False);
     assert_eq!(predicates[1].evaluate(&session, ip, true), MatchState::True);
+}
+
+#[test]
+fn optional_rap_denied_sibling_preserves_usable_membership() {
+    let mut owner: EdgionPlugins = serde_json::from_value(json!({
+        "metadata":{"name":"rap","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"RequestAccessPolicy","config":{
+            "defaultProfile":"main","profiles":{},"resolvedProfiles":{"main":{"requiredRuleGroups":[{
+                "name":"clients","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{
+                    "ipRefs":[{"name":"networks"},{"name":"networks"}]
+                }}]
+            }]}}
+        }}]}
+    }))
+    .unwrap();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |mut leaf, _| {
+                leaf.set_read_scopes(&[IpReadScope::SameNamespace, IpReadScope::Denied])
+                    .unwrap()
+            },
+            |_, _| {},
+        )
+        .unwrap();
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    assert!(compiler.required().is_empty());
+    let mut predicates = Vec::new();
+    prepared
+        .visit_ip(&owner, |leaf| predicates.push(compiler.bind(leaf.config()).unwrap()))
+        .unwrap();
+    assert_eq!(predicates.len(), 1);
+    let predicate = &predicates[0];
+    let store = EdgionConfigDataStore::new();
+    let ip = Some("192.0.2.1".parse().unwrap());
+    publish(&store, "default", "192.0.2.0/24", "Namespace");
+    assert_eq!(predicate.evaluate(&session(&store), ip, false), MatchState::True);
+    assert_eq!(predicate.evaluate(&session(&store), ip, true), MatchState::False);
+    store.full_set(&HashMap::new());
+    assert_eq!(predicate.evaluate(&session(&store), ip, false), MatchState::False);
+    assert_eq!(predicate.evaluate(&session(&store), ip, true), MatchState::True);
 }
 
 #[test]

@@ -9810,3 +9810,27 @@ Fresh verification passed 23 Gateway GeoIP, six shared GeoIP-reference, 14
 Resources GeoRule and 15 GeoIpLocation tests. Formatting, workspace all-target
 check/Clippy and documentation validation passed; existing unrelated warnings
 remain. No matching benchmark or retained-generation memory measurement ran.
+
+## Precompute immutable denied IP-reference availability
+
+Both condition and GeoIP predicate construction now record whether final compiled
+keys contain a Denied scope, after actual-owner proof validation and per-reference
+denial overrides. Availability rejects that immutable case without scalar snapshot
+reads. Dynamic missing, disabled, type and visibility checks remain live; snapshot
+capture, required ordering, construction errors and Partial membership are unchanged.
+The flag stays separate from invalid input, so usable optional RAP siblings still
+match and an empty optional union retains its existing negation semantics.
+
+The new actual-owner fixtures passed against the previous implementation before
+changing production code. They cover readable-first/denied-second references,
+held and fresh snapshots across removal/publication, permission recompilation and
+Partial sibling membership. The optimized denied predicate performs zero scalar
+availability reads. This is a lookup reduction for denied predicates, not a claimed
+allocation or throughput improvement; allowed predicates still use live reads.
+
+Fresh verification passed 9 IP-reference, 22 ConfigData, 4 ACL, 23 GeoIP, 6 shared
+GeoIP-reference, 34 RealIp and 100 plugin-runtime tests. Formatting, workspace
+all-target check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
+Gateway API transform, unit-layout and gateway no-tracing guards passed. Existing
+unrelated Clippy warnings remain. No full integration suite or throughput benchmark
+ran.

@@ -37,13 +37,25 @@ pub(crate) struct BoundIpPredicate {
     keys: Vec<IpListReadKey>,
     role: IpExecutionRole,
     invalid: bool,
+    has_denied_scope: bool,
 }
 impl BoundIpPredicate {
+    fn new(keys: Vec<IpListReadKey>, role: IpExecutionRole, invalid: bool) -> Self {
+        let has_denied_scope = keys.iter().any(|key| key.scope == IpReadScope::Denied);
+        Self {
+            keys,
+            role,
+            invalid,
+            has_denied_scope,
+        }
+    }
     pub(crate) fn required(&self) -> bool {
         self.role == IpExecutionRole::Required
     }
     fn available_by(&self, mut read: impl FnMut(&IpListReadKey) -> IpListAvailability) -> bool {
-        !self.invalid && self.keys.iter().all(|key| read(key) == IpListAvailability::Available)
+        !self.invalid
+            && !self.has_denied_scope
+            && self.keys.iter().all(|key| read(key) == IpListAvailability::Available)
     }
     pub(crate) fn available(&self, session: &dyn PluginSession) -> bool {
         self.available_by(|key| session.ip_list_availability(key))
@@ -178,7 +190,7 @@ impl<'owner> IpConditionCompiler<'owner> {
         )?;
         Ok((
             config as *const IpReferenceSet as usize,
-            Arc::new(BoundIpPredicate { keys, role, invalid }),
+            Arc::new(BoundIpPredicate::new(keys, role, invalid)),
         ))
     }
     pub(crate) fn bind(&self, refs: &IpReferenceSet) -> Option<Arc<BoundIpPredicate>> {
@@ -245,11 +257,11 @@ pub(crate) fn compile_geo_leaf(leaf: &BoundGeoIpAccess<'_>) -> Result<Arc<BoundI
     if invalid {
         return Err(ReferenceError::UnsupportedTarget);
     }
-    Ok(Arc::new(BoundIpPredicate {
+    Ok(Arc::new(BoundIpPredicate::new(
         keys,
-        role: IpExecutionRole::Required,
+        IpExecutionRole::Required,
         invalid,
-    }))
+    )))
 }
 
 #[cfg(test)]
