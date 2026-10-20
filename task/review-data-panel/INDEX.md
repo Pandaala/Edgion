@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below. Direct backend transport counters and generation-local drain projection inspected below; deeper endpoint algorithms, cleaner lifecycle, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Wasm direct ABI profiling, callout execution, shared-data snapshots, lease ownership, prepared callback handles and process admission are inspected in the entries below; four Wasm representation/lock decisions remain deferred. Deeper Wasmtime and network dependencies, other concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Direct plugin-stage log collection, nested resource-log handoff and borrowed terminal serialization inspected below; stage-specific capacity policy is deferred. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
@@ -27,6 +27,8 @@ destination.
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
 ## Deferred decisions
+
+- [Stage-specific plugin log capacity policy](log-06-stage-log-capacity-policy.md)
 
 - [Outbound terminal classification ownership](outbound-04-terminal-classification-ownership.md)
 
@@ -11890,3 +11892,28 @@ bytes were lower than the old construction except at the unchanged 36-byte case.
 Existing unrelated Clippy warnings remain. No live integration or throughput
 benchmark ran.
 Final independent code review passed.
+
+## Plugin-stage log collection and terminal handoff
+
+The request and response runners reserve their top-level log vector only at the
+first unsuppressed result. Early RequestId selection can execute a subset while
+reserving the full selected slice length; suppression and termination can also
+leave unused capacity. ExtensionRef inner logs grow incrementally under their
+pending-resource token. The phase-specific capacity/preparation tradeoff is
+recorded in log-06; no runtime reservation policy changed.
+
+finish_plugin_stage moves the filter vector and takes the pending resource vector.
+AccessLogEntry borrows the retained stage slice and serializes to an owned String.
+The optional integration-store clone is of that JSON output, not the stage tree.
+Final attached summaries still mutate retained logs before terminal serialization.
+Body dispatch stays log-less and native WAF uses its dedicated terminal summary.
+This inspection covers direct collection/handoff, not all finalizers or sinks.
+
+Independent plan review passed. Fresh tests passed 542 plugin-runtime, 18 access-log
+entry, 11 terminal-logging and eight plugin-request-state cases (579 total).
+The remaining state case reproduced the existing 184-versus-176 size assertion
+failure tracked in verification-04. No code/tests changed or checks disabled;
+no full-suite, live integration or capacity/throughput benchmark result is claimed.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed.
+Existing unrelated Clippy warnings remain.
+Final independent review passed.
