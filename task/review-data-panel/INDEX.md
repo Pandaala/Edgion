@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Wasm pool discard lock scope](wasm-04-pool-discard-lock-scope.md)
+
 - [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
 
 - [Wasm map decoding profile storage](wasm-02-map-decoding-profile-storage.md)
@@ -11568,4 +11570,25 @@ Independent plan review passed. No runtime code or tests changed.
 Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatting,
 workspace all-target check/Clippy and agent-doc validation. Existing unrelated
 Clippy warnings remain. No new representation or performance benchmark was run.
+Final independent review passed.
+
+## Wasm lease checkout and rejected-return ownership audit
+
+Inspected warm checkout, fresh-instance admission, request-permit ownership,
+request-context opening/closing, healthy return and retirement. Typed callback
+handles are resolved at VM initialization. Request-bound leases own their entry,
+VM and admission guards; context/health gates determine whether retention is safe.
+Healthy returns release callback payloads before considering idle retention.
+Retirement drains idle VMs outside the pool lock while preventing late repooling.
+
+The healthy rejected-return branch destroys its VM under the entry pool mutex.
+Moving that destruction out may shorten contention but changes when a competing
+checkout can reach still-held global admission resources. This is deferred in
+wasm-04 with a measurement and ordering decision; the existing retirement and
+poisoned-context paths are explicitly distinct. No runtime code or tests changed.
+Independent plan review passed.
+
+Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatting,
+workspace all-target check/Clippy and agent-doc validation. Existing unrelated
+Clippy warnings remain. No destructor or contention benchmark was run.
 Final independent review passed.
