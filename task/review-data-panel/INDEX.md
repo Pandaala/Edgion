@@ -132,7 +132,7 @@ destination.
 
 - [Compression algorithm preference storage](compression-01-accept-encoding-storage.md)
 
-- [Empty gzip output buffer retention](compression-02-empty-output-buffer-retention.md)
+- [Empty compression output buffer retention](compression-02-empty-output-buffer-retention.md)
 
 - [Zstd exclusive encoder access](compression-03-zstd-exclusive-encoder-access.md)
 
@@ -8751,3 +8751,18 @@ historical session-taking signature from the current borrowed input.
 This removes one duplicate lookup and text validation for present textual
 Origins, not a buffer allocation. No full suite or throughput benchmark ran.
 Final independent code and knowledge review passed.
+
+## Extend empty compression-buffer investigation to Brotli
+
+Traced the registered downstream module into the pinned fork's Brotli compressor.
+Like gzip, it reserves output storage and transfers the Vec after every encode,
+including empty output; the pinned Bytes conversion retains spare capacity in
+a Shared owner. The existing compression-02 task now covers this same mechanism
+for both codecs with separate frequency/capacity/CPU measurements and unchanged
+codec-specific terminal operations. Decompressors remain excluded.
+
+This source audit makes no empty-output frequency or net performance claim.
+No dependency checkout, runtime source or lockfile changed. Independent plan
+review passed; no runtime tests or benchmarks ran in this documentation batch.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+checks passed with existing unrelated warnings. Final independent review passed.

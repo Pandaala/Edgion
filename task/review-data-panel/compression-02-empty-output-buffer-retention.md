@@ -1,7 +1,7 @@
-# Evaluate retaining empty gzip output buffers
+# Evaluate retaining empty compression output buffers
 
 Status: deferred for user decision. Priority: P2. Type: performance investigation.
-Edgion baseline: `a886ea342`.
+Initial gzip baseline: `a886ea342`. Brotli extension baseline: `4c76c48a0`.
 Inspected Pingora fork: `1aaa45cc70430bc782990bc20ddee3fef36d6b99`.
 
 ## Evidence and scope
@@ -14,6 +14,20 @@ finishes, updates statistics, then unconditionally returns
 `mem::take(self.compress.get_mut()).into()`. This resets the encoder's output
 buffer even when a call produced no bytes. The encoder need not emit data for
 every input chunk; actual empty-output frequency remains to be measured.
+
+The same ownership pattern exists in the fork's
+`pingora-core/src/protocols/http/compression/brotli.rs::Compressor::encode`:
+reserve min(16 KiB, input length), write the input, flush only at end, update
+statistics, then unconditionally take the output Vec. This is the compressor,
+not the separately implemented Brotli decompressor. Gzip uses finish at end;
+Brotli uses its existing writer flush. Neither terminal operation may be changed
+as part of empty-output storage retention.
+
+Brotli is reachable through `Algorithm::compressor`. The registered downstream
+module initializes all algorithm levels from the selected level; Edgion's final
+known-length/non-SSE eligibility gate applies before downstream encoding. This
+source trace establishes reachability, not actual codec use or empty-output
+frequency in a deployment.
 
 The pinned bytes 1.12.1 implementation of From<Vec<u8>> retains spare capacity
 through a separately allocated Shared owner when length differs from capacity.
@@ -53,10 +67,15 @@ revalidating the current fork rather than treating historical tests as fresh pro
 ## Acceptance for a later implementation
 
 Measure empty-output frequency, allocation calls/bytes, live capacity and CPU
-for empty, tiny and large chunks; compressible and incompressible bodies; final
+separately for gzip and Brotli, using empty, tiny and large chunks; compressible
+and incompressible bodies; final
 empty input; slow delivery; cancellation; and concurrent responses. Include the
 current caller's returned-Bytes lifetime when comparing memory. Compare byte
 streams and decompressed content, accounting and independent retained outputs;
 verify exactly-once finishing and footer-before-trailer behavior through the
 actual downstream module. Keep enabled/disabled, origin/cache and known-length
 eligibility tests. No throughput or peak-memory improvement is established yet.
+
+The Brotli extension reuses this decision rather than creating a second task.
+No fork code, dependency revision, runtime tests or benchmarks were changed or
+run for this documentation-only extension.
