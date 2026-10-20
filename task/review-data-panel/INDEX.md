@@ -10995,3 +10995,33 @@ WAF tests, formatting, workspace all-target check/Clippy and agent-document
 validation. Existing unrelated Clippy warnings remain. This is a source and
 local-test audit, not live transport or benchmark evidence.
 Final independent review passed.
+
+
+## Compile the complete WAF structured stage-cache capacity
+
+Gateway JSON/XML capture initializes the canonical leaf collector once per
+inspection. Its constructor previously traversed the domain's capture-hit batches
+to count adjacent matcher identities and add them to the ordinary matcher bound.
+Optional compilation now counts each installed matcher once per participating
+domain inside its existing installation loop, including a matcher shared by name
+and value views. Temporary staged totals publish only with successful nonempty
+optional results into the existing matcher_scan_capacity fields.
+
+The collector reads that final scalar. Persistent generation layout, namespace
+validation, inline/overflow selection, physical reservations and runtime work
+charges are unchanged. Optional refusal leaves the original ordinary capacity;
+the existing checked namespace bound also bounds each new scalar increment.
+There is no new compilation traversal, allocation, body owner or observability.
+This removes one batch traversal per structured inspection, not per body chunk;
+no measured throughput improvement is claimed.
+
+Independent plan review passed. The new regression compares final JSON/XML
+capacities against distinct compiled matcher identities, exercises two optional
+matchers and paired name/value batches, and verifies program-budget and metadata
+admission fallback retain the required generation's byte accounting. Existing
+stage-cache namespace and exact physical admission regressions remain in place.
+
+Fresh verification passed 839 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

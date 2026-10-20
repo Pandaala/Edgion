@@ -42,7 +42,8 @@ fn capture_program_sharing_keeps_complete_json_group_identity() {
     assert_eq!(plan.members[0].value, plan.members[1].value);
     let first = plan.members[0].value;
     assert!(plan.members[2..].iter().all(|member| member.value != first));
-    assert_eq!(plan.matcher_scan_capacity, 0);
+    assert_eq!(plan.capture_hits.batches.len(), 1);
+    assert_eq!(plan.matcher_scan_capacity, 1);
 }
 
 #[test]
@@ -409,4 +410,70 @@ fn broad_only_order_is_precompiled_by_profile_then_group() {
     )
     .unwrap();
     assert!(empty.json_inspection.broad_only_order.is_empty());
+}
+
+#[test]
+fn finalized_scan_capacity_includes_optional_domains_and_preserves_refusal() {
+    let source = concat!(
+        "SecRule ARGS|ARGS_NAMES|XML:/* \"@rx (evil)\" \"id:1,phase:2,pass,capture,t:none\"\n",
+        "SecRule ARGS|ARGS_NAMES|XML:/* \"@rx (attack)\" \"id:2,phase:2,pass,capture,t:none\"\n",
+        "SecRule ARGS|ARGS_NAMES|XML:/* \"@rx (first)\" \"id:3,phase:2,pass,capture,t:lowercase\"\n",
+        "SecRule ARGS|ARGS_NAMES|XML:/* \"@rx (second)\" \"id:4,phase:2,pass,capture,t:lowercase\"\n",
+        "SecRule ARGS|XML:/* \"@pm needle\" \"id:5,phase:2,pass,t:none\"\n",
+    );
+    let required = compile(
+        source,
+        CompilerLimits {
+            max_regex_programs: 4,
+            ..CompilerLimits::default()
+        },
+    )
+    .unwrap();
+    assert!(required.capture_hits.matchers.is_empty());
+    for (limits, optional) in [
+        (CompilerLimits::default(), true),
+        (
+            CompilerLimits {
+                max_regex_programs: 4,
+                ..CompilerLimits::default()
+            },
+            false,
+        ),
+        (
+            CompilerLimits {
+                max_compiler_owned_non_matcher_bytes: required.compiler_owned_bytes,
+                ..CompilerLimits::default()
+            },
+            false,
+        ),
+    ] {
+        let generation = compile(source, limits).unwrap();
+        assert_eq!(!generation.capture_hits.matchers.is_empty(), optional);
+        if optional {
+            assert_eq!(generation.capture_hits.matchers.len(), 2);
+            let batches = &generation.json_inspection.capture_hits.batches;
+            assert_eq!(batches.len(), 4);
+            assert_eq!(batches[0].matcher, batches[1].matcher);
+            assert_eq!(batches[2].matcher, batches[3].matcher);
+            assert_ne!(batches[0].matcher, batches[2].matcher);
+            assert_eq!(generation.xml_inspection.capture_hits.batches.len(), 2);
+        } else {
+            assert_eq!(generation.retained_bytes(), required.retained_bytes());
+        }
+        for plan in [&generation.json_inspection, &generation.xml_inspection] {
+            let mut ids = plan
+                .groups
+                .iter()
+                .filter_map(|group| match generation.operator_plans[group.member].unwrap().operand {
+                    CompiledOperatorOperand::Matcher { group, .. } => Some(group),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            ids.extend(plan.capture_hits.batches.iter().map(|batch| batch.matcher));
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(plan.matcher_scan_capacity, ids.len());
+            assert_eq!(ids.len(), if optional { 3 } else { 1 });
+        }
+    }
 }

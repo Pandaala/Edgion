@@ -114,7 +114,8 @@ pub(super) struct CompiledJsonPlan {
     pub candidate_literals: Vec<JsonNameRef>,
     pub candidate_regexes: Vec<CompiledTargetSelector>,
     pub unsupported: Vec<JsonInspectionUnsupported>,
-    /// Unique compiled Matcher IDs; bounds every profile's stage scan cache.
+    /// Unique ordinary and optional capture-hit Matcher IDs in this domain.
+    /// Finalized by optional compilation; bounds every profile's stage scan cache.
     pub matcher_scan_capacity: usize,
     pub needs_candidate_names: bool,
     pub needs_all_candidate_names: bool,

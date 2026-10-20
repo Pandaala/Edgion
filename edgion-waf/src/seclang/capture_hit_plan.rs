@@ -50,6 +50,7 @@ struct Staged {
     pool: CaptureHitPlan,
     json: DomainHits,
     xml: DomainHits,
+    scan_capacities: [usize; 2],
 }
 
 fn invariant() -> CompilerError {
@@ -268,11 +269,16 @@ fn attempt(
         )?;
         member = checked_add(member, unit.members().len())?;
     }
+    let scan_capacities = [
+        generation.json_inspection.matcher_scan_capacity,
+        generation.xml_inspection.matcher_scan_capacity,
+    ];
     if count < 2 {
         return Ok(Staged {
             pool: CaptureHitPlan::default(),
             json: DomainHits::default(),
             xml: DomainHits::default(),
+            scan_capacities,
         });
     }
     let mut candidates = Vec::new();
@@ -302,6 +308,7 @@ fn attempt(
         pool: CaptureHitPlan::default(),
         json: domain_reserve(&generation.json_inspection, count, work)?,
         xml: domain_reserve(&generation.xml_inspection, count, work)?,
+        scan_capacities,
     };
     reserve(&mut result.pool.matchers, count / 2, true, work)?;
     let mut patterns = Vec::new();
@@ -435,7 +442,15 @@ fn attempt(
             *work = build;
             let matcher_id = checked_add(generation.groups.len(), result.pool.matchers.len())?;
             result.pool.matchers.push(matcher);
-            for (hits, (name, value)) in [&mut result.json, &mut result.xml].into_iter().zip(domains) {
+            for ((hits, capacity), (name, value)) in [&mut result.json, &mut result.xml]
+                .into_iter()
+                .zip(&mut result.scan_capacities)
+                .zip(domains)
+            {
+                // A matcher can serve both views; reserve one stage-cache slot.
+                if name.is_some() || value.is_some() {
+                    *capacity = checked_inc(*capacity)?;
+                }
                 for peers in name.into_iter().chain(value) {
                     install_domain(hits, matcher_id, &peers.records[..peers.count], peers.profile)?;
                 }
@@ -473,6 +488,8 @@ pub(super) fn compile_optional(
     let mut optional = *work;
     match attempt(generation, validated, preflight, &mut optional, canonical) {
         Ok(result) if !result.pool.matchers.is_empty() => {
+            generation.json_inspection.matcher_scan_capacity = result.scan_capacities[0];
+            generation.xml_inspection.matcher_scan_capacity = result.scan_capacities[1];
             generation.capture_hits = result.pool;
             generation.json_inspection.capture_hits = result.json;
             generation.xml_inspection.capture_hits = result.xml;

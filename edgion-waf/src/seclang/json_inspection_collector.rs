@@ -167,19 +167,7 @@ impl<'call, 'generation> JsonCollector<'call, 'generation> {
         let profile_count = generation.inspection_plan(domain).profiles.len();
         let hit_plan = &generation.inspection_plan(domain).capture_hits;
         let hit_count = hit_plan.batches.len();
-        let mut last = None;
-        let mut hit_matchers = 0;
-        for batch in &hit_plan.batches {
-            if last != Some(batch.matcher) {
-                hit_matchers += 1;
-                last = Some(batch.matcher);
-            }
-        }
-        let scan_capacity = generation
-            .inspection_plan(domain)
-            .matcher_scan_capacity
-            .checked_add(hit_matchers)
-            .ok_or(StoreError::Arithmetic)?;
+        let scan_capacity = generation.inspection_plan(domain).matcher_scan_capacity;
         if scan_capacity > generation.matcher_count() {
             return Err(CollectorError::State);
         }
