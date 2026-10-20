@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Hostname ID-to-content representation](routing-03-hostname-content-index.md)
+
 - [Validated passthrough SNI handoff](tls-06-validated-sni-handoff.md)
 
 - [Prepared WAF finding metadata](waf-02-prepared-finding-metadata.md)
@@ -9435,3 +9437,17 @@ Formatting, workspace all-target check/Clippy, agent-doc validation, SSA-force,
 metrics inventory, Pingora-source policy, Gateway API transform, unit-test layout
 and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
 No performance measurement or integration fixture change was made.
+
+## Hostname content lookup and update-sharing audit
+
+After the radix yields an ID, matching_values borrows its contents through the
+persistent HashTrieMapSync. It performs a map lookup per yielded candidate, with
+no query allocation or Arc clone. Dense private IDs make indexed storage worth
+evaluating, but snapshot sharing and small content patches are part of the
+existing contract; a flat replacement can move work to configuration updates
+and retained generations.
+
+[Content representation investigation](routing-03-hostname-content-index.md)
+records this undecided tradeoff and the existing benchmark coverage. No runtime
+representation or dependency changed, and no new performance result is claimed.
+The tree optimization already delivered does not resolve this separate decision.
