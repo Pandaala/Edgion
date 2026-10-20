@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF sealed outcome lookup indexing](waf-10-sealed-outcome-lookup-index.md)
+
 - [WAF profile capture-hit indexing](waf-09-profile-capture-hit-index.md)
 
 - [WAF count-value layout](waf-08-count-value-layout.md)
@@ -11191,4 +11193,25 @@ a measured request-throughput improvement.
 Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+
+## WAF sealed outcome lookup review
+
+Static JSON/XML replay already passes sealed match/capture handles into member
+and TX state; descriptor storage is not a second payload copy. Its checked group
+lookup still scans each candidate's sparse outcome chain after profile lookup,
+with work and owner validation on each visited node. Repeated selected-group
+queries can repeat that traversal. Profile lookup remains a separate traversal.
+
+[waf-10](waf-10-sealed-outcome-lookup-index.md) records the sparse-index tradeoff:
+construction/retention, generational ownership, shared payload cleanup and ordered
+work failures require an explicit decision. This is separate from compiled
+capture-hit profile dispatch. Independent plan review passed; no runtime change
+or measured performance improvement is claimed.
+
+Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
+90 Gateway WAF tests, formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. These checks verify the
+current implementation, not an alternative lookup index.
 Final independent review passed.
