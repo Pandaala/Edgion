@@ -5555,3 +5555,21 @@ fn target_exclusion_insertion_keeps_unit_groups_and_duplicate_budget() {
         Err(RuntimeError::CtlEntryLimit { limit: 6 })
     );
 }
+
+#[test]
+fn request_head_projection_matches_decimal_boundaries() {
+    for size in [0, 1, 9, 10, 11, 99, 100, 101, 999, 1000, 1001] {
+        let mut uri = b"/?".to_vec();
+        uri.resize(uri.len() + size, b'a');
+        let head = request(&[], &uri);
+        let projection = projected_derived_bytes(head, query_part(head.uri)).unwrap();
+        let state = RequestState::build(head, RuntimeLimits::default()).unwrap();
+        let (digits, start) = decimal_bytes(size);
+        assert_eq!(projection.query_combined_size, size);
+        assert_eq!(state.bytes.len(), projection.arena);
+        assert_eq!(
+            state.first_value(CollectionKind::ArgsCombinedSize),
+            Some(&digits[start..])
+        );
+    }
+}

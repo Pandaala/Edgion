@@ -25,10 +25,11 @@ it cannot be treated as a byte-for-byte accounting-neutral local edit.
 
 The shared unsigned helper also feeds numeric capture keys, response status,
 request metadata and JSON/XML publication. JsonPublication and XmlPublication
-retain two [u8; 40] metadata buffers. projected_derived_bytes currently computes
-a numeric length as 40 minus the returned start. Changing the helper alone would
-break that projection and conflict with fixed consumer types. signed_decimal_bytes
-is a separate i64 formatter and is not automatically part of this candidate.
+retain two [u8; 40] metadata buffers. The subsequent projection-only optimization
+computes numeric length directly with checked_ilog10, so request-head preflight
+no longer depends on the formatter width. Changing the formatter alone still
+conflicts with fixed consumer types. signed_decimal_bytes is a separate i64
+formatter and is not automatically part of this candidate.
 
 ## Decision
 

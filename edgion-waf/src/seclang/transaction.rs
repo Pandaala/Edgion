@@ -6085,8 +6085,9 @@ struct RequestHeadProjection {
 
 fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<RequestHeadProjection, RuntimeError> {
     let query_combined_size = query_argument_combined_size(query)?;
-    let (_, combined_start) = decimal_bytes(query_combined_size);
-    let mut total = 40 - combined_start;
+    let mut total = query_combined_size
+        .checked_ilog10()
+        .map_or(1, |digits| digits as usize + 1);
     let body_processor = request_body_processor(request.headers);
     for value in [
         query,

@@ -10844,8 +10844,9 @@ Count targets already accumulate a scalar and use inline decimal bytes; exclusio
 compaction is in place. SelectedBytes::Count embeds a 40-byte buffer in every
 selection-slot enum layout. A smaller unsigned representation is a candidate,
 but actual enclosing sizes are unmeasured and sizeof-based capacity, overlap and
-summary admission would change. Shared JSON/XML metadata and the request-head
-projection also depend on the current helper width.
+summary admission would change. Shared JSON/XML metadata depends on the current
+helper width. The later projection-only optimization below removes the request-head
+preflight's former dependency on that width.
 
 [waf-08](waf-08-count-value-layout.md) records the representation choices,
 consumer inventory and numeric/layout/accounting acceptance. Independent plan
@@ -10855,4 +10856,25 @@ Fresh verification passed 833 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and agent-document
 validation. Existing unrelated Clippy warnings remain. No alternate layout
 or workload benchmark was implemented.
+Final independent review passed.
+
+## WAF request-head decimal length projection
+
+projected_derived_bytes formerly formatted the query combined-size number into
+a 40-byte array only to discard the digits and subtract the returned offset.
+It now computes decimal length directly with checked_ilog10, using one digit
+for zero. Actual metadata still uses the canonical decimal formatter. Arena and
+nominal charges, validation order and all formatter representations are unchanged.
+This removes discarded formatting and the projection's width dependency; waf-08
+is updated accordingly without resolving its separate layout/admission decision.
+
+A RequestState construction test compares projected arena length and emitted
+metadata at zero and around decimal boundaries through 1000, using the existing
+formatter as the byte oracle. Existing exact/one-below retained-budget tests remain.
+Independent plan review passed. Scope is transaction source, its unit tests, the
+updated deferred task and this record. No measured throughput gain is claimed.
+
+Fresh verification passed 834 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
