@@ -9559,3 +9559,29 @@ tests, 19 HTTP match-unit tests, 51 HTTP conf-handler tests and 23 request acces
 policy tests. Formatting, workspace all-target check/Clippy and the seven agent-doc,
 SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout and gateway
 no-tracing guards passed. Existing unrelated Clippy warnings remain.
+
+## Avoid collecting singleton regex route match IDs
+
+RegexRoutesEngine uses the existing RegexSet.is_match when the set contains
+exactly one pattern. A hit can only select index zero, then runs the same deep
+match and transfers the same successful Arc owners. A miss returns no candidate.
+The multi-pattern ascending-index loop and failed-set linear fallback remain
+unchanged; the branch uses set length rather than assuming every route has a
+compiled path pattern.
+
+The locked regex 1.13.1 matches_at constructs a PatternSet for each call;
+regex-automata 0.4.18 owns its boxed boolean result storage. is_match uses the same
+set and input span without constructing that result set. This removes singleton
+result collection, not regex engine caches, all allocations or deep-match work.
+No throughput claim or per-route prepared state is added.
+
+The existing ARCH-156 session test retains every pattern and ancestor-boundary
+case and now exercises singleton and multi-candidate engines, both RegexSet and
+forced linear paths, with inside, outside and path-miss requests. Rejected
+singletons remain unmatched; multi-candidate rejection still reaches fallback.
+
+Fresh verification passed 34 Gateway match-engine tests, 19 HTTP match-unit tests
+and 51 HTTP conf-handler tests. Formatting, workspace all-target check/Clippy
+and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards passed. Existing unrelated Clippy
+warnings remain.

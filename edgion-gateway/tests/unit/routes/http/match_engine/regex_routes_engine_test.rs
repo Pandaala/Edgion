@@ -454,12 +454,18 @@ async fn arch156_regex_candidates_check_parent_before_winner_in_both_engines() {
         unit.parent_refs = Some(refs.clone());
         let mut fallback = create_test_route_unit("default", "fallback", ".*", 0);
         Arc::make_mut(&mut fallback).parent_refs = Some(refs.clone());
-        for linear in [false, true] {
-            let mut engine = RegexRoutesEngine::build(vec![fallback.clone(), child.clone()]);
+        for (linear, singleton) in [(false, false), (true, false), (false, true), (true, true)] {
+            let routes = if singleton {
+                vec![child.clone()]
+            } else {
+                vec![fallback.clone(), child.clone()]
+            };
+            let mut engine = RegexRoutesEngine::build(routes);
             if linear {
                 engine.regex_set = None;
             }
-            for (path, expected) in [(inside, "child"), (outside, "fallback")] {
+            let unmatched = (!singleton).then_some("fallback");
+            for (path, expected) in [(inside, Some("child")), (outside, unmatched), ("/unmatched", unmatched)] {
                 let (mut client, server) = tokio::io::duplex(1024);
                 client
                     .write_all(format!("GET {path} HTTP/1.1\r\nHost: example.com\r\n\r\n").as_bytes())
@@ -470,10 +476,13 @@ async fn arch156_regex_candidates_check_parent_before_winner_in_both_engines() {
                 let mut ctx = EdgionHttpContext::default();
                 ctx.request_info.normalized_current_path = path.into();
                 ctx.request_info.hostname = NormalizedHostname::new("example.com");
-                let result = engine.match_route(&mut session, &ctx, index).unwrap().unwrap();
+                let result = engine.match_route(&mut session, &ctx, index).unwrap();
                 assert_eq!(
-                    result.route_unit.matched_info.rsc.name, expected,
-                    "{pattern} {path}, linear={linear}"
+                    result
+                        .as_ref()
+                        .map(|matched| matched.route_unit.matched_info.rsc.name.as_str()),
+                    expected,
+                    "{pattern} {path}, linear={linear}, singleton={singleton}"
                 );
             }
         }

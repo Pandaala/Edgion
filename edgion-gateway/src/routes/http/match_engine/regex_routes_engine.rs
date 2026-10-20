@@ -90,6 +90,19 @@ impl RegexRoutesEngine {
         let path = ctx.path();
 
         if let Some(ref regex_set) = self.regex_set {
+            // A singleton can only yield index zero; avoid collecting match IDs.
+            if regex_set.len() == 1 {
+                if !regex_set.is_match(path) {
+                    return Ok(None);
+                }
+                let route = &self.routes[0];
+                return Ok(route
+                    .deep_match(session, ctx, index)?
+                    .map(|matched_gateway| RouteMatchResult {
+                        route_unit: Arc::clone(route),
+                        matched_gateway,
+                    }));
+            }
             // Indices from `RegexSet::matches()` are ascending; combined with the
             // build-time longest-first sort of `routes`, this iteration is already
             // in highest-precedence-first order. See the invariant note in `build`.
