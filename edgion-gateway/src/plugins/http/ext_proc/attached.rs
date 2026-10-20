@@ -207,14 +207,13 @@ impl AttachedExtProc {
                 Some(processing_response::Response::ImmediateResponse(_))
             )
         });
+        let output_bytes = result.as_ref().ok().map(response_payload_len);
         {
             let mut summary = self.summary.lock();
             summary.phases = summary.phases.saturating_add(1);
             summary.input_bytes = summary.input_bytes.saturating_add(input_bytes as u64);
-            if let Ok(response) = &result {
-                summary.output_bytes = summary
-                    .output_bytes
-                    .saturating_add(response_payload_len(response) as u64);
+            if let Some(output_bytes) = output_bytes {
+                summary.output_bytes = summary.output_bytes.saturating_add(output_bytes as u64);
             }
             summary.outcome = if result.is_err() {
                 summary.reason = "dependency";

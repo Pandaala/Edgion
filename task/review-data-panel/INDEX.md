@@ -10492,3 +10492,28 @@ Fresh baseline verification passed 146 ExtProc, three response-driver and 11
 terminal-logging tests (160 total), formatting and workspace all-target
 check/Clippy. Existing unrelated Clippy warnings remain. This documentation
 batch changes no runtime code and adds no concurrency or live transport probe.
+
+## Count ExtProc response bytes before locking the summary
+
+AttachedExtProc now computes response_payload_len from the immutable exchange
+result immediately before taking the summary mutex. Body/immediate responses
+read scalar lengths; trailer responses traverse set/remove header mutations.
+This pure projection has no await, allocation, shared-state read or mutation.
+Its existing raw-value precedence and saturating arithmetic remain unchanged.
+
+The same guarded update still increments phase/input counts, adds the optional
+output byte count using the same conversion, and sets outcome/reason together.
+Failed exchanges still skip output accumulation. Phase validation, the moved
+stream's Failed sentinel, half-close, final state publication and cancellation
+remain unchanged. This removes traversal work from the critical section, not
+from the callback overall; no throughput or contention reduction is measured.
+
+The separate terminal-stream retirement decision in extproc-01 and summary
+rendering decision in log-05 remain open. No new runtime interface, cache,
+observability output or test-only production hook was introduced.
+
+Fresh verification passed 146 ExtProc, three response-driver and 11 terminal-
+logging tests (160 total), formatting, workspace all-target check/Clippy and
+the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No new test, contention measurement or live transport experiment ran.
