@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF default body-processor reuse](waf-05-default-body-processor-reuse.md)
+
 - [Normalized request-body segment ownership](body-07-normalized-segment-ownership.md)
 
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
@@ -10680,4 +10682,24 @@ Independent plan review passed. Fresh verification passed 116 request-body,
 workspace all-target check/Clippy and agent-document validation. Existing
 unrelated Clippy warnings remain. This is a documentation-only ownership audit,
 not live transport evidence or a measured performance improvement.
+Final independent review passed.
+
+## Defer WAF default body-processor reuse
+
+Traced Gateway phase-one execution into request-body preflight. Request-head
+projection already computes the immutable Content-Type default, but an effective
+Auto preflight searches and classifies it again. The classifier is allocation-free;
+explicit resolved selections and ctl overrides do not take that same default path.
+This extends the earlier constructor-local projection audit without treating every
+preflight as a repeated scan or treating request metadata as fixed configuration.
+
+[waf-05](waf-05-default-body-processor-reuse.md) records the choice between current
+lookup, retained default enum and existing scalar reuse, including transaction
+layout/accounting and phase-one override requirements. No runtime optimization
+was selected; deeper WAF execution remains open.
+
+Independent plan review passed. Fresh verification passed 829 WAF leaf tests
+(six existing ignored) and 90 Gateway WAF tests, formatting, workspace all-target
+check/Clippy and agent-document validation. Existing unrelated Clippy warnings
+remain. No default-reuse implementation, layout measurement or live benchmark ran.
 Final independent review passed.
