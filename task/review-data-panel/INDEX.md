@@ -13,7 +13,7 @@ destination.
 | Stage | Current evidence / remaining work |
 | --- | --- |
 | HTTP callback dispatch (`proxy_http/mod.rs`) | Callback inventory inspected; implementations still require staged review. |
-| `new_ctx`, `init_downstream_modules` | Direct bodies and context/default construction inspected: pinned config, parsed policy, absent optional owners and lazy containers. Pinned-fork module construction inspected; outer module storage is deferred below. Compression/bridge processing internals remain open. |
+| `new_ctx`, `init_downstream_modules` | Direct bodies and context/default construction inspected: pinned config, parsed policy, absent optional owners and lazy containers. Registered downstream module callbacks, compression negotiation/output ownership and gRPC-Web header/trailer paths inspected in the entries below. Module storage/dispatch and compression/bridge representation decisions remain deferred. Downstream decompressor execution and dictionary setup are not currently enabled; see the reachability audit below. This is not complete fork-codec coverage. |
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
@@ -10057,3 +10057,32 @@ tests (39 total), formatting, workspace all-target check/Clippy and the seven
 agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
 and gateway no-tracing guards. Existing unrelated Clippy warnings remain. No
 live integration or throughput benchmark ran.
+
+## Registered downstream compression reachability
+
+Revalidated registration and both Gateway level-adjustment sites against the
+locked Pingora `1aaa45cc70430bc782990bc20ddee3fef36d6b99`. Its
+ResponseCompressionBuilder constructs ResponseCompressionCtx with all
+decompression flags false. Gateway's early request and final response filters
+adjust encoding levels only; no production caller enables decompression or
+installs a dictionary on this module.
+
+The fork can still select Action::Decompress from response metadata. Its
+algorithm.decompressor(false) returns None, however, so this registered module
+does not construct or execute a decoder. That is a reachability boundary, not
+an assertion that selection, header classification or module dispatch disappears.
+It says nothing about independent outbound clients, artifact decompression or
+other fork consumers.
+
+The coverage row now reflects the existing registered callback, compression
+negotiation/output-buffer and gRPC-Web header/trailer investigations instead of
+leaving all processing internals generically open. Existing context-01/02,
+compression-01/02/03/04 and grpc-web-01 decisions remain deferred. Their evidence
+does not certify every codec implementation. Re-evaluate this boundary when
+module registration/mutation, dictionary setup or the pinned fork changes.
+
+Fresh Edgion gate verification passed two module-registration, 17 early-request
+and 26 response-filter tests (45 total), formatting, workspace all-target
+check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
+No runtime code, dependency source or revision changed; no decoder execution
+test, complete fork codec suite or performance measurement ran.
