@@ -11449,3 +11449,24 @@ trailer tests (279 total), formatting, workspace all-target check/Clippy and sev
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
 Final independent review passed.
+
+## Reuse Wasm callout upstream decoded length
+
+Callout allocation preflight now retains the upstream lossy UTF-8 length from
+its first calculation and reuses it for normalized-origin accounting. The input
+is the same immutable byte slice and the helper is a pure checked traversal;
+there is no guest call or mutation between the former duplicate calculations.
+Map validation, raw-copy arithmetic, decoded-payload arithmetic, pair-vector
+accounting and origin arithmetic keep their existing order and values. This
+removes one repeated scan only when preflight reaches origin accounting.
+
+Independent plan review passed. Existing lossy-expansion and high-pair-count
+preflight regressions passed on the original code; the surrounding real-guest
+admission tests retain token/state publication coverage. No allocation, capacity,
+error-policy or ownership change is made, and no throughput gain is claimed.
+
+Fresh verification passed all 268 Gateway Wasm tests serially and 11 upstream
+trailer tests (279 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.

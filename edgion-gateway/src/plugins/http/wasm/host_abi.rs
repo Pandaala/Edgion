@@ -1195,7 +1195,8 @@ fn callout_allocation_preflight_payload(
         .checked_add(header_bytes.len())
         .and_then(|len| len.checked_add(body_size))
         .ok_or(STATUS_INTERNAL_FAILURE)?;
-    let lossy_owned_bytes = lossy_utf8_output_len(upstream_bytes)?
+    let upstream_lossy_bytes = lossy_utf8_output_len(upstream_bytes)?;
+    let lossy_owned_bytes = upstream_lossy_bytes
         .checked_add(profile.lossy_string_bytes)
         .ok_or(STATUS_INTERNAL_FAILURE)?;
     // `decode_map`'s Vec is consumed while the filtered PendingCallout header
@@ -1210,7 +1211,6 @@ fn callout_allocation_preflight_payload(
     // factor plus fixed slack covers IDNA's `xn--` label prefix and URL
     // delimiters. The returned normalized origin is a second concurrently
     // live String of no greater size.
-    let upstream_lossy_bytes = lossy_utf8_output_len(upstream_bytes)?;
     let one_origin_representation = upstream_lossy_bytes
         .checked_mul(4)
         .and_then(|bytes| bytes.checked_add(64))
