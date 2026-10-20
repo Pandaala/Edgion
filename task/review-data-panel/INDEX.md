@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [AI DNS first-address projection](dns-02-ai-first-address-projection.md)
+
 - [Service outlier completion-token ownership](outlier-01-completion-token-ownership.md)
 
 - [Prepared configured session-persistence header names](lb-04-prepared-session-header-name.md)
@@ -10157,3 +10159,18 @@ outlier and six shared time-parser tests (54 total), formatting, workspace
 all-target check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
 Gateway API transform, unit-layout and gateway no-tracing guards. Existing
 unrelated Clippy warnings remain. No live provider, Redis or throughput test ran.
+
+## AI DNS result projection audit
+
+AI endpoint selection consumes only the first allowed DNS address, but the shared
+filter observes every rejected address, including those after that selection.
+Short-circuiting would change egress metrics. A full-scan first-only projection
+has an unmeasured compaction-versus-bookkeeping tradeoff; the existing owned
+filter/collect can reuse its Vec allocation. This separate decision is recorded
+in [DNS-02](dns-02-ai-first-address-projection.md), without runtime changes.
+
+Fresh baseline verification passed seven AI HTTP attempt, three Gateway egress
+and nine Common egress tests (19 total), formatting, workspace all-target
+check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
+No new projection implementation, production-loopback test, live DNS exchange
+or performance benchmark ran.
