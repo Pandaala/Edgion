@@ -101,7 +101,8 @@ this fix does not add symbolic subset checking or nested default-root inheritanc
 A full bounded ancestor chain avoids relying on semantic subsumption of parameter
 patterns. All guard data belongs to the same immutable unit generation. There is
 no request-time resource lookup, new registry, regex parser, or duplicated filter
-execution. Up to eight IDs fit the matcher result inline capacity eight and bound
+execution. The guard reduces visited IDs into a count and a non-partial-boundary
+conjunction without collecting results. Up to eight root-to-terminal paths bound
 the DFS frontier below its inline capacity sixteen.
 
 Regression coverage resides in the existing resource transport, Controller

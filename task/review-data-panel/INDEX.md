@@ -9514,3 +9514,26 @@ tests, 19 HTTP match-unit tests, 51 HTTP conf-handler tests and 22 request acces
 policy tests. Formatting, workspace all-target check/Clippy and the seven agent-doc,
 SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout and gateway
 no-tracing guards passed. Existing unrelated Clippy warnings remain.
+
+## Consume parent and access-policy radix matches directly
+
+CompiledParentMatch reduces the canonical extended radix visitor into the same
+required-ID count and non-partial-boundary conjunction. It still visits every
+match, including distinct IDs for repeated ancestor paths. Its eight-edge bound
+already kept the old result buffer inline; this removes that buffer and its
+second pass, not a previous heap allocation. Normalization, guard elision,
+provenance checks and snapshot ownership are unchanged.
+
+RuntimeUrlIndex now sets its existing candidate flags directly from the same
+visitor. Exact/prefix classification and subsequent regex updates are unchanged.
+This removes its intermediate radix result buffer and overflow allocation above
+eight results. The dense result Vec<bool> and DFS stack remain; the separate RAP
+result-storage tradeoff is not resolved here. A twelve-prefix regression checks
+all hits, each shorter path, partial-segment rejection and a complete miss.
+No throughput or overall allocation-free claim is made.
+
+Fresh verification passed 160 algorithm-library tests, 19 HTTP match-unit tests,
+51 HTTP conf-handler tests and 23 request access policy tests. Formatting,
+workspace all-target check/Clippy and the seven agent-doc, SSA-force, metrics,
+Pingora-source, Gateway API transform, unit-layout and gateway no-tracing guards
+passed. Existing unrelated Clippy warnings remain.

@@ -170,8 +170,8 @@ impl std::ops::Deref for CompiledBackend {
 }
 
 /// Canonical PathPrefix conjunction for one delegated effective match.
-/// At most eight IDs fit the radix result's inline capacity; at most eight
-/// root-to-terminal paths also bound its DFS frontier below inline capacity 16.
+/// At most eight root-to-terminal paths bound the radix DFS frontier below
+/// inline capacity 16; matching reduces visited values directly into scalars.
 pub struct CompiledParentMatch {
     tree: PathRadixTree,
     required: usize,
@@ -204,8 +204,13 @@ impl CompiledParentMatch {
     }
 
     fn matches(&self, path: &str) -> bool {
-        let matches = self.tree.match_all_ext(path);
-        matches.len() == self.required && matches.iter().all(|(_, kind)| *kind != PathMatchKind::PartialSegment)
+        let mut count = 0;
+        let mut all_boundaries = true;
+        self.tree.for_each_match_ext(path, |_, kind| {
+            count += 1;
+            all_boundaries &= kind != PathMatchKind::PartialSegment;
+        });
+        count == self.required && all_boundaries
     }
 }
 

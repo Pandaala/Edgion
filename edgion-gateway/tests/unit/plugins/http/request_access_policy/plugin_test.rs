@@ -1017,3 +1017,32 @@ async fn consecutive_url_rules_keep_imported_candidate_ownership_across_groups()
         );
     }
 }
+
+#[test]
+fn profile_url_index_handles_more_than_eight_nested_prefixes() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::AccessPathMatch;
+
+    let paths: Vec<_> = (1..=12)
+        .map(|depth| {
+            vec![AccessPathMatch {
+                match_type: AccessPathMatchType::PathPrefix,
+                value: "/a".repeat(depth),
+            }]
+        })
+        .collect();
+    let index = RuntimeUrlIndex::compile(
+        paths.iter().map(|paths| (&[][..], paths.as_slice(), None)).collect(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(index.lookup(&"/a".repeat(12)), vec![true; 12]);
+    assert_eq!(index.lookup(&format!("{}/tail", "/a".repeat(12))), vec![true; 12]);
+    for depth in 1..=12 {
+        let exact: Vec<_> = (1..=12).map(|candidate| candidate <= depth).collect();
+        let partial: Vec<_> = (1..=12).map(|candidate| candidate < depth).collect();
+        assert_eq!(index.lookup(&"/a".repeat(depth)), exact);
+        assert_eq!(index.lookup(&format!("{}x", "/a".repeat(depth))), partial);
+    }
+    assert_eq!(index.lookup("/missing"), vec![false; 12]);
+}

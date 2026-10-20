@@ -163,7 +163,7 @@ impl RuntimeUrlIndex {
     fn lookup(&self, path: &str) -> Vec<bool> {
         let mut matched = vec![false; self.candidates.len()];
         if let Some(tree) = &self.path_tree {
-            for (bucket_index, kind) in tree.match_all_ext(path) {
+            tree.for_each_match_ext(path, |bucket_index, kind| {
                 let bucket = &self.path_buckets[bucket_index as usize];
                 if kind == PathMatchKind::FullyConsumed {
                     for candidate_index in &bucket.exact {
@@ -175,7 +175,7 @@ impl RuntimeUrlIndex {
                         matched[*candidate_index] = true;
                     }
                 }
-            }
+            });
         }
         for (candidate_index, regex) in &self.regex_paths {
             if regex.is_match(path) {
