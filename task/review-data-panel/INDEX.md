@@ -21,12 +21,14 @@ destination.
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
-| Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Remaining local-gate/Redis dependencies and publication construction remain open. |
+| Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
 | TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
 ## Deferred decisions
+
+- [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
 
 - [Prepared GeoIP geographic membership](geoip-02-geographic-membership-index.md)
 
@@ -9861,3 +9863,23 @@ Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No full integration
 suite or throughput benchmark ran.
+
+
+## Defer local connection-gate lookup ownership
+
+Revalidated the persistent entry binding, sparse port lookup and coherent local
+admission transition. The bucket Arc releases the port-map guard before waiting
+on the state mutex; borrowing through that guard changes contention boundaries.
+Warm gate hits already avoid allocation, and the Arc does not clone bucket state.
+
+Connection-rate-01 records keeping the current representation, port sharding and
+stable lookup ownership as alternatives requiring a separate measured decision.
+It preserves retained budget identity, first-use generation activation, stale
+callers, clock/arithmetic rules and local-before-Redis/no-refund semantics. The
+historical contention results do not isolate reference counting as a bottleneck.
+No runtime, dependency or integration-fixture changes were made.
+
+Fresh connection-rate-limit verification passed 32 tests with one existing
+measurement ignored. Formatting, workspace all-target check/Clippy and agent-doc
+validation passed; existing unrelated warnings remain. No contention benchmark,
+live Redis exchange or hot-reload traffic test ran.
