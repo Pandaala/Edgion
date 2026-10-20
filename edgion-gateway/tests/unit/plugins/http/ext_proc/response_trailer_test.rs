@@ -293,7 +293,13 @@ async fn no_mutation_preserves_trailer_storage_and_sensitive_opaque_values() {
                 }
                 let original = trailers.clone();
                 let original_value = std::ptr::from_ref(trailers.get("x-value").unwrap());
-                let mut session = session(grpc, true, true);
+                let mut session = MockPluginSession::new();
+                session.expect_is_grpc_request().times(1).return_const(grpc);
+                session
+                    .expect_downstream_response_trailers_representable()
+                    .times(1)
+                    .return_const(true);
+                session.expect_downstream_response_trailer_name_allowed().times(0);
                 session.expect_record_outcome().times(0).return_const(());
                 let mut log = PluginLog::new("ExtProc");
                 assert_eq!(

@@ -119,10 +119,14 @@ boundaries in both modes, plus whole-map gates. Their allocation counter exclude
 fixture construction and confirms no allocation in these validator calls.
 Protobuf projection, mutation and callback lifecycle retain their ownership.
 A matched trailer verdict with no HeaderMutation, or with both operation lists
-empty, validates the original map and preserves its storage. A nonempty operation
-list still clones a candidate and commits it only after validation and transport
-representability checks, even if its operations ultimately change nothing.
-Explicit empty mutations retain the same final validation and terminal ordering.
+empty, reuses input validation and preserves the original map's storage. The map
+remains exclusively borrowed across the exchange, which receives only owned
+protobuf fields; the production adapter's request-classification booleans remain
+unchanged. A nonempty operation list still clones and validates a candidate even
+if its operations ultimately change nothing. All successful verdicts retain the
+transport representability check and terminal ordering before publication.
+Re-evaluate validation reuse if map ownership, exchange capabilities or request
+classification mutability changes.
 This is not an allocation-free trailer callback claim.
 Existing asynchronous tests retain atomic rejection and failure-policy coverage.
 

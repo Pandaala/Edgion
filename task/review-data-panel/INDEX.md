@@ -9651,3 +9651,25 @@ Fresh verification passed 146 ExtProc and 11 upstream-trailer unit tests.
 Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain.
+
+## Reuse validated unchanged ExtProc trailers
+
+collect_trailers validates the original map before creating the owned protobuf
+request. The callback retains its exclusive map loan across exchange; the owner
+receives neither that map nor Session. The production trailer adapter's request
+classification reads stable context booleans, and no intervening operation
+changes them. Absent and explicit empty mutation verdicts now reuse that input
+validation instead of rescanning size, forbidden names and gRPC status.
+
+Every nonempty mutation list still validates its candidate immediately after
+apply_mutation, including effective no-ops. Representability, atomic publication,
+failure reasons and terminal ordering remain in place. The existing unchanged-map
+matrix now checks one classification read while retaining HTTP/gRPC, both failure
+policies, original value identity, opaque duplicates and sensitivity assertions.
+The owning fidelity guard documents the proof and its re-evaluation triggers.
+No new cache or state is added, and no measured throughput improvement is claimed.
+
+Fresh verification passed 146 ExtProc, 11 upstream-trailer and six response-
+callback unit tests. Formatting, workspace all-target check/Clippy and the seven
+agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
+and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.

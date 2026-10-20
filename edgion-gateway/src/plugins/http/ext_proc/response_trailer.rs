@@ -176,13 +176,15 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             if apply_mutation(&mut candidate, mutation, session).is_err() {
                 return self.finish_failure(session, log, "bad-verdict");
             }
+            if validate_trailer_map(&candidate, session.is_grpc_request()).is_err() {
+                return self.finish_failure(session, log, "bad-verdict");
+            }
             Some(candidate)
         } else {
+            // collect_trailers validated this exclusively borrowed map before the
+            // exchange; neither it nor the request's gRPC classification changed.
             None
         };
-        if validate_trailer_map(candidate.as_ref().unwrap_or(trailers), session.is_grpc_request()).is_err() {
-            return self.finish_failure(session, log, "bad-verdict");
-        }
 
         if !session.downstream_response_trailers_representable() {
             return self.finish_failure(session, log, "unrepresentable");
