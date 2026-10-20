@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Route header-name preparation](routing-04-header-name-preparation.md)
+
 - [Hostname ID-to-content representation](routing-03-hostname-content-index.md)
 
 - [Validated passthrough SNI handoff](tls-06-validated-sni-handoff.md)
@@ -9479,3 +9481,14 @@ tests and six request-entry tests, including native gRPC/gRPC-Web fallback.
 Formatting, workspace all-target check/Clippy, agent-doc validation, SSA-force,
 metrics inventory, Pingora-source policy, Gateway API transform, unit-test layout
 and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
+
+## Route header-name preparation audit
+
+HTTP and gRPC deep matching both query HeaderMap with configured string names.
+The pinned http implementation uses stack scratch or borrowed bytes, without
+request-time name allocation. A prepared HeaderName avoids repeated name
+processing but adds retained custom-name ownership unless the representation is
+redesigned. The [deferred investigation](routing-04-header-name-preparation.md)
+records this CPU/storage tradeoff, constructor scope and semantic acceptance.
+HTTP and gRPC unknown-type policies differ and must not be merged accidentally.
+No runtime change or measured performance improvement is claimed.
