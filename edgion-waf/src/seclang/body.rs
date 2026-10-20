@@ -215,8 +215,8 @@ fn build_publication_inner(
     ) {
         builder.push(CollectionKind::RequestBody, None, &body.bytes, false)?;
     }
-    let length = body.bytes.len().to_string();
-    builder.push(CollectionKind::RequestBodyLength, None, length.as_bytes(), false)?;
+    let (length, start) = super::decimal_bytes(body.bytes.len());
+    builder.push(CollectionKind::RequestBodyLength, None, &length[start..], false)?;
     builder.push(CollectionKind::ReqbodyProcessor, None, processor.as_bytes(), false)?;
     if parse_derived_views && !body.bytes.is_empty() {
         match processor {
@@ -227,8 +227,8 @@ fn build_publication_inner(
             BodyProcessorSelection::Xml => return Err(BodyError::Malformed { processor }),
         }
     }
-    let combined_size = builder.accounting.combined_size(head_args_combined_size)?.to_string();
-    builder.push(CollectionKind::ArgsCombinedSize, None, combined_size.as_bytes(), false)?;
+    let (combined_size, start) = super::decimal_bytes(builder.accounting.combined_size(head_args_combined_size)?);
+    builder.push(CollectionKind::ArgsCombinedSize, None, &combined_size[start..], false)?;
     builder.finish()
 }
 
@@ -604,8 +604,8 @@ fn parse_multipart(input: &[u8], content_type: Option<&[u8]>, builder: &mut Body
             .checked_add(delimiter.len())
             .ok_or(BodyError::Arithmetic)?;
         if input.get(after..after + 2) == Some(b"--") {
-            let size = combined_size.to_string();
-            builder.push(CollectionKind::FilesCombinedSize, None, size.as_bytes(), false)?;
+            let (size, start) = super::decimal_bytes(combined_size);
+            builder.push(CollectionKind::FilesCombinedSize, None, &size[start..], false)?;
             return Ok(());
         }
         let part_start = if input.get(after..after + 2) == Some(b"\r\n") {

@@ -883,3 +883,40 @@ fn form_publication_owns_fields_after_input_drop_and_preserves_split_order() {
         ]
     );
 }
+
+#[test]
+fn numeric_publication_metadata_owns_decimal_boundary_values() {
+    for length in [0, 1, 9, 10, 99, 100] {
+        let expected_length = length.to_string();
+        for combined in [0, 9, 10, usize::MAX] {
+            let body = RequestBody::new(bytes::Bytes::from(vec![b'a'; length]), BodyProcessorSelection::Raw);
+            let publication = build_publication(&body, None, combined, BodyLimits::default()).unwrap();
+            drop(body);
+            assert_eq!(
+                values(&publication, CollectionKind::RequestBodyLength),
+                [(None, expected_length.as_bytes())]
+            );
+            let expected_combined = combined.to_string();
+            assert_eq!(
+                values(&publication, CollectionKind::ArgsCombinedSize),
+                [(None, expected_combined.as_bytes())]
+            );
+        }
+        let mut input = b"--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n".to_vec();
+        input.resize(input.len() + length, b'b');
+        input.extend_from_slice(b"\r\n--x--\r\n");
+        let body = RequestBody::new(bytes::Bytes::from(input), BodyProcessorSelection::Multipart);
+        let publication = build_publication(
+            &body,
+            Some(b"multipart/form-data; boundary=x"),
+            0,
+            BodyLimits::default(),
+        )
+        .unwrap();
+        drop(body);
+        assert_eq!(
+            values(&publication, CollectionKind::FilesCombinedSize),
+            [(None, expected_length.as_bytes())]
+        );
+    }
+}

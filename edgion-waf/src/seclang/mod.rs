@@ -19,6 +19,19 @@ mod tokenizer;
 mod transform;
 mod xml_stream;
 
+fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
+    let mut bytes = [0_u8; 40];
+    let mut start = bytes.len();
+    loop {
+        start -= 1;
+        bytes[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            return (bytes, start);
+        }
+    }
+}
+
 pub(crate) use semantic::validate_executable_profile;
 pub use tag_selection::{
     rule_unit_tags, PreparedWafRuleSelection, WafRuleIdRange, WafRuleSelection, WafRuleSelectionExpr,

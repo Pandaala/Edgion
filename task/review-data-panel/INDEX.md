@@ -10878,3 +10878,29 @@ Fresh verification passed 834 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## WAF body numeric publication scratch
+
+Materialized body publication formatted RequestBodyLength and ArgsCombinedSize
+into temporary Strings before BodyBuilder copied their bytes. Multipart completion
+did the same for FilesCombinedSize (which retains its existing combined-content
+meaning). These three sites now use the existing bounded unsigned formatter's
+stack bytes; publication entries still own their final fallible copies.
+
+The unchanged formatter lives in the common private seclang parent because body
+and transaction consumers have different module owners. Transaction imports it
+and inspection activation uses its new private path; descendant JSON/XML consumers
+retain their existing calls. The expanded ownership plan passed independent review. There is no public API, compatibility alias or duplicate formatter.
+The supporting allowlist includes these four production files, the body unit test
+and this record. Formatter width and representation remain unchanged.
+
+Tests exercise raw body metadata across decimal boundaries and usize::MAX head
+combined size, multipart content lengths, and publication after source release.
+Existing literal accounting, fallback and exact-limit tests remain. Arithmetic,
+entry/work/decoded-byte checks and final allocation order are unchanged; only
+discardable String allocations are removed. No throughput benchmark is claimed.
+
+Fresh verification passed 835 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

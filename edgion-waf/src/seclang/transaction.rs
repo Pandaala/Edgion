@@ -1,3 +1,4 @@
+use crate::seclang::decimal_bytes;
 #[cfg(test)]
 use crate::seclang::measurements::{self, Event};
 use std::borrow::Cow;
@@ -6061,19 +6062,6 @@ fn percent_decoded_len(value: &[u8]) -> usize {
         length += 1;
     }
     length
-}
-
-pub(super) fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
-    let mut bytes = [0_u8; 40];
-    let mut start = bytes.len();
-    loop {
-        start -= 1;
-        bytes[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            return (bytes, start);
-        }
-    }
 }
 
 struct RequestHeadProjection {

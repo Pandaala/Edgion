@@ -330,7 +330,7 @@ fn stable(
         work.charge_records(1, limits)?;
         for index in 0..program.capture_len() {
             work.charge_records(1, limits)?;
-            let (digits, start) = transaction::decimal_bytes(index);
+            let (digits, start) = crate::seclang::decimal_bytes(index);
             if comparison(key, &digits[start..], work, limits)? {
                 return Ok(false);
             }
