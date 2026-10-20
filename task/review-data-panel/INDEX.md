@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
+
 - [Incremental semantic window statistics](sse-01-incremental-window-statistics.md)
 
 - [Guardrail decision snapshot encoding](guardrail-02-decision-snapshot-encoding.md)
@@ -8669,3 +8671,18 @@ existing unrelated Clippy warnings. Final independent review passed.
 This removes unused self-weak ownership and cyclic setup only in the saturated
 branch. It does not remove the flight allocation or claim a measured throughput
 improvement. No network test or full suite ran.
+
+## Defer borrowed OIDC session-cookie projection
+
+Rechecked request-filter refresh publication and its six-field persistence
+projection. Nonblank access-token copying was already eliminated; session
+reference, optional ID/refresh tokens and whitespace-only access tokens still
+use temporary owned copies before serialization. Borrowing them requires a
+choice between a second serialization view and a broader shared-schema change.
+The new oidc-07 task records that decision and exact serialization/cache-order
+acceptance separately from oidc-02 Base64 output construction.
+
+Independent plan review passed. This documentation-only batch passed formatting,
+workspace all-target check/Clippy, agent-doc validation and diff checks, with
+existing unrelated Clippy warnings. No runtime tests or benchmarks ran.
+Final independent review passed.
