@@ -1290,6 +1290,33 @@ fn log_preflight_rejection_has_no_partial_state_or_accounting() {
 }
 
 #[test]
+fn header_name_ascii_folding_preserves_bytes_and_allocation() {
+    fn scalar_fold(value: &str) -> Result<String, i32> {
+        let mut normalized = try_string_with_capacity(value.len())?;
+        normalized.extend(value.chars().map(|character| character.to_ascii_lowercase()));
+        Ok(normalized)
+    }
+
+    let ascii: String = (0u8..=127).map(char::from).collect();
+    let long = "X-FIELD-é-É-π-€".repeat(128);
+    for value in ["", "x-field", "X-MiXeD-Header", "éÉñÑπ€", ascii.as_str(), long.as_str()] {
+        let (previous, previous_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| scalar_fold(value).unwrap());
+        let (actual, actual_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| try_ascii_lowercase(value).unwrap());
+        assert_eq!(actual, previous);
+        assert_eq!(actual.len(), value.len());
+        assert_eq!(actual_stats.calls, previous_stats.calls);
+        assert_eq!(actual_stats.requested_bytes, previous_stats.requested_bytes);
+    }
+    let pairs = ["X-é", "x-é", "X-É", "x-É", "", ""]
+        .into_iter()
+        .map(|name| (name.to_owned(), String::new()))
+        .collect::<Vec<_>>();
+    assert_eq!(collect_header_removals(&pairs).unwrap(), ["X-é", "X-É", ""]);
+}
+
+#[test]
 fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
     let existing = vec![
         ("First".to_string(), "1".to_string()),

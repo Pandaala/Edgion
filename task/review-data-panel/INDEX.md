@@ -11426,3 +11426,26 @@ trailer tests (278 total), formatting, workspace all-target check/Clippy and sev
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
 Final independent review passed.
+
+## Fold Wasm header removal keys as ASCII bytes
+
+The fallible canonical-name helper now copies the input into its already reserved
+String and uses the standard in-place ASCII lowercase operation. This removes
+scalar UTF-8 decoding and re-encoding from ReplaceAll's removal-key preparation.
+The same fallible exact reservation precedes any copy; allocation error status,
+owned key lifetime, length and admission profiles are unchanged. Non-ASCII bytes
+remain unchanged, and removal names retain their first spelling and input order.
+
+Independent plan review passed. A regression passed on the original implementation
+before editing production code. It compares the frozen scalar implementation for
+all ASCII bytes, empty and mixed-case names, multi-byte text and longer inputs,
+including unchanged allocation calls/requested bytes. It also verifies distinct
+non-ASCII uppercase/lowercase names and first-spelling removal deduplication.
+Existing ReplaceAll publication/admission tests remain the surrounding contract.
+No allocation reduction or measured throughput improvement is claimed.
+
+Fresh verification passed all 268 Gateway Wasm tests serially and 11 upstream
+trailer tests (279 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.

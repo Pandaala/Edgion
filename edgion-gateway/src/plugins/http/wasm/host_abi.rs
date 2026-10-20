@@ -626,7 +626,8 @@ fn try_clone_string(value: &str) -> Result<String, i32> {
 
 fn try_ascii_lowercase(value: &str) -> Result<String, i32> {
     let mut normalized = try_string_with_capacity(value.len())?;
-    normalized.extend(value.chars().map(|character| character.to_ascii_lowercase()));
+    normalized.push_str(value);
+    normalized.make_ascii_lowercase();
     debug_assert_eq!(normalized.len(), value.len());
     Ok(normalized)
 }
