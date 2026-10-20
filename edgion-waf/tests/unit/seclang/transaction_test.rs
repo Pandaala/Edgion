@@ -1770,6 +1770,42 @@ fn negated_operator_matches_the_first_nonmatching_selected_value() {
 }
 
 #[test]
+fn discarded_action_templates_preserve_bytes_and_length_errors() {
+    for (text, expected) in [
+        ("plain", b"plain".as_slice()),
+        ("%{TX.missing}", b""),
+        ("pre:%{ARGS.a}:%{TX.missing}:post", b"pre:one::post"),
+    ] {
+        let g = generation(&format!("SecAction \"id:1,phase:1,pass,msg:'{text}'\"\n"));
+        let template = g
+            .actions
+            .iter()
+            .find_map(|action| match (action.kind, action.operand) {
+                (
+                    super::super::ActionEnvelopeKind::Action(crate::seclang::ActionKind::Msg),
+                    super::super::CompiledActionOperand::Template(id),
+                ) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+        let state = RequestState::build(request(&[], b"/?a=one"), RuntimeLimits::default()).unwrap();
+        let tx = TxState::default();
+        for limit in [0, 1, expected.len().saturating_sub(1), expected.len(), usize::MAX] {
+            let owned = expand_template::<true>(&g, &state, &tx, template, limit, None);
+            let discarded = expand_template::<false>(&g, &state, &tx, template, limit, None);
+            if limit >= expected.len() {
+                assert_eq!(owned.as_deref(), Ok(expected));
+            }
+            if let Ok(value) = &discarded {
+                assert!(value.is_empty());
+                assert_eq!(value.capacity(), 0);
+            }
+            assert_eq!(owned.map(|_| ()), discarded.map(|_| ()));
+        }
+    }
+}
+
+#[test]
 fn message_and_logdata_templates_are_validated_without_exposing_payloads() {
     let generation = generation(
             "SecRule REQUEST_HEADERS:X-Secret \"@contains token\" \"id:57,phase:1,pass,msg:'matched %{MATCHED_VAR_NAME}',logdata:'value %{MATCHED_VAR}'\"\n",

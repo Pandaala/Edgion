@@ -1860,6 +1860,60 @@ fn injection_capture_and_large_then_small_match_charges_match_form_runtime() {
 }
 
 #[test]
+fn discarded_json_action_templates_preserve_metering_and_sticky_failures() {
+    let g = compile("SecAction \"id:1,phase:2,pass,msg:'pre:%{ARGS.json.a}:post'\"\n");
+    assert_eq!(g.templates.len(), 1);
+    let build = || {
+        let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body_with_json_limits(
+            RequestBody::new(Bytes::from_static(br#"{"a":"value"}"#), BodyProcessorSelection::Json),
+            JsonInspectionLimits::default(),
+        )
+        .unwrap();
+        tx
+    };
+    for poisoned in [false, true] {
+        for limit in [0, 4, 8, 9, 13, 14, usize::MAX] {
+            let mut owned_tx = build();
+            let mut discarded_tx = build();
+            if poisoned {
+                assert!(owned_tx.json_budget.as_mut().unwrap().work(usize::MAX).is_err());
+                assert!(discarded_tx.json_budget.as_mut().unwrap().work(usize::MAX).is_err());
+            }
+            let owned = expand_template::<true>(
+                &g,
+                &owned_tx.request,
+                &owned_tx.tx,
+                0,
+                limit,
+                owned_tx.json_budget.as_mut(),
+            );
+            let discarded = expand_template::<false>(
+                &g,
+                &discarded_tx.request,
+                &discarded_tx.tx,
+                0,
+                limit,
+                discarded_tx.json_budget.as_mut(),
+            );
+            if !poisoned && limit >= 14 {
+                assert_eq!(owned.as_deref(), Ok(b"pre:value:post".as_slice()));
+            }
+            if let Ok(value) = &discarded {
+                assert!(value.is_empty());
+                assert_eq!(value.capacity(), 0);
+            }
+            assert_eq!(owned.map(|_| ()), discarded.map(|_| ()));
+            let owned_budget = owned_tx.json_budget.as_ref().unwrap();
+            let discarded_budget = discarded_tx.json_budget.as_ref().unwrap();
+            assert_eq!(owned_budget.usage().work, discarded_budget.usage().work);
+            assert_eq!(owned_budget.failure(), discarded_budget.failure());
+        }
+    }
+}
+
+#[test]
 fn matching_and_tx_limits_precede_action_metadata_expansion() {
     let mut generation = compile("SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass,msg:'long-message'\"\n");
     generation.members[0].runtime_expansion_byte_limit = 3;

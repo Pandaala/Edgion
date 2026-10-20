@@ -9080,3 +9080,31 @@ select the last severity and count literal tags. Deferred cold preparation in
 actual compiled layout and near-limit admission. No runtime change or performance
 measurement is claimed. This audit covers direct phase/commit orchestration;
 remaining operators, action expansion and full callback coverage stay open.
+
+## Validate WAF action templates without retaining discarded output
+
+validate_runtime_actions formerly expanded Msg and LogData into a Vec and dropped
+it after validation. The shared expand_template now has a compile-time output
+retention mode. These two validation consumers retain no output; TX keys/values
+and dynamic operator operands keep materialized output. Both modes use the same
+ordered segment/macro traversal and checked_runtime_append length validation.
+Macro reads still execute their existing JSON/TX metering and sticky-failure checks.
+
+The retained mode preserves its initial reservation and output bytes. Validation
+removes only its disposable output reservation, growth and copy, including the
+associated allocation-failure opportunity. It does not skip actions or change
+matching/TX/commit order, template/member byte limits or sensitive-data handling.
+No second template interpreter, persistent cache or compiled field was added.
+
+Literal expected-byte tests cover plain text, missing TX values and query macros
+at exact and smaller limits. Paired JSON transactions compare successful values,
+length errors, metered work and sticky failures; discarded results have zero
+capacity. Existing secret-safe metadata and action-error-priority tests remain.
+This is temporary output removal, not an allocation-free WAF or CPU measurement.
+
+Fresh verification passed 814 leaf tests (six existing ignored cases) and
+90 Gateway WAF-related tests. Formatting, workspace all-target check and Clippy,
+agent documentation, SSA-force, metrics inventory, Pingora-source policy,
+Gateway API transform contract, unit-test layout and gateway no-tracing guards
+passed. Existing unrelated Clippy warnings remain. Broader action/operator and
+callback coverage remains open.

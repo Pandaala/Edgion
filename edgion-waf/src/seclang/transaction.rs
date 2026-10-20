@@ -2748,7 +2748,7 @@ impl<'generation> Transaction<'generation> {
                     let super::CompiledActionOperand::Template(template) = action.operand else {
                         return Err(RuntimeError::GenerationInvariant);
                     };
-                    let _expanded = expand_template(
+                    let _expanded = expand_template::<false>(
                         &self.generation,
                         &self.request,
                         tx,
@@ -2867,7 +2867,7 @@ impl<'generation> Transaction<'generation> {
             if setvar.collection != CollectionKind::Tx {
                 return Err(RuntimeError::GenerationInvariant);
             }
-            let key = expand_template(
+            let key = expand_template::<true>(
                 &self.generation,
                 &self.request,
                 staged,
@@ -4038,7 +4038,7 @@ fn setvar_value(
         return owned_copy(&digits[start..]);
     }
     if let Some(template) = setvar.value {
-        return expand_template(generation, request, tx, template, member_limit, json_budget);
+        return expand_template::<true>(generation, request, tx, template, member_limit, json_budget);
     }
     Ok(Vec::new())
 }
@@ -5180,11 +5180,12 @@ fn operator_template_operand<'g>(
 ) -> Result<Cow<'g, [u8]>, RuntimeError> {
     match static_template_operand(generation, template, limit)? {
         Some(value) => Ok(Cow::Borrowed(value)),
-        None => expand_template(generation, request, tx, template, limit, json_budget).map(Cow::Owned),
+        None => expand_template::<true>(generation, request, tx, template, limit, json_budget).map(Cow::Owned),
     }
 }
 
-fn expand_template(
+// Validation still resolves and meters every macro, but need not retain its bytes.
+fn expand_template<const RETAIN_OUTPUT: bool>(
     generation: &CompiledGeneration,
     request: &RequestState,
     tx: &TxState,
@@ -5206,14 +5207,15 @@ fn expand_template(
         .get(template.segment_start..end)
         .ok_or(RuntimeError::GenerationInvariant)?;
     let mut output = Vec::new();
-    output
-        .try_reserve(template.static_bytes.min(limit))
-        .map_err(|_| RuntimeError::Allocation)?;
+    if RETAIN_OUTPUT {
+        output
+            .try_reserve(template.static_bytes.min(limit))
+            .map_err(|_| RuntimeError::Allocation)?;
+    }
+    let mut expanded_len = 0_usize;
     for segment in segments {
-        match segment.kind {
-            super::CompiledSegmentKind::Literal(range) => {
-                append_runtime(&mut output, generation_bytes(&generation.bytes, range)?, limit)?;
-            }
+        let value = match segment.kind {
+            super::CompiledSegmentKind::Literal(range) => generation_bytes(&generation.bytes, range)?,
             super::CompiledSegmentKind::Macro(macro_id) => {
                 let reference = *generation
                     .macros
@@ -5229,8 +5231,12 @@ fn expand_template(
                     key,
                     json_budget.as_deref_mut(),
                 )?;
-                append_runtime(&mut output, value.unwrap_or_default(), limit)?;
+                value.unwrap_or_default()
             }
+        };
+        expanded_len = checked_runtime_append(expanded_len, value.len(), limit)?;
+        if RETAIN_OUTPUT {
+            output.extend_from_slice(value);
         }
     }
     Ok(output)
@@ -5300,12 +5306,6 @@ fn checked_runtime_append(current: usize, added: usize, limit: usize) -> Result<
         return Err(RuntimeError::ValueByteLimit { actual, limit });
     }
     Ok(actual)
-}
-
-fn append_runtime(output: &mut Vec<u8>, value: &[u8], limit: usize) -> Result<(), RuntimeError> {
-    checked_runtime_append(output.len(), value.len(), limit)?;
-    output.extend_from_slice(value);
-    Ok(())
 }
 
 pub(super) fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
