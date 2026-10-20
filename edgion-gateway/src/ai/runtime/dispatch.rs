@@ -414,7 +414,7 @@ fn prepare_ready_attempt(
         candidate.effective_policy.clone(),
         candidate.backend_tls_policy.clone(),
         candidate.adaptive.clone(),
-        credential_outlier.clone(),
+        credential_outlier,
         selected.credential,
         credential.name.clone(),
         candidate.weight,

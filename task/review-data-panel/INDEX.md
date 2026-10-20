@@ -10174,3 +10174,22 @@ and nine Common egress tests (19 total), formatting, workspace all-target
 check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
 No new projection implementation, production-loopback test, live DNS exchange
 or performance benchmark ran.
+
+## Move the prepared credential outlier handle into selection
+
+AI attempt preparation now moves its local credential outlier handle into
+SelectedAiBackend instead of cloning it and dropping the unused local. The
+initial clone from the candidate remains necessary to give the prepared
+selection its own generation-stable handle. Admission ownership is unchanged.
+
+For a present handle this removes one increment and decrement for each of its
+two Arc fields. It does not remove a payload allocation or establish a measured
+throughput gain. The handle has no custom Drop, and the candidate retains the
+original state owners through construction and preparation failures. No policy,
+ejection lock, cooldown, retry, credential or observability behavior changes.
+
+Fresh verification passed 35 dispatch, 17 credential outlier and 25 attempt
+runtime tests (77 total), formatting, workspace all-target check/Clippy and the
+seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No new test, live provider/Redis exchange or throughput benchmark ran.
