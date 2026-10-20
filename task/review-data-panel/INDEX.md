@@ -9492,3 +9492,25 @@ redesigned. The [deferred investigation](routing-04-header-name-preparation.md)
 records this CPU/storage tradeoff, constructor scope and semantic acceptance.
 HTTP and gRPC unknown-type policies differ and must not be merged accidentally.
 No runtime change or measured performance improvement is claimed.
+
+## Fill HTTP radix candidates directly from traversal
+
+The canonical path radix extended DFS now exposes for_each_match_ext. Its existing
+match_all_ext collection API delegates to the same traversal for parent guards,
+access policy and other collection consumers. HTTP ordered_candidates consumes
+the visitor directly, eliminating the intermediate match-result SmallVec and
+its spill allocation above eight results. The DFS stack and final candidate
+buffer retain their existing inline capacities and can still allocate.
+
+Node/value traversal order, empty parameter rejection, segment boundary kinds,
+invalid-bucket skipping and final integer-rank sorting are unchanged. No early
+winner selection, route-result cache, new dependency or policy change is added.
+Explicit expected sequences cover static/parameter branches, full/boundary/partial
+matches, empty and missing paths, empty trees, and twelve matching prefixes.
+No throughput or universal allocation-free claim is made.
+
+Fresh verification passed all 160 algorithm-library tests, 34 Gateway match-engine
+tests, 19 HTTP match-unit tests, 51 HTTP conf-handler tests and 22 request access
+policy tests. Formatting, workspace all-target check/Clippy and the seven agent-doc,
+SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout and gateway
+no-tracing guards passed. Existing unrelated Clippy warnings remain.

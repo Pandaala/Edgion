@@ -403,9 +403,17 @@ impl PathRadixTree {
     /// without re-parsing the path.
     pub fn match_all_ext(&self, path: &str) -> SmallVec<[(u32, PathMatchKind); 8]> {
         let mut results = SmallVec::<[(u32, PathMatchKind); 8]>::new();
+        self.for_each_match_ext(path, |value, kind| results.push((value, kind)));
+        results
+    }
 
+    /// Visit every matching value and its boundary kind in traversal order.
+    ///
+    /// Uses the same traversal as [`Self::match_all_ext`] without collecting an
+    /// intermediate result buffer. The traversal stack may still spill to heap.
+    pub fn for_each_match_ext(&self, path: &str, mut visit: impl FnMut(u32, PathMatchKind)) {
         if self.nodes.is_empty() {
-            return results;
+            return;
         }
 
         let mut stack = SmallVec::<[(usize, &[u8]); 16]>::new();
@@ -438,7 +446,7 @@ impl PathRadixTree {
                     PathMatchKind::PartialSegment
                 };
                 for &v in self.get_node_values(node_idx) {
-                    results.push((v, kind));
+                    visit(v, kind);
                 }
             }
 
@@ -459,8 +467,6 @@ impl PathRadixTree {
                 }
             }
         }
-
-        results
     }
 }
 

@@ -167,3 +167,52 @@ fn test_match_all_prefixes_still_works() {
     assert!(results.contains(&1), "Should match prefix /api");
     assert!(results.contains(&2), "Should match prefix /api/users");
 }
+
+#[test]
+fn visitor_preserves_branch_value_and_boundary_order() {
+    use PathMatchKind::{FullyConsumed as Full, PartialSegment as Partial, SegmentBoundary as Boundary};
+
+    let mut builder = PathRadixBuilder::new();
+    for (path, value) in [("/x/:id", 1), ("/x/:id/tail", 2), ("/x/fixed", 3), ("/x/", 4)] {
+        builder.insert(path, value).unwrap();
+    }
+    let tree = builder.freeze().unwrap();
+    for (path, expected) in [
+        (
+            "/x/fixed/tail",
+            vec![(4, Boundary), (1, Boundary), (2, Full), (3, Boundary)],
+        ),
+        ("/x/fixedly", vec![(4, Boundary), (1, Full), (3, Partial)]),
+        ("/x/", vec![(4, Full)]),
+        ("/x//tail", vec![(4, Boundary)]),
+        ("/missing", vec![]),
+        ("", vec![]),
+    ] {
+        let mut visited = Vec::new();
+        tree.for_each_match_ext(path, |value, kind| visited.push((value, kind)));
+        assert_eq!(visited, expected, "{path}");
+        assert_eq!(tree.match_all_ext(path).as_slice(), expected.as_slice(), "{path}");
+    }
+
+    let empty = PathRadixBuilder::new().freeze().unwrap();
+    empty.for_each_match_ext("/x", |_, _| panic!("empty tree yielded a match"));
+}
+
+#[test]
+fn visitor_preserves_more_than_inline_results() {
+    use PathMatchKind::{FullyConsumed, SegmentBoundary};
+
+    let mut builder = PathRadixBuilder::new();
+    let mut path = String::new();
+    let mut expected = Vec::new();
+    for value in 1..=12 {
+        path.push_str("/a");
+        builder.insert(&path, value).unwrap();
+        expected.push((value as u32, if value == 12 { FullyConsumed } else { SegmentBoundary }));
+    }
+    let tree = builder.freeze().unwrap();
+    let mut visited = Vec::new();
+    tree.for_each_match_ext(&path, |value, kind| visited.push((value, kind)));
+    assert_eq!(visited, expected);
+    assert_eq!(tree.match_all_ext(&path).as_slice(), expected.as_slice());
+}

@@ -32,7 +32,7 @@ fn cmp_candidate(
 
 /// Radix tree based route matching engine.
 ///
-/// Uses a single `match_all_ext` tree traversal that returns both the matched
+/// Uses a single `for_each_match_ext` tree traversal that visits both the matched
 /// values and a [`PathMatchKind`] per value. The engine then applies lightweight
 /// filtering:
 /// - **Exact routes**: accepted only when `PathMatchKind::FullyConsumed`
@@ -91,7 +91,7 @@ impl RadixRouteMatchEngine {
 
     /// Match a route for the given request (recommended entry point).
     ///
-    /// Performs a single `match_all_ext` tree traversal, filters candidates by
+    /// Performs a single `for_each_match_ext` tree traversal, filters candidates by
     /// [`PathMatchKind`], orders them by their build-time precedence rank, and runs
     /// deep matching.
     ///
@@ -131,28 +131,27 @@ impl RadixRouteMatchEngine {
     /// plain integer sort: no comparator call, no `String` comparison, and no
     /// lookup into `self.routes`.
     fn ordered_candidates(&self, path: &str) -> SmallVec<[(u32, u32); 8]> {
-        let all_results = self.tree.match_all_ext(path);
         let mut candidates: SmallVec<[(u32, u32); 8]> = SmallVec::new();
 
-        for (tree_value, match_kind) in &all_results {
-            let Some(bucket_idx) = (*tree_value as usize).checked_sub(1) else {
-                continue;
+        self.tree.for_each_match_ext(path, |tree_value, match_kind| {
+            let Some(bucket_idx) = (tree_value as usize).checked_sub(1) else {
+                return;
             };
             let Some(path_indices) = self.tree_value_paths.get(bucket_idx) else {
-                continue;
+                return;
             };
             for &path_idx in path_indices {
                 if let Some(radix_path) = self.radix_paths.get(path_idx as usize) {
-                    if !radix_path.is_prefix_match && *match_kind != PathMatchKind::FullyConsumed {
+                    if !radix_path.is_prefix_match && match_kind != PathMatchKind::FullyConsumed {
                         continue;
                     }
-                    if radix_path.is_prefix_match && *match_kind == PathMatchKind::PartialSegment {
+                    if radix_path.is_prefix_match && match_kind == PathMatchKind::PartialSegment {
                         continue;
                     }
                     candidates.push((radix_path.precedence_rank, path_idx));
                 }
             }
-        }
+        });
 
         candidates.sort_unstable();
         candidates
