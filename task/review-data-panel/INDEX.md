@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Normalized request-body segment ownership](body-07-normalized-segment-ownership.md)
+
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
 
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
@@ -10590,4 +10592,23 @@ Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing unrelated Clippy warnings. Existing memory/disk, segmented scan,
 scan-limit, blocking-context, admission and cancellation cases were retained.
 No new predicate-mirroring test, live transport test or benchmark ran.
+Final independent review passed.
+
+## Defer normalized body-segment ownership
+
+The replace_literal and replace_spans paths build normalized segments through
+the shared splicer, then from_segments allocates a second vector and normalizes
+again before checked length summation. Reusing the first vector could remove
+that normalization walk and allocation, but can retain substantially more
+capacity after deletion/merging. A segment-count limit is not a Vec-capacity
+bound. No payload-copy or measured throughput claim follows from this inspection.
+
+[body-07](body-07-normalized-segment-ownership.md) records the canonical builder
+and retained-capacity decision. Other from_segments callers still need normalizing;
+snapshot retirement and pattern preparation remain separate decisions.
+
+Independent plan review passed. Fresh verification passed 115 request-body and
+29 callback tests, formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. Only documentation changed;
+no alternative builder, allocation probe or live transport behavior was validated.
 Final independent review passed.
