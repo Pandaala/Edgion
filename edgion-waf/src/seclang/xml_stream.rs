@@ -796,7 +796,7 @@ impl XmlStream {
         self.refresh()
     }
     fn prefix_local(&self, name: Span) -> (Span, Span) {
-        match self.span(name).iter().position(|byte| *byte == b':') {
+        match memchr::memchr(b':', self.span(name)) {
             Some(index) => (
                 Span {
                     start: name.start,
@@ -1463,10 +1463,12 @@ fn validate_ncname(bytes: &[u8]) -> Result<(), XmlStreamError> {
     Ok(())
 }
 fn validate_qname(bytes: &[u8]) -> Result<(), XmlStreamError> {
-    for part in bytes.split(|b| *b == b':') {
+    let mut multiple = false;
+    for (index, part) in bytes.split(|b| *b == b':').enumerate() {
         validate_ncname(part)?;
+        multiple |= index > 1;
     }
-    if bytes.iter().filter(|b| **b == b':').count() > 1 {
+    if multiple {
         return Err(XmlStreamError::Syntax);
     }
     Ok(())

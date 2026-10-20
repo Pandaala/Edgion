@@ -11116,3 +11116,26 @@ Fresh verification passed 841 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting and workspace all-target check/Clippy. Existing unrelated
 Clippy warnings remain. Agent-document validation also passed.
 Final independent review passed.
+
+
+## Avoid repeated WAF XML QName delimiter scans
+
+Active XML QName validation now records excess name segments while validating
+them, removing the subsequent full-name colon count. It still validates every
+segment before reporting the excess-segment error: an invalid UTF-8 later segment
+can therefore retain Character precedence over multiple-colon Syntax. QName
+prefix splitting uses the existing pinned memchr dependency for the first colon.
+Span offsets, namespace binding rules, work charges and error order are unchanged.
+
+Independent plan review passed. The new regression passed on the original code
+before edits, then remains an oracle for offset spans, absent/edge/repeated colons,
+valid non-ASCII names and explicit competing errors. It compares validation with
+the frozen original traversal on all length-zero-through-five strings over an
+ASCII-name/digit/colon/invalid-byte alphabet. Surrounding arena delimiters verify
+that prefix search stays within the supplied span. No new allocation, parser
+policy or body owner was introduced; no measured throughput gain is claimed.
+
+Fresh verification passed 842 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

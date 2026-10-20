@@ -735,3 +735,56 @@ fn unprefixed_attribute_uniqueness_uses_lexical_names_with_namespace_declaration
         assert_eq!(parse(input, 1).err(), Some(XmlStreamError::Syntax));
     }
 }
+
+#[test]
+fn qname_delimiters_preserve_first_split_and_validation_error_order() {
+    fn original(bytes: &[u8]) -> Result<(), XmlStreamError> {
+        for part in bytes.split(|b| *b == b':') {
+            validate_ncname(part)?;
+        }
+        if bytes.iter().filter(|b| **b == b':').count() > 1 {
+            return Err(XmlStreamError::Syntax);
+        }
+        Ok(())
+    }
+    for bytes in [
+        b"".as_slice(),
+        b"name",
+        b":name",
+        b"name:",
+        b"a:b",
+        b"a:b:c",
+        b"a::b",
+        "é:ñ".as_bytes(),
+    ] {
+        let mut stream = XmlStream::new(XmlStreamLimits::default());
+        stream.arena.extend_from_slice(b"padding:");
+        let span = Span {
+            start: stream.arena.len(),
+            len: bytes.len(),
+        };
+        stream.arena.extend_from_slice(bytes);
+        stream.arena.extend_from_slice(b":suffix");
+        let (prefix, local) = stream.prefix_local(span);
+        let split = bytes.iter().position(|b| *b == b':');
+        assert_eq!(prefix.start, span.start);
+        assert_eq!(prefix.len, split.unwrap_or(0));
+        assert_eq!(local.start, span.start + split.map_or(0, |at| at + 1));
+        assert_eq!(stream.span(local), &bytes[split.map_or(0, |at| at + 1)..]);
+        assert_eq!(validate_qname(bytes), original(bytes));
+    }
+    assert_eq!(validate_qname(b"a:b:c"), Err(XmlStreamError::Syntax));
+    assert_eq!(validate_qname(b"a:b:\xff"), Err(XmlStreamError::Character));
+    assert_eq!(validate_qname(b"a::\xff"), Err(XmlStreamError::Syntax));
+    let alphabet = [b'a', b':', b'1', 0xff];
+    for len in 0..=5 {
+        for mut encoded in 0..4_usize.pow(len) {
+            let mut bytes = vec![0; len as usize];
+            for byte in &mut bytes {
+                *byte = alphabet[encoded % 4];
+                encoded /= 4;
+            }
+            assert_eq!(validate_qname(&bytes), original(&bytes), "{bytes:?}");
+        }
+    }
+}
