@@ -8433,3 +8433,22 @@ Baseline and final verification each passed eight response-head tests and seven
 content-type tests. Formatting, workspace check/Clippy and seven repository guards
 passed with existing unrelated Clippy warnings. This saves unnecessary scanning
 on rejected heads, not allocations; no throughput benchmark or full suite ran.
+
+## Borrow Guardrail response Content-Type
+
+Guardrail response admission now reads Content-Type directly from the canonical
+borrowed response header map instead of materializing a temporary String through
+get_response_header. The first field, HeaderValue::to_str rejection and shared
+SSE classifier remain unchanged. The borrow ends before mutable session access;
+admission order, encoding checks, failure policy and processor ownership are
+unchanged. This removes a temporary copy for nonempty accepted text, not all
+plugin allocations.
+
+A real PingoraSessionAdapter regression passed before and after the source change.
+Its ten cases cover missing/empty fields, mixed case, parameters, wrong media
+types, duplicate first-value selection, invalid bytes and non-ASCII UTF-8 text.
+It checks processor admission versus 503 and unchanged response headers, using
+an in-memory duplex session without an outbound call. Final verification passed
+two Guardrail plugin tests and seven content-type tests, formatting, workspace
+check/Clippy and seven repository guards with existing unrelated Clippy warnings.
+No throughput benchmark or full suite ran.

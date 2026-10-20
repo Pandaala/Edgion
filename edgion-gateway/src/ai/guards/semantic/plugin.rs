@@ -153,8 +153,9 @@ impl UpstreamResponse for Guardrail {
         };
         let status = session.get_response_status().unwrap_or(0);
         let content_type_ok = session
-            .get_response_header("content-type")
-            .as_deref()
+            .response_header_map()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
             .is_some_and(is_sse_content_type);
         let encoding_ok = response_is_identity_encoded(session.response_header_map());
         let canonical_ai = session
