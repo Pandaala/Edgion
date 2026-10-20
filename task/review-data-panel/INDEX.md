@@ -8730,3 +8730,24 @@ benchmarks ran in this documentation-only batch.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 checks passed with existing unrelated warnings. Final independent code-evidence
 and knowledge review passed.
+
+## Reuse the CORS request-entry Origin lookup
+
+The request filter now passes its initial borrowed textual Origin directly to
+`get_validated_origin`. Previously the presence check and that helper each
+looked up and text-validated the same immutable header with no intervening
+mutation or await. The helper retains direct config allowance and ACAO selection;
+accepted echoes own their output and the standard star borrows static storage
+before later mutable session operations. Missing/non-text inputs still skip
+without logging. Preflight and timing-origin reads remain unchanged.
+
+Independent plan review passed. Baseline and final Gateway CORS-filtered runs
+passed 45 tests each. The existing denied-GET test now requires one header-map
+read; the adapted allocation matrix retains absent/non-text/denied/star/echo
+cases. Formatting, workspace all-target check/Clippy and seven guards passed
+with existing unrelated warnings. The owning knowledge page distinguishes its
+historical session-taking signature from the current borrowed input.
+
+This removes one duplicate lookup and text validation for present textual
+Origins, not a buffer allocation. No full suite or throughput benchmark ran.
+Final independent code and knowledge review passed.

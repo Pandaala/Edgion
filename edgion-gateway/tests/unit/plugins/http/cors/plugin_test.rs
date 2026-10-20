@@ -81,7 +81,9 @@ async fn test_origin_not_allowed() {
     let mut plugin_log = PluginLog::new("Cors");
 
     mock_session.expect_get_method().return_const("GET".to_string());
-    setup_header_mocks(&mut mock_session, &[("origin", "https://evil.com")]);
+    let mut headers = http::HeaderMap::new();
+    headers.insert("origin", http::HeaderValue::from_static("https://evil.com"));
+    mock_session.expect_request_header_map().times(1).return_const(headers);
 
     let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -351,9 +353,18 @@ fn origin_selection_copies_only_the_selected_accepted_value() {
         session.expect_request_header_map().return_const(map);
         session.expect_header_value().never();
         // Keep mock initialization outside the allocation measurement.
-        assert_eq!(cors.get_validated_origin(&mut session).as_deref(), expected);
-        let (actual, calls) =
-            crate::test_allocation_counter::count_allocations(|| cors.get_validated_origin(&mut session));
+        assert_eq!(
+            session
+                .header_str("origin")
+                .and_then(|origin| cors.get_validated_origin(origin))
+                .as_deref(),
+            expected
+        );
+        let (actual, calls) = crate::test_allocation_counter::count_allocations(|| {
+            session
+                .header_str("origin")
+                .and_then(|origin| cors.get_validated_origin(origin))
+        });
         assert_eq!(actual.as_deref(), expected);
         assert_eq!(calls, usize::from(expected.is_some_and(|value| value != "*")));
     }

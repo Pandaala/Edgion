@@ -81,9 +81,7 @@ impl Cors {
     /// Get the validated origin (returns Some(value) if allowed, None if rejected).
     /// Orchestrates the allow/deny check (`CorsConfig::is_origin_allowed`) and the
     /// ACAO value selection ([`Cors::select_acao_value`]).
-    fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<Cow<'static, str>> {
-        let origin = session.header_str("origin")?;
-
+    fn get_validated_origin(&self, origin: &str) -> Option<Cow<'static, str>> {
         if !self.config.is_origin_allowed(origin) {
             return None;
         }
@@ -236,12 +234,12 @@ impl RequestFilter for Cors {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if session.header_str("origin").is_none() {
+        let Some(origin) = session.header_str("origin") else {
             // No Origin header means same-origin request, skip CORS
             return PluginRunningResult::GoodNext;
-        }
+        };
 
-        let Some(allowed_origin) = self.get_validated_origin(session) else {
+        let Some(allowed_origin) = self.get_validated_origin(origin) else {
             plugin_log.push("origin match:deny");
             // For preflight with non-matching origin, return 204 directly
             // to avoid forwarding a useless OPTIONS request to the backend.

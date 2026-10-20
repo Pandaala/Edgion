@@ -56,8 +56,9 @@ Verify before closing such a re-report:
 - Historical source finding (source queue removed): `tasks/todo/rfc-review/rfc-refactor-cookie-auth-02-*` (closed)
 - Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a5.md → NC-A5-03` (CONFIRM)
 - The finding's stale snapshot claimed the signature was
-  `get_validated_origin(&self, origin: &str)`; the real signature takes
-  `session: &mut dyn PluginSession`. The "two concerns mixed" observation was
+  `get_validated_origin(&self, origin: &str)`; the implementation at that time took
+  `session: &mut dyn PluginSession`. The subsequent request-input reuse below
+  intentionally changes it to `origin: &str`. The "two concerns mixed" observation was
   still accurate; the over-scoped wrapper + `has_credentials` parts were not.
 
 ## Resolution references
@@ -69,8 +70,10 @@ Verify before closing such a re-report:
 
 The selector accepts a borrowed origin, borrows the static star for the standard
 wildcard, and owns an echoed origin.
-`get_validated_origin` reads the canonical borrowed header accessor and checks
-allowance before copying. Denied, absent and non-text origins produce no source
+The request entry reads the canonical borrowed header accessor once for presence
+and passes that same `&str` into `get_validated_origin`, which checks allowance
+before copying. There is no intervening request mutation or await. Later
+preflight and timing-header reads retain their existing order and behavior. Denied, absent and non-text origins produce no source
 copy; a nonempty accepted echo has one owned output, while the selected star
 needs no allocation. Both outputs survive subsequent session mutation and
 asynchronous preflight handling without borrowing the session.
