@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF final transformation buffer transfer](waf-11-final-transform-buffer-transfer.md)
+
 - [WAF sealed outcome lookup indexing](waf-10-sealed-outcome-lookup-index.md)
 
 - [WAF profile capture-hit indexing](waf-09-profile-capture-hit-index.md)
@@ -11214,4 +11216,20 @@ Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
 90 Gateway WAF tests, formatting, workspace all-target check/Clippy and agent-doc
 validation. Existing unrelated Clippy warnings remain. These checks verify the
 current implementation, not an alternative lookup index.
+Final independent review passed.
+
+## WAF final transformation transfer review
+
+Non-multiMatch scratch-backed output already arrives as an owned final buffer,
+but successful ordinary and structured dynamic matching copies its bytes again.
+[waf-11](waf-11-final-transform-buffer-transfer.md) records the possible transfer
+and its longer-lived spare-capacity tradeoff. Existing outer-vector and logical
+payload accounting must not be mistaken for complete heap-capacity admission.
+Static sealed handles and local SemanticLength digits are outside this candidate.
+Independent plan review passed. No runtime change or measured speedup is claimed.
+
+Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
+90 Gateway WAF tests, formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. No transfer prototype or
+benchmark ran; current tests do not establish an alternative's memory behavior.
 Final independent review passed.
