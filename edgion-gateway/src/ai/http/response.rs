@@ -63,15 +63,19 @@ pub(crate) fn apply_provider_cooldown(ctx: &mut EdgionHttpContext, upstream_resp
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
         .filter(|value| value.len() <= MAX_PROVIDER_RESET_HINT_BYTES);
-    let reset_hint = ctx
+    let provider = ctx
         .ai_state()
         .and_then(|state| state.request.as_ref())
-        .and_then(|ai| provider_reset_hint(&upstream_response.headers, ai.provider, now));
+        .map(|ai| ai.provider);
     let cooldown = ctx.ai_state_mut().and_then(|state| {
         state.attempt_runtime.active_mut().and_then(|active| {
             retry_after
                 .and_then(|value| active.apply_retry_after(value, now))
-                .or_else(|| reset_hint.and_then(|hint| active.apply_cooldown(hint)))
+                .or_else(|| {
+                    provider
+                        .and_then(|provider| provider_reset_hint(&upstream_response.headers, provider, now))
+                        .and_then(|hint| active.apply_cooldown(hint))
+                })
         })
     });
 

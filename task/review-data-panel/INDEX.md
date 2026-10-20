@@ -10130,3 +10130,30 @@ Fresh baseline verification passed 36 outlier, 41 coordinator, nine connect-fail
 and 11 proxy-error tests (97 total), formatting, workspace all-target check/Clippy
 and agent-doc validation. Existing unrelated Clippy warnings remain. No new-handle
 concurrency test, live integration or performance measurement ran.
+
+## Parse provider reset hints only when cooldown fallback needs them
+
+The raw provider cooldown hook now captures the Copy provider label and delays
+reset-header parsing until an active attempt declines Retry-After. An accepted
+Retry-After or absent active attempt skips the previously discarded reset
+parsing. The canonical parsers are pure; invalid duration parsing can allocate
+an error String even though this caller keeps only an Option.
+
+The same wall-clock sample, bounded header reads, provider-specific header set,
+maximum positive reset selection, cooldown clamping and Retry-After precedence
+remain in use. Header removal and accepted delta-seconds insertion retain their
+order. No new cache, parse grammar, attempt owner or observability is introduced.
+
+The response tests cross real no-Redis admission into cooldown handling for both
+OpenAI labels and Anthropic, including accepted/capped Retry-After and missing,
+invalid or zero fallback. They also check header removal without an active
+attempt, with and without request metadata. An isolated invalid-reset fixture
+establishes parser-error allocation, while the no-active hook skips that work
+without allocating. Active normalization can still allocate; there is no claim
+that the complete cooldown path is allocation-free or faster by a measured rate.
+
+Fresh verification passed six AI-response, 25 attempt-runtime, 17 credential
+outlier and six shared time-parser tests (54 total), formatting, workspace
+all-target check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
+Gateway API transform, unit-layout and gateway no-tracing guards. Existing
+unrelated Clippy warnings remain. No live provider, Redis or throughput test ran.

@@ -3,6 +3,135 @@ use crate::ai::AiProviderLabel;
 use http::{HeaderMap, HeaderValue};
 use std::time::{Duration, SystemTime};
 
+async fn cooldown_context(
+    provider: AiProviderLabel,
+    active: bool,
+) -> (crate::EdgionHttpContext, crate::ai::AiCredentialOutlierHandle) {
+    use crate::ai::runtime::attempt_runtime::{AiAttemptAdmission, AiAttemptAdmissionInput};
+    use crate::ai::runtime::credential_outlier::AiCredentialOutlierStore;
+    use crate::ai::{AiRequestContext, AiUsageShared};
+    use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+    use edgion_resources::resources::edgion_plugins::OnRedisFailure;
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    let store = AiCredentialOutlierStore::new();
+    let target = PolicyTargetKey {
+        target_kind: PolicyTargetKind::EdgionBackend,
+        namespace: "default".into(),
+        name: "provider".into(),
+    };
+    store.configure_backend(target.clone(), None, ["primary".into()]);
+    let handle = store.current_handle(&target).unwrap().capture("primary").unwrap();
+    let mut ctx = crate::EdgionHttpContext::new();
+    let usage = Arc::new(AiUsageShared::default());
+    ctx.ensure_ai_state().request = Some(AiRequestContext {
+        provider,
+        model: "fixture".into(),
+        pricing: None,
+        requested_streaming: false,
+        usage: Arc::clone(&usage),
+        quota_status: None,
+        quota: None,
+    });
+    if active {
+        let state = &mut ctx.ensure_ai_state().attempt_runtime;
+        let admitted = state
+            .admit(AiAttemptAdmissionInput {
+                namespace: "default".into(),
+                backend_uid: "fixture".into(),
+                credential_alias: "primary".into(),
+                backend_name: "default/provider".into(),
+                provider,
+                pricing: None,
+                redis_ref: None,
+                on_redis_failure: OnRedisFailure::Deny,
+                limits: None,
+                estimated_input_tokens: 0,
+                max_output_tokens: 0,
+                usage,
+                eos: Arc::new(AtomicBool::new(false)),
+                outlier: Some(handle.clone()),
+                adaptive: None,
+                circuit_breaker: None,
+                limiter_core: Arc::new(RedisRateLimiter::new()),
+            })
+            .await;
+        let AiAttemptAdmission::Ready(attempt) = admitted else {
+            panic!("fixture must admit without Redis limits");
+        };
+        state.install(attempt);
+    }
+    (ctx, handle)
+}
+
+#[tokio::test]
+async fn cooldown_fallback_preserves_retry_after_precedence_and_normalization() {
+    use crate::backends::outlier_detection::EjectionAdmission;
+    for provider in [
+        AiProviderLabel::OpenAi,
+        AiProviderLabel::OpenAiCompatible,
+        AiProviderLabel::Anthropic,
+    ] {
+        for (retry_after, accepted) in [
+            (Some("2"), Some("2")),
+            (Some("600"), Some("300")),
+            (Some("0"), None),
+            (Some("invalid"), None),
+            (None, None),
+        ] {
+            let (mut ctx, handle) = cooldown_context(provider, true).await;
+            let mut response = pingora_http::ResponseHeader::build(429, None).unwrap();
+            response.insert_header("x-ratelimit-reset-requests", "250ms").unwrap();
+            response.insert_header("x-ratelimit-reset-tokens", "5s").unwrap();
+            if let Some(value) = retry_after {
+                response.insert_header("retry-after", value).unwrap();
+            }
+            super::apply_provider_cooldown(&mut ctx, &mut response);
+            let expected = accepted.or(if provider == AiProviderLabel::Anthropic {
+                None
+            } else {
+                Some("5")
+            });
+            assert_eq!(
+                response.headers.get("retry-after").map(|value| value.to_str().unwrap()),
+                expected
+            );
+            assert_eq!(response.headers["x-ratelimit-reset-tokens"], "5s");
+            assert_eq!(
+                matches!(handle.admit(), EjectionAdmission::Rejected),
+                expected.is_some()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cooldown_skips_unused_reset_parsing_without_an_active_attempt() {
+    for has_request in [false, true] {
+        let (mut ctx, _) = cooldown_context(AiProviderLabel::OpenAi, false).await;
+        if !has_request {
+            ctx.ensure_ai_state().request = None;
+        }
+        let mut response = pingora_http::ResponseHeader::build(429, None).unwrap();
+        response.insert_header("retry-after", "2").unwrap();
+        response.insert_header("x-ratelimit-reset-tokens", "invalid").unwrap();
+        let (hint, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+            provider_reset_hint(&response.headers, AiProviderLabel::OpenAi, SystemTime::UNIX_EPOCH)
+        });
+        assert!(hint.is_none());
+        assert!(
+            before.calls > 0,
+            "fixture must exercise discarded parser error allocation"
+        );
+        let (_, after) = crate::test_allocation_counter::count_allocation_stats(|| {
+            super::apply_provider_cooldown(&mut ctx, &mut response);
+        });
+        assert!(!response.headers.contains_key("retry-after"));
+        assert_eq!(after.calls, 0);
+    }
+}
+
 #[test]
 fn openai_reset_headers_accept_delta_and_choose_the_later_bound() {
     let mut headers = HeaderMap::new();
