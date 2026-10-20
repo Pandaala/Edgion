@@ -9629,3 +9629,25 @@ tests, formatting, workspace all-target check/Clippy and documentation validatio
 Existing unrelated warnings remain. No runtime change or performance gain is
 claimed, and these unit checks do not constitute new real-network cancellation
 or complete protocol coverage.
+
+## Reuse candidate trailer-name presence during ExtProc mutation
+
+ExtProc clones the original trailer map immediately before apply_mutation.
+Every set operation appends, inserts or leaves names unchanged, and all removals
+run after the complete set loop. The candidate therefore contains every original
+name throughout that loop. Its already-computed exists result is sufficient to
+detect an introduced name; the second original-map lookup and private helper's
+original-map parameter are removed.
+
+Declaration-policy checks retain the same order and count, including an absent
+OverwriteIfExists name whose action would otherwise be a no-op. Existing-name
+sets followed by removal still require no new-name admission; repeated appends
+to a newly admitted name check policy once and preserve both values. Tests cover
+all four actions, absent denial, mixed-case identity and set-before-remove order.
+The staging clone, byte validation, failure policy and atomic publication remain.
+This removes a redundant lookup without a measured throughput claim.
+
+Fresh verification passed 146 ExtProc and 11 upstream-trailer unit tests.
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain.

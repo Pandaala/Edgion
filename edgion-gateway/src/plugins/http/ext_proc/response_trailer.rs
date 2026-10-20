@@ -173,7 +173,7 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             .filter(|mutation| !mutation.set_headers.is_empty() || !mutation.remove_headers.is_empty())
         {
             let mut candidate = trailers.clone();
-            if apply_mutation(&mut candidate, trailers, mutation, session).is_err() {
+            if apply_mutation(&mut candidate, mutation, session).is_err() {
                 return self.finish_failure(session, log, "bad-verdict");
             }
             Some(candidate)
@@ -278,7 +278,6 @@ fn is_forbidden_trailer_name(name: &str) -> bool {
 
 fn apply_mutation(
     candidate: &mut HeaderMap,
-    original: &HeaderMap,
     mutation: &HeaderMutation,
     session: &dyn ResponseTrailerSession,
 ) -> Result<(), ()> {
@@ -299,8 +298,9 @@ fn apply_mutation(
         let value = HeaderValue::from_bytes(raw).map_err(|_| ())?;
         let action = HeaderAppendAction::try_from(option.append_action).map_err(|_| ())?;
         let exists = candidate.contains_key(&name);
-        let introduces_name = !original.contains_key(&name) && !exists;
-        if introduces_name && !session.downstream_response_trailer_name_allowed(&name) {
+        // The candidate starts as the original map; all removals follow all sets,
+        // so an absent candidate name is also absent from the original map.
+        if !exists && !session.downstream_response_trailer_name_allowed(&name) {
             return Err(());
         }
         match action {

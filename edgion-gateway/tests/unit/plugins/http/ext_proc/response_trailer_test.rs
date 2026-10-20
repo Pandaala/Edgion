@@ -733,3 +733,55 @@ fn trailer_status_validation_retains_whole_map_gates() {
     map.insert("host", HeaderValue::from_static("example.test"));
     assert!(validate_trailer_map(&map, true).is_err());
 }
+
+#[test]
+fn set_actions_preserve_name_admission_before_removals() {
+    for action in [
+        HeaderAppendAction::AppendIfExistsOrAdd,
+        HeaderAppendAction::OverwriteIfExistsOrAdd,
+        HeaderAppendAction::AddIfAbsent,
+        HeaderAppendAction::OverwriteIfExists,
+    ] {
+        let mut existing = HeaderMap::new();
+        existing.insert("x-old", HeaderValue::from_static("old"));
+        let mut no_admission = MockPluginSession::new();
+        no_admission.expect_downstream_response_trailer_name_allowed().times(0);
+        let mutation = HeaderMutation {
+            set_headers: vec![option("X-Old", b"new", action)],
+            remove_headers: vec!["x-old".into()],
+        };
+        apply_mutation(&mut existing, &mutation, &no_admission).unwrap();
+        assert!(existing.is_empty());
+
+        let mut absent = HeaderMap::new();
+        let mut denied = MockPluginSession::new();
+        denied
+            .expect_downstream_response_trailer_name_allowed()
+            .withf(|name| name == "x-old")
+            .times(1)
+            .return_const(false);
+        assert!(apply_mutation(&mut absent, &mutation, &denied).is_err());
+        assert!(absent.is_empty());
+    }
+}
+
+#[test]
+fn repeated_sets_admit_a_new_name_only_once() {
+    let mut candidate = HeaderMap::new();
+    let mut admitted = MockPluginSession::new();
+    admitted
+        .expect_downstream_response_trailer_name_allowed()
+        .withf(|name| name == "x-new")
+        .times(1)
+        .return_const(true);
+    let mutation = HeaderMutation {
+        set_headers: vec![
+            option("X-New", b"first", HeaderAppendAction::AppendIfExistsOrAdd),
+            option("x-new", b"second", HeaderAppendAction::AppendIfExistsOrAdd),
+        ],
+        remove_headers: Vec::new(),
+    };
+    apply_mutation(&mut candidate, &mutation, &admitted).unwrap();
+    let values: Vec<_> = candidate.get_all("x-new").iter().map(HeaderValue::as_bytes).collect();
+    assert_eq!(values, vec![b"first".as_slice(), b"second".as_slice()]);
+}
