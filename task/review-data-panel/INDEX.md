@@ -8627,3 +8627,23 @@ This removes the singleton address-vector allocation on literal OIDC admission.
 URL parsing and metric machinery may still allocate. No additional allocation
 was inferred for the old consuming filter collect, which may reuse its input
 storage. No throughput benchmark, live DNS/provider test or full suite ran.
+
+## Reject oversized OIDC header values before scanning their bytes
+
+The request-filter session and bearer paths reach `apply_upstream_headers`, then
+`try_set_header_with_limits`. Its per-value byte-length rejection now precedes
+the CR/LF/NUL safety scan. Both checks are pure and silently return without
+writing a header or changing the budget. Admitted values still pass the same
+safety scan, total-budget check and canonical sensitive-header writer; only a
+successful write consumes budget. No total-budget arithmetic was moved.
+
+Independent plan review passed. The existing three upstream-header tests passed
+before and after the change, covering accepted sensitive headers, oversized
+values and unsafe values. The failed-write budget regression also passed after
+the change. Formatting, workspace all-target check/Clippy and seven project
+guards passed with existing unrelated Clippy warnings. Final independent review
+passed.
+
+The benefit is limited to skipping the linear safety scan for a value already
+over its configured limit. No allocation reduction or general throughput gain
+is claimed; no network test or full suite ran.

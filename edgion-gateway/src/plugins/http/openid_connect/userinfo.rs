@@ -16,10 +16,10 @@ impl OpenidConnect {
         let max_value = self.config.max_header_value_bytes as usize;
         let max_total = self.config.max_total_header_bytes as usize;
 
-        if !Self::is_header_value_safe(header_value) {
+        if header_value.len() > max_value {
             return;
         }
-        if header_value.len() > max_value {
+        if !Self::is_header_value_safe(header_value) {
             return;
         }
 
