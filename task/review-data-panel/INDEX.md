@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below; deeper WAF rule/parser execution, other concrete streamed handlers and remaining storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Remaining finalizers and retry consumers remain open. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Remaining finalizers, Redis sink internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
@@ -9932,3 +9932,38 @@ Fresh verification passed 52 usage, 13 accounting-finalizer and 25 attempt-runti
 tests (90 total). Formatting, workspace all-target check/Clippy and agent-doc
 validation passed; existing unrelated warnings remain. No concurrency stress,
 live provider/Redis exchange or throughput benchmark ran.
+
+
+## Terminal coordination ownership audit
+
+Revalidated logging's AI finalization handoff, request-local response terminal
+arbitration and the quota accumulator/request/worker implementation. The
+ResponseTerminalState transitions operate on scalar Copy values without heap
+allocation; this does not describe the complete logging callback. No new
+behavior-preserving runtime optimization was established in these subpaths.
+
+Quota accumulator Arcs support independent context, worker and processor owners.
+The request handle retains timeout abort, completed-worker join and drop abort.
+The worker preserves coalesced threshold notifications, independent flush/lease
+timers, sent-high-water publication before awaiting the sink, conservative unknown
+final totals and authoritative downward corrections. Its final retry deadline
+and the outer wait timeout are separate; the retry check alone does not bound
+an individual sink await. Removing these owners or waits is not a mechanical
+clone-to-borrow optimization.
+
+The disabled token-metric writer returns before registration, but the caller can
+still traverse borrowed attempt totals. No compiled-code or benchmark evidence
+establishes a benefit from merely moving that guard, so no such change is made.
+There is no claim that all disabled-path preparation is free or compiler-elided.
+
+Existing decisions remain open: [worker future representation](quota-01-worker-future-representation.md),
+[accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md), and
+[attached summary rendering](log-05-attached-summary-rendering.md). This record
+narrows terminal coordination coverage only; Redis sink internals, other
+finalizers and retry consumers retain their remaining audit scope.
+
+Fresh verification passed 27 quota, 3 terminal-state, 11 terminal-logging and
+13 accounting-finalizer tests (54 total). Formatting, workspace all-target
+check/Clippy and agent-doc validation passed; existing unrelated warnings remain.
+No runtime or test files changed. No live Redis/provider, concurrency stress or
+throughput measurement ran.
