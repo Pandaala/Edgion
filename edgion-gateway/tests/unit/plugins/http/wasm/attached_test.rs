@@ -276,3 +276,56 @@ async fn attached_body_deadline_discards_binding_and_preserves_later_chunks() {
     assert!(state.owners.lock().finish());
     assert_eq!(entry.pool_len(), 0);
 }
+
+#[tokio::test]
+async fn trailer_snapshot_bounds_preserve_guest_dispatch_and_cleanup() {
+    for (fields, bytes, accepted) in [
+        (1023, None, true),
+        (1024, None, true),
+        (1025, None, false),
+        (2, Some(65535), true),
+        (2, Some(65536), true),
+        (2, Some(65537), false),
+    ] {
+        let plugin = plugin();
+        let entry = plugin.runtime.get_or_load().await.unwrap();
+        let (mut session, state) = session("limits", false);
+        session
+            .expect_record_error()
+            .withf(|error| *error == EdgionErrorCode::WasmExecutionError)
+            .times(usize::from(!accepted))
+            .return_const(());
+        start(&plugin, &mut session).await;
+        let mut observer = state.trailers.lock().pop().unwrap();
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert("x-lifecycle-trailer", "limits".parse().unwrap());
+        if let Some(bytes) = bytes {
+            let base = "x-lifecycle-trailer".len() + "limits".len() + "x-pad".len();
+            trailers.insert("x-pad", http::HeaderValue::from_str(&"a".repeat(bytes - base)).unwrap());
+            assert_eq!(
+                trailers.iter().map(|(k, v)| k.as_str().len() + v.len()).sum::<usize>(),
+                bytes
+            );
+        } else {
+            for _ in 1..fields {
+                trailers.append("x-extra", "a".parse().unwrap());
+            }
+        }
+        assert_eq!(trailers.len(), fields);
+        let original = trailers.clone();
+        let mut log = PluginLog::new("Wasm");
+        for _ in 0..2 {
+            assert!(matches!(
+                observer
+                    .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
+                    .await,
+                UpstreamTrailerResult::Continue
+            ));
+            assert_eq!(trailers, original);
+        }
+        assert_eq!(counter(&entry, "limits:trailers"), accepted.then_some(1));
+        assert!(state.owners.lock().finish());
+        assert!(state.owners.lock().finish());
+        assert_eq!(counter(&entry, "limits:done"), accepted.then_some(1));
+    }
+}

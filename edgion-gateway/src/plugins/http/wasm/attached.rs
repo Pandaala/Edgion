@@ -189,10 +189,16 @@ impl UpstreamResponseTrailer for WasmResponseObserver {
             if let Some(trailers) = trailers.filter(|_| self.hooks.trailers) {
                 // Transport limits header bytes; retain an independently bounded
                 // callback snapshot before copying its values into host memory.
-                let bytes = trailers.iter().try_fold(0usize, |n, (k, v)| {
-                    n.checked_add(k.as_str().len())?.checked_add(v.len())
-                });
-                if bytes.is_none_or(|n| n > 64 * 1024) || trailers.len() > 1024 {
+                let admitted = trailers.len() <= 1024
+                    && trailers
+                        .iter()
+                        .try_fold(0usize, |n, (k, v)| {
+                            n.checked_add(k.as_str().len())?
+                                .checked_add(v.len())
+                                .filter(|bytes| *bytes <= 64 * 1024)
+                        })
+                        .is_some();
+                if !admitted {
                     session.record_error(EdgionErrorCode::WasmExecutionError);
                     return UpstreamTrailerResult::Continue;
                 }

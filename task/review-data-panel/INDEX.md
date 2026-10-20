@@ -11379,3 +11379,30 @@ upstream-trailer and six response-callback tests (136 total), formatting,
 workspace all-target check/Clippy and agent-doc validation. Existing unrelated
 Clippy warnings remain. No live upstream exchange or benchmark ran.
 Final independent review passed.
+
+## Stop oversized Wasm trailer snapshot scans at admission
+
+The attached Wasm trailer observer now rejects an excessive field count before
+scanning byte lengths, and stops its checked byte fold at the first prefix over
+64 KiB. The existing limits remain 1024 values and 64 KiB of raw name/value bytes.
+Lengths are nonnegative and the scan is pure, so rejection remains certain once
+either cap is exceeded. Lossy snapshot conversion and its separate representation
+costs are unchanged; no new heap-bound claim is made.
+
+Binding acquisition, hook/terminal gates, read-only frame creation and successful
+guest dispatch keep their order. Rejection records the same diagnostic and drops
+the incomplete loan, leaving subsequent callbacks inert. No snapshot is copied
+on rejection, and original trailers remain untouched. This does not modify body
+callbacks, runtime budgets, the fixture or independent response-header ownership.
+
+Independent plan review passed. The new real-SDK fixture regression passed before
+production edits. It checks 1023/1024/1025 repeated fields and 65535/65536/65537 raw
+bytes, exactly-once accepted guest dispatch and done, no guest dispatch/done after
+rejection, inert repeat calls and unchanged trailers. Benefit is limited to avoiding
+remaining scans on oversized maps; no measured throughput claim is made.
+
+Fresh verification passed all 265 Gateway Wasm tests serially and 11 upstream
+trailer tests (276 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.
