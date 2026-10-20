@@ -10247,3 +10247,28 @@ and 22 adaptive tests (80 total), formatting, workspace all-target check/Clippy
 and all seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No live provider or performance benchmark ran.
+
+## Reserve complete provider URI capacity before composition
+
+provider_uri now computes the final byte length, including a retained query,
+before appending the existing prefix, separator, path and query into one String.
+This avoids growing a path-only buffer when the query exceeds its spare capacity.
+The provider-specific path, slash trimming and query-preservation rules remain
+unchanged, including Some("") producing a trailing question mark and converted
+non-native Anthropic requests omitting the query.
+
+The output matrix covers all three providers, both native flags, empty and
+slash-heavy prefixes/paths, permitted multibyte text and absent/empty/encoded
+queries. A long-query fixture compares output and allocation requests with the
+former path-format-then-append construction. The change affects only composition:
+session URI parsing, native-header validation and credential isolation retain
+their original ownership and ordering. No complete-provider-path allocation-free
+or throughput claim is made.
+
+Fresh verification passed five provider-connector, 36 dispatch and seven AI HTTP
+attempt tests (48 total). The long-query fixture produces identical bytes with
+one exact-length allocation instead of the former multiple allocation requests.
+Formatting, workspace all-target check/Clippy and all seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No live provider or
+throughput benchmark ran.

@@ -22,6 +22,53 @@ fn provider_uri_uses_canonical_path_and_query() {
         ),
         "/native/v1/messages"
     );
+    for (prefix, path, openai_path, anthropic_path) in [
+        ("", "", "/", "/v1/messages"),
+        ("/", "///chat", "/chat", "/v1/messages"),
+        ("/api///", "//chat", "/api/chat", "/api/v1/messages"),
+        ("api", "chat", "api/chat", "api/v1/messages"),
+        ("/café/", "/π", "/café/π", "/café/v1/messages"),
+    ] {
+        for (provider, native, expected_path, preserves_query) in [
+            (AiProvider::OpenAI, false, openai_path, true),
+            (AiProvider::OpenAI, true, openai_path, true),
+            (AiProvider::OpenAICompatible, false, openai_path, true),
+            (AiProvider::OpenAICompatible, true, openai_path, true),
+            (AiProvider::Anthropic, false, anthropic_path, false),
+            (AiProvider::Anthropic, true, anthropic_path, true),
+        ] {
+            for query in [None, Some(""), Some("a=hello%20world&b=x%26y")] {
+                let mut expected = expected_path.to_owned();
+                if preserves_query {
+                    if let Some(query) = query {
+                        expected.push('?');
+                        expected.push_str(query);
+                    }
+                }
+                assert_eq!(provider_uri(provider, prefix, path, query, native), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_uri_reserves_the_query_before_building_the_path() {
+    let path = "v1/chat/completions";
+    let query = "x".repeat(4096);
+    let (previous, previous_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        let mut uri = format!("/{path}");
+        uri.push('?');
+        uri.push_str(&query);
+        uri
+    });
+    let (actual, actual_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        provider_uri(AiProvider::OpenAICompatible, "", path, Some(&query), false)
+    });
+    assert_eq!(actual, previous);
+    assert_eq!(actual_stats.calls, 1);
+    assert_eq!(actual_stats.requested_bytes, actual.len());
+    assert!(previous_stats.calls > actual_stats.calls);
+    assert!(previous_stats.requested_bytes > actual_stats.requested_bytes);
 }
 
 #[test]

@@ -151,16 +151,14 @@ fn provider_uri(
     };
     let prefix = prefix.trim_end_matches('/');
     let path = downstream_path.trim_start_matches('/');
-    let mut result = if prefix.is_empty() {
-        format!("/{path}")
-    } else {
-        format!("{prefix}/{path}")
-    };
-    if native || provider != AiProvider::Anthropic {
-        if let Some(query) = canonical_query {
-            result.push('?');
-            result.push_str(query);
-        }
+    let query = canonical_query.filter(|_| native || provider != AiProvider::Anthropic);
+    let mut result = String::with_capacity(prefix.len() + 1 + path.len() + query.map_or(0, |value| 1 + value.len()));
+    result.push_str(prefix);
+    result.push('/');
+    result.push_str(path);
+    if let Some(query) = query {
+        result.push('?');
+        result.push_str(query);
     }
     result
 }
