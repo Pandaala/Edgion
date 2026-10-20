@@ -375,6 +375,86 @@ fn data_character_counting_is_opt_in_and_uses_parser_boundaries() {
 }
 
 #[test]
+fn character_observer_segments_match_bytewise_state_transitions() {
+    fn assert_state(actual: &DataCharObserver, expected: &DataCharObserver) {
+        assert_eq!(
+            std::mem::discriminant(&actual.state),
+            std::mem::discriminant(&expected.state)
+        );
+        assert_eq!(actual.matched, expected.matched);
+        assert_eq!(actual.event_has_data, expected.event_has_data);
+        assert_eq!(actual.line_started, expected.line_started);
+        assert_eq!(actual.skip_lf, expected.skip_lf);
+        assert_eq!(actual.utf8.pending, expected.utf8.pending);
+        assert_eq!(actual.utf8.len, expected.utf8.len);
+        assert_eq!(actual.utf8.expected, expected.utf8.expected);
+    }
+
+    let lines: &[&[u8]] = &[
+        b": comment",
+        b"event: \xff",
+        b"id: value",
+        b"retry: 100",
+        b"dat: near miss",
+        b"datax: near miss",
+        b"data : near miss",
+        b"data: h\xc3\xa9",
+        b"data",
+        b"data:",
+        b"data:\xff\xc3x",
+        b"",
+    ];
+    for &line in lines {
+        for split in 0..=line.len() {
+            for ended_with_cr in [false, true] {
+                let mut actual = DataCharObserver::default();
+                let mut expected = DataCharObserver::default();
+                for segment in [b"data: seed".as_slice(), b""] {
+                    actual.feed_segment(segment);
+                    expected.feed_segment(segment);
+                }
+                actual.finish_line(false);
+                expected.finish_line(false);
+                for segment in [&line[..split], &line[split..]] {
+                    let expected_count = segment.iter().fold(0_u64, |count, &byte| {
+                        count.saturating_add(expected.feed_line_byte(byte))
+                    });
+                    assert_eq!(actual.feed_segment(segment), expected_count);
+                    assert_state(&actual, &expected);
+                }
+                assert_eq!(actual.finish_line(ended_with_cr), expected.finish_line(ended_with_cr));
+                assert_state(&actual, &expected);
+                assert_eq!(actual.feed_segment(b"data: next"), expected.feed_segment(b"data: next"));
+                assert_state(&actual, &expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn ignored_character_segments_preserve_framing_degradation_and_malformed_detection() {
+    let mut input = b": ".to_vec();
+    input.extend(std::iter::repeat_n(b'x', 256));
+    input.extend_from_slice(b"\r\nevent: \xff\rid: value\nretry: 10\ndatax: ignored\n");
+    input.extend_from_slice(b"data: a\r\ndata: b\xc3\xa9\n\ndata: x\n\n");
+    for limit in [8, DEFAULT_MAX_PENDING_EVENT_BYTES] {
+        for split in 0..=input.len() {
+            let mut decoder = SseDecoder::new(limit);
+            decoder.enable_data_char_counting();
+            decoder.feed_records(Bytes::copy_from_slice(&input[..split]), |_| {});
+            let first = decoder.take_data_chars();
+            decoder.feed_records(Bytes::copy_from_slice(&input[split..]), |_| {});
+            assert_eq!(first + decoder.finish_data_chars(), 5, "limit={limit}, split={split}");
+            assert_eq!(decoder.degraded(), limit == 8);
+            if limit == DEFAULT_MAX_PENDING_EVENT_BYTES {
+                assert!(decoder.malformed());
+                assert_eq!(decoder.malformed_events(), 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn metadata_charge_accepts_exact_limit_and_rejects_limit_plus_one() {
     let range_size = std::mem::size_of::<ByteRange>();
     let line_capacity = MAX_EVENT_METADATA_BYTES / range_size;

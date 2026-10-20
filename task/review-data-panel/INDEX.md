@@ -8519,3 +8519,26 @@ The change removes an impossible suffix search for fragmented ranges. It adds
 a branch to the sliced lookup and the table is already bounded at 256 handles;
 no universal CPU, allocation or throughput improvement is claimed. No full
 suite or live-provider integration test ran.
+
+## Skip character-counter dispatch for ignored SSE line tails
+
+DataCharObserver::feed_segment now stops processing a segment once its line state
+is Ignore. The old per-byte Ignore arm returns zero without modifying state, and
+only finish_line resets it. The main decoder still validates complete field lines
+and records malformed events. The degraded feed_opaque path still scans framing
+and invokes finish_line, so ignored content does not hide subsequent data fields.
+UTF-8 accounting, semantic newlines, saturation and quota policy are unchanged.
+
+A differential regression compares per-segment counts and every observer field,
+including pending UTF-8 state, with the original bytewise dispatch. It covers
+control fields, data-prefix near misses, empty data, malformed bytes and split
+UTF-8. An actual decoder regression checks every two-way split of a long comment
+followed by an invalid event field and valid data, both normally and after forced
+degradation. It verifies the character total and retained malformed-event signal.
+All 48 SSE module tests passed before the production edit. Final verification
+passed 90 SSE-filtered tests and 52 usage tests, formatting, workspace
+check/Clippy and seven repository guards; existing unrelated warnings remain.
+
+This removes repeated zero-result state dispatch in ignored line tails. Active
+data scanning gains a branch; no universal CPU, allocation or throughput gain is
+claimed. No full suite or live-provider integration test ran.

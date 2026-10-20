@@ -694,6 +694,10 @@ impl DataCharObserver {
     fn feed_segment(&mut self, bytes: &[u8]) -> u64 {
         let mut count = 0_u64;
         for byte in bytes {
+            if matches!(self.state, DataLineState::Ignore) {
+                // Only finish_line can leave this state; the remaining bytes contribute nothing.
+                break;
+            }
             count = count.saturating_add(self.feed_line_byte(*byte));
         }
         count
