@@ -37,7 +37,7 @@ use crate::plugins::http::common::auth_common::{
 };
 use crate::plugins::http::common::outbound::client::extract_ip_literal;
 use crate::plugins::http::common::outbound::egress::{
-    default_block_private, egress_dns_cache_ttl, filter_resolved_addrs, EgressPolicy, EgressResolver,
+    default_block_private, egress_dns_cache_ttl, is_ip_allowed, EgressPolicy, EgressResolver,
 };
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::build_verified_outbound_tls;
@@ -81,14 +81,14 @@ pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), OidcDependencyFai
     let Some(addr) = literal else {
         return Ok(());
     };
-    let admitted = filter_resolved_addrs(
-        vec![addr.ip()],
+    let admitted = is_ip_allowed(
+        addr.ip(),
         EgressPolicy {
             block_private: default_block_private(),
         },
         false,
     );
-    if admitted.is_empty() {
+    if !admitted {
         Err(OidcDependencyFailure::DestinationRejected)
     } else {
         Ok(())

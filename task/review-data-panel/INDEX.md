@@ -8598,3 +8598,32 @@ unrelated warnings remain.
 This skips trailing map entries and state locks after observing the cap; savings
 depend on iteration order. No allocation, throughput or contention benchmark
 claim is made. No full suite or live integration test ran.
+
+## Admit OIDC literal addresses without a singleton vector
+
+OIDC outbound URL admission now calls a scalar Gateway egress adapter instead of
+constructing a one-element Vec and checking the filtered result for emptiness.
+The policy match lives in one common is_ip_allowed_with_observer helper; the
+existing batch filter delegates every address to that same helper. The common
+crate change is supporting work for this Gateway path, not a broader crate audit.
+
+IP classification, mapped IPv6 handling, optional private-address blocking and
+loopback short-circuit order are unchanged. Common unit-test/integration-mode
+exceptions and the Gateway unit-test loopback adaptation remain at their original
+layers. Each dropped address still invokes the binary-owned observer exactly once.
+Bulk filtering keeps input order and duplicates, and does not stop early after
+finding an allowed address. OIDC URL parsing, hostname passthrough, policy loading
+and fixed dependency-error mapping remain unchanged.
+
+The explicit address/observer matrix passed against the old batch implementation.
+It now also checks scalar decisions and drop reasons. Gateway tests exercise the
+adapter's mapped-address and loopback behavior, and the existing four OIDC
+admission regressions exercise the actual call site. Baseline and final common
+runs passed nine network-free tests; final Gateway adapter and OIDC runs passed
+three and four tests respectively. Formatting, workspace check/Clippy and seven
+repository guards passed with existing unrelated warnings.
+
+This removes the singleton address-vector allocation on literal OIDC admission.
+URL parsing and metric machinery may still allocate. No additional allocation
+was inferred for the old consuming filter collect, which may reuse its input
+storage. No throughput benchmark, live DNS/provider test or full suite ran.

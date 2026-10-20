@@ -13,7 +13,8 @@ use reqwest::dns::{Name, Resolve, Resolving};
 
 use edgion_common::dns::ResolverSpec;
 use edgion_common::egress::{
-    filter_resolved_addrs_with_observer, EgressBlockReason, EgressResolver as CoreEgressResolver,
+    filter_resolved_addrs_with_observer, is_ip_allowed_with_observer, EgressBlockReason,
+    EgressResolver as CoreEgressResolver,
 };
 
 use crate::observe::metrics::record_egress_blocked;
@@ -84,6 +85,11 @@ impl Resolve for EgressResolver {
 /// Gateway-observed form of the shared address filter.
 pub(crate) fn filter_resolved_addrs(addrs: Vec<IpAddr>, policy: EgressPolicy, allow_loopback: bool) -> Vec<IpAddr> {
     filter_resolved_addrs_with_observer(addrs, policy, allow_loopback || cfg!(test), Some(observe_block))
+}
+
+/// Gateway-observed admission for a single address without a temporary address vector.
+pub(crate) fn is_ip_allowed(ip: IpAddr, policy: EgressPolicy, allow_loopback: bool) -> bool {
+    is_ip_allowed_with_observer(ip, policy, allow_loopback || cfg!(test), Some(observe_block))
 }
 
 #[cfg(test)]

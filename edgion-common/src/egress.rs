@@ -244,21 +244,29 @@ pub fn filter_resolved_addrs_with_observer(
 ) -> Vec<IpAddr> {
     addrs
         .into_iter()
-        .filter(|ip| {
-            let reason = match classify_ip(*ip) {
-                IpClass::Loopback if allow_loopback || cfg!(test) || is_integration_testing_mode() => return true,
-                IpClass::Loopback => EgressBlockReason::Loopback,
-                IpClass::LinkLocal => EgressBlockReason::LinkLocal,
-                IpClass::Unspecified => EgressBlockReason::Unspecified,
-                IpClass::Private | IpClass::UniqueLocal if policy.block_private => EgressBlockReason::Private,
-                IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return true,
-            };
-            if let Some(observe) = observer {
-                observe(reason);
-            }
-            false
-        })
+        .filter(|ip| is_ip_allowed_with_observer(*ip, policy, allow_loopback, observer))
         .collect()
+}
+
+/// Check one address with the same policy and rejection observation as batch filtering.
+pub fn is_ip_allowed_with_observer(
+    ip: IpAddr,
+    policy: EgressPolicy,
+    allow_loopback: bool,
+    observer: Option<EgressBlockObserver>,
+) -> bool {
+    let reason = match classify_ip(ip) {
+        IpClass::Loopback if allow_loopback || cfg!(test) || is_integration_testing_mode() => return true,
+        IpClass::Loopback => EgressBlockReason::Loopback,
+        IpClass::LinkLocal => EgressBlockReason::LinkLocal,
+        IpClass::Unspecified => EgressBlockReason::Unspecified,
+        IpClass::Private | IpClass::UniqueLocal if policy.block_private => EgressBlockReason::Private,
+        IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return true,
+    };
+    if let Some(observe) = observer {
+        observe(reason);
+    }
+    false
 }
 
 impl Resolve for EgressResolver {

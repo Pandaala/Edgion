@@ -73,6 +73,65 @@ fn filter_enforces_link_local_unspecified_and_private_policy() {
 }
 
 #[test]
+fn observed_filter_preserves_address_order_and_drop_reasons() {
+    thread_local! {
+        static DROPS: std::cell::RefCell<Vec<EgressBlockReason>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn observe(reason: EgressBlockReason) {
+        DROPS.with(|drops| drops.borrow_mut().push(reason));
+    }
+    let cases = [
+        ("127.0.0.1", None),
+        ("::1", None),
+        ("::ffff:127.0.0.1", None),
+        ("169.254.169.254", Some(EgressBlockReason::LinkLocal)),
+        ("fe80::1", Some(EgressBlockReason::LinkLocal)),
+        ("::ffff:169.254.169.254", Some(EgressBlockReason::LinkLocal)),
+        ("0.0.0.0", Some(EgressBlockReason::Unspecified)),
+        ("::", Some(EgressBlockReason::Unspecified)),
+        ("::ffff:0.0.0.0", Some(EgressBlockReason::Unspecified)),
+        ("10.1.2.3", Some(EgressBlockReason::Private)),
+        ("fd00::1", Some(EgressBlockReason::Private)),
+        ("::ffff:192.168.1.1", Some(EgressBlockReason::Private)),
+        ("93.184.216.34", None),
+        ("2001:db8::1", None),
+        ("169.254.169.254", Some(EgressBlockReason::LinkLocal)),
+        ("93.184.216.34", None),
+    ];
+    for block_private in [false, true] {
+        for allow_loopback in [false, true] {
+            let policy = EgressPolicy { block_private };
+            let mut allowed = Vec::new();
+            let mut reasons = Vec::new();
+            for (address, reason) in cases {
+                let reason = reason.filter(|reason| *reason != EgressBlockReason::Private || block_private);
+                DROPS.with(|drops| drops.borrow_mut().clear());
+                assert_eq!(
+                    is_ip_allowed_with_observer(ip(address), policy, allow_loopback, Some(observe)),
+                    reason.is_none(),
+                    "{address}"
+                );
+                DROPS.with(|drops| assert_eq!(*drops.borrow(), reason.into_iter().collect::<Vec<_>>()));
+                if let Some(reason) = reason {
+                    reasons.push(reason);
+                } else {
+                    allowed.push(ip(address));
+                }
+            }
+            DROPS.with(|drops| drops.borrow_mut().clear());
+            let actual = filter_resolved_addrs_with_observer(
+                cases.iter().map(|(address, _)| ip(address)).collect(),
+                policy,
+                allow_loopback,
+                Some(observe),
+            );
+            assert_eq!(actual, allowed);
+            DROPS.with(|drops| assert_eq!(*drops.borrow(), reasons));
+        }
+    }
+}
+
+#[test]
 fn cache_hit_negative_expiry_and_bound() {
     let resolver = resolver(true);
     let now = Instant::now();
