@@ -660,8 +660,7 @@ fn parse_multipart_part(part: &[u8], builder: &mut BodyBuilder) -> Result<usize,
             });
         }
         if name.eq_ignore_ascii_case(b"content-disposition") {
-            field_name = disposition_parameter(value, b"name");
-            filename = disposition_parameter(value, b"filename");
+            (field_name, filename) = disposition_parameters(value);
         }
     }
     let field_name = field_name.ok_or(BodyError::Malformed {
@@ -755,8 +754,16 @@ fn is_header_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
 }
 
-fn disposition_parameter<'input>(value: &'input [u8], expected: &[u8]) -> Option<&'input [u8]> {
-    let mut cursor = value.iter().position(|byte| *byte == b';')?.checked_add(1)?;
+fn disposition_parameters(value: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
+    let Some(mut cursor) = value
+        .iter()
+        .position(|byte| *byte == b';')
+        .and_then(|index| index.checked_add(1))
+    else {
+        return (None, None);
+    };
+    let mut field_name = None;
+    let mut filename = None;
     while cursor <= value.len() {
         let start = cursor;
         let mut quoted = false;
@@ -776,20 +783,27 @@ fn disposition_parameter<'input>(value: &'input [u8], expected: &[u8]) -> Option
         }
         let parameter = &value[start..cursor];
         let (name, value) = split_once(trim_ascii(parameter), b'=');
-        if name.eq_ignore_ascii_case(expected) {
+        let destination = if field_name.is_none() && name.eq_ignore_ascii_case(b"name") {
+            Some(&mut field_name)
+        } else if filename.is_none() && name.eq_ignore_ascii_case(b"filename") {
+            Some(&mut filename)
+        } else {
+            None
+        };
+        if let Some(destination) = destination {
             let value = trim_ascii(value);
-            return if value.len() >= 2 && value.first() == Some(&b'"') && value.last() == Some(&b'"') {
+            *destination = if value.len() >= 2 && value.first() == Some(&b'"') && value.last() == Some(&b'"') {
                 Some(&value[1..value.len() - 1])
             } else {
                 Some(value)
             };
         }
-        if cursor == value.len() {
+        if (field_name.is_some() && filename.is_some()) || cursor == value.len() {
             break;
         }
         cursor += 1;
     }
-    None
+    (field_name, filename)
 }
 
 fn multipart_boundary(content_type: Option<&[u8]>) -> Option<&[u8]> {

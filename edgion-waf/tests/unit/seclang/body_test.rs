@@ -291,13 +291,10 @@ fn multipart_long_near_matches_preserve_fields_and_limits() {
 fn multipart_disposition_keeps_semicolons_inside_quoted_parameters() {
     let disposition = b"form-data; name=\"prefix&amp;suffix\"; filename=\"safe.txt\"";
     assert_eq!(
-        disposition_parameter(disposition, b"name"),
+        disposition_parameters(disposition).0,
         Some(b"prefix&amp;suffix".as_slice())
     );
-    assert_eq!(
-        disposition_parameter(disposition, b"filename"),
-        Some(b"safe.txt".as_slice())
-    );
+    assert_eq!(disposition_parameters(disposition).1, Some(b"safe.txt".as_slice()));
 }
 
 #[test]
@@ -919,4 +916,51 @@ fn numeric_publication_metadata_owns_decimal_boundary_values() {
             [(None, expected_length.as_bytes())]
         );
     }
+}
+
+#[test]
+fn multipart_disposition_preserves_first_values_and_tolerant_grammar() {
+    let check = |input: &[u8], name: Option<&[u8]>, filename: Option<&[u8]>| {
+        assert_eq!(disposition_parameters(input), (name, filename));
+    };
+    check(b"form-data", None, None);
+    check(b"form-data;", None, None);
+    check(
+        b"form-data; name=a; name=b; filename=x; filename=y",
+        Some(b"a"),
+        Some(b"x"),
+    );
+    check(b"form-data; filename=x; name=a", Some(b"a"), Some(b"x"));
+    check(b"form-data; name=; name=b; filename=", Some(b""), Some(b""));
+    check(b"form-data; name; filename=x", Some(b""), Some(b"x"));
+    check(b"form-data; name =a; filename=x", None, Some(b"x"));
+    check(b"form-data; NaMe= a ; FILENAME= x ", Some(b"a"), Some(b"x"));
+    check(br#"form-data; name="a;b"; filename="x;y""#, Some(b"a;b"), Some(b"x;y"));
+    check(br#"form-data; name="a\";b"; filename=x"#, Some(br#"a\";b"#), Some(b"x"));
+    check(
+        br#"form-data; filename=x; name="open;tail"#,
+        Some(br#""open;tail"#),
+        Some(b"x"),
+    );
+    check(b"form-data; filename=x; name=\"open\\", Some(b"\"open\\"), Some(b"x"));
+}
+
+#[test]
+fn multipart_later_disposition_replaces_missing_filename() {
+    let input = concat!(
+        "--x\r\n",
+        "Content-Disposition: form-data; name=\"old\"; filename=\"old.txt\"\r\n",
+        "Content-Disposition: form-data; name=\"new\"\r\n",
+        "\r\nvalue\r\n--x--\r\n"
+    );
+    let published = publication(
+        input.as_bytes(),
+        BodyProcessorSelection::Multipart,
+        Some(b"multipart/form-data; boundary=x"),
+    );
+    assert_eq!(
+        values(&published, CollectionKind::Args),
+        [(Some(b"new".as_slice()), b"value".as_slice())]
+    );
+    assert!(values(&published, CollectionKind::Files).is_empty());
 }

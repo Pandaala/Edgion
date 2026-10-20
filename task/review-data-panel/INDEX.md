@@ -10904,3 +10904,28 @@ Fresh verification passed 835 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## WAF multipart disposition parameter scan
+
+parse_multipart_part previously scanned each Content-Disposition value separately
+for name and filename. disposition_parameters now scans once and retains the
+first occurrence of each key, stopping when both are found. Some(empty) remains
+a found value. Each later disposition header replaces the entire pair, including
+clearing a filename absent from that later header.
+
+Quoted semicolon and escaped-quote traversal, literal escape bytes, malformed
+quote tolerance, ASCII case matching and whitespace rules remain unchanged.
+A bare name parameter matches an empty value; whitespace before its equals sign
+still prevents a match. The boundary-parameter parser is unchanged. Header/part
+validation, work charges, publication copies and limits retain their original
+order, with no new allocation or persistent state.
+
+The existing quoted-semicolon test remains, supplemented by direct grammar
+and first-value goldens and a repeated-header publication test. Independent
+plan review passed. Scope is body source, its unit tests and this record.
+The benefit is avoiding the second scan, not a measured throughput claim.
+
+Fresh verification passed 837 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
