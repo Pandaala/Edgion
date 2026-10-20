@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF multiMatch stage ownership](waf-07-multimatch-stage-ownership.md)
+
 - [WAF marker-free decoder borrowing](waf-06-marker-free-decoder-borrowing.md)
 
 - [WAF default body-processor reuse](waf-05-default-body-processor-reuse.md)
@@ -10785,5 +10787,24 @@ selected. Independent plan review passed; deeper WAF execution remains open.
 Fresh verification passed 832 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and agent-document
 validation. Existing unrelated Clippy warnings remain. No new identity behavior
+or workload benchmark was implemented.
+Final independent review passed.
+
+## Defer ordinary WAF multiMatch stage ownership
+
+The ordinary multiMatch path collects owned raw and changed-stage payloads before
+predicate evaluation. This preserves complete transformation validation ahead of
+an early hit. Consumed stages drop progressively; remaining stages live until
+consumed or iterator drop, not for the entire transaction.
+
+[waf-07](waf-07-multimatch-stage-ownership.md) separates borrowing the initial
+stage from provisional predicate evaluation, including allocation-failure,
+physical work, captures and error-order consequences. Existing JSON observation
+is related evidence, not automatic permission to replace the ordinary path.
+Independent plan review passed. No runtime change was selected.
+
+Fresh verification passed 832 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and agent-document
+validation. Existing unrelated Clippy warnings remain. No ownership redesign
 or workload benchmark was implemented.
 Final independent review passed.
