@@ -21,7 +21,7 @@ destination.
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
-| Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
+| Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Remaining local-gate/Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
 | TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
@@ -9834,3 +9834,30 @@ all-target check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-sou
 Gateway API transform, unit-layout and gateway no-tracing guards passed. Existing
 unrelated Clippy warnings remain. No full integration suite or throughput benchmark
 ran.
+
+
+## Stop boolean IP membership at the first covering prefix
+
+Traced Gateway ConfigData membership reads used by RealIp, shared IP conditions
+and GeoIP references into the canonical algorithm leaf. Boolean contains previously
+completed longest-prefix lookup despite discarding the selected label. One private
+compile-time traversal mode now returns at the first terminal; both group-returning
+APIs and public frozen-tree lookups keep longest-prefix selection. Address-family
+and mapped-address dispatch remain shared. No Gateway authorization, snapshot,
+publication, rule ordering, node layout or builder behavior changes.
+
+Supporting edits stay within the canonical IP radix implementation and its unit
+tests; this does not activate an algorithm-crate review campaign. Exact-group and
+Boolean matrix tests passed on the previous implementation first. Final tests
+cover nested/default/host prefixes, mapped and compatible IPv6, misses and empty
+matchers. Test-only key-bit counters show 0 or 24 reads instead of 32 for selected
+IPv4 hits and 0 or 32 instead of 128 for selected IPv6 hits. These are traversal
+counts, not allocation savings or throughput measurements. More-specific label
+attribution and Arc results remain unchanged.
+
+Fresh verification passed 51 algorithm radix, 46 Resources IP helper, 34 Gateway
+RealIp, 70 shared condition, 23 GeoIP, 22 ConfigData and 4 ACL tests (250 total).
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No full integration
+suite or throughput benchmark ran.

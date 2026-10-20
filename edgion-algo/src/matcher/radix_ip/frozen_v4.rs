@@ -37,7 +37,12 @@ impl FrozenIpV4RadixTree {
     /// ```
     #[inline]
     pub fn match_ip(&self, ip: u32) -> Option<u16> {
-        self.inner.match_key(ip)
+        self.match_ip_mode::<false>(ip)
+    }
+
+    #[inline]
+    pub(super) fn match_ip_mode<const FIRST_MATCH: bool>(&self, ip: u32) -> Option<u16> {
+        self.inner.match_key::<FIRST_MATCH>(ip)
     }
 
     /// Convenience method to match an `Ipv4Addr`.

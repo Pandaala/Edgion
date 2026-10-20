@@ -57,3 +57,40 @@ fn flattening_preserves_dfs_indices_and_zero_sentinel() {
         ]
     );
 }
+
+#[test]
+fn membership_stops_at_first_terminal_for_both_key_widths() {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy)]
+    struct CountedKey<'a, K> {
+        key: K,
+        reads: &'a Cell<usize>,
+    }
+    impl<K: BitKey> BitKey for CountedKey<'_, K> {
+        const WIDTH: u8 = K::WIDTH;
+
+        fn bit_at(self, depth: u8) -> bool {
+            self.reads.set(self.reads.get() + 1);
+            self.key.bit_at(depth)
+        }
+    }
+    fn check<K: BitKey>(key: K, first_prefix: u8) {
+        let reads = Cell::new(0);
+        let counted = CountedKey { key, reads: &reads };
+        let mut builder = BinaryRadixBuilder::new();
+        builder.insert(counted, first_prefix, 1, "broad").unwrap();
+        builder.insert(counted, K::WIDTH, 2, "host").unwrap();
+        let tree = builder.freeze().unwrap();
+        reads.set(0);
+        assert_eq!(tree.match_key::<true>(counted), Some(1));
+        assert_eq!(reads.get(), usize::from(first_prefix));
+        reads.set(0);
+        assert_eq!(tree.match_key::<false>(counted), Some(2));
+        assert_eq!(reads.get(), usize::from(K::WIDTH));
+    }
+    check(0xc0000207_u32, 0);
+    check(0xc0000207_u32, 24);
+    check(0x20010db8000000000000000000000007_u128, 0);
+    check(0x20010db8000000000000000000000007_u128, 32);
+}

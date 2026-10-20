@@ -23,8 +23,11 @@ Both address families use one private binary-radix core, monomorphized through a
 two-implementation `BitKey` trait for `u32` and `u128`. Insertion consumes bits from
 most significant to least significant and records a terminal label at the prefix
 depth. Freeze emits nodes in DFS pre-order into a contiguous `Vec<FlatNode>`.
-Lookup walks at most 32 or 128 edges and retains the last terminal encountered,
-which implements longest-prefix matching.
+Group lookup walks at most 32 or 128 edges and retains the last terminal
+encountered, which implements longest-prefix matching. Boolean `contains` uses
+the same traversal with a compile-time first-terminal mode: any covering prefix
+proves membership, so it need not walk more-specific descendants. Public frozen
+tree lookups and both group-returning APIs retain longest-prefix selection.
 
 ## Contract
 
@@ -45,6 +48,12 @@ with the same label is idempotent; a different label is rejected. Empty builders
 invalid families, prefix bounds, label bounds, frozen layout, DFS indices, `/0`,
 `/32`, `/128`, longest-prefix selection, mixed-family dispatch, and mapped IPv6
 normalization are covered by unit tests.
+
+Membership tests also check exact group attribution across nested prefixes and
+address families. Test-only bit counters demonstrate early termination for both
+widths: a default-prefix hit reads no key bits, and an overlapping subnet hit
+stops at that subnet depth. Misses retain the same traversal; this establishes
+reduced work on covered descendants, not a measured throughput improvement.
 
 ## Why this algorithm
 

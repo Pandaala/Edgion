@@ -69,31 +69,31 @@ impl IpRadixMatcher {
 
     /// Zero-allocation membership check. Hot path for RealIpExtractor.
     pub fn contains(&self, ip: &IpAddr) -> bool {
-        self.match_label_id(ip).is_some()
+        self.match_label_id::<true>(ip).is_some()
     }
 
     /// Returns the matched group name (longest-prefix). `None` if no rule
     /// covers `ip`. Uses `.get()` — an out-of-bounds `label_id` silently
     /// returns `None` (defensive against builder/labels desync).
     pub fn matched_group(&self, ip: &IpAddr) -> Option<&str> {
-        let id = self.match_label_id(ip)?;
+        let id = self.match_label_id::<false>(ip)?;
         self.labels.get(id as usize).map(|s| s.as_ref())
     }
 
     /// Like `matched_group` but returns a cloned `Arc`.
     pub fn matched_group_arc(&self, ip: &IpAddr) -> Option<Arc<str>> {
-        let id = self.match_label_id(ip)?;
+        let id = self.match_label_id::<false>(ip)?;
         self.labels.get(id as usize).cloned()
     }
 
-    fn match_label_id(&self, ip: &IpAddr) -> Option<u16> {
+    fn match_label_id<const FIRST_MATCH: bool>(&self, ip: &IpAddr) -> Option<u16> {
         match ip {
-            IpAddr::V4(v4) => self.ipv4_tree.as_ref()?.match_ipv4(*v4),
+            IpAddr::V4(v4) => self.ipv4_tree.as_ref()?.match_ip_mode::<FIRST_MATCH>(u32::from(*v4)),
             IpAddr::V6(v6) => {
                 if let Some(mapped) = v6.to_ipv4_mapped() {
-                    return self.ipv4_tree.as_ref()?.match_ipv4(mapped);
+                    return self.ipv4_tree.as_ref()?.match_ip_mode::<FIRST_MATCH>(u32::from(mapped));
                 }
-                self.ipv6_tree.as_ref()?.match_ipv6(*v6)
+                self.ipv6_tree.as_ref()?.match_ip_mode::<FIRST_MATCH>(u128::from(*v6))
             }
         }
     }

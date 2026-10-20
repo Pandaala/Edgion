@@ -156,7 +156,7 @@ pub(super) struct FrozenBinaryRadixTree<K: BitKey> {
 
 impl<K: BitKey> FrozenBinaryRadixTree<K> {
     #[inline]
-    pub(super) fn match_key(&self, key: K) -> Option<u16> {
+    pub(super) fn match_key<const FIRST_MATCH: bool>(&self, key: K) -> Option<u16> {
         let mut node_idx = 0;
         let mut last_match = None;
         let mut current_bit = 0;
@@ -164,6 +164,9 @@ impl<K: BitKey> FrozenBinaryRadixTree<K> {
         loop {
             let node = self.nodes.get(node_idx)?;
             if node.label_id != 0 {
+                if FIRST_MATCH {
+                    return Some(node.label_id);
+                }
                 last_match = Some(node.label_id);
             }
 

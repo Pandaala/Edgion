@@ -263,3 +263,43 @@ fn non_mapped_ipv6_rules_keep_separate_family_semantics() {
     assert_eq!(tree.match_ipv6("::ffff:192.0.2.8".parse().unwrap()), Some(1));
     assert_eq!(tree.match_ipv6("::ffff:192.0.3.8".parse().unwrap()), None);
 }
+
+#[test]
+fn membership_preserves_nested_prefix_group_attribution_and_family_boundaries() {
+    for with_defaults in [false, true] {
+        let mut builder = IpRadixMatcher::builder();
+        for (cidr, group) in [
+            ("192.0.2.0/24", "v4-subnet"),
+            ("192.0.2.7/32", "v4-host"),
+            ("2001:db8::/32", "v6-subnet"),
+            ("2001:db8::7/128", "v6-host"),
+        ] {
+            builder.insert(cidr, group).unwrap();
+        }
+        if with_defaults {
+            builder.insert("0.0.0.0/0", "v4-default").unwrap();
+            builder.insert("::/0", "v6-default").unwrap();
+        }
+        let matcher = builder.build().unwrap();
+        for (address, specific, fallback) in [
+            ("192.0.2.7", Some("v4-host"), "v4-default"),
+            ("192.0.2.8", Some("v4-subnet"), "v4-default"),
+            ("::ffff:192.0.2.7", Some("v4-host"), "v4-default"),
+            ("::ffff:192.0.2.8", Some("v4-subnet"), "v4-default"),
+            ("192.0.3.7", None, "v4-default"),
+            ("::ffff:192.0.3.7", None, "v4-default"),
+            ("2001:db8::7", Some("v6-host"), "v6-default"),
+            ("2001:db8::8", Some("v6-subnet"), "v6-default"),
+            ("2001:db9::7", None, "v6-default"),
+            ("::192.0.2.7", None, "v6-default"),
+            ("::1", None, "v6-default"),
+        ] {
+            let ip = address.parse().unwrap();
+            let expected = specific.or(with_defaults.then_some(fallback));
+            assert_eq!(matcher.contains(&ip), expected.is_some(), "{address}");
+            assert_eq!(matcher.matched_group(&ip), expected, "{address}");
+            assert_eq!(matcher.matched_group_arc(&ip).as_deref(), expected, "{address}");
+            assert!(!IpRadixMatcher::empty().contains(&ip));
+        }
+    }
+}
