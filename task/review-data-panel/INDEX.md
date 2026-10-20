@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Incremental semantic window statistics](sse-01-incremental-window-statistics.md)
+
 - [Guardrail decision snapshot encoding](guardrail-02-decision-snapshot-encoding.md)
 
 - [Webhook extraction path preparation](webhook-02-extraction-path-preparation.md)
