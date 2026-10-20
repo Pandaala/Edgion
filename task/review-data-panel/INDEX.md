@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared ForwardAuth denial header names](forward-auth-01-prepared-denial-header-names.md)
+
 - [Wasm pool discard lock scope](wasm-04-pool-discard-lock-scope.md)
 
 - [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
@@ -11707,4 +11709,21 @@ selection and coordinator generation tests provide the verification owners.
 Fresh baseline verification passed 127 LB tests and 41 discovery coordinator tests
 (168 total), formatting and workspace all-target check/Clippy. Existing unrelated
 Clippy warnings remain. No concurrency or throughput benchmark was run.
+Agent-doc validation and final independent review passed.
+
+## ForwardAuth denial header-name ownership audit
+
+Followed request filtering through ForwardAuth response classification and the
+private denial writer. Configured selection is already prepared, but each retained
+field value still clones its configured String into Pingora original-case ownership.
+Prepared shared names could avoid those payload copies while adding persistent
+storage and refcount ownership. Parsed HeaderName alone changes spelling, and
+CaseHeaderName does not eliminate Pingora's normalized-name parsing. The bounded
+[deferred decision](forward-auth-01-prepared-denial-header-names.md) records the
+measurement and behavior gates; no representation was selected or code changed.
+
+Independent plan review passed. Fresh verification passed all 13 Gateway
+ForwardAuth tests serially, formatting and workspace all-target check/Clippy.
+Existing unrelated Clippy warnings remain. No allocation/throughput benchmark or
+live network test ran; deeper outbound transport remains outside this audit.
 Agent-doc validation and final independent review passed.
