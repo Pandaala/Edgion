@@ -733,3 +733,40 @@ fn comment_search_preserves_first_closer_and_output_limits() {
         }
     }
 }
+
+#[test]
+fn css_hex_scan_preserves_digit_boundaries_and_output_limits() {
+    for (input, expected) in [
+        (b"".as_slice(), b"".as_slice()),
+        (b"\\", b""),
+        (b"\\\nX", b"X"),
+        (b"\\\rX", b"\rX"),
+        (br"\g", b"g"),
+        (br"\0", b"\0"),
+        (br"\41", b"A"),
+        (br"\041", b"A"),
+        (br"\0041", b"A"),
+        (br"\00041", b"A"),
+        (br"\000041", b"A"),
+        (br"\0000412", b"A2"),
+        (br"\1234567", b"V7"),
+        (br"\123456g", b"Vg"),
+        (br"\4a\4A", b"JJ"),
+        (br"\ff21", b"A"),
+        (br"\41 z", b"Az"),
+        (br"\41  z", b"A z"),
+        (b"\\000041\tX", b"AX"),
+    ] {
+        let mut output = Vec::new();
+        css_decode(input, &mut output, expected.len()).unwrap();
+        assert_eq!(output, expected);
+        for limit in 0..expected.len() {
+            output.clear();
+            assert_eq!(
+                css_decode(input, &mut output, limit),
+                Err(TransformError::OutputLimit { limit })
+            );
+            assert_eq!(output, expected[..limit]);
+        }
+    }
+}

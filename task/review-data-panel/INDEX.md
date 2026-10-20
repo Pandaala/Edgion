@@ -10745,3 +10745,25 @@ Fresh verification passed 831 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## WAF CSS hexadecimal scan fusion
+
+Gateway WAF transformations reach the canonical css_decode implementation.
+Its bounded prefix scan now accumulates each accepted hexadecimal digit while
+validating it, removing a second conversion pass over the same prefix. At most
+six digits produce a 24-bit value in u32. The first invalid digit, zero-digit
+escape path, trailing backslash, fullwidth-to-byte folding, one-whitespace
+consumption and all bounded writes remain in their original order. Scratch,
+logical work charges and observer checkpoints are unchanged.
+
+Direct decoder goldens cover one through six digits, retained seventh digits,
+mixed hex case, malformed terminators, escaped newline versus carriage return,
+ASCII-result folding, and exact/every insufficient output cap with partial bytes.
+No new allocation, dependency or throughput claim is introduced. Independent
+plan review passed. The supporting leaf change is limited to the transform
+source, its unit tests and this record.
+
+Fresh verification passed 832 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

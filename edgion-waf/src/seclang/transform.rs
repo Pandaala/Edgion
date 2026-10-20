@@ -501,7 +501,12 @@ fn css_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), Tr
             break;
         }
         let mut digits = 0_usize;
-        while digits < 6 && index + digits < input.len() && hex(input[index + digits]).is_some() {
+        let mut value = 0_u32;
+        while digits < 6 && index + digits < input.len() {
+            let Some(digit) = hex(input[index + digits]) else {
+                break;
+            };
+            value = (value << 4) | u32::from(digit);
             digits += 1;
         }
         if digits == 0 {
@@ -512,10 +517,6 @@ fn css_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), Tr
                 index += 1;
             }
             continue;
-        }
-        let mut value = 0_u32;
-        for digit in &input[index..index + digits] {
-            value = (value << 4) | u32::from(hex(*digit).unwrap_or_default());
         }
         let mut byte = value as u8;
         if (0xff01..=0xff5e).contains(&value) {
