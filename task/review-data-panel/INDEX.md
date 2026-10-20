@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Wasm map decoding profile storage](wasm-02-map-decoding-profile-storage.md)
+
 - [WAF final transformation buffer transfer](waf-11-final-transform-buffer-transfer.md)
 
 - [WAF sealed outcome lookup indexing](waf-10-sealed-outcome-lookup-index.md)
@@ -11469,4 +11471,25 @@ Fresh verification passed all 268 Gateway Wasm tests serially and 11 upstream
 trailer tests (279 total), formatting, workspace all-target check/Clippy and seven
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
+Final independent review passed.
+
+## Wasm map profiling and decode ownership audit
+
+Inspected aggregate-only serialized map profiles, per-field lossy UTF-8 sizing,
+ReplaceAll/local-response preflight and decoding, and callout's additional scan
+of its owned header copy. Cached per-pair metadata is deferred in wasm-02 because
+it adds storage to currently allocation-free profiling and needs an admission,
+peak-capacity and failure-order decision. This is distinct from wasm-01's decoded
+payload sharing. Reusing an existing scalar aggregate profile remains a separate
+candidate and is not categorically deferred by the new task.
+
+Current bounds checks do not enforce zero terminator bytes or reject trailing
+bytes. Local-response BAD_ARGUMENT maps become empty headers, whereas other paths
+retain their own error mapping. These behaviors and guest-memory lifetime must be
+preserved by any selected optimization. No runtime code or tests changed.
+Independent plan review passed.
+
+Fresh baseline verification passed all 268 Gateway Wasm tests serially, formatting,
+workspace all-target check/Clippy and agent-doc validation. Existing unrelated
+Clippy warnings remain. No new representation or performance benchmark was run.
 Final independent review passed.
