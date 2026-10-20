@@ -18,7 +18,7 @@ destination.
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
-| Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Other concrete processors, conditions, hold/commit and remaining header chains remain open. |
+| Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Wasm direct ABI profiling, callout execution, shared-data snapshots, lease ownership, prepared callback handles and process admission are inspected in the entries below; four Wasm representation/lock decisions remain deferred. Deeper Wasmtime and network dependencies, other concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
@@ -11643,4 +11643,39 @@ Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
 trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
+Final independent review passed.
+
+## Wasm process admission and growth rollback audit
+
+Inspected admission.rs and HostState's resource-limiter callbacks together with
+VM checkout/destruction. Startup publishes limits and all associated capacities
+in one OnceLock value. Warm access reads this stable owner; it does not construct
+a dynamic key, rebuild a policy or acquire a global write lock. Validation belongs
+to initialization. Diagnostic stats do not initialize defaults before startup.
+
+GuestBudget atomically checks overflow and capacity while reserving bytes. A
+separate load/check followed by addition would weaken concurrent admission.
+GuestMemory tracks its own admitted delta, and failed memory/table growth rolls
+back only the pending delta via take. The external charge owner remains after
+Store destruction; its Arc is not a temporary copy that can be replaced with a
+borrow across the VM lifetime. Logical guest bytes are not total host heap or RSS.
+
+Idle admission takes a count slot before reserving bytes; byte refusal drops the
+slot automatically. Checkout releases its idle reservation, while retained VMs
+keep the guard after Store/guest destruction in field order. Runtime retirement
+and the separate rejected-return lock decision remain as recorded in wasm-04.
+Blocking preparation retains an owned permit through running work and undelivered
+results after waiter cancellation; borrowing from the canceled waiter would not
+satisfy that lifetime. Stats independently sample counters, not a transactional
+resource snapshot.
+
+No new behavior-preserving optimization was selected in this bounded audit;
+this is not a claim that further optimization is impossible. Existing atomic
+reservation, failed-growth, real-guest initialization, cancellation, idle rollback
+and startup-publication tests provide the verification owners. No code, tests,
+admission policy, metric or configuration changed. Independent plan review passed.
+
+Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatting,
+workspace all-target check/Clippy and agent-doc validation. Existing unrelated
+Clippy warnings remain. No concurrency or throughput benchmark was run.
 Final independent review passed.
