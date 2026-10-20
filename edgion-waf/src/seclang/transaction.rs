@@ -3806,9 +3806,7 @@ impl TxState {
         let start = self
             .target_exclusions
             .partition_point(|existing| existing.unit < entry.unit);
-        let end = self
-            .target_exclusions
-            .partition_point(|existing| existing.unit <= entry.unit);
+        let end = start + self.target_exclusions[start..].partition_point(|existing| existing.unit <= entry.unit);
         if self.target_exclusions[start..end].contains(&entry) {
             return Ok(());
         }
@@ -4239,7 +4237,8 @@ fn select_values(
         .get(plan.record_start..end)
         .ok_or(RuntimeError::GenerationInvariant)?;
     let exclude_start = tx.target_exclusions.partition_point(|entry| entry.unit < unit_id);
-    let exclude_end = tx.target_exclusions.partition_point(|entry| entry.unit <= unit_id);
+    let exclude_end =
+        exclude_start + tx.target_exclusions[exclude_start..].partition_point(|entry| entry.unit <= unit_id);
     let exclusions = &tx.target_exclusions[exclude_start..exclude_end];
     for target in records {
         let json_count = if target.modifier == super::TargetModifier::Count

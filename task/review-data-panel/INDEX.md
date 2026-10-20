@@ -10808,3 +10808,30 @@ WAF tests, formatting, workspace all-target check/Clippy and agent-document
 validation. Existing unrelated Clippy warnings remain. No ownership redesign
 or workload benchmark was implemented.
 Final independent review passed.
+
+## WAF target-exclusion upper-bound search
+
+Rechecked match transfer: apply_member_match retains current and cumulative
+matched values, capture-key ownership and staged rollback state. Ordinary owned
+payload clones and immutable structured-result handles remain distinct. No
+blanket clone removal was selected for those lifetimes.
+
+Target exclusions are sorted by unit: add_target_exclusion is their sole
+production insertion and appends within the equal-unit group; cloning preserves
+order. After computing the lower bound, add_target_exclusion and select_values
+now search only the remaining suffix for the upper bound. Adding the suffix
+index yields the same group end, bounded by vector length. Empty and missing
+unit groups retain their original behavior. tagged_units is unchanged.
+
+The focused test covers out-of-order unit insertion, stable same-unit groups,
+exact duplicates at the entry cap and retained-byte stability. Outer control
+activation still charges duplicate visits; filtering still charges exclusions
+and selectors in the original order. Allocation, limits and rollback are unchanged.
+The benefit is a smaller upper-bound search domain when the lower bound is
+nonzero, without a measured or universal throughput claim. Independent plan
+review passed. Scope is transaction source, its unit tests and this record.
+
+Fresh verification passed 833 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

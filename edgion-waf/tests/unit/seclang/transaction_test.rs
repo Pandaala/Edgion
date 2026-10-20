@@ -5509,3 +5509,49 @@ fn optional_check_policy_survives_unpruned_inspection_and_chain_clones() {
         assert_eq!(tx.tx_value(b"paramcounter_ARGS_NAMES:json.probe"), None);
     }
 }
+
+#[test]
+fn target_exclusion_insertion_keeps_unit_groups_and_duplicate_budget() {
+    let mut state = TxState::default();
+    let limits = RuntimeLimits {
+        max_ctl_entries: 6,
+        ..RuntimeLimits::default()
+    };
+    let entry = |unit, collection| ActiveTargetExclusion {
+        unit,
+        collection,
+        selector: super::super::CompiledTargetSelector::None,
+    };
+    for (unit, collection) in [
+        (7, CollectionKind::Args),
+        (1, CollectionKind::Args),
+        (4, CollectionKind::Args),
+        (7, CollectionKind::RequestHeaders),
+        (4, CollectionKind::Args),
+        (0, CollectionKind::Args),
+        (9, CollectionKind::Args),
+    ] {
+        state.add_target_exclusion(entry(unit, collection), limits).unwrap();
+    }
+    assert_eq!(
+        state.target_exclusions,
+        [
+            entry(0, CollectionKind::Args),
+            entry(1, CollectionKind::Args),
+            entry(4, CollectionKind::Args),
+            entry(7, CollectionKind::Args),
+            entry(7, CollectionKind::RequestHeaders),
+            entry(9, CollectionKind::Args),
+        ]
+    );
+    let retained = state.retained_bytes;
+    state
+        .add_target_exclusion(entry(7, CollectionKind::Args), limits)
+        .unwrap();
+    assert_eq!(state.target_exclusions.len(), 6);
+    assert_eq!(state.retained_bytes, retained);
+    assert_eq!(
+        state.add_target_exclusion(entry(6, CollectionKind::Args), limits),
+        Err(RuntimeError::CtlEntryLimit { limit: 6 })
+    );
+}
