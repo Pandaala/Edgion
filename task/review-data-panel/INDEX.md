@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
+
 - [Wasm map decoding profile storage](wasm-02-map-decoding-profile-storage.md)
 
 - [WAF final transformation buffer transfer](waf-11-final-transform-buffer-transfer.md)
@@ -11545,4 +11547,25 @@ Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
 trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
+Final independent review passed.
+
+## Wasm shared-data snapshot and accounting audit
+
+Inspected GET's lock-held Vec/CAS copy and ABI preflight/guest allocator handoff,
+SET's per-key CAS serialization, cross-shard growth reservation/rollback,
+shrink/delete accounting and shared-label gauge contribution ownership. A detached
+snapshot is required across guest allocator reentry; a map borrow is not a safe
+replacement. Shared immutable payloads may avoid copies but need allocation,
+contention and retained-owner evidence, so the representation decision is recorded
+in wasm-03. Existing independent snapshots also survive replacement; sharing does
+not create that lifetime requirement from nothing.
+
+The transient check is per-call preflight, not cumulative recursive reservation.
+Current map bytes and the gauge do not establish a detached-snapshot or RSS bound.
+No eviction, cross-generation identity or metric policy change is selected.
+Independent plan review passed. No runtime code or tests changed.
+
+Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatting,
+workspace all-target check/Clippy and agent-doc validation. Existing unrelated
+Clippy warnings remain. No new representation or performance benchmark was run.
 Final independent review passed.
