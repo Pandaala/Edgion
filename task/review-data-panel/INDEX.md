@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared response-cache Content-Length](cache-04-prepared-content-length.md)
+
 - [Inactive downstream request-body module dispatch](context-02-request-body-module-dispatch.md)
 
 - [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
@@ -8782,5 +8784,19 @@ This source observation is distinct from outer context storage and per-connectio
 Stream plugin dispatch. It does not establish optimized allocation counts or
 CPU gains. Independent plan review passed. No runtime code, dependency checkout
 or revision changed; no runtime tests or benchmarks ran.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+checks passed with existing unrelated warnings. Final independent review passed.
+
+## Defer prepared cache-hit Content-Length
+
+Rechecked response-cache lookup, pending capture and publication: each hit
+formats immutable published entry.used after full header decode. Preparing a
+value may remove repeated formatting, but adds a persistent derived value whose
+capacity, admission and reader-retained lifetime require explicit accounting.
+The new cache-04 task records the alternatives and consistency tests; cache-02
+Age measurements are not extrapolated to this construction.
+
+Independent plan review passed. Runtime code and cache charges are unchanged.
+No runtime tests or benchmarks ran for this documentation-only investigation.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 checks passed with existing unrelated warnings. Final independent review passed.
