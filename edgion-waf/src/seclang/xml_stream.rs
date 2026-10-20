@@ -682,7 +682,7 @@ impl XmlStream {
         self.tag_work = 0;
         self.tag_trailing = 0;
     }
-    fn emit(&mut self, value: &[u8], name: Option<Span>, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
+    fn prepare_emit(&mut self, value_len: usize, name: Option<Span>) -> Result<(), XmlStreamError> {
         if name.is_none() && self.frames.is_empty() {
             return Err(XmlStreamError::Syntax);
         }
@@ -691,10 +691,14 @@ impl XmlStream {
         self.summary.value_count = add(self.summary.value_count, 1)?;
         self.summary.decoded_bytes = add(
             self.summary.decoded_bytes,
-            add(name.map_or(0, |name| name.len), value.len())?,
+            add(name.map_or(0, |name| name.len), value_len)?,
         )?;
         self.summary.max_name_bytes = self.summary.max_name_bytes.max(name.map_or(0, |name| name.len));
-        self.work(value.len())?;
+        self.work(value_len)?;
+        Ok(())
+    }
+    fn emit(&mut self, value: &[u8], name: Option<Span>, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
+        self.prepare_emit(value.len(), name)?;
         sink.value(name.map(|name| self.span(name)), value)
             .map_err(|_| XmlStreamError::SinkRejected)
     }
@@ -707,16 +711,15 @@ impl XmlStream {
         if text {
             self.token.truncate(self.token.len() - self.trailing);
         }
-        self.held_heap = add(self.held_heap, heap_capacity(&self.token))?;
-        let mut token = std::mem::take(&mut self.token);
-        let result = if !text || !token.is_empty() {
-            self.emit(&token, name, sink)
+        let result = if !text || !self.token.is_empty() {
+            self.prepare_emit(self.token.len(), name).and_then(|()| {
+                sink.value(name.map(|name| self.span(name)), &self.token)
+                    .map_err(|_| XmlStreamError::SinkRejected)
+            })
         } else {
             Ok(())
         };
-        token.clear();
-        self.held_heap -= heap_capacity(&token);
-        self.token = token;
+        self.token.clear();
         self.trailing = 0;
         result
     }

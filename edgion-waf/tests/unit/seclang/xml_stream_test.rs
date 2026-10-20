@@ -788,3 +788,109 @@ fn qname_delimiters_preserve_first_split_and_validation_error_order() {
         }
     }
 }
+
+#[test]
+fn token_emission_borrow_preserves_original_counters_and_cleanup() {
+    fn original_emit(
+        stream: &mut XmlStream,
+        value: &[u8],
+        sink: &mut impl XmlStreamSink,
+    ) -> Result<(), XmlStreamError> {
+        if stream.frames.is_empty() {
+            return Err(XmlStreamError::Syntax);
+        }
+        stream.event()?;
+        stream.summary.value_count = add(stream.summary.value_count, 1)?;
+        stream.summary.decoded_bytes = add(stream.summary.decoded_bytes, add(0, value.len())?)?;
+        // The original name=None update leaves max_name_bytes unchanged.
+        stream.work(value.len())?;
+        sink.value(None, value).map_err(|_| XmlStreamError::SinkRejected)
+    }
+    fn original_token(stream: &mut XmlStream, text: bool, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
+        if text {
+            stream.token.truncate(stream.token.len() - stream.trailing);
+        }
+        stream.held_heap = add(stream.held_heap, heap_capacity(&stream.token))?;
+        let mut token = std::mem::take(&mut stream.token);
+        let result = if !text || !token.is_empty() {
+            original_emit(stream, &token, sink)
+        } else {
+            Ok(())
+        };
+        token.clear();
+        stream.held_heap -= heap_capacity(&token);
+        stream.token = token;
+        stream.trailing = 0;
+        result
+    }
+    #[derive(Default)]
+    struct RecordingSink {
+        reject: bool,
+        values: Vec<Vec<u8>>,
+    }
+    impl XmlStreamSink for RecordingSink {
+        fn value(&mut self, name: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
+            assert!(name.is_none());
+            self.values.push(value.to_vec());
+            if self.reject {
+                Err(XmlStreamSinkError)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    for len in [0_usize, 1, 1024, 1025, 2048] {
+        for text in [false, true] {
+            for inside in [false, true] {
+                for reject in [false, true] {
+                    for (events, work) in [(0, usize::MAX), (1, len.saturating_sub(1)), (1, len), (1, usize::MAX)] {
+                        let make = || {
+                            let mut stream = XmlStream::new(XmlStreamLimits {
+                                max_events: events,
+                                max_work: work,
+                                ..XmlStreamLimits::default()
+                            });
+                            if inside {
+                                stream.frames.push(Frame {
+                                    name: Span { start: 0, len: 0 },
+                                    mark: 0,
+                                    bindings: 0,
+                                });
+                            }
+                            stream.token.extend(std::iter::repeat_n(b'x', len));
+                            if text {
+                                stream.token.extend_from_slice(b"  ");
+                                stream.trailing = 2;
+                            }
+                            stream.refresh().unwrap();
+                            stream
+                        };
+                        let mut expected = make();
+                        let mut actual = make();
+                        let mut old_sink = RecordingSink {
+                            reject,
+                            ..RecordingSink::default()
+                        };
+                        let mut new_sink = RecordingSink {
+                            reject,
+                            ..RecordingSink::default()
+                        };
+                        let before_capacity = actual.token.capacity();
+                        assert_eq!(
+                            actual.emit_token(text, None, &mut new_sink),
+                            original_token(&mut expected, text, &mut old_sink)
+                        );
+                        assert_eq!(new_sink.values, old_sink.values);
+                        assert_eq!(actual.usage(), expected.usage());
+                        assert_eq!(actual.summary(), expected.summary());
+                        assert!(actual.token.is_empty());
+                        assert_eq!(actual.token.capacity(), before_capacity);
+                        assert_eq!(actual.token.capacity(), expected.token.capacity());
+                        assert_eq!(actual.held_heap, 0);
+                        assert_eq!(actual.trailing, 0);
+                    }
+                }
+            }
+        }
+    }
+}

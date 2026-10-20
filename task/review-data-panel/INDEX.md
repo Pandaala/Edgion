@@ -11139,3 +11139,34 @@ Fresh verification passed 842 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+
+## Borrow WAF XML text scratch during emission
+
+XmlStream::emit_token now borrows its resident token during text/CDATA callbacks
+instead of taking and restoring its SmallVec owner. A shared prepare_emit helper
+retains the original syntax, event, summary and work admission order for both
+borrowed-source emission and buffered-token emission. Buffered emission still
+trims literal trailing whitespace only for text, emits empty CDATA, and clears
+the token/trailing state after admission or sink errors while retaining capacity.
+
+The token stays included in the parser's ordinary heap calculation. All three
+production emit_token callers run outside temporary held_heap scopes and pass no
+name; removing that path's former zero-plus-token-capacity bookkeeping cannot
+remove a reachable overflow. Name saving and attribute completion still take
+scratch and use held_heap because they can allocate other parser storage while
+those borrowed values are in use. Persistent layout, physical limits, work
+charges, body ownership and namespace processing remain unchanged.
+
+Independent plan review passed. A frozen original emission/admission oracle was
+verified against the original production path before editing, then compares
+inline/spilled buffers, text/CDATA, empty values, scope validity, sink rejection,
+and exact/one-below event/work limits with the new path. It checks callbacks,
+errors, all usage counters, summaries, capacity retention and cleanup. This
+removes source-level owner moves; compiler copy elimination and request throughput
+were not measured, and no eliminated heap allocation is claimed.
+
+Fresh verification passed 843 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
