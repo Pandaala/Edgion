@@ -234,14 +234,16 @@ fn test_auto_recovery_after_cooldown() {
 
 #[test]
 fn test_max_ejection_percent() {
-    let store = Fixture::new();
-    store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 25)));
+    for percent in [1, 25] {
+        let store = Fixture::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, percent)));
 
-    store.record_failure("default/svc1", 0, FailureClass::Gateway);
-    assert!(store.is_ejected("default/svc1", 0));
+        store.record_failure("default/svc1", 0, FailureClass::Gateway);
+        assert!(store.is_ejected("default/svc1", 0));
 
-    store.record_failure("default/svc1", 1, FailureClass::Gateway);
-    assert!(!store.is_ejected("default/svc1", 1));
+        store.record_failure("default/svc1", 1, FailureClass::Gateway);
+        assert!(!store.is_ejected("default/svc1", 1));
+    }
 }
 
 #[test]

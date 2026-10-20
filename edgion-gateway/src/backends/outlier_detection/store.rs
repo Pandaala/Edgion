@@ -192,13 +192,14 @@ impl OutlierDetectionStore {
                     let _guard = svc.eject_lock.lock();
                     #[cfg(test)]
                     svc.percent_arbitrations.fetch_add(1, Ordering::Relaxed);
+                    let max = ((total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize).max(1);
                     let currently_ejected = svc
                         .identity_endpoints
                         .iter()
                         .filter(|entry| entry.value().is_open())
+                        .take(max)
                         .count();
-                    let max = (total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
-                    endpoint.finish_failure(candidate, currently_ejected < max.max(1))
+                    endpoint.finish_failure(candidate, currently_ejected < max)
                 };
                 if transition == FailureTransition::Opened {
                     if let Some(remaining) = endpoint.legacy_ejection_remaining() {

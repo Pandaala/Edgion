@@ -8542,3 +8542,30 @@ check/Clippy and seven repository guards; existing unrelated warnings remain.
 This removes repeated zero-result state dispatch in ignored line tails. Active
 data scanning gains a branch; no universal CPU, allocation or throughput gain is
 claimed. No full suite or live-provider integration test ran.
+
+## Stop outlier arbitration scans at the ejection cap
+
+Identity-bound Service failure completion now stops counting open endpoint states
+once the normalized ejection cap is reached. is_open only reads state under its
+mutex; it does not expire cooldowns, recover endpoints or update metrics. Later
+observations cannot reduce the count already accumulated, so they cannot change
+the denial. Concurrent success already could clear a previously observed state
+without being revisited by the original scan; no coherent-snapshot guarantee is
+added or removed.
+
+The current coordinator membership, exact policy token, endpoint completion
+lock, service ejection lock and candidate revalidation remain unchanged.
+Zero-percent bypass is preserved, and positive caps are normalized to at least
+one before limiting the iterator. Below-cap scans still inspect the full map.
+No shared counter or retained state is introduced.
+
+The existing actual-fixture percent-cap regression now covers both 1% and 25%
+of four endpoints, pinning the rounded-down minimum-one case. It passed on the
+old production code before editing. Baseline and final serial verification
+passed 36 outlier-detection tests and 41 coordinator tests, including concurrent
+caps, retirement, recovery and policy replacement. Formatting, workspace
+check/Clippy and seven repository guards passed with existing unrelated warnings.
+
+The benefit is fewer map entries and endpoint read locks on cap-reached scans,
+depending on iteration order. No allocation, throughput or contention benchmark
+claim is made; no full suite or live integration test ran.
