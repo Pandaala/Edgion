@@ -704,3 +704,32 @@ fn html_entity_delimiters_preserve_decoding_and_output_limits() {
         assert_eq!(output, expected[..limit]);
     }
 }
+
+#[test]
+fn comment_search_preserves_first_closer_and_output_limits() {
+    for (input, expected) in [
+        (b"".as_slice(), b"".as_slice()),
+        (b"plain", b"plain"),
+        (b"/*", b" "),
+        (b"/*/", b" "),
+        (b"/**/", b" "),
+        (b"/***/", b" "),
+        (b"/****/tail", b" tail"),
+        (b"a/*outer/*inner*/tail*/b", b"a tail*/b"),
+        (b"/**//**/", b"  "),
+        (b"a/*closed*/b/*open", b"a b "),
+        (b"*/tail", b"*/tail"),
+    ] {
+        let mut output = Vec::new();
+        replace_comments(input, &mut output, expected.len()).unwrap();
+        assert_eq!(output, expected);
+        for limit in 0..expected.len() {
+            output.clear();
+            assert_eq!(
+                replace_comments(input, &mut output, limit),
+                Err(TransformError::OutputLimit { limit })
+            );
+            assert_eq!(output, expected[..limit]);
+        }
+    }
+}

@@ -10723,3 +10723,25 @@ Fresh verification passed 830 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## WAF path and comment delimiter searches
+
+The same Gateway WAF transformation call chain reaches normalize_path and
+replace_comments in the canonical leaf engine. The former now uses memrchr for
+the last output slash before removing a path component. The latter uses memmem
+for the first closing comment marker after an opener, advancing past that marker
+or to input end when absent. Searches mutate no output and emit no checkpoints;
+all surrounding path decisions, non-nesting comment semantics, bounded writes,
+scratch admission and logical work accounting remain unchanged.
+
+The existing relative/absolute/Windows path matrix remains. New comment goldens
+cover empty input, absent/unterminated comments, repeated stars, nested openers,
+adjacent comments and every insufficient output cap, including partial output.
+This reuses existing optimized search implementations without adding dependencies
+or claiming measured throughput or allocation reduction. Independent plan review
+passed. Scope is the transform source, its unit tests and this record only.
+
+Fresh verification passed 831 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

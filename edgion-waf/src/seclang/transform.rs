@@ -754,10 +754,7 @@ fn normalize_path(input: &[u8], output: &mut Vec<u8>, windows: bool, limit: usiz
             continue;
         }
         if component == b".." {
-            let start = output
-                .iter()
-                .rposition(|byte| *byte == b'/')
-                .map_or(0, |index| index + 1);
+            let start = memchr::memrchr(b'/', output).map_or(0, |index| index + 1);
             if output.len() > root_len && &output[start..] != b".." {
                 output.truncate(start.saturating_sub(1).max(root_len));
                 continue;
@@ -825,12 +822,7 @@ fn replace_comments(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<
             continue;
         }
         index += 2;
-        while index < input.len() && !input[index..].starts_with(b"*/") {
-            index += 1;
-        }
-        if index < input.len() {
-            index += 2;
-        }
+        index = memchr::memmem::find(&input[index..], b"*/").map_or(input.len(), |offset| index + offset + 2);
         push_byte(output, b' ', limit)?;
     }
     Ok(())
