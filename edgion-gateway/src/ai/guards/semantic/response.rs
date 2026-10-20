@@ -440,21 +440,10 @@ impl GuardrailResponseProcessor {
         self.publish_terminal("reject", "policy");
     }
 
-    fn remaining_raw_bytes(records: &VecDeque<crate::sse::window::WindowRecord>) -> Option<usize> {
-        records
-            .iter()
-            .try_fold(0usize, |total, record| total.checked_add(record.raw_len()))
-    }
-
-    fn rollback_fits(
-        &mut self,
-        output_len: usize,
-        emitted_len: usize,
-        remaining: &VecDeque<crate::sse::window::WindowRecord>,
-    ) -> bool {
+    fn rollback_fits(&mut self, output_len: usize, emitted_len: usize, remaining_raw_bytes: Option<usize>) -> bool {
         output_len
             .checked_add(emitted_len)
-            .and_then(|value| value.checked_add(Self::remaining_raw_bytes(remaining)?))
+            .and_then(|value| value.checked_add(remaining_raw_bytes?))
             .is_some_and(|value| value <= MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
     }
 
@@ -488,6 +477,9 @@ impl GuardrailResponseProcessor {
             *chunk = (!output.is_empty()).then(|| output.freeze());
             return;
         }
+        // Available batches already carry the checked sum of their records.
+        // A rejected retain keeps the current record in this total until retry succeeds.
+        let mut remaining_raw_bytes = Some(batch.raw_len());
         let mut records = VecDeque::from(batch.into_records());
         let Ok(mut output) = Self::output_buffer() else {
             self.terminate_dependency(sink, session, "callback-output-limit");
@@ -495,10 +487,14 @@ impl GuardrailResponseProcessor {
             return;
         };
         while let Some(mut record) = records.pop_front() {
-            self.summary.input_bytes = self.summary.input_bytes.saturating_add(record.raw_len() as u64);
+            let record_raw_len = record.raw_len();
+            self.summary.input_bytes = self.summary.input_bytes.saturating_add(record_raw_len as u64);
             loop {
                 match self.window.try_retain(record) {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        remaining_raw_bytes = remaining_raw_bytes.and_then(|bytes| bytes.checked_sub(record_raw_len));
+                        break;
+                    }
                     Err((_error, returned)) => {
                         record = returned;
                         let Ok(stats) = self.window.stats() else {
@@ -545,7 +541,7 @@ impl GuardrailResponseProcessor {
                             }
                             ParsedDecision::Reject => 0,
                         };
-                        if !self.rollback_fits(output.len(), emitted_len, &records) {
+                        if !self.rollback_fits(output.len(), emitted_len, remaining_raw_bytes) {
                             self.fail_dependency(&mut output, records, sink, session, "callback-output-limit");
                             *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
@@ -621,7 +617,7 @@ impl GuardrailResponseProcessor {
                     }
                     ParsedDecision::Reject => 0,
                 };
-                if !self.rollback_fits(output.len(), emitted_len, &records) {
+                if !self.rollback_fits(output.len(), emitted_len, remaining_raw_bytes) {
                     self.fail_dependency(&mut output, records, sink, session, "callback-output-limit");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
@@ -693,7 +689,7 @@ impl GuardrailResponseProcessor {
                     }
                     ParsedDecision::Reject => 0,
                 };
-                if !self.rollback_fits(output.len(), emitted_len, &VecDeque::new()) {
+                if !self.rollback_fits(output.len(), emitted_len, Some(0)) {
                     self.fail_dependency(&mut output, VecDeque::new(), sink, session, "callback-output-limit");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;

@@ -8472,3 +8472,26 @@ fixture with both optional fields. Formatting, workspace check/Clippy and seven
 repository guards passed with existing unrelated Clippy warnings. This removes
 two discarded String allocations for that nonempty unescaped fixture, not all
 parser allocations. No throughput benchmark or full suite ran.
+
+## Reuse callback-local Guardrail remaining-byte accounting
+
+Guardrail rollback reservation no longer rescans every remaining record and its
+raw slices at each decision. An available canonical batch already owns a checked
+raw-byte total. The callback retains that scalar and subtracts each record's saved
+length only after successful window admission. Failed admission and temporary
+requeue/retry leave the count unchanged, so the pending record remains reserved.
+Unavailable/fallback batches keep their previous path. Checked arithmetic,
+inclusive capacity bounds, input summaries, failure ordering and EOS are unchanged.
+
+The actual two-callback regression passed before and after the change. It forces
+two successive full-window release/retry transitions with multi-slice and empty
+records, then checks all output bytes and summaries. Boundary tests retain an
+independent suffix-sum reference and cover both addition overflows, missing totals
+and exact limits. Final verification passed 19 network-free response tests and
+12 canonical-batch tests, formatting, workspace check/Clippy and seven repository
+guards with existing unrelated warnings. Six existing wiremock response tests
+were excluded from this unit-only run; no integration or full suite ran.
+
+This removes repeated suffix traversal, which can revisit the same tail across
+many decisions in a bounded batch. It does not make all window processing linear
+or establish a throughput or allocation improvement.

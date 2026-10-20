@@ -293,10 +293,21 @@ async fn pending_release_continues_to_charge_work_and_exhaustion_stages_fail() {
 #[test]
 fn rollback_reservation_is_inclusive_and_checked() {
     let mut processor = processor(true);
-    let remaining = VecDeque::from([WindowRecord::raw(vec![Bytes::from_static(b"tail")])]);
-    assert!(processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 8, 4, &remaining));
-    assert!(!processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 7, 4, &remaining));
-    assert!(!processor.rollback_fits(usize::MAX, 1, &remaining));
+    let remaining = VecDeque::from([
+        WindowRecord::raw(vec![Bytes::from_static(b"ta"), Bytes::new()]),
+        WindowRecord::raw(Vec::new()),
+        WindowRecord::raw(vec![Bytes::from_static(b"i"), Bytes::from_static(b"l")]),
+    ]);
+    let scanned = remaining
+        .iter()
+        .try_fold(0usize, |total, record| total.checked_add(record.raw_len()));
+    assert_eq!(scanned, Some(4));
+    assert!(processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 8, 4, scanned));
+    assert!(!processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 7, 4, scanned));
+    assert!(!processor.rollback_fits(usize::MAX, 1, scanned));
+    assert!(!processor.rollback_fits(usize::MAX - 1, 1, scanned));
+    assert!(!processor.rollback_fits(0, 0, None));
+    assert!(processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES, 0, Some(0)));
     let output = GuardrailResponseProcessor::output_buffer().unwrap();
     assert_eq!(output.capacity(), MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES);
 }
@@ -402,6 +413,52 @@ async fn eos_flushes_raw_tail_once_without_a_callout() {
     let summary = processor.owner.take_summary_line().unwrap();
     assert!(summary.contains("windows=0"));
     assert!(summary.contains("outcome=pass"));
+}
+
+#[tokio::test]
+async fn raw_batch_retries_two_full_windows_without_losing_remaining_bytes() {
+    let prefix = Bytes::from(vec![b'a'; 400_000]);
+    let middle = Bytes::from(vec![b'b'; 800_000]);
+    let tail = Bytes::from(vec![b'c'; 250_000]);
+    let mut initial = CanonicalRecordBatch::new();
+    initial.push(WindowRecord::raw(vec![prefix.clone()])).unwrap();
+    let mut processor = processor(false);
+    let mut chunk = None;
+    let mut sink = ResponseBodySink::new();
+    let mut session = MockPluginSession::new();
+    processor
+        .process_batch(initial, false, &mut chunk, &mut sink, &mut session)
+        .await;
+    assert!(chunk.is_none());
+    assert_eq!(processor.window.stats().unwrap().raw_bytes, prefix.len());
+
+    let mut batch = CanonicalRecordBatch::new();
+    batch
+        .push(WindowRecord::raw(vec![
+            middle.slice(..400_000),
+            middle.slice(400_000..),
+        ]))
+        .unwrap();
+    batch.push(WindowRecord::raw(Vec::new())).unwrap();
+    batch
+        .push(WindowRecord::raw(vec![tail.slice(..1), tail.slice(1..)]))
+        .unwrap();
+    assert_eq!(batch.status(), CanonicalSourceStatus::Available);
+    assert_eq!(batch.raw_len(), middle.len() + tail.len());
+    assert!(prefix.len() + middle.len() > MAX_RAW_BYTES);
+    assert!(middle.len() + tail.len() > MAX_RAW_BYTES);
+    processor
+        .process_batch(batch, true, &mut chunk, &mut sink, &mut session)
+        .await;
+
+    let expected = [prefix.as_ref(), middle.as_ref(), tail.as_ref()].concat();
+    assert_eq!(chunk.as_deref(), Some(expected.as_slice()));
+    assert!(!sink.is_terminated());
+    assert!(!processor.disabled);
+    assert_eq!(processor.summary.input_bytes, expected.len() as u64);
+    assert_eq!(processor.summary.output_bytes, expected.len() as u64);
+    assert_eq!(processor.summary.windows, 0);
+    assert_eq!(processor.summary.outcome, "pass");
 }
 
 #[tokio::test]
