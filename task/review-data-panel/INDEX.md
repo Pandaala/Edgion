@@ -10193,3 +10193,31 @@ runtime tests (77 total), formatting, workspace all-target check/Clippy and the
 seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No new test, live provider/Redis exchange or throughput benchmark ran.
+
+## Reuse candidate storage within one AI target-selection call
+
+select_target now retains a local Vec capacity across backend scans in its
+synchronous loop. Each scan clears and rebuilds every candidate, including
+eligibility, cost and current adaptive snapshots, in the original order. Only
+storage is reused; no selection result or telemetry snapshot is cached across
+scans or calls. The Copy projections retain no backend or telemetry owner.
+
+Storage remains lazy for direct credential selection and stopped/invalid states.
+The first backend scan reserves the exact candidate count before extending, so
+a singleton does not inherit Vec's minimum growth capacity. The buffer is dropped
+when select_target returns and is never stored in request state or across await.
+
+The baseline-first regression crosses the actual scheduler and selector: a
+single credential's dispatched retryable failure exhausts its round, causes an
+excluded-backend scan and then advances to a fresh round in one selector call.
+Its measured allocations fall from two candidate buffers to one. First selection
+still allocates one exact-size buffer; direct selection of a second credential
+and selection after retry-budget exhaustion allocate none. The test also checks
+selected credentials, round progression, dispatch count and failure ledger.
+These are fixture allocation results, not measured throughput improvements.
+
+Fresh verification passed 36 dispatch, nine attempt-scheduler and 13 candidate
+picker tests (58 total), formatting, workspace all-target check/Clippy and all
+seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No live provider, Redis exchange or throughput benchmark ran.

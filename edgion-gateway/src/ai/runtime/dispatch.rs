@@ -678,6 +678,7 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
 }
 
 fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<SelectedTarget, AiDispatchError> {
+    let mut route_candidates = Vec::new();
     loop {
         let service_step = match plan.scheduler.next_step() {
             NextStep::PickBackend(step) => Some(step),
@@ -692,53 +693,52 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             _ => return Err(AiDispatchError::InvalidConfiguration),
         };
         let service_step = service_step.expect("PickBackend branch supplies state");
-        let route_candidates: Vec<_> =
-            plan.candidates
-                .iter()
-                .enumerate()
-                .map(|(index, candidate)| {
-                    let dispatchable_credential =
-                        candidate.backend.as_ref().is_some_and(|backend| {
-                            backend.credential_pool.credentials.iter().enumerate().any(
-                                |(credential_index, credential)| {
-                                    credential.weight > 0
-                                        && candidate
-                                            .credential_outliers
-                                            .get(credential_index)
-                                            .is_some_and(Option::is_some)
-                                },
-                            )
-                        });
-                    let cost = candidate.model.as_ref().and_then(|model| {
-                        model.pricing.map(|pricing| CostSnapshot {
-                            input_price_micro_usd_per_million: pricing.input.get(),
-                            output_price_micro_usd_per_million: pricing.output.get(),
-                            service_max_output_tokens: candidate
-                                .backend
-                                .as_ref()
-                                .and_then(|backend| backend.max_output_tokens)
-                                .map(u64::from),
-                        })
-                    });
-                    RouteCandidate {
-                        slot: u8::try_from(candidate.slot).unwrap_or(u8::MAX),
-                        order: candidate.order,
-                        weight: candidate.weight,
-                        eligibility: CandidateEligibility {
-                            valid_ref: true,
-                            model_compatible: candidate.model.is_some(),
-                            runtime_available: dispatchable_credential,
-                            untried: service_step.excluded_backends & (1u16 << index) == 0,
-                        },
-                        adaptive: candidate
-                            .adaptive
-                            .as_ref()
-                            .map(|state| state.snapshot())
-                            .unwrap_or_default(),
-                        cost,
-                    }
+        route_candidates.clear();
+        route_candidates.reserve_exact(plan.candidates.len());
+        route_candidates.extend(plan.candidates.iter().enumerate().map(|(index, candidate)| {
+            let dispatchable_credential = candidate.backend.as_ref().is_some_and(|backend| {
+                backend
+                    .credential_pool
+                    .credentials
+                    .iter()
+                    .enumerate()
+                    .any(|(credential_index, credential)| {
+                        credential.weight > 0
+                            && candidate
+                                .credential_outliers
+                                .get(credential_index)
+                                .is_some_and(Option::is_some)
+                    })
+            });
+            let cost = candidate.model.as_ref().and_then(|model| {
+                model.pricing.map(|pricing| CostSnapshot {
+                    input_price_micro_usd_per_million: pricing.input.get(),
+                    output_price_micro_usd_per_million: pricing.output.get(),
+                    service_max_output_tokens: candidate
+                        .backend
+                        .as_ref()
+                        .and_then(|backend| backend.max_output_tokens)
+                        .map(u64::from),
                 })
-                .collect();
+            });
+            RouteCandidate {
+                slot: u8::try_from(candidate.slot).unwrap_or(u8::MAX),
+                order: candidate.order,
+                weight: candidate.weight,
+                eligibility: CandidateEligibility {
+                    valid_ref: true,
+                    model_compatible: candidate.model.is_some(),
+                    runtime_available: dispatchable_credential,
+                    untried: service_step.excluded_backends & (1u16 << index) == 0,
+                },
+                adaptive: candidate
+                    .adaptive
+                    .as_ref()
+                    .map(|state| state.snapshot())
+                    .unwrap_or_default(),
+                cost,
+            }
+        }));
         let selected = match pick(
             PickerInput {
                 candidates: &route_candidates,

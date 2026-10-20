@@ -744,6 +744,73 @@ fn limited_only_pool_is_dispatch_candidate() {
 }
 
 #[test]
+fn target_selection_allocations_follow_backend_scans_and_retry_rounds() {
+    for credential_count in [1, 2] {
+        let mut plan = selectable_plan(
+            (0..credential_count)
+                .map(|index| RuntimeAiCredential {
+                    name: format!("credential-{index}"),
+                    weight: 1,
+                    credential: "test-key".into(),
+                    limits: None,
+                })
+                .collect(),
+        );
+        let weights = vec![1; credential_count];
+        plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 1).unwrap();
+        let candidate_bytes = std::mem::size_of::<RouteCandidate>();
+        let (first, first_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| select_target(&mut plan, 0));
+        assert_eq!(
+            first.unwrap(),
+            SelectedTarget {
+                candidate: 0,
+                credential: 0
+            }
+        );
+        assert_eq!(first_stats.calls, 1);
+        assert_eq!(first_stats.requested_bytes, candidate_bytes);
+        assert_eq!(plan.scheduler.round(), 0);
+        assert_eq!(plan.scheduler.dispatch_count(), 0);
+
+        plan.scheduler.start_dispatch().unwrap();
+        plan.scheduler
+            .finish_dispatch(DispatchOutcome::RetryableFailure)
+            .unwrap();
+        let (retry, retry_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| select_target(&mut plan, 0));
+        assert_eq!(
+            retry.unwrap(),
+            SelectedTarget {
+                candidate: 0,
+                credential: credential_count - 1,
+            }
+        );
+        let allocations = usize::from(credential_count == 1);
+        assert_eq!(retry_stats.calls, allocations);
+        assert_eq!(retry_stats.requested_bytes, allocations * candidate_bytes);
+        assert_eq!(plan.scheduler.round(), u8::from(credential_count == 1));
+        assert_eq!(plan.scheduler.dispatch_count(), 1);
+        assert_eq!(plan.scheduler.failures().len(), 1);
+
+        plan.scheduler.start_dispatch().unwrap();
+        plan.scheduler
+            .finish_dispatch(DispatchOutcome::RetryableFailure)
+            .unwrap();
+        assert_eq!(
+            plan.scheduler.next_step(),
+            NextStep::Stop(crate::ai::runtime::attempt::StopReason::RetryLimitReached)
+        );
+        let (stopped, stopped_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| select_target(&mut plan, 0));
+        assert_eq!(stopped, Err(AiDispatchError::Unavailable));
+        assert_eq!(stopped_stats.calls, 0);
+        assert_eq!(plan.scheduler.dispatch_count(), 2);
+        assert_eq!(plan.scheduler.failures().len(), 2);
+    }
+}
+
+#[test]
 fn target_selection_reports_unavailable_when_every_candidate_is_exhausted() {
     let credential = || RuntimeAiCredential {
         name: "primary".to_string(),
