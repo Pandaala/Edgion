@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Inactive downstream request-body module dispatch](context-02-request-body-module-dispatch.md)
+
 - [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
 
 - [Incremental semantic window statistics](sse-01-incremental-window-statistics.md)
@@ -8764,5 +8766,21 @@ codec-specific terminal operations. Decompressors remain excluded.
 This source audit makes no empty-output frequency or net performance claim.
 No dependency checkout, runtime source or lockfile changed. Independent plan
 review passed; no runtime tests or benchmarks ran in this documentation batch.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+checks passed with existing unrelated warnings. Final independent review passed.
+
+## Inspect downstream request-body module dispatch
+
+The pinned compression and gRPC-Web implementations inherit the async no-op
+request-body hook. When the relay reaches body-hook dispatch, HttpModuleCtx
+awaits every registered module before the application action; earlier trailer
+errors or termination can bypass this stage. The locked async-trait expansion
+uses boxed futures. A stage-participation or synchronous-result contract is
+deferred in context-02 rather than hardcoding a two-module bypass.
+
+This source observation is distinct from outer context storage and per-connection
+Stream plugin dispatch. It does not establish optimized allocation counts or
+CPU gains. Independent plan review passed. No runtime code, dependency checkout
+or revision changed; no runtime tests or benchmarks ran.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 checks passed with existing unrelated warnings. Final independent review passed.
