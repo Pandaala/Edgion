@@ -9037,3 +9037,27 @@ optional capture-hit matchers and regex hints, preserve runtime error ordering,
 and account for compiled metadata. Constructor-local subtotal reuse is a smaller
 alternative. No runtime or admission-policy change and no performance measurement
 was made in this audit; broader engine coverage remains open.
+
+## Reuse WAF constructor matcher scratch subtotal
+
+Transaction initialization now computes the immutable program scratch subtotal
+once, then adds requested Option slot storage for preallocation admission and
+actual Option capacity storage for reconciliation. The checked program traversal
+still includes ordinary and optional capture-hit matchers, boolean programs and
+capture programs. Its first evaluation follows RequestState construction as
+before; removing a repeated successful calculation changes no later error result.
+
+All scratch and aggregate-retained limits, allocation order, actual capacity
+checks and lazy engine initialization remain unchanged. No generation field,
+request-retained field, pooling or reached-only admission is introduced. The
+pure capacity helper has overflow tests for each slot family and total addition;
+existing exact-budget and lazy-initialization tests remain. The broader cold
+preparation proposal in waf-01 stays deferred against this updated local baseline.
+This removes one source-level program traversal, not a measured CPU/heap claim.
+
+Final verification passed 812 leaf tests (six existing ignored cases) and
+90 Gateway WAF-related tests. The now test-only aggregate helper lives in the
+mounted test file; its cfg(test) import preserves nested test access. Formatting,
+workspace all-target check and Clippy, agent documentation, SSA-force, metrics
+inventory, Pingora-source policy, Gateway API transform contract, unit-test layout
+and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.

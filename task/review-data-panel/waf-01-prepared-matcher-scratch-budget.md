@@ -3,15 +3,16 @@
 Status: deferred for user decision. Priority: P2. Type: performance investigation.
 Inspected baseline: `6e41d58f9`.
 
-## Evidence
+## Historical evidence and current scope
 
-The Gateway WAF request hook calls Transaction::new_shared_with_policy. In
-`edgion-waf/src/seclang/transaction.rs`, new_with_handle builds RequestState,
-computes matcher_scratch_bytes, checks scratch and aggregate retained limits,
-allocates three vectors of empty Option slots, then calls matcher_scratch_capacity
-again with actual vector capacities. Both calculations traverse all_matchers,
-boolean_regexes and capture_regexes. They sum each program's conservative scratch
-envelope minus its inline scratch struct, then add Option slot storage.
+At the inspected baseline, the Gateway WAF request hook called
+Transaction::new_shared_with_policy. In
+`edgion-waf/src/seclang/transaction.rs`, new_with_handle built RequestState,
+computed matcher_scratch_bytes, checked scratch and aggregate retained limits,
+allocated three vectors of empty Option slots, then called matcher_scratch_capacity
+again with actual vector capacities. Both calculations traversed all_matchers,
+boolean_regexes and capture_regexes. They summed each program's conservative scratch
+envelope minus its inline scratch struct, then added Option slot storage.
 
 The compiled program inputs are immutable during request execution. However,
 `CompiledGeneration::publish_with_work` in compiler.rs installs optional capture-hit
@@ -22,7 +23,7 @@ optional engines and any hint-dependent scratch requirements.
 
 Engine scratch is already lazy: lazy_group_scratch, lazy_boolean_scratch and
 lazy_capture_scratch initialize their individual request-owned slots on first use.
-The repeated work here is budget computation, not duplicate engine allocation.
+The historical repeated work was budget computation, not duplicate engine allocation.
 The full generation envelope is conservative admission, not measured heap or RSS.
 See `skills/04-review/waf/regression-guards/fused-json-inspection.md`, especially
 Demand-driven scratch and static activation and optional capture-hit ownership.
@@ -32,11 +33,11 @@ Demand-driven scratch and static activation and optional capture-hit ownership.
 Evaluate storing the checked program-envelope subtotal in the immutable generation
 at its final publication point. Each request would still account for requested
 and actual Option capacities and perform its existing runtime-limit checks.
-Compare this with constructor-local subtotal reuse, which removes the second
-program walk without adding generation metadata, and retaining the current code
-if representative measurements do not justify either change. The local alternative
-does not inherently require a new authorization boundary; this task records the
-broader cold-preparation choice, not a technical prohibition on local reuse.
+Constructor-local subtotal reuse is now implemented: one program walk supplies
+both requested-slot admission and actual-capacity reconciliation. No generation
+metadata was added. Evaluate further cold preparation against this updated
+baseline, or retain local reuse if measurements do not justify added compiled
+state. The remaining decision concerns eliminating the first per-request walk.
 
 Preserve RequestState validation before scratch admission. Moving arithmetic to
 compilation must not silently replace a runtime Arithmetic outcome with compiler
@@ -68,4 +69,6 @@ profiling metric is needed.
   and large rule sets. Report preparation cost and per-generation storage too.
 - Run the leaf unit suite, Gateway WAF tests, workspace checks and relevant guards.
 
-This record changes no runtime code and supplies no fresh performance measurement.
+Generation-prepared budgets remain unimplemented. The subsequent constructor-local
+reuse preserves runtime admission and is recorded in INDEX.md; it does not resolve
+this broader proposal or supply a performance measurement.

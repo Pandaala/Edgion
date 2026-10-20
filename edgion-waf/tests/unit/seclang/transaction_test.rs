@@ -1,5 +1,14 @@
 use super::*;
 
+pub(super) fn matcher_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
+    matcher_scratch_capacity(
+        matcher_program_scratch_bytes(generation)?,
+        generation.matcher_count(),
+        generation.boolean_regexes.len(),
+        generation.capture_regexes.len(),
+    )
+}
+
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn xml_kind_variants_preserve_selected_value_storage_size() {
@@ -4211,6 +4220,29 @@ fn frozen_clone_unit_into(
 }
 
 #[test]
+fn matcher_capacity_accounting_checks_slot_multiplication_and_total_overflow() {
+    assert_eq!(matcher_scratch_capacity(0, 0, 0, 0), Ok(0));
+    assert_eq!(matcher_scratch_capacity(usize::MAX, 0, 0, 0), Ok(usize::MAX));
+    let expected = 11
+        + 2 * size_of::<Option<MatchScratch>>()
+        + 3 * size_of::<Option<RegexBooleanScratch>>()
+        + 4 * size_of::<Option<RegexCaptureScratch>>();
+    assert_eq!(matcher_scratch_capacity(11, 2, 3, 4), Ok(expected));
+    for (groups, booleans, captures) in [(usize::MAX, 0, 0), (0, usize::MAX, 0), (0, 0, usize::MAX)] {
+        assert_eq!(
+            matcher_scratch_capacity(0, groups, booleans, captures),
+            Err(RuntimeError::Arithmetic)
+        );
+    }
+    for (groups, booleans, captures) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+        assert_eq!(
+            matcher_scratch_capacity(usize::MAX, groups, booleans, captures),
+            Err(RuntimeError::Arithmetic)
+        );
+    }
+}
+
+#[test]
 fn lazy_program_slots_initialize_once_and_preserve_generation_wide_admission() {
     let g = generation(concat!(
         "SecRule REQUEST_URI \"@pm hit one\" \"id:901,phase:1,pass\"\n",
@@ -4238,7 +4270,7 @@ fn lazy_program_slots_initialize_once_and_preserve_generation_wide_admission() {
     assert_eq!(tx.tx_value(b"word"), Some(b"hit".as_slice()));
     assert!(tx.group_scratch.iter().any(Option::is_none));
     let expected = matcher_scratch_capacity(
-        &g,
+        matcher_program_scratch_bytes(&g).unwrap(),
         tx.group_scratch.capacity(),
         tx.boolean_scratch.capacity(),
         tx.capture_scratch.capacity(),

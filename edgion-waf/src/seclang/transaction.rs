@@ -1350,7 +1350,13 @@ impl<'generation> Transaction<'generation> {
         check_policy: RuleCheckPolicy,
     ) -> Result<Self, RuntimeError> {
         let request = RequestState::build(request, limits)?;
-        let scratch_bytes = matcher_scratch_bytes(&generation)?;
+        let program_scratch_bytes = matcher_program_scratch_bytes(&generation)?;
+        let scratch_bytes = matcher_scratch_capacity(
+            program_scratch_bytes,
+            generation.matcher_count(),
+            generation.boolean_regexes.len(),
+            generation.capture_regexes.len(),
+        )?;
         if scratch_bytes > limits.max_matcher_scratch_bytes {
             return Err(RuntimeError::MatcherScratchByteLimit {
                 limit: limits.max_matcher_scratch_bytes,
@@ -1381,7 +1387,7 @@ impl<'generation> Transaction<'generation> {
             .map_err(|_| RuntimeError::Allocation)?;
         capture_scratch.resize_with(generation.capture_regexes.len(), || None);
         let actual_scratch = matcher_scratch_capacity(
-            &generation,
+            program_scratch_bytes,
             group_scratch.capacity(),
             boolean_scratch.capacity(),
             capture_scratch.capacity(),
@@ -4066,21 +4072,7 @@ fn signed_decimal_bytes(value: i64) -> ([u8; 40], usize) {
     (bytes, start)
 }
 
-fn matcher_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
-    matcher_scratch_capacity(
-        generation,
-        generation.matcher_count(),
-        generation.boolean_regexes.len(),
-        generation.capture_regexes.len(),
-    )
-}
-
-fn matcher_scratch_capacity(
-    generation: &CompiledGeneration,
-    groups: usize,
-    booleans: usize,
-    captures: usize,
-) -> Result<usize, RuntimeError> {
+fn matcher_program_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
     let mut total = 0_usize;
     for matcher in generation.all_matchers() {
         total = total
@@ -4112,6 +4104,16 @@ fn matcher_scratch_capacity(
             )
             .ok_or(RuntimeError::Arithmetic)?;
     }
+    Ok(total)
+}
+
+fn matcher_scratch_capacity(
+    program_bytes: usize,
+    groups: usize,
+    booleans: usize,
+    captures: usize,
+) -> Result<usize, RuntimeError> {
+    let mut total = program_bytes;
     for (count, unit) in [
         (groups, size_of::<Option<MatchScratch>>()),
         (booleans, size_of::<Option<RegexBooleanScratch>>()),
@@ -6130,6 +6132,9 @@ fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::BodyPr
 #[cfg(test)]
 #[path = "../../tests/unit/seclang/transaction_test.rs"]
 mod tests;
+
+#[cfg(test)]
+use tests::matcher_scratch_bytes;
 
 #[path = "json_inspection.rs"]
 mod json_inspection;
