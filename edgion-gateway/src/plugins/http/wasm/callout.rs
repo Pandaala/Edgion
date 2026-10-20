@@ -252,7 +252,10 @@ fn validate_response_headers(headers: &reqwest::header::HeaderMap) -> Result<(),
         return Err(());
     }
     let total = headers.iter().try_fold(0usize, |total, (name, value)| {
-        total.checked_add(name.as_str().len())?.checked_add(value.len())
+        total
+            .checked_add(name.as_str().len())?
+            .checked_add(value.len())
+            .filter(|total| *total <= 64 * 1024)
     });
     if total.is_none_or(|total| total > 64 * 1024) {
         return Err(());

@@ -11520,3 +11520,29 @@ repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
 Final independent review passed after correcting a new Clippy let-else warning
 and rerunning the targeted suites and workspace checks.
+
+## Stop oversized Wasm callout response-header scans early
+
+The callout response-header admission fold now stops at the first checked prefix
+over 64 KiB. The existing 1024-value count gate still runs first. Nonnegative name
+and value lengths make rejection certain at an oversized prefix; checked overflow,
+the inclusive accepted bounds and Err(()) remain unchanged. The final total guard
+is retained. Header copying, lossy conversion, status insertion and bounded body
+reading are untouched. No new heap-bound or measured throughput claim is made.
+
+The direct callout resolver transfers pending entries with mem::take and consumes
+them serially for at most four rounds. Deadlines are checked before execution and
+before guest reentry. Undelivered tokens poison the lease rather than allowing
+unsafe reuse. Request construction consumes owned payloads; response delivery
+moves the result into the callback frame. These inspected orchestration boundaries
+do not claim complete reqwest, resolver, guest runtime or transport coverage.
+
+Independent plan review passed. The existing response-header snapshot regression
+passed before editing, covering inclusive byte/count limits and oversized input.
+The pure early exit needs no duplicate implementation-shaped test.
+
+Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
+trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.
