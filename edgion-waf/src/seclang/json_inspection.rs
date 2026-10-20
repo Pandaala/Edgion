@@ -1371,11 +1371,11 @@ impl<'generation> ResultStore<'generation> {
         self.active(|store| match (left, right) {
             (Some(left), Some(right)) => {
                 store.budget.work(2)?;
-                if left.tail == right.head
-                    || store.records.candidates.get(left.tail.0)?.next.is_some()
-                    || !store.records.candidates.get(left.tail.0)?.complete
-                    || !store.records.candidates.get(right.head.0)?.complete
-                {
+                if left.tail == right.head {
+                    return Err(StoreError::Identity);
+                }
+                let tail = store.records.candidates.get(left.tail.0)?;
+                if tail.next.is_some() || !tail.complete || !store.records.candidates.get(right.head.0)?.complete {
                     return Err(StoreError::Identity);
                 }
                 store.records.candidates.get(right.tail.0)?;
@@ -1518,6 +1518,7 @@ impl<'generation> ResultStore<'generation> {
                 }
                 next = candidate.next.map(|id| id.full(store.records.candidates.owner));
                 let name = candidate.name;
+                let named = candidate.kind != CandidateKind::XmlText;
                 let mut outcome_next = candidate.outcomes.map(|id| id.full(store.records.outcomes.owner));
                 let mut required = [false; 2];
                 while let Some(outcome_id) = outcome_next {
@@ -1559,7 +1560,6 @@ impl<'generation> ResultStore<'generation> {
                     } else {
                         collection.as_str().as_bytes()
                     };
-                    let named = store.records.candidates.get(id.0)?.kind != CandidateKind::XmlText;
                     store.records.bytes.read(name)?;
                     let separator = usize::from(named);
                     let len = add(add(prefix.len(), separator)?, name.len)?;

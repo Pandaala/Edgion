@@ -11253,3 +11253,26 @@ Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## Reuse WAF candidate reads during merge and sealing
+
+Receipt concatenation now keeps the checked left-tail reference for its next-link
+and completion checks. Work charging and self-concatenation rejection still occur
+first; right-head, right-tail and left-head validation and the final mutable lookup
+retain their order. Sealing copies the qualified-name separator decision from the
+already checked candidate instead of querying its kind again for each needed view.
+Intervening work changes other pools and byte storage, not that candidate record.
+
+Pool reads are pure and unmetered; the existing budget, allocation and ordered
+failure checkpoints remain. This does not cache across mutation or change JSON/XML
+name bytes, sparse views, receipt order or cleanup ownership. Discard/free_outcome
+read-before-remove paths remain intact because removal charges work and advances
+slot generations. Independent plan review passed. Existing receipt, reuse, sparse
+qualified-name, identity and XML replay tests cover these local reuses; no mirror
+test was added. Scope is the result-store source and this record. Compiler effects
+and request-throughput benefits were not measured.
+
+Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
