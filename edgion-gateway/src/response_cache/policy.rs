@@ -131,10 +131,15 @@ impl Freshness {
     ) -> Option<Self> {
         let lifetime = supported_header_lifetime(response)?.min(max_ttl);
         let date = httpdate::parse_http_date(std::str::from_utf8(singleton(&response.headers, "date")?).ok()?).ok()?;
-        let age = if response.headers.contains_key("age") {
-            decimal(singleton(&response.headers, "age")?)?
-        } else {
-            0
+        let mut ages = response.headers.get_all("age").iter();
+        let age = match ages.next() {
+            None => 0,
+            Some(value) => {
+                if ages.next().is_some() {
+                    return None;
+                }
+                decimal(value.as_bytes())?
+            }
         };
         let apparent_age = received_wall.duration_since(date).unwrap_or(Duration::ZERO);
         let corrected_age = Duration::from_secs(age).checked_add(header_at.saturating_duration_since(request_at))?;

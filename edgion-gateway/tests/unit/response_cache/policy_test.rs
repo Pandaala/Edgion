@@ -54,6 +54,44 @@ fn contract_is_strict_and_not_a_lossy_general_directive_parser() {
 }
 
 #[test]
+fn freshness_distinguishes_absent_single_and_repeated_age_values() {
+    let now = Instant::now();
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000);
+    let cases: &[(&[&[u8]], Option<u64>)] = &[
+        (&[], Some(0)),
+        (&[b"0"], Some(0)),
+        (&[b"0007"], Some(7)),
+        (&[b"18446744073709551615"], Some(u64::MAX)),
+        (&[b""], None),
+        (&[b" 1"], None),
+        (&[b"1 "], None),
+        (&[b"+1"], None),
+        (&[b"-1"], None),
+        (&[b"18446744073709551616"], None),
+        (&[b"\xff"], None),
+        (&[b"1", b"2"], None),
+        (&[b"", b"1"], None),
+        (&[b"1", b""], None),
+    ];
+    for &(values, expected) in cases {
+        let mut response = crate::response_cache::tests::response();
+        response.insert_header("date", httpdate::fmt_http_date(wall)).unwrap();
+        response.remove_header("age");
+        for value in values {
+            response
+                .append_header("age", http::HeaderValue::from_bytes(value).unwrap())
+                .unwrap();
+        }
+        let freshness = Freshness::from_headers(&response, now, now, wall, Duration::from_secs(60));
+        assert_eq!(
+            freshness.map(|freshness| freshness.initial_age),
+            expected.map(Duration::from_secs),
+            "{values:?}"
+        );
+    }
+}
+
+#[test]
 fn upstream_age_delay_and_body_residency_do_not_restart_freshness() {
     let now = Instant::now();
     let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000);

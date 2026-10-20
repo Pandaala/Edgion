@@ -8820,3 +8820,20 @@ This removes a separate validation traversal, not allocations. The old digit
 prepass may optimize differently from the combined loop; no universal CPU or
 throughput gain is claimed. No full suite or performance benchmark ran.
 Final independent review passed.
+
+## Read optional cache Age through one header lookup
+
+Freshness construction now reads Age with one get_all iterator rather than
+contains_key followed by singleton lookup. Missing remains zero; any second
+value rejects before strict decimal parsing. The Date/lifetime validation order,
+apparent age, response delay, overflow and remaining-lifetime calculations are
+unchanged. No stored state or header mutation is introduced.
+
+Independent plan review passed. A real HeaderMap matrix passed against the old
+implementation before the edit, covering absent, zero, leading zeros, maximum,
+empty, whitespace, signs, overflow, non-text and repeated values (including empty
+first or last). Final verification passed six policy and 21 storage tests,
+formatting, workspace all-target check/Clippy and seven guards with existing
+unrelated warnings. This removes one lookup when Age is present; no allocation
+or throughput improvement is claimed. No full suite or benchmark ran.
+Final independent review passed.
