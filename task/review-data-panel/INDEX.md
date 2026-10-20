@@ -8647,3 +8647,25 @@ passed.
 The benefit is limited to skipping the linear safety scan for a value already
 over its configured limit. No allocation reduction or general throughput gain
 is claimed; no network test or full suite ran.
+
+## Avoid unused self-weak ownership for unregistered OIDC refresh flights
+
+The request-filter refresh path reaches `RefreshFlightRegistry::get_or_create`.
+When its bounded map is full, each caller receives an independent unregistered
+flight. This saturation branch now constructs the flight with `Arc::new` and an
+empty `self_weak`, rather than cyclic initialization and a cloned self-reference.
+The only reader of `self_weak` is registered-entry identity cleanup; ephemeral
+Drop returns immediately because `registered_key` is absent. The caller's strong
+Arc still owns the Mutex throughout waiting, refresh and cancellation.
+
+Registered-flight cyclic construction, weak-map ownership, capacity admission,
+lock release and allocation-identity cleanup remain unchanged. Independent plan
+review passed. All six existing registry tests passed both before and after the
+change: same-key reuse, different-key independence, saturation without map growth,
+last-owner cleanup without deadlock, and both capacity validation boundaries.
+Formatting, workspace all-target check/Clippy and seven guards passed, with
+existing unrelated Clippy warnings. Final independent review passed.
+
+This removes unused self-weak ownership and cyclic setup only in the saturated
+branch. It does not remove the flight allocation or claim a measured throughput
+improvement. No network test or full suite ran.

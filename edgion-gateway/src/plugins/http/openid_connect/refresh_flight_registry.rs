@@ -89,11 +89,11 @@ impl RefreshFlightRegistry {
 
 impl RefreshFlight {
     fn ephemeral() -> Arc<Self> {
-        Arc::new_cyclic(|self_weak| Self {
+        Arc::new(Self {
             lock: Mutex::new(()),
             registered_key: None,
             registry: Weak::new(),
-            self_weak: self_weak.clone(),
+            self_weak: Weak::new(),
         })
     }
 
