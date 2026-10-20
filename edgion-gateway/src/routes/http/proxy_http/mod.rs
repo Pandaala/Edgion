@@ -67,6 +67,16 @@ fn retry_budget_allows_next_attempt(completed_attempts: u32, retry_attempts: u32
     completed_attempts <= retry_attempts
 }
 
+fn append_request_trace_summary(mut summary: String, trace_id: Option<&str>) -> String {
+    if let Some(trace_id) = trace_id {
+        const SEPARATOR: &str = ", trace-id: ";
+        summary.reserve_exact(SEPARATOR.len() + trace_id.len());
+        summary.push_str(SEPARATOR);
+        summary.push_str(trace_id);
+    }
+    summary
+}
+
 /// HTTP proxy service for Gateway HTTP/HTTPS listeners.
 pub struct EdgionHttpProxy {
     pub listener_port: u16,
@@ -386,10 +396,7 @@ impl ProxyHttp for EdgionHttpProxy {
         // can be joined with its access-log entry instead of a heuristic
         // timestamp+path match.
         let summary = session.as_ref().request_summary();
-        match ctx.request_info.trace_id.standard_trace_id() {
-            Some(trace_id) => format!("{summary}, trace-id: {trace_id}"),
-            None => summary,
-        }
+        append_request_trace_summary(summary, ctx.request_info.trace_id.standard_trace_id())
     }
 
     async fn connected_to_upstream(
@@ -424,5 +431,9 @@ impl ProxyHttp for EdgionHttpProxy {
 #[cfg(test)]
 #[path = "../../../../tests/unit/routes/http/proxy_http/mod_test/retry_budget_tests.rs"]
 mod retry_budget_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/routes/http/proxy_http/mod_test/request_summary_tests.rs"]
+mod request_summary_tests;
 
 pub(crate) use pg_upstream_peer::prepare_selected_policy_admission;

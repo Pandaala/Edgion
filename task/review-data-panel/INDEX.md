@@ -10086,3 +10086,31 @@ and 26 response-filter tests (45 total), formatting, workspace all-target
 check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
 No runtime code, dependency source or revision changed; no decoder execution
 test, complete fork codec suite or performance measurement ran.
+
+## Append trace identity into the owned request summary
+
+ProxyHttp::request_summary now appends the same separator and canonical trace ID
+to Pingora's owned summary buffer, reserving only the additional required
+capacity. The no-trace path returns that owner untouched. It no longer formats a
+separate result String while retaining the original summary. Existing capacity
+can eliminate allocation; insufficient capacity may still reallocate and copy.
+No universal allocation-count, allocator movement or throughput claim is made.
+
+The trait still obtains the protocol-specific Pingora summary before reading
+standard_trace_id. No URI reconstruction, trace policy, log trigger/suppression
+or access-log ownership changes. The pinned fork uses this callback for failure
+diagnostics and other diagnostic sites; this is not a claimed per-successful-
+request saving.
+
+The regression compares the former formatter against the new composition for
+empty, ordinary, permitted non-ASCII and long summaries, absent/empty/normal
+trace values, and exact/spare input capacities. It checks bytes and allocation
+requests, retaining the original owner and allocating nothing when capacity
+already suffices or the trace is absent. Allocation comparisons are limited to
+that measured fixture, not complete protocol-summary construction.
+
+Fresh verification passed the 24-case summary regression, 28 trace-ID and
+11 logging tests (40 test functions total), formatting, workspace all-target
+check/Clippy and all seven agent-doc, SSA-force, metrics, Pingora-source,
+Gateway API transform, unit-layout and gateway no-tracing guards. Existing
+unrelated Clippy warnings remain. No live traffic or throughput benchmark ran.
