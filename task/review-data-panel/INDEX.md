@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF marker-free decoder borrowing](waf-06-marker-free-decoder-borrowing.md)
+
 - [WAF default body-processor reuse](waf-05-default-body-processor-reuse.md)
 
 - [Normalized request-body segment ownership](body-07-normalized-segment-ownership.md)
@@ -10766,4 +10768,22 @@ source, its unit tests and this record.
 Fresh verification passed 832 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+## Defer WAF marker-free decoder borrowing
+
+CssDecode, EscapeSeqDecode and JsDecode currently copy backslash-free values.
+The existing walker identity guard could avoid that materialization, but physical
+scratch admission/retained headroom and existing BorrowedTransformMemo eligibility
+would change. Marker-bearing values also gain a prescan. Existing scratch is not
+freed merely by retaining the current buffer.
+
+[waf-06](waf-06-marker-free-decoder-borrowing.md) records those choices and the
+required recipe, budget, checkpoint and memo verification. No runtime change was
+selected. Independent plan review passed; deeper WAF execution remains open.
+
+Fresh verification passed 832 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and agent-document
+validation. Existing unrelated Clippy warnings remain. No new identity behavior
+or workload benchmark was implemented.
 Final independent review passed.
