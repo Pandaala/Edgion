@@ -350,6 +350,105 @@ fn cumulative_quota_ttls_are_independently_bounded() {
     assert!(validate_quota_ttls(Duration::from_secs(5), Duration::from_secs(10)).is_err());
 }
 
+fn reference_quota_keys(prefix: &str, identity: &[u8], window: u64, request: &[u8]) -> CumulativeQuotaKeys {
+    let identity = hex::encode(Sha256::digest(identity));
+    let request = hex::encode(Sha256::digest(request));
+    CumulativeQuotaKeys {
+        bucket: format!("{prefix}{{{identity}}}:window:{window}"),
+        marker: format!("{prefix}{{{identity}}}:request:{request}"),
+    }
+}
+
+fn reference_credential_keys(
+    prefix: &str,
+    namespace: &[u8],
+    uid: &[u8],
+    alias: &[u8],
+    window: u64,
+    request: &[u8],
+) -> CredentialReservationKeys {
+    let mut identity = Sha256::new();
+    for part in [namespace, uid, alias] {
+        identity.update((part.len() as u64).to_be_bytes());
+        identity.update(part);
+    }
+    let identity = hex::encode(identity.finalize());
+    let request = hex::encode(Sha256::digest(request));
+    CredentialReservationKeys {
+        bucket: format!("{prefix}{{{identity}}}:window:{window}"),
+        marker: format!("{prefix}{{{identity}}}:window:{window}:request:{request}"),
+    }
+}
+
+#[test]
+fn opaque_key_builders_preserve_complete_wire_bytes() {
+    let long_prefix = "p".repeat(128);
+    let binary: Vec<u8> = (0..=u8::MAX).collect();
+    let maximum_identity = [b'x'; 512];
+    for prefix in ["q:", long_prefix.as_str()] {
+        for identity in [b"a".as_slice(), binary.as_slice(), maximum_identity.as_slice()] {
+            for window in [0, 9, 10, u64::MAX] {
+                assert_eq!(
+                    build_cumulative_quota_keys(prefix, identity, window, &binary).unwrap(),
+                    reference_quota_keys(prefix, identity, window, &binary)
+                );
+                assert_eq!(
+                    build_credential_reservation_keys(prefix, identity, b"bc", b"d", window, &binary).unwrap(),
+                    reference_credential_keys(prefix, identity, b"bc", b"d", window, &binary)
+                );
+            }
+        }
+    }
+    let first = build_credential_reservation_keys("q:", b"a", b"bc", b"d", 1, b"r").unwrap();
+    let second = build_credential_reservation_keys("q:", b"ab", b"c", b"d", 1, b"r").unwrap();
+    assert_ne!(
+        first.bucket, second.bucket,
+        "identity component boundaries remain significant"
+    );
+    assert_eq!(second, reference_credential_keys("q:", b"ab", b"c", b"d", 1, b"r"));
+}
+
+#[test]
+fn sha256_hex_uses_only_caller_storage() {
+    for byte in 0..=u8::MAX {
+        let digest = [byte; 32];
+        let mut output = [0u8; 64];
+        let (encoded, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| sha256_hex_into(digest, &mut output));
+        assert_eq!(encoded, hex::encode(digest));
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}
+
+#[test]
+fn opaque_key_builders_avoid_temporary_digest_allocations() {
+    let long_prefix = "p".repeat(128);
+    for prefix in ["q:", long_prefix.as_str()] {
+        for window in [0, 9, 10, u64::MAX] {
+            let (expected, old) = crate::test_allocation_counter::count_allocation_stats(|| {
+                reference_quota_keys(prefix, b"identity", window, b"request")
+            });
+            let (actual, new) = crate::test_allocation_counter::count_allocation_stats(|| {
+                build_cumulative_quota_keys(prefix, b"identity", window, b"request")
+            });
+            assert_eq!(actual.unwrap(), expected);
+            assert_eq!(new.calls + 2, old.calls);
+            assert_eq!(new.requested_bytes + 128, old.requested_bytes);
+
+            let (expected, old) = crate::test_allocation_counter::count_allocation_stats(|| {
+                reference_credential_keys(prefix, b"ns", b"uid", b"alias", window, b"request")
+            });
+            let (actual, new) = crate::test_allocation_counter::count_allocation_stats(|| {
+                build_credential_reservation_keys(prefix, b"ns", b"uid", b"alias", window, b"request")
+            });
+            assert_eq!(actual.unwrap(), expected);
+            assert_eq!(new.calls + 2, old.calls);
+            assert_eq!(new.requested_bytes + 128, old.requested_bytes);
+        }
+    }
+}
+
 #[test]
 fn credential_keys_are_opaque_scoped_and_same_slot() {
     let keys = build_credential_reservation_keys(

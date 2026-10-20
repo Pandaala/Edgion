@@ -9692,3 +9692,28 @@ and six response-callback unit tests. Workspace all-target check/Clippy and the
 seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards passed. Existing unrelated Clippy
 warnings remain.
+
+## Stack-backed Redis quota identity encoding
+
+The shared cumulative-quota and credential-reservation key builders now encode
+each SHA-256 digest once into caller-owned 64-byte stack storage. Both final keys
+still own their strings; no borrowed digest crosses the synchronous builder.
+Existing hex encoding supplies the lowercase alphabet, with fixed-size input and
+output proving the encoding and ASCII conversion assertions. Validation order,
+length-prefixed credential identity parts, hash tags and exact key formats remain
+unchanged, including the distinct window placement in the two marker formats.
+
+The complete-key oracle passed against the original implementation before the
+change. New coverage compares binary identities, maximum supported credential
+identity and request lengths, prefix bounds, component boundaries and window
+values through u64::MAX. Allocation checks on each complete builder confirm two
+fewer allocation calls and 128 fewer requested heap bytes for the tested prefixes
+and windows; final key storage still allocates. The encoding helper allocates
+nothing across all byte values. No throughput or async-frame-size gain is claimed.
+
+Fresh verification passed 32 shared Redis-core, 27 AI quota, 25 attempt-runtime
+and 32 connection-rate-limit tests; one existing measurement test remains ignored.
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No live Redis or full
+integration suite ran.

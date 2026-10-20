@@ -50,6 +50,11 @@ fn validate_opaque_prefix(prefix: &str, mechanism: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn sha256_hex_into(digest: [u8; 32], output: &mut [u8; 64]) -> &str {
+    hex::encode_to_slice(digest, output).expect("32-byte SHA-256 digest encodes to exactly 64 hex bytes");
+    std::str::from_utf8(output).expect("hex encoding produces only ASCII digits and letters")
+}
+
 /// Opaque same-slot keys for one credential/window reservation ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialReservationKeys {
@@ -84,8 +89,10 @@ pub fn build_credential_reservation_keys(
         identity.update((value.len() as u64).to_be_bytes());
         identity.update(value);
     }
-    let identity_digest = hex::encode(identity.finalize());
-    let request_digest = hex::encode(Sha256::digest(internal_request_id));
+    let mut identity_buffer = [0u8; 64];
+    let mut request_buffer = [0u8; 64];
+    let identity_digest = sha256_hex_into(identity.finalize().into(), &mut identity_buffer);
+    let request_digest = sha256_hex_into(Sha256::digest(internal_request_id).into(), &mut request_buffer);
     Ok(CredentialReservationKeys {
         bucket: format!("{prefix}{{{identity_digest}}}:window:{window_id}"),
         marker: format!("{prefix}{{{identity_digest}}}:window:{window_id}:request:{request_digest}"),
@@ -240,8 +247,10 @@ pub fn build_cumulative_quota_keys(
     if internal_request_id.is_empty() {
         anyhow::bail!("cumulative quota internal request ID cannot be empty");
     }
-    let quota_digest = hex::encode(Sha256::digest(quota_identity));
-    let request_digest = hex::encode(Sha256::digest(internal_request_id));
+    let mut quota_buffer = [0u8; 64];
+    let mut request_buffer = [0u8; 64];
+    let quota_digest = sha256_hex_into(Sha256::digest(quota_identity).into(), &mut quota_buffer);
+    let request_digest = sha256_hex_into(Sha256::digest(internal_request_id).into(), &mut request_buffer);
     Ok(CumulativeQuotaKeys {
         bucket: format!("{prefix}{{{quota_digest}}}:window:{window_id}"),
         marker: format!("{prefix}{{{quota_digest}}}:request:{request_digest}"),
