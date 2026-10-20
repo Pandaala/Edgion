@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Redis fallback command ownership](redis-02-fallback-command-ownership.md)
+
 - [Multi-pattern regex route result storage](routing-05-regex-result-storage.md)
 
 - [Route header-name preparation](routing-04-header-name-preparation.md)
@@ -9766,3 +9768,23 @@ Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No live Redis,
 Cluster/failover or full integration suite ran.
+
+## Defer Redis fallback command ownership
+
+Traced the shared executor through Fred 10.1.0's consuming Lua command APIs.
+EVALSHA receives cloned key and argument containers while the originals remain
+available for the exact NOSCRIPT-only EVAL fallback. Key payloads share Bytes
+owners; this is not an unconditional deep copy of every string. Fred's reload
+helper changes both command sequence and error classification and is not an
+equivalent replacement.
+
+The new redis-02 task records lazy fallback preparation as an ownership decision,
+including frozen inputs, captured clients, cancellation, retained capacity and
+warm/cold-path measurements. It selects no new representation and claims no
+measured performance gain. Existing runtime code, dependencies and integration
+fixtures remain unchanged.
+
+Fresh verification passed 34 shared Redis-core and 32 connection-rate-limit
+unit tests, with one existing measurement test ignored. Formatting, workspace
+all-target check/Clippy and documentation validation passed; existing unrelated
+warnings remain. No live Redis, Cluster/failover or throughput verification ran.
