@@ -9,13 +9,15 @@ Gateway WAF transaction execution reaches the IpNetworks arm of evaluate_operato
 in `edgion-waf/src/seclang/transaction.rs`. It parses the input address once,
 then searches the configured network range until a match. ip_matches checks the
 address family and reconstructs a u32/u128 mask from the prefix for every tested
-same-family network, then masks the input and stored base.
+same-family network, then masks the input for comparison with the normalized base.
+The inspected baseline also masked the base again; a subsequent local optimization
+removed that redundant source-level operation without changing representation.
 
 The base is already normalized: parse_network in semantic.rs validates the prefix
 and returns mask_ip(address, prefix); compiler.rs copies this address and prefix
 into CompiledIpNetwork. Do not describe normalization as missing. The candidate
 is to prepare the mask or another equivalent compact comparison representation
-once at compilation. Removing the redundant base mask is a separate local
+once at compilation. The delivered redundant-base-mask removal is a separate local
 simplification, not evidence that a larger prepared representation is worthwhile.
 
 CompiledIpNetwork currently contains IpAddr and u8 prefix. Compilation charges
@@ -47,4 +49,5 @@ into this leaf, or an unrelated radix-tree/list-reordering project.
   implementation plan. The original transaction ownership and budget contract is
   in `skills/04-review/waf/regression-guards/fused-json-inspection.md`.
 
-This record delivers no IP runtime change, measurement or acceptance-policy change.
+The prepared-mask proposal remains unimplemented and unmeasured. The local
+base-mask removal does not change this proposal's status or acceptance policy.

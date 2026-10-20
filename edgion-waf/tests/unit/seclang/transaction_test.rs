@@ -1134,6 +1134,94 @@ fn detection_only_reports_deny_rules_without_short_circuiting_the_phase() {
 }
 
 #[test]
+fn compiled_ip_network_bases_are_normalized_for_every_prefix() {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    for (v4, v6) in [
+        ("255.255.255.255", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+        ("203.0.113.179", "2001:db8:1234:5678:9abc:def0:1234:5678"),
+    ] {
+        let networks = (0..=32)
+            .map(|prefix| format!("{v4}/{prefix}"))
+            .chain((0..=128).map(|prefix| format!("{v6}/{prefix}")))
+            .collect::<Vec<_>>()
+            .join(",");
+        let g = generation(&format!(
+            "SecRule REMOTE_ADDR \"@ipMatch {networks}\" \"id:1,phase:1,pass\"\n"
+        ));
+        assert_eq!(g.ip_networks.len(), 162);
+        for network in &g.ip_networks {
+            let (width, maximum, original, stored) = match network.address {
+                IpAddr::V4(base) => (
+                    32,
+                    u128::from(u32::MAX),
+                    u128::from(u32::from(v4.parse::<Ipv4Addr>().unwrap())),
+                    u128::from(u32::from(base)),
+                ),
+                IpAddr::V6(base) => (
+                    128,
+                    u128::MAX,
+                    u128::from(v6.parse::<Ipv6Addr>().unwrap()),
+                    u128::from(base),
+                ),
+            };
+            let mask = if network.prefix == 0 {
+                0
+            } else {
+                (maximum << (width - u32::from(network.prefix))) & maximum
+            };
+            assert_eq!(stored, original & mask);
+            let last = stored | (maximum ^ mask);
+            let candidates = [
+                Some(0),
+                Some(maximum),
+                Some(original),
+                Some(stored),
+                Some(last),
+                stored.checked_sub(1),
+                last.checked_add(1).filter(|value| *value <= maximum),
+            ];
+            for value in candidates.into_iter().flatten() {
+                let address = if width == 32 {
+                    IpAddr::V4(Ipv4Addr::from(u32::try_from(value).unwrap()))
+                } else {
+                    IpAddr::V6(Ipv6Addr::from(value))
+                };
+                assert_eq!(ip_matches(address, *network), value & mask == original & mask);
+            }
+            let other_family = if width == 32 {
+                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+            } else {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            };
+            assert!(!ip_matches(other_family, *network));
+        }
+    }
+}
+
+#[test]
+fn ip_network_operator_preserves_host_prefixes_families_and_negation() {
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Address \"@ipMatch 192.0.2.1,2001:db8:abcd::1/32\" \"id:1,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Address \"!@ipMatch 192.0.2.1,2001:db8:abcd::1/32\" \"id:2,phase:1,pass\"\n",
+    ));
+    for (input, expected) in [
+        ("192.0.2.1", 1),
+        ("192.0.2.2", 2),
+        ("2001:db8:ffff::1", 1),
+        ("2001:db9::1", 2),
+        ("::ffff:192.0.2.1", 2),
+        ("invalid", 2),
+    ] {
+        let headers = [RequestHeader::new(b"X-Address", input.as_bytes())];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = tx.execute_request_headers().unwrap();
+        assert_eq!(outcome.findings().len(), 1);
+        assert_eq!(outcome.findings()[0].rule_id(), expected);
+    }
+}
+
+#[test]
 fn url_encoding_scan_matches_scalar_oracle() {
     let oracle = |input: &[u8]| {
         let mut index = 0;

@@ -5358,12 +5358,12 @@ fn ip_matches(address: std::net::IpAddr, network: super::CompiledIpNetwork) -> b
         (std::net::IpAddr::V4(address), std::net::IpAddr::V4(base)) => {
             let prefix = u32::from(network.prefix.min(32));
             let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
-            u32::from(address) & mask == u32::from(base) & mask
+            u32::from(address) & mask == u32::from(base)
         }
         (std::net::IpAddr::V6(address), std::net::IpAddr::V6(base)) => {
             let prefix = u32::from(network.prefix.min(128));
             let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
-            u128::from(address) & mask == u128::from(base) & mask
+            u128::from(address) & mask == u128::from(base)
         }
         _ => false,
     }

@@ -9204,3 +9204,28 @@ WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No IP representation measurement is claimed by these runtime checks.
+
+## Reuse normalized WAF IP network bases
+
+The sole CompiledIpNetwork constructor copies semantic NetworkRecord values,
+whose sole production constructor uses parse_network and mask_ip after prefix
+validation. The private compiled type has no deserialization path. ip_matches
+now compares the masked request address directly with that normalized base,
+removing the redundant base-side AND for each tested IPv4/IPv6 network. Input
+parsing, prefix clamping, input-mask construction, family matching, list order,
+negation and budgets remain unchanged. Compiled layout and allocation are unchanged.
+
+Compiler-driven tests cover every IPv4/IPv6 prefix with all-one and nontrivial
+host-bearing seeds, normalized bases, first/last and adjacent addresses, and
+cross-family rejection. Real rules cover default host prefixes, mixed-family
+lists, mapped IPv6 addresses, invalid inputs and negation. This demonstrates
+removal of redundant source arithmetic, not machine-code or throughput savings.
+The larger [prepared-mask representation](waf-03-prepared-ip-network-masks.md)
+remains deferred; this local change does not settle its layout/admission tradeoff.
+Broader callback coverage remains open.
+
+Fresh verification passed: 824 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain; these checks do not measure compiled-mask performance or storage.
