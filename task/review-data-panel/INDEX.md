@@ -9599,3 +9599,33 @@ ordered deep-match continuation and outer hostname/radix fallback remain require
 No runtime code changed or comparative performance result is claimed. Formatting,
 workspace all-target check/Clippy and documentation validation passed with
 existing unrelated warnings; no new runtime tests or benchmark ran for this audit.
+
+## Response trailer policy ownership audit
+
+ResponseTrailerPolicy::capture runs only when the leased trailer companion list
+is nonempty. HTTP/2, subrequest and custom transports allow all names and retain
+no declaration values. The H1 path clones only committed Trailer HeaderValues
+once per dispatch, sharing their backing bytes. ResponseTrailerAdapter then
+borrows context without borrowing Session while response_callback::run owns the
+independent mutable Session loan for downstream closure detection. Replacing
+this snapshot with direct Session references would conflict with that boundary.
+
+Declaration checks borrow, split and trim existing strings for introduced
+ExtProc trailer names; they do not build a per-body-chunk snapshot. ExtProc stages
+a cloned trailer map only when mutation is present, validates it and checks
+representability before publishing it. Skipping name policy solely because the
+transport is unrepresentable can change validation/failure order. Existing
+lease completion, terminal arbitration and cancellation ownership remain intact.
+
+No directly removable ownership cost was established at these boundaries.
+This does not establish that the current Vec representation is uniquely valid
+or globally optimal. Concrete codec internals, all trailer implementations and
+new scratch/preparation designs are outside this audit. The canonical
+[downstream cancellation guard](../../skills/04-review/plugin-runtime/regression-guards/response-callback-downstream-cancellation.md)
+remains authoritative; its historical wire results were not rerun here.
+
+Fresh verification passed 11 upstream-trailer and six response-callback unit
+tests, formatting, workspace all-target check/Clippy and documentation validation.
+Existing unrelated warnings remain. No runtime change or performance gain is
+claimed, and these unit checks do not constitute new real-network cancellation
+or complete protocol coverage.
