@@ -677,3 +677,30 @@ fn large_unchanged_lowercase_keeps_input_borrowed() {
     assert_eq!(scratch.retained_bytes().unwrap(), 0);
     assert_eq!(probe.work, [input.len() * 2]);
 }
+
+#[test]
+fn html_entity_delimiters_preserve_decoding_and_output_limits() {
+    for (input, expected) in [
+        (b"&".as_slice(), b"&".as_slice()),
+        (b"&amp", b"&amp"),
+        (b"&;", b"&;"),
+        (b"&bogus;", b"&bogus;"),
+        (b"&bogus&amp;", b"&bogus&"),
+        (b"&&lt;", b"&<"),
+        (b"&amp;&gt;", b"&>"),
+        (b"&#65;&#x41;&#X41;", b"AAA"),
+        (b"&#x;&amp;", b"&#x;&"),
+        (b"prefix&unterminated", b"prefix&unterminated"),
+    ] {
+        let mut output = Vec::new();
+        html_entity_decode(input, &mut output, expected.len()).unwrap();
+        assert_eq!(output, expected);
+        let limit = expected.len() - 1;
+        output.clear();
+        assert_eq!(
+            html_entity_decode(input, &mut output, limit),
+            Err(TransformError::OutputLimit { limit })
+        );
+        assert_eq!(output, expected[..limit]);
+    }
+}

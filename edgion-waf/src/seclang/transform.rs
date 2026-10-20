@@ -596,7 +596,7 @@ fn html_entity_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Resul
             continue;
         }
         let candidate = &input[index + 1..];
-        let Some(relative_end) = candidate.iter().position(|byte| *byte == b';' || *byte == b'&') else {
+        let Some(relative_end) = memchr::memchr2(b';', b'&', candidate) else {
             push_byte(output, b'&', limit)?;
             index += 1;
             continue;

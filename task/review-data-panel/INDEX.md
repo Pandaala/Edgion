@@ -10703,3 +10703,23 @@ Independent plan review passed. Fresh verification passed 829 WAF leaf tests
 check/Clippy and agent-document validation. Existing unrelated Clippy warnings
 remain. No default-reuse implementation, layout measurement or live benchmark ran.
 Final independent review passed.
+
+## WAF HTML entity delimiter search
+
+Gateway WAF transaction transformations reach the canonical leaf engine's
+html_entity_decode. Its search for the first semicolon or ampersand now uses
+existing memchr2 instead of a byte iterator predicate. Both return the same
+first delimiter; unknown, nested and unterminated entities still take the same
+fallback path. Output writes, numeric parsing, output limits, scratch admission,
+work accounting and observer checkpoints remain unchanged. This is supporting
+Gateway work limited to the transform source, its unit tests and this record.
+
+Direct decoder goldens cover delimiter precedence, named/numeric and malformed
+entities, exact output caps and the first excess byte. The benefit is use of the
+existing optimized byte-search primitive; no allocation or measured throughput
+improvement is claimed. Independent plan review passed.
+
+Fresh verification passed 830 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
