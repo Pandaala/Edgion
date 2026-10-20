@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Unary tool-argument serialization staging](unary-01-tool-argument-staging.md)
+
 - [Provider Bearer header value ownership](credential-02-provider-bearer-value-ownership.md)
 
 - [AI DNS first-address projection](dns-02-ai-first-address-projection.md)
@@ -10422,3 +10424,18 @@ and 26 response-filter tests (94 total), formatting, workspace all-target
 check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
 API transform, unit-layout and gateway no-tracing guards. Existing unrelated
 Clippy warnings remain. No live upstream exchange or throughput benchmark ran.
+
+## Unary tool-argument staging audit
+
+Traced bounded unary response serialization from validated DOM through individual
+tool-argument writers and the outer response writer. Per-tool Vec-to-String
+conversion moves storage; the actual retained intermediate is each encoded
+argument String. Removing that staging needs an explicit two-layer serialization
+and accounting design, not a raw JSON substitution. The decision and required
+canonical-byte, limit, usage-retention and reservation tests are recorded in
+[unary-01](unary-01-tool-argument-staging.md).
+
+Fresh baseline verification passed 60 conversion, eight response-head and 26
+response-filter tests (94 total), formatting and workspace all-target check/Clippy.
+Existing unrelated Clippy warnings remain. This documentation batch changes no
+runtime behavior and includes no new allocation or throughput experiment.
