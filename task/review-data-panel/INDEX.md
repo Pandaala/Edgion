@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Multi-pattern regex route result storage](routing-05-regex-result-storage.md)
+
 - [Route header-name preparation](routing-04-header-name-preparation.md)
 
 - [Hostname ID-to-content representation](routing-03-hostname-content-index.md)
@@ -9585,3 +9587,15 @@ and 51 HTTP conf-handler tests. Formatting, workspace all-target check/Clippy
 and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards passed. Existing unrelated Clippy
 warnings remain.
+
+## Defer multi-pattern regex result reuse
+
+The pinned multi-pattern RegexSet query allocates PatternSet result storage;
+its hidden caller-buffer API still creates that storage internally. The
+[deferred investigation](routing-05-regex-result-storage.md) records the real
+ownership, concurrency, retention and lower-level matcher parity decisions.
+Singleton matching is already optimized separately. Winning Arc ownership,
+ordered deep-match continuation and outer hostname/radix fallback remain required.
+No runtime code changed or comparative performance result is claimed. Formatting,
+workspace all-target check/Clippy and documentation validation passed with
+existing unrelated warnings; no new runtime tests or benchmark ran for this audit.
