@@ -109,23 +109,59 @@ fn zero_past_invalid_and_unknown_alias_do_not_install_cooldown() {
 
 #[test]
 fn max_ejection_percent_is_scoped_to_credentials_of_one_service() {
+    for percent in [1, 50] {
+        let store = AiCredentialOutlierStore::new();
+        let target = target("svc");
+        let mut policy = config(60, percent);
+        policy.ejection_seconds = 60;
+        store.configure_backend(target.clone(), Some(policy), ["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            store.record_failure(&target, "one", FailureClass::Gateway),
+            FailureTransition::Opened
+        );
+        assert_eq!(
+            store.record_failure(&target, "two", FailureClass::Gateway),
+            FailureTransition::None
+        );
+        assert!(matches!(store.admit(&target, "one"), EjectionAdmission::Rejected));
+        assert!(matches!(store.admit(&target, "two"), EjectionAdmission::Closed));
+    }
+}
+
+#[test]
+fn concurrent_credential_failures_respect_the_percent_cap() {
     let store = AiCredentialOutlierStore::new();
     let target = target("svc");
-    store.configure_backend(
-        target.clone(),
-        Some(config(10, 50)),
-        ["one".to_string(), "two".to_string()],
-    );
+    let aliases = ["one", "two", "three", "four"];
+    let mut policy = config(60, 50);
+    policy.ejection_seconds = 60;
+    store.configure_backend(target.clone(), Some(policy), aliases.map(str::to_owned));
+    let backend = store.current_handle(&target).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(aliases.len()));
+    let workers: Vec<_> = aliases
+        .iter()
+        .map(|alias| {
+            let credential = backend.capture(alias).unwrap();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                credential.record_failure(FailureClass::Gateway)
+            })
+        })
+        .collect();
+    let opened = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .filter(|transition| *transition == FailureTransition::Opened)
+        .count();
+    assert_eq!(opened, 2);
     assert_eq!(
-        store.record_failure(&target, "one", FailureClass::Gateway),
-        FailureTransition::Opened
+        aliases
+            .iter()
+            .filter(|alias| matches!(store.admit(&target, alias), EjectionAdmission::Rejected))
+            .count(),
+        2
     );
-    assert_eq!(
-        store.record_failure(&target, "two", FailureClass::Gateway),
-        FailureTransition::None
-    );
-    assert!(matches!(store.admit(&target, "one"), EjectionAdmission::Rejected));
-    assert!(matches!(store.admit(&target, "two"), EjectionAdmission::Closed));
 }
 
 #[test]

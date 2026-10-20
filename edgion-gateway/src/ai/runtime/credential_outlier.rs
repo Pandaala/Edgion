@@ -104,9 +104,14 @@ impl AiCredentialOutlierBackendHandle {
             return true;
         }
         let total = self.aliases.read().len().max(1);
-        let open = self.credentials.iter().filter(|entry| entry.value().is_open()).count();
-        let maximum = (total as u64 * u64::from(config.max_ejection_percent) / 100) as usize;
-        open < maximum.max(1)
+        let maximum = ((total as u64 * u64::from(config.max_ejection_percent) / 100) as usize).max(1);
+        let open = self
+            .credentials
+            .iter()
+            .filter(|entry| entry.value().is_open())
+            .take(maximum)
+            .count();
+        open < maximum
     }
 
     fn cooldown_cap(&self) -> Duration {

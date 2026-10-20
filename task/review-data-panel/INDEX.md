@@ -8569,3 +8569,32 @@ check/Clippy and seven repository guards passed with existing unrelated warnings
 The benefit is fewer map entries and endpoint read locks on cap-reached scans,
 depending on iteration order. No allocation, throughput or contention benchmark
 claim is made; no full suite or live integration test ran.
+
+## Stop credential ejection scans at the observed cap
+
+AiCredentialOutlierBackendHandle::failure_allowed now limits its filtered
+open-state count to the normalized positive percentage cap. Once enough open
+credentials are observed, additional read-only is_open calls cannot change
+denial. Low-count scans still exhaust the map. No-policy rejection, zero-percent
+bypass, minimum-one allowance and the existing alias-count denominator remain
+unchanged.
+
+The independent AI wrapper retains its generation-stable credential handles,
+backend arbitration lock and final candidate revalidation. Explicit provider
+cooldowns and half-open states still count as open; the scan neither expires
+them nor acquires probes. Concurrent alias reconciliation and success retain the
+existing observation semantics, not an atomic membership/state snapshot.
+No extra counter, cache or shared owner is introduced.
+
+The actual-store percent test covers both 1% and 50% of two credentials.
+A barrier-driven regression records simultaneous failures for four captured
+credentials and checks exactly two openings and rejected admissions at 50%.
+Both cap fixtures use long ejection deadlines and no sleeps. All 17 credential
+tests passed before the production edit. Final serial verification passed
+17 credential tests, 25 attempt-runtime tests and 36 shared outlier tests,
+formatting, workspace check/Clippy and seven repository guards. Existing
+unrelated warnings remain.
+
+This skips trailing map entries and state locks after observing the cap; savings
+depend on iteration order. No allocation, throughput or contention benchmark
+claim is made. No full suite or live integration test ran.
