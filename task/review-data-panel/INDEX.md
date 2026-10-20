@@ -16,7 +16,7 @@ destination.
 | `new_ctx`, `init_downstream_modules` | Direct bodies and context/default construction inspected: pinned config, parsed policy, absent optional owners and lazy containers. Registered downstream module callbacks, compression negotiation/output ownership and gRPC-Web header/trailer paths inspected in the entries below. Module storage/dispatch and compression/bridge representation decisions remain deferred. Downstream decompressor execution and dictionary setup are not currently enabled; see the reachability audit below. This is not complete fork-codec coverage. |
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
-| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
+| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below. Direct backend transport counters and generation-local drain projection inspected below; deeper endpoint algorithms, cleaner lifecycle, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Wasm direct ABI profiling, callout execution, shared-data snapshots, lease ownership, prepared callback handles and process admission are inspected in the entries below; four Wasm representation/lock decisions remain deferred. Deeper Wasmtime and network dependencies, other concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
@@ -11679,3 +11679,32 @@ Fresh baseline verification passed all 269 Gateway Wasm tests serially, formatti
 workspace all-target check/Clippy and agent-doc validation. Existing unrelated
 Clippy warnings remain. No concurrency or throughput benchmark was run.
 Final independent review passed.
+
+## Backend transport counters and generation drain ownership audit
+
+Inspected lb/backend.rs with coordinator materialization/retirement and the
+least-connection cleaner. Shared BackendRuntimeCounters retain connection load,
+Peak-EWMA and circuit-breaker inflight state across same-socket proof replacement.
+Each new immutable wrapper has a fresh runtime identity and its own zero-initialized
+owned_conn_count. Retirement and cleaner polling use that wrapper-local count;
+sharing it would let replacement traffic keep an old generation resident.
+
+runtime_counters clones its Arc during cold coordinator materialization to give
+the replacement wrapper ownership. This is not a temporary request-path clone.
+The dec_conn guard prevents a wrapper whose owned count is already zero from
+decrementing the shared counter. It does not detect arbitrary duplicate releases
+while that wrapper still owns other connections. Circuit-breaker admission checks
+and increments atomically; saturation on release is likewise not per-permit
+identity tracking. Caching live atomic values or splitting admission into separate
+check/update operations would change concurrency semantics.
+
+No new behavior-preserving optimization was selected in this bounded audit.
+No runtime code or tests changed. This covers direct counter ownership and drain
+projection, not the cleaner's complete lifecycle or a general concurrency proof.
+Independent plan review passed. Existing stale-wrapper, saturation, admission,
+selection and coordinator generation tests provide the verification owners.
+
+Fresh baseline verification passed 127 LB tests and 41 discovery coordinator tests
+(168 total), formatting and workspace all-target check/Clippy. Existing unrelated
+Clippy warnings remain. No concurrency or throughput benchmark was run.
+Agent-doc validation and final independent review passed.
