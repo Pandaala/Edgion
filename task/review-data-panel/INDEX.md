@@ -11861,3 +11861,32 @@ final text length for all fixtures; the original formatter used more allocation
 calls in at least one fixture. Existing unrelated Clippy warnings remain.
 No deployed integration or throughput benchmark ran.
 Final independent code review passed.
+
+## Allocate PluginLog names at their actual length
+
+PluginLog::new now copies the supplied name directly into its owned String instead
+of first reserving 36 bytes and then appending. Names are not subsequently appended
+by current production consumers. This removes unused requested capacity for short
+names, avoids an allocation for empty names and avoids growth for long names.
+The String field, exact serialization, optional alias ownership and disabled scratch
+log remain unchanged; no borrowed name escapes into request logging.
+
+NAME_CAPACITY stays 36 because request-context inline identity storage and the DSL
+name limit use it independently. Their bounds/layout are not changed. Comments now
+distinguish this inline bound from String allocation, and the adjacent cond_skip
+example matches the current compiled descriptor format.
+
+Independent plan review passed. Baseline verification passed 35 PluginLog and 18
+conditional-wrapper tests. The new actual-constructor regression compares a frozen
+36-byte-reserve baseline for empty, short, UTF-8, 36/37-byte and long names, checking
+both name bytes and JSON serialization outside the allocation measurement. It
+measures allocator requests, not RSS, allocator size classes or throughput.
+
+Fresh verification passed 542 plugin-runtime tests, the DSL name-limit test and
+two inline plugin-identity tests (545 total), formatting, workspace all-target
+check/Clippy and seven repository guards. The constructor measured zero allocations
+for an empty name and one exact-length request for each nonempty fixture; requested
+bytes were lower than the old construction except at the unchanged 36-byte case.
+Existing unrelated Clippy warnings remain. No live integration or throughput
+benchmark ran.
+Final independent code review passed.

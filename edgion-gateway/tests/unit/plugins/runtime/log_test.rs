@@ -668,3 +668,33 @@ fn condition_skip_preserves_text_and_replaces_with_one_allocation() {
     }
     assert!(reduced_calls);
 }
+
+#[test]
+fn plugin_name_ownership_preserves_text_without_fixed_reservation() {
+    let names = [
+        String::new(),
+        "Wasm".to_owned(),
+        "éπ".to_owned(),
+        "x".repeat(36),
+        "x".repeat(37),
+        "x".repeat(256),
+    ];
+    for name in &names {
+        let (original, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut owned = String::with_capacity(36);
+            owned.push_str(std::hint::black_box(name));
+            owned
+        });
+        let (log, after) =
+            crate::test_allocation_counter::count_allocation_stats(|| PluginLog::new(std::hint::black_box(name)));
+        assert_eq!(log.name, original);
+        assert_eq!(serde_json::to_value(&log).unwrap()["name"], original);
+        assert_eq!(after.calls, usize::from(!name.is_empty()));
+        assert_eq!(after.requested_bytes, name.len());
+        assert!(after.calls <= before.calls);
+        assert!(after.requested_bytes <= before.requested_bytes);
+        if name.len() != 36 {
+            assert!(after.requested_bytes < before.requested_bytes);
+        }
+    }
+}

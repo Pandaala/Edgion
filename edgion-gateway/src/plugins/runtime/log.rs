@@ -4,7 +4,8 @@ use serde::Serialize;
 use smallvec::SmallVec;
 use std::io::{Cursor, Write};
 
-/// Default capacity for plugin name string.
+/// Byte capacity of the request context's inline plugin entry name.
+/// Kept aligned with the DSL plugin name limit; log strings own their actual length.
 pub const NAME_CAPACITY: usize = 36;
 
 /// A single argument to [`PluginLog::push_fmt`].
@@ -167,7 +168,7 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
 /// and every `Option` field is omitted when `None`.
 #[derive(Debug, Clone)]
 pub struct PluginLog {
-    /// Plugin name (pre-allocated with capacity 36)
+    /// Owned plugin name.
     pub name: String,
 
     /// Operator-defined label propagated from the EdgionPlugins entry's
@@ -180,7 +181,7 @@ pub struct PluginLog {
     pub time_cost: Option<u64>,
 
     /// Condition skip reason, None if not skipped
-    /// e.g., "skip:keyExist,hdr:X-Internal"
+    /// e.g., "!run:run.allOf[0]:probability"
     pub cond_skip: Option<String>,
 
     /// Tier-1 fixed 128-byte stack buffer — the common, zero-heap path.
@@ -290,11 +291,8 @@ impl PluginLog {
 
     #[inline]
     pub fn new(name: &str) -> Self {
-        let mut n = String::with_capacity(NAME_CAPACITY);
-        n.push_str(name);
-
         Self {
-            name: n,
+            name: name.to_owned(),
             alias: None,
             time_cost: None,
             cond_skip: None,
