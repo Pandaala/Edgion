@@ -248,13 +248,18 @@ impl GrpcMatchEngine {
 /// Example: "/helloworld.Greeter/SayHello" → ("helloworld.Greeter", "SayHello")
 /// Returns string slices into the original path to avoid heap allocation.
 pub fn parse_grpc_path(path: &str) -> Result<(&str, &str), EdError> {
+    grpc_path_parts(path).ok_or_else(|| EdError::InvalidGrpcPath(path.to_string()))
+}
+
+/// Borrow path components for probes that do not need an owned error.
+pub(super) fn grpc_path_parts(path: &str) -> Option<(&str, &str)> {
     let trimmed = path.strip_prefix('/').unwrap_or(path);
     if let Some((service, method)) = trimmed.split_once('/') {
         if !service.is_empty() && !method.is_empty() && !method.contains('/') {
-            return Ok((service, method));
+            return Some((service, method));
         }
     }
-    Err(EdError::InvalidGrpcPath(path.to_string()))
+    None
 }
 
 #[cfg(test)]

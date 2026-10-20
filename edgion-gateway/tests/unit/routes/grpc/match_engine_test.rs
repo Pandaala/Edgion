@@ -21,6 +21,53 @@ fn test_parse_grpc_path_invalid() {
 }
 
 #[test]
+fn path_probe_preserves_borrowed_parts_and_owned_errors() {
+    fn check(path: &str) {
+        let trimmed = path.strip_prefix('/').unwrap_or(path);
+        let fields: Vec<_> = trimmed.split('/').collect();
+        let expected = match fields.as_slice() {
+            [service, method] if !service.is_empty() && !method.is_empty() => Some((*service, *method)),
+            _ => None,
+        };
+        assert_eq!(grpc_path_parts(path), expected, "path={path:?}");
+        match (parse_grpc_path(path), expected) {
+            (Ok(actual), Some(expected)) => {
+                assert_eq!(actual, expected);
+                assert_eq!(actual.0.as_ptr(), expected.0.as_ptr());
+                assert_eq!(actual.1.as_ptr(), expected.1.as_ptr());
+                let probe = grpc_path_parts(path).unwrap();
+                assert_eq!(probe.0.as_ptr(), expected.0.as_ptr());
+                assert_eq!(probe.1.as_ptr(), expected.1.as_ptr());
+            }
+            (Err(EdError::InvalidGrpcPath(actual)), None) => assert_eq!(actual, path),
+            _ => panic!("path probe and diagnostic parser disagree for {path:?}"),
+        }
+    }
+
+    let alphabet = ['a', '/', '\0', 'é'];
+    for len in 0..=6 {
+        for mut encoded in 0..alphabet.len().pow(len) {
+            let mut path = String::new();
+            for _ in 0..len {
+                path.push(alphabet[encoded % alphabet.len()]);
+                encoded /= alphabet.len();
+            }
+            check(&path);
+        }
+    }
+    for path in [
+        "/helloworld.Greeter/SayHello",
+        "helloworld.Greeter/SayHello",
+        "//service/method",
+        "/service/method/",
+        "/service/method?query",
+        "/service/%2Fmethod",
+    ] {
+        check(path);
+    }
+}
+
+#[test]
 fn test_parse_grpc_path_empty_parts() {
     assert!(parse_grpc_path("//").is_err());
     assert!(parse_grpc_path("/service/").is_err());

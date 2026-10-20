@@ -9451,3 +9451,31 @@ and retained generations.
 records this undecided tradeoff and the existing benchmark coverage. No runtime
 representation or dependency changed, and no new performance result is claimed.
 The tree optimization already delivered does not resolve this separate decision.
+
+## Avoid discarded gRPC path-probe diagnostics
+
+try_match_grpc_route first probes the normalized current path to populate owned
+gRPC log fields, then invokes route matching. Its failed probe previously
+constructed and discarded InvalidGrpcPath with an owned copy of the path.
+The canonical path grammar now lives in a borrowed Option-returning helper.
+This probe uses that helper; the existing public parse_grpc_path lazily wraps
+the same result in its unchanged owned diagnostic when a caller needs errors.
+
+Optional leading slash, nonempty service/method, extra-slash rejection and raw
+byte spelling are unchanged. Probe failure still proceeds to the actual matcher
+and leaves prior log fields untouched. Successful log fields retain owned
+strings, and successful path scanning still occurs at both boundaries; this
+change claims only removal of a discarded failed-probe error allocation.
+An empty invalid path already needed no string payload allocation.
+
+A split-based oracle checks all short combinations of slash, ASCII, permitted
+multibyte UTF-8 and NUL, plus qualified service names and encoded/query-like text.
+Both successful APIs preserve original-buffer pointers, and the diagnostic API
+retains the exact original invalid path. No cache, fallback policy or public
+signature changes, and no measured throughput claim.
+
+Fresh verification passed the focused path oracle, all 75 Gateway gRPC route
+tests and six request-entry tests, including native gRPC/gRPC-Web fallback.
+Formatting, workspace all-target check/Clippy, agent-doc validation, SSA-force,
+metrics inventory, Pingora-source policy, Gateway API transform, unit-test layout
+and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.

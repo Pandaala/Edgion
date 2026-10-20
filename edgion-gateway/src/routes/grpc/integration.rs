@@ -35,7 +35,7 @@ pub async fn try_match_grpc_route(
     ctx: &mut EdgionHttpContext,
     index: &GatewayInfoIndex,
 ) -> Result<bool, EdError> {
-    if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.normalized_current_path) {
+    if let Some((service, method)) = super::match_engine::grpc_path_parts(&ctx.request_info.normalized_current_path) {
         ctx.request_info
             .set_grpc_method(service.to_string(), method.to_string());
     }
