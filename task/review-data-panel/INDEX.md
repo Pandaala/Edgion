@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Validated passthrough SNI handoff](tls-06-validated-sni-handoff.md)
+
 - [Prepared WAF finding metadata](waf-02-prepared-finding-metadata.md)
 
 - [Generation-prepared WAF matcher scratch budgets](waf-01-prepared-matcher-scratch-budget.md)
@@ -9382,3 +9384,18 @@ malformed trailing containers, duplicate selection and record/body isolation.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 checks passed; existing unrelated Clippy warnings remain. No socket integration
 or performance measurement was run for this documentation-only audit.
+
+## TLS route query validation handoff audit
+
+Passthrough parsing validates and normalizes SNI, then into_owned erases its
+checked type before TlsRouteTable::select_by validates the string again. The
+second pass operates on at most 253 already lowercase bytes; it does not allocate
+another lowercase string. Terminated TLS uses the same generic route entry from
+different metadata/SSL sources and still needs validation.
+
+[Validated SNI handoff](tls-06-validated-sni-handoff.md) records the ownership/API
+and measured-value decision. No runtime change is made. Attachment hostname
+checks already use a parse-free canonical suffix/exact predicate, so another
+compiled attachment list is not justified by alleged repeated parsing. Existing
+attachment, logical-owner and more-specific-listener semantics remain mandatory.
+Matcher internals and the broader callback review remain open.
