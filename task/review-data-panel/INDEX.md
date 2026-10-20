@@ -8419,3 +8419,17 @@ mechanism was not established. The unchanged-source serial rerun passed all 47
 provider tests, followed by four WebhookKeyGet tests. Formatting, workspace
 check/Clippy and seven repository guards passed with existing unrelated Clippy
 warnings. No live webhook or full suite ran.
+
+## Short-circuit ineligible response-head encoding scans
+
+Guardrail's final response-head Hold gate now checks its existing final-response
+eligibility and 2xx status before calling the canonical identity-encoding
+classifier. Already rejected responses skip repeated Content-Encoding traversal.
+All predicates are pure; the same nonretryable 503, owner outcome, usage and limits
+are published on rejection. Eligible responses retain the shared all-field/list
+classification. gRPC/unary dispatch and Hold ownership remain unchanged.
+
+Baseline and final verification each passed eight response-head tests and seven
+content-type tests. Formatting, workspace check/Clippy and seven repository guards
+passed with existing unrelated Clippy warnings. This saves unnecessary scanning
+on rejected heads, not allocations; no throughput benchmark or full suite ran.
