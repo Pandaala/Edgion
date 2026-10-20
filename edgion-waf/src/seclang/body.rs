@@ -827,7 +827,7 @@ fn disposition_parameter_value<'input>(parameter: &'input [u8], expected: &[u8])
 }
 
 fn percent_decode(value: &[u8]) -> Result<Cow<'_, [u8]>, BodyError> {
-    if !value.iter().any(|byte| matches!(*byte, b'+' | b'%')) {
+    if memchr::memchr2(b'+', b'%', value).is_none() {
         return Ok(Cow::Borrowed(value));
     }
     let mut output = Vec::new();
@@ -875,14 +875,11 @@ fn try_copy(value: &[u8]) -> Result<Vec<u8>, BodyError> {
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    (!needle.is_empty()).then(|| haystack.windows(needle.len()).position(|window| window == needle))?
+    (!needle.is_empty()).then(|| memchr::memmem::find(haystack, needle))?
 }
 
 fn split_once(value: &[u8], delimiter: u8) -> (&[u8], &[u8]) {
-    value
-        .iter()
-        .position(|byte| *byte == delimiter)
-        .map_or((value, &[]), |index| (&value[..index], &value[index + 1..]))
+    memchr::memchr(delimiter, value).map_or((value, &[]), |index| (&value[..index], &value[index + 1..]))
 }
 
 fn trim_ascii(mut value: &[u8]) -> &[u8] {

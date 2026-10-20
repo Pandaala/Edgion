@@ -10929,3 +10929,29 @@ Fresh verification passed 837 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+## WAF body byte-search primitives
+
+The form decoder's marker preflight now uses memchr2; split_once uses memchr;
+find_bytes uses memmem while retaining its explicit empty-needle None behavior.
+All three reuse the existing dependency and preserve first-match/absent results.
+The production substring caller finds the multipart header separator. The
+MultipartBoundarySearcher strategy, prepared Finder and overlapping KMP path
+are unchanged; this is not a boundary-strategy replacement or benchmark claim.
+
+Literal search cases cover empty/short inputs, absent, repeated and overlapping
+matches and the header separator. Existing tolerant form/Cow, publication and
+limit tests remain. The historical multipart recognition oracle and XML test
+oracle also use find_bytes: they still test their separate recognition logic,
+but their substring primitive no longer uses the old window scan.
+
+No decoding branch, allocation, work charge, publication ownership or limit
+changes. Independent plan review passed. Scope is body source, its unit tests
+and this record. Multipart header publication remains a second traversal after
+all headers validate and the final field name is known; no temporary header list
+or earlier publication was introduced.
+
+Fresh verification passed 838 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.

@@ -964,3 +964,19 @@ fn multipart_later_disposition_replaces_missing_filename() {
     );
     assert!(values(&published, CollectionKind::Files).is_empty());
 }
+
+#[test]
+fn body_byte_search_keeps_first_match_and_empty_needle_contract() {
+    for (haystack, needle, expected) in [
+        (b"".as_slice(), b"".as_slice(), None),
+        (b"abc", b"", None),
+        (b"", b"a", None),
+        (b"ab", b"abc", None),
+        (b"abc", b"x", None),
+        (b"abcabc", b"abc", Some(0)),
+        (b"baaaa", b"aaa", Some(1)),
+        (b"x\r\n\r\nbody", b"\r\n\r\n", Some(1)),
+    ] {
+        assert_eq!(find_bytes(haystack, needle), expected);
+    }
+}
