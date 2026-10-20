@@ -49,6 +49,7 @@ use crate::{end_response_500, end_response_503};
 use discovery::DnsCache;
 use edgion_common::dns::resolver_select::{resolve_effective_spec, LinkSysKey, ResolverCandidate};
 use edgion_common::dns::{resolve, DnsError, ResolverSpec};
+#[cfg(test)]
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::EdgionErrorCode;
@@ -247,11 +248,7 @@ fn native_service_path(captured: &CapturedServiceSelection) -> Result<ExternalNa
         return Ok(ExternalNamePath::EndpointSlice);
     }
     external_name(captured)?;
-    let mode = DnsResolutionMode::parse(captured.source().metadata.annotations.as_ref().and_then(|annotations| {
-        annotations
-            .get(edgion_annotations::DNS_RESOLUTION_MODE)
-            .map(String::as_str)
-    }));
+    let mode = captured.dns_resolution_mode();
     Ok(decide_external_name_path(
         mode,
         mode == DnsResolutionMode::Controller && !captured.section().ready_slots.is_empty(),

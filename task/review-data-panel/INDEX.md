@@ -8856,3 +8856,26 @@ formatting, workspace all-target check/Clippy and seven guards. Existing Clippy
 warnings are outside the changed code. Tests cover stale-builder rejection,
 membership repair and section isolation. No full suite or benchmark ran.
 Final independent review passed.
+
+
+## Prepare ExternalName DNS mode in the Service projection
+
+AvailableServiceProjection now stores the canonical parsed DNS resolution mode,
+computed at its single publication constructor. Native Service dispatch reads
+that Copy enum instead of looking up the annotation and trimming/matching its
+text on every ExternalName attempt. The existing Service semantic digest already
+includes the mode annotation, so changes and removal rebuild the projection.
+Retained captures keep the old mode. Type/hostname validation, readiness-based
+controller fallback, DNS cache identity and live resolver selection are unchanged.
+
+Independent plan review passed. A new mode-only update regression passed against
+the old production implementation, checking current and all retained captures
+through absent, gateway, per-request, whitespace, controller, invalid and removed
+values. The existing native baseline passed 15 tests with the known TLS fixture
+in verification-03 explicitly excluded; that fixture was not modified. This is
+cold preparation with one internal enum per projection, not a measured throughput
+or allocation improvement. Final verification passed 77 tests: 16 native dispatch
+(with that same explicit TLS-fixture exclusion), 41 coordinator and 20 DNS-cache
+tests. Formatting, workspace all-target check/Clippy and seven guards passed
+with existing unrelated warnings. No full suite, live DNS or benchmark ran.
+Final independent review passed.

@@ -110,7 +110,10 @@ omitted/exact Service kind, required declared port). The captured actual Service
 `core` do not grant a native target. `CapturedServiceSelection` keeps the Service
 source Arc, checked section and membership-matched runtime snapshot from one
 joint discovery generation. Type, hostname, annotations, Service port, protocol
-and appProtocol therefore remain coherent through a DNS await. A later peer
+and appProtocol therefore remain coherent through a DNS await. Each peer
+attempt reads the DNS resolution mode parsed at projection publication, including
+the canonical fallback for absent or unknown annotations. Mode-only changes
+rebuild the projection; retained captures keep their original mode. A later peer
 attempt recaptures geometry; request-captured EBTP/TLS policy, including absence,
 keeps its existing lifetime. Endpoint health/outlier atomics remain live.
 

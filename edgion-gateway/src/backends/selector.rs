@@ -274,6 +274,10 @@ impl CapturedServiceSelection {
         self.available.dns_resolver_candidate.as_ref()
     }
 
+    pub(crate) fn dns_resolution_mode(&self) -> super::DnsResolutionMode {
+        self.available.dns_resolution_mode
+    }
+
     pub(crate) fn source(&self) -> &Service {
         &self.available.raw.service
     }

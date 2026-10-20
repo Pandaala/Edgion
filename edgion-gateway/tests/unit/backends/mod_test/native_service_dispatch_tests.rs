@@ -333,6 +333,35 @@ async fn controller_readiness_does_not_bypass_runtime_health_and_other_modes_ign
     }
 }
 
+#[test]
+fn dns_mode_only_updates_preserve_captured_paths() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let selected = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let mut retained = Vec::new();
+    for (mode, expected) in [
+        (None, ExternalNamePath::EndpointSlice),
+        (Some("gateway"), ExternalNamePath::SelfResolve { cache: true }),
+        (Some("per-request"), ExternalNamePath::SelfResolve { cache: false }),
+        (Some(" \tgateway \t"), ExternalNamePath::SelfResolve { cache: true }),
+        (Some("controller"), ExternalNamePath::EndpointSlice),
+        (Some("invalid"), ExternalNamePath::EndpointSlice),
+        (Some("per-request"), ExternalNamePath::SelfResolve { cache: false }),
+        (None, ExternalNamePath::EndpointSlice),
+    ] {
+        publish(
+            &coordinator,
+            service(Some("ExternalName"), Some("answers.test"), mode, 80),
+            Some(true),
+        );
+        let current = capture(&coordinator, &selected);
+        assert_eq!(native_service_path(&current).unwrap(), expected, "{mode:?}");
+        retained.push((current, expected));
+        for (previous, original_path) in &retained {
+            assert_eq!(native_service_path(previous).unwrap(), *original_path);
+        }
+    }
+}
+
 #[tokio::test]
 async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_capture_recovers() {
     let coordinator = ServiceDiscoveryCoordinator::new();

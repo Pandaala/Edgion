@@ -163,6 +163,7 @@ pub struct LegacyRawProjection {
 
 pub struct AvailableServiceProjection {
     pub(crate) dns_resolver_candidate: Option<edgion_common::dns::resolver_select::ResolverCandidate>,
+    pub(crate) dns_resolution_mode: super::DnsResolutionMode,
     content_fingerprint: [u8; 32],
     pub membership_identity: u64,
     pub runtime_cell: Arc<ServiceRuntimeCell>,
@@ -1416,6 +1417,14 @@ fn build_service_projection(
         ));
     };
     Some(ServicePublishedState::Available(Arc::new(AvailableServiceProjection {
+        dns_resolution_mode: super::DnsResolutionMode::parse(
+            raw.service
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
+                .map(String::as_str),
+        ),
         dns_resolver_candidate: edgion_common::dns::resolver_select::candidate_from_dns_owner(
             edgion_resources::resources::refs::dns_fields::DnsResolverOwner::Service(&service_record.resource),
         ),
