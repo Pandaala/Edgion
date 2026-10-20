@@ -10221,3 +10221,29 @@ picker tests (58 total), formatting, workspace all-target check/Clippy and all
 seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No live provider, Redis exchange or throughput benchmark ran.
+
+## Check latency bootstrap availability only when exploring
+
+LowestLatency now searches for a selectable bootstrap candidate only after
+finding mature latency evidence and determining that the sequence is an
+exploration slot. Previously the independent availability search ran even when
+the no-mature weighted fallback or ordinary mature selection ignored it.
+
+The search predicate reads only the immutable candidate snapshot's scalar
+fields. The mature minimum, sample threshold, exploration interval, weighted
+tie/fallback sets, entropy and error precedence remain unchanged. Adaptive
+publication and dispatch snapshot acquisition are untouched. This skips one
+bounded availability search when its result is unused; no allocation or
+throughput improvement is claimed.
+
+The existing latency test now covers sequence boundaries and u64::MAX, weighted
+mature ties, ineligible bootstrap on exploration slots, unconditional weighted
+bootstrap fallback without mature evidence, and mature sample counts with
+missing p50. The separate unequal-p50 regression still proves that lower
+latency outranks a larger route weight.
+
+Fresh verification passed 13 candidate-picker, 36 dispatch, nine attempt-scheduler
+and 22 adaptive tests (80 total), formatting, workspace all-target check/Clippy
+and all seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No live provider or performance benchmark ran.

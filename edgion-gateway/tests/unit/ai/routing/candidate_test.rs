@@ -98,27 +98,59 @@ fn lowest_latency_bootstraps_explores_and_weight_breaks_ties() {
         latency_samples: 8,
         charged_tokens_60s: 0,
     };
-    // Normal mature choice: exact latency tie is weighted.
-    assert_eq!(
-        pick(input(&candidates, 2), AiBackendSelection::LowestLatency)
-            .unwrap()
-            .slot,
-        1
-    );
-    // Every twentieth selection explores the only bootstrap candidate.
-    let mut exploring = input(&candidates, 0);
-    exploring.selection_sequence = 19;
-    assert_eq!(pick(exploring, AiBackendSelection::LowestLatency).unwrap().slot, 2);
+    let sequences = [
+        (0, false),
+        (18, false),
+        (19, true),
+        (20, false),
+        (39, true),
+        (u64::MAX, false),
+    ];
+    // Exact mature ties retain route weights; only exploration selects bootstrap.
+    for (sequence, exploring) in sequences {
+        for (entropy, mature_slot) in [(0, 0), (1, 1), (2, 1), (3, 1)] {
+            let mut picker = input(&candidates, entropy);
+            picker.selection_sequence = sequence;
+            assert_eq!(
+                pick(picker, AiBackendSelection::LowestLatency).unwrap().slot,
+                if exploring { 2 } else { mature_slot }
+            );
+        }
+    }
 
-    // With no mature samples, bootstrap selection uses route weights.
+    // Ineligible bootstrap must not divert an exploration from the mature pool.
+    candidates[2].eligibility.runtime_available = false;
+    for (sequence, _) in sequences {
+        let mut picker = input(&candidates, 2);
+        picker.selection_sequence = sequence;
+        assert_eq!(pick(picker, AiBackendSelection::LowestLatency).unwrap().slot, 1);
+    }
+    candidates[2].eligibility.runtime_available = true;
+
+    // With no mature samples, bootstrap uses route weights on every sequence.
     candidates[0].adaptive.latency_samples = 0;
     candidates[1].adaptive.latency_samples = 0;
-    assert_eq!(
-        pick(input(&candidates, 2), AiBackendSelection::LowestLatency)
-            .unwrap()
-            .slot,
-        1
-    );
+    for (sequence, _) in sequences {
+        for (entropy, slot) in [(0, 0), (1, 1), (3, 1), (4, 2)] {
+            let mut picker = input(&candidates, entropy);
+            picker.selection_sequence = sequence;
+            assert_eq!(pick(picker, AiBackendSelection::LowestLatency).unwrap().slot, slot);
+        }
+    }
+
+    // A mature sample count without p50 is neither mature evidence nor bootstrap.
+    for candidate in &mut candidates {
+        candidate.adaptive.latency_samples = LATENCY_MATURE_SAMPLES;
+        candidate.adaptive.latency_p50_micros = None;
+    }
+    for (sequence, _) in sequences {
+        let mut picker = input(&candidates, 0);
+        picker.selection_sequence = sequence;
+        assert_eq!(
+            pick(picker, AiBackendSelection::LowestLatency),
+            Err(PickerError::NoEligibleCandidate)
+        );
+    }
 }
 
 #[test]

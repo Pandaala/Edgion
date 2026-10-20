@@ -193,19 +193,16 @@ fn pick_lowest_latency(input: PickerInput<'_>) -> Result<&RouteCandidate, Picker
         })
         .filter_map(|candidate| candidate.adaptive.latency_p50_micros)
         .min();
-    let has_bootstrap = input
-        .candidates
-        .iter()
-        .any(|candidate| is_selectable(candidate) && candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES);
-
     let Some(best) = mature_best else {
         return pick_weighted(input.candidates, input.entropy, |candidate| {
             candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES
         });
     };
-    if has_bootstrap
-        && input.selection_sequence % u64::from(LATENCY_EXPLORATION_INTERVAL)
-            == u64::from(LATENCY_EXPLORATION_INTERVAL - 1)
+    if input.selection_sequence % u64::from(LATENCY_EXPLORATION_INTERVAL) == u64::from(LATENCY_EXPLORATION_INTERVAL - 1)
+        && input
+            .candidates
+            .iter()
+            .any(|candidate| is_selectable(candidate) && candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES)
     {
         return pick_weighted(input.candidates, input.entropy, |candidate| {
             candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES
