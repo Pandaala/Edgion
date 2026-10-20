@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Shared outbound ready-endpoint projection](outbound-03-ready-endpoint-projection.md)
+
 - [Prepared ForwardAuth denial header names](forward-auth-01-prepared-denial-header-names.md)
 
 - [Wasm pool discard lock scope](wasm-04-pool-discard-lock-scope.md)
@@ -11760,3 +11762,20 @@ was not established. Existing unrelated Clippy warnings remain. Scripted outboun
 coverage is network-free; existing semantic guard fixtures include local mock
 servers. No deployed integration or throughput benchmark ran.
 Final independent code review passed.
+
+## Outbound ready-endpoint projection audit
+
+Traced Service URL selection and pinned resolver construction through the canonical
+EndpointSlice facade. Both copy ready sockets, but URL selection consumes one and
+the resolver needs the complete filtered, rotated sequence. A borrowed scalar
+operation or published numeric projection could reduce copying; preserving
+whole-list validation and avoiding long-lived generation retention require separate
+representation decisions. The [deferred task](outbound-03-ready-endpoint-projection.md)
+records alternatives and exact readiness, serving-port, cursor and safety boundaries.
+No new runtime code, cache or selection policy was introduced.
+
+Independent plan review passed. Fresh verification passed 123 shared outbound,
+41 coordinator and four direct facade inventory tests (168 total), formatting and
+workspace all-target check/Clippy. Existing unrelated Clippy warnings remain.
+No allocation/throughput benchmark or deployed integration ran.
+Agent-doc validation and final independent review passed.
