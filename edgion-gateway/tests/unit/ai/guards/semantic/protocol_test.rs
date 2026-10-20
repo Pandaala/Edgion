@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn optional_reject_text_preserves_bounds_and_error_order() {
+    for (code, reason, expected) in [
+        (None, None, Ok(ParsedDecision::Reject)),
+        (
+            Some("policy_1.-".to_owned()),
+            Some(String::new()),
+            Ok(ParsedDecision::Reject),
+        ),
+        (Some("a".repeat(64)), Some("x".repeat(256)), Ok(ParsedDecision::Reject)),
+        (None, Some("é".repeat(128)), Ok(ParsedDecision::Reject)),
+        (Some(String::new()), None, Err("invalid-reject-code")),
+        (Some("a".repeat(65)), None, Err("invalid-reject-code")),
+        (Some("bad code".to_owned()), None, Err("invalid-reject-code")),
+        (Some("é".to_owned()), None, Err("invalid-reject-code")),
+        (None, Some("x".repeat(257)), Err("invalid-reject-reason")),
+        (None, Some("é".repeat(129)), Err("invalid-reject-reason")),
+        (Some(String::new()), Some("x".repeat(257)), Err("invalid-reject-code")),
+    ] {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "version": "v1", "action": "reject", "code": code, "reason": reason,
+        }))
+        .unwrap();
+        assert_eq!(parse_decision(&body, 10), expected);
+    }
+    for field in ["code", "reason"] {
+        for value in ["1", "true", "[]", "{}"] {
+            let body = format!(r#"{{"version":"v1","action":"reject","{field}":{value}}}"#);
+            assert_eq!(parse_decision(body.as_bytes(), 10), Err("invalid-json"));
+        }
+        for (first, second) in [("null", r#""policy""#), (r#""policy""#, "null"), ("null", "null")] {
+            let body = format!(r#"{{"version":"v1","action":"reject","{field}":{first},"{field}":{second}}}"#);
+            assert_eq!(parse_decision(body.as_bytes(), 10), Err("invalid-json"));
+        }
+    }
+    for (body, expected) in [
+        (
+            br#"{"version":"v1","action":"reject","code":"p\u006flicy","reason":"line\nnext"}"#.as_slice(),
+            Ok(ParsedDecision::Reject),
+        ),
+        (
+            br#"{"version":"v1","action":"reject","code":"bad\ncode"}"#,
+            Err("invalid-reject-code"),
+        ),
+        (
+            br#"{"version":"v1","action":"pass","code":null,"reason":null}"#,
+            Ok(ParsedDecision::Pass),
+        ),
+        (
+            br#"{"version":"v1","action":"pass","reason":""}"#,
+            Err("invalid-action-fields"),
+        ),
+        (
+            br#"{"version":"v2","action":"reject","code":""}"#,
+            Err("unsupported-version"),
+        ),
+        (
+            br#"{"version":"v2","action":"reject","code":""} {}"#,
+            Err("trailing-json"),
+        ),
+    ] {
+        assert_eq!(parse_decision(body, 10), expected);
+    }
+}
+
+#[test]
 fn strict_decisions_and_bounds() {
     assert_eq!(
         parse_decision(br#"{"version":"v1","action":"pass"}"#, 10),
@@ -54,12 +119,39 @@ fn plain_terminal_decisions_do_not_allocate() {
             br#"{"version":"v1","action":"reject"}"#.as_slice(),
             ParsedDecision::Reject,
         ),
+        (
+            br#"{"version":"v1","action":"reject","code":"policy","reason":"blocked"}"#.as_slice(),
+            ParsedDecision::Reject,
+        ),
     ] {
         let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| parse_decision(body, 10));
         assert_eq!(result, Ok(expected));
         assert_eq!(stats.calls, 0);
         assert_eq!(stats.requested_bytes, 0);
     }
+}
+
+#[test]
+fn optional_decision_text_borrows_plain_input_and_owns_escaped_text() {
+    let body = br#"{"version":"v1","action":"reject","code":"policy","reason":"blocked"}"#;
+    let envelope: DecisionEnvelope<'_> = serde_json::from_slice(body).unwrap();
+    for (text, expected) in [
+        (envelope.code.unwrap(), "policy"),
+        (envelope.reason.unwrap(), "blocked"),
+    ] {
+        let Cow::Borrowed(value) = text.0 else {
+            panic!("plain optional text must borrow the response buffer");
+        };
+        assert_eq!(value, expected);
+        let offset = value.as_ptr() as usize - body.as_ptr() as usize;
+        assert!(offset + value.len() <= body.len());
+        assert_eq!(&body[offset..offset + value.len()], value.as_bytes());
+    }
+    let envelope: DecisionEnvelope<'_> =
+        serde_json::from_slice(br#"{"version":"v1","action":"reject","code":"p\u006flicy","reason":"line\nnext"}"#)
+            .unwrap();
+    assert!(matches!(envelope.code.unwrap().0, Cow::Owned(value) if value == "policy"));
+    assert!(matches!(envelope.reason.unwrap().0, Cow::Owned(value) if value == "line\nnext"));
 }
 
 #[test]

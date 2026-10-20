@@ -61,6 +61,11 @@ impl WireField {
     }
 }
 
+// Serde's borrowing adapter applies to a direct Cow field, not Option<Cow>.
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+struct DecisionText<'a>(#[serde(borrow)] Cow<'a, str>);
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DecisionEnvelope<'a> {
@@ -70,10 +75,10 @@ struct DecisionEnvelope<'a> {
     action: Cow<'a, str>,
     #[serde(default)]
     replacements: Option<Vec<Replacement>>,
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    reason: Option<String>,
+    #[serde(default, borrow)]
+    code: Option<DecisionText<'a>>,
+    #[serde(default, borrow)]
+    reason: Option<DecisionText<'a>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,8 +108,8 @@ pub(super) fn parse_decision(body: &[u8], max_replacement_bytes: usize) -> Resul
             Ok(ParsedDecision::Pass)
         }
         "reject" if envelope.replacements.is_none() => {
-            let code = envelope.code;
-            let reason = envelope.reason;
+            let code = envelope.code.map(|text| text.0);
+            let reason = envelope.reason.map(|text| text.0);
             if code.as_ref().is_some_and(|value| {
                 value.len() > MAX_CODE_BYTES
                     || value.is_empty()

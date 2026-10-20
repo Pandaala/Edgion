@@ -8454,3 +8454,21 @@ an in-memory duplex session without an outbound call. Final verification passed
 two Guardrail plugin tests and seven content-type tests, formatting, workspace
 check/Clippy and seven repository guards with existing unrelated Clippy warnings.
 No throughput benchmark or full suite ran.
+
+## Borrow optional Guardrail decision text
+
+The decision envelope now retains optional code/reason strings through a private
+transparent Serde wrapper around a directly borrowed Cow field. This is necessary
+because the locked derive's borrowing adapter does not apply directly through
+Option<Cow>. Plain text borrows the bounded response buffer; escaped text still
+uses Serde's owned decoding. Replacement text remains independently owned.
+Null/missing fields, duplicate rejection, byte limits, character checks and error
+precedence are unchanged; optional diagnostic text remains unexposed.
+
+The semantic regression passed against the original parser before the change.
+Final verification passed all ten protocol tests, including input-pointer and
+escaped-ownership checks and zero allocations for the prepared plain rejection
+fixture with both optional fields. Formatting, workspace check/Clippy and seven
+repository guards passed with existing unrelated Clippy warnings. This removes
+two discarded String allocations for that nonempty unescaped fixture, not all
+parser allocations. No throughput benchmark or full suite ran.
