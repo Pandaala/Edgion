@@ -1479,11 +1479,15 @@ fn validate_qname(bytes: &[u8]) -> Result<(), XmlStreamError> {
 fn validate_declaration(bytes: &[u8]) -> Result<(), XmlStreamError> {
     let mut rest = bytes;
     let mut index = 0;
-    while !trim_xml(rest).is_empty() {
+    loop {
+        let trimmed = trim_xml(rest);
+        if trimmed.is_empty() {
+            break;
+        }
         if !rest.first().is_some_and(|b| xml_ws(*b)) {
             return Err(XmlStreamError::Syntax);
         }
-        rest = trim_xml(rest);
+        rest = trimmed;
         let end = rest
             .iter()
             .position(|b| xml_ws(*b) || *b == b'=')
@@ -1499,7 +1503,7 @@ fn validate_declaration(bytes: &[u8]) -> Result<(), XmlStreamError> {
             return Err(XmlStreamError::Syntax);
         }
         rest = &rest[1..];
-        let end = rest.iter().position(|b| *b == quote).ok_or(XmlStreamError::Syntax)?;
+        let end = memchr::memchr(quote, rest).ok_or(XmlStreamError::Syntax)?;
         let value = &rest[..end];
         rest = &rest[end + 1..];
         index = match (index, key, value) {

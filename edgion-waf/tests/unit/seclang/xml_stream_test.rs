@@ -894,3 +894,93 @@ fn token_emission_borrow_preserves_original_counters_and_cleanup() {
         }
     }
 }
+
+#[test]
+fn declaration_scan_preserves_whitespace_quotes_and_attribute_order() {
+    fn original(bytes: &[u8]) -> Result<(), XmlStreamError> {
+        let mut rest = bytes;
+        let mut index = 0;
+        while !trim_xml(rest).is_empty() {
+            if !rest.first().is_some_and(|b| xml_ws(*b)) {
+                return Err(XmlStreamError::Syntax);
+            }
+            rest = trim_xml(rest);
+            let end = rest
+                .iter()
+                .position(|b| xml_ws(*b) || *b == b'=')
+                .ok_or(XmlStreamError::Syntax)?;
+            let key = &rest[..end];
+            rest = trim_xml(&rest[end..]);
+            if rest.first() != Some(&b'=') {
+                return Err(XmlStreamError::Syntax);
+            }
+            rest = trim_xml(&rest[1..]);
+            let quote = *rest.first().ok_or(XmlStreamError::Syntax)?;
+            if !matches!(quote, b'\'' | b'"') {
+                return Err(XmlStreamError::Syntax);
+            }
+            rest = &rest[1..];
+            let end = rest.iter().position(|b| *b == quote).ok_or(XmlStreamError::Syntax)?;
+            let value = &rest[..end];
+            rest = &rest[end + 1..];
+            index = match (index, key, value) {
+                (0, b"version", b"1.0") => 1,
+                (1, b"encoding", value) if value.eq_ignore_ascii_case(b"UTF-8") => 2,
+                (1 | 2, b"standalone", b"yes" | b"no") => 3,
+                _ => return Err(XmlStreamError::Syntax),
+            };
+        }
+        if index == 0 {
+            Err(XmlStreamError::Syntax)
+        } else {
+            Ok(())
+        }
+    }
+    for (input, valid) in [
+        (b" version='1.0'".as_slice(), true),
+        (b"\tversion=\"1.0\" encoding='utf-8' standalone='yes' \r\n", true),
+        (b" version='1.0' standalone='no'", true),
+        (b"", false),
+        (b" \t\r\n", false),
+        (b"version='1.0'", false),
+        (b" version='1.0'encoding='UTF-8'", false),
+        (b" encoding='UTF-8' version='1.0'", false),
+        (b" version='1.0' standalone='yes' encoding='UTF-8'", false),
+        (b" version='1.0' version='1.0'", false),
+        (b" version='1.0", false),
+        (b" version='1.0\"", false),
+        (b" version='1.0' unknown='yes'", false),
+    ] {
+        assert_eq!(validate_declaration(input).is_ok(), valid, "{input:?}");
+        assert_eq!(validate_declaration(input), original(input));
+    }
+    for leading in ["", " ", "\t\r\n", "x"] {
+        for between in ["", " ", "\n", "  "] {
+            for tail in ["", " ", "\t\n", "?"] {
+                for first in [
+                    "version='1.0'",
+                    "version=\"1.0\"",
+                    "version='1.1'",
+                    "version='",
+                    "encoding='UTF-8'",
+                ] {
+                    for second in [
+                        "",
+                        "encoding='UTF-8'",
+                        "standalone='no'",
+                        "standalone=\"yes\"",
+                        "version='1.0'",
+                        "unknown='x'",
+                    ] {
+                        let input = format!("{leading}{first}{between}{second}{tail}");
+                        assert_eq!(
+                            validate_declaration(input.as_bytes()),
+                            original(input.as_bytes()),
+                            "{input:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

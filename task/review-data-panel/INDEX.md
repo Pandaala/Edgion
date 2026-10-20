@@ -11170,3 +11170,25 @@ Fresh verification passed 843 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
 Final independent review passed.
+
+
+## Reuse WAF XML declaration scans
+
+validate_declaration now reuses its loop-entry trimmed slice after checking the
+required separator against the original input. It also uses existing memchr for
+the first matching closing quote. Empty/all-whitespace termination, version and
+optional attribute order, accepted values, quote handling and errors retain their
+original rules. The caller's checked token-length work precharge is unchanged;
+no allocation, namespace behavior or parser ownership changes.
+
+Independent plan review passed. The new test passed on the original production
+implementation before edits. Directed valid/invalid declarations and generated
+separator, quote, version, attribute-order and trailing-input combinations compare
+against a frozen original validator, including its old trim and quote searches.
+This removes a repeated trim query and reuses byte search; it does not establish
+a measured request-throughput improvement.
+
+Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
