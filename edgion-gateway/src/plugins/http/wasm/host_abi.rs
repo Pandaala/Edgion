@@ -531,7 +531,8 @@ impl wasmtime::ResourceLimiter for HostState {
 // ---------- proxy-wasm serialized map codec ----------
 
 pub fn encode_map(pairs: &[(String, String)]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16 + pairs.iter().map(|(k, v)| k.len() + v.len() + 10).sum::<usize>());
+    let mut out =
+        Vec::with_capacity(size_of::<u32>() + pairs.iter().map(|(k, v)| k.len() + v.len() + 10).sum::<usize>());
     out.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
     for (k, v) in pairs {
         out.extend_from_slice(&(k.len() as u32).to_le_bytes());

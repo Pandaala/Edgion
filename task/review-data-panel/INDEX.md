@@ -11406,3 +11406,23 @@ trailer tests (276 total), formatting, workspace all-target check/Clippy and sev
 repository guards. Existing unrelated Clippy warnings remain. No live transport
 or throughput benchmark ran.
 Final independent review passed.
+
+## Reserve exact Wasm serialized map capacity
+
+The header-map encoder reserves the four-byte count prefix plus each pair's
+existing length fields, terminators and payload, removing twelve unused requested
+bytes per encoding. Wire order, casts, error handling and the independent snapshot
+across guest allocator reentry remain unchanged. The only production consumer
+passes the completed bytes to write_to_guest; spare capacity is not observed.
+
+Independent plan review passed. Literal empty, empty-pair and repeated-key UTF-8
+wire fixtures passed before the production edit. A frozen previous encoder checks
+identical output and allocation count, with twelve fewer requested bytes for zero,
+one, two, 64 and 1024 pairs. This is a reservation reduction, not an allocation-count,
+physical allocator size, RSS or throughput claim.
+
+Fresh verification passed all 267 Gateway Wasm tests serially and 11 upstream
+trailer tests (278 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed.

@@ -116,6 +116,60 @@ fn map_codec_roundtrip() {
     assert!(decode_map(&[1, 2]).is_none());
 }
 
+#[test]
+fn map_encoding_preserves_literal_wire_layout() {
+    let cases = [
+        (Vec::new(), vec![0, 0, 0, 0]),
+        (
+            vec![(String::new(), String::new())],
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        (
+            vec![("x".to_owned(), "é".to_owned()), ("x".to_owned(), String::new())],
+            vec![
+                2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, b'x', 0, 0xc3, 0xa9, 0, b'x', 0, 0,
+            ],
+        ),
+    ];
+    for (pairs, expected) in cases {
+        let actual = encode_map(&pairs);
+        assert_eq!(actual, expected);
+        assert_eq!(decode_map(&actual).unwrap(), pairs);
+    }
+}
+
+#[test]
+fn map_encoding_reserves_only_serialized_bytes() {
+    // Freeze the previous reservation strategy as an allocation oracle.
+    fn previous_encode(pairs: &[(String, String)]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + pairs.iter().map(|(k, v)| k.len() + v.len() + 10).sum::<usize>());
+        out.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+        for (key, value) in pairs {
+            out.extend_from_slice(&(key.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        }
+        for (key, value) in pairs {
+            out.extend_from_slice(key.as_bytes());
+            out.push(0);
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+        }
+        out
+    }
+
+    for count in [0, 1, 2, 64, 1024] {
+        let pairs = vec![("x-field".to_owned(), "é".to_owned()); count];
+        let (previous, previous_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| previous_encode(&pairs));
+        let (actual, actual_stats) = crate::test_allocation_counter::count_allocation_stats(|| encode_map(&pairs));
+        assert_eq!(actual, previous);
+        assert_eq!(actual_stats.calls, 1);
+        assert_eq!(actual_stats.calls, previous_stats.calls);
+        assert_eq!(actual_stats.requested_bytes, actual.len());
+        assert_eq!(actual_stats.requested_bytes + 12, previous_stats.requested_bytes);
+    }
+}
+
 fn encode_raw_map(pairs: &[(&[u8], &[u8])]) -> Vec<u8> {
     let mut encoded = Vec::new();
     encoded.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
