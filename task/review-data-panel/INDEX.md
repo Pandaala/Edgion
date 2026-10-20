@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Provider Bearer header value ownership](credential-02-provider-bearer-value-ownership.md)
+
 - [AI DNS first-address projection](dns-02-ai-first-address-projection.md)
 
 - [Service outlier completion-token ownership](outlier-01-completion-token-ownership.md)
@@ -10293,3 +10295,18 @@ dispatch tests (90 total), formatting, workspace all-target check/Clippy and the
 seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No new test, live upstream exchange or throughput benchmark ran.
+
+## Provider Bearer value ownership audit
+
+Provider preparation formats a Bearer String that the string setter copies
+before Pingora consumes it. Moving the original into the typed setter could
+remove that payload copy, but its credential-sensitivity contract requires an
+explicit metadata decision. The fixed authorization field is not sealed by the
+transcoder, so sealed-header ordering is not the blocker at this call site.
+The ownership alternatives and setter-versus-provider failure boundaries are
+recorded in [credential-02](credential-02-provider-bearer-value-ownership.md).
+
+Fresh baseline verification passed 49 adapter, five provider and 36 dispatch
+tests (90 total), formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. No runtime change,
+new sensitivity implementation, allocation benchmark or demonstrated leak.
