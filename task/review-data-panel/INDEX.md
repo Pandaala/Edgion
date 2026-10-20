@@ -8837,3 +8837,22 @@ formatting, workspace all-target check/Clippy and seven guards with existing
 unrelated warnings. This removes one lookup when Age is present; no allocation
 or throughput improvement is claimed. No full suite or benchmark ran.
 Final independent review passed.
+
+
+## Borrow the affinity runtime cell from its captured generation
+
+Ordinary Service affinity lookup now borrows runtime_cell from the available
+projection held by its local ServiceSelectorGeneration. The synchronous cache-hit
+and cache-build paths no longer clone that cell Arc. The generation still pins
+the cell through active/SP snapshot reads, the build lock, membership checks and
+publication revalidation. Lock release order and returned affinity-map ownership
+remain unchanged; typed-scope map construction is untouched.
+
+Independent plan review passed. The existing pre-change LB and coordinator
+baselines passed 127 and 41 tests respectively. This removes one Arc reference
+count increment/decrement after an available Service lookup, not heap allocation
+or measured throughput cost. Final verification passed the same 168 tests,
+formatting, workspace all-target check/Clippy and seven guards. Existing Clippy
+warnings are outside the changed code. Tests cover stale-builder rejection,
+membership repair and section isolation. No full suite or benchmark ran.
+Final independent review passed.

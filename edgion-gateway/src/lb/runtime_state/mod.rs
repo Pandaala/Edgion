@@ -76,7 +76,7 @@ fn sp_affinity_get_or_build_from(
         return Arc::new(std::collections::HashMap::new());
     };
     let membership = available.membership_identity;
-    let cell = Arc::clone(&available.runtime_cell);
+    let cell = &available.runtime_cell;
     let active = cell.active.load_full();
     if active.membership_identity != Some(membership) {
         return Arc::new(std::collections::HashMap::new());
@@ -93,16 +93,8 @@ fn sp_affinity_get_or_build_from(
             return Arc::clone(&snapshot.entries);
         }
     }
-    try_publish_sp_snapshot(
-        coordinator,
-        service_key,
-        section,
-        &generation,
-        &active,
-        available,
-        &cell,
-    )
-    .unwrap_or_else(|| Arc::new(std::collections::HashMap::new()))
+    try_publish_sp_snapshot(coordinator, service_key, section, &generation, &active, available, cell)
+        .unwrap_or_else(|| Arc::new(std::collections::HashMap::new()))
 }
 
 fn try_publish_sp_snapshot(
