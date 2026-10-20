@@ -8917,3 +8917,32 @@ is claimed. Final verification passed 144 ExtProc and 11 upstream-trailer tests
 (155 total), formatting, workspace all-target check/Clippy and seven guards.
 Existing warnings remain outside changed code. No full suite, interoperability
 test or benchmark ran. Final independent review passed.
+
+
+## Typed response processor forwarding audit
+
+The leased response driver dispatches on_event, and AiAttemptResponseProcessor
+forwards that event to its child processors. UsageExtractionProcessor,
+GuardrailResponseProcessor, SemanticSseSource, AnthropicResponseProcessor and
+MessagesProcessor inherit the default on_event, which awaits on_chunk. Locked
+async-trait 0.1.92 expands both async methods through Box::pin. This is source
+structure, not measured allocation counts, future sizes or gateway-level cost.
+
+ExtProc and gRPC processors override on_event; their compatibility on_chunk
+methods call it, so that reverse wrapper is not automatically extra work on the
+normal typed driver path. Wasm overrides both methods and calls synchronous
+observe directly from each. The outer Pingora callback and installed processor
+forwarding are distinct layers and must be measured separately.
+
+The canonical cpu-memory async-response-body-hook-profile-before-gate decision
+continues to govern the proposed public no-work predicate. It is not an absolute
+ban on local helper or direct-future forwarding alternatives. No representative
+profiling was added here, so no runtime refactor or duplicate deferred task was
+selected. Any later change must establish value and preserve typed terminal
+mapping, first-poll behavior, cancellation leases, backpressure, ordered child
+execution and early terminal arbitration.
+
+Independent plan review passed. This source-audit batch changes only this record;
+no runtime tests or allocation/throughput measurements were run. Formatting,
+workspace all-target check/Clippy, agent-doc validation and diff checks passed
+with existing unrelated warnings. Final independent review passed.
