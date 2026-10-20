@@ -213,8 +213,8 @@ pub trait PluginSession: Send + Sync {
     fn get_request_method<'a>(&'a self) -> Option<&'a str>;
 
     /// Get the wire HTTP version used to build SecLang REQUEST_PROTOCOL.
-    fn get_http_protocol(&self) -> String {
-        "HTTP/1.1".to_string()
+    fn get_http_protocol(&self) -> &'static str {
+        "HTTP/1.1"
     }
 
     /// Borrow the canonical standard W3C trace ID, if initialized.

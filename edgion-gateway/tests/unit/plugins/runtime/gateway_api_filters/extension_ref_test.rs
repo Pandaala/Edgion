@@ -153,7 +153,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     session.expect_get_method().times(1).return_const("GET".to_string());
     session.expect_get_uri().return_const("/".to_string());
     session.expect_get_request_uri().return_const("/".to_string());
-    session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
+    session.expect_get_http_protocol().return_const("HTTP/1.1");
     session.expect_remote_ip().return_const("192.0.2.1".to_string());
     session.expect_get_request_id_ref().returning(|| Some("request-1"));
     waf.expect_record_phase_outcome().returning(|_, _, _, _| ());

@@ -51,6 +51,26 @@ async fn borrowed_path_params_preserve_capture_and_empty_cache() {
 }
 
 #[tokio::test]
+async fn wire_http_protocol_labels_preserve_versions_without_allocating() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    for (version, expected) in [
+        (http::Version::HTTP_09, "HTTP/0.9"),
+        (http::Version::HTTP_10, "HTTP/1.0"),
+        (http::Version::HTTP_11, "HTTP/1.1"),
+        (http::Version::HTTP_2, "HTTP/2.0"),
+        (http::Version::HTTP_3, "HTTP/3.0"),
+    ] {
+        session.req_header_mut().set_version(version);
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let view: &dyn PluginSession = &adapter;
+        let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| view.get_http_protocol());
+        assert_eq!(actual, expected);
+        assert_eq!(allocations, 0);
+    }
+}
+
+#[tokio::test]
 async fn borrowed_protocol_metadata_preserves_sources_and_fallbacks() {
     let mut session = test_session().await;
     for is_grpc in [false, true] {

@@ -90,7 +90,7 @@ fn expect_request_head_with_identity(
     session.expect_get_method().times(1).return_const("POST".to_string());
     session.expect_get_uri().return_const(uri.to_string());
     session.expect_get_request_uri().return_const(uri.to_string());
-    session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
+    session.expect_get_http_protocol().return_const("HTTP/1.1");
     session.expect_remote_ip().return_const("192.0.2.1".to_string());
     session.expect_get_request_id_ref().returning(move || request_id);
 }

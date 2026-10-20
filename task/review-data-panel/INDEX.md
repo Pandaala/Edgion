@@ -8970,3 +8970,27 @@ documentation, SSA-force, metrics inventory, Pingora-source policy, Gateway API
 transform contract, unit-test layout and gateway no-tracing guards passed.
 Clippy retains unrelated existing warnings. This batch covers identity ingestion,
 not the remaining WAF engine operators or complete callback coverage.
+
+## Borrow fixed wire HTTP protocol labels for WAF
+
+PluginSession::get_http_protocol and PingoraSessionAdapter now return static
+string slices. The five known HTTP versions and the HTTP/1.1 fallback retain
+exactly the same labels. WafPlugin is the sole production consumer; H2 authority
+synthesis, REQUEST_PROTOCOL and request-line construction still see the same
+bytes. Transaction-owned bounded storage remains unchanged. This is separate
+from the earlier discovered application-protocol label optimization.
+
+All three WAF wiring mocks retain their original HTTP/1.1 value. A real adapter
+unit test selects each public Version value and checks the label through a trait
+object while counting allocations around only the getter. This checks the
+adapter mapping, not real H2/H3 transport behavior; it does not manufacture an
+unknown Version or broaden the supported transport set. URI composition and the
+already-borrowed method and remote address are unchanged.
+
+Fresh verification passed 90 Gateway WAF-related tests and the adapter version
+test; each of its five getter calls allocated zero times. Formatting, workspace
+all-target check and Clippy, agent documentation, SSA-force, metrics inventory,
+Pingora-source policy, Gateway API transform contract, unit-test layout and
+gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
+The allocation assertion covers this getter only, not complete WAF execution or
+end-to-end throughput. Remaining engine and callback coverage stays open.

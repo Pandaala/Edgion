@@ -1137,7 +1137,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.request_method().map(http::Method::as_str)
     }
 
-    fn get_http_protocol(&self) -> String {
+    fn get_http_protocol(&self) -> &'static str {
         match self.inner.req_header().version {
             http::Version::HTTP_09 => "HTTP/0.9",
             http::Version::HTTP_10 => "HTTP/1.0",
@@ -1146,7 +1146,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             http::Version::HTTP_3 => "HTTP/3.0",
             _ => "HTTP/1.1",
         }
-        .to_string()
     }
 
     fn get_request_id_ref(&self) -> Option<&str> {
