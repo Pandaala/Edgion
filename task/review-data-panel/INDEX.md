@@ -17,7 +17,7 @@ destination.
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
-| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
+| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
@@ -11073,4 +11073,46 @@ separate existing counter-overflow boundary.
 Fresh verification passed 841 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+
+## WAF JSON structure ownership and duplicate lifecycle audit
+
+Inspected the active JSON checker's structural path from bounded node/key/path
+reservation through object insertion, duplicate replacement, sorted drain and
+terminal cleanup, including json_scratch capacity arithmetic. This is bounded
+structure-owner coverage, not complete lexer, collector, predicate or WAF review.
+
+Incoming decoded keys are borrowed during lookup, then copied only for new object
+members into a scoped key arena. Their identity must survive the token callback
+for later duplicate lookup and sorted publication; dotted external path collisions
+remain distinct from duplicate keys within one object. Duplicate insertion returns
+without rewriting ancestor links/heights. The selected node's preceding receipt
+is discarded before its subtree is reset; failures retain canonical abandonment.
+
+Object completion drains the balanced key index in order before truncating node
+and key arenas to the object's marks. Parent scopes remain live, while subsequent
+siblings reuse retained capacities. The reducer's arrays retain frame summaries
+and receipts rather than an element-value tape; this does not describe downstream
+collector payload retention. Path storage is reused and restored by frame marks.
+Node reads/writes and comparisons have explicit ordered work charges, so a Copy
+operation is not authority to remove the corresponding budget step.
+
+Complete-source node hints are enabled only when a conservative aggregate bound
+fits. A hint is attempted at zero node capacity; reservation failure falls back
+to ordinary demand growth, and successful allocation reconciles actual capacity.
+Inline key/path bytes are excluded from heap usage; first spill charges the full
+heap allocation through the canonical shared helper. Capacity reuse does not
+refund live heap charges. Completion and failures release the structural owners;
+feed retains the terminal result and does not publish partial failed receipts.
+
+Independent plan review passed. No additional runtime optimization was selected.
+Existing regressions exercise AVL rotations, decoded duplicates, nested scope
+restoration, sibling reuse, conservative hints, exact/one-below physical limits,
+malformed prefixes and callback failure cleanup. These are current implementation
+checks, not benchmarks or evidence of full data-plane coverage.
+
+Fresh verification passed 841 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting and workspace all-target check/Clippy. Existing unrelated
+Clippy warnings remain. Agent-document validation also passed.
 Final independent review passed.
