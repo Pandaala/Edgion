@@ -9262,3 +9262,31 @@ WAF tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No new performance or allocator measurement was run.
+
+## Copy plain WAF request components without scalar decoding
+
+RequestState query decoding now uses copy_bytes when memchr2 finds neither plus
+nor percent. Path decoding uses the same existing bulk copy when no percent is
+present, preserving literal plus signs. percent_decoded_len returns the original
+length without scalar decoding when no percent occurs; plus replacement does not
+change length. Marker-bearing paths retain the original tolerant decoder loops.
+
+The constructor reserves the projected arena before any component writes. Plain
+copies append the same bytes and ranges within that reservation, so retained
+accounting, aliases, record order and admission checks are unchanged. No temporary
+owned value, borrowed publication, cache or new dependency was introduced. The
+preflight adds inspection work for encoded input; avoiding scalar decode/push work
+on plain input is not evidence that every workload becomes faster.
+
+An independent scalar oracle covers short binary/escape combinations, long plain
+inputs, malformed/truncated escapes and one-pass decoding for query and path.
+Assertions check decoded length, prefix preservation, returned ranges and unchanged
+reserved capacity. Existing full RequestState literal collection, alias, arena and
+exact/one-below retained-limit tests remain. This does not change body form decoding
+or canonical request BodyStorage. Broader callback coverage remains open.
+
+Fresh checks passed: 827 WAF leaf tests (six existing ignored), 90 Gateway WAF
+tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No allocator or throughput measurement is claimed.

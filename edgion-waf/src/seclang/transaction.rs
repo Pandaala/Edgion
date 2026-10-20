@@ -5770,6 +5770,9 @@ impl RequestState<'_> {
     }
 
     fn copy_percent_decoded(&mut self, value: &[u8]) -> Result<ByteRange, RuntimeError> {
+        if memchr::memchr2(b'+', b'%', value).is_none() {
+            return self.copy_bytes(value);
+        }
         let start = self.bytes.len();
         let mut index = 0_usize;
         while index < value.len() {
@@ -5800,6 +5803,9 @@ impl RequestState<'_> {
     }
 
     fn copy_percent_decoded_path(&mut self, value: &[u8]) -> Result<ByteRange, RuntimeError> {
+        if memchr::memchr(b'%', value).is_none() {
+            return self.copy_bytes(value);
+        }
         let start = self.bytes.len();
         let mut index = 0_usize;
         while index < value.len() {
@@ -6048,6 +6054,9 @@ fn query_argument_combined_size(query: &[u8]) -> Result<usize, RuntimeError> {
 }
 
 fn percent_decoded_len(value: &[u8]) -> usize {
+    if memchr::memchr(b'%', value).is_none() {
+        return value.len();
+    }
     let mut length = 0_usize;
     let mut index = 0_usize;
     while index < value.len() {

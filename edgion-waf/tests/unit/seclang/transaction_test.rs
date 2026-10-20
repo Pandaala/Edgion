@@ -601,6 +601,70 @@ fn finding_storage_is_lazy_and_grows_only_after_matches() {
 }
 
 #[test]
+fn request_decoders_preserve_scalar_bytes_ranges_and_reserved_capacity() {
+    let oracle = |input: &[u8], query: bool| {
+        let mut output = Vec::new();
+        let mut index = 0;
+        while index < input.len() {
+            if query && input[index] == b'+' {
+                output.push(b' ');
+                index += 1;
+                continue;
+            }
+            if input[index] == b'%' && index + 2 < input.len() {
+                if let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2])) {
+                    output.push((high << 4) | low);
+                    index += 3;
+                    continue;
+                }
+            }
+            output.push(input[index]);
+            index += 1;
+        }
+        output
+    };
+    let mut inputs = vec![Vec::new(), vec![b'a'; 1024], vec![255; 65]];
+    let mut level = vec![Vec::new()];
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for prefix in &level {
+            for byte in [b'a', b'+', b'%', b'0', b'2', b'f', b'G', 255] {
+                let mut value = prefix.clone();
+                value.push(byte);
+                next.push(value);
+            }
+        }
+        inputs.extend(next.iter().cloned());
+        level = next;
+    }
+    for literal in [b"%2520+tail".as_slice(), b"%00%ff%2F", b"%GG%", b"/a+b/plain"] {
+        inputs.push(literal.to_vec());
+    }
+    for input in inputs {
+        for query in [false, true] {
+            let expected = oracle(&input, query);
+            assert_eq!(percent_decoded_len(&input), expected.len());
+            let mut state = owned_key_request();
+            state.bytes.try_reserve_exact(4 + expected.len()).unwrap();
+            state.bytes.extend_from_slice(b"seed");
+            let capacity = state.bytes.capacity();
+            let range = if query {
+                state.copy_percent_decoded(&input)
+            } else {
+                state.copy_percent_decoded_path(&input)
+            }
+            .unwrap();
+            assert_eq!(range.start, 4);
+            assert_eq!(range.len, expected.len());
+            assert_eq!(state.bytes_at(range), expected);
+            assert_eq!(&state.bytes[..4], b"seed");
+            assert_eq!(state.bytes.len(), 4 + expected.len());
+            assert_eq!(state.bytes.capacity(), capacity);
+        }
+    }
+}
+
+#[test]
 fn request_state_preserves_query_header_and_cookie_order() {
     let headers = [
         RequestHeader::new(b"X-Test", b"first"),
