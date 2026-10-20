@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Generation-prepared WAF matcher scratch budgets](waf-01-prepared-matcher-scratch-budget.md)
+
 - [Callback-local compression eligibility reuse](compression-04-response-eligibility-reuse.md)
 
 - [Prepared response-cache Content-Length](cache-04-prepared-content-length.md)
@@ -9020,3 +9022,18 @@ agent documentation, SSA-force, metrics inventory, Pingora-source policy,
 Gateway API transform contract, unit-test layout and gateway no-tracing guards
 passed. Existing unrelated Clippy warnings remain. This closes only the repeated
 request-head metadata scans, not broader WAF engine or callback coverage.
+
+## WAF matcher scratch admission audit
+
+Transaction initialization computes the generation-wide matcher envelope before
+slot allocation, then repeats the program walk while reconciling actual Option
+capacities. Engine caches themselves already initialize on first use. Both the
+full-envelope policy and actual-capacity checks are intentional bounds; neither
+is redundant merely because a request visits few rules.
+
+Deferred generation-prepared budget computation in
+[waf-01](waf-01-prepared-matcher-scratch-budget.md). The design must include late
+optional capture-hit matchers and regex hints, preserve runtime error ordering,
+and account for compiled metadata. Constructor-local subtotal reuse is a smaller
+alternative. No runtime or admission-policy change and no performance measurement
+was made in this audit; broader engine coverage remains open.
