@@ -2700,7 +2700,7 @@ async fn waf_selection_only_update_keeps_sources_and_in_flight_filter_behavior()
         session.expect_get_request_uri().return_const("/probe".to_string());
         session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
         session.expect_remote_ip().return_const("192.0.2.1".to_string());
-        session.expect_get_request_id().return_const("request-1".to_string());
+        session.expect_get_request_id_ref().returning(|| Some("request-1"));
         session
             .expect_waf()
             .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);

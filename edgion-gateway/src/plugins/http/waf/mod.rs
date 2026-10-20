@@ -410,7 +410,7 @@ impl RequestFilter for WafPlugin {
         let headers = request_header_views(session.request_header_map(), &protocol, request_uri);
         let uri = session.get_uri();
         let raw_uri = session.get_request_uri();
-        let request_id = session.get_request_id();
+        let request_id = session.get_request_id_ref().unwrap_or_default();
         let method = session.get_method();
         let remote_addr = session.remote_ip();
         let request_line = format!("{method} {raw_uri} {protocol}");

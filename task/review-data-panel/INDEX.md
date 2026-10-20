@@ -8946,3 +8946,27 @@ Independent plan review passed. This source-audit batch changes only this record
 no runtime tests or allocation/throughput measurements were run. Formatting,
 workspace all-target check/Clippy, agent-doc validation and diff checks passed
 with existing unrelated warnings. Final independent review passed.
+
+## Borrow WAF request identity during transaction construction
+
+WafPlugin::run_request now uses get_request_id_ref().unwrap_or_default()
+for UNIQUE_ID. The current production PingoraSessionAdapter's owned getter
+performs exactly that lookup followed by to_owned; the independent trait default
+is not a universal equivalence guarantee. This removes the temporary String for
+a present identity. RequestState::build still validates and copies the same bytes
+into its bounded arena before any subsequent mutable session access or await.
+Canonical W3C identity, missing identity as empty bytes, limits, phase order,
+transaction ownership and access-log behavior are unchanged. No measured
+throughput or whole-request allocation claim is made.
+
+The mounted WAF regression checks actual UNIQUE_ID rule outcomes for a present
+canonical identity and missing identity. Existing hot-reload and ExtensionRef
+mocks use the borrowed getter with the same value; the real-adapter identity test
+covers absence, initialization, wire-header suppression and later header rewrites.
+
+Fresh verification passed 90 Gateway tests selected by waf and the real-adapter
+borrowed-identity test. Formatting, workspace all-target check and Clippy, agent
+documentation, SSA-force, metrics inventory, Pingora-source policy, Gateway API
+transform contract, unit-test layout and gateway no-tracing guards passed.
+Clippy retains unrelated existing warnings. This batch covers identity ingestion,
+not the remaining WAF engine operators or complete callback coverage.

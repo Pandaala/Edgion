@@ -62,6 +62,17 @@ fn expect_request_head_with_context(
     headers: Vec<(Vec<u8>, Vec<u8>)>,
     ctx: EdgionHttpContext,
 ) {
+    expect_request_head_with_identity(session, waf, uri, headers, ctx, Some("request-1"));
+}
+
+fn expect_request_head_with_identity(
+    session: &mut MockPluginSession,
+    waf: &mut MockWafSessionCapability,
+    uri: &str,
+    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    ctx: EdgionHttpContext,
+    request_id: Option<&'static str>,
+) {
     session.expect_ctx().times(1).return_const(ctx);
     waf.expect_claim_phase().returning(|_, _| WafPhaseClaim::Execute);
     waf.expect_record_phase_outcome().returning(|_, _, _, _| ());
@@ -81,7 +92,46 @@ fn expect_request_head_with_context(
     session.expect_get_request_uri().return_const(uri.to_string());
     session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
     session.expect_remote_ip().return_const("192.0.2.1".to_string());
-    session.expect_get_request_id().return_const("request-1".to_string());
+    session.expect_get_request_id_ref().returning(move || request_id);
+}
+
+#[tokio::test]
+async fn unique_id_uses_canonical_identity_or_empty_when_missing() {
+    for (identity, operator) in [
+        (
+            Some("0123456789abcdef0123456789abcdef"),
+            "@streq 0123456789abcdef0123456789abcdef",
+        ),
+        (None, "@rx ^$"),
+    ] {
+        let plugin = plugin(
+            &format!("SecRule UNIQUE_ID \"{operator}\" \"id:1,phase:1,deny,status:403\"\n"),
+            WafMode::On,
+        );
+        let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head_with_identity(
+            &mut session,
+            &mut waf,
+            "/identity",
+            Vec::new(),
+            EdgionHttpContext::default(),
+            identity,
+        );
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+        let mut log = PluginLog::new(NAME);
+
+        assert_eq!(
+            RequestFilter::run_request(&plugin, &mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None
+            },
+            "identity: {identity:?}",
+        );
+    }
 }
 
 #[tokio::test]
