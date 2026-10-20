@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Guardrail decision snapshot encoding](guardrail-02-decision-snapshot-encoding.md)
+
 - [Webhook extraction path preparation](webhook-02-extraction-path-preparation.md)
 
 - [Webhook selective JSON projection](webhook-01-selective-json-projection.md)
