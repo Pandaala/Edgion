@@ -707,7 +707,7 @@ impl BodyStorageView {
     where
         S: RawBodyScanner,
     {
-        if !scanner.requires_blocking_context() && !snapshot.contains_disk() && snapshot.len <= SCAN_CHUNK_SIZE as u64 {
+        if !scanner.requires_blocking_context() && snapshot.len <= SCAN_CHUNK_SIZE as u64 && !snapshot.contains_disk() {
             return scan_snapshot_owned(snapshot, scanner, max_scan_bytes, None);
         }
 

@@ -10567,3 +10567,27 @@ check/Clippy and agent-document validation. Existing unrelated Clippy warnings
 remain. This batch changes documentation only; no selected-member implementation,
 live Redis experiment, instrumentation or performance benchmark was validated.
 Final independent review passed.
+
+## Check snapshot length before scanning for disk segments
+
+BodyStorageView::scan_snapshot now checks the immutable cached length before
+contains_disk when deciding whether a scanner may run inline. Snapshots larger
+than the existing 64 KiB cutoff must use the blocking scan lane regardless of
+their backing; they now skip the preliminary segment/source-kind traversal.
+Memory-only mutation snapshots can contain up to 4,096 segments. The actual
+body scan still traverses the same bytes under the same limits.
+
+The scanner's requires_blocking_context call remains first. The reordered
+predicates are pure reads of one immutable snapshot; inline/blocking decisions,
+permit admission, cancellation, scan budgets, errors and results are unchanged.
+No cached disk flag, representation change, new body owner or observability was
+introduced. This removes redundant metadata work for large snapshots; no
+allocation reduction or measured throughput benefit is claimed.
+
+Independent plan review passed. All 115 request-body tests passed before and
+after the change; the final run also passed 29 request-body callback tests.
+Formatting, workspace all-target check/Clippy and seven repository guards passed,
+with existing unrelated Clippy warnings. Existing memory/disk, segmented scan,
+scan-limit, blocking-context, admission and cancellation cases were retained.
+No new predicate-mirroring test, live transport test or benchmark ran.
+Final independent review passed.
