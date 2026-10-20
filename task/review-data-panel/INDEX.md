@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared configured session-persistence header names](lb-04-prepared-session-header-name.md)
+
 - [AI accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md)
 
 - [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
@@ -10018,3 +10020,16 @@ Fresh verification passed all 30 quota tests, formatting, workspace all-target
 check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
 Gateway API transform, unit-layout and gateway no-tracing guards. Existing
 unrelated Clippy warnings remain. No live Redis or full integration suite ran.
+
+## Session-persistence response header-name ownership
+
+Traced configured-name copying through Pingora's original-case ownership and
+normalized HeaderName parsing. Preparing dynamic names requires a measured
+generation-storage decision; it is recorded in
+[lb-04](lb-04-prepared-session-header-name.md). The static default is a separate
+remaining candidate. No runtime changes or throughput claims are made here.
+
+Fresh baseline verification passed 26 session-persistence and 11 upstream
+response-filter tests, formatting, workspace all-target check/Clippy and
+agent-doc validation. Existing unrelated Clippy warnings remain; no live
+integration or comparative performance measurement ran.
