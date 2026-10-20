@@ -2051,7 +2051,8 @@ impl SealedResults<'_> {
         budget.checked(self.records.owner, |budget| {
             budget.work(1)?;
             self.records.candidates.get(owner.0)?;
-            if self.records.outcomes.get(outcome.0)?.owner != owner {
+            let outcome_record = self.records.outcomes.get(outcome.0)?;
+            if outcome_record.owner != owner {
                 return Err(StoreError::Identity);
             }
             let capture = self.records.captures.get(id.0)?;
@@ -2063,7 +2064,7 @@ impl SealedResults<'_> {
                 value: match capture.value {
                     StoredCaptureValue::Owned(value) => self.sealed_handle(value)?,
                     StoredCaptureValue::MatchRange { start, len } => {
-                        let StoredOutcome::Match { value, .. } = self.records.outcomes.get(outcome.0)?.result else {
+                        let StoredOutcome::Match { value, .. } = outcome_record.result else {
                             return Err(StoreError::Identity);
                         };
                         self.records.bytes.read(value)?;

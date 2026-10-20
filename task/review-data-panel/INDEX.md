@@ -11233,3 +11233,23 @@ Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
 validation. Existing unrelated Clippy warnings remain. No transfer prototype or
 benchmark ran; current tests do not establish an alternative's memory behavior.
 Final independent review passed.
+
+## Reuse the sealed WAF capture parent lookup
+
+SealedResults::capture now keeps its first checked outcome reference and reuses
+it when resolving a MatchRange capture. Pool::get performs immutable owner, slot
+and generation validation without budget charges or side effects. No intervening
+operation can mutate this sealed pool, so the repeated lookup supplied no further
+validation result. The initial lookup and every later capture, key, lease, range
+and arithmetic check stay in their original order; checked/work(1) is unchanged.
+Owned captures, payload handles and whole-profile cleanup retain their ownership.
+
+Independent plan review passed. Existing shared-range, parent-bound, identity and
+sticky-failure tests cover this local reuse; no mirror test was added. Scope is
+the result-store source and this record. The change removes a source-level repeat
+lookup; compiler elimination and request-throughput effects were not measured.
+
+Fresh verification passed 844 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and seven repository
+guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
