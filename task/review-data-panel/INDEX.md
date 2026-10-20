@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Redis command pool-member selection](redis-03-pool-member-selection.md)
+
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
 
 - [Unary tool-argument serialization staging](unary-01-tool-argument-staging.md)
@@ -10543,4 +10545,25 @@ Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing unrelated Clippy warnings. Existing identity, initial/deleted None,
 replacement and caller-retained-handle tests cover this expression change; no
 new test, live backend experiment or full suite ran.
+Final independent review passed.
+
+## Defer Redis command pool-member selection
+
+Traced the shared quota/rate-limit executor through pinned Fred 10.1.0 Lua
+key-slot checking, tracing dispatch, request setup, command options and submission.
+Pool::inner selects again at these call sites; its default next_connected advances
+the counter and searches current connection states. This is repeated selection
+work, not multiple wire commands or demonstrated allocation overhead.
+
+[redis-03](redis-03-pool-member-selection.md) separates per-command member selection
+from pinning across EVALSHA and its exact NOSCRIPT fallback. Both can change live
+routing behavior and require a user decision. The existing redis-02 payload
+ownership proposal does not authorize either change. Router internals, socket
+encoding, reconnect execution and deeper transport coverage remain open.
+
+Independent plan review passed. Fresh baseline verification passed 36 shared
+Redis-core and 61 Redis-provider tests, formatting, workspace all-target
+check/Clippy and agent-document validation. Existing unrelated Clippy warnings
+remain. This batch changes documentation only; no selected-member implementation,
+live Redis experiment, instrumentation or performance benchmark was validated.
 Final independent review passed.
