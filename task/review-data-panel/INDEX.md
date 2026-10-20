@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF profile capture-hit indexing](waf-09-profile-capture-hit-index.md)
+
 - [WAF count-value layout](waf-08-count-value-layout.md)
 
 - [WAF multiMatch stage ownership](waf-07-multimatch-stage-ownership.md)
@@ -11024,4 +11026,26 @@ stage-cache namespace and exact physical admission regressions remain in place.
 Fresh verification passed 839 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+
+## WAF per-stage capture-hit profile scan
+
+The active structured collector scans all domain capture-hit batches on each
+emitted transformation stage in Accelerated mode, charging each visit before
+profile filtering. Matching batches then validate and charge their peers before
+updating eligibility. Static profile indexing could skip unrelated batches, but
+its metadata admission, stable binding indexes and ordered work failures need a
+separate decision. Stage-specific eligibility cannot be precompiled: terminal
+multiMatch peers and epoch wrap remain runtime inputs.
+
+[waf-09](waf-09-profile-capture-hit-index.md) records these choices and required
+oracles. This is separate from the completed once-per-inspection capacity count
+optimization. Independent plan review passed; no runtime change was selected
+and no throughput or memory improvement is claimed.
+
+Fresh baseline verification passed 839 WAF leaf tests (six existing ignored),
+90 Gateway WAF tests, formatting, workspace all-target check/Clippy and agent-doc
+validation. Existing unrelated Clippy warnings remain. These checks validate the
+current implementation, not an alternative profile index.
 Final independent review passed.
