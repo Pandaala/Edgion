@@ -1,7 +1,7 @@
 # Wasm map decoding profile storage
 
 Status: deferred representation and admission decision. No runtime change.
-Source baseline: 723a66357.
+Source baseline before the aggregate-reuse update: 84f483895.
 
 ## Source evidence
 
@@ -21,12 +21,13 @@ Malformed local-response maps with BAD_ARGUMENT become an empty header list;
 other callers have different status handling. The scanner checks bounds but does
 not require zero-valued terminator bytes or reject trailing bytes.
 
-Callout preflight computes an aggregate map profile, discards it, copies the raw
-header buffer and calls `decode_map`, which scans again. Reusing that small
-aggregate profile is a separate candidate: it does not inherently require a
-per-pair metadata allocation and is not blocked by this task. Error mapping and
-ownership still need their own verification. The already committed upstream
-scalar-length reuse is likewise independent.
+Callout preflight now retains its small aggregate profile alongside the payload
+estimate and reuses it to decode the owned header copy. Independent plan review
+and fresh tests verify this separate optimization: profiling through copying
+contains no guest execution or memory mutation, and decoder errors retain the
+prior BAD_ARGUMENT mapping. This removes one aggregate scan without per-pair
+metadata allocation. The per-pair storage decision here remains deferred; it is
+not implemented by aggregate reuse or the earlier upstream scalar-length reuse.
 
 ## Decision alternatives
 

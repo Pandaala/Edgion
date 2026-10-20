@@ -11493,3 +11493,30 @@ Fresh baseline verification passed all 268 Gateway Wasm tests serially, formatti
 workspace all-target check/Clippy and agent-doc validation. Existing unrelated
 Clippy warnings remain. No new representation or performance benchmark was run.
 Final independent review passed.
+
+## Reuse Wasm callout aggregate map profiling
+
+Callout preflight now returns its existing serialized-map aggregate alongside the
+unchanged payload-byte estimate. Dispatch reuses that aggregate to decode the
+owned raw-header copy instead of rescanning its structure and total lossy lengths.
+Between profiling and copying, ordinary nonshared guest memory is only read by
+host helpers: there is no guest execution, mutation, growth or await. The owned
+copy remains in place and all decoder failures still map to BAD_ARGUMENT.
+
+Checked arithmetic, admission order and charges, per-field sizing/copying,
+pseudo-header handling, allowlist enforcement and token-before-state publication
+remain unchanged. The profile is scalar stack data, not per-pair heap metadata.
+This is separate from wasm-02's deferred per-pair storage decision. Benefit is one
+aggregate scan removed, not all UTF-8 scans or a measured throughput gain.
+
+Independent plan review passed, including the task's documentation update. The
+new real-guest fixture passed before production edits, preserving duplicate names,
+last-path selection, invalid UTF-8 decoding, ignored terminators/trailing bytes,
+and successful token/counter/retained-charge publication.
+
+Fresh verification passed all 269 Gateway Wasm tests serially and 11 upstream
+trailer tests (280 total), formatting, workspace all-target check/Clippy and seven
+repository guards. Existing unrelated Clippy warnings remain. No live transport
+or throughput benchmark ran.
+Final independent review passed after correcting a new Clippy let-else warning
+and rerunning the targeted suites and workspace checks.

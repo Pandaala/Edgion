@@ -1184,11 +1184,16 @@ fn callout_input_payload_bytes(upstream_size: i32, headers_size: i32, body_size:
         .ok_or(STATUS_BAD_ARGUMENT)
 }
 
-fn callout_allocation_preflight_payload(
+struct CalloutAllocationProfile {
+    payload_bytes: usize,
+    headers: SerializedMapProfile,
+}
+
+fn profile_callout_allocation(
     upstream_bytes: &[u8],
     header_bytes: &[u8],
     body_size: usize,
-) -> Result<usize, i32> {
+) -> Result<CalloutAllocationProfile, i32> {
     let profile = scan_serialized_map(header_bytes)?;
     let raw_guest_copies = upstream_bytes
         .len()
@@ -1199,7 +1204,7 @@ fn callout_allocation_preflight_payload(
     let lossy_owned_bytes = upstream_lossy_bytes
         .checked_add(profile.lossy_string_bytes)
         .ok_or(STATUS_INTERNAL_FAILURE)?;
-    // `decode_map`'s Vec is consumed while the filtered PendingCallout header
+    // The decoded map's Vec is consumed while the filtered PendingCallout header
     // Vec is built, so both pair allocations coexist briefly.
     let pair_vec_bytes = profile
         .pair_count
@@ -1226,12 +1231,16 @@ fn callout_allocation_preflight_payload(
         .checked_add(4)
         .and_then(|bytes| bytes.checked_add(profile.path_normalization_bytes))
         .ok_or(STATUS_INTERNAL_FAILURE)?;
-    raw_guest_copies
+    let payload_bytes = raw_guest_copies
         .checked_add(lossy_owned_bytes)
         .and_then(|bytes| bytes.checked_add(pair_vec_bytes))
         .and_then(|bytes| bytes.checked_add(origin_bytes))
         .and_then(|bytes| bytes.checked_add(callout_fixed_bytes))
-        .ok_or(STATUS_INTERNAL_FAILURE)
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    Ok(CalloutAllocationProfile {
+        payload_bytes,
+        headers: profile,
+    })
 }
 
 fn pending_callout_retained_payload(callout: &PendingCallout) -> Result<usize, i32> {
@@ -1319,16 +1328,12 @@ fn host_http_call(
                 return status;
             }
         }
-        match callout_allocation_preflight_payload(
-            &memory_bytes[upstream_range],
-            &memory_bytes[headers_range],
-            body_len,
-        ) {
+        match profile_callout_allocation(&memory_bytes[upstream_range], &memory_bytes[headers_range], body_len) {
             Ok(payload) => payload,
             Err(status) => return status,
         }
     };
-    if let Err(status) = caller.data().checked_abi_charge(allocation_preflight) {
+    if let Err(status) = caller.data().checked_abi_charge(allocation_preflight.payload_bytes) {
         return status;
     }
     let upstream = match read_guest_string(&mut caller, upstream_ptr, upstream_size) {
@@ -1339,7 +1344,9 @@ fn host_http_call(
         Ok(b) => b,
         Err(s) => return s,
     };
-    let Some(all_headers) = decode_map(&header_bytes) else {
+    // No guest execution or memory mutation occurs between profiling and this
+    // owned copy. Preserve decode_map's BAD_ARGUMENT mapping for all failures.
+    let Ok(all_headers) = decode_profiled_map(&header_bytes, allocation_preflight.headers) else {
         return STATUS_BAD_ARGUMENT;
     };
     drop(header_bytes);

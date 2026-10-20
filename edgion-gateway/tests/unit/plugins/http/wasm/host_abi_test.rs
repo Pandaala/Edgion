@@ -379,8 +379,10 @@ fn callout_budget_rejects_next_dispatch_without_partial_state() {
     store
         .data_mut()
         .arm_dispatch(Arc::from(vec!["http://example.com:80".to_string()]), 1000);
-    let preflight_cost =
-        callout_allocation_preflight_payload(b"http://example.com", &[0, 0, 0, 0], 0).unwrap() + ABI_OP_OVERHEAD_BYTES;
+    let preflight_cost = profile_callout_allocation(b"http://example.com", &[0, 0, 0, 0], 0)
+        .unwrap()
+        .payload_bytes
+        + ABI_OP_OVERHEAD_BYTES;
     let admission_cost = callout_cost.max(preflight_cost);
     let retained_before = MAX_RETAINED_ABI_BYTES - admission_cost;
     store.data_mut().frame.retained_bytes = retained_before;
@@ -400,6 +402,59 @@ fn callout_budget_rejects_next_dispatch_without_partial_state() {
     assert_eq!(state.frame.pending_callouts.len(), 1);
     assert_eq!(state.frame.callouts_dispatched, 1);
     assert_eq!(state.last_callout_token, 2);
+}
+
+#[test]
+fn callout_map_decoding_preserves_permissive_wire_and_publication() {
+    let invalid = [b'a', 0xff, b'b'];
+    let pairs: &[(&[u8], &[u8])] = &[
+        (b":path", b"first"),
+        (b"X-Field", &invalid),
+        (b"X-Field", b"second"),
+        (b":path", b"last"),
+    ];
+    let mut encoded = encode_raw_map(pairs);
+    let mut offset = 4 + pairs.len() * 8;
+    for (key, value) in pairs {
+        offset += key.len();
+        encoded[offset] = b'!';
+        offset += 1 + value.len();
+        encoded[offset] = b'?';
+        offset += 1;
+    }
+    encoded.extend_from_slice(b"trailing");
+    let (mut store, instance) = instantiate_callout_guest();
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
+    memory.write(&mut store, 1024, &encoded).unwrap();
+    let dispatch = instance
+        .get_typed_func::<(i32, i32, i32), i32>(&mut store, "dispatch_custom_headers")
+        .unwrap();
+    assert_eq!(
+        dispatch.call(&mut store, (1024, encoded.len() as i32, 512)).unwrap(),
+        STATUS_OK
+    );
+    let mut token = [0; 4];
+    memory.read(&store, 512, &mut token).unwrap();
+    assert_eq!(u32::from_le_bytes(token), 1);
+    let state = store.data();
+    assert_eq!(state.frame.pending_callouts.len(), 1);
+    let pending = &state.frame.pending_callouts[0];
+    assert_eq!(pending.path, "/last");
+    assert_eq!(pending.method, "GET");
+    assert_eq!(
+        pending.headers,
+        vec![
+            ("X-Field".to_owned(), String::from_utf8_lossy(&invalid).into_owned()),
+            ("X-Field".to_owned(), "second".to_owned()),
+        ]
+    );
+    assert_eq!(state.frame.callouts_dispatched, 1);
+    assert_eq!(state.last_callout_token, 1);
+    assert_eq!(state.frame.retained_ops, 1);
+    assert_eq!(
+        state.frame.retained_bytes,
+        pending_callout_retained_payload(pending).unwrap() + ABI_OP_OVERHEAD_BYTES
+    );
 }
 
 #[test]
@@ -490,10 +545,12 @@ fn callout_preflight_rejects_lossy_utf8_expansion_without_retained_state_change(
     let invalid_name = [0xFF; 16];
     let headers = encode_raw_map(&[(&invalid_name, b"value")]);
     let raw_payload = upstream.len() + headers.len();
-    let allocation_payload = callout_allocation_preflight_payload(upstream, &headers, 0).unwrap();
+    let allocation_payload = profile_callout_allocation(upstream, &headers, 0).unwrap().payload_bytes;
     let valid_name = [b'x'; 16];
     let valid_headers = encode_raw_map(&[(&valid_name, b"value")]);
-    let valid_allocation_payload = callout_allocation_preflight_payload(upstream, &valid_headers, 0).unwrap();
+    let valid_allocation_payload = profile_callout_allocation(upstream, &valid_headers, 0)
+        .unwrap()
+        .payload_bytes;
     assert_eq!(
         allocation_payload - valid_allocation_payload,
         invalid_name.len() * 2,
@@ -559,7 +616,7 @@ fn callout_preflight_rejects_high_pair_count_without_retained_state_change() {
     let empty_pairs = vec![(&[][..], &[][..]); 128];
     let headers = encode_raw_map(&empty_pairs);
     let raw_payload = upstream.len() + headers.len();
-    let allocation_payload = callout_allocation_preflight_payload(upstream, &headers, 0).unwrap();
+    let allocation_payload = profile_callout_allocation(upstream, &headers, 0).unwrap().payload_bytes;
     assert!(
         allocation_payload >= raw_payload + 128 * 2 * std::mem::size_of::<(String, String)>(),
         "both concurrently-live pair Vec capacities must be preflighted"
