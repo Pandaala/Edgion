@@ -465,10 +465,14 @@ impl PluginLog {
         false
     }
 
-    /// Set condition skip reason
-    /// Format: "action:type,detail" e.g., "skip:keyExist,hdr:X-Internal"
+    /// Set the value-free condition skip reason as "action:cause".
+    /// Reserve once for the action prefix and the compiled cause descriptor.
     #[inline]
-    pub fn set_cond_skip(&mut self, reason: String) {
+    pub fn set_cond_skip(&mut self, action: &str, cause: &str) {
+        let mut reason = String::with_capacity(action.len() + 1 + cause.len());
+        reason.push_str(action);
+        reason.push(':');
+        reason.push_str(cause);
         self.cond_skip = Some(reason);
     }
 

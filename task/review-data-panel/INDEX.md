@@ -11833,3 +11833,31 @@ check/Clippy. The four outcome tests verify selection/writes; they are not an
 end-to-end multi-variable network or hot-reload test. Existing unrelated warnings
 remain. No code/tests changed, no lifecycle stress test or benchmark ran.
 Agent-doc validation and final independent review passed.
+
+## Reserve condition skip reasons once
+
+The three non-body conditional wrappers now pass borrowed action/cause parts to
+PluginLog::set_cond_skip. The existing setter reserves their exact combined byte
+length including the colon, appends both pieces, then replaces the owned reason.
+This avoids formatter-driven growth without changing the action:cause bytes or
+retaining another compiled representation. The stale comma-format setter comment
+now describes its actual format.
+
+Condition descriptors, group names, skip-before-run ordering, short-circuiting,
+metadata serialization and sensitivity policy are unchanged. The body-phase wrapper
+still uses its log-less path. The old reason remains alive until its replacement
+is fully built. No logging, tracing, cache, truncation or new fallback was added.
+
+Independent plan review passed. Baseline verification passed 18 conditional-wrapper,
+34 PluginLog and 70 condition tests. The new allocation regression exercises actual
+setter replacement and serialization for both actions, empty parts, permitted UTF-8
+and a long descriptor against the original formatting expression. Allocation counts
+and requested bytes do not establish retained heap, RSS or throughput improvement.
+
+Fresh verification passed 18 conditional-wrapper, 35 PluginLog and 70 condition
+tests (123 total), formatting, workspace all-target check/Clippy and seven repository
+guards. The new setter measured one allocation with requested bytes equal to the
+final text length for all fixtures; the original formatter used more allocation
+calls in at least one fixture. Existing unrelated Clippy warnings remain.
+No deployed integration or throughput benchmark ran.
+Final independent code review passed.

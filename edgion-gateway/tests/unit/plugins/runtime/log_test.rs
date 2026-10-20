@@ -638,3 +638,33 @@ fn test_stage_logs_with_edgion_plugins() {
     assert_eq!(parsed["edgion_plugins"][0]["logs"][0]["name"], "BasicAuth");
     assert_eq!(parsed["edgion_plugins"][0]["logs"][0]["time_cost"], 45);
 }
+
+#[test]
+fn condition_skip_preserves_text_and_replaces_with_one_allocation() {
+    let long_cause = format!("run.anyOf[0].allOf[0]:keyMatch:header:{}", "x".repeat(256));
+    let cases = [
+        ("skip", "skip.allOf"),
+        ("!run", "run.allOf[0]:probability"),
+        ("!run", "group:é"),
+        ("", ""),
+        ("!run", long_cause.as_str()),
+    ];
+    let mut log = PluginLog::new("condition-capacity");
+    let mut reduced_calls = false;
+    for (action, cause) in cases {
+        let (expected, original) = crate::test_allocation_counter::count_allocation_stats(|| {
+            format!("{}:{cause}", std::hint::black_box(action))
+        });
+        let (_, actual) = crate::test_allocation_counter::count_allocation_stats(|| {
+            log.set_cond_skip(std::hint::black_box(action), std::hint::black_box(cause));
+        });
+        assert!(log.is_cond_skipped());
+        assert_eq!(log.cond_skip.as_deref(), Some(expected.as_str()));
+        assert_eq!(serde_json::to_value(&log).unwrap()["cond_skip"], expected);
+        assert_eq!(actual.calls, 1);
+        assert_eq!(actual.requested_bytes, expected.len());
+        assert!(actual.requested_bytes <= original.requested_bytes);
+        reduced_calls |= actual.calls < original.calls;
+    }
+    assert!(reduced_calls);
+}

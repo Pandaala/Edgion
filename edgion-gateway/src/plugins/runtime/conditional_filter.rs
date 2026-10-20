@@ -93,7 +93,7 @@ impl RequestFilter for ConditionalRequestFilter {
                 };
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cause) = eval.cause {
-                        log.set_cond_skip(format!("{}:{cause}", eval.action));
+                        log.set_cond_skip(eval.action, cause);
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -166,7 +166,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
                 let eval = conditions.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cause) = eval.cause {
-                        log.set_cond_skip(format!("{}:{cause}", eval.action));
+                        log.set_cond_skip(eval.action, cause);
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -316,7 +316,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
                 };
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cause) = eval.cause {
-                        log.set_cond_skip(format!("{}:{cause}", eval.action));
+                        log.set_cond_skip(eval.action, cause);
                     }
                     return PluginRunningResult::Nothing;
                 }
