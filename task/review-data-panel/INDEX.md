@@ -10272,3 +10272,24 @@ Formatting, workspace all-target check/Clippy and all seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No live provider or
 throughput benchmark ran.
+
+## Reuse the static Host name in upstream host rewrites
+
+PingoraSessionAdapter::set_upstream_host now passes the static "Host" literal to
+Pingora instead of constructing a String for that fixed header name. The pinned
+fork's IntoCaseHeaderName paths preserve the same original-case bytes, while
+the static input uses Bytes::from_static. The dynamic host value remains owned.
+
+Authority parsing, H2 authority/header synchronization, failure ordering and
+HTTP/1 absolute-form raw-target preservation are unchanged. The adapter still
+does not finalize or refresh the path for an authority-only rewrite. Existing
+tests cover these boundaries, including invalid-host atomicity and userinfo
+rejection by the later canonical egress validator. This removes the fixed-name
+String allocation; it does not make the whole rewrite allocation-free or
+establish a measured throughput improvement.
+
+Fresh verification passed 49 session-adapter, five provider-connector and 36
+dispatch tests (90 total), formatting, workspace all-target check/Clippy and the
+seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
+unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No new test, live upstream exchange or throughput benchmark ran.

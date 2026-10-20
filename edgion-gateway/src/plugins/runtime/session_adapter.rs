@@ -1543,7 +1543,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         };
         self.inner
             .req_header_mut()
-            .insert_header("Host".to_string(), host.to_string())
+            .insert_header("Host", host.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         if let Some(uri) = updated_uri {
             self.inner.req_header_mut().set_uri(uri);
