@@ -9883,3 +9883,29 @@ Fresh connection-rate-limit verification passed 32 tests with one existing
 measurement ignored. Formatting, workspace all-target check/Clippy and agent-doc
 validation passed; existing unrelated warnings remain. No contention benchmark,
 live Redis exchange or hot-reload traffic test ran.
+
+## Format fixed-window IDs directly into Redis keys
+
+The shared fixed-window executor now supplies its validated, already-computed
+window ID directly to a private synchronous Display-based suffix builder. The
+public string-suffix helper delegates its nonempty case to the same format
+expression and keeps its empty-suffix behavior. This removes the temporary
+numeric String without changing the final owned key, delimiter bytes, opaque
+limit-key content, policy index, validation/division order or script inputs.
+Only the completed String crosses await; fallback/client ownership is unchanged.
+
+New byte-oracle cases passed against the previous implementation before the
+production edit. The final 84-case allocation comparison includes the old
+numeric String inside the measured operation and counts reallocations as well
+as allocations. Empty, short, UTF-8 and 4096-byte keys, index boundaries and
+window digit boundaries each save one allocation and reduce requested bytes on
+the current target/toolchain. The i64 maximum case tests formatting only, not
+runtime timestamp acceptance. Final key storage still allocates; no throughput
+or whole-operation allocation-free claim is made.
+
+Fresh verification passed 36 shared Redis-core, 24 HTTP Redis-limiter and 32
+connection-rate-limit tests; one existing contention measurement stays ignored.
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No live Redis exchange,
+Cluster/failover verification or full integration suite ran.

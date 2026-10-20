@@ -464,8 +464,18 @@ pub fn build_redis_key(prefix: &str, algo: &str, policy_idx: usize, limit_key: &
     if suffix.is_empty() {
         format!("{prefix}{algo}:{policy_idx}:{limit_key}")
     } else {
-        format!("{prefix}{algo}:{policy_idx}:{limit_key}:{suffix}")
+        build_redis_key_with_suffix(prefix, algo, policy_idx, limit_key, suffix)
     }
+}
+
+fn build_redis_key_with_suffix(
+    prefix: &str,
+    algo: &str,
+    policy_idx: usize,
+    limit_key: &str,
+    suffix: impl Display,
+) -> String {
+    format!("{prefix}{algo}:{policy_idx}:{limit_key}:{suffix}")
 }
 
 /// Truncate the variable key segment on a UTF-8 boundary.
@@ -721,7 +731,7 @@ impl RedisRateLimiter {
             }
             RateLimitAlgorithm::FixedWindow => {
                 let window_id = now_ms / window_ms;
-                let key = build_redis_key(key_prefix, "fw", policy_idx, limit_key, &window_id.to_string());
+                let key = build_redis_key_with_suffix(key_prefix, "fw", policy_idx, limit_key, window_id);
                 let args = script_args([rate_arg, window_ms, cost_arg]);
                 let v = self
                     .eval_script(client, &self.scripts.fixed_window, script_keys([key]), args)

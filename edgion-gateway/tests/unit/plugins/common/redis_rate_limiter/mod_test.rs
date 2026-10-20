@@ -781,3 +781,66 @@ fn credential_lua_uses_one_atomic_bounded_ledger() {
     assert!(CREDENTIAL_RESERVATION_SCRIPT.contains("redis.call('PEXPIRE', marker_key, ttl_ms)"));
     assert!(!CREDENTIAL_RESERVATION_SCRIPT.contains("math.random"));
 }
+
+#[test]
+fn fixed_window_key_bytes_cover_numeric_and_opaque_boundaries() {
+    let long_key = "key:".repeat(1024);
+    for (prefix, key) in [
+        ("", ""),
+        ("p:", "ip:1:2"),
+        ("{scope}:", "é:€"),
+        ("long:", long_key.as_str()),
+    ] {
+        for index in [0, 1, usize::MAX] {
+            for window in [0_i64, 9, 10, 99, 100, (MAX_SAFE_LUA_INTEGER / 100) as i64, i64::MAX] {
+                let suffix = window.to_string();
+                let expected = format!("{prefix}fw:{index}:{key}:{window}");
+                assert_eq!(build_redis_key(prefix, "fw", index, key, &suffix), expected);
+                assert_eq!(build_redis_key_with_suffix(prefix, "fw", index, key, window), expected);
+            }
+            assert_eq!(
+                build_redis_key(prefix, "fw", index, key, ""),
+                format!("{prefix}fw:{index}:{key}")
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_window_key_avoids_temporary_numeric_string_allocation() {
+    use std::hint::black_box;
+    let long_key = "key:".repeat(1024);
+    for (prefix, key) in [
+        ("", ""),
+        ("p:", "ip:1:2"),
+        ("{scope}:", "é:€"),
+        ("long:", long_key.as_str()),
+    ] {
+        for index in [0, 1, usize::MAX] {
+            for window in [0_i64, 9, 10, 99, 100, (MAX_SAFE_LUA_INTEGER / 100) as i64, i64::MAX] {
+                let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                    let suffix = black_box(window).to_string();
+                    build_redis_key(
+                        black_box(prefix),
+                        black_box("fw"),
+                        black_box(index),
+                        black_box(key),
+                        &suffix,
+                    )
+                });
+                let (new, new_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                    build_redis_key_with_suffix(
+                        black_box(prefix),
+                        black_box("fw"),
+                        black_box(index),
+                        black_box(key),
+                        black_box(window),
+                    )
+                });
+                assert_eq!(new, old);
+                assert_eq!(new_stats.calls + 1, old_stats.calls, "{prefix:?}/{index}/{window}");
+                assert!(new_stats.requested_bytes < old_stats.requested_bytes);
+            }
+        }
+    }
+}
