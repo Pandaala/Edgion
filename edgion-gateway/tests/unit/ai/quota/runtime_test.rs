@@ -352,3 +352,85 @@ fn lease_refresh_is_sparse_and_stays_before_expiry() {
         Duration::from_millis(9)
     );
 }
+
+fn apply_fixture(case: usize, used: u64) -> anyhow::Result<CumulativeQuotaResult> {
+    let status = match case {
+        0 => CumulativeQuotaStatus::Admitted,
+        1 => CumulativeQuotaStatus::Denied,
+        2 => CumulativeQuotaStatus::Applied,
+        3 => CumulativeQuotaStatus::Duplicate,
+        4 => CumulativeQuotaStatus::Stale,
+        5 => CumulativeQuotaStatus::Conflict,
+        _ => return Err(anyhow::anyhow!("quota fixture failure")),
+    };
+    Ok(CumulativeQuotaResult {
+        status,
+        applied_delta: -7,
+        used,
+        remaining: 17,
+        revision: 42,
+    })
+}
+
+fn previous_apply_summary(
+    results: impl IntoIterator<Item = (u64, anyhow::Result<CumulativeQuotaResult>)>,
+) -> Result<QuotaApplyResult, ()> {
+    let mut over_limit = false;
+    let mut failed = false;
+    for (limit, result) in results {
+        match result.map(|value| (value.status, value.used)) {
+            Ok((CumulativeQuotaStatus::Applied, used))
+            | Ok((CumulativeQuotaStatus::Duplicate, used))
+            | Ok((CumulativeQuotaStatus::Stale, used)) => over_limit |= used > limit,
+            _ => failed = true,
+        }
+    }
+    if failed {
+        Err(())
+    } else {
+        Ok(QuotaApplyResult { over_limit })
+    }
+}
+
+#[test]
+fn projected_apply_results_preserve_status_boundaries_and_failure_precedence() {
+    assert_eq!(summarize_apply_results([]), Ok(QuotaApplyResult { over_limit: false }));
+    for limit in [0, 1, 100, u64::MAX] {
+        for used in [0, limit.saturating_sub(1), limit, limit.saturating_add(1), u64::MAX] {
+            for first in 0..7 {
+                let projected = project_apply_result(limit, apply_fixture(first, used));
+                let expected = if (2..=4).contains(&first) {
+                    Ok(used > limit)
+                } else {
+                    Err(())
+                };
+                assert_eq!(projected, expected);
+                for second in 0..7 {
+                    let old =
+                        previous_apply_summary([(limit, apply_fixture(first, used)), (0, apply_fixture(second, 1))]);
+                    let new = summarize_apply_results([projected, project_apply_result(0, apply_fixture(second, 1))]);
+                    assert_eq!(new, old);
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn joined_apply_outputs_keep_only_the_projected_result() {
+    use std::mem::size_of;
+    type PreviousOutput = (u64, anyhow::Result<CumulativeQuotaResult>);
+    for count in 1..=8 {
+        let previous =
+            futures::future::join_all((0..count).map(|index| std::future::ready((100, apply_fixture(index % 7, 101)))))
+                .await;
+        let projected = futures::future::join_all(
+            (0..count).map(|index| std::future::ready(project_apply_result(100, apply_fixture(index % 7, 101)))),
+        )
+        .await;
+        let old_bytes = previous.capacity() * size_of::<PreviousOutput>();
+        let new_bytes = projected.capacity() * size_of::<Result<bool, ()>>();
+        assert!(new_bytes < old_bytes);
+        assert_eq!(summarize_apply_results(projected), previous_apply_summary(previous));
+    }
+}

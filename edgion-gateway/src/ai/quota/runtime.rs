@@ -5,7 +5,7 @@ use super::{AiQuotaRequest, QuotaApplyResult, QuotaFuture, QuotaSink};
 use crate::link_sys::get_redis_client;
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::plugins::common::redis_rate_limiter::{
-    build_cumulative_quota_keys, CumulativeQuotaMode, CumulativeQuotaStatus, RedisRateLimiter,
+    build_cumulative_quota_keys, CumulativeQuotaMode, CumulativeQuotaResult, CumulativeQuotaStatus, RedisRateLimiter,
 };
 use crate::plugins::http::common::{resolve_rate_limit_key, RateLimitKey};
 use crate::plugins::runtime::{PluginLog, PluginSession};
@@ -271,6 +271,31 @@ struct RedisQuotaSink {
     request_timeout: Duration,
 }
 
+fn project_apply_result(limit: u64, result: anyhow::Result<CumulativeQuotaResult>) -> Result<bool, ()> {
+    match result.map(|value| (value.status, value.used)) {
+        Ok((CumulativeQuotaStatus::Applied, used))
+        | Ok((CumulativeQuotaStatus::Duplicate, used))
+        | Ok((CumulativeQuotaStatus::Stale, used)) => Ok(used > limit),
+        _ => Err(()),
+    }
+}
+
+fn summarize_apply_results(results: impl IntoIterator<Item = Result<bool, ()>>) -> Result<QuotaApplyResult, ()> {
+    let mut over_limit = false;
+    let mut failed = false;
+    for result in results {
+        match result {
+            Ok(exceeded) => over_limit |= exceeded,
+            Err(()) => failed = true,
+        }
+    }
+    if failed {
+        Err(())
+    } else {
+        Ok(QuotaApplyResult { over_limit })
+    }
+}
+
 impl RedisQuotaSink {
     async fn admit_all(&self) -> Result<Option<Duration>, ()> {
         let mut retry_after = None;
@@ -294,7 +319,6 @@ impl RedisQuotaSink {
 
     async fn apply_all(&self, revision: u64, total: u64, final_update: bool) -> Result<QuotaApplyResult, ()> {
         let operation = async {
-            let mut over_limit = false;
             let results = futures::future::join_all(self.targets.iter().map(|target| async move {
                 let now = Instant::now();
                 let marker_ttl = if final_update {
@@ -320,25 +344,10 @@ impl RedisQuotaSink {
                         CumulativeQuotaMode::Force,
                     )
                     .await;
-                (target.limit, result)
+                project_apply_result(target.limit, result)
             }))
             .await;
-            let mut failed = false;
-            for (limit, result) in results {
-                match result.map(|value| (value.status, value.used)) {
-                    Ok((CumulativeQuotaStatus::Applied, used))
-                    | Ok((CumulativeQuotaStatus::Duplicate, used))
-                    | Ok((CumulativeQuotaStatus::Stale, used)) => {
-                        over_limit |= used > limit;
-                    }
-                    _ => failed = true,
-                }
-            }
-            if failed {
-                Err(())
-            } else {
-                Ok(QuotaApplyResult { over_limit })
-            }
+            summarize_apply_results(results)
         };
         tokio::time::timeout(self.request_timeout, operation)
             .await

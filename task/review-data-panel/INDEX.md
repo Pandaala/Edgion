@@ -9967,3 +9967,34 @@ Fresh verification passed 27 quota, 3 terminal-state, 11 terminal-logging and
 check/Clippy and agent-doc validation passed; existing unrelated warnings remain.
 No runtime or test files changed. No live Redis/provider, concurrency stress or
 throughput measurement ran.
+
+## Project completed Redis quota results before joining
+
+RedisQuotaSink::apply_all now projects each completed target result to
+Result<bool, ()>: Applied, Duplicate and Stale retain the strict used > limit
+outcome, while other statuses and execution errors remain failures. The same
+join_all still awaits every target before aggregate failure/over-limit selection.
+TTL sampling, command arguments, client ownership, timeout and worker settlement
+remain unchanged. Serial admission and the deferred boxed-future representation
+are outside this batch.
+
+Previously the join retained each target limit plus the full parsed quota result
+or an unused error message. The projection retains only the final outcome and
+releases unused error text when that target completes. Current production errors
+are owned validation/parser messages or formatted Redis errors, not reservation
+or bookkeeping guards. No error detail escaped this caller before the change.
+
+Tests cover all six statuses, errors, strict limit boundaries, empty input and
+mixed-result failure precedence against the original classifier. The u64 extrema
+exercise classification, not relaxed Redis numeric acceptance. A ready-future
+join fixture with one through eight outputs verifies smaller collected-Vec backing
+storage on the current target. This is output-storage evidence, not a production
+future-size, total-allocation or throughput measurement; pending futures and the
+result collection still exist.
+
+Fresh verification passed 29 quota, 36 shared Redis-core, 13 accounting-finalizer
+and 25 attempt-runtime tests (103 total). Formatting, workspace all-target
+check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
+Gateway API transform, unit-layout and gateway no-tracing guards passed. Existing
+unrelated Clippy warnings remain. No live Redis, Cluster/failover or full
+integration suite ran.
