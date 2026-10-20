@@ -16,7 +16,7 @@ destination.
 | `new_ctx`, `init_downstream_modules` | Direct bodies and context/default construction inspected: pinned config, parsed policy, absent optional owners and lazy containers. Registered downstream module callbacks, compression negotiation/output ownership and gRPC-Web header/trailer paths inspected in the entries below. Module storage/dispatch and compression/bridge representation decisions remain deferred. Downstream decompressor execution and dictionary setup are not currently enabled; see the reachability audit below. This is not complete fork-codec coverage. |
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
-| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below. Direct backend transport counters and generation-local drain projection inspected below; deeper endpoint algorithms, cleaner lifecycle, body conversion and credential publication remain open. |
+| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below. Direct backend transport counters and generation-local drain projection inspected below; cleaner snapshot/stop wiring is inspected below. Deeper endpoint algorithms, body conversion, credential publication and process-wide shutdown guarantees remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Wasm direct ABI profiling, callout execution, shared-data snapshots, lease ownership, prepared callback handles and process admission are inspected in the entries below; four Wasm representation/lock decisions remain deferred. Deeper Wasmtime and network dependencies, other concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Direct plugin-stage log collection, nested resource-log handoff and borrowed terminal serialization inspected below; stage-specific capacity policy is deferred. Terminal route-matrix recording and shared counter/histogram renewal gates inspected below. Retry-budget percentage conversion is prepared at construction below; epoch sampling, coherent snapshots and admission atomics are retained. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
@@ -11981,3 +11981,34 @@ passed. Existing unrelated Clippy warnings remain; no full test suite or live
 integration ran. The private scalar representation changed without adding an
 allocation; retained layout size and throughput were not measured.
 Final independent code review passed.
+
+## Backend cleaner snapshot and stop wiring
+
+Inspected BackendCleaner, the draining registry, coordinator retirement and the
+auxiliary shutdown watcher. The cleaner collects owned keys and backend Arcs
+before deleting entries, releasing DashMap iteration guards before removal.
+This is not an atomic snapshot across shards. Its copies belong to a background
+scan, not each proxy request; replacing them with live iteration while deleting
+would change lock ownership. No new hot-path optimization was selected.
+
+Polling uses each retired wrapper's owned_conn, not the shared transport count.
+Typed registry keys include incarnation/proof identity. The configured interval
+is ten seconds with an immediately ready first tick, not a precise cleanup-delay
+bound. Each sweep is synchronous and checks cancellation again only on returning
+to select. The existing remove_service retain/insert race remains a documented
+self-healing lifecycle tradeoff; this inspection is not a race stress proof.
+
+start keeps its JoinHandle and rejects a duplicate start while it is present.
+stop cancels, takes and awaits the handle, then resets the token. The production
+auxiliary watcher owns the cleaner and invokes stop on shutdown signal/channel
+closure. This proves the direct wiring, not that process teardown always waits
+for this watcher or that arbitrary owner drop performs an asynchronous join.
+
+Independent plan review passed. Fresh serial tests passed six leastconn, seven
+runtime-registry, three backend-counter and 41 discovery-coordinator cases (57
+total). Lifecycle tests exercise start/duplicate-start/stop/restart calls returning;
+they do not count running workers or prove a post-restart timed sweep. Registry
+checks cover manual removal and distinct same-socket incarnations, not all scan
+interleavings. No code/tests changed or new test/benchmark was added. Formatting
+and workspace all-target check/Clippy passed; unrelated warnings remain.
+Agent-doc validation and final independent review passed.
