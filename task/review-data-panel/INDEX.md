@@ -9290,3 +9290,27 @@ tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No allocator or throughput measurement is claimed.
+
+## Reuse WAF head validation scans and response payload counts
+
+RequestState and ResponseState now use the existing memchr3 primitive to detect
+CR/LF/NUL in header values. The forbidden-byte set, ordinal diagnostics and
+name-before-value-before-size validation order are unchanged. ResponseState also
+reuses the checked header_bytes total after the same owned allocations instead
+of traversing entries again to sum copied name/value lengths. It adds the same
+status byte count and checked entry metadata charge; positive-sum overflow still
+returns Arithmetic. Status validation and allocation-error order are unchanged.
+
+All 256 byte values at beginning/middle/end positions are checked through both
+builders. Directed cases verify invalid-name/value precedence over length limits.
+Response accounting retains all accepted statuses and adds duplicate/empty/binary
+header cases with a literal payload total and preserved copied entries. Existing
+response phase/window and request retained-limit tests remain. No representation,
+cache, logging or public API changes, and no measured throughput claim. Wider
+callback coverage remains open.
+
+Fresh checks passed: 828 WAF leaf tests (six existing ignored), 90 Gateway WAF
+tests, formatting, workspace all-target check/Clippy, agent-doc validation,
+SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
+remain. No allocator or throughput measurement was run.

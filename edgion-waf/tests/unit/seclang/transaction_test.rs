@@ -1111,6 +1111,71 @@ fn request_head_alias_admission_boundaries_and_error_precedence_stay_ordered() {
 }
 
 #[test]
+fn head_value_validation_preserves_all_bytes_ordinals_and_error_order() {
+    for byte in 0..=255_u8 {
+        for position in [0, 32, 64] {
+            let mut value = [b'a'; 65];
+            value[position] = byte;
+            let request_headers = [RequestHeader::new(b"X-First", b"ok"), RequestHeader::new(b"X", &value)];
+            let response_headers = [
+                ResponseHeader::new(b"X-First", b"ok"),
+                ResponseHeader::new(b"X", &value),
+            ];
+            let request_result = RequestState::build(request(&request_headers, b"/"), RuntimeLimits::default());
+            let response_result =
+                ResponseState::build(ResponseHead::new(200, &response_headers), RuntimeLimits::default());
+            if matches!(byte, 0 | b'\r' | b'\n') {
+                assert_eq!(
+                    request_result.err(),
+                    Some(RuntimeError::InvalidHeaderValue { ordinal: 1 })
+                );
+                assert_eq!(
+                    response_result.err(),
+                    Some(RuntimeError::InvalidResponseHeaderValue { ordinal: 1 })
+                );
+            } else {
+                assert_eq!(
+                    request_result
+                        .unwrap()
+                        .first_named(CollectionKind::RequestHeaders, b"X", false),
+                    Some(value.as_slice())
+                );
+                assert_eq!(response_result.unwrap().entries[2].value, value);
+            }
+        }
+    }
+    for name in [b"X".as_slice(), b"Bad Name"] {
+        let mut value = [b'a'; 65];
+        value[64] = b'\r';
+        let request_headers = [RequestHeader::new(name, &value)];
+        let response_headers = [ResponseHeader::new(name, &value)];
+        let limits = RuntimeLimits {
+            max_value_bytes: 64,
+            ..RuntimeLimits::default()
+        };
+        let (request_error, response_error) = if name == b"X" {
+            (
+                RuntimeError::InvalidHeaderValue { ordinal: 0 },
+                RuntimeError::InvalidResponseHeaderValue { ordinal: 0 },
+            )
+        } else {
+            (
+                RuntimeError::InvalidHeaderName { ordinal: 0 },
+                RuntimeError::InvalidResponseHeaderName { ordinal: 0 },
+            )
+        };
+        assert_eq!(
+            RequestState::build(request(&request_headers, b"/"), limits).err(),
+            Some(request_error)
+        );
+        assert_eq!(
+            ResponseState::build(ResponseHead::new(200, &response_headers), limits).err(),
+            Some(response_error)
+        );
+    }
+}
+
+#[test]
 fn invalid_headers_and_errors_are_content_free() {
     let private = [RequestHeader::new(b"Bad Name", b"private-value")];
     let Err(error) = RequestState::build(request(&private, b"/private-path"), RuntimeLimits::default()) else {
@@ -3036,6 +3101,18 @@ fn response_status_bytes_and_accounting_cover_the_accepted_range() {
         assert_eq!(entry.value, status.to_string().as_bytes());
         assert_eq!(response.total_retained_bytes(), size_of::<ResponseEntry>() + 3);
         assert!(response.window.is_none());
+    }
+
+    let headers = [
+        ResponseHeader::new(b"X", b""),
+        ResponseHeader::new(b"X", b"value"),
+        ResponseHeader::new(b"Other", b"\xff"),
+    ];
+    let response = ResponseState::build(ResponseHead::new(200, &headers), RuntimeLimits::default()).unwrap();
+    assert_eq!(response.total_retained_bytes(), 16 + 4 * size_of::<ResponseEntry>());
+    for (entry, header) in response.entries[1..].iter().zip(&headers) {
+        assert_eq!(entry.name.as_deref(), Some(header.name));
+        assert_eq!(entry.value, header.value);
     }
 
     let invalid_headers = [ResponseHeader::new(b"", b"\n")];

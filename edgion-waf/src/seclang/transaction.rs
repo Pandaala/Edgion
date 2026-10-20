@@ -5429,7 +5429,7 @@ impl ResponseState {
             if header.name.is_empty() || !header.name.iter().copied().all(is_header_name_byte) {
                 return Err(RuntimeError::InvalidResponseHeaderName { ordinal });
             }
-            if header.value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
+            if memchr::memchr3(b'\r', b'\n', 0, header.value).is_some() {
                 return Err(RuntimeError::InvalidResponseHeaderValue { ordinal });
             }
             check_value(header.name, limits.max_value_bytes)?;
@@ -5459,14 +5459,9 @@ impl ResponseState {
                 value: owned_copy(header.value)?,
             });
         }
-        let retained_bytes = entries
-            .iter()
-            .try_fold(0_usize, |total, entry| {
-                total
-                    .checked_add(entry.name.as_ref().map_or(0, Vec::len))
-                    .and_then(|value| value.checked_add(entry.value.len()))
-                    .ok_or(RuntimeError::Arithmetic)
-            })?
+        let retained_bytes = header_bytes
+            .checked_add(status_digits.len() - status_start)
+            .ok_or(RuntimeError::Arithmetic)?
             .checked_add(
                 entries
                     .len()
@@ -5518,7 +5513,7 @@ impl RequestState<'_> {
             if header.name.is_empty() || !header.name.iter().copied().all(is_header_name_byte) {
                 return Err(RuntimeError::InvalidHeaderName { ordinal });
             }
-            if header.value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
+            if memchr::memchr3(b'\r', b'\n', 0, header.value).is_some() {
                 return Err(RuntimeError::InvalidHeaderValue { ordinal });
             }
             check_value(header.name, limits.max_value_bytes)?;
