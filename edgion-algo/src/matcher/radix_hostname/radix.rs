@@ -16,7 +16,8 @@ pub(super) struct HostPatternId(pub(super) u32);
 struct FlatHostnameNode {
     edge_offset: u32,
     children_offset: u32,
-    parent_index: u32,
+    // Nearest strict ancestor with a wildcard terminal; NONE when absent.
+    wildcard_parent_index: u32,
     terminal_id: u32,
     suffix_len: u8,
     edge_len: u8,
@@ -28,7 +29,7 @@ impl FlatHostnameNode {
     const EMPTY: Self = Self {
         edge_offset: 0,
         children_offset: 0,
-        parent_index: NONE,
+        wildcard_parent_index: NONE,
         terminal_id: NONE,
         suffix_len: 0,
         edge_len: 0,
@@ -405,7 +406,7 @@ impl FlatTreeBuilder {
         &mut self,
         entries: &[BuildEntry],
         depth: usize,
-        parent_index: u32,
+        wildcard_parent_index: u32,
         limits: FreezeLimits,
     ) -> Result<u32, RadixHostnameBuildError> {
         let node_index = checked_index(self.nodes.len(), CapacityKind::Nodes, limits.nodes)?;
@@ -471,7 +472,7 @@ impl FlatTreeBuilder {
         self.nodes[node_index as usize] = FlatHostnameNode {
             edge_offset,
             children_offset,
-            parent_index,
+            wildcard_parent_index,
             terminal_id,
             suffix_len,
             edge_len,
@@ -480,6 +481,11 @@ impl FlatTreeBuilder {
         };
         let mut offset = terminal_end;
         let mut child_slot = children_offset as usize;
+        let child_wildcard_parent = if terminal_flags & HAS_WILDCARD != 0 {
+            node_index
+        } else {
+            wildcard_parent_index
+        };
         while offset < entries.len() {
             let start = offset;
             let first_byte = entries[start].reversed[end];
@@ -487,7 +493,7 @@ impl FlatTreeBuilder {
             while offset < entries.len() && entries[offset].reversed[end] == first_byte {
                 offset += 1;
             }
-            let child_index = self.emit_node(&entries[start..offset], end, node_index, limits)?;
+            let child_index = self.emit_node(&entries[start..offset], end, child_wildcard_parent, limits)?;
             self.children[child_slot] = ChildEntry {
                 node_index: child_index,
                 first_byte,
@@ -547,7 +553,7 @@ impl Iterator for MatchingIds<'_, '_> {
         }
         while self.next_node != NONE {
             let node = self.tree.nodes.get(self.next_node as usize)?;
-            self.next_node = node.parent_index;
+            self.next_node = node.wildcard_parent_index;
             let Some(wildcard_id) = terminal_id(node, true) else {
                 continue;
             };

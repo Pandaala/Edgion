@@ -9399,3 +9399,39 @@ checks already use a parse-free canonical suffix/exact predicate, so another
 compiled attachment list is not justified by alleged repeated parsing. Existing
 attachment, logical-owner and more-specific-listener semantics remain mandatory.
 Matcher internals and the broader callback review remain open.
+
+## Prepare hostname wildcard ancestor links during tree construction
+
+TLSRoute selection reaches the shared edgion-algo Route hostname matcher, also
+used by HTTPRoute and GRPCRoute. Its old physical parent index was consumed only
+by lazy wildcard iteration. Tree construction now stores the nearest strict
+wildcard ancestor in that same u32 slot. The iterator still inspects the deepest
+matched node first, then skips ancestors without wildcard terminals.
+
+Exact-first laziness, suffix boundary checks, longest-to-shortest ordering,
+generation-local IDs and topology/content ownership are unchanged. Node size
+remains 20 bytes; child/edge pools, capacity guards, descent and allocations are
+unchanged. This removes irrelevant ancestor inspections, with no throughput
+measurement or extra cache, field, dependency or protocol policy.
+
+New tests reconstruct physical parents from child edges independently and check
+every shortcut, including a compressed wildcard root, intermediate exact and
+branching nodes, empty/exact-only trees, wildcard apex rejection and compressed
+edge misses. Existing exhaustive oracle, maximum-depth, deterministic topology,
+layout and snapshot tests remain. The shared algorithm documentation records the
+new links; broader callback and matcher review remains open.
+
+Fresh verification passed all 158 edgion-algo unit tests. Gateway routes tests
+reported 874 passed and one failure:
+response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserves_ordinary_capture.
+An isolated rerun reproduced its backend policy ancestor limit error. The
+unchanged fixture publishes traffic policy without preparedAncestorAdmission;
+the unchanged admission chain rejects absent preparation. This is the existing
+[cache-policy fixture issue](verification-01-cache-policy-fixture.md), not a
+passing full route suite. No baseline binary was rebuilt and no fixture or
+production admission was changed.
+
+Formatting, workspace all-target check/Clippy, agent-doc validation, SSA-force,
+metrics inventory, Pingora-source policy, Gateway API transform, unit-test layout
+and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
+No performance measurement or integration fixture change was made.

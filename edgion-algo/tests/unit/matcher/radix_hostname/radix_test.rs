@@ -99,6 +99,69 @@ fn exact_first_is_lazy_about_parent_wildcards() {
 }
 
 #[test]
+fn wildcard_links_skip_only_nonmatching_physical_ancestors() {
+    let mixed = [
+        "com",
+        "*.com",
+        "example.com",
+        "*.example.com",
+        "branch.example.com",
+        "a.branch.example.com",
+        "b.branch.example.com",
+        "x.long.example.com",
+        "y.long.example.com",
+    ];
+    for values in [mixed.as_slice(), &["a.example.com", "b.example.com", "grpc"], &[]] {
+        let tree = HostnameRadixTree::build(values.iter().map(|value| pattern(value)).collect()).unwrap();
+        // Recover actual topology from child edges, independently of the shortcut.
+        let mut physical_parents = vec![NONE; tree.nodes.len()];
+        for (index, node) in tree.nodes.iter().enumerate() {
+            let start = node.children_offset as usize;
+            for child in &tree.children[start..start + node.children_len as usize] {
+                physical_parents[child.node_index as usize] = index as u32;
+            }
+        }
+        assert_eq!(tree.nodes[0].wildcard_parent_index, NONE);
+        let mut skipped = false;
+        for (index, node) in tree.nodes.iter().enumerate() {
+            let mut expected = physical_parents[index];
+            while expected != NONE && tree.nodes[expected as usize].terminal_flags & HAS_WILDCARD == 0 {
+                skipped = true;
+                expected = physical_parents[expected as usize];
+            }
+            assert_eq!(
+                node.wildcard_parent_index, expected,
+                "node={index}, patterns={values:?}"
+            );
+        }
+        if values == mixed {
+            assert_ne!(tree.nodes[0].terminal_flags & HAS_WILDCARD, 0);
+            assert!(skipped);
+            for (query, expected) in [
+                (
+                    "a.branch.example.com",
+                    vec!["a.branch.example.com", "*.example.com", "*.com"],
+                ),
+                ("example.com", vec!["example.com", "*.com"]),
+                ("com", vec!["com"]),
+                // Miss inside a compressed edge and retain the shorter wildcard.
+                ("z.lung.example.com", vec!["*.example.com", "*.com"]),
+                ("unknown.com", vec!["*.com"]),
+                ("unknown.test", vec![]),
+            ] {
+                let actual: Vec<_> = tree
+                    .matching_ids(query)
+                    .map(|id| tree.patterns[id.0 as usize].as_str())
+                    .collect();
+                assert_eq!(actual, expected, "query={query}");
+            }
+        } else {
+            assert!(tree.nodes.iter().all(|node| node.wildcard_parent_index == NONE));
+        }
+    }
+}
+
+#[test]
 fn terminal_base_decodes_single_and_double_terminals_without_using_none() {
     let exact_only = FlatHostnameNode {
         terminal_id: NONE - 1,

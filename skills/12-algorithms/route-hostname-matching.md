@@ -27,8 +27,11 @@ names; TLSRoute requires 1..16. Invalid entries reject the entire Route list.
 The immutable topology uses exactly sized flat node, packed child-entry and
 edge-byte pools. Edges are stored in query-forward order, so traversal compares
 one continuous borrowed query slice without constructing a reversed request.
-After descent a lazy iterator returns exact first, then follows parent indices
-to yield wildcard terminals from longest to shortest suffix. Thus exact wins,
+After descent a lazy iterator returns exact first, inspects the deepest matched
+node, then follows prepared links to strict wildcard ancestors from longest to
+shortest suffix. Construction stores the nearest wildcard ancestor in the existing
+node index slot, skipping nonterminal and exact-only ancestors without increasing
+node size. Query boundary checks still reject wildcard apex matches. Thus exact wins,
 then longest wildcard suffix, then shorter matching suffixes. `*.example.com`
 matches `a.example.com` and `a.b.example.com`, never `example.com` or
 `notexample.com`. Exact and wildcard terminals at the same suffix are distinct.
