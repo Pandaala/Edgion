@@ -198,7 +198,7 @@ fn compact_map(original: &HeaderMap, limit: usize, base: usize) -> Result<Header
             return Err(failure(false));
         }
     }
-    let mut result = HeaderMap::new();
+    let mut result = HeaderMap::with_capacity(original.keys_len());
     for (name, value) in original {
         let name = HeaderName::from_bytes(name.as_str().as_bytes()).map_err(|_| failure(false))?;
         let value = HeaderValue::from_bytes(value.as_bytes()).map_err(|_| failure(false))?;

@@ -1,4 +1,51 @@
 use super::*;
+
+#[test]
+fn compact_projection_reserves_distinct_names_without_growth() {
+    // This is the previous copying strategy, isolated as an allocation oracle.
+    fn growing_copy(original: &HeaderMap) -> HeaderMap {
+        let mut result = HeaderMap::new();
+        for (name, value) in original {
+            result.append(
+                HeaderName::from_bytes(name.as_str().as_bytes()).unwrap(),
+                HeaderValue::from_bytes(value.as_bytes()).unwrap(),
+            );
+        }
+        result
+    }
+
+    for distinct in 0..=64 {
+        let mut original = HeaderMap::with_capacity(1024);
+        for index in 0..distinct {
+            let name = HeaderName::from_bytes(format!("x-field-{index}").as_bytes()).unwrap();
+            original.append(name, HeaderValue::from_static("first"));
+        }
+        if distinct > 0 {
+            for _ in distinct..64 {
+                original.append("x-field-0", HeaderValue::from_static("repeated"));
+            }
+        }
+        let (previous, previous_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| growing_copy(&original));
+        let (actual, actual_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| compact_map(&original, 65536, 64).unwrap());
+        assert_eq!(actual, previous);
+        assert!(actual.iter().eq(previous.iter()));
+        assert!(actual.capacity() <= previous.capacity());
+        if distinct == 0 {
+            assert_eq!(actual_stats.calls, 0);
+        }
+        if distinct == 1 {
+            // Repeated values must not reserve 64 distinct-name slots.
+            assert!(actual.capacity() < 64);
+        }
+        if distinct == 32 {
+            assert!(actual_stats.calls < previous_stats.calls);
+            assert!(actual_stats.requested_bytes < previous_stats.requested_bytes);
+        }
+    }
+}
+
 #[test]
 fn compact_projection_drops_preallocated_capacity_and_counts_repeated_fields() {
     let mut original = HeaderMap::with_capacity(1024);

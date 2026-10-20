@@ -10337,3 +10337,31 @@ tests (90 total), formatting, workspace all-target check/Clippy and the seven
 agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
 and gateway no-tracing guards. Existing unrelated Clippy warnings remain.
 No live upstream exchange or throughput benchmark ran.
+
+## Reserve bounded unary metadata maps by distinct header names
+
+The response-filter and trailer paths reach the unary converter's compact_map.
+After validating every field against the existing count and metadata bounds,
+it now reserves the fresh HeaderMap using the original distinct-name count.
+The pinned http implementation exposes that count directly; repeated values
+do not inflate the table reservation. Empty maps remain allocation-free.
+
+Fresh name/value byte reconstruction, insertion order, duplicate ordering and
+current sensitivity handling remain unchanged. This preserves the compact
+retained-storage boundary instead of retaining the original map or byte owners.
+The count remains at most 64 before reservation, within the existing conservative
+unary metadata ledger; no admission or Hold limit changes.
+
+A focused allocation oracle compares the previous growing-copy strategy with
+the actual compact_map across zero through 64 distinct names, filling nonempty
+fixtures to 64 values. It checks map and ordered-iteration equality, no larger
+final table capacity, empty allocation behavior, and lower allocation calls and
+requested bytes for the 32-name case. Existing overflow, source-capacity, final
+header, trailer, error-template and deadline tests remain in place. This measures
+local allocation behavior, not end-to-end throughput or process RSS.
+
+Fresh verification passed 57 Chat-to-Anthropic conversion, eight response-head
+and 26 response-filter tests (91 total), formatting, workspace all-target
+check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
+API transform, unit-layout and gateway no-tracing guards. Existing unrelated
+Clippy warnings remain. No live upstream exchange or throughput benchmark ran.
