@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared GeoIP geographic membership](geoip-02-geographic-membership-index.md)
+
 - [Redis fallback command ownership](redis-02-fallback-command-ownership.md)
 
 - [Multi-pattern regex route result storage](routing-05-regex-result-storage.md)
@@ -9788,3 +9790,23 @@ Fresh verification passed 34 shared Redis-core and 32 connection-rate-limit
 unit tests, with one existing measurement test ignored. Formatting, workspace
 all-target check/Clippy and documentation validation passed; existing unrelated
 warnings remain. No live Redis, Cluster/failover or throughput verification ran.
+
+## Defer prepared geographic membership
+
+Traced HTTP and Stream GeoIP rule evaluation into the shared geographic value
+matcher. Normalized values use allocation-free linear borrowed equality. A
+prepared index could reduce comparisons for large lists, but needs an explicit
+owner and CPU/memory evidence; public mutable rule values are not proven sorted.
+Unknown country/continent codes remain accepted after warnings, so a known-code
+bitset alone would change matching semantics.
+
+Geoip-02 records linear, sorted and hashed alternatives without selecting one.
+It preserves source/missingness semantics, CIDR coordinates, ordered decisions,
+reference preflight, lazy lookup and existing failure/logging boundaries. This
+is distinct from the existing MMDB record-decoding task. No runtime, schema,
+dependency or integration-fixture changes were made.
+
+Fresh verification passed 23 Gateway GeoIP, six shared GeoIP-reference, 14
+Resources GeoRule and 15 GeoIpLocation tests. Formatting, workspace all-target
+check/Clippy and documentation validation passed; existing unrelated warnings
+remain. No matching benchmark or retained-generation memory measurement ran.
