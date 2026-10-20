@@ -10393,3 +10393,32 @@ and 26 response-filter tests (92 total), formatting, workspace all-target
 check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
 API transform, unit-layout and gateway no-tracing guards. Existing unrelated
 Clippy warnings remain. No live upstream exchange or throughput benchmark ran.
+
+## Borrow exact bare response media types before MIME parsing
+
+Anthropic success-header validation and UnaryHead final revalidation share the
+converter's media matcher. After the existing unique-field, text and trim gates,
+that matcher now compares bare application/json and text/event-stream directly
+without allocating. Each shortcut is restricted to its exact lowercase expected
+type/subtype tuple; mismatched or differently cased expected tuples retain the
+original comparison semantics.
+
+Parameterized, suffixed, wildcard, malformed and all other values continue
+through the pinned MIME parser. The converter's parameter/suffix policy differs
+from the request JSON validator and the lightweight SSE classifier; neither
+replaces this parser. Raw encoding/length validation, fixed-error ordering and
+independent post-onion UnaryHead validation remain unchanged. No cached header
+classification or new shared owner is introduced.
+
+Differential fixtures compare the original parser with the actual matcher over
+case/whitespace, parameters, suffixes, wildcards, malformed and opaque bytes,
+missing/repeated fields and alternate expected tuples. A separate prebuilt-head
+measurement verifies positive original-parser allocation and zero matcher
+allocation for the two bare media types, including mixed case and outer
+whitespace. This measures the matcher only, not callback throughput.
+
+Fresh verification passed 60 Chat-to-Anthropic conversion, eight response-head
+and 26 response-filter tests (94 total), formatting, workspace all-target
+check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway
+API transform, unit-layout and gateway no-tracing guards. Existing unrelated
+Clippy warnings remain. No live upstream exchange or throughput benchmark ran.

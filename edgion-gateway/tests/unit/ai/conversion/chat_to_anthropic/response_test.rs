@@ -1392,3 +1392,93 @@ fn provider_header_clear_avoids_name_collection_and_preserves_response_metadata(
         }
     }
 }
+
+fn parsed_media_matches(response: &ResponseHeader, type_: &str, subtype: &str) -> bool {
+    let mut values = response.headers.get_all("content-type").iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.trim().parse::<mime::Mime>().ok())
+        .is_some_and(|media| media.type_().as_str() == type_ && media.subtype().as_str() == subtype)
+}
+
+#[test]
+fn response_media_fast_path_matches_original_parser_policy() {
+    let values: &[&[u8]] = &[
+        b"application/json",
+        b" APPLICATION/JSON\t",
+        b"text/event-stream",
+        b"\tText/Event-Stream ",
+        b"application/json; charset=utf-8",
+        b"text/event-stream; charset=\"utf-8\"",
+        b"text/event-stream; malformed",
+        b"application/json;",
+        b"application/json; charset=latin1",
+        b"application/problem+json",
+        b"application/json+suffix",
+        b"text/event-stream+suffix",
+        b"application/*",
+        b"*/*",
+        b"application /json",
+        b"application/json,text/event-stream",
+        b"/json",
+        b"text/",
+        b"",
+        &[0x80, b'x'],
+    ];
+    for value in values {
+        for copies in 0..=2 {
+            let mut response = ResponseHeader::build(200, None).unwrap();
+            for _ in 0..copies {
+                response
+                    .append_header("content-type", http::HeaderValue::from_bytes(value).unwrap())
+                    .unwrap();
+            }
+            for (type_, subtype) in [
+                ("application", "json"),
+                ("text", "event-stream"),
+                ("text", "json"),
+                ("APPLICATION", "json"),
+                ("application", "JSON"),
+                ("application", "*"),
+                ("*", "*"),
+            ] {
+                assert_eq!(
+                    matches_media_type(&response, type_, subtype),
+                    parsed_media_matches(&response, type_, subtype),
+                    "value={value:?}, copies={copies}, expected={type_}/{subtype}"
+                );
+            }
+        }
+    }
+    let mut response = header(200, "application/json");
+    response
+        .append_header("content-type", http::HeaderValue::from_bytes(&[0x80]).unwrap())
+        .unwrap();
+    assert!(!matches_media_type(&response, "application", "json"));
+}
+
+#[test]
+fn bare_response_media_checks_do_not_allocate() {
+    for (value, type_, subtype) in [
+        ("application/json", "application", "json"),
+        (" APPLICATION/JSON\t", "application", "json"),
+        ("text/event-stream", "text", "event-stream"),
+        ("\tText/Event-Stream ", "text", "event-stream"),
+    ] {
+        let response = header(200, value);
+        let (expected, previous_calls) =
+            crate::test_allocation_counter::count_allocations(|| parsed_media_matches(&response, type_, subtype));
+        let (actual, actual_calls) =
+            crate::test_allocation_counter::count_allocations(|| matches_media_type(&response, type_, subtype));
+        assert!(expected && actual);
+        assert!(previous_calls > 0);
+        assert_eq!(actual_calls, 0);
+    }
+}

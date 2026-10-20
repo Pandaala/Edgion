@@ -1188,10 +1188,20 @@ pub(super) fn matches_media_type(response: &ResponseHeader, type_: &str, subtype
     if values.next().is_some() {
         return false;
     }
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    let value = value.trim();
+    if match (type_, subtype) {
+        ("application", "json") => value.eq_ignore_ascii_case("application/json"),
+        ("text", "event-stream") => value.eq_ignore_ascii_case("text/event-stream"),
+        _ => false,
+    } {
+        return true;
+    }
     value
-        .to_str()
+        .parse::<mime::Mime>()
         .ok()
-        .and_then(|value| value.trim().parse::<mime::Mime>().ok())
         .is_some_and(|media| media.type_().as_str() == type_ && media.subtype().as_str() == subtype)
 }
 
