@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared WAF finding metadata](waf-02-prepared-finding-metadata.md)
+
 - [Generation-prepared WAF matcher scratch budgets](waf-01-prepared-matcher-scratch-budget.md)
 
 - [Callback-local compression eligibility reuse](compression-04-response-eligibility-reuse.md)
@@ -9061,3 +9063,20 @@ mounted test file; its cfg(test) import preserves nested test access. Formatting
 workspace all-target check and Clippy, agent documentation, SSA-force, metrics
 inventory, Pingora-source policy, Gateway API transform contract, unit-test layout
 and gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
+
+## WAF phase outcomes and staged rule execution audit
+
+execute_phase_with_prefix starts with an empty finding vector and grows it only
+for retained hits. Removed and policy-pruned units skip evaluation accounting;
+omitted findings still preserve omission counters, intervention and schedule
+effects. First-member TX evaluation loans existing entries and restores observers;
+only hits create staged state. Nonfinal chain branches own rollback state, while
+the final member consumes its staged frontier in winner order. These existing
+ownership and budget boundaries are retained, not blanket clone-removal targets.
+
+finding_metadata scans immutable compiled member actions for retained hits to
+select the last severity and count literal tags. Deferred cold preparation in
+[waf-02](waf-02-prepared-finding-metadata.md): evaluate request savings against
+actual compiled layout and near-limit admission. No runtime change or performance
+measurement is claimed. This audit covers direct phase/commit orchestration;
+remaining operators, action expansion and full callback coverage stay open.
