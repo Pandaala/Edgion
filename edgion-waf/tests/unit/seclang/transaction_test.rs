@@ -1183,6 +1183,71 @@ fn setvar_actions_are_ordered_visible_and_case_insensitive() {
 }
 
 #[test]
+fn delete_key_templates_borrow_static_bytes_and_preserve_expansion_limits() {
+    for (text, expected, borrowed) in [
+        ("Score", b"Score".as_slice(), true),
+        ("%{ARGS.key}", b"Score".as_slice(), false),
+        ("pre%{ARGS.key}", b"preScore".as_slice(), false),
+        ("%{TX.missing}", b"".as_slice(), false),
+    ] {
+        let g = generation(&format!("SecAction \"id:1,phase:1,pass,setvar:'!tx.{text}'\"\n"));
+        let template = g.setvars[0].key;
+        let state = RequestState::build(request(&[], b"/?key=Score"), RuntimeLimits::default()).unwrap();
+        let tx = TxState::default();
+        for limit in [0, 1, expected.len().saturating_sub(1), expected.len(), usize::MAX] {
+            let owned = expand_template::<true>(&g, &state, &tx, template, limit, None);
+            let operand = template_operand(&g, &state, &tx, template, limit, None);
+            assert_eq!(owned.as_deref(), operand.as_deref());
+            if let Ok(value) = operand {
+                assert_eq!(value.as_ref(), expected);
+                assert_eq!(matches!(value, Cow::Borrowed(_)), borrowed);
+                if borrowed {
+                    assert!(g.bytes.as_ptr_range().contains(&value.as_ptr()));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn static_and_dynamic_tx_deletes_preserve_lookup_and_rollback() {
+    for (key, removed) in [
+        ("sCoRe", true),
+        ("%{ARGS.key}", true),
+        ("absent", false),
+        ("%{TX.missing}", false),
+    ] {
+        for fail_after_delete in [false, true] {
+            let failure = if fail_after_delete {
+                ",setvar:'tx.invalid=+%{TX.missing}'"
+            } else {
+                ""
+            };
+            let g = generation(&format!(
+                "SecAction \"id:1,phase:1,pass,setvar:tx.score=kept\"\n\
+                 SecAction \"id:2,phase:1,pass,setvar:'!tx.{key}',setvar:tx.marker=hit{failure}\"\n"
+            ));
+            let mut tx = Transaction::new(&g, request(&[], b"/?key=SCORE"), RuntimeLimits::default()).unwrap();
+            let outcome = tx.execute_request_headers();
+            if fail_after_delete {
+                assert!(matches!(outcome, Err(RuntimeError::IntegerConversion)));
+                assert_eq!(tx.tx_value(b"score"), Some(b"kept".as_slice()));
+                assert_eq!(tx.tx_value(b"marker"), None);
+                assert_eq!(tx.tx_value(b"invalid"), None);
+                assert_eq!(tx.next_phase(), Some(Phase::RequestHeaders));
+            } else {
+                assert_eq!(outcome.unwrap().findings().len(), 2);
+                assert_eq!(
+                    tx.tx_value(b"score"),
+                    if removed { None } else { Some(b"kept".as_slice()) }
+                );
+                assert_eq!(tx.tx_value(b"marker"), Some(b"hit".as_slice()));
+            }
+        }
+    }
+}
+
+#[test]
 fn setvar_constant_and_dynamic_arithmetic_preserve_results_and_rollback() {
     let cases = [
         (None, "+", "0", Some("0")),

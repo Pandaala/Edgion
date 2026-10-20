@@ -2867,14 +2867,25 @@ impl<'generation> Transaction<'generation> {
             if setvar.collection != CollectionKind::Tx {
                 return Err(RuntimeError::GenerationInvariant);
             }
-            let key = expand_template::<true>(
-                &self.generation,
-                &self.request,
-                staged,
-                setvar.key,
-                member.runtime_expansion_byte_limit,
-                self.json_budget.as_mut(),
-            )?;
+            let key = if setvar.operation == super::SetVarOperation::Delete {
+                template_operand(
+                    &self.generation,
+                    &self.request,
+                    staged,
+                    setvar.key,
+                    member.runtime_expansion_byte_limit,
+                    self.json_budget.as_mut(),
+                )?
+            } else {
+                Cow::Owned(expand_template::<true>(
+                    &self.generation,
+                    &self.request,
+                    staged,
+                    setvar.key,
+                    member.runtime_expansion_byte_limit,
+                    self.json_budget.as_mut(),
+                )?)
+            };
             match setvar.operation {
                 super::SetVarOperation::Delete => staged.delete(&key, &self.request, self.json_budget.as_mut())?,
                 super::SetVarOperation::Assign => {
@@ -2886,7 +2897,13 @@ impl<'generation> Transaction<'generation> {
                         member.runtime_expansion_byte_limit,
                         self.json_budget.as_mut(),
                     )?;
-                    staged.set(key, value, self.limits, &self.request, self.json_budget.as_mut())?;
+                    staged.set(
+                        key.into_owned(),
+                        value,
+                        self.limits,
+                        &self.request,
+                        self.json_budget.as_mut(),
+                    )?;
                 }
                 super::SetVarOperation::Add | super::SetVarOperation::Subtract => {
                     let current = staged
@@ -2915,7 +2932,7 @@ impl<'generation> Transaction<'generation> {
                     .ok_or(RuntimeError::IntegerConversion)?;
                     let (digits, start) = signed_decimal_bytes(result);
                     staged.set(
-                        key,
+                        key.into_owned(),
                         owned_copy(&digits[start..])?,
                         self.limits,
                         &self.request,
@@ -5023,8 +5040,7 @@ fn evaluate_operator(
     let mut fingerprint = None;
     let positive = match plan.operand {
         super::CompiledOperatorOperand::String { relation, template } => {
-            let operand =
-                operator_template_operand(generation, request, tx, template, member_runtime_limit, json_budget)?;
+            let operand = template_operand(generation, request, tx, template, member_runtime_limit, json_budget)?;
             Ok(match relation {
                 super::StringRelation::BeginsWith => input.starts_with(&operand),
                 super::StringRelation::Contains => contains(input, &operand),
@@ -5036,7 +5052,7 @@ fn evaluate_operator(
         super::CompiledOperatorOperand::Integer { relation, operand } => {
             let expected = match operand {
                 super::CompiledIntegerOperand::Static(value) => value,
-                super::CompiledIntegerOperand::Template(template) => parse_i64(&operator_template_operand(
+                super::CompiledIntegerOperand::Template(template) => parse_i64(&template_operand(
                     generation,
                     request,
                     tx,
@@ -5174,7 +5190,7 @@ fn static_template_operand(
     }
 }
 
-fn operator_template_operand<'g>(
+fn template_operand<'g>(
     generation: &'g CompiledGeneration,
     request: &RequestState,
     tx: &TxState,

@@ -9131,3 +9131,27 @@ WAF-related tests passed. Formatting, workspace all-target check and Clippy,
 agent-doc validation, SSA force, metrics inventory, Pingora source policy,
 Gateway API transform contract, unit-test layout and gateway no-tracing guards
 passed. Existing unrelated Clippy warnings remain.
+
+## Borrow compiled static WAF deletion keys
+
+TX deletion consumes its key only during lookup. It now uses the existing
+borrowed-or-expanded template operand helper (renamed from the operator-specific
+name). Static keys borrow validated contiguous generation bytes with the same
+per-segment length checks; dynamic keys still use canonical owned expansion and
+metered macro reads. Assignment and arithmetic deliberately retain their original
+owned key expansion before value processing; into_owned only moves those vectors.
+The delete lookup still validates/meters stored keys and applies the same staged
+payload accounting and rollback. This removes the disposable static-key output
+allocation and its failure opportunity, not persistent TX storage or stage clones.
+
+Tests compare borrowed/owned results and length failures against canonical
+expansion, assert static slice ownership inside the generation, and cover static
+and dynamic case-insensitive deletion, absent/empty keys and rollback after a
+later action failure while retaining a previous unit's committed value. No new
+cache, compiled field, logging or public API is introduced. Wider action and
+callback coverage remains open; no measured throughput claim is made.
+
+Verification passed: 818 WAF leaf tests (six existing ignored), 90 Gateway WAF
+tests, formatting, workspace all-target check/Clippy and the seven existing
+agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-test
+layout and gateway no-tracing guards. Existing unrelated Clippy warnings remain.
