@@ -10517,3 +10517,30 @@ logging tests (160 total), formatting, workspace all-target check/Clippy and
 the seven agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform,
 unit-layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No new test, contention measurement or live transport experiment ran.
+
+## Borrow the persistent LinkSys publication while cloning its client
+
+AI quota admission and DSL Redis calls resolve the current Redis client through
+the unified runtime table and PersistentRunner::current. The shared getter now
+borrows its ArcSwap publication briefly and clones the inner client Arc, rather
+than obtaining an owned outer Arc only to discard it after that same clone.
+Redis, Etcd, Elasticsearch, Kafka and OTLP retain the same owned return type.
+The guard ends inside the synchronous getter; it never crosses an await or
+turns a fresh client lookup into a cached generation.
+
+Pinned arc-swap 1.9.2 implements load_full as Guard::into_inner(load()). The
+change avoids unconditional outer ownership promotion on the normal borrowed
+fast path. Exhausted guard slots and concurrent writer-paid debts can still
+involve outer reference counts; no zero-atomic, allocation or throughput claim
+is made. The inner client ownership remains necessary for asynchronous callers.
+Publication, health ownership, replacement, deletion and retirement are unchanged.
+Other lifecycle load_full sites and runtime-table entry ownership are outside
+this batch. Fred pool selection and transport internals remain open.
+
+Independent plan review passed. The existing 88 LinkSys runtime tests passed
+before and after the change; the final run also passed 30 AI quota tests.
+Formatting, workspace all-target check/Clippy and seven repository guards passed,
+with existing unrelated Clippy warnings. Existing identity, initial/deleted None,
+replacement and caller-retained-handle tests cover this expression change; no
+new test, live backend experiment or full suite ran.
+Final independent review passed.

@@ -114,7 +114,7 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     }
 
     pub fn current(&self) -> Option<Arc<O::Client>> {
-        (*self.current.load_full()).clone()
+        (**self.current.load()).clone()
     }
 
     pub fn post_ready(&self, link: Arc<LinkSys>, forced: bool) {
