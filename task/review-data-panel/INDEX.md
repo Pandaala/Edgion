@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [WAF count-value layout](waf-08-count-value-layout.md)
+
 - [WAF multiMatch stage ownership](waf-07-multimatch-stage-ownership.md)
 
 - [WAF marker-free decoder borrowing](waf-06-marker-free-decoder-borrowing.md)
@@ -10834,4 +10836,23 @@ review passed. Scope is transaction source, its unit tests and this record.
 Fresh verification passed 833 WAF leaf tests (six existing ignored), 90 Gateway
 WAF tests, formatting, workspace all-target check/Clippy and all seven campaign
 guards. Existing unrelated Clippy warnings remain. No live benchmark ran.
+Final independent review passed.
+
+## Defer WAF count-value layout
+
+Count targets already accumulate a scalar and use inline decimal bytes; exclusion
+compaction is in place. SelectedBytes::Count embeds a 40-byte buffer in every
+selection-slot enum layout. A smaller unsigned representation is a candidate,
+but actual enclosing sizes are unmeasured and sizeof-based capacity, overlap and
+summary admission would change. Shared JSON/XML metadata and the request-head
+projection also depend on the current helper width.
+
+[waf-08](waf-08-count-value-layout.md) records the representation choices,
+consumer inventory and numeric/layout/accounting acceptance. Independent plan
+review passed. No runtime change or slot-size claim was selected.
+
+Fresh verification passed 833 WAF leaf tests (six existing ignored), 90 Gateway
+WAF tests, formatting, workspace all-target check/Clippy and agent-document
+validation. Existing unrelated Clippy warnings remain. No alternate layout
+or workload benchmark was implemented.
 Final independent review passed.
