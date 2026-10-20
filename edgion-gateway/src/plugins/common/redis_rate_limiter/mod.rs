@@ -519,6 +519,10 @@ fn is_missing_script(error: &fred::error::Error) -> bool {
         && error.details().split_ascii_whitespace().next() == Some("NOSCRIPT")
 }
 
+fn script_args<const N: usize>(args: [i64; N]) -> Vec<Value> {
+    args.into_iter().map(Into::into).collect()
+}
+
 /// References process-shared script descriptors; remote cache misses are handled per invocation.
 pub struct RedisRateLimiter {
     scripts: &'static ScriptDescriptors,
@@ -538,15 +542,15 @@ impl RedisRateLimiter {
         }
     }
 
-    async fn eval_script<T: Into<Value>>(
+    async fn eval_script(
         &self,
         client: &RedisLinkClient,
         script: &ScriptDescriptor,
         keys: Vec<String>,
-        args: Vec<T>,
+        args: Vec<Value>,
     ) -> anyhow::Result<Vec<i64>> {
         let keys = MultipleKeys::from(keys);
-        let args = Value::Array(args.into_iter().map(Into::into).collect());
+        let args = Value::Array(args);
         match client
             .pool()
             .evalsha::<Vec<i64>, _, _, _>(script.sha1.as_str(), keys.clone(), args.clone())
@@ -578,7 +582,7 @@ impl RedisRateLimiter {
                 // Admission reads only KEYS[1]. Reusing it as KEYS[2] keeps the
                 // invocation valid in Redis Cluster without inventing a marker.
                 vec![quota_key.to_string(), quota_key.to_string()],
-                vec![0, limit as i64, 0, 0, 0, 0, 0],
+                script_args([0, limit as i64, 0, 0, 0, 0, 0]),
             )
             .await?;
         CumulativeQuotaResult::from_lua_result(&values, limit)
@@ -621,7 +625,7 @@ impl RedisRateLimiter {
                 client,
                 &self.scripts.cumulative_quota,
                 vec![bucket_key.to_string(), marker_key.to_string()],
-                vec![
+                script_args([
                     mode.lua_code(),
                     limit as i64,
                     bucket_ttl_ms as i64,
@@ -629,7 +633,7 @@ impl RedisRateLimiter {
                     revision as i64,
                     cumulative_target as i64,
                     i64::from(final_update),
-                ],
+                ]),
             )
             .await?;
         CumulativeQuotaResult::from_lua_result(&values, limit)
@@ -672,13 +676,13 @@ impl RedisRateLimiter {
                 client,
                 &self.scripts.credential_reservation,
                 vec![keys.bucket.clone(), keys.marker.clone()],
-                vec![
+                script_args([
                     operation.lua_code(),
                     limits.rpm.unwrap_or(0) as i64,
                     limits.tpm.unwrap_or(0) as i64,
                     ttl_ms as i64,
                     amount as i64,
-                ],
+                ]),
             )
             .await?;
         CredentialReservationResult::from_lua_result(&values, limits)
@@ -706,7 +710,7 @@ impl RedisRateLimiter {
         match algorithm {
             RateLimitAlgorithm::SlidingWindow => {
                 let key = build_redis_key(key_prefix, "sw", policy_idx, limit_key, "");
-                let args = vec![rate_arg, window_ms, now_ms, cost_arg];
+                let args = script_args([rate_arg, window_ms, now_ms, cost_arg]);
                 let v = self
                     .eval_script(client, &self.scripts.sliding_window, vec![key], args)
                     .await?;
@@ -715,7 +719,7 @@ impl RedisRateLimiter {
             RateLimitAlgorithm::FixedWindow => {
                 let window_id = now_ms / window_ms;
                 let key = build_redis_key(key_prefix, "fw", policy_idx, limit_key, &window_id.to_string());
-                let args = vec![rate_arg, window_ms, cost_arg];
+                let args = script_args([rate_arg, window_ms, cost_arg]);
                 let v = self
                     .eval_script(client, &self.scripts.fixed_window, vec![key], args)
                     .await?;
@@ -723,7 +727,7 @@ impl RedisRateLimiter {
             }
             RateLimitAlgorithm::TokenBucket => {
                 let key = build_redis_key(key_prefix, "tb", policy_idx, limit_key, "");
-                let args = vec![rate_arg, rate_arg, window_ms, now_ms, cost_arg];
+                let args = script_args([rate_arg, rate_arg, window_ms, now_ms, cost_arg]);
                 let v = self
                     .eval_script(client, &self.scripts.token_bucket, vec![key], args)
                     .await?;

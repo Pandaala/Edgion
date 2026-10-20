@@ -2,6 +2,36 @@ use super::*;
 use std::collections::HashMap;
 
 #[test]
+fn script_arguments_keep_integer_order_without_intermediate_storage() {
+    fn check<const N: usize>(integers: [i64; N]) {
+        let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let intermediate = std::hint::black_box(integers.to_vec());
+            Value::Array(intermediate.into_iter().map(Into::into).collect())
+        });
+        let (new, new_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            Value::Array(script_args(std::hint::black_box(integers)))
+        });
+        assert_eq!(new, old);
+        let Value::Array(values) = new else {
+            panic!("script arguments must remain an array");
+        };
+        assert_eq!(values.len(), N);
+        for (value, expected) in values.iter().zip(integers) {
+            assert!(matches!(value, Value::Integer(actual) if *actual == expected));
+        }
+        assert_eq!(new_stats.calls + 1, old_stats.calls);
+        assert_eq!(
+            new_stats.requested_bytes + N * std::mem::size_of::<i64>(),
+            old_stats.requested_bytes
+        );
+    }
+    check([1, 1000, 2]);
+    check([1, 1000, MAX_SAFE_LUA_INTEGER as i64, 2]);
+    check([1, 2, 3, 4, 5]);
+    check([i64::MIN, -1, 0, 1, MAX_SAFE_LUA_INTEGER as i64, i64::MAX, 42]);
+}
+
+#[test]
 fn script_descriptors_pair_each_source_with_its_redis_sha1() {
     let core = RedisRateLimiter::new();
     let cases = [

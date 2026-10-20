@@ -9717,3 +9717,27 @@ Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No live Redis or full
 integration suite ran.
+
+## Build Redis script arguments without an intermediate integer Vec
+
+All six shared executor call sites now synchronously convert fixed integer arrays
+into the final Vec<Value>. The private executor takes that vector directly instead
+of converting a temporary Vec<i64>. Arrays are consumed before the async call;
+EVALSHA still receives the same cloned Value::Array and keys, with the originals
+retained for the exact NOSCRIPT-only EVAL fallback. Validation, argument order,
+integer representation, script selection and results remain unchanged.
+
+The new regression compares the old and new argument construction for every
+production arity (3, 4, 5 and 7), checks exact Value::Integer values and order, and
+covers signed boundaries as a conversion test without relaxing caller validation.
+Allocation measurement shows one fewer call and N * size_of::<i64>() fewer
+requested bytes for each tested arity. Final argument storage, fallback container
+clones and command encoding still allocate; no whole-command allocation-free,
+async-frame-size or throughput improvement is claimed.
+
+Fresh verification passed 33 shared Redis-core, 27 AI quota, 25 attempt-runtime
+and 32 connection-rate-limit tests; one existing measurement test remains ignored.
+Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force,
+metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
+guards passed. Existing unrelated Clippy warnings remain. No live Redis,
+Cluster/failover or full integration suite ran.
