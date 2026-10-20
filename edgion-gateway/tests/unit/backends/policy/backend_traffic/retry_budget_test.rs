@@ -103,6 +103,41 @@ fn floor_permits_trickle_at_low_volume() {
 }
 
 #[test]
+fn percentage_admission_matches_original_math_at_weighted_boundaries() {
+    for percent in 0..=u8::MAX {
+        for attempts in [0, 1, 7, 99, 100, 101, 1_000_001, COUNT_MAX - 1] {
+            for now in [1000, 1250, 1999] {
+                let budget = frozen_budget(percent, "1s", None);
+                budget.clock.as_ref().unwrap().set(now);
+                let window = &budget.budget_window;
+                seed(window, 0, attempts, attempts / 7);
+                seed(window, 1000, attempts / 3, 0);
+                let point = point(window, now);
+                let (estimated_attempts, previous_retries) = snapshot(window, now).estimates(point);
+                let threshold = (percent as f64 / 100.0 * estimated_attempts).ceil();
+                let boundary = ((threshold - previous_retries).ceil() as u64).min(COUNT_MAX - 1);
+                for retries in [boundary.saturating_sub(1), boundary, (boundary + 1).min(COUNT_MAX - 1)] {
+                    seed(window, 1000, attempts / 3, retries);
+                    let (estimated_attempts, estimated_retries) = snapshot(window, now).estimates(point);
+                    let expected = estimated_retries < (percent as f64 / 100.0 * estimated_attempts).ceil();
+                    assert_eq!(
+                        budget.try_retry(),
+                        expected,
+                        "percent={percent}, now={now}, attempts={attempts}, retries={retries}"
+                    );
+                    // An accepted increment may reach the saturation sentinel,
+                    // so inspect the stored word rather than requesting another snapshot.
+                    let current = Bucket::unpack(window.buckets[(point.epoch & 1) as usize].load(Ordering::SeqCst));
+                    assert_eq!(current.epoch, point.epoch);
+                    assert_eq!(current.attempts, attempts / 3);
+                    assert_eq!(current.retries, retries + u64::from(expected));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn percent_cap_uses_total_attempts_denominator() {
     // No floor → only the percentage governs. 100 attempts, 20% → ~20 retries.
     let b = frozen_budget(20, "10s", None);

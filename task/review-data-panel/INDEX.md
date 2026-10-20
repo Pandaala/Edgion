@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below. Direct backend transport counters and generation-local drain projection inspected below; deeper endpoint algorithms, cleaner lifecycle, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below. Body-state forwarding, snapshot reads/isolation, capture/spill/replay ownership and lossy-decoder boundaries are inspected below. ExtProc is the sole current production RequestBodyStreamHandler and its direct exchange path is inspected. WAF materialized raw/form/multipart parsing, accounting and direct publication handoff are inspected below. JSON structural key/path ownership, duplicate replacement and scoped arena reuse are inspected below. Bounded result-store pool allocation/reuse, whole-owner cleanup and sealing are inspected below. Deeper WAF structured parsing/rule execution, raw streaming, plugin-specific body consumers and Pingora/Tokio/OS transport dependencies remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. The gRPC transcoder framing, terminal settlement and output-credit ownership are inspected below. Wasm direct ABI profiling, callout execution, shared-data snapshots, lease ownership, prepared callback handles and process admission are inspected in the entries below; four Wasm representation/lock decisions remain deferred. Deeper Wasmtime and network dependencies, other concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Direct plugin-stage log collection, nested resource-log handoff and borrowed terminal serialization inspected below; stage-specific capacity policy is deferred. Terminal route-matrix recording and shared counter/histogram renewal gates inspected below. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Direct plugin-stage log collection, nested resource-log handoff and borrowed terminal serialization inspected below; stage-specific capacity policy is deferred. Terminal route-matrix recording and shared counter/histogram renewal gates inspected below. Retry-budget percentage conversion is prepared at construction below; epoch sampling, coherent snapshots and admission atomics are retained. Remaining finalizers, Redis transport/pool internals and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
@@ -11949,3 +11949,35 @@ and concurrent first renewal. Formatting and workspace all-target check/Clippy
 passed. Existing unrelated Clippy warnings remain. No new allocation measurement,
 throughput benchmark, full test suite or live integration run is claimed.
 Agent-doc validation and final independent review passed.
+
+## Prepare the retry-budget percentage fraction
+
+RetryBudget now stores the immutable percent_fraction computed by the same
+u8-to-f64 cast and division by 100.0 in from_config. try_retry multiplies that
+stored result by the estimated attempts before the existing ceil and strict
+comparison. No reciprocal substitution or floating-point reassociation was used.
+The source-level conversion/division moves from each admission to configuration
+construction; no throughput or struct-size improvement is claimed.
+
+Window interpolation, one sampled clock, double-collect snapshots, saturation,
+minimum-rate floor, atomic order and accepted concurrent soft-cap slack are
+unchanged. Service/AI consumers keep their captured budget ownership and equivalent
+configuration replay retains the existing Arc. No shared crate, schema, metric,
+logging or failure behavior changed.
+
+Independent plan review passed. Baseline verification passed 28 retry-budget-filter
+tests. A new actual-admission regression passed against the original implementation
+before the production edit. It compares the original arithmetic at adjacent retry
+thresholds for every u8 percentage, weighted previous attempts/retries, several
+elapsed fractions, zero/small/large counts and the saturation edge. Its 18,432
+admission decisions also check the stored current epoch and exact counter effect.
+Existing floor, delayed-operation and concurrency tests remain in place.
+
+Fresh serial verification passed the retry-budget filter (29), AI dispatch (36),
+connect-failure (9), proxy-error (11), upstream-response (11), backend-traffic store
+(39) and upstream-peer (104) tests. These filters overlap and are not a unique-test
+count. Formatting, workspace all-target check/Clippy and seven repository guards
+passed. Existing unrelated Clippy warnings remain; no full test suite or live
+integration ran. The private scalar representation changed without adding an
+allocation; retained layout size and throughput were not measured.
+Final independent code review passed.

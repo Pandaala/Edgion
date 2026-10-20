@@ -194,7 +194,7 @@ impl EpochWindow {
 /// across retries of one request; configuration replay retains it when unchanged.
 pub struct RetryBudget {
     origin: Instant,
-    percent: u8,
+    percent_fraction: f64,
     budget_window: EpochWindow,
     min_retry: Option<(u32, EpochWindow)>,
     #[cfg(test)]
@@ -213,7 +213,7 @@ impl RetryBudget {
         });
         RetryBudget {
             origin: Instant::now(),
-            percent: cfg.budget.percent,
+            percent_fraction: cfg.budget.percent as f64 / 100.0,
             budget_window: EpochWindow::new(budget_interval),
             min_retry,
             #[cfg(test)]
@@ -249,7 +249,7 @@ impl RetryBudget {
             return false;
         };
         let (attempts, retries) = snapshot.estimates(point);
-        let within_pct = retries < (self.percent as f64 / 100.0 * attempts).ceil();
+        let within_pct = retries < (self.percent_fraction * attempts).ceil();
         let floor = if let Some((count, window)) = &self.min_retry {
             let Some(point) = window.point_at(now) else {
                 return false;
