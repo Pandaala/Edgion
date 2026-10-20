@@ -10310,3 +10310,30 @@ Fresh baseline verification passed 49 adapter, five provider and 36 dispatch
 tests (90 total), formatting, workspace all-target check/Clippy and agent-doc
 validation. Existing unrelated Clippy warnings remain. No runtime change,
 new sensitivity implementation, allocation benchmark or demonstrated leak.
+
+## Reuse static provider protocol header values
+
+Provider preparation now installs the public identity encoding, Anthropic
+version and JSON content type through the existing typed setter with static
+HeaderValue storage. This avoids copying those constant values into Strings.
+Header-name and map allocation costs remain, as do URI and credential costs.
+
+The Anthropic key is still written first through the original string setter;
+native live/deferred version preservation still precedes any default version
+construction or insertion. Both credential paths and their deferred ownership
+decision remain untouched. Typed and string setters retain the same sealed
+header guards and remove deferred mutations only after successful insertion.
+All newly installed public constants remain nonsensitive, matching their prior
+metadata; preserved native values retain their existing metadata.
+
+The existing mock checks encoding removal before replacement, exact typed public
+values and nonsensitivity, while requiring one separate credential string write.
+Existing real-adapter native version/beta and dispatch tests retain coverage of
+preservation and request rebuilding. No new session interface or runtime owner
+was introduced, and no throughput improvement is claimed.
+
+Fresh verification passed five provider, 36 dispatch and 49 session-adapter
+tests (90 total), formatting, workspace all-target check/Clippy and the seven
+agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
+and gateway no-tracing guards. Existing unrelated Clippy warnings remain.
+No live upstream exchange or throughput benchmark ran.

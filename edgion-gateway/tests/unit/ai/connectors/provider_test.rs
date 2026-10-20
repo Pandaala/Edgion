@@ -90,14 +90,27 @@ fn every_provider_requests_identity_encoding_after_removing_client_values() {
             .times(7)
             .returning(|_| Ok(()));
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "accept-encoding" && value == "identity")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "accept-encoding" && value == "identity" && !value.is_sensitive())
             .times(1)
             .in_sequence(&mut encoding_order)
             .returning(|_, _| Ok(()));
         session
+            .expect_set_request_header_value()
+            .withf(|name, value| {
+                !value.is_sensitive()
+                    && match name {
+                        "anthropic-version" => value == ANTHROPIC_VERSION,
+                        "content-type" => value == "application/json",
+                        _ => false,
+                    }
+            })
+            .times(if provider == AiProvider::Anthropic { 2 } else { 0 })
+            .returning(|_, _| Ok(()));
+        session
             .expect_set_request_header()
-            .withf(|name, _| name != "accept-encoding")
+            .withf(|name, _| matches!(name, "authorization" | "x-api-key"))
+            .times(1)
             .returning(|_, _| Ok(()));
         session.expect_set_upstream_uri().returning(|_| Ok(()));
         session.expect_set_upstream_host().returning(|_| Ok(()));

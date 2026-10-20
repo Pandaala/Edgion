@@ -54,7 +54,7 @@ pub(crate) fn prepare_provider_request(
             .remove_request_header("accept-encoding")
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
         adapter
-            .set_request_header("accept-encoding", "identity")
+            .set_request_header_value("accept-encoding", http::HeaderValue::from_static("identity"))
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     }
     adapter
@@ -71,8 +71,10 @@ pub(crate) fn prepare_provider_request(
                 .map_err(|_| AiDispatchError::InvalidConfiguration)?;
         }
         AiProvider::Anthropic => {
+            adapter
+                .set_request_header("x-api-key", credential)
+                .map_err(|_| AiDispatchError::InvalidConfiguration)?;
             for (name, value) in [
-                ("x-api-key", credential),
                 ("anthropic-version", ANTHROPIC_VERSION),
                 ("content-type", "application/json"),
             ] {
@@ -80,7 +82,7 @@ pub(crate) fn prepare_provider_request(
                     continue;
                 }
                 adapter
-                    .set_request_header(name, value)
+                    .set_request_header_value(name, http::HeaderValue::from_static(value))
                     .map_err(|_| AiDispatchError::InvalidConfiguration)?;
             }
         }
