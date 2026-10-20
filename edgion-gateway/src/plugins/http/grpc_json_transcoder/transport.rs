@@ -194,9 +194,9 @@ impl GrpcTranscodingPlan {
         for (name, value) in &response.headers {
             size = size.saturating_add(name.as_str().len() + value.as_bytes().len() + 4);
             fields += 1;
-        }
-        if size > 8192 || fields > 64 {
-            return Err(failure());
+            if size > 8192 || fields > 64 {
+                return Err(failure());
+            }
         }
         *self.template.lock() = Some(response.clone());
         Ok(ResponseHeadCommitPlan::hold(ResponseHeadHoldLimits::new(

@@ -357,3 +357,52 @@ fn correction_ai_installation_and_outgoing_attempt_defenses_are_sticky() {
         Outcome::Expired
     );
 }
+
+#[test]
+fn unary_head_template_limits_preserve_boundaries_and_publication() {
+    let check = |header: ResponseHeader, expected: bool| {
+        let ctx = context();
+        let plan = ctx.grpc_transcoding.as_ref().unwrap();
+        assert!(!plan.streaming());
+        let result = plan.head_plan(ResponseHeadSource::Origin, &header);
+        assert_eq!(result.is_ok(), expected);
+        match result {
+            Ok(_) => {
+                let template = plan.template.lock();
+                let template = template.as_ref().unwrap();
+                assert_eq!(template.status, header.status);
+                assert_eq!(template.headers, header.headers);
+            }
+            Err(error) => {
+                assert_eq!(error.etype(), &pingora_core::ErrorType::HTTPStatus(502));
+                assert!(!error.retry());
+                assert!(plan.template.lock().is_none());
+            }
+        }
+        assert_eq!(plan.outcome.lock().kind, Outcome::Pending);
+    };
+    for repeated in [false, true] {
+        for fields in [1, 63, 64, 65, 128] {
+            let mut header = ResponseHeader::build(200, None).unwrap();
+            header.insert_header("content-type", "application/json").unwrap();
+            for index in 1..fields {
+                let name = if repeated {
+                    "x-extra".to_owned()
+                } else {
+                    format!("x-extra-{index}")
+                };
+                header.append_header(name, "value").unwrap();
+            }
+            assert_eq!(header.headers.len(), fields);
+            check(header, fields <= 64);
+        }
+    }
+    for bytes in [8191, 8192, 8193, 16384] {
+        let mut header = ResponseHeader::build(200, None).unwrap();
+        header.insert_header("content-type", "application/json").unwrap();
+        let base = "content-type".len() + "application/json".len() + 4 + "x-pad".len() + 4;
+        header.insert_header("x-pad", "a".repeat(bytes - base)).unwrap();
+        assert_eq!(header.headers.len(), 2);
+        check(header, bytes <= 8192);
+    }
+}

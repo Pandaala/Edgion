@@ -11316,3 +11316,26 @@ Fresh baseline verification passed 844 WAF leaf tests (six existing ignored),
 validation. Existing unrelated Clippy warnings remain. These checks cover current
 code, not an alternative storage implementation.
 Final independent review passed.
+
+## Stop oversized unary gRPC response-head scans at the bound
+
+The response-head commit callback reaches GrpcTranscodingPlan::head_plan after
+response plugins. Unary template admission now rejects immediately when its
+existing metadata or field counter exceeds 8192 bytes or 64 values. Both counters
+are monotonic and the scan has no side effects; remaining fields cannot restore
+admission. Earlier response/media/deadline checks, the streaming Immediate branch,
+fixed non-retryable 502, outcome state and template publication remain unchanged.
+
+Independent plan review passed. The new regression passed against the original
+implementation before edits. It covers unique/repeated names at 63/64/65 values,
+a larger field list, exact/one-below/one-above metadata limits and larger metadata.
+Successful templates preserve headers; rejected templates remain absent and the
+existing Pending outcome is retained. Existing conversion and response-callback
+tests cover surrounding control flow. The change skips remaining metadata scanning
+only after rejection is certain; no normal-response throughput gain is claimed.
+
+Fresh verification passed 29 Gateway transcoder, eight response-head and 26
+response-filter tests (63 total), formatting, workspace all-target check/Clippy
+and seven repository guards. Existing unrelated Clippy warnings remain. No live
+upstream exchange or throughput benchmark ran.
+Final independent review passed.
