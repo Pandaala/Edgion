@@ -9314,3 +9314,17 @@ tests, formatting, workspace all-target check/Clippy, agent-doc validation,
 SSA-force, metrics inventory, Pingora-source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards. Existing unrelated Clippy warnings
 remain. No allocator or throughput measurement was run.
+
+## WAF response-head ownership and allocation review
+
+The Gateway response-header adapter already borrows header bytes. The leaf
+transaction copies the validated head into owned entries so it survives the
+callback; indexed selectors retain ordered names and values. Consolidating these
+buffers could reduce allocations, but descriptor layout, nominal retained
+accounting, aggregate admission after construction and allocation failures need
+an explicit design decision.
+
+See [consolidated response-head storage](waf-04-response-header-arena.md) for
+source evidence and acceptance criteria. No runtime change or measured benefit
+is claimed. The request-head arena precedent does not decide response budget
+policy. Broader callback coverage remains open.
