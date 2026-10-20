@@ -328,7 +328,7 @@ pub fn upstream_response_filter(
                                 let _ = upstream_response.append_header("Set-Cookie", cookie_value);
                             }
                             SessionPersistenceType::Header => {
-                                let header_name = session_persistence::get_session_name(sp).to_owned();
+                                let header_name = session_persistence::session_header_name(sp);
                                 let _ = upstream_response.append_header(header_name, token);
                             }
                         }

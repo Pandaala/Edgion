@@ -2,6 +2,70 @@ use super::*;
 use edgion_resources::resources::http_route::CookieConfig;
 use tokio::io::AsyncWriteExt;
 
+#[test]
+fn session_header_name_preserves_append_validation_and_original_case() {
+    let long_name = "x".repeat(128);
+    for name in [
+        None,
+        Some(""),
+        Some("X-StIcKy"),
+        Some("SERVER"),
+        Some("bad name"),
+        Some("bad\rname"),
+        Some(&long_name),
+    ] {
+        let sp: SessionPersistence = serde_json::from_value(serde_json::json!({
+            "type": "Header",
+            "sessionName": name,
+        }))
+        .unwrap();
+        for preserve_case in [false, true] {
+            let build = || {
+                if preserve_case {
+                    pingora_http::ResponseHeader::build(200, None).unwrap()
+                } else {
+                    pingora_http::ResponseHeader::build_no_case(200, None).unwrap()
+                }
+            };
+            let mut original = build();
+            let mut actual = build();
+            for value in ["first", "second"] {
+                let expected = original.append_header(get_session_name(&sp).to_owned(), value);
+                let result = actual.append_header(session_header_name(&sp), value);
+                match (expected, result) {
+                    (Ok(expected), Ok(result)) => assert_eq!(expected, result),
+                    (Err(expected), Err(result)) => assert_eq!(expected.etype(), result.etype()),
+                    _ => panic!("session header append results differ"),
+                }
+                assert_eq!(actual.headers, original.headers);
+                let cases = |header: &pingora_http::ResponseHeader| {
+                    header
+                        .case_header_iter()
+                        .map(|(name, value)| (name.as_slice().to_vec(), value.as_bytes().to_vec()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(cases(&actual), cases(&original));
+            }
+        }
+    }
+}
+
+#[test]
+fn default_session_header_name_preparation_does_not_allocate() {
+    let sp: SessionPersistence = serde_json::from_value(serde_json::json!({"type": "Header"})).unwrap();
+    let (original, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+        let name = std::hint::black_box(get_session_name(std::hint::black_box(&sp))).to_owned();
+        Bytes::from(name)
+    });
+    let (actual, after) =
+        crate::test_allocation_counter::count_allocation_stats(|| session_header_name(std::hint::black_box(&sp)));
+    assert_eq!(actual, original);
+    assert!(before.calls > 0);
+    assert!(before.requested_bytes >= DEFAULT_SESSION_NAME.len());
+    assert_eq!(after.calls, 0);
+    assert_eq!(after.requested_bytes, 0);
+}
+
 async fn session_with_request(request: &[u8]) -> Session {
     let (mut client, server) = tokio::io::duplex(4096);
     client.write_all(request).await.unwrap();

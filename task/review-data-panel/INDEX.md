@@ -10033,3 +10033,27 @@ Fresh baseline verification passed 26 session-persistence and 11 upstream
 response-filter tests, formatting, workspace all-target check/Clippy and
 agent-doc validation. Existing unrelated Clippy warnings remain; no live
 integration or comparative performance measurement ran.
+
+## Reuse static session-persistence response header names
+
+The Header issuance branch now prepares Bytes through session_header_name.
+Absent sessionName uses the static default's bytes directly; explicit names
+retain the existing String clone and Bytes conversion, including empty or
+invalid names. Pingora still performs its normalized HeaderName parsing and map
+insertion. This completes the static-default candidate identified above;
+[configured-name preparation](lb-04-prepared-session-header-name.md) remains
+deferred without new generation-owned storage.
+
+The tests compare old/new append results, header values and original-case maps
+for default, empty, mixed-case, standard, long and invalid names, with case maps
+enabled and disabled and repeated appends. A separate allocation check compares
+default-name preparation against the old owned conversion, requiring equal bytes
+and zero allocation requests. Its scope excludes normalized-name parsing and HeaderMap work.
+Issuance placement, ignored append errors, state consumption, HTTP/gRPC policy
+selection, Cookie behavior and expiry sampling are unchanged.
+
+Fresh verification passed 28 session-persistence and 11 upstream response-filter
+tests (39 total), formatting, workspace all-target check/Clippy and the seven
+agent-doc, SSA-force, metrics, Pingora-source, Gateway API transform, unit-layout
+and gateway no-tracing guards. Existing unrelated Clippy warnings remain. No
+live integration or throughput benchmark ran.

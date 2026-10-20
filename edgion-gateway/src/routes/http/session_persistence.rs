@@ -5,6 +5,7 @@
 
 use std::fmt::Write as _;
 
+use bytes::Bytes;
 use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
 use pingora_proxy::Session;
 use sha2::{Digest, Sha256};
@@ -72,6 +73,14 @@ pub fn generate_scoped_session_token(scope: Option<&str>, backend_addr: &str) ->
 /// Get the session name from a `SessionPersistence` config, falling back to the default.
 pub fn get_session_name(sp: &SessionPersistence) -> &str {
     sp.session_name.as_deref().unwrap_or(DEFAULT_SESSION_NAME)
+}
+
+/// Preserve original header spelling while reusing the static default name.
+pub(crate) fn session_header_name(sp: &SessionPersistence) -> Bytes {
+    match &sp.session_name {
+        Some(name) => name.clone().into(),
+        None => Bytes::from_static(DEFAULT_SESSION_NAME.as_bytes()),
+    }
 }
 
 /// Get the persistence type, defaulting to Cookie.
