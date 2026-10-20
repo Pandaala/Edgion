@@ -8994,3 +8994,29 @@ Pingora-source policy, Gateway API transform contract, unit-test layout and
 gateway no-tracing guards passed. Existing unrelated Clippy warnings remain.
 The allocation assertion covers this getter only, not complete WAF execution or
 end-to-end throughput. Remaining engine and callback coverage stays open.
+
+## Reuse WAF request-head projection metadata
+
+The Gateway WAF request hook constructs a leaf Transaction before phase one.
+RequestState::build formerly calculated query_argument_combined_size and selected
+the first Content-Type processor during byte projection, then repeated both
+scans while filling scalar collections. Its private RequestHeadProjection now
+carries the successful query size and Copy processor enum into scalar assembly.
+The initial calculations remain before reservation and byte accounting; a second
+query calculation over identical immutable bytes could not fail after the first
+succeeded. No cross-request cache or retained transaction field is added.
+
+The supporting leaf change preserves tolerant percent-decoded length counting,
+first Content-Type selection, scalar order, nominal and arena byte accounting,
+allocation order, limits and phase-one control overrides. A literal final-state
+test covers empty/plain/encoded and malformed queries, missing and varied media
+types, and duplicate Content-Type precedence. Existing exact retained-budget
+and phase/body-control tests remain intact. Source inspection establishes two
+removed repeated scans, not a measured throughput improvement.
+
+Fresh verification passed 811 leaf unit tests (six existing ignored cases) and
+90 Gateway WAF-related tests. Formatting, workspace all-target check and Clippy,
+agent documentation, SSA-force, metrics inventory, Pingora-source policy,
+Gateway API transform contract, unit-test layout and gateway no-tracing guards
+passed. Existing unrelated Clippy warnings remain. This closes only the repeated
+request-head metadata scans, not broader WAF engine or callback coverage.

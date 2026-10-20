@@ -797,6 +797,37 @@ fn request_head_aliases_share_only_source_fields_and_preserve_decoding() {
 }
 
 #[test]
+fn request_head_projected_metadata_preserves_query_sizes_and_first_content_type() {
+    for (uri, expected_size) in [
+        (b"/".as_slice(), b"0".as_slice()),
+        (b"/?a=one", b"4"),
+        (b"/?a=one&a=%26&=x&flag&bad=%Q1&&", b"17"),
+    ] {
+        for (content_type, expected_processor) in [
+            (None, b"RAW".as_slice()),
+            (Some(b"application/x-www-form-urlencoded".as_slice()), b"URLENCODED"),
+            (Some(b" Application/Problem+JSON ; charset=utf-8"), b"JSON"),
+            (Some(b"multipart/form-data; boundary=example"), b"MULTIPART"),
+            (Some(b"text/xml"), b"XML"),
+            (Some(b"application/octet-stream"), b"RAW"),
+        ] {
+            let mut headers = vec![RequestHeader::new(b"X-Probe", b"unchanged")];
+            if let Some(value) = content_type {
+                headers.push(RequestHeader::new(b"CoNtEnT-TyPe", value));
+                // The first Content-Type wins, even when a later one disagrees.
+                headers.push(RequestHeader::new(b"content-type", b"application/json"));
+            }
+            let state = RequestState::build(request(&headers, uri), RuntimeLimits::default()).unwrap();
+            assert_eq!(state.first_value(CollectionKind::ArgsCombinedSize), Some(expected_size));
+            assert_eq!(
+                state.first_value(CollectionKind::ReqbodyProcessor),
+                Some(expected_processor)
+            );
+        }
+    }
+}
+
+#[test]
 fn request_head_aliases_keep_literal_nominal_and_aggregate_retained_charges() {
     let headers = [RequestHeader::new(b"X", b"z"), RequestHeader::new(b"Cookie", b"a=one")];
     let head = request(&headers, b"/?q=hello%20world");

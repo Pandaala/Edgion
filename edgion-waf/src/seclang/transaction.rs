@@ -5561,7 +5561,7 @@ impl RequestState<'_> {
             .bytes
             .try_reserve_exact(derived_bytes.arena)
             .map_err(|_| RuntimeError::Allocation)?;
-        let (digits, digit_start) = decimal_bytes(query_argument_combined_size(query)?);
+        let (digits, digit_start) = decimal_bytes(derived_bytes.query_combined_size);
         state.push_scalar(CollectionKind::ArgsCombinedSize, &digits[digit_start..])?;
         state.push_query_collection(query)?;
         state.push_collection_alias(CollectionKind::Args, CollectionKind::ArgsGet, false)?;
@@ -5571,7 +5571,7 @@ impl RequestState<'_> {
         state.push_scalar(CollectionKind::RemoteAddr, request.remote_addr)?;
         state.push_scalar(
             CollectionKind::ReqbodyProcessor,
-            request_body_processor(request.headers).as_bytes(),
+            derived_bytes.body_processor.as_bytes(),
         )?;
         state.push_cookie_collection(request.headers)?;
         state.push_collection_alias(
@@ -6055,18 +6055,22 @@ pub(super) fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
     }
 }
 
-struct RequestHeadBytes {
+struct RequestHeadProjection {
     arena: usize,
     nominal: usize,
+    query_combined_size: usize,
+    body_processor: super::super::BodyProcessorSelection,
 }
 
-fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<RequestHeadBytes, RuntimeError> {
-    let (_, combined_start) = decimal_bytes(query_argument_combined_size(query)?);
+fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<RequestHeadProjection, RuntimeError> {
+    let query_combined_size = query_argument_combined_size(query)?;
+    let (_, combined_start) = decimal_bytes(query_combined_size);
     let mut total = 40 - combined_start;
+    let body_processor = request_body_processor(request.headers);
     for value in [
         query,
         request.remote_addr,
-        request_body_processor(request.headers).as_bytes(),
+        body_processor.as_bytes(),
         request.request_line,
         request.method,
         request.protocol,
@@ -6106,7 +6110,12 @@ fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<Req
             }
         }
     }
-    Ok(RequestHeadBytes { arena, nominal: total })
+    Ok(RequestHeadProjection {
+        arena,
+        nominal: total,
+        query_combined_size,
+        body_processor,
+    })
 }
 
 fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::BodyProcessorSelection {
