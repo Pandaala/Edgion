@@ -264,6 +264,58 @@ fn suffix_matches_lossy_text_across_all_three_chunk_splits() {
 }
 
 #[test]
+fn short_suffix_updates_match_byte_loop_with_wrapped_tails() {
+    let mut saw_wrapped = false;
+    for width in 1..=32 {
+        for initial_len in 0..=width {
+            let mut tail = VecDeque::with_capacity(width);
+            tail.extend(std::iter::repeat_n(b'x', initial_len));
+            if initial_len > 0 {
+                for _ in 0..tail.capacity() - 1 {
+                    let value = tail.pop_front().unwrap();
+                    tail.push_back(value);
+                }
+            }
+            saw_wrapped |= !tail.as_slices().1.is_empty();
+            let mut expected = tail.iter().copied().collect::<VecDeque<_>>();
+            let pattern = vec![b'x'; width];
+            let mut scanner = TextOperationScanner::EndsWith {
+                pattern: pattern.clone(),
+                tail,
+            };
+            for _ in 0..3 {
+                for chunk in ["", "x", "ab", "cde", "fghijk", "lmnopqrstuv"] {
+                    if chunk.len() >= width {
+                        continue;
+                    }
+                    for &value in chunk.as_bytes() {
+                        if expected.len() == width {
+                            expected.pop_front();
+                        }
+                        expected.push_back(value);
+                    }
+                    assert_eq!(scanner.push(chunk).unwrap(), ScanControl::Continue);
+                    let TextOperationScanner::EndsWith { tail, .. } = &scanner else {
+                        unreachable!()
+                    };
+                    assert_eq!(tail, &expected, "width={width}, initial={initial_len}, chunk={chunk}");
+                    assert!(tail.len() <= width);
+                    saw_wrapped |= !tail.as_slices().1.is_empty();
+                }
+            }
+            assert_eq!(
+                scanner.finish().unwrap(),
+                BodyTextResult::Bool(expected.iter().copied().eq(pattern))
+            );
+        }
+    }
+    assert!(
+        saw_wrapped,
+        "the differential cases must exercise wrapped deque storage"
+    );
+}
+
+#[test]
 fn known_empty_operations_resolve_without_building_scanner_state() {
     assert_eq!(
         empty_text_operation(BodyTextOperation::CharLen).unwrap(),

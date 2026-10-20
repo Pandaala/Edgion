@@ -10612,3 +10612,29 @@ Independent plan review passed. Fresh verification passed 115 request-body and
 validation. Existing unrelated Clippy warnings remain. Only documentation changed;
 no alternative builder, allocation probe or live transport behavior was validated.
 Final independent review passed.
+
+## Batch short-chunk request-body suffix updates
+
+TextOperationScanner::EndsWith now drains the excess prefix once before extending
+its deque with a short decoded chunk. For pattern length P, chunk length C < P
+and retained length L <= P, it removes max(0, L - (P - C)) bytes, exactly the old
+per-byte pop/push loop's prefix. Empty-pattern and long-chunk branches are unchanged.
+The retained logical bytes and nonempty-pattern Continue result are identical;
+lossy UTF-8 handling, raw scan accounting and terminal comparison are untouched.
+
+The installed Rust 1.96.1 deque implementation drops a prefix drain by adjusting
+the head, without moving the retained bytes; u8 needs no element destruction.
+Bulk extension removes repeated explicit length/pop/push orchestration. Capacity
+growth may differ within the existing proportional bound; no zero-allocation or
+measured throughput claim is made.
+
+A differential regression compares the old byte loop with short/empty chunks
+for pattern lengths 1 through 32 and every initial tail length, including repeated
+updates and an explicit assertion that wrapped storage was exercised. Existing
+every-split lossy suffix tests retain multibyte and malformed-input coverage.
+
+Independent plan review passed. Baseline request-body verification passed 115
+tests; final verification passed 116 request-body and 29 callback tests.
+Formatting, workspace all-target check/Clippy and seven repository guards passed,
+with existing unrelated Clippy warnings. No live transport test or benchmark ran.
+Final independent review passed.

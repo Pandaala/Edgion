@@ -437,12 +437,11 @@ impl TextBodyScanner for TextOperationScanner {
                     tail.clear();
                     tail.extend(chunk.as_bytes()[chunk.len() - pattern.len()..].iter().copied());
                 } else {
-                    for &value in chunk.as_bytes() {
-                        if tail.len() == pattern.len() {
-                            tail.pop_front();
-                        }
-                        tail.push_back(value);
+                    let retained = pattern.len() - chunk.len();
+                    if tail.len() > retained {
+                        tail.drain(..tail.len() - retained);
                     }
+                    tail.extend(chunk.as_bytes().iter().copied());
                 }
             }
             Self::Contains {
