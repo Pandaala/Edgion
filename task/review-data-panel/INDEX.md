@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
+
 - [Unary tool-argument serialization staging](unary-01-tool-argument-staging.md)
 
 - [Provider Bearer header value ownership](credential-02-provider-bearer-value-ownership.md)
@@ -10470,3 +10472,23 @@ core and 13 accounting-finalizer tests (79 total), formatting and workspace
 all-target check/Clippy. Existing unrelated Clippy warnings remain. This audit
 changes no runtime code and runs no live Redis, Cluster/failover, concurrency
 stress or throughput experiment; Rust unit results do not prove server execution.
+
+## ExtProc synchronous terminal retirement audit
+
+Traced logging and response cancellation into AttachedExtProc's synchronous
+terminal methods. Replacing an Open state releases its stream while the owner
+state mutex is held. Moving that destruction after guard release could reduce
+lock occupancy but changes terminal-state visibility relative to channel/inbound
+and permit release. Cancellation still holds the outer response-driver guard,
+so owner-lock shortening is not general lock-free cleanup.
+
+[extproc-01](extproc-01-terminal-stream-retirement.md) records the ownership
+decision and method-specific ordering tests. Existing async exchange/half-close
+move-out paths have different Failed-sentinel contracts; existing summary-rendering
+and request-body retirement decisions do not resolve this choice. No deadlock,
+actual contention or throughput gain is asserted.
+
+Fresh baseline verification passed 146 ExtProc, three response-driver and 11
+terminal-logging tests (160 total), formatting and workspace all-target
+check/Clippy. Existing unrelated Clippy warnings remain. This documentation
+batch changes no runtime code and adds no concurrency or live transport probe.
