@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn decimal_preserves_byte_grammar_and_overflow_boundaries() {
+    for (input, expected) in [
+        ("", None),
+        ("0", Some(0)),
+        ("00000000000000000000000000000001", Some(1)),
+        ("18446744073709551615", Some(u64::MAX)),
+        ("018446744073709551615", Some(u64::MAX)),
+        ("18446744073709551616", None),
+        ("99999999999999999999999999999999", None),
+        ("+1", None),
+        ("-1", None),
+        (" 1", None),
+        ("1 ", None),
+    ] {
+        assert_eq!(decimal(input.as_bytes()), expected, "{input:?}");
+    }
+    for byte in 0..=u8::MAX {
+        let digit = match byte {
+            b'0'..=b'9' => Some(u64::from(byte - b'0')),
+            _ => None,
+        };
+        assert_eq!(decimal(&[byte]), digit);
+        assert_eq!(decimal(&[byte, b'1']), digit.map(|n| n * 10 + 1));
+        assert_eq!(decimal(&[b'1', byte, b'2']), digit.map(|n| 102 + n * 10));
+        let mut overflow = b"18446744073709551616".to_vec();
+        overflow.push(byte);
+        assert_eq!(decimal(&overflow), None);
+    }
+}
+
+#[test]
 fn contract_is_strict_and_not_a_lossy_general_directive_parser() {
     for value in ["public, max-age=1", " MAX-AGE=10 , PUBLIC ", "public,max-age=999999"] {
         assert!(public_max_age(value.as_bytes()).is_some(), "{value}");

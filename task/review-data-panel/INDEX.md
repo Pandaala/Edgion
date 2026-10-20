@@ -8800,3 +8800,23 @@ Independent plan review passed. Runtime code and cache charges are unchanged.
 No runtime tests or benchmarks ran for this documentation-only investigation.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 checks passed with existing unrelated warnings. Final independent review passed.
+
+## Validate cache decimal fields during checked accumulation
+
+The cache policy decimal helper now checks each ASCII digit inside its checked
+fold instead of performing a complete digit scan first. Empty input remains
+invalid, leading zeros remain valid, and every non-digit or u64 overflow returns
+None. Neither caller distinguishes invalid syntax from overflow: strict max-age
+admission and Age freshness parsing retain the same result. The helper has no
+observer or mutation, so an overflow may reject before reading an invalid suffix.
+
+Independent plan review passed. A new byte-grammar/overflow regression passed
+against the old implementation before the production edit: all 256 single-byte
+values, embedded bytes, leading zeros, u64 maximum and overflow suffixes. Final
+verification passed five policy tests and 21 storage tests, formatting, workspace
+all-target check/Clippy and seven guards with existing unrelated warnings.
+
+This removes a separate validation traversal, not allocations. The old digit
+prepass may optimize differently from the combined loop; no universal CPU or
+throughput gain is claimed. No full suite or performance benchmark ran.
+Final independent review passed.

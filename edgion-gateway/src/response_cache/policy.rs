@@ -51,12 +51,15 @@ fn singleton<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a [u8]> {
 }
 
 fn decimal(value: &[u8]) -> Option<u64> {
-    if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+    if value.is_empty() {
         return None;
     }
-    value
-        .iter()
-        .try_fold(0u64, |n, digit| n.checked_mul(10)?.checked_add(u64::from(digit - b'0')))
+    value.iter().try_fold(0u64, |n, digit| {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        n.checked_mul(10)?.checked_add(u64::from(digit - b'0'))
+    })
 }
 
 fn ows(value: &[u8]) -> &[u8] {
