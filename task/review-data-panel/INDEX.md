@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below; deeper WAF rule/parser execution, other concrete streamed handlers and remaining storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Remaining finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
@@ -27,6 +27,8 @@ destination.
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
 ## Deferred decisions
+
+- [AI accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md)
 
 - [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
 
@@ -9909,3 +9911,24 @@ Formatting, workspace all-target check/Clippy and the seven agent-doc, SSA-force
 metrics, Pingora-source, Gateway API transform, unit-layout and gateway no-tracing
 guards passed. Existing unrelated Clippy warnings remain. No live Redis exchange,
 Cluster/failover verification or full integration suite ran.
+
+
+## Defer AI accounting snapshot reuse
+
+Traced terminal logging through AI usage and quota finalization. Successful
+reported-only snapshots read provider usage twice; both reads already use borrowed
+ArcSwap projection. A concurrent cumulative publication can fall between them,
+so local read fusion needs an explicit observation contract. Cross-phase reuse
+is a separate decision: quota's second snapshot checks overflow classification,
+while charged totals come from the attempt ledger or summary. Summary re-entry
+and asynchronous settlement prevent treating all reads as interchangeable.
+
+Usage-02 records both alternatives without selecting a cache or changing runtime
+behavior. It preserves producer ownership, reported-only billing, flag precedence,
+independent attempt metrics/charges and terminal diagnostics. The earlier borrowed
+projection optimization and this snapshot-reuse decision have different scopes.
+
+Fresh verification passed 52 usage, 13 accounting-finalizer and 25 attempt-runtime
+tests (90 total). Formatting, workspace all-target check/Clippy and agent-doc
+validation passed; existing unrelated warnings remain. No concurrency stress,
+live provider/Redis exchange or throughput benchmark ran.
