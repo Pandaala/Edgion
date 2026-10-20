@@ -1183,6 +1183,79 @@ fn setvar_actions_are_ordered_visible_and_case_insensitive() {
 }
 
 #[test]
+fn setvar_constant_and_dynamic_arithmetic_preserve_results_and_rollback() {
+    let cases = [
+        (None, "+", "0", Some("0")),
+        (None, "-", "2", Some("-2")),
+        (Some("7"), "+", "2", Some("9")),
+        (Some("7"), "-", "2", Some("5")),
+        (Some("7"), "+", "-2", Some("5")),
+        (Some("7"), "-", "-2", Some("9")),
+        (None, "+", "9223372036854775807", Some("9223372036854775807")),
+        (None, "+", "-9223372036854775808", Some("-9223372036854775808")),
+        (Some("-1"), "-", "9223372036854775807", Some("-9223372036854775808")),
+        (Some("-1"), "-", "-9223372036854775808", Some("9223372036854775807")),
+        (Some("1"), "+", "9223372036854775807", None),
+        (Some("-1"), "+", "-9223372036854775808", None),
+        (Some("-9223372036854775808"), "-", "1", None),
+        (None, "-", "-9223372036854775808", None),
+        (Some("invalid"), "+", "1", None),
+        (Some(""), "-", "1", None),
+    ];
+    for (initial, operation, delta, expected) in cases {
+        for dynamic in [false, true] {
+            let initialize = if initial.is_some() {
+                ",setvar:'tx.score=%{ARGS.initial}'"
+            } else {
+                ""
+            };
+            let operand = if dynamic { "%{ARGS.delta}" } else { delta };
+            let source = format!(
+                "SecAction \"id:1,phase:1,pass,setvar:tx.marker=hit{initialize},setvar:'tx.score={operation}{operand}'\"\n"
+            );
+            let generation = generation(&source);
+            let arithmetic = generation.setvars.last().unwrap();
+            assert_eq!(
+                arithmetic.constant,
+                if dynamic { None } else { Some(delta.parse().unwrap()) }
+            );
+            let uri = format!("/?initial={}&delta={delta}", initial.unwrap_or_default());
+            let mut transaction =
+                Transaction::new(&generation, request(&[], uri.as_bytes()), RuntimeLimits::default()).unwrap();
+            let result = transaction.execute_request_headers();
+            if let Some(expected) = expected {
+                assert_eq!(result.unwrap().findings().len(), 1, "{source}");
+                assert_eq!(transaction.tx_value(b"score"), Some(expected.as_bytes()), "{source}");
+                assert_eq!(transaction.tx_value(b"marker"), Some(b"hit".as_slice()));
+            } else {
+                assert!(matches!(result, Err(RuntimeError::IntegerConversion)), "{source}");
+                assert_eq!(transaction.tx_value(b"score"), None);
+                assert_eq!(transaction.tx_value(b"marker"), None);
+                assert_eq!(transaction.next_phase(), Some(Phase::RequestHeaders));
+            }
+        }
+    }
+}
+
+#[test]
+fn setvar_dynamic_arithmetic_rejects_invalid_delta_without_committing() {
+    let generation =
+        generation("SecAction \"id:1,phase:1,pass,setvar:tx.marker=hit,setvar:'tx.score=+%{ARGS.delta}'\"\n");
+    for delta in ["", "invalid", "9223372036854775808", "-9223372036854775809"] {
+        let uri = format!("/?delta={delta}");
+        let mut transaction =
+            Transaction::new(&generation, request(&[], uri.as_bytes()), RuntimeLimits::default()).unwrap();
+        assert!(matches!(
+            transaction.execute_request_headers(),
+            Err(RuntimeError::IntegerConversion)
+        ));
+        assert_eq!(transaction.tx_value(b"score"), None);
+        assert_eq!(transaction.tx_value(b"marker"), None);
+        assert_eq!(transaction.next_phase(), Some(Phase::RequestHeaders));
+    }
+}
+
+#[test]
 fn failed_chain_and_failed_action_batch_do_not_leak_tx_mutations() {
     let failed_chain = generation(concat!(
         "SecRule REQUEST_METHOD \"@streq GET\" \"id:22,phase:1,pass,chain,setvar:'tx.leak=1'\"\n",

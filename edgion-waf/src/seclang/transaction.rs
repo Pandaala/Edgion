@@ -2894,15 +2894,19 @@ impl<'generation> Transaction<'generation> {
                         .map(|value| value.bytes(&self.request, self.json_budget.as_mut()))
                         .transpose()?
                         .map_or(Ok(0_i64), parse_i64)?;
-                    let value = setvar_value(
-                        &self.generation,
-                        &self.request,
-                        staged,
-                        setvar,
-                        member.runtime_expansion_byte_limit,
-                        self.json_budget.as_mut(),
-                    )?;
-                    let delta = parse_i64(&value)?;
+                    let delta = if let Some(constant) = setvar.constant {
+                        constant
+                    } else {
+                        let value = setvar_value(
+                            &self.generation,
+                            &self.request,
+                            staged,
+                            setvar,
+                            member.runtime_expansion_byte_limit,
+                            self.json_budget.as_mut(),
+                        )?;
+                        parse_i64(&value)?
+                    };
                     let result = if setvar.operation == super::SetVarOperation::Add {
                         current.checked_add(delta)
                     } else {

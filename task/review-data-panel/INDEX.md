@@ -9108,3 +9108,26 @@ agent documentation, SSA-force, metrics inventory, Pingora-source policy,
 Gateway API transform contract, unit-test layout and gateway no-tracing guards
 passed. Existing unrelated Clippy warnings remain. Broader action/operator and
 callback coverage remains open.
+
+## Reuse compiled WAF setvar arithmetic constants
+
+Gateway WAF request-header execution reaches apply_member_actions in the native
+transaction engine. Macro-free Add/Sub operands already carry a strict i64 from
+semantic validation. The arithmetic path now uses that value after the unchanged
+current-value lookup and parse, avoiding a temporary decimal Vec and reparse.
+Dynamic operands retain canonical template expansion and parsing. Key expansion,
+action charges, checked arithmetic, final owned decimal storage, TX limits and
+atomic commit/rollback remain unchanged. Only the disposable allocation and its
+allocation-failure opportunity are removed; no throughput improvement is claimed.
+
+Real compiled-rule tests compare literal and dynamic operands against explicit
+results for missing/current values, signed deltas, zero, i64 boundaries and
+overflow/underflow. Invalid current values and invalid/empty/out-of-range dynamic
+operands retain IntegerConversion and roll back earlier same-unit mutations.
+This is a local arithmetic optimization; wider callback coverage remains open.
+
+Verification: 816 WAF leaf tests passed (six existing ignored), and 90 Gateway
+WAF-related tests passed. Formatting, workspace all-target check and Clippy,
+agent-doc validation, SSA force, metrics inventory, Pingora source policy,
+Gateway API transform contract, unit-test layout and gateway no-tracing guards
+passed. Existing unrelated Clippy warnings remain.
