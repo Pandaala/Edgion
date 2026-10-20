@@ -9998,3 +9998,23 @@ check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
 Gateway API transform, unit-layout and gateway no-tracing guards passed. Existing
 unrelated Clippy warnings remain. No live Redis, Cluster/failover or full
 integration suite ran.
+
+## Reuse the shared quota lease refresh interval
+
+Quota admission now derives its refresh interval from the first target instead
+of mapping every target and taking the minimum. build_targets computes one
+active lease TTL before its limit loop and copies it to all targets, independent
+of scope, token limit and window. The empty-target expect remains unchanged.
+This removes repeated source-level Duration arithmetic and traversal for multiple
+limits; no compiled-code or throughput improvement has been measured.
+
+The regression test protects that shared-TTL premise across one through eight
+mixed-scope/window targets, ordinary durations and saturation boundaries. Extreme
+durations exercise arithmetic only, not runtime configuration acceptance or timer
+construction. Clock sampling, Redis TTL values, admission ordering, worker timers
+and settlement ownership remain unchanged.
+
+Fresh verification passed all 30 quota tests, formatting, workspace all-target
+check/Clippy and the seven agent-doc, SSA-force, metrics, Pingora-source,
+Gateway API transform, unit-layout and gateway no-tracing guards. Existing
+unrelated Clippy warnings remain. No live Redis or full integration suite ran.

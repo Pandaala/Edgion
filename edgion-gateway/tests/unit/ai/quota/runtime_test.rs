@@ -341,6 +341,56 @@ fn quota_window_boundary_rotates_bucket_and_retry_after() {
 }
 
 #[test]
+fn quota_targets_share_the_request_lease_across_scopes_and_windows() {
+    let limits: Vec<_> = (1..=8)
+        .map(|index| CompiledLimit {
+            tokens: index * 100,
+            window_ms: u128::from(index) * 60_000,
+            scope: if index % 2 == 0 {
+                AiTokenQuotaScope::Identity
+            } else {
+                AiTokenQuotaScope::IdentityModel
+            },
+        })
+        .collect();
+    // Extreme durations exercise saturating arithmetic, not runtime config acceptance.
+    for (maximum_request_duration, request_timeout) in [
+        (Duration::ZERO, Duration::ZERO),
+        (Duration::from_secs(300), Duration::from_millis(500)),
+        (Duration::MAX, Duration::from_secs(1)),
+        (Duration::from_secs(1), Duration::MAX),
+    ] {
+        for count in 1..=limits.len() {
+            let targets = build_targets(
+                "scope",
+                "consumer",
+                "model-a",
+                "r1",
+                &limits[..count],
+                maximum_request_duration,
+                request_timeout,
+                TEST_NOW_MS,
+            );
+            let first_ttl = targets[0].active_lease_ttl;
+            assert_eq!(
+                first_ttl,
+                maximum_request_duration
+                    .saturating_add(request_timeout)
+                    .saturating_add(RECONCILIATION_GRACE)
+            );
+            assert!(targets.iter().all(|target| target.active_lease_ttl == first_ttl));
+            assert_eq!(
+                Some(lease_refresh_interval(first_ttl)),
+                targets
+                    .iter()
+                    .map(|target| lease_refresh_interval(target.active_lease_ttl))
+                    .min()
+            );
+        }
+    }
+}
+
+#[test]
 fn lease_refresh_is_sparse_and_stays_before_expiry() {
     assert_eq!(lease_refresh_interval(Duration::from_secs(10)), Duration::from_secs(5));
     assert_eq!(

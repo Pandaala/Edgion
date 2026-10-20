@@ -153,10 +153,10 @@ impl CompiledAiQuotaPlan {
             self.request_timeout,
             current_unix_millis(),
         );
+        // build_targets assigns the same active lease TTL to every limit.
         let lease_refresh_interval = targets
-            .iter()
+            .first()
             .map(|target| lease_refresh_interval(target.active_lease_ttl))
-            .min()
             .expect("validated quota plan has at least one limit");
         drop(identity);
         let sink = Arc::new(RedisQuotaSink {
