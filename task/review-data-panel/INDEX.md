@@ -12012,3 +12012,33 @@ checks cover manual removal and distinct same-socket incarnations, not all scan
 interleavings. No code/tests changed or new test/benchmark was added. Formatting
 and workspace all-target check/Clippy passed; unrelated warnings remain.
 Agent-doc validation and final independent review passed.
+
+## Reject malformed HMAC tag lengths before key setup
+
+HmacAuth::verify_signature now checks the supplied decoded tag length against
+OutputSizeUser for the selected SHA-256/384/512 HMAC type before constructing the
+MAC or processing the signing string. The pinned digest implementation already
+rejects incorrect lengths in verify_slice; moving that public-length rejection
+forward avoids key setup and input hashing for those inputs. Correct-length tags
+still use the original update and verify_slice path, including its constant-time
+tag comparison. No custom cryptographic comparison or new algorithm was added.
+
+The check stays inside the existing verifier call. Authorization parsing,
+credential lookup, timestamp validation, required-header checks and signing-string
+construction keep their order. BadSignature handling, shared failure delay and
+body-capture ordering remain unchanged. Signature decoding and signing-string
+allocation are not removed. The existing hmac-01 through hmac-04 decisions remain
+separate; this change does not select their representation alternatives.
+
+Independent plan review passed. The original 57-test HMAC filter passed. The
+expanded signature regression also passed against unchanged production code before
+the edit: all three algorithms, empty/ordinary/long direct-call keys, every shorter
+tag prefix, appended/oversized tags and same-length tampering. Existing fixed wire
+vectors remain.
+
+Fresh serial verification passed 57 HMAC-filtered, 70 condition-system and 38
+shared-auth tests. The filters overlap; these are not unique-test totals. No
+allocation/throughput benchmark or machine-code timing proof was performed.
+Formatting, workspace all-target check/Clippy and seven repository guards passed.
+Existing unrelated Clippy warnings remain. No live integration or full test suite ran.
+Final independent code review passed.

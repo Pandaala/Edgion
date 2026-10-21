@@ -281,16 +281,37 @@ fn test_body_requirement_declared_only_when_validate_body() {
 }
 
 #[test]
-fn test_verify_signature_success() {
-    let secret = b"test-secret";
+fn signature_verification_preserves_full_length_and_rejects_malformed_lengths() {
     let signing = "@request-target: get /ping";
-    let digest = HmacAuth::compute_hmac(HmacAlgorithm::HmacSha256, secret, signing).unwrap();
-    assert!(HmacAuth::verify_signature(
+    let long_secret = [b's'; 200];
+    for algorithm in [
         HmacAlgorithm::HmacSha256,
-        secret,
-        signing,
-        &digest
-    ));
+        HmacAlgorithm::HmacSha384,
+        HmacAlgorithm::HmacSha512,
+    ] {
+        for secret in [b"".as_slice(), b"test-secret".as_slice(), long_secret.as_slice()] {
+            let digest = HmacAuth::compute_hmac(algorithm, secret, signing).unwrap();
+            assert!(HmacAuth::verify_signature(algorithm, secret, signing, &digest));
+            for length in 0..digest.len() {
+                assert!(!HmacAuth::verify_signature(
+                    algorithm,
+                    secret,
+                    signing,
+                    &digest[..length]
+                ));
+            }
+            let mut extended = digest.clone();
+            extended.push(0);
+            assert!(!HmacAuth::verify_signature(algorithm, secret, signing, &extended));
+            extended.resize(1024, 0);
+            assert!(!HmacAuth::verify_signature(algorithm, secret, signing, &extended));
+            for index in [0, digest.len() / 2, digest.len() - 1] {
+                let mut tampered = digest.clone();
+                tampered[index] ^= 1;
+                assert!(!HmacAuth::verify_signature(algorithm, secret, signing, &tampered));
+            }
+        }
+    }
 }
 
 #[tokio::test]

@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{digest::OutputSizeUser, Hmac, Mac};
 #[cfg(test)]
 use sha2::Digest;
 use sha2::{Sha256, Sha384, Sha512};
@@ -512,9 +512,13 @@ impl HmacAuth {
     }
 
     /// Verify HMAC signature using constant-time comparison.
+    /// Reject malformed public lengths before key setup and input processing.
     fn verify_signature(algorithm: HmacAlgorithm, secret: &[u8], signing_string: &str, actual: &[u8]) -> bool {
         match algorithm {
             HmacAlgorithm::HmacSha256 => {
+                if actual.len() != <HmacSha256 as OutputSizeUser>::output_size() {
+                    return false;
+                }
                 let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
                     return false;
                 };
@@ -522,6 +526,9 @@ impl HmacAuth {
                 mac.verify_slice(actual).is_ok()
             }
             HmacAlgorithm::HmacSha384 => {
+                if actual.len() != <HmacSha384 as OutputSizeUser>::output_size() {
+                    return false;
+                }
                 let Ok(mut mac) = HmacSha384::new_from_slice(secret) else {
                     return false;
                 };
@@ -529,6 +536,9 @@ impl HmacAuth {
                 mac.verify_slice(actual).is_ok()
             }
             HmacAlgorithm::HmacSha512 => {
+                if actual.len() != <HmacSha512 as OutputSizeUser>::output_size() {
+                    return false;
+                }
                 let Ok(mut mac) = HmacSha512::new_from_slice(secret) else {
                     return false;
                 };
