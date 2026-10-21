@@ -12058,3 +12058,19 @@ and 38 shared-auth tests; formatting and workspace all-target check/Clippy passe
 Existing unrelated warnings remain. No runtime or tests changed. No live panic
 test, benchmark, integration run or full suite was performed for this record.
 Agent-doc validation and final independent review passed.
+
+## RealIp plugin local Display allocation
+
+Deferred [local Display scratch](ip-02-real-ip-display-scratch.md). The plugin
+still creates temporary address text even for unchanged outcomes. Bounded scratch
+or streaming comparison requires a formatting/storage tradeoff; this is separate
+from ip-01's shared typed session state. Preserve textual comparison and mapped
+IPv6 setter/log behavior rather than replacing them with parsed equality. The
+production setter's canonicalization and remote GeoIP invalidation remain separate.
+
+Independent plan review passed. Fresh serial RealIp-filtered verification passed
+34 tests, including mapped-address comparison and setter-boundary coverage.
+Formatting and workspace all-target check/Clippy passed with unrelated warnings.
+No runtime/tests changed or allocation/throughput benchmark, live integration or
+full suite ran. The proposal does not claim allocation-free request processing.
+Agent-doc validation and final independent review passed.
