@@ -221,6 +221,89 @@ fn parse_delimited_accepts_bracketed_ipv6() {
     );
 }
 
+#[test]
+fn candidate_parsing_preserves_legacy_results_and_consumption() {
+    fn original<'a>(raw: impl Iterator<Item = &'a str>) -> Result<Vec<IpAddr>, DnsError> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for value in raw {
+            if out.len() >= MAX_HTTP_DNS_ADDRS {
+                break;
+            }
+            if let Ok(ip) = value.parse::<IpAddr>().or_else(|_| strip_brackets(value).parse()) {
+                if seen.insert(ip) {
+                    out.push(ip);
+                }
+            }
+        }
+        if out.is_empty() {
+            Err(DnsError::NoAddresses)
+        } else {
+            Ok(out)
+        }
+    }
+
+    fn compare(values: &[String]) {
+        let expected_reads = std::cell::Cell::new(0);
+        let actual_reads = std::cell::Cell::new(0);
+        let expected = original(values.iter().map(String::as_str).inspect(|_| {
+            expected_reads.set(expected_reads.get() + 1);
+        }));
+        let actual = parse_ip_candidates(values.iter().map(String::as_str).inspect(|_| {
+            actual_reads.set(actual_reads.get() + 1);
+        }));
+        assert_eq!(actual, expected);
+        assert_eq!(actual_reads.get(), expected_reads.get());
+    }
+
+    let cases = [
+        "",
+        "invalid",
+        "é",
+        "\0",
+        "127.0.0.1",
+        "::1",
+        "2001:db8::1",
+        "::ffff:192.0.2.1",
+        "[::1]",
+        "[127.0.0.1]",
+        "[]",
+        "[[::1]]",
+        "[::1",
+        "::1]",
+        "[invalid]",
+        "[::1]:53",
+        "127.0.0.1:53",
+        "fe80::1%lo0",
+        " ::1",
+        "::1 ",
+        "[ ::1]",
+        "[::1 ]",
+    ];
+    compare(&[]);
+    for value in cases {
+        compare(&[value.to_string()]);
+    }
+    let mut mixed: Vec<String> = cases.into_iter().cycle().take(100).map(str::to_string).collect();
+    compare(&mixed);
+    mixed.extend((0..300).flat_map(|i| [format!("10.0.{}.{}", i / 256, i % 256), "invalid".into()]));
+    compare(&mixed);
+    let reads = std::cell::Cell::new(0);
+    let unique: Vec<String> = (0..300).map(|i| format!("10.0.{}.{}", i / 256, i % 256)).collect();
+    assert_eq!(
+        parse_ip_candidates(
+            unique
+                .iter()
+                .map(String::as_str)
+                .inspect(|_| reads.set(reads.get() + 1))
+        )
+        .unwrap()
+        .len(),
+        MAX_HTTP_DNS_ADDRS
+    );
+    assert_eq!(reads.get(), MAX_HTTP_DNS_ADDRS + 1);
+}
+
 // ---- apply_fallback: empty Dns { servers } must not silently use the system resolver ----
 
 #[tokio::test]

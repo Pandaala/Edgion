@@ -11721,6 +11721,23 @@ Fresh baseline verification passed 127 LB tests and 41 discovery coordinator tes
 Clippy warnings remain. No concurrency or throughput benchmark was run.
 Agent-doc validation and final independent review passed.
 
+## Avoid repeating unchanged invalid HTTPDNS address parsing
+
+The shared Common HTTPDNS candidate parser retains its initial IpAddr parse.
+After failure, it retries only if canonical bracket removal changed the slice;
+otherwise it returns the original discarded parse error. Valid unbracketed
+addresses keep their original fast path. This removes the second identical
+parse for malformed unbracketed candidates without changing accepted addresses,
+first-occurrence deduplication, ordering, fallback or the 256-address cap.
+
+A differential regression passed against the old source before implementation.
+It compares singleton, mixed, duplicate and capped sequences, malformed/nested
+brackets, ports, zone identifiers and whitespace, including exact iterator
+consumption at the cap. Final verification passed 69 Common DNS and 26 Gateway
+DNS-cache tests, formatting, workspace check/Clippy and seven guards. Existing
+unrelated warnings remain. No new runtime owner, API, DNS wire experiment or
+throughput claim is introduced; resolver preparation remains deferred in dns-03.
+
 ## ForwardAuth denial header-name ownership audit
 
 Followed request filtering through ForwardAuth response classification and the

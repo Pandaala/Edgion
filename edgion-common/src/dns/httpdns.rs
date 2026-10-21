@@ -169,7 +169,14 @@ fn parse_ip_candidates<'a>(raw: impl Iterator<Item = &'a str>) -> Result<Vec<IpA
         if out.len() >= MAX_HTTP_DNS_ADDRS {
             break;
         }
-        let parsed = s.parse::<IpAddr>().or_else(|_| strip_brackets(s).parse::<IpAddr>());
+        let parsed = s.parse::<IpAddr>().or_else(|error| {
+            let unbracketed = strip_brackets(s);
+            if unbracketed.len() == s.len() {
+                Err(error)
+            } else {
+                unbracketed.parse::<IpAddr>()
+            }
+        });
         if let Ok(ip) = parsed {
             if seen.insert(ip) {
                 out.push(ip);
