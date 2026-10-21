@@ -72,6 +72,7 @@ destination.
 
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
 - [Redis command frame encoding ownership](redis-04-command-frame-encoding.md)
+- [Redis script result conversion storage](redis-05-script-result-conversion.md)
 
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
 
@@ -12496,3 +12497,20 @@ transport internals remain open; this does not close all Redis dependencies.
 Independent plan review passed. Formatting, workspace check/Clippy passed with
 existing unrelated warnings. No Rust tests, live Redis or performance experiment
 ran for this docs-only audit.
+
+## Redis script response conversion audit
+
+Traced Fred's frame-to-Value conversion, generic Lua result conversion and the
+Gateway's four/five/seven-field result validators. Fixed-array FromValue still
+converts through Vec; replacing the return type alone does not establish a
+storage saving and changes where shape errors originate. Scalar conversion
+accepts more than RESP integers, and conversion errors precede Gateway arity
+validation. Existing slice-based result tests do not prove this transport seam.
+
+[redis-05](redis-05-script-result-conversion.md) records the inline-result
+representation decision and differential acceptance. No runtime change was
+selected. Exact allocation counts and performance benefits remain unmeasured;
+reader dispatch, wire decoding and reconnect execution remain open.
+
+Independent plan review passed. Formatting and workspace check/Clippy passed
+with existing unrelated warnings. No Rust tests, live Redis or benchmark ran.
