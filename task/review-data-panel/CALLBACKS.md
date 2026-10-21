@@ -141,7 +141,8 @@ encoding before Hold. Its template retains the first Server/HSTS values, fixed
 replacement metadata and canonical managed response IDs. OnceLock keeps the first
 successful publication, but prepare_head_replacement still builds each candidate
 before set; unary error-template preparation has the same construction/publication
-distinction. Callback multiplicity is not established here. Replacement clones
+distinction. The bounded lifecycle audit below constrains successful Hold but
+does not establish unrestricted callback multiplicity. Replacement clones
 and frozen state cannot be replaced with a destructive take without ownership
 review; [guardrail-01](guardrail-01-held-replacement-header-storage.md) already owns
 that decision.
@@ -159,6 +160,45 @@ barrier transition, repeated callback, transport commit or cancellation schedule
 Focused checks passed eight response-head, seven unary-head, two attached-Guardrail,
 ten transcoder-transport and sixteen transcoder-response tests (43 total).
 
+## Fork Hold lifecycle and retry boundary
+
+Inspected at `7bab9c423` against the locked fork above. ResponseHeadBarrier::select
+rejects selection outside AwaitingFinalHead. The pipeline calls the plan only for
+a final header (including 101) while awaiting selection. H1 and H2 create a fresh
+ResponsePipelineState per pump invocation; neither fact alone proves one plan
+invocation per request across failures and attempts.
+
+After successful Hold selection and successful release-latch arming, the pipeline
+sets the Session's response_head_attempt_selected flag. This flag is monotonic
+for that Session. response_head_retry_closed checks it or an independently
+committed final response. The fork clears retry before the product
+error_while_proxy hook and again in the outer attempt loop. Gateway's corresponding
+hook retains its earlier failure accounting, then checks this closure before AI
+scheduling or retry-budget decisions. Thus an armed Hold cannot start another
+ordinary retry through this loop merely because the retained head is not written.
+
+This excludes a plan error, failed barrier selection or failed latch arming before
+the marker. Immediate does not set this marker at plan selection: the output path
+calls response_head_will_commit, marks writer handoff only after that succeeds,
+then awaits prepare_response_headers. Selection is not proof of transport write
+completion. Do not generalize these observations into an unconditional
+once-per-request callback contract or remove owner-level first-publication guards.
+
+Both H1/H2 call cancel_response_head_hold after the joined pumps return. Its
+claim_boundary moves Holding to Aborted and drops retained tasks; when already
+resolved/aborted it returns None, so repeat cancellation does not publish another
+Cancelled outcome. Release/Replace usage is separately consumed with Option::take.
+These are explicit-return cleanup observations, not proof of notification when
+an enclosing future is dropped, nor complete transport-interleaving coverage.
+
+No new template-construction guard was selected solely to prevent repetition
+after successfully armed Hold: this path already closes ordinary retries. The
+separate Guardrail representation decision remains open. Eight Gateway head tests
+and eleven proxy-error tests passed in this audit; they do not execute the fork's
+entire lifecycle matrix. The fork held_head_and_body_cross_batches_until_release
+test was inspected (one plan call and retry closed while no header is prepared),
+not executed. Formatting, workspace check/Clippy and document validation passed.
+
 ## Concrete remaining checks
 
 - Fork successful Hold release currently transfers its suffix through a temporary
@@ -166,10 +206,10 @@ ten transcoder-transport and sixteen transcoder-response tests (43 total).
   deferred in [response-02](response-02-fork-held-task-transfer.md); no fork change
   or complete barrier-lifecycle verification is claimed.
 
-- Response-head ownership: direct owner plan/boundary and final-eligibility
-  orchestration is inspected above. Fork barrier transitions, complete callback
-  multiplicity, deeper response execution and transport/cancellation interleavings
-  remain separate work; direct owner inspection does not close those scopes.
+- Response-head ownership: direct owner orchestration, successful Hold retry
+  closure and explicit pump-return cancellation are inspected above. Preselection
+  failures, full callback multiplicity, deeper response execution, enclosing-future
+  drops and transport/cancellation interleavings remain separate work.
 - Inherited warning hooks: eleven retry/cache call sites and log/filter ordering
   are inspected in [the ownership decision](log-07-fork-warning-ownership.md).
   Diagnostic equivalence and cache/custom reachability remain unproven. The false
