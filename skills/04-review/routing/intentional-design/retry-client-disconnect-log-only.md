@@ -35,6 +35,17 @@ new evidence — e.g. production log analysis (ClientClosed × upstreams
 aggregation) showing the remaining window is material, or a Pingora API that
 makes downstream liveness checks during backoff cheap and reliable.
 
+## Current re-evaluation candidate
+
+At Edgion `8e03bdfe6`, the locked fork exposes watch_h2_stream_close and the
+Gateway response-callback guard uses canonical closure detection under explicit
+H1/H2 eligibility restrictions. The
+[backoff scope decision](../../../../task/review-data-panel/retry-01-backoff-cancellation-scope.md)
+records this concrete API evidence and required validation. It does not establish
+that response-phase monitoring is safe during retry waits or reverse the accepted
+behavior. The approximately 60 ms H1 pump observation above remains historical,
+not a fresh measurement of backoff, connect or other protocol paths.
+
 ## Resolution references
 
 - `route-03 (client disconnect)` — 2026-06-11 (⚠️ accepted tradeoff, log-only).

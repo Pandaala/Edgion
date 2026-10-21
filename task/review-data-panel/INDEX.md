@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Retry backoff cancellation scope](retry-01-backoff-cancellation-scope.md)
+
 - [Stage-specific plugin log capacity policy](log-06-stage-log-capacity-policy.md)
 
 - [Outbound terminal classification ownership](outbound-04-terminal-classification-ownership.md)
