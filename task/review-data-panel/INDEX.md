@@ -12286,3 +12286,25 @@ Independent plan review passed. Fresh unchanged-code verification passed 71
 Common DNS and 16 HTTPDNS transport tests, formatting, workspace all-target
 check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
 No full test suite, deployed integration or performance benchmark ran.
+
+## RequestId RNG handle ownership
+
+Custom ID generation now obtains rand's ThreadRng only in the RandomHex, NanoId
+and MD5 branches that use it. UUID v4/v7 calls are unchanged. Locked rand 0.9.5
+obtains the handle through a thread-local Rc clone and may initialize its RNG
+on first use; the Gateway's uuid 1.24.0 feature graph uses its independent
+getrandom backend. UUID-only calls no longer acquire that unused handle. This
+also avoids an unrelated entropy initialization/failure opportunity; it is not
+a claim of identical entropy-failure timing or measured throughput improvement.
+
+RandomHex/NanoId obtain their handle before the same runtime parameter guards,
+and retain the same per-byte/per-character draw order. MD5 retains the same
+16-byte random seed. Prefix handling, header validation, bounds and generation
+formats remain unchanged. RequestId source extraction and per-rule managed-header
+reconciliation were inspected and retain their existing eager execution order.
+
+Independent plan review passed. Fresh filtered runs passed 29 request-trace-ID,
+15 RequestId and 17 early-request-filter cases (filters can overlap). Formatting,
+workspace all-target check/Clippy and seven campaign guards passed; unrelated
+warnings remain. Existing tests cover generator versions/formats, prefixes and
+runtime bounds; no new test or benchmark was added for this local handle move.

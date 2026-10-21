@@ -341,11 +341,11 @@ fn hex_digit(byte: u8) -> u8 {
 }
 
 fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
-    let mut rng = rand::rng();
     let suffix = match config.kind {
         RequestIdGeneratorKind::UuidV4 => uuid::Uuid::new_v4().to_string(),
         RequestIdGeneratorKind::UuidV7 => uuid::Uuid::now_v7().to_string(),
         RequestIdGeneratorKind::RandomHex => {
+            let mut rng = rand::rng();
             let count = config.bytes.unwrap_or(16);
             if !(8..=64).contains(&count) {
                 return None;
@@ -357,6 +357,7 @@ fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
             lower_hex(&bytes[..count])
         }
         RequestIdGeneratorKind::NanoId => {
+            let mut rng = rand::rng();
             const ALPHABET: &[u8; 64] = b"_-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
             let length = config.length.unwrap_or(21);
             if !(8..=128).contains(&length) {
@@ -365,7 +366,7 @@ fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
             (0..length).map(|_| ALPHABET[rng.random_range(0..64)] as char).collect()
         }
         RequestIdGeneratorKind::Md5 => {
-            let seed: [u8; 16] = rng.random();
+            let seed: [u8; 16] = rand::rng().random();
             lower_hex(&Md5::digest(seed))
         }
     };
