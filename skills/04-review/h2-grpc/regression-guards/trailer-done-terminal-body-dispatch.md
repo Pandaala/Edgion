@@ -12,9 +12,21 @@ Fixed: `upstream_response_body_filter` now receives `end_of_stream = true` exact
 
 ## Evidence boundary
 
+### Current dependency adoption
+
+Source revalidation at Edgion `2bf6b8570`: Cargo.lock selects fork
+`1aaa45cc70430bc782990bc20ddee3fef36d6b99`, which includes downstream terminal
+observation. `response_pipeline.rs` owns a separate downstream TerminalBodyDispatch;
+`lib.rs::downstream_response_body_filter_tasks` calls response_body_filter with
+None and EOS true when a non-body task claims terminal observation, and rejects
+nonempty synthetic output. The old nonadoption/open-gap statements below describe
+the September snapshot, not the current dependency. This is source verification,
+not fresh execution of fork regressions or proof of every transport interleaving.
+
 ### Downstream observation follow-up
 
-`downstream-response-body-filter-trailer-eos-gap` is implemented locally in the
+At the historical September snapshot,
+`downstream-response-body-filter-trailer-eos-gap` was implemented locally in the
 sibling Pingora worktree based on `0b0d8bba` after explicit user authorization
 on 2026-09-25. The canonical
 fork record at `edgion-changes/review/h2-grpc/trailer-done-terminal-body-dispatch.md`
@@ -22,7 +34,7 @@ fork record at `edgion-changes/review/h2-grpc/trailer-done-terminal-body-dispatc
 owns the separate downstream latch, empty terminal callback, and rejection of
 nonempty synthetic output. This task corrects an observation gap; no production
 byte-loss impact was established. Edgion has no production override of this downstream hook, and its
-lockfile still selects `7c24c0dd`; the local fix has not been adopted or published.
+lockfile then selected `7c24c0dd`; the local fix had not yet been adopted or published.
 
 After independent review and targeted verification, the user explicitly
 requested removal of the original task despite the unrelated baseline test
@@ -84,7 +96,8 @@ timed split-batch gzip end-to-end test.
 
 Re-evaluate when compression finalization, prefix dispatch, batch reset,
 terminal latching, or cache ordering changes. The separate downstream
-observation gap above remains open.
+observation gap was still open at that historical verification point; current
+dependency adoption is recorded above.
 
 Fresh closure checks on 2026-09-09: the sibling fork's focused H1/H2 gzip
 trailered integration filter passed 2 tests; the custom-pump equivalent passed

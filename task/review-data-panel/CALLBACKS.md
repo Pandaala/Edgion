@@ -199,6 +199,34 @@ entire lifecycle matrix. The fork held_head_and_body_cross_batches_until_release
 test was inspected (one plan call and retry closed while no header is prepared),
 not executed. Formatting, workspace check/Clippy and document validation passed.
 
+## Direct trailer dispatch and terminal transfer
+
+Inspected at `2bf6b8570` against the locked fork. Gateway's upstream trailer hook
+dispatches request-owned companions before unary Anthropic trailer compaction.
+The downstream hook returns None without a transcoder; with one it clears the
+trailers and transfers terminal Bytes through lock().take(), without cloning
+the payload. The existing [typed status evidence decision](grpc-08-typed-terminal-status-evidence.md)
+owns the original-status snapshot alternative. INDEX's trailer-policy and bounded
+unary metadata audits own their snapshot and fresh-storage constraints; copying
+there is not automatically redundant. No duplicate optimization is proposed.
+
+In the fork's normal successful source path, a claimed terminal-body event is
+processed before the present upstream trailer callback. Errors/deadlines can
+return earlier. The downstream ordered-task helper invokes the trailer callback
+only for Some trailers: returned Bytes become a terminal Body task; otherwise
+the existing trailer owner moves through mem::take and normalization. Downstream
+body filtering then observes the resulting task. Module-level trailer-to-body
+translation in Session is a separate stage, including gRPC-Web behavior.
+
+The locked fork already owns a separate downstream terminal latch and rejects
+nonempty output from a synthetic terminal observation. The
+[terminal-dispatch knowledge](../../skills/04-review/h2-grpc/regression-guards/trailer-done-terminal-body-dispatch.md)
+now distinguishes that current source fact from its older nonadoption snapshot.
+This audit passed eleven upstream-trailer, six callback-cancellation and seven
+unary-head Gateway tests, formatting, workspace check/Clippy and doc validation.
+Fork regressions were not executed. Concrete processor internals, all module
+transforms and full transport/interleaving coverage are not closed by this audit.
+
 ## Concrete remaining checks
 
 - Fork successful Hold release currently transfers its suffix through a temporary
