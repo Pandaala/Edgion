@@ -235,9 +235,10 @@ transforms and full transport/interleaving coverage are not closed by this audit
   or complete barrier-lifecycle verification is claimed.
 
 - Response-head ownership: direct owner orchestration, successful Hold retry
-  closure and explicit pump-return cancellation are inspected above. Preselection
-  failures, full callback multiplicity, deeper response execution, enclosing-future
-  drops and transport/cancellation interleavings remain separate work.
+  closure, explicit pump-return cancellation, selection-failure state transitions
+  and field destruction are inspected above and below. Full callback multiplicity,
+  deeper response execution and transport/cancellation interleavings remain
+  separate work; field destruction is not callback-notification evidence.
 - Inherited warning hooks: eleven retry/cache call sites and log/filter ordering
   are inspected in [the ownership decision](log-07-fork-warning-ownership.md).
   Diagnostic equivalence and cache/custom reachability remain unproven. The false
@@ -258,3 +259,42 @@ These are focused behavior checks, not exhaustive callback coverage. No runtime
 or tests changed. No benchmark, full suite or live integration was performed.
 Independent plan and final reviews passed; source-to-table method sets match
 exactly, and agent-doc validation and diff checks passed.
+
+
+## Selection failure and destruction boundaries
+
+Source inspection at `0eaaeb889` against the same locked fork narrows the earlier
+preselection-failure entry without claiming complete cancellation verification.
+
+- `response_head_commit_plan` errors propagate before `head_barrier.select`.
+  This says nothing about application-side work performed before returning Err.
+- `ResponseHeadBarrier::select` rejects a non-Awaiting state before mutation.
+  For Hold, the monotonic deadline is checked before the Holding assignment and
+  Box allocation. Deadline overflow leaves the prior Awaiting state intact.
+- Release-latch arming follows Holding selection. Arming rejects a non-Disarmed
+  sink without changing its control/work state. That failure leaves the barrier
+  Holding and returns before this site's Session marker assignment. It does not
+  prove the Session marker was previously false or that retry is then permitted.
+- Unsupported-mode and initial work-limit handling occur after successful latch
+  arming and marker assignment, through the existing typed boundary path.
+
+Neither ResponsePipelineState nor ResponseHeadBarrier defines a Drop hook that
+calls application response-head callbacks. Dropping the pipeline drops its
+Holding Box, task Vec and owned HttpTask fields. This releases those owners;
+shared Bytes or other referenced allocations can remain alive through other
+owners. It is not proof of a Cancelled outcome notification, log submission,
+transport completion or release of every application-owned reservation.
+
+Explicit `cancel_response_head_hold` instead claims a Holding boundary, disarms
+the sink, forbids upstream reuse and calls the Cancelled outcome hook. Other
+states return without a second notification. Gateway body/trailer execution
+leases separately release inflight processor work when an incomplete callback
+future is dropped; they do not establish a general response-head Drop callback.
+Keep these ownership boundaries separate when considering destructive takes,
+first-publication guards or cleanup shortcuts.
+
+No runtime optimization or defect was selected in this audit. The concrete
+selection states above are inspected; full attempt multiplicity, owner-specific
+reservation cleanup and transport interleavings remain outside this source-only
+result. Fresh formatting, workspace check/Clippy and document validation passed
+with existing unrelated warnings. No Gateway/fork tests or benchmarks were run.

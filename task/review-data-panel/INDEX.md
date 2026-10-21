@@ -12408,3 +12408,17 @@ remains the separate tls-05 decision, not a new duplicated finding.
 Independent plan review passed. Fresh formatting, workspace check/Clippy and
 agent-doc validation passed; existing warnings remain. No tests or benchmarks
 were rerun for this documentation-only batch.
+
+
+## Response-head selection failure coverage refinement
+
+Revalidated the locked fork's preselection errors, deadline-overflow assignment,
+latch-arm ordering and ordinary pipeline destruction. [CALLBACKS](CALLBACKS.md)
+now distinguishes those inspected state transitions from callback notification,
+shared-buffer lifetime and application reservation cleanup. It no longer lists
+all preselection failures as wholly uninspected. No runtime change or speculative
+optimization was selected; full transport/interleaving coverage is not claimed.
+
+Independent plan review passed. Fresh formatting, workspace check/Clippy and
+agent-doc validation passed with existing unrelated warnings. No tests or
+benchmarks were rerun for this documentation-only coverage update.
