@@ -342,3 +342,52 @@ Clippy and agent-doc checks passed with existing warnings. No new source/test
 behavior, allocation measurement, full suite or live transport test was added.
 Concrete processor execution, retry decisions and external transport internals
 remain their own bounded review items; this inventory is not a blanket closure.
+
+## Retry adapter and bounded AI scheduler reconciliation
+
+Revalidated at `48ff77c48`: pg_fail_to_connect, pg_error_while_proxy,
+ai/http/attempt.rs retry adapters, ai/runtime/dispatch.rs outcome/skip handlers,
+and ai/runtime/attempt.rs. The direct decision and transition bodies are reviewed;
+this does not close asynchronous admission or settlement execution.
+
+- Ordinary connect failures retain per-attempt status/error/outlier accounting,
+  then resolve request/gRPC deadline ownership before retry. The AI branch
+  delegates endpoint-scoped predispatch release/advancement; ordinary connect
+  retry checks relay and attempts before its optional retryConstraint gate.
+- Proxy failures retain the local-reply exception and transport accounting.
+  A closed response head vetoes retry before AI scheduling. Ordinary per-try
+  timeouts, method-safe reuse, ambiguous H2 outcomes and Pingora-decided retry
+  ceilings remain distinct branches. Ordinary reuse does not consume the
+  retryConstraint gate; do not describe all branches as sharing one budget path.
+- AI raw-response processing owns status classification, cooldown observation,
+  scheduler transition and retry-budget decision. The later status-retry error
+  adapter clears retry_on_status and marks Pingora retry without repeating that
+  transition or budget consumption. It does not freshly redo every deadline.
+- Other classified AI transport failures use live replay/deadline/commit facts
+  before dispatch outcome handling. Excluded failures return without those
+  unused checks, as already implemented. Predispatch credential/backend skips
+  do not consume a dispatch slot or failure-ledger entry.
+- AttemptScheduler stores at most 16 backends, 16 credentials per backend and
+  eight dispatched failures in fixed arrays/bitmaps. Its transitions use scalar
+  arithmetic, no heap collections, locks, I/O or timers. Credential selection
+  scans at most 16 weights; exclusions and caller-supplied current eligibility
+  affect both total weight and ticket resolution. No cached-weight replacement
+  was selected. These properties do not apply to all surrounding adapters.
+
+Existing owned admission projections pin the selected generation across awaits;
+deadline checks before preparation and after admission/resolution remain live
+checks, not redundant compilation candidates. Error context and attempt logs
+remain request-owned. The earlier candidate-buffer reuse and borrowed retry-budget
+changes already cover their recorded costs; no new runtime change or deferred
+task was selected in this reconciliation.
+
+The concrete asynchronous seams left outside this result are
+AiAttemptRuntimeState::admit/drain_pending and the endpoint/transport operations they
+surround; their generation, quota and cancellation execution belongs with the
+upstream-selection and accounting reviews. Do not reopen the pure scheduler or
+direct retry adapters merely because those dependency seams remain open.
+
+Fresh tests passed 72 cases: HTTP AI attempt 7, pure scheduler 9, dispatch 36,
+connect failure 9 and proxy error 11. Formatting, workspace check/Clippy and
+agent-doc validation passed with existing warnings. No source/test changes,
+live provider/Redis, full suite or performance measurement ran.
