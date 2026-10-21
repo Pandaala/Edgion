@@ -71,6 +71,7 @@ destination.
 - [Normalized request-body segment ownership](body-07-normalized-segment-ownership.md)
 
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
+- [Redis command frame encoding ownership](redis-04-command-frame-encoding.md)
 
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
 
@@ -12477,3 +12478,21 @@ No production edit or duplicate task was selected.
 Independent plan review passed. Formatting, workspace check/Clippy and agent-doc
 validation passed with existing unrelated warnings. No Rust tests, live IdP
 exchange or performance benchmark ran for this documentation-only batch.
+
+## Redis command frame and socket encoding audit
+
+Continued the shared script executor into locked Fred 10.1.0 frame preparation,
+in-flight ownership and socket feed/send, then redis-protocol 6.0.0 encoding.
+Ordinary EVALSHA/EVAL builds a temporary frame Vec; string/byte values share
+handles and integer values stay scalar before wire encoding. The original
+command remains owned by the in-flight queue. A borrowed encoder API alone does
+not resolve that ownership boundary or remove the array.
+
+[redis-04](redis-04-command-frame-encoding.md) records a separate dependency design
+decision with wire, error, lifetime and backpressure acceptance. No unconditional
+clone removal was selected. Reconnect execution, response decoding and deeper
+transport internals remain open; this does not close all Redis dependencies.
+
+Independent plan review passed. Formatting, workspace check/Clippy passed with
+existing unrelated warnings. No Rust tests, live Redis or performance experiment
+ran for this docs-only audit.
