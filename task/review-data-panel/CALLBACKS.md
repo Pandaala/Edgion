@@ -161,6 +161,11 @@ ten transcoder-transport and sixteen transcoder-response tests (43 total).
 
 ## Concrete remaining checks
 
+- Fork successful Hold release currently transfers its suffix through a temporary
+  Vec. The dependency-owned allocation candidate and required ownership tests are
+  deferred in [response-02](response-02-fork-held-task-transfer.md); no fork change
+  or complete barrier-lifecycle verification is claimed.
+
 - Response-head ownership: direct owner plan/boundary and final-eligibility
   orchestration is inspected above. Fork barrier transitions, complete callback
   multiplicity, deeper response execution and transport/cancellation interleavings
