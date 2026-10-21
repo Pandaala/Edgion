@@ -12249,3 +12249,20 @@ Independent plan review passed. Fresh verification passed 10 Common egress,
 71 Common DNS and 16 unchanged HTTPDNS transport tests. Formatting, workspace
 all-target check/Clippy and all seven campaign guards passed; unrelated Clippy
 warnings remain. No full test suite or new integration fixture was run.
+
+## Outbound DNS name ownership across the async boundary
+
+The Common reqwest adapter now moves its already-owned `Name` into the returned
+future and borrows `name.as_str()` for `resolve_ips`, removing the intermediate
+hostname `String` allocation/copy. The locked reqwest 0.12.28 wrapper delegates
+to hyper-util 0.1.20's `Box<str>` owner; neither name wrapper has a custom drop
+side effect. Resolver Arc ownership, returned address ownership, port zero,
+cache and policy/error handling are unchanged. The Gateway HTTPDNS bootstrap
+and outbound adapter both reach this Common implementation. This does not make
+DNS resolution allocation-free and is not a throughput benchmark result.
+
+Independent plan review passed. Fresh verification passed 10 Common egress,
+71 Common DNS and 16 unchanged HTTPDNS transport tests, workspace all-target
+check/Clippy, formatting and seven campaign guards. Existing unrelated Clippy
+warnings remain. No new tests or fixtures and no full-suite run were needed
+for this ownership transfer.

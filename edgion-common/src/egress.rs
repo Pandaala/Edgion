@@ -280,18 +280,15 @@ pub fn is_ip_allowed_with_observer(
 impl Resolve for EgressResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let resolver = self.clone();
-        let host = name.as_str().to_string();
         Box::pin(async move {
-            let allowed =
-                resolver
-                    .resolve_ips(&host)
-                    .await
-                    .map_err(|failure| -> Box<dyn std::error::Error + Send + Sync> {
-                        match failure {
-                            ResolveFailure::Dns(error) => Box::new(error),
-                            ResolveFailure::Blocked(message) => message.into(),
-                        }
-                    })?;
+            let allowed = resolver.resolve_ips(name.as_str()).await.map_err(
+                |failure| -> Box<dyn std::error::Error + Send + Sync> {
+                    match failure {
+                        ResolveFailure::Dns(error) => Box::new(error),
+                        ResolveFailure::Blocked(message) => message.into(),
+                    }
+                },
+            )?;
             let addrs: Addrs = Box::new(allowed.into_iter().map(|ip| SocketAddr::new(ip, 0)));
             Ok(addrs)
         })
