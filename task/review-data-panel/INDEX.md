@@ -12463,3 +12463,17 @@ drop, full budget recovery afterward, and unchanged counters/reason. Existing
 EOF, transport-retained payload, disk streaming and exhaustion tests remain.
 Formatting, workspace check/Clippy and seven campaign guards passed; existing
 unrelated warnings remain. No full suite, live integration or benchmark ran.
+
+## OIDC completed-URL storage audit
+
+Revisited the two final OIDC Url-to-String copies against the existing
+[outbound storage decision](outbound-02-url-serialization-storage.md). Fresh
+synthetic authorization/logout probes confirm identical bytes but larger moved
+capacities (311/528 and 123/240 copied/moved respectively). Exact inputs and
+measurement limits are recorded there. Returned Strings feed the async redirect
+writer; no unconditional allocation/retention improvement is established.
+No production edit or duplicate task was selected.
+
+Independent plan review passed. Formatting, workspace check/Clippy and agent-doc
+validation passed with existing unrelated warnings. No Rust tests, live IdP
+exchange or performance benchmark ran for this documentation-only batch.

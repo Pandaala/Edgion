@@ -65,3 +65,57 @@ owner lifetime across request construction, retries and cancellation before maki
 heap or throughput claims. Existing shared outbound tests provide regression
 coverage but are not a live DNS/TLS handshake or performance benchmark. Run the
 applicable repository checks and obtain independent final review.
+
+## OIDC redirect outputs (audit at b89c2a072)
+
+The same representation decision applies to two completed URLs in
+`plugins/http/openid_connect/`: `callback.rs::build_authorization_redirect`
+returns `auth_url.to_string()`, and `logout.rs::build_logout_redirect_target`
+returns `end_session_url.to_string()`. A consuming conversion would preserve the
+same serialization while retaining its backing capacity. These paths append
+query pairs; unlike the earlier outbound examples they do not replace the host.
+
+A fresh standalone probe linked against the existing url 2.5.8 build artifact
+asserted byte equality between Display copying and consuming conversion:
+
+| Synthetic case | Output length | Copied capacity | Moved capacity |
+| --- | --- | --- | --- |
+| Authorization with nonce and S256 fields | 311 | 311 | 528 |
+| Logout with redirect and token hint | 123 | 123 | 240 |
+
+Reproduction inputs, in append order, were:
+
+- Parse `https://idp.example.com/authorize`; append `response_type=code`,
+  `client_id=sample-client`, `redirect_uri=https://app.example/callback`,
+  `scope=openid profile`, `state` with 32 ASCII `a` characters, `nonce` with
+  32 ASCII `b` characters, `code_challenge_method=S256`, and `code_challenge`
+  with 43 ASCII `c` characters. These fixed values exercise serialization;
+  they are not generated authentication credentials or a PKCE verification test.
+- Parse `https://idp.example.com/logout`; append
+  `post_logout_redirect_uri=https://app.example/after-logout` and
+  `id_token_hint=sample-token`.
+- For each Url, compute `copied = value.to_string()`, then
+  `moved = String::from(value)`; assert equality and read each String capacity.
+
+These are local capacity observations for exact synthetic inputs, not stable
+allocator behavior, physical heap accounting, production workload or throughput
+results. The probe does not establish which conversion is better overall.
+
+`request_filter_impl.rs` borrows both result Strings into the async
+`send_redirect_with_cookies` helper. That helper inserts Location into a separate
+response header before awaiting `write_response_header`. This is source-level
+ownership evidence, not proof of physical retention across every suspension or
+compiler optimization. Any selected lifetime change must assess both owners.
+
+Retain the existing decision alternatives rather than automatically applying
+Into<String>. OIDC acceptance additionally covers exact query order/encoding,
+existing endpoint query/fragment behavior, nonce/PKCE and state-cookie binding,
+reserved authorization parameters, cookie clearing, token hints and invalid/
+missing-discovery fallback. Preserve the canonical trusted host and connection-
+scheme rules; no forwarded-header trust or authentication policy changes belong
+in this optimization.
+
+Fresh formatting, workspace check/Clippy and agent-doc validation passed for this
+docs-only extension; existing unrelated warnings remain. No Rust tests, IdP
+exchange or performance benchmark ran. The local probe only compared bytes and
+capacities; existing OIDC test coverage is not fresh verification of a new API.
