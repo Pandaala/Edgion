@@ -116,8 +116,9 @@ impl RequestTraceId {
         if self.w3c.is_some() {
             return;
         }
-        let inbound = single_header(headers, "traceparent")
-            .filter(|value| value.to_str().ok().and_then(w3c::parse_trace_id).is_some());
+        let inbound = single_header_ref(headers, "traceparent")
+            .filter(|value| value.to_str().ok().and_then(w3c::parse_trace_id).is_some())
+            .cloned();
         let (traceparent, tracestate) = if let Some(value) = inbound {
             (value, validated_tracestate(headers))
         } else {
@@ -320,12 +321,16 @@ pingora_managed_headers!(pingora_http::ResponseHeader);
 
 /// Duplicate header lines are ambiguous even when their values happen to match.
 pub fn single_header(headers: &HeaderMap, name: &str) -> Option<HeaderValue> {
+    single_header_ref(headers, name).cloned()
+}
+
+fn single_header_ref<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a HeaderValue> {
     let mut values = headers.get_all(name).iter();
     let first = values.next()?;
     if values.next().is_some() || first.is_sensitive() {
         return None;
     }
-    Some(first.clone())
+    Some(first)
 }
 
 fn valid_value(value: &HeaderValue) -> bool {

@@ -75,10 +75,16 @@ fn three_gateway_hops_preserve_w3c_and_first_custom_id() {
 
 #[test]
 fn invalid_or_duplicate_parent_restarts_and_drops_state() {
-    for values in [vec!["bad"], vec![PARENT, PARENT]] {
+    let mut sensitive = HeaderValue::from_static(PARENT);
+    sensitive.set_sensitive(true);
+    for values in [
+        vec![HeaderValue::from_static("bad")],
+        vec![HeaderValue::from_static(PARENT), HeaderValue::from_static(PARENT)],
+        vec![sensitive],
+    ] {
         let mut headers = HeaderMap::new();
         for value in values {
-            headers.append("traceparent", HeaderValue::from_str(value).unwrap());
+            headers.append("traceparent", value);
         }
         headers.insert("tracestate", HeaderValue::from_static("vendor=value"));
         let mut state = RequestTraceId::default();

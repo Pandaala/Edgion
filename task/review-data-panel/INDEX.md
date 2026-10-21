@@ -12308,3 +12308,20 @@ Independent plan review passed. Fresh filtered runs passed 29 request-trace-ID,
 workspace all-target check/Clippy and seven campaign guards passed; unrelated
 warnings remain. Existing tests cover generator versions/formats, prefixes and
 runtime bounds; no new test or benchmark was added for this local handle move.
+
+## Borrow inbound traceparent until validation succeeds
+
+RequestTraceId initialization now validates the unique nonsensitive header by
+reference, cloning it only after W3C validation succeeds. The private borrowed
+helper owns the existing duplicate/sensitivity gate; the public single_header
+API still returns an owned clone. Accepted wire bytes and lifetime are unchanged.
+Malformed unique parents avoid the discarded HeaderValue clone and possible
+Bytes ownership/refcount work; no universal allocation or throughput gain is
+claimed. Regeneration, unsampled roots and tracestate rejection are unchanged.
+The existing invalid/duplicate regression additionally checks a sensitive valid
+parent. Future-version byte preservation and other lifecycle tests remain intact.
+
+Independent plan review passed. Fresh filtered runs passed 29 request-trace-ID,
+15 RequestId and 17 early-request-filter cases (filters can overlap). Formatting,
+workspace all-target check/Clippy and seven campaign guards passed; existing
+unrelated warnings remain. No full suite or performance benchmark ran.
