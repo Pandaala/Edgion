@@ -12139,3 +12139,21 @@ Formatting and workspace all-target check/Clippy passed with unrelated warnings.
 No runtime or tests changed. No fork macro execution benchmark, custom/cache
 reachability proof, full suite or live integration was performed.
 Agent-doc validation and final independent review passed.
+
+## Ordinary HTTP fork-cache reachability
+
+The [callback inventory](CALLBACKS.md#ordinary-http-cache-reachability) now links
+initial Disabled(NeverEnabled) state, absent proxy-cache mutation by Gateway
+owners, inherited no-op request admission, false purge and fork request/response
+entry guards. Current ordinary Gateway HTTP does not activate fork cache key,
+lookup, range, stale or purge work. Edgion's bounded ResponseCache owns separate
+context state and direct delivery; this is not a claim that HTTP caching is absent.
+No new optimization was selected for the inactive fork cache branches.
+
+Independent plan review passed. Seven existing ResponseCache lifecycle tests
+passed, as did formatting and workspace all-target check/Clippy; unrelated
+warnings remain. Those tests exercise Edgion's cache, not all fork cache branches.
+No runtime/tests changed. Custom connectors, injected sessions, future cache
+activation and dependency changes are explicit reevaluation boundaries. No full
+suite, live integration or benchmark ran.
+Agent-doc validation and final independent review passed.

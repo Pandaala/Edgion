@@ -79,10 +79,38 @@ absence of allocation throughout their callees.
 | `purge_action` | Delete; consulted when is_purge is true |
 | `purge_response_filter` | Ok(()) |
 
-Search of Gateway sources found no session.cache enable call. This supports a
-narrow source observation, not a complete reachability proof. Edgion's own
-ResponseCache lifecycle is distinct from these fork cache callbacks. Re-evaluate
-on fork upgrades, new trait overrides, feature changes or cache configuration.
+### Ordinary HTTP cache reachability
+
+Revalidated at `4ff20ab72` against the same locked fork. Session::new constructs
+HttpCache::new with Disabled(NeverEnabled), no inner cache owner and no bypass.
+The current Gateway inherits the no-op request_cache_filter and false is_purge.
+Inspection of Gateway cache-field consumers found only unrelated TinyUFO,
+plugin-generation and Wasm OCI cache owners, not writes to the proxy Session
+cache. Registered downstream modules are compression and gRPC-Web; their module
+interface does not own this proxy cache state. Upstream-module hooks are inherited
+no-ops when enabled.
+
+The fork request-cache entry checks enabled before generating a key and returns
+before lookup while disabled; purge dispatch is skipped by false is_purge.
+The response cache-task helper returns immediately when neither enabled nor
+bypassing. ServeFromCache starts Off, and support_streaming_partial_write returns
+None without the inner owner, so the ordinary disabled-cache state does not enter
+cache-fill continuation solely because a downstream error occurs.
+
+Edgion ResponseCache instead owns ctx.response_cache: request-tail bind/lookup,
+private bounded capture and direct hit delivery in response_cache/lifecycle.rs.
+It does not enable the fork field. Current ordinary Gateway HTTP therefore does
+not make the inherited fork key/lookup/range/stale/purge implementations a cache
+hot path to optimize. This does not mean Edgion has no HTTP response cache.
+
+This is a current-source control-flow/ownership conclusion for ordinary Gateway
+HTTP, not a blanket proof for fork examples, injected sessions, custom connectors
+or future configurations. Re-evaluate on fork changes, new overrides, module/API
+ownership changes or any cache enablement. Source anchors: fork Session::new,
+HttpCache::new, proxy_cache request entry and cache_http_task; Gateway
+pg_init_downstream_modules.rs, pg_request_filter.rs and response_cache/lifecycle.rs.
+Seven existing own-cache lifecycle tests passed, but they do not execute every
+inherited fork cache branch or establish custom-connector reachability.
 
 ## Concrete remaining checks
 
@@ -95,9 +123,10 @@ on fork upgrades, new trait overrides, feature changes or cache configuration.
   are inspected in [the ownership decision](log-07-fork-warning-ownership.md).
   Diagnostic equivalence and cache/custom reachability remain unproven. The false
   default is not policy approval or permission to suppress useful errors.
-- Fork cache defaults: verify actual enablement and guarded call sites before
-  classifying key/range/purge/stale work as reachable or excluded. Keep Edgion
-  ResponseCache inspection separate.
+- Fork cache defaults: ordinary HTTP enablement and entry guards are inspected
+  above. Reopen this boundary when a cache owner, override or dependency changes;
+  do not expand the conclusion to uninspected custom/injected sessions. Edgion
+  ResponseCache internals remain a separate inspection scope.
 - Continue the stage-specific open dependencies in INDEX. The dispatcher table
   supplies entry points, not replacement evidence for those reviews. Other
   transport inventories remain governed by their existing coverage records.
