@@ -298,3 +298,47 @@ selection states above are inspected; full attempt multiplicity, owner-specific
 reservation cleanup and transport interleavings remain outside this source-only
 result. Fresh formatting, workspace check/Clippy and document validation passed
 with existing unrelated warnings. No Gateway/fork tests or benchmarks were run.
+
+## Terminal logging owner inventory reconciled
+
+Revalidated at `6c943c23d`. This closes the inventory of direct terminal cleanup
+calls in pg_logging, not the entire reachable implementation graph or the error/
+retry stage. Earlier broad references to "remaining finalizers" should use these
+concrete boundaries instead of restarting the same ownership inspection.
+
+| Direct owner / handoff | Current ownership and review disposition |
+| --- | --- |
+| Active-context gauge | Release guard is acquired before awaits; retain cancellation/unwind balancing. |
+| Wasm | Context takes the request state; finish drains bindings and closes guest contexts. Abort/drop does not re-enter the guest. Existing Wasm lifecycle/lease audits remain applicable. |
+| ResponseCache | Pending publication moves out before awaited finish_body; only accepted completion publishes. Preserve deadlines, epoch/freshness fences and cancellation ownership. See INDEX's response-cache terminal ownership audit. |
+| Transcoder | Ordinary processors finalize before plan logging and output/reservation cleanup. The temporary plan Arc supports mutable-context access; [grpc-05](grpc-05-terminal-log-owner-borrow.md) owns that decision. |
+| Backend ledger and metrics | Final attempt commit is consumed with take; byte counters and request metrics remain required without log sinks. Existing terminal metric-handle audit covers the direct dispatch. |
+| AI accounting | Driver/builder fallback precedes attempt, usage and quota settlement. Summary publication and frozen accounting snapshots retain their existing ownership; [usage-02](usage-02-accounting-snapshot-reuse.md) remains the decision owner. |
+| Response terminal state | Claimed/open state selects scalar settlement/close; no new owned payload is created here. |
+| Request handlers and observers | Handler collection moves out and back while logs transfer; observers finalize and take their logs. The first production observer sweep is not an empty repeated collection; see below. |
+| Semantic/trailer processors | Driver paths retain their mutex and cancellation gates; pre-driver fallback and trailer cleanup claim remain necessary. [body-06](body-06-empty-terminal-role-locks.md) owns optional-role lock elision. |
+| Attached ExtProc/Guardrail | Summaries enrich retained stage logs. Keep [log-05](log-05-attached-summary-rendering.md) and [extproc-01](extproc-01-terminal-stream-retirement.md); no duplicate proposal. |
+| WAF | Current direct finalizer changes Running/Detected to Incomplete when the logging phase is absent; it does not copy the findings collection. |
+| Mirror | Both explicit no-consumer and sending paths take/drop the handle. A dropped JoinHandle detaches; cancellation during the send await does not prove that later explicit cleanup executed. |
+
+The observer collector reserves self.len slots even on a repeated empty sweep.
+However, current production references form one chain: pg_logging calls
+drain_request_body_observer_logs, which calls finalize_incomplete_and_take_logs.
+Every installed observer starts with Some(log); Complete/Abandoned events finalize
+the outcome without taking the log. Repeated empty-sweep tests therefore do not
+demonstrate an allocation to eliminate on the normal production collection path.
+No optimization or deferred task was selected for this hypothetical repetition.
+Reopen if another production drain or changed slot-log lifecycle is introduced.
+
+The locked fork has three logging call sites: finish, the local-response return
+branch after request_filter, and the error-handler terminal path. Do not infer
+"only from finish" from the current Gateway comment. These terminal paths do not
+by themselves demonstrate repeated collection for one request, nor do they prove
+cleanup notification when an enclosing future is dropped before logging.
+
+Fresh existing pg_logging tests passed 11 cases, including the subprocess matrix
+for disabled sinks, cleanup and test-store behavior. Formatting, workspace check/
+Clippy and agent-doc checks passed with existing warnings. No new source/test
+behavior, allocation measurement, full suite or live transport test was added.
+Concrete processor execution, retry decisions and external transport internals
+remain their own bounded review items; this inventory is not a blanket closure.
