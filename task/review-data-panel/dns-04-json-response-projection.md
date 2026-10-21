@@ -45,6 +45,35 @@ heavy documents near the byte cap, large selected arrays, escaped/unescaped
 strings and invalid inputs. Include the retained input String and any auxiliary
 parser state; a reduced allocation count alone does not establish a net benefit.
 
+## Independent lookup-only candidate
+
+Preparing encoded pointer text does not prepare all traversal work. The locked
+serde_json 1.0.151 `Value::pointer` splits the pointer and invokes
+`replace("~1", "/").replace("~0", "~")` for each visited token, producing
+temporary Strings even for ordinary object keys. Empty-token behavior must be
+measured separately; this is not a claim of two heap allocations for every token.
+A lookup-only change could leave complete Value parsing and its error precedence
+intact, independently of the full-document representation decision above.
+
+The repository already uses jsonptr 0.7.1 for Resources' compiled JSON Patch
+paths. Its PointerBuf stores encoded text; resolution borrows unescaped object
+tokens, but decoding escaped tokens allocates storage. Invalid array-index
+characters can also allocate error detail. Reuse therefore needs a comparison
+covering both success and failure paths, not an allocation-free claim. Common
+has no direct jsonptr dependency today; adoption would add a direct edge to an
+already locked version, not require a new version.
+
+Compare the current traversal, existing jsonptr traversal, and a cold prepared
+decoded-token/index plan. A decoded plan can avoid repeated work but adds
+per-generation storage, allocations and reload overlap. Prefer an existing
+canonical mechanism before introducing another generic pointer implementation.
+Preserve empty keys, literal slash/tilde keys, nested arrays, object keys that
+look numeric, leading zeros, plus signs, dash, index overflow and out-of-bounds
+results. A failed traversal must still become the same authored-path diagnostic
+and follow the same configured fallback. Measure plain and escaped paths, empty
+segments, early/late failures, short/long paths and persistent configuration heap.
+No lookup implementation or dependency change is selected by this task.
+
 ## Acceptance for a later implementation
 
 Use the current full Value path as a differential oracle. Preserve:

@@ -12277,6 +12277,9 @@ caps the input at 64 KiB. Avoiding unrelated object/string materialization needs
 a representation decision that preserves full-document validation and duplicate
 ancestor replacement. The [deferred task](dns-04-json-response-projection.md)
 records alternatives, performance measurements and differential acceptance.
+A separate lookup-only candidate records repeated serde_json pointer decoding,
+existing jsonptr reuse and cold token storage tradeoffs; it can retain full Value
+validation. No representation or traversal implementation is selected.
 No runtime, parser dependency or test fixture changed.
 
 Independent plan review passed. Fresh unchanged-code verification passed 71
