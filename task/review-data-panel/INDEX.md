@@ -12356,3 +12356,19 @@ coverage. Seven campaign guards passed. The first workspace check crashed with
 rustc SIGBUS; an unchanged-code retry passed. Workspace Clippy and final
 formatting passed; existing unrelated warnings remain. No full suite or
 benchmark ran.
+
+## RR/CH successful-winner resolution audit
+
+Both compiled selector cores resolve a candidate for health evaluation and then
+resolve the successful address again to return the runtime Arc. The map is
+immutable and the second lookup deliberately does not repeat live health checks.
+The existing [selected-slot task](backend-01-selected-slot-lookup.md) now records
+this earlier lookup separately from the later section pointer scan, with API,
+duplicate-address identity and measurement constraints. No implementation was
+selected. The locked Ketama walk hashes once, searches the prebuilt ring, and
+returns borrowed addresses; duplicate virtual nodes retain the distinct-backend
+budget and mandatory all-rejected termination gate.
+
+This docs-only batch passed independent plan review, formatting, workspace
+check/Clippy and agent-doc validation. Existing unrelated warnings remain.
+No Rust tests or benchmarks were rerun; prior results are not fresh evidence.

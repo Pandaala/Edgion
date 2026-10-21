@@ -67,3 +67,42 @@ Original constraints: `skills/04-review/lb/regression-guards/service-runtime-sna
 `skills/04-review/lb/regression-guards/rr-ch-core-shared-resolve-helper.md`, and
 `skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md`.
 This is source-inspection evidence only; no production change or benchmark was run.
+
+## Earlier RR/CH winner resolution (audit at c3ad51cfb)
+
+There is a separate lookup before the section-local reverse scan above.
+`lb/compiled_selector.rs::RrCore::select` and `ChCore::select` call
+`backend_passes_health`, which resolves each candidate through the immutable
+address map before applying the live health predicate. After selection returns
+its borrowed `Backend`, `resolve_backend` looks up the successful address again
+and clones the final runtime Arc. The second lookup does not repeat health
+validation. CH reuses the fallback RR map; there is no duplicate CH map to remove.
+
+A projected-result selector API could return the already resolved winner, or a
+reviewed mutable callback could hand off that reference. Either option needs an
+interface/lifetime review and measurement against the current simple APIs.
+This could save one successful-winner address lookup; it does not remove failed
+candidate lookups, CH ring address resolution, or the later section slot scan.
+Do not introduce a per-request heap container, duplicate health protocol, or a
+new global map to carry the result. Keeping the existing implementation remains
+an option. Compare this local alternative and the broader slot/index alternative
+above using whole-selection cost, not only hash-lookup counts.
+
+Preserve the exact resolved Arc and one health evaluation per visited candidate.
+The address map is built from the original backend list with last-write-wins for
+duplicate Inet sockets; inner RR ordering/truncation and CH ring preparation are
+separate. Returning the inner candidate's original owner by position would not
+by itself preserve map resolution for duplicate sockets. Canonical Service
+normalization supplies unique sockets today, but an API change must verify every
+constructor/caller rather than assume that property everywhere. Non-Inet
+candidates remain unresolvable. Keep RR cursor/fallback ordering, CH distinct-
+backend budgets, empty-key fallback, generation lifetime and live health reads.
+The existing shared resolver/helper and shared CH/RR map remain canonical.
+
+The inspected compiled-selector tests cover the returned live RR Arc and an
+existing keyless CH result, but do not establish duplicate-socket last-wins or
+no-second-health-call coverage. Those are explicit future implementation cases,
+alongside all-rejected and fallback selection. This addition is source evidence
+only: no runtime change, new tests or benchmark. Fresh formatting, workspace
+check/Clippy and documentation validation passed for this documentation batch;
+existing unrelated Clippy warnings remain.
