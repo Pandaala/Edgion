@@ -386,8 +386,51 @@ AiAttemptRuntimeState::admit/drain_pending and the endpoint/transport operations
 surround; their generation, quota and cancellation execution belongs with the
 upstream-selection and accounting reviews. Do not reopen the pure scheduler or
 direct retry adapters merely because those dependency seams remain open.
+The direct admit/drain ownership seam is subsequently reconciled below; the
+exclusion here describes the retry-adapter audit's scope.
 
 Fresh tests passed 72 cases: HTTP AI attempt 7, pure scheduler 9, dispatch 36,
 connect failure 9 and proxy error 11. Formatting, workspace check/Clippy and
 agent-doc validation passed with existing warnings. No source/test changes,
 live provider/Redis, full suite or performance measurement ran.
+
+## AI admission and settlement ownership reconciled
+
+Revalidated at `ecbfcc430`: AiAttemptRuntimeState::admit, finish_predispatch,
+finish_failure, finalize, settlement_for, push and drain_pending, together with
+the local reserve/settle helpers in ai/runtime/attempt_runtime.rs. This completes
+the named direct owner-orchestration check left by the retry audit above.
+
+Admission acquires the logical breaker permit, then the outlier/probe owner,
+before optional Redis reservation. Early exits and cancelled futures release
+local RAII owners; they do not prove a remote reservation was refunded. Owned
+input remains across reserve's await and success moves its fields into the
+runtime. The previously implemented limiter borrow already avoids its extra Arc
+clone on rejected/failed admissions; only a successful lease needs that owner.
+Bounded identity compaction preserves retained capacity, not just text length.
+
+The reservation lease pins its Redis client, limiter, keys, limits and original
+TTL. Re-resolving the client or regenerating those inputs during settlement would
+change generation/window ownership. Pending items move from the bounded queue
+into settle without cloning. Release and Reconcile execute serially under the
+existing 500 ms operation timeout; Retain issues no Redis command. A popped item
+is not requeued if its await is cancelled. Missing reservations do not enter the
+queue; overflow past eight entries drops the lease and preserves the remote
+charge's TTL fallback instead of inventing a refund or detached retry.
+
+Predispatch release, known usage reconciliation, ambiguous transport retention
+and unavailable-accounting retention remain distinct. A deliberate gateway cut
+can reconcile valid usage without claiming upstream EOS or outlier success.
+Local cleanup, remote timeout and exactly-once execution are not interchangeable.
+Skipping queued Retain owners would alter release timing; no measured need or
+new task was selected for that representation change. Existing
+[snapshot reuse](usage-02-accounting-snapshot-reuse.md) and
+[attempt size accounting](log-02-incremental-attempt-size.md) decisions remain.
+
+Fresh tests passed 25 attempt-runtime and 32 shared Redis-core cases (57 total),
+plus formatting, workspace check/Clippy and agent-doc validation with existing
+warnings. The tests exercise local policies and conversions; they do not prove
+live Redis cancellation, failover or wire execution. No runtime changes, new
+tests, live backend experiment, full suite or performance measurement ran.
+The direct owner seam is reviewed; shared Redis transport execution and concrete
+response-processor work remain separately scoped rather than reopening this seam.
