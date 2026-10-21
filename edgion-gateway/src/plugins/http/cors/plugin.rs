@@ -194,9 +194,12 @@ impl Cors {
     ) -> CorsResult<Box<ResponseHeader>> {
         let headers = self.build_cors_header_pairs(session, allowed_origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).map_err(|e| Box::new(e) as CorsError)?;
-        for (name, value) in &headers {
-            let value: &str = value;
-            resp.insert_header(*name, value).map_err(|e| Box::new(e) as CorsError)?;
+        for (name, value) in headers {
+            match value {
+                Cow::Borrowed(value) => resp.insert_header(name, value),
+                Cow::Owned(value) => resp.insert_header(name, value),
+            }
+            .map_err(|e| Box::new(e) as CorsError)?;
         }
         if self.config.should_add_vary_header() {
             resp.append_header("Vary", "Origin")

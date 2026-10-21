@@ -12074,3 +12074,33 @@ Formatting and workspace all-target check/Clippy passed with unrelated warnings.
 No runtime/tests changed or allocation/throughput benchmark, live integration or
 full suite ran. The proposal does not claim allocation-free request processing.
 Agent-doc validation and final independent review passed.
+
+## Transfer owned CORS preflight header values
+
+The terminating EdgionPlugins CORS preflight builder consumes its existing Cow
+pairs. Owned reflected request-header, timing-origin and formatted Max-Age values
+move into Pingora insert_header instead of being copied through a borrowed str.
+Borrowed values still take the existing borrowed insertion path. Both branches
+retain Pingora's InvalidHTTPHeader error wrapping, header casing/order, 204 status
+and Vary behavior. Session-queue insertion, native CORS, origin validation and
+constructor/cache ownership are unchanged; cors-01 remains a separate decision.
+
+This removes a second byte copy for already-owned values. The pinned http 1.5.0
+String conversion retains the same byte validation and sensitivity initialization,
+but its Bytes owner may retain spare capacity and allocate metadata before value
+validation. No unconditional allocation-count, retained-memory or throughput gain
+is claimed. Relevant CORS knowledge now distinguishes these insertion boundaries.
+
+Independent plan review passed after preserving the original Pingora error
+wrapper. Baseline Gateway CORS tests passed 45. A 32-case differential regression
+passed on unchanged production code before the edit and compares successful wire
+bytes, status, header values/sensitivity and rejected-value error representations
+against the previous borrowed insertion boundary. It includes wildcard/reflected
+timing, zero/max Max-Age, empty/non-ASCII reflection and synthetic invalid values.
+Invalid mock values test defensive handling, not wire acceptance of control bytes.
+
+Fresh verification passed 46 Gateway CORS and 35 resources CORS tests, formatting,
+workspace all-target check/Clippy and seven repository guards. Existing unrelated
+Clippy warnings remain. No full suite, live integration or benchmark ran.
+Final independent code review passed after correcting the remaining blanket
+copy statement in the CORS knowledge page.

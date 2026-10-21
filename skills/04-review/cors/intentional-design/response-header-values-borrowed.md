@@ -78,9 +78,14 @@ its consistency obligation on the deny-safe `validate_and_init` branch. A future
 adds any other derived CORS wire value should revisit this together with it, rather than
 treating this paragraph as a rule that derived values must not be cached.
 
-Accepted limits: the conversion from `&str` to a header value inside
-`insert_header` / `set_response_header` still copies bytes — that is inherent to those
-APIs and is not claimed to be removed. `Cow<'_, str>` is wider than `String`, so the
+The terminating preflight builder consumes these pairs: borrowed values still
+copy into `insert_header`, while owned values move their String into the pinned
+HTTP HeaderValue conversion. This avoids a second byte copy for owned reflection,
+timing and Max-Age values without adding prepared caches. Both branches retain
+Pingora's validation and error wrapping. The Bytes owner may retain spare capacity
+and allocate metadata, including before rejected-value validation; this is not a
+guaranteed allocation-count or throughput improvement. Session-queue insertion
+still copies through `set_response_header`. `Cow<'_, str>` is wider than `String`, so the
 inline `SmallVec` array is larger; it still holds all eight entries inline
 (asserted by `maximum_header_set_stays_inline_and_preserves_order`).
 
@@ -129,7 +134,8 @@ This changes no matcher initialization, native Gateway API
 CORS path, preflight-only emission, reflection or Max-Age behavior. A warmed mock
 regression measures zero allocation for selected denied-origin, accepted standard
 wildcard and timing/flag decisions, and one for nonempty accepted or timing echoes.
-Final header insertion still copies bytes. The full eight-header
+Final insertion still copies borrowed values and session-queue values; owned
+terminating-preflight values transfer their buffers as described above. The full eight-header
 order/no-spill and existing plugin tests remain relevant; this is not a claim
 that all CORS requests or header insertion are allocation-free.
 

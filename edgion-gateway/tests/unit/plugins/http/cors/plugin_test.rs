@@ -459,3 +459,79 @@ fn requested_headers_are_read_only_for_preflight_reflection() {
         }
     }
 }
+
+#[test]
+fn preflight_header_transfer_preserves_wire_and_errors() {
+    fn session(reflected: &str) -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        let mut headers = http::HeaderMap::new();
+        headers.insert("origin", "https://example.com".parse().unwrap());
+        session.expect_request_header_map().return_const(headers);
+        let reflected = reflected.to_owned();
+        session.expect_header_value().returning(move |name| {
+            assert_eq!(name, "access-control-request-headers");
+            Some(reflected.clone())
+        });
+        session
+    }
+
+    // Reference the previous borrowed insertion boundary, including Pingora's
+    // validation errors. Invalid reflected values exercise defensive handling
+    // through a synthetic session, not an accepted HTTP request on the wire.
+    fn borrowed_response(
+        cors: &Cors,
+        session: &mut dyn PluginSession,
+        origin: &str,
+    ) -> CorsResult<Box<ResponseHeader>> {
+        let headers = cors.build_cors_header_pairs(session, origin, true);
+        let mut response = ResponseHeader::build(204, Some(headers.len() + 1)).map_err(|e| Box::new(e) as CorsError)?;
+        for (name, value) in &headers {
+            response
+                .insert_header(*name, value.as_ref())
+                .map_err(|e| Box::new(e) as CorsError)?;
+        }
+        if cors.config.should_add_vary_header() {
+            response
+                .append_header("Vary", "Origin")
+                .map_err(|e| Box::new(e) as CorsError)?;
+        }
+        Ok(Box::new(response))
+    }
+
+    for reflected in ["X-Requested, X-Trace", "", "café", "invalid\r\nvalue"] {
+        for wildcard in [false, true] {
+            for max_age in [0, u32::MAX] {
+                let mut config = create_cors_config();
+                config.allow_headers = "**".to_owned();
+                config.max_age = Some(max_age);
+                config.timing_allow_origins = Some(if wildcard { "*" } else { "https://example.com" }.to_owned());
+                if wildcard {
+                    config.allow_origins = "*".to_owned();
+                    config.allow_credentials = false;
+                }
+                let cors = Cors::new(&config);
+                for origin in ["https://example.com", "invalid\norigin"] {
+                    let old = borrowed_response(&cors, &mut session(reflected), origin);
+                    let new = cors.build_preflight_response(&mut session(reflected), origin);
+                    match (old, new) {
+                        (Ok(old), Ok(new)) => {
+                            assert_eq!(old.status, new.status);
+                            assert_eq!(old.headers, new.headers);
+                            let mut old_wire = Vec::new();
+                            let mut new_wire = Vec::new();
+                            old.header_to_h1_wire(&mut old_wire);
+                            new.header_to_h1_wire(&mut new_wire);
+                            assert_eq!(old_wire, new_wire);
+                            assert!(new.headers.values().all(|value| !value.is_sensitive()));
+                        }
+                        (Err(old), Err(new)) => {
+                            assert_eq!(old.to_string(), new.to_string());
+                            assert_eq!(format!("{old:?}"), format!("{new:?}"));
+                        }
+                        _ => panic!("preflight header transfer changed success or failure"),
+                    }
+                }
+            }
+        }
+    }
+}
