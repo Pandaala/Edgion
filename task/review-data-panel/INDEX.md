@@ -11751,6 +11751,24 @@ against the previous predicate and exact errors; it passed on the old source
 before implementation. Final targeted tests passed 70 Common DNS and 26 Gateway
 DNS-cache cases. No new wire experiment or full test suite was run.
 
+## Reuse parsed HTTPDNS endpoint literal addresses
+
+The production fetcher now copies IPv4/IPv6 values from the already parsed URL
+instead of reparsing its serialized host. Domain variants retain the original
+strip-brackets/IpAddr fallback because non-special URL schemes can keep numeric
+hosts as domains. The same parsed URL still reaches reqwest, with unchanged
+canonical address classification, loopback policy, failure ordering and URL
+redaction. Common adds only a direct edge to the existing workspace url 2.5.8;
+no dependency version changed.
+
+The new mounted pure regression passed with the original projection first. It
+compares HTTP/HTTPS/WS/FTP/custom hosts, normalized short/decimal/hex/octal IPv4,
+IPv6 and mapped forms, domains and absent hosts, and preserves serialized URLs.
+Final focused tests passed 71 Common DNS, 26 Gateway DNS-cache and all 16 existing
+HTTPDNS transport cases. Those transport tests remained unchanged and ran before
+and after the optimization. No additional protocol support, cache or runtime
+owner was introduced, and no throughput improvement is claimed.
+
 ## ForwardAuth denial header-name ownership audit
 
 Followed request filtering through ForwardAuth response classification and the

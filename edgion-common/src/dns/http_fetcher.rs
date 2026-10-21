@@ -104,10 +104,7 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
         let url = reqwest::Url::parse(url).map_err(|_| DnsError::Http("invalid HTTP DNS endpoint URL".into()))?;
         // reqwest skips custom DNS for literals. Classify the normalized URL
         // host, including bracketed IPv6, and send this exact parsed URL.
-        if let Some(ip) = url
-            .host_str()
-            .and_then(|host| super::strip_brackets(host).parse::<IpAddr>().ok())
-        {
+        if let Some(ip) = endpoint_literal_ip(&url) {
             match classify_ip(ip) {
                 IpClass::Loopback if !self.allow_loopback => {
                     return Err(DnsError::Http("HTTP DNS endpoint blocked: loopback".into()));
@@ -151,3 +148,16 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
         String::from_utf8(buf).map_err(|e| DnsError::Parse(e.to_string()))
     }
 }
+
+fn endpoint_literal_ip(url: &reqwest::Url) -> Option<IpAddr> {
+    match url.host()? {
+        url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+        // Non-special schemes may retain a numeric host as a domain.
+        url::Host::Domain(host) => super::strip_brackets(host).parse().ok(),
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/dns/http_fetcher_test.rs"]
+mod tests;

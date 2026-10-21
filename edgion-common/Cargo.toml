@@ -76,6 +76,7 @@ tracing-appender.workspace = true
 http.workspace = true
 
 reqwest.workspace = true
+url.workspace = true
 
 time.workspace = true
 
