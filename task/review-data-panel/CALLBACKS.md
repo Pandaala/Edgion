@@ -73,7 +73,7 @@ absence of allocation throughout their callees.
 | `downstream_custom_message_proxy_filter` | Returns supplied Bytes by move |
 | `upstream_custom_message_proxy_filter` | Returns supplied Bytes by move |
 | `response_body_filter` | Ok(None), no downstream body change/delay |
-| `suppress_proxy_warn_log` | false; warning call sites still need review |
+| `suppress_proxy_warn_log` | false; eleven call sites inspected; ownership decision deferred below |
 | `should_serve_stale` | True only for an error with Upstream source; cache-gated contract |
 | `is_purge` | false |
 | `purge_action` | Delete; consulted when is_purge is true |
@@ -91,9 +91,10 @@ on fork upgrades, new trait overrides, feature changes or cache configuration.
   plan/boundary decisions and final eligibility against current callback ordering.
   Direct will-commit excludes 101, claims the final writer and seals cache headers;
   its tests do not prove every owner or transport interleaving.
-- Inherited warning hooks: trace fork retry/cache call sites, error rendering and
-  request_summary use against canonical access-log ownership. The false default
-  is not an observability-policy approval or permission to suppress useful errors.
+- Inherited warning hooks: eleven retry/cache call sites and log/filter ordering
+  are inspected in [the ownership decision](log-07-fork-warning-ownership.md).
+  Diagnostic equivalence and cache/custom reachability remain unproven. The false
+  default is not policy approval or permission to suppress useful errors.
 - Fork cache defaults: verify actual enablement and guarded call sites before
   classifying key/range/purge/stale work as reachable or excluded. Keep Edgion
   ResponseCache inspection separate.

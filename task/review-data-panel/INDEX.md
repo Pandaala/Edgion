@@ -12122,3 +12122,20 @@ or tests changed, and no benchmark, full suite or live integration ran. Source
 inspection identifies a copy, not a measured throughput benefit or malformed
 CORS wire acceptance.
 Agent-doc validation and final independent review passed.
+
+## Inherited warning call sites and eager summaries
+
+Deferred [fork warning ownership](log-07-fork-warning-ownership.md). Eleven sites
+use the inherited false hook: one retry warning and ten downstream-cache warnings.
+The common H1 target floor blocks emission, but the pinned log macro can evaluate
+request_summary before the bridge applies target filtering when global levels
+permit WARN. Root proxy, H2 and custom targets do not share the H1 floor.
+Suppression would change diagnostics; existing attempt labels do not establish
+full equivalence, and no new retry metric is authorized by this investigation.
+
+Independent plan review passed. Fresh tests passed four common logging cases,
+11 proxy-error cases, nine connect-failure cases and one request-summary case.
+Formatting and workspace all-target check/Clippy passed with unrelated warnings.
+No runtime or tests changed. No fork macro execution benchmark, custom/cache
+reachability proof, full suite or live integration was performed.
+Agent-doc validation and final independent review passed.
