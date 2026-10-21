@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [HTTPDNS JSON response projection](dns-04-json-response-projection.md)
+
 - [Explicit DNS resolver preparation](dns-03-standard-resolver-preparation.md)
 
 - [Retry backoff cancellation scope](retry-01-backoff-cancellation-scope.md)
@@ -12266,3 +12268,18 @@ Independent plan review passed. Fresh verification passed 10 Common egress,
 check/Clippy, formatting and seven campaign guards. Existing unrelated Clippy
 warnings remain. No new tests or fixtures and no full-suite run were needed
 for this ownership transfer.
+
+## HTTPDNS JSON materialization boundary
+
+The full JSON Value is constructed before selecting the prepared IP pointer;
+the 256-address cap does not bound that construction, while the transport already
+caps the input at 64 KiB. Avoiding unrelated object/string materialization needs
+a representation decision that preserves full-document validation and duplicate
+ancestor replacement. The [deferred task](dns-04-json-response-projection.md)
+records alternatives, performance measurements and differential acceptance.
+No runtime, parser dependency or test fixture changed.
+
+Independent plan review passed. Fresh unchanged-code verification passed 71
+Common DNS and 16 HTTPDNS transport tests, formatting, workspace all-target
+check/Clippy and agent-doc validation. Existing unrelated Clippy warnings remain.
+No full test suite, deployed integration or performance benchmark ran.
