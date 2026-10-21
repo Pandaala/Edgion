@@ -12042,3 +12042,19 @@ allocation/throughput benchmark or machine-code timing proof was performed.
 Formatting, workspace all-target check/Clippy and seven repository guards passed.
 Existing unrelated Clippy warnings remain. No live integration or full test suite ran.
 Final independent code review passed.
+
+## BasicAuth MD5 result storage decision
+
+Deferred [bounded MD5 result storage](basic-auth-01-md5-result-storage.md).
+The final result uses one Vec allocation, reused by String::from_utf8, with
+maximum requested capacities of 37 bytes for APR1 and 34 for MD5-crypt. Removing
+it needs a representation decision and measured value beside 1,000 hash rounds.
+Raw eight-byte salt truncation can split UTF-8 before the final expect; the task
+requires an explicit malformed-salt failure decision, not preservation of panic
+or an unreviewed behavior change hidden inside an allocation optimization.
+
+Independent plan review passed. Fresh baseline verification passed 20 BasicAuth
+and 38 shared-auth tests; formatting and workspace all-target check/Clippy passed.
+Existing unrelated warnings remain. No runtime or tests changed. No live panic
+test, benchmark, integration run or full suite was performed for this record.
+Agent-doc validation and final independent review passed.
