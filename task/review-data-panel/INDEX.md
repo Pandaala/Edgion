@@ -12104,3 +12104,21 @@ workspace all-target check/Clippy and seven repository guards. Existing unrelate
 Clippy warnings remain. No full suite, live integration or benchmark ran.
 Final independent code review passed after correcting the remaining blanket
 copy statement in the CORS knowledge page.
+
+## CORS session mutation ownership boundary
+
+Deferred [session value transfer](cors-02-session-header-value-transfer.md).
+Actual-response/preflightContinue insertion still borrows owned timing/reflection/
+Max-Age strings through the session API. Unlike direct preflight insertion, the
+string setter retains invalid-value queued no-op versus live-error semantics.
+A shared owned-value seam needs an explicit API/value decision; caller-side typed
+conversion alone does not preserve that boundary. ACAO's outer owner, Max-Age
+preparation and retained queue execution are separate scopes.
+
+Independent plan review passed. Fresh verification passed the real adapter's
+invalid-string queued/live regression and 46 Gateway CORS tests. Formatting and
+workspace all-target check/Clippy passed; unrelated warnings remain. No runtime
+or tests changed, and no benchmark, full suite or live integration ran. Source
+inspection identifies a copy, not a measured throughput benefit or malformed
+CORS wire acceptance.
+Agent-doc validation and final independent review passed.
