@@ -12157,3 +12157,21 @@ No runtime/tests changed. Custom connectors, injected sessions, future cache
 activation and dependency changes are explicit reevaluation boundaries. No full
 suite, live integration or benchmark ran.
 Agent-doc validation and final independent review passed.
+
+## Response-head owner orchestration and retained templates
+
+The [callback inventory](CALLBACKS.md#direct-response-head-owner-orchestration)
+records direct transcoder/unary/Guardrail precedence, final metadata revalidation,
+absolute deadline ownership and replacement/template boundaries. Compact unary
+metadata intentionally drops source capacity; Guardrail frozen-header representation
+remains the existing guardrail-01 decision. OnceLock publication is first-wins,
+but candidate construction is not proven once-only. No clone or validation was
+removed, and numeric HeaderValue construction was not assumed to save allocations.
+
+Independent plan review passed. Fresh focused tests passed eight response-head,
+seven unary-head, two attached-Guardrail, ten transcoder-transport and sixteen
+transcoder-response cases (43 total). Formatting and workspace all-target
+check/Clippy passed with unrelated warnings. No runtime or tests changed. No full
+suite, live integration or new allocation/throughput benchmark ran. Complete fork
+barrier behavior and callback multiplicity remain outside this direct-owner audit.
+Agent-doc validation and final independent review passed.

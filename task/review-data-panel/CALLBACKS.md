@@ -112,13 +112,59 @@ pg_init_downstream_modules.rs, pg_request_filter.rs and response_cache/lifecycle
 Seven existing own-cache lifecycle tests passed, but they do not execute every
 inherited fork cache branch or establish custom-connector reachability.
 
+## Direct response-head owner orchestration
+
+Inspected at `a5c4a1d81`: pg_response_head.rs, the transcoder transport.rs,
+Anthropic conversion head.rs and semantic Guardrail attached.rs. The dispatcher
+prioritizes a transcoder plan, then a unary owner, then an active Guardrail claim.
+The request-stage may_hold predicate is broader: possible unary work or any claim
+can reserve the capability before activation. These predicates are not equivalent.
+
+Transcoder head_plan rechecks valid response ownership, Origin source, status 200
+and final JSON media rules. Streaming returns Immediate; unary bounds metadata
+before retaining its header template and supplies the remaining absolute deadline
+to Hold. Its boundary takes ready output only for a valid clean terminal decision;
+other boundaries discard ready output and fail. Full reservation/output cleanup
+has separate lifecycle owners and is not implied by that one discard.
+
+Anthropic UnaryHead returns Immediate for an unsuccessful raw origin response.
+Successful conversion revalidates final media/encoding, method/status eligibility,
+source and active competing claims. Its first deadline publication retains an
+absolute instant and source: request wins ties over gRPC, then the Hold ceiling.
+Fresh compact metadata projections intentionally release original capacity;
+removing copies merely because HeaderValue can share backing storage would change
+that retained-memory boundary. The error template and later error reply also have
+independent ownership.
+
+Guardrail checks final SSE eligibility, 2xx status and canonical all-field identity
+encoding before Hold. Its template retains the first Server/HSTS values, fixed
+replacement metadata and canonical managed response IDs. OnceLock keeps the first
+successful publication, but prepare_head_replacement still builds each candidate
+before set; unary error-template preparation has the same construction/publication
+distinction. Callback multiplicity is not established here. Replacement clones
+and frozen state cannot be replaced with a destructive take without ownership
+review; [guardrail-01](guardrail-01-held-replacement-header-storage.md) already owns
+that decision.
+
+No new behavior-preserving change was selected. In particular, replacing decimal
+String insertion with numeric HeaderValue construction is not automatically an
+allocation saving: locked http 1.5.0 From<usize> reserves maximum decimal width in
+BytesMut. Existing [cache-02](cache-02-age-header-construction.md) measurements are
+for its recorded u64 case, not a new usize or Guardrail benchmark.
+
+The direct will-commit callback excludes 101, claims the final writer and seals
+cache headers. The fork response_pipeline selects the plan after response_filter
+while awaiting the final head. This source observation does not establish every
+barrier transition, repeated callback, transport commit or cancellation schedule.
+Focused checks passed eight response-head, seven unary-head, two attached-Guardrail,
+ten transcoder-transport and sixteen transcoder-response tests (43 total).
+
 ## Concrete remaining checks
 
-- Response-head ownership: pg_response_head prioritizes the transcoder plan,
-  then unary conversion, then the active Guardrail claim. Inspect those owners'
-  plan/boundary decisions and final eligibility against current callback ordering.
-  Direct will-commit excludes 101, claims the final writer and seals cache headers;
-  its tests do not prove every owner or transport interleaving.
+- Response-head ownership: direct owner plan/boundary and final-eligibility
+  orchestration is inspected above. Fork barrier transitions, complete callback
+  multiplicity, deeper response execution and transport/cancellation interleavings
+  remain separate work; direct owner inspection does not close those scopes.
 - Inherited warning hooks: eleven retry/cache call sites and log/filter ordering
   are inspected in [the ownership decision](log-07-fork-warning-ownership.md).
   Diagnostic equivalence and cache/custom reachability remain unproven. The false
