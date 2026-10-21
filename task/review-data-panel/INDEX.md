@@ -11738,6 +11738,19 @@ DNS-cache tests, formatting, workspace check/Clippy and seven guards. Existing
 unrelated warnings remain. No new runtime owner, API, DNS wire experiment or
 throughput claim is introduced; resolver preparation remains deferred in dns-03.
 
+## Validate HTTPDNS domain bytes against the existing ASCII policy
+
+The canonical domain validator now iterates bytes for its ASCII-only alphanumeric,
+dot and hyphen policy. Empty input, non-ASCII rejection, exact error text and
+validation-before-template ordering are unchanged. No URL normalization, fallback,
+egress, resolver or cache behavior changed. This removes character decoding from
+the predicate without claiming measured throughput gains.
+
+The regression compares all 128 ASCII bytes plus permitted multibyte fixtures
+against the previous predicate and exact errors; it passed on the old source
+before implementation. Final targeted tests passed 70 Common DNS and 26 Gateway
+DNS-cache cases. No new wire experiment or full test suite was run.
+
 ## ForwardAuth denial header-name ownership audit
 
 Followed request filtering through ForwardAuth response classification and the

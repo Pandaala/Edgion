@@ -32,8 +32,8 @@ fn validate_domain(domain: &str) -> Result<(), DnsError> {
         return Err(DnsError::Parse("domain must not be empty".into()));
     }
     if !domain
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
     {
         return Err(DnsError::Parse(format!(
             "domain '{domain}' contains characters outside the allowed hostname set [A-Za-z0-9.-]"

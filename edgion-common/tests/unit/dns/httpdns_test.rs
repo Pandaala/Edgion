@@ -95,6 +95,28 @@ fn parse_rejects_no_ips() {
 // ---- DR-2: render_url domain validation ----
 
 #[test]
+fn domain_validation_preserves_ascii_allowlist_and_errors() {
+    let domains = (0u8..=127)
+        .map(|value| format!("a{}.test", char::from(value)))
+        .chain(["", "é.test", "ñ.test", "€.test", "π.test"].map(str::to_string));
+    for domain in domains {
+        let expected = if domain.is_empty() {
+            Err(DnsError::Parse("domain must not be empty".into()))
+        } else if domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            Ok(())
+        } else {
+            Err(DnsError::Parse(format!(
+                "domain '{domain}' contains characters outside the allowed hostname set [A-Za-z0-9.-]"
+            )))
+        };
+        assert_eq!(validate_domain(&domain), expected, "input: {domain:?}");
+    }
+}
+
+#[test]
 fn render_url_rejects_ampersand_injection() {
     let cfg = generic("https://h/d?host={domain}", HttpDnsResponseFormat::default());
     assert!(matches!(render_url(&cfg, "a&b=1"), Err(DnsError::Parse(_))));
