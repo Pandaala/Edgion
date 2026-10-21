@@ -12339,3 +12339,20 @@ API ownership, sequential reconciliation and capture-timing acceptance. No code
 or tests changed. Prior focused tests are identified as prior evidence; fresh
 formatting, workspace check/Clippy and agent-doc/diff checks passed. Existing
 unrelated Clippy warnings remain. No performance claim or full coverage claim.
+
+## Wasm binding duplicate probe
+
+WasmRequestState::install now checks entry pointer identity directly with any,
+without calling the owned-Arc get API. A duplicate hit avoids one temporary Arc
+clone/drop pair; successful installations already avoided that clone. The
+64-binding cap still short-circuits first, rejection still aborts the incoming
+binding, and lookup ownership, insertion order and terminal cleanup are unchanged.
+No allocation or throughput improvement is claimed.
+
+Independent plan review passed. Fresh serial runs passed three request-lifecycle
+and five attached-hook tests. These exercise cleanup and callback behavior;
+duplicate/cap equivalence is established by source inspection, not direct test
+coverage. Seven campaign guards passed. The first workspace check crashed with
+rustc SIGBUS; an unchanged-code retry passed. Workspace Clippy and final
+formatting passed; existing unrelated warnings remain. No full suite or
+benchmark ran.

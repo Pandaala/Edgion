@@ -123,7 +123,12 @@ pub(crate) struct WasmRequestState {
 
 impl WasmRequestState {
     pub(crate) fn install(&mut self, binding: Arc<WasmRequestBinding>) -> bool {
-        if self.bindings.len() >= 64 || self.get(&binding.identity).is_some() {
+        if self.bindings.len() >= 64
+            || self
+                .bindings
+                .iter()
+                .any(|existing| Arc::ptr_eq(&existing.identity, &binding.identity))
+        {
             binding.abort();
             return false;
         }
