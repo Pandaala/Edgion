@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [RequestId source evaluation timing](trace-02-request-id-source-evaluation.md)
+
 - [HTTPDNS JSON response projection](dns-04-json-response-projection.md)
 
 - [Explicit DNS resolver preparation](dns-03-standard-resolver-preparation.md)
@@ -12325,3 +12327,15 @@ Independent plan review passed. Fresh filtered runs passed 29 request-trace-ID,
 15 RequestId and 17 early-request-filter cases (filters can overlap). Formatting,
 workspace all-target check/Clippy and seven campaign guards passed; existing
 unrelated warnings remain. No full suite or performance benchmark ran.
+
+## RequestId eager source evaluation audit
+
+The adapter extracts sources before the identity core can preserve an existing
+ID, reject a new slot or choose an inbound target. Discarded reads can allocate
+and initialize the query cache. Early reads can precede entry metadata capture,
+so changing evaluation timing is not proven invisible to later query readers.
+The [deferred decision](trace-02-request-id-source-evaluation.md) records canonical
+API ownership, sequential reconciliation and capture-timing acceptance. No code
+or tests changed. Prior focused tests are identified as prior evidence; fresh
+formatting, workspace check/Clippy and agent-doc/diff checks passed. Existing
+unrelated Clippy warnings remain. No performance claim or full coverage claim.
