@@ -209,3 +209,55 @@ async fn mirror_snapshot_exhaustion_returns_error_instead_of_clean_eof() {
     );
     assert!(budget.try_reserve_snapshot(7).is_some());
 }
+
+#[tokio::test]
+async fn dropping_pending_snapshot_stream_releases_reader_and_charge() {
+    struct PendingReader(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::request_body::RequestBodySnapshotReader for PendingReader {
+        fn len(&self) -> u64 {
+            8
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, crate::request_body::BodyReadError> {
+            std::future::pending().await
+        }
+    }
+
+    let budget = MirrorBudget::new(1, 8).unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reason = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let bytes = Arc::new(AtomicU64::new(0));
+    let chunks = Arc::new(AtomicU64::new(0));
+    let body = PreparedSnapshot {
+        reader: Box::new(PendingReader(Arc::clone(&dropped))),
+        _memory_permit: budget.try_reserve_snapshot(8).unwrap(),
+    };
+    let mut stream = Box::pin(snapshot_stream(
+        body,
+        budget.body_budget(8),
+        Arc::clone(&reason),
+        Arc::clone(&bytes),
+        Arc::clone(&chunks),
+    ));
+    {
+        let next = stream.next();
+        tokio::pin!(next);
+        assert!(futures::poll!(&mut next).is_pending());
+    }
+    assert!(!dropped.load(Ordering::Acquire));
+    assert!(budget.try_reserve_snapshot(1).is_none());
+    drop(stream);
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(budget.try_reserve_snapshot(8).is_some());
+    assert_eq!(bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(chunks.load(Ordering::Relaxed), 0);
+    assert_eq!(MirrorCancellation::load_reason(&reason), None);
+}

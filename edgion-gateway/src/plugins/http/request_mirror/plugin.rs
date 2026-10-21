@@ -76,12 +76,9 @@ fn snapshot_stream(
     bytes_sent: Arc<AtomicU64>,
     chunks_sent: Arc<AtomicU64>,
 ) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send {
-    futures::stream::try_unfold(body, move |mut body| {
-        let budget = budget.clone();
-        let abandon_reason = Arc::clone(&abandon_reason);
-        let bytes_sent = Arc::clone(&bytes_sent);
-        let chunks_sent = Arc::clone(&chunks_sent);
-        async move {
+    futures::stream::try_unfold(
+        (body, budget, abandon_reason, bytes_sent, chunks_sent),
+        |(mut body, budget, abandon_reason, bytes_sent, chunks_sent)| async move {
             // The canonical storage lane bounds transient disk-read scratch.
             // Only retained send payload and isolated snapshot memory belong to
             // this budget; never materialize an entire disk-backed request.
@@ -99,9 +96,9 @@ fn snapshot_stream(
             };
             bytes_sent.fetch_add(owned.len() as u64, Ordering::Relaxed);
             chunks_sent.fetch_add(1, Ordering::Relaxed);
-            Ok(Some((owned, body)))
-        }
-    })
+            Ok(Some((owned, (body, budget, abandon_reason, bytes_sent, chunks_sent))))
+        },
+    )
 }
 
 async fn wait_for_send_or_cancel<F>(send_result: F, mut cancel_rx: oneshot::Receiver<()>) -> Option<F::Output>

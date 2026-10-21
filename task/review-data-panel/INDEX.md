@@ -12438,3 +12438,28 @@ existing in-memory writer observer asserts prepared URL and Host without network
 IO. Formatting, workspace check/Clippy and seven campaign guards passed with
 existing unrelated warnings. No new test was needed for this local move, and no
 full suite, live integration or benchmark ran.
+
+## Move mirror snapshot handles with stream state
+
+The committed-snapshot stream now carries its budget, abandon reason and byte/
+chunk counters alongside the reader in try_unfold's owned state. Each iteration
+moves that state into its future and returns it with the next payload. This
+removes five temporary Arc clone/drop pairs per iteration (two budget handles,
+three atomics), including the terminal read. It does not remove the permit-owner
+clones or independent payload copy required by try_copy, and claims no measured
+throughput or stream-layout improvement.
+
+EOF/error can drop these state handles before the stream itself is destroyed;
+the handles own no permits. PreparedSnapshot and emitted BudgetedBytes retain
+their existing separate charges, and the writer retains outcome/counter handles.
+The locked futures-util 0.3.33 implementation owns either the idle state or the
+pending future, so dropping a pending stream releases the reader and its charge.
+No body storage, failure, counter ordering, cancellation or logging policy changed.
+
+Independent plan review passed. The new pending-reader cancellation test passed
+against the original implementation, then all 28 RequestMirror tests passed
+serially after the change. It checks reader lifetime and retained charge before
+drop, full budget recovery afterward, and unchanged counters/reason. Existing
+EOF, transport-retained payload, disk streaming and exhaustion tests remain.
+Formatting, workspace check/Clippy and seven campaign guards passed; existing
+unrelated warnings remain. No full suite, live integration or benchmark ran.
