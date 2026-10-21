@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Client-certificate serial hash preparation](tls-03-client-serial-hash-preparation.md)
+
 - [RequestId source evaluation timing](trace-02-request-id-source-evaluation.md)
 
 - [HTTPDNS JSON response projection](dns-04-json-response-projection.md)
@@ -12372,3 +12374,18 @@ budget and mandatory all-rejected termination gate.
 This docs-only batch passed independent plan review, formatting, workspace
 check/Clippy and agent-doc validation. Existing unrelated warnings remain.
 No Rust tests or benchmarks were rerun; prior results are not fresh evidence.
+
+
+## Pingora mTLS reuse-hash serial conversion
+
+The locked BoringSSL CertKey hash converts every certificate serial through
+BigNum, hexadecimal native string and owned Rust String on each hash invocation.
+H1/H2 connector lookup/release reaches that hash; some operations already share
+a local computed key. The [deferred task](tls-03-client-serial-hash-preparation.md)
+separates this from prepared Edgion pool-fingerprint composition and records
+native aliasing, failure timing and mutable peer-input gates before precomputation.
+No fork, dependency or runtime changes were made, and no measured gain is claimed.
+
+Independent plan review passed. Fresh formatting, workspace check/Clippy and
+agent-doc validation passed; existing unrelated warnings remain. No Rust tests,
+live connection test or benchmark ran for this documentation-only investigation.
