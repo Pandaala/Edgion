@@ -242,3 +242,39 @@ async fn cache_hit_does_not_touch_network() {
         .collect();
     assert_eq!(addrs, vec![SocketAddr::new(ip("93.184.216.34"), 0)]);
 }
+
+#[tokio::test]
+async fn zero_ttl_skips_retention_but_preserves_policy_and_observation() {
+    thread_local! {
+        static DROPS: std::cell::RefCell<Vec<EgressBlockReason>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn observe(reason: EgressBlockReason) {
+        DROPS.with(|drops| drops.borrow_mut().push(reason));
+    }
+    // Numeric System inputs are parsed locally without an OS lookup.
+    for ttl in [Duration::ZERO, Duration::MAX] {
+        let resolver = EgressResolver::new_with_options(
+            ResolverSpec::System,
+            EgressPolicy { block_private: true },
+            ttl,
+            false,
+            Some(observe),
+        );
+        DROPS.with(|drops| drops.borrow_mut().clear());
+        for _ in 0..2 {
+            assert_eq!(
+                resolver.resolve_socket_addrs("93.184.216.34", 443).await.unwrap(),
+                vec![SocketAddr::new(ip("93.184.216.34"), 443)]
+            );
+            assert_eq!(
+                resolver.resolve_socket_addrs("169.254.169.254", 443).await.unwrap_err(),
+                "egress policy blocked all resolved addresses"
+            );
+        }
+        let expected_drops = if ttl.is_zero() { 2 } else { 1 };
+        DROPS.with(|drops| {
+            assert_eq!(*drops.borrow(), vec![EgressBlockReason::LinkLocal; expected_drops]);
+        });
+        assert_eq!(resolver.cache_len(), if ttl.is_zero() { 0 } else { 2 });
+    }
+}

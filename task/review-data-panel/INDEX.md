@@ -12227,3 +12227,25 @@ check/Clippy passed with unrelated warnings. No runtime or tests changed. No ful
 suite, live integration or new allocation/throughput benchmark ran. Complete fork
 barrier behavior and callback multiplicity remain outside this direct-owner audit.
 Agent-doc validation and final independent review passed.
+
+## Zero-TTL outbound DNS memo bypass
+
+HTTPDNS endpoint bootstrap constructs the canonical Common `EgressResolver`
+with `Duration::ZERO`. Its immutable TTL and strict freshness predicate make
+every memo lookup a miss, including reversed clock samples. `resolve_ips` now
+skips memo lookup and insertion for that case, avoiding both locks, clock
+reads, address-vector duplication and hostname retention. Resolution, address
+classification, observer calls and errors still run as before. Nonzero TTL
+positive/negative memoization and the existing cache helpers are unchanged.
+
+The supporting Common scope is `src/egress.rs` and its mounted unit tests;
+Gateway HTTPDNS and outbound adapters share this canonical owner. A numeric-IP
+System-resolution regression covers repeated allowed/blocked results, observer
+counts and zero/nonzero retention without network IO. Existing cache freshness,
+capacity and adapter tests remain in place. No throughput benchmark or complete
+data-plane coverage claim is made.
+
+Independent plan review passed. Fresh verification passed 10 Common egress,
+71 Common DNS and 16 unchanged HTTPDNS transport tests. Formatting, workspace
+all-target check/Clippy and all seven campaign guards passed; unrelated Clippy
+warnings remain. No full test suite or new integration fixture was run.

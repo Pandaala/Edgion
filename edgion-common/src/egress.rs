@@ -183,8 +183,14 @@ impl EgressResolver {
     }
 
     async fn resolve_ips(&self, host: &str) -> Result<Vec<IpAddr>, ResolveFailure> {
-        let now = Instant::now();
-        let allowed = match self.inner.cached(host, now) {
+        // A zero-TTL entry can never be fresh; avoid memo work entirely.
+        let cache_enabled = !self.inner.ttl.is_zero();
+        let cached = if cache_enabled {
+            self.inner.cached(host, Instant::now())
+        } else {
+            None
+        };
+        let allowed = match cached {
             Some(hit) => hit,
             None => {
                 let raw = dns_resolve(&self.inner.spec, host).await.map_err(ResolveFailure::Dns)?;
@@ -194,7 +200,9 @@ impl EgressResolver {
                     self.inner.allow_loopback,
                     self.inner.observer,
                 );
-                self.inner.store(host, allowed.clone(), Instant::now());
+                if cache_enabled {
+                    self.inner.store(host, allowed.clone(), Instant::now());
+                }
                 allowed
             }
         };
