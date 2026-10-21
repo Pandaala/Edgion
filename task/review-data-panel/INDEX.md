@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [UDP session retirement wakeup](udp-01-session-retirement-wakeup.md)
+
 - [Client-certificate serial hash preparation](tls-03-client-serial-hash-preparation.md)
 
 - [RequestId source evaluation timing](trace-02-request-id-source-evaluation.md)
@@ -12389,3 +12391,20 @@ No fork, dependency or runtime changes were made, and no measured gain is claime
 Independent plan review passed. Fresh formatting, workspace check/Clippy and
 agent-doc validation passed; existing unrelated warnings remain. No Rust tests,
 live connection test or benchmark ran for this documentation-only investigation.
+
+
+## UDP receive retirement polling boundary
+
+The receiver reuses one packet buffer but restarts a one-second receive timeout
+to observe generation retirement. The [deferred task](udp-01-session-retirement-wakeup.md)
+records a notification alternative, resident-state and scheduling tradeoffs,
+lost-wakeup acceptance and unchanged in-flight send/permit ownership. The
+existing retirement-at-entry test is not pending-receive wakeup coverage.
+No runtime change or timer-allocation/throughput claim is made.
+
+The adjacent TLS handshake audit confirmed the locked fork builds SslDigest at
+successful connect/accept and subsequently shares its Arc. Backend SAN extraction
+remains the separate tls-05 decision, not a new duplicated finding.
+Independent plan review passed. Fresh formatting, workspace check/Clippy and
+agent-doc validation passed; existing warnings remain. No tests or benchmarks
+were rerun for this documentation-only batch.
