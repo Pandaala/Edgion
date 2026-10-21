@@ -12422,3 +12422,19 @@ optimization was selected; full transport/interleaving coverage is not claimed.
 Independent plan review passed. Fresh formatting, workspace check/Clippy and
 agent-doc validation passed with existing unrelated warnings. No tests or
 benchmarks were rerun for this documentation-only coverage update.
+
+## Move the rendered mirror target into its result
+
+RequestMirror target resolution now borrows the rendered address while building
+its base URL, then moves the original address String into the result tuple.
+Previously the result cloned that String and dropped the original after URL
+formatting. Successful resolution removes one temporary String allocation/copy;
+no throughput claim is made. Endpoint selection, safety validation, scheme,
+returned URL/Host bytes and caller ownership remain unchanged. No mirror budget,
+body, transport or cancellation behavior changed.
+
+Independent plan review passed. All 27 RequestMirror tests passed serially; the
+existing in-memory writer observer asserts prepared URL and Host without network
+IO. Formatting, workspace check/Clippy and seven campaign guards passed with
+existing unrelated warnings. No new test was needed for this local move, and no
+full suite, live integration or benchmark ran.

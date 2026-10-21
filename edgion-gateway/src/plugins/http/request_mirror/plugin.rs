@@ -241,7 +241,8 @@ impl RequestMirrorPlugin {
                 return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
             }
             let target = format!("{}", addr);
-            return Ok((target.clone(), format!("{scheme}://{target}")));
+            let base_url = format!("{scheme}://{target}");
+            return Ok((target, base_url));
         }
 
         Err("mirror backend has no selectable endpoint".to_string())
