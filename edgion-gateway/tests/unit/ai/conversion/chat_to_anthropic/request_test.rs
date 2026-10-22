@@ -428,3 +428,55 @@ fn bounded_serialization_accepts_exact_limit_and_rejects_one_less() {
     let too_small = prepare_anthropic_request(base_request(), "claude-canonical", None, false, prepared.body.len() - 1);
     assert_eq!(too_small, Err(AnthropicRequestError::OutputTooLarge));
 }
+
+#[test]
+fn tool_ids_remain_unique_across_completed_rounds() {
+    let mut request = base_request();
+    request["tools"] = json!([{"type":"function","function":{"name":"lookup","parameters":{}}}]);
+    request["messages"] = json!([
+        {"role":"user","content":"Hi"},
+        {"role":"assistant","tool_calls":[
+            {"id":"first","type":"function","function":{"name":"lookup","arguments":"{}"}}
+        ]},
+        {"role":"tool","tool_call_id":"first","content":"one"},
+        {"role":"assistant","tool_calls":[
+            {"id":"second","type":"function","function":{"name":"lookup","arguments":"{}"}},
+            {"id":"third","type":"function","function":{"name":"lookup","arguments":"{}"}}
+        ]},
+        {"role":"tool","tool_call_id":"third","content":"three"},
+        {"role":"tool","tool_call_id":"second","content":"two"}
+    ]);
+    let expected = json!({
+        "model":"claude-canonical","max_tokens":64,"stream":false,
+        "tools":[{"name":"lookup","input_schema":{}}],
+        "messages":[
+            {"role":"user","content":[{"type":"text","text":"Hi"}]},
+            {"role":"assistant","content":[{"type":"tool_use","id":"first","name":"lookup","input":{}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"first","content":[{"type":"text","text":"one"}]}]},
+            {"role":"assistant","content":[
+                {"type":"tool_use","id":"second","name":"lookup","input":{}},
+                {"type":"tool_use","id":"third","name":"lookup","input":{}}
+            ]},
+            {"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"third","content":[{"type":"text","text":"three"}]},
+                {"type":"tool_result","tool_use_id":"second","content":[{"type":"text","text":"two"}]}
+            ]}
+        ]
+    });
+    assert_eq!(
+        prepare(request.clone()).unwrap().body,
+        serde_json::to_vec(&expected).unwrap()
+    );
+
+    let mut repeated = request.clone();
+    repeated["messages"][3]["tool_calls"][0]["id"] = json!("first");
+    // Duplicate validation precedes the unsupported call-type check.
+    repeated["messages"][3]["tool_calls"][0]["type"] = json!("custom");
+    assert_eq!(prepare(repeated), Err(AnthropicRequestError::InvalidRequestBody));
+
+    for id in ["missing", "third", "first"] {
+        let mut invalid_result = request.clone();
+        invalid_result["messages"][5]["tool_call_id"] = json!(id);
+        assert_eq!(prepare(invalid_result), Err(AnthropicRequestError::InvalidRequestBody));
+    }
+}

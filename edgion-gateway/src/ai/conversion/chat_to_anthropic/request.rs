@@ -222,7 +222,7 @@ fn parse_stop(value: Option<&Value>) -> Result<Option<Vec<Value>>, AnthropicRequ
     }
 }
 
-fn parse_tools(value: Option<&Value>) -> Result<(Option<Vec<Value>>, HashSet<String>), AnthropicRequestError> {
+fn parse_tools(value: Option<&Value>) -> Result<(Option<Vec<Value>>, HashSet<&str>), AnthropicRequestError> {
     let Some(value) = value else {
         return Ok((None, HashSet::new()));
     };
@@ -256,7 +256,7 @@ fn parse_tools(value: Option<&Value>) -> Result<(Option<Vec<Value>>, HashSet<Str
             &["name", "parameters"],
         )?;
         let name = required_tool_name(function.get("name"))?;
-        if !names.insert(name.to_string()) {
+        if !names.insert(name) {
             return Err(AnthropicRequestError::InvalidRequestBody);
         }
         let parameters = function
@@ -279,7 +279,7 @@ fn parse_tool_choice(
     choice: Option<&Value>,
     parallel: Option<&Value>,
     has_tools: bool,
-    declared_tool_names: &HashSet<String>,
+    declared_tool_names: &HashSet<&str>,
 ) -> Result<Option<Value>, AnthropicRequestError> {
     let parallel = match parallel {
         None | Some(Value::Null) => None,
@@ -342,7 +342,7 @@ fn parse_tool_choice(
 
 fn parse_messages(
     value: &Value,
-    declared_tool_names: &HashSet<String>,
+    declared_tool_names: &HashSet<&str>,
 ) -> Result<(Vec<Value>, Vec<Value>), AnthropicRequestError> {
     let messages = value
         .as_array()
@@ -475,11 +475,11 @@ fn parse_text_parts(parts: &[Value]) -> Result<Vec<Value>, AnthropicRequestError
     Ok(translated)
 }
 
-fn parse_assistant_tool_calls(
-    value: Option<&Value>,
-    declared_tool_names: &HashSet<String>,
-    pending_tool_ids: &mut HashSet<String>,
-    all_tool_ids: &mut HashSet<String>,
+fn parse_assistant_tool_calls<'a>(
+    value: Option<&'a Value>,
+    declared_tool_names: &HashSet<&str>,
+    pending_tool_ids: &mut HashSet<&'a str>,
+    all_tool_ids: &mut HashSet<&'a str>,
 ) -> Result<Vec<Value>, AnthropicRequestError> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -493,7 +493,7 @@ fn parse_assistant_tool_calls(
         let call = call.as_object().ok_or(AnthropicRequestError::InvalidRequestBody)?;
         require_exact_keys(call, &["id", "type", "function"])?;
         let id = required_bounded_id(call.get("id"))?;
-        if !all_tool_ids.insert(id.to_string()) {
+        if !all_tool_ids.insert(id) {
             return Err(AnthropicRequestError::InvalidRequestBody);
         }
         match call.get("type") {
@@ -519,7 +519,7 @@ fn parse_assistant_tool_calls(
         if !arguments.is_object() {
             return Err(AnthropicRequestError::InvalidRequestBody);
         }
-        pending_tool_ids.insert(id.to_string());
+        pending_tool_ids.insert(id);
         translated.push(json!({
             "type": "tool_use",
             "id": id,

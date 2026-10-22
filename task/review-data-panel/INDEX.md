@@ -12987,3 +12987,28 @@ workspace all-target check/Clippy, seven repository guards and diff hygiene.
 Existing unrelated warnings remain. An initial test compilation exhausted disk
 space; after removing rebuildable stale/failed incremental caches, the test run
 passed. No full suite, live integration or throughput benchmark ran.
+
+
+## Borrowed converter tool-validation keys
+
+Chat-to-Anthropic request preparation now borrows tool names and call IDs from
+the original immutable JSON document for its three validation sets: declared
+names, all call IDs and pending result IDs. The synchronous preparation already
+retains that document for the complete operation. Set insertion, membership and
+removal retain string-value semantics; no set iteration contributes to output.
+Explicit helper lifetimes bind retained IDs to the input rather than temporary
+translated values.
+
+This removes one validation-only name copy per declared tool and two ID copies
+per valid call. Translated JSON strings and schemas remain owned, and hash tables
+and serialized output still allocate. Validation order, duplicate rejection,
+result grouping, fixed errors and serialization limits are unchanged. No measured
+throughput or total-allocation reduction is claimed.
+
+The unchanged-code baseline passed 60 converter tests. Final verification passed
+61 converter and 36 dispatch tests (97 total), including a new exact-output
+multi-round fixture with reverse-order parallel results, duplicate IDs across
+completed rounds, duplicate-before-unsupported-type error precedence, and
+unknown/repeated/already-completed result IDs. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed. Existing unrelated
+warnings remain. No full suite, live integration or performance benchmark ran.
