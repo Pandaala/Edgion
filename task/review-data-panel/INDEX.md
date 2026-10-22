@@ -98,6 +98,8 @@ destination.
 
 - [Native Messages iteration-model storage](usage-03-iteration-model-storage.md)
 
+- [JSON grammar-stack storage for SSE usage](usage-04-json-grammar-stack-storage.md)
+
 - [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
 
 - [Prepared GeoIP geographic membership](geoip-02-geographic-membership-index.md)
