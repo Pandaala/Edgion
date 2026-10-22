@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Guardrail callback output capacity](guardrail-03-callback-output-capacity.md)
+
 - [UDP session retirement wakeup](udp-01-session-retirement-wakeup.md)
 
 - [Client-certificate serial hash preparation](tls-03-client-serial-hash-preparation.md)
@@ -12573,3 +12575,18 @@ Independent plan review passed. Fresh tests passed 36 dispatch, 13 native Messag
 processor, 52 usage and 32 conversion-response cases (133 total). Formatting,
 workspace check/Clippy and all seven static guards passed; existing unrelated
 warnings remain. No new tests, full suite, live provider/Redis or benchmark ran.
+
+## Guardrail callback output capacity audit
+
+Active batch processing requests a 2.0625 MiB output buffer before it knows
+whether the callback emits bytes. Locked Bytes freezing transfers that backing
+for small nonempty output; no RSS or downstream lifetime measurement is implied.
+[guardrail-03](guardrail-03-callback-output-capacity.md) defers lazy allocation and
+bounded growth choices, preserving rollback, capacity peaks and terminal ownership.
+Missing non-EOS batches and disabled processing have separate paths. No runtime
+change or duplicate statistics/snapshot task was selected.
+
+Independent plan review passed. Fresh existing tests passed 25 semantic response
+and 12 canonical SSE cases; formatting, workspace check/Clippy and agent-doc
+validation passed with existing unrelated warnings. No new tests, full suite,
+live transport, allocation measurement or benchmark ran.
