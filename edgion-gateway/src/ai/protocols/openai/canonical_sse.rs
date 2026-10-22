@@ -184,14 +184,11 @@ pub(crate) fn write_canonical_record(
         limit,
     };
     writer.append(b"data: ")?;
-    writer.value(
-        value,
-        if capture_semantics {
-            WriteContext::Root
-        } else {
-            WriteContext::Other
-        },
-    )?;
+    if capture_semantics {
+        writer.value(value, WriteContext::Root)?;
+    } else {
+        writer.json(value)?;
+    }
     writer.append(b"\n\n")?;
     let bytes = Bytes::from(writer.bytes);
     let record = capture_semantics.then(|| WindowRecord::raw(vec![bytes.clone()]).with_fragments(writer.fragments));

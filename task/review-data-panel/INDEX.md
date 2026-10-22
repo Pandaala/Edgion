@@ -13012,3 +13012,30 @@ completed rounds, duplicate-before-unsupported-type error precedence, and
 unknown/repeated/already-completed result IDs. Formatting, workspace all-target
 check/Clippy, seven repository guards and diff hygiene passed. Existing unrelated
 warnings remain. No full suite, live integration or performance benchmark ran.
+
+
+## Canonical event serialization without semantic capture
+
+write_canonical_record now uses its existing bounded serde writer directly when
+semantic capture is disabled. The capture branch retains the original structural
+walk and token-range recording. This supersedes the earlier optional-metadata
+implementation detail above that propagated WriteContext::Other through every
+container even when no semantic metadata was requested. It removes that custom
+context propagation and field classification from the plain path; JSON still
+requires serialization.
+
+Both branches keep the same prefix/suffix, checked inclusive byte limit, complete
+record publication and lazy record ownership. The locked serde_json Value
+serializer preserves map iteration order and scalar encoding. Failed partial
+writes remain local and are discarded. Different serializer write segmentation
+may affect Vec capacity; neither identical capacity nor a throughput gain is
+claimed. The converter copies encoded bytes to its independently bounded output;
+active semantic retention and RawWindow backing normalization are unchanged.
+
+The unchanged baseline and final canonical filter each passed 13 tests, including
+both modes against exact serde bytes, every insufficient output cap, semantic
+ranges and allocation comparisons. Final verification also passed 61 converter
+and 25 semantic-response tests (99 distinct tests total), formatting, workspace
+all-target check/Clippy, seven repository guards and diff hygiene. Existing
+unrelated warnings remain. No new tests, full suite, live integration or
+performance benchmark ran.
