@@ -1195,6 +1195,8 @@ fn profile_callout_allocation(
     body_size: usize,
 ) -> Result<CalloutAllocationProfile, i32> {
     let profile = scan_serialized_map(header_bytes)?;
+    // Retain the conservative raw-header allowance even though decoding now
+    // borrows those bytes, preserving the existing admission boundary.
     let raw_guest_copies = upstream_bytes
         .len()
         .checked_add(header_bytes.len())
@@ -1340,16 +1342,26 @@ fn host_http_call(
         Ok(s) => s,
         Err(s) => return s,
     };
-    let header_bytes = match read_guest(&mut caller, headers_ptr, headers_size) {
-        Ok(b) => b,
-        Err(s) => return s,
+    let all_headers = {
+        let profile = match profile_guest_range(&mut caller, headers_ptr, headers_size) {
+            Ok(profile) => profile,
+            Err(status) => return status,
+        };
+        let Some(memory) = guest_memory(&mut caller) else {
+            return STATUS_INVALID_MEMORY_ACCESS;
+        };
+        let bytes = match guest_bytes(&caller, memory, &profile) {
+            Ok(bytes) => bytes,
+            Err(status) => return status,
+        };
+        // No guest execution or memory mutation occurs after profiling. Decode
+        // directly into owned strings before releasing this guest-memory borrow.
+        // Preserve decode_map's BAD_ARGUMENT mapping for decoder failures.
+        let Ok(headers) = decode_profiled_map(bytes, allocation_preflight.headers) else {
+            return STATUS_BAD_ARGUMENT;
+        };
+        headers
     };
-    // No guest execution or memory mutation occurs between profiling and this
-    // owned copy. Preserve decode_map's BAD_ARGUMENT mapping for all failures.
-    let Ok(all_headers) = decode_profiled_map(&header_bytes, allocation_preflight.headers) else {
-        return STATUS_BAD_ARGUMENT;
-    };
-    drop(header_bytes);
     let body = if body_size > 0 {
         match read_guest(&mut caller, body_ptr, body_size) {
             Ok(b) => b,

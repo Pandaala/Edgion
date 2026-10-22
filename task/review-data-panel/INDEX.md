@@ -13094,3 +13094,28 @@ guards and diff hygiene. Existing roundtrip, WKT, bounds and transport ownership
 regressions cover this lifetime change; no new implementation-mirroring tests,
 full suite, live integration or performance benchmark ran. Existing unrelated
 warnings remain.
+
+
+## Decode Wasm callout headers from guest memory
+
+`host_http_call` now borrows the validated serialized-header range while the
+canonical map decoder builds independently owned strings. It no longer allocates
+and copies the entire raw header map into a temporary Vec. No guest execution,
+memory mutation, growth or await occurs between profiling and decoding; the
+borrow ends before body handling and token publication. This does not relax the
+separate snapshot requirement when an accessor invokes a guest allocator.
+
+Range/memory errors retain their status, while decoder failures still map to
+BAD_ARGUMENT. The aggregate preflight and final retained charges, admission
+order, permissive decoding, pseudo-header selection, allowlist enforcement and
+token-before-state publication remain unchanged. The conservative raw-header
+allowance remains in the profile, preserving the admission boundary.
+
+Independent plan review passed. Fresh baseline and final runs each passed all
+269 Gateway Wasm tests serially, including real-guest permissive wire, lossy UTF-8,
+duplicate/pseudo-header, malformed map, budget and token atomicity coverage.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed; existing unrelated warnings remain. No implementation-mirroring
+test, full suite, live integration or performance benchmark was added or run.
+The source change removes one temporary serialized-header copy; no measured
+throughput or RSS improvement is claimed.
