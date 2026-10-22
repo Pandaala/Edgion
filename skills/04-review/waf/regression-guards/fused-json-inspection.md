@@ -425,6 +425,13 @@ policy. Differential tests compare each feed's events, errors, usage, summary,
 retained capacity and UTF-8 state with the forced scalar path, including terminal
 retries and summary overflow. Keep those semantics when changing the fast path.
 
+Selective keys reuse the existing buffered ASCII path only within remaining key
+capacity and already allocated token space. Raw-token, source, decoded and work
+admission remain independent; growth and boundary bytes stay scalar. This retains
+the same token contents, capacity trajectory and error priority, including after
+escapes, split input and long-key spill. It does not borrow keys in a way that
+bypasses their capture budgets or alter the accepted geometric growth policy.
+
 Default `JsonStream` token borrowing, capture, counters, errors, limits and WAF
 verdicts remain unchanged. Selective coverage is additive: preserve the existing
 test identities and compare whole, byte and mixed schedules under every budget.

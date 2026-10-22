@@ -1618,3 +1618,75 @@ fn selective_ascii_discard_preserves_summary_overflow_order() {
         assert_eq!(results[0], results[1]);
     }
 }
+
+#[test]
+fn selective_ascii_keys_match_scalar_caps_and_special_bytes() {
+    let bodies: &[&[u8]] = &[
+        br#"{"ordinary_ascii":1,"escaped\nkey":2,"\u00e9tail":3}"#,
+        "{\"prefix-é€-tail\":null,\"\":true}".as_bytes(),
+        b"{\"prefix\x7f-tail\":0}",
+        b"{\"prefix\x1f-tail\":0}",
+        b"{\"prefix\xff-tail\":0}",
+        b"{\"prefix\xc3-tail\":0}",
+        br#"{"prefix\uD800x":0}"#,
+    ];
+    for &body in bodies {
+        let baseline = selective_run(body, body.len(), selective_limits());
+        for budget in 0..=baseline.2.work + 2 {
+            for dimension in 0..6 {
+                let mut limits = selective_limits();
+                match dimension {
+                    0 => limits.max_key_bytes = budget,
+                    1 => limits.lexical.max_raw_token_bytes = budget,
+                    2 => limits.lexical.max_decoded_bytes = budget,
+                    3 => limits.lexical.max_source_bytes = budget,
+                    4 => limits.lexical.max_work = budget,
+                    _ => {
+                        limits.max_key_bytes = budget;
+                        limits.lexical.max_raw_token_bytes = budget;
+                        limits.lexical.max_work = budget * 2 + 1;
+                    }
+                }
+                for split in 0..=body.len() {
+                    assert_selective_ascii_trace(&[&body[..split], &body[split..]], limits);
+                }
+                let chunks: Vec<_> = body.chunks(1).collect();
+                assert_selective_ascii_trace(&chunks, limits);
+            }
+        }
+    }
+}
+
+#[test]
+fn selective_ascii_keys_preserve_growth_and_reused_capacity() {
+    for size in [1023, 1024, 1025, 2048, 2049] {
+        let document = format!(r#"{{"{}":1,"short":2,"escaped\nkey":3}}"#, "a".repeat(size));
+        let mut limits = selective_limits();
+        limits.max_key_bytes = 8192;
+        limits.lexical.max_raw_token_bytes = 8192;
+        for width in [1, 7, 1024, document.len()] {
+            let baseline = selective_run(document.as_bytes(), width, limits);
+            assert_eq!(baseline.0, Ok(()));
+            let mut profiles = vec![limits];
+            for cap in [size - 1, size, size + 1] {
+                let mut bounded = limits;
+                bounded.max_key_bytes = cap;
+                profiles.push(bounded);
+            }
+            for cap in [baseline.2.work - 1, baseline.2.work] {
+                let mut bounded = limits;
+                bounded.lexical.max_work = cap;
+                profiles.push(bounded);
+            }
+            for cap in [baseline.2.peak_retained_bytes - 1, baseline.2.peak_retained_bytes] {
+                let mut bounded = limits;
+                bounded.lexical.max_retained_bytes = cap;
+                profiles.push(bounded);
+            }
+            let chunks: Vec<_> = document.as_bytes().chunks(width).collect();
+            for profile in profiles {
+                assert_selective_ascii_trace(&chunks, profile);
+            }
+        }
+    }
+}

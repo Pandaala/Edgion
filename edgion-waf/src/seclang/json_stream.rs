@@ -444,6 +444,17 @@ impl JsonStream {
                         escape: EscapeState::Plain,
                     } = self.lexical
                     {
+                        if key && self.utf8_remaining == 0 {
+                            if let Some(limits) = self.selective {
+                                let available = limits.max_key_bytes.saturating_sub(self.token.len());
+                                let end = offset + available.min(bytes.len() - offset);
+                                let run = self.buffer_string_prefix(&bytes[offset..end]);
+                                if run != 0 {
+                                    offset += run;
+                                    continue;
+                                }
+                            }
+                        }
                         if !key
                             && self.utf8_remaining == 0
                             && self.selective.is_some()

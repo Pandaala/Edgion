@@ -12909,3 +12909,27 @@ or throughput benchmark ran. Canonical fused-JSON knowledge records the boundary
 Formatting, workspace all-target check/Clippy and seven repository guards passed;
 existing unrelated warnings remain. No new allocations or retained-capacity
 changes were introduced by this fast path.
+
+## Reuse buffered ASCII processing for selective JSON keys
+
+Gateway usage selection's canonical parser now routes plain ASCII key prefixes
+through the existing buffered-string helper, additionally bounded by remaining
+key length. The helper uses only current token capacity; a full buffer, special
+byte or exhausted budget falls back to scalar processing. Source, raw-token,
+decoded and work limits remain independent, including partially charged failure
+bytes. Key content, geometric growth, retained capacity and reuse are unchanged.
+No key borrowing, capacity hint, new buffer or provider-specific parser was added.
+This remains supporting work in the canonical dependency, not a WAF-wide audit.
+
+Independent plan review passed the four-file scope. Two new key differential
+tests passed before the runtime edit. Final tests passed 36 canonical parser,
+78 Gateway protocol and 52 usage cases (166 total). Per-feed scalar comparisons
+cover independent key/raw/source/decoded/work caps, competing limits, all two-way
+splits and byte feeds, escaped/multibyte/DEL/invalid keys, and lengths around 1024
+and 2048 with exact/one-less retained and work budgets plus later short-key reuse.
+Existing selected string and discarded string tests remain. The fused-JSON
+knowledge records the added key-path boundary. No full suite, live integration
+or throughput benchmark ran; reduced byte dispatch is not a measured speedup.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed;
+existing unrelated warnings remain.
