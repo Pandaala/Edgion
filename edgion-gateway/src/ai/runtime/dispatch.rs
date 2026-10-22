@@ -592,14 +592,13 @@ fn prepare_ready_attempt(
         response_processors.push(Box::new(
             crate::ai::protocols::anthropic::processor::MessagesProcessor::new(
                 Arc::clone(&usage),
-                quota_accumulator.clone(),
+                quota_accumulator,
                 requested_streaming,
                 plan.terminate_on_over_limit,
                 model.provider_model.clone(),
             ),
         ));
-    }
-    if plan.api != AiApi::AnthropicMessages
+    } else if plan.api != AiApi::AnthropicMessages
         && plan.conversion.is_none()
         && plan.usage_observation == AiUsageObservation::Provider
     {

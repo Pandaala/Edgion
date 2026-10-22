@@ -12557,3 +12557,19 @@ Independent plan review passed. Fresh tests passed 25 attempt-runtime and 32
 shared Redis-core cases, plus formatting, workspace check/Clippy and agent-doc
 validation. Existing unrelated warnings remain. No full suite, live Redis, new
 tests or benchmark ran.
+
+## Move the native Messages quota accumulator into its response owner
+
+In `prepare_ready_attempt`, native Messages observation now moves the local
+optional quota accumulator into `MessagesProcessor`. Its branch and the generic
+usage-observer branch are mutually exclusive by API; connecting them with
+`else if` retains every existing predicate. The earlier converter branch remains
+independent and retains its clone, including for noncanonical plan combinations.
+Request/worker ownership, processor order, accounting and termination are unchanged.
+This removes one temporary Arc increment/decrement when the native branch receives
+an accumulator; no allocation saving or measured throughput improvement is claimed.
+
+Independent plan review passed. Fresh tests passed 36 dispatch, 13 native Messages
+processor, 52 usage and 32 conversion-response cases (133 total). Formatting,
+workspace check/Clippy and all seven static guards passed; existing unrelated
+warnings remain. No new tests, full suite, live provider/Redis or benchmark ran.
