@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Canonical SSE fallback record handoff](sse-02-fallback-record-handoff.md)
+
 - [Guardrail callback output capacity](guardrail-03-callback-output-capacity.md)
 
 - [UDP session retirement wakeup](udp-01-session-retirement-wakeup.md)
@@ -12689,3 +12691,19 @@ append. Fresh final tests passed 13 canonical SSE, 25 Guardrail response, 37 raw
 window and 52 usage cases (127 total). Independent plan review, formatting,
 workspace check/Clippy and seven static guards passed; existing unrelated warnings
 remain. No full suite, live provider or benchmark ran.
+
+## Canonical SSE fallback handoff audit
+
+The consuming batch-to-record handoff still uses a borrowing slice projection:
+handle clones for sliced fallback and a payload copy for coalesced fallback.
+Guardrail's unavailable branch performs it before output admission and failure
+handling, including paths that discard the result. The copy also releases spare
+arena capacity before output allocation, so moving is not unconditionally better.
+[sse-02](sse-02-fallback-record-handoff.md) records consuming versus deferred
+projection choices and the capacity, ordering and terminal acceptance gates.
+No runtime change or duplicate output-buffer proposal was selected.
+
+Independent plan review passed. Fresh tests passed 13 canonical SSE, 25 semantic
+response and five chain cases (43 total). Formatting, workspace check/Clippy and
+agent-doc validation passed with existing unrelated warnings. No new tests, full
+suite, prototype, live transport or benchmark ran.
