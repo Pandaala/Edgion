@@ -20,9 +20,13 @@ where
     S: Stream<Item = Result<Bytes, E>>,
 {
     futures::pin_mut!(stream);
-    let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_bytes));
+    let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
+        // Empty, failed and still-pending bodies need no accumulation storage.
+        if buf.capacity() == 0 && !chunk.is_empty() {
+            buf.reserve_exact(8192.min(max_bytes));
+        }
         let remaining = max_bytes - buf.len();
         if chunk.len() > remaining {
             buf.extend_from_slice(&chunk[..remaining]);

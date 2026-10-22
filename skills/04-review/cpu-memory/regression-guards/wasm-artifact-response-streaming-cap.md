@@ -19,8 +19,12 @@ therefore make `reqwest` allocate an arbitrarily large body before the nominal
 4 MiB / 64 MiB limit rejected it — a memory-amplification / OOM surface in the
 gateway data-plane process (module loads run during preload / config apply /
 lazy first-request load). This is **fixed**: all four paths now stream the body
-through the shared capped helper `stream_body_capped`, so peak host allocation
-is bounded to the cap plus one chunk regardless of what the peer sends.
+through the shared capped helper `stream_body_capped`, so logical accumulated
+body bytes stay at or below the cap. Vec capacity
+and the currently delivered transport chunk also contribute to peak memory;
+this is not a complete host-heap or RSS bound. The collector defers its initial
+accumulation allocation until the first successful nonempty chunk, without
+changing the cap, overflow result or exact-cap EOF requirement.
 
 Re-reports of the "response limit applies only after full buffering" /
 "token/url body has no cap" form are **not accepted** — verify the four call
@@ -30,7 +34,7 @@ sites below still use `stream_body_capped` before re-filing.
 
 **1. One shared streaming helper, four call sites.**
 `stream_body_capped(resp, max_bytes)`
-(`edgion-gateway/src/plugins/http/common/outbound/call.rs`) already backs the
+(`edgion-gateway/src/util/http_body.rs`) already backs the
 Wasm HTTP callout path; it accumulates bytes chunk-by-chunk and returns
 `(body, truncated)` where `truncated == true` means the body would exceed the
 cap. It counts **actually-streamed bytes**, so `Content-Length` truthfulness is
@@ -101,7 +105,7 @@ Re-open only if:
   `fetch_token`, `MAX_TOKEN_BYTES`) and
   `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` (`fetch_url_bytes`,
   `MAX_URL_MODULE_BYTES`); helper `stream_body_capped` in
-  `edgion-gateway/src/plugins/http/common/outbound/call.rs`.
+  `edgion-gateway/src/util/http_body.rs`.
 - Regression tests: `oversized_manifest_is_rejected_at_the_cap`,
   `oversized_token_response_is_rejected_at_the_cap` (oci/mod.rs),
   `url_fetch_rejects_oversized_body_at_the_cap` (vm_manager.rs).

@@ -2,11 +2,47 @@ use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[test]
+fn collector_does_not_allocate_before_nonempty_data() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    for cap in [0, 1, 8192, 16384] {
+        for chunks in [vec![], vec![Ok(Bytes::new())], vec![Err("read failed")]] {
+            let failed = chunks.first().is_some_and(Result::is_err);
+            let stream = futures::stream::iter(chunks);
+            let mut future = std::pin::pin!(stream_body_chunks_capped(stream, cap));
+            let mut context = Context::from_waker(Waker::noop());
+            let (result, allocations) =
+                crate::test_allocation_counter::count_allocations(|| future.as_mut().poll(&mut context));
+            if failed {
+                assert_eq!(result, Poll::Ready(Err("read failed")));
+            } else {
+                assert_eq!(result, Poll::Ready(Ok((Bytes::new(), false))));
+            }
+            assert_eq!(allocations, 0, "cap={cap}, failed={failed}");
+        }
+
+        let stream = futures::stream::pending::<Result<Bytes, ()>>();
+        let mut future = std::pin::pin!(stream_body_chunks_capped(stream, cap));
+        let mut context = Context::from_waker(Waker::noop());
+        let (result, allocations) =
+            crate::test_allocation_counter::count_allocations(|| future.as_mut().poll(&mut context));
+        assert!(result.is_pending());
+        assert_eq!(allocations, 0, "pending cap={cap}");
+    }
+}
+
 #[tokio::test]
 async fn collector_preserves_empty_zero_and_exact_eof_contracts() {
     for (chunks, cap, expected) in [
         (vec![], 0, b"".as_slice()),
         (vec![Bytes::new()], 0, b"".as_slice()),
+        (
+            vec![Bytes::new(), Bytes::from_static(b"abc"), Bytes::new()],
+            3,
+            b"abc".as_slice(),
+        ),
         (
             vec![Bytes::from_static(b"ab"), Bytes::from_static(b"c")],
             3,
@@ -22,7 +58,11 @@ async fn collector_preserves_empty_zero_and_exact_eof_contracts() {
 
 #[tokio::test]
 async fn collector_stops_polling_at_first_overflow_and_keeps_capped_prefix() {
-    for chunks in [vec![b"abcdef".as_slice()], vec![b"ab".as_slice(), b"cdef".as_slice()]] {
+    for chunks in [
+        vec![b"abcdef".as_slice()],
+        vec![b"ab".as_slice(), b"cdef".as_slice()],
+        vec![b"".as_slice(), b"ab".as_slice(), b"".as_slice(), b"cdef".as_slice()],
+    ] {
         let stream = futures::stream::iter(
             chunks
                 .into_iter()

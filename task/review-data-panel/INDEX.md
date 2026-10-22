@@ -13162,3 +13162,36 @@ No runtime change or performance claim was made. Independent plan review passed.
 Fresh verification passed 269 Gateway Wasm tests serially, formatting, workspace
 all-target check/Clippy, agent-doc validation and diff hygiene. Existing unrelated
 warnings remain; no full suite, live integration or performance benchmark ran.
+
+
+## Defer bounded outbound body allocation until data arrives
+
+The canonical `util/http_body.rs` collector now starts with an empty Vec and
+reserves its existing `min(8192, cap)` initial capacity only on the first
+successful nonempty chunk. Empty chunks, empty EOF, an initial read error and
+pending initial reads no longer allocate accumulation storage. Nonempty data
+keeps the existing initial capacity and growth strategy, copied ownership,
+capped prefix, first-overflow return and exact-cap EOF requirement. No response
+BodyStorage, transport-chunk retention, cap or caller policy changed.
+
+This adds a capacity/emptiness check to successful chunk processing; no throughput
+improvement is measured. Allocation counting polls stack-pinned futures with
+prebuilt streams and wakers. The new regression failed on the old collector at
+a positive-cap empty EOF, then passed with zero allocation calls for empty,
+initial-error and pending cases across four caps. Existing boundary tests now
+also exercise leading/interspersed empty chunks before exact and overflowing
+data. The cancellation-drop regression remains unchanged.
+
+The owning Wasm artifact knowledge now distinguishes logical bytes from Vec
+capacity and the delivered transport chunk, correcting its previous full-heap
+overclaim and stale helper location. Lazy allocation does not establish a total
+heap/RSS bound. Independent plan review approved both code and knowledge scope.
+
+Fresh final verification passed 5 collector, 269 serial Wasm and 42 DSL HTTP-call
+tests (316 total), formatting, workspace all-target check/Clippy, seven repository
+guards and diff hygiene. The OIDC response-cap selection reported eight ignored
+network tests; none were run and no OIDC transport coverage is claimed. One test
+link initially failed with disk-full errno 28; after removing confirmed old
+rebuildable incremental artifacts, the failed test command passed. Existing
+unrelated warnings remain. No full suite, live integration or throughput benchmark
+ran.
