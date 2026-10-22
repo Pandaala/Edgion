@@ -91,6 +91,33 @@ fn batch_exact_record_limit_then_falls_back_without_losing_raw_bytes() {
 }
 
 #[test]
+fn batch_metadata_limit_preserves_raw_bytes_after_fallback() {
+    let mut batch = CanonicalRecordBatch::new();
+    batch.push(WindowRecord::raw(vec![Bytes::from_static(b"a")])).unwrap();
+    assert!(batch.metadata_bytes > 0);
+
+    let ranges = vec![ByteRange::new(0, 1); MAX_CANONICAL_BATCH_METADATA_BYTES / size_of::<ByteRange>()];
+    let record = WindowRecord::raw(vec![Bytes::from_static(b"b")]).with_fragments(vec![SemanticFragment {
+        bucket: LogicalBucketKey {
+            choice_index: 0,
+            field: LogicalField::Content,
+        },
+        source: SemanticSource::Utf8Ranges(ranges),
+    }]);
+    assert!(record.metadata_bytes() > MAX_CANONICAL_BATCH_METADATA_BYTES);
+    batch.push(record).unwrap();
+    assert_eq!(batch.status(), CanonicalSourceStatus::Unavailable);
+    assert!(batch.records.is_empty());
+    assert_eq!(batch.metadata_bytes, 0);
+
+    batch.push(WindowRecord::raw(vec![Bytes::from_static(b"c")])).unwrap();
+    assert!(batch.records.is_empty());
+    assert_eq!(batch.metadata_bytes, 0);
+    assert_eq!(batch.raw_len(), 3);
+    assert_eq!(batch.into_raw_bytes().unwrap().as_ref(), b"abc");
+}
+
+#[test]
 fn batch_raw_cap_is_inclusive_and_plus_one_returns_the_record() {
     let mut batch = CanonicalRecordBatch::new();
     batch

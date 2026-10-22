@@ -92,15 +92,15 @@ impl CanonicalRecordBatch {
         if next_raw > MAX_CANONICAL_BATCH_RAW_BYTES {
             return Err(record);
         }
-        let record_metadata = record.metadata_bytes();
-        let annotated_fits = self.records.len() < MAX_CANONICAL_BATCH_RECORDS
-            && self
-                .metadata_bytes
-                .checked_add(record_metadata)
-                .is_some_and(|value| value <= MAX_CANONICAL_BATCH_METADATA_BYTES)
-            && self.fallback.is_empty();
-        if annotated_fits {
-            self.metadata_bytes += record_metadata;
+        let next_metadata = if self.records.len() < MAX_CANONICAL_BATCH_RECORDS && self.fallback.is_empty() {
+            self.metadata_bytes
+                .checked_add(record.metadata_bytes())
+                .filter(|value| *value <= MAX_CANONICAL_BATCH_METADATA_BYTES)
+        } else {
+            None
+        };
+        if let Some(next_metadata) = next_metadata {
+            self.metadata_bytes = next_metadata;
             self.records.push(record);
         } else {
             self.status = CanonicalSourceStatus::Unavailable;

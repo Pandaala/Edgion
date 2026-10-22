@@ -12672,3 +12672,20 @@ validation passed with existing unrelated warnings. These unit tests do not
 establish live accept/handshake behavior or allocation counts; the ordering is
 source evidence from the locked fork. No new tests, full suite, live transport or
 benchmark ran.
+
+## Skip unusable canonical SSE metadata scans
+
+CanonicalRecordBatch now computes incoming record metadata only while the record
+count admits another annotated record and the raw fallback chain is empty. Once
+either gate rules out annotated storage, the fragment-capacity scan has no consumer.
+Accepted records use the same checked, inclusive metadata total. Raw-byte admission
+still runs first; fallback conversion, raw order, status, zero-byte behavior and
+error ownership are unchanged. This removes unused computation, with no allocation
+or measured throughput claim.
+
+The new real-capacity metadata-overflow regression passed on baseline and final
+code, checking raw preservation, record/metadata clearing and subsequent fallback
+append. Fresh final tests passed 13 canonical SSE, 25 Guardrail response, 37 raw
+window and 52 usage cases (127 total). Independent plan review, formatting,
+workspace check/Clippy and seven static guards passed; existing unrelated warnings
+remain. No full suite, live provider or benchmark ran.
