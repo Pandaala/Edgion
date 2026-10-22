@@ -13120,3 +13120,28 @@ hygiene passed; existing unrelated warnings remain. No implementation-mirroring
 test, full suite, live integration or performance benchmark was added or run.
 The source change removes one temporary serialized-header copy; no measured
 throughput or RSS improvement is claimed.
+
+
+## Release Wasm lookup keys before guest allocation
+
+Header-value, property and shared-data GET hostcalls now drop their decoded
+lookup key after obtaining an independently owned result and before entering
+`write_to_guest`. The String key has no further use; releasing it here avoids
+retaining its storage through guest allocator execution and possible recursive
+hostcalls. Header/property results remain owned Strings, and SharedData returns
+an owned Vec plus copied CAS token after releasing its map guard.
+
+All preflight/transient and retained admission checks remain unchanged, as do
+lookup and error precedence, pre-allocation result snapshots, memory reacquisition
+and shared-data CAS write ordering. This shortens key lifetime without removing
+its allocation or establishing an aggregate heap bound, RSS or throughput gain.
+The deferred snapshot and allocator preparation decisions remain untouched.
+
+Independent plan review passed. Fresh baseline and final serial Gateway Wasm
+runs each passed 269 tests. Existing real-guest coverage includes header/shared
+data reads and buffer allocator reentry; it does not supply a dedicated property
+GET reentry test. Owned result types and the narrow lifetime-only diff establish
+key independence; no implementation-mirroring lifetime test was added. Formatting,
+workspace all-target check/Clippy, seven repository guards and diff hygiene passed.
+Existing unrelated warnings remain. No full suite, live integration or performance
+benchmark ran.

@@ -1589,6 +1589,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                     Err(status) => return status,
                 }
             };
+            // The owned value survives allocator reentry; the lookup key is done.
+            drop(key);
             write_to_guest(&mut caller, value.as_bytes(), ret_ptr, ret_size)
         },
     )?;
@@ -2184,6 +2186,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                     Err(status) => return status,
                 }
             };
+            // The owned value survives allocator reentry; the lookup key is done.
+            drop(key);
             write_to_guest(&mut caller, value.as_bytes(), ret_ptr, ret_size)
         },
     )?;
@@ -2283,6 +2287,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             let Some((value, cas)) = caller.data().shared_data.get(&key) else {
                 return STATUS_NOT_FOUND;
             };
+            // SharedData returned an independent value/CAS snapshot.
+            drop(key);
             let status = write_to_guest(&mut caller, &value, ret_value_ptr, ret_value_size);
             if status != STATUS_OK {
                 return status;
