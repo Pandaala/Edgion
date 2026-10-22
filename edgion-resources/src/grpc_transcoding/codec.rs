@@ -72,6 +72,8 @@ impl BoundRequest {
         let message =
             DynamicMessage::deserialize(request_descriptor, &mut de).map_err(|_| TranscodingError::Invalid)?;
         de.end().map_err(|_| TranscodingError::Invalid)?;
+        drop(de);
+        drop(input);
         let len = message.encoded_len();
         if len > limits.request {
             return Err(TranscodingError::TooLarge);

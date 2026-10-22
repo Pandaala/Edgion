@@ -171,9 +171,13 @@ and response peaks are alternatives, not concurrent full trees):
   capacities <=4 MiB in aggregate), reflected text, and temporary transcode_from
   encoded bytes (text plus <=16 bytes per admitted node, below 2.25 MiB).
   Temporary WKT trees and transcode buffers are released before final framing.
-  Materialized body, serialized input and reflected message can remain live during
-  framing; the same 14 MiB allowance includes this overlap and a frame <=1 MiB
-  plus five bytes. Output encoding rejects oversize payloads before frame allocation.
+  After reflection and the JSON end check succeed, the deserializer (including its
+  scratch) and normalized serialized input are explicitly dropped before encoded
+  length calculation and frame allocation. DynamicMessage owns its field data.
+  Materialized body and reflected message can remain live during framing; the same
+  conservative 14 MiB allowance includes that overlap and a frame <=1 MiB plus five
+  bytes. Reservations are unchanged; earlier buffer release is not a measured RSS
+  reduction. Output encoding rejects oversize payloads before frame allocation.
 - The response buffer peak fits inside the same 14 MiB: canonical request replay,
   RawWindow backing/resident storage <=2 MiB, coalesced wire <=512 KiB, reflected
   and temporary transcode_to typed/text/wire representations bounded by that wire

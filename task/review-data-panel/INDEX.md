@@ -13068,3 +13068,26 @@ Final verification passed 35 Resources and 29 Gateway transcoder tests (64 total
 formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene. Existing unrelated warnings remain. No full suite, live integration or
 performance benchmark ran.
+
+
+## Retire transcoding JSON input before framing
+
+BoundRequest::encode now explicitly drops the serde deserializer and normalized
+JSON input immediately after the successful end check. The locked prost-reflect
+DynamicMessage owns its field data independently of that input; its descriptor
+and message remain alive for encoded_len and frame construction. This retires
+the input Vec and deserializer scratch before the frame allocation instead of
+retaining both until function exit.
+
+Validation/error order, protobuf size admission, framing and returned ownership
+are unchanged. The owning conversion memory ledger now reflects the earlier
+release while retaining its conservative 14 MiB allowance and 32 MiB exchange
+reservation. No measured peak-RSS or throughput reduction is claimed. The exact
+supporting production scope is Resources grpc_transcoding/codec.rs.
+
+Fresh verification passed 35 Resources transcoding and 29 Gateway transcoder
+tests (64 total), formatting, workspace all-target check/Clippy, seven repository
+guards and diff hygiene. Existing roundtrip, WKT, bounds and transport ownership
+regressions cover this lifetime change; no new implementation-mirroring tests,
+full suite, live integration or performance benchmark ran. Existing unrelated
+warnings remain.
