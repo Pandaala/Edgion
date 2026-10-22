@@ -489,3 +489,46 @@ parallel Wasm selection passed four and failed its timer test with preparation
 capacity exhausted; all five passed unchanged with --test-threads=1. The process
 preparation semaphore defaults to four permits. Serial success does not establish
 parallel isolation. No new tests, live transport or benchmark ran.
+
+## Read-only response body filter direct-entry inventory
+
+Reconciled at `05c842fee`. Four current Gateway implementations implement
+`UpstreamResponseBodyFilter`; they are separate from the nine writable streaming
+processors above. Read-only describes the body argument, not session immutability:
+entry dye installation and IP-denial state still mutate the request context.
+
+| Implementation | Direct work and retained boundary |
+| --- | --- |
+| `ConditionalUpstreamResponseBodyFilter` in `plugins/runtime/conditional_filter.rs` | Uses compiled conditions and their logless evaluation before invoking its inner filter. Descriptors, regexes, time bounds and dependency bindings are prepared; current time, probability, context and dependency results remain live. A skipped condition returns no delay. |
+| `ExtensionRefFilter` in `plugins/runtime/gateway_api_filters/extension_ref.rs` | Resolves the request-pinned runtime silently, including backend placement restrictions. Checks IP dependencies, installs each nested entry's dye plan, invokes filters in order and takes the maximum delay. Stops nested execution on IP denial. The runtime Arc retains ownership during mutable session dispatch; this is not a disposable payload copy. |
+| `BandwidthLimit` in `plugins/http/bandwidth_limit/plugin.rs` | Uses the construction-time parsed f64 rate and current nonempty chunk length to compute a Duration. Zero rate/empty input returns none. The accepted per-response, stateless delay contract has no shared token bucket or elapsed-time correction. |
+| `WasmPlugin` in `plugins/http/wasm/plugin.rs` | Resolves/schedules module refresh, skips absent body exports, acquires a bounded lease and installs the current shared Bytes handle in an otherwise empty body frame. Clears that handle before lease return. Pause uses the existing bounded metric; acquire/trap failure leaves streaming intact. This standalone stage differs from the request-attached observer's execution lifetime. |
+
+`pg_upstream_response_body_filter` dispatches route (gRPC preferred), selected
+backend (gRPC preferred), Gateway and global runtimes in that order. Runtime and
+ExtensionRef loops merge delays by maximum, not sum, and stop invoking later
+filters after IP denial. Writable processor sink termination alone does not skip
+the read-only chain for the terminating chunk. Runtime IP dependency checks occur
+before the empty-filter shortcut; do not infer that an empty list makes the
+runtime irrelevant.
+
+Typed `TerminalWithoutTrailers` runs processors and the read-only chain with EOS.
+`TerminalBeforeTrailers` runs the full read-only chain with EOS false only when
+processors flush nonempty bytes; otherwise it still checks IP dependencies.
+Actual trailers retain their separate completion ownership. These distinctions
+prevent replacing terminal dispatch with a generic empty-chunk shortcut.
+
+No new safe optimization was selected. The existing
+[prepared dispatch](body-01-prebuild-readonly-dispatch.md),
+[IP projection](ip-01-session-address-projection.md),
+[JWT condition ownership](condition-01-jwt-claim-evaluation.md) and Wasm decisions
+remain the proposal owners. In particular, logless evaluation does not prove
+zero allocations: live JWT JSON parsing and eager candidate storage remain an
+unresolved conflict with the body-phase allocation rule, not an accepted exception.
+This inventory closes the direct-wrapper enumeration, not deeper matcher/parser,
+Wasmtime, dependency-publication or network execution coverage.
+
+Fresh tests passed 18 conditional-wrapper, 70 condition, four bandwidth,
+11 ExtensionRef, 31 response-body callback and 44 standalone Wasm cases (178 total).
+Wasm ran serially because process admission is shared. No new tests, full suite,
+live transport or benchmark ran.
