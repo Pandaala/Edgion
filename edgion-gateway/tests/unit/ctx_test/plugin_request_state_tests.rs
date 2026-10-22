@@ -147,6 +147,7 @@ fn backend_hits_and_misses_stay_pinned_through_stage_and_retry_reentry() {
     }
     assert_eq!(reads, 2);
     assert!(ctx.stage_logs().is_empty());
+    assert!(ctx.listener_publication().is_none());
     let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
         assert!(ctx
             .pinned_backend_ext_ref("default/missing", || panic!("cached miss"))
@@ -156,8 +157,19 @@ fn backend_hits_and_misses_stay_pinned_through_stage_and_retry_reentry() {
                 .unwrap(),
             &original
         ));
+        assert!(ctx.resolve_pinned_backend_ext_ref("default/missing").is_none());
+        assert!(Arc::ptr_eq(
+            &ctx.resolve_pinned_backend_ext_ref("default/hit").unwrap(),
+            &original
+        ));
     });
     assert_eq!(allocations.calls, 0);
+    ctx.capture_listener_publication(crate::plugins::publication::HttpListenerPublication::empty());
+    assert!(ctx.resolve_pinned_backend_ext_ref("default/missing").is_none());
+    assert!(Arc::ptr_eq(
+        &ctx.resolve_pinned_backend_ext_ref("default/hit").unwrap(),
+        &original
+    ));
 }
 
 #[test]
@@ -176,6 +188,14 @@ fn listener_capture_is_inline_allocation_free_and_preserves_captured_absence() {
 }
 
 impl EdgionHttpContext {
+    pub(crate) fn pinned_backend_ext_ref(
+        &mut self,
+        key: &str,
+        resolve: impl FnOnce() -> Option<Arc<PluginRuntime>>,
+    ) -> Option<Arc<PluginRuntime>> {
+        self.ensure_plugin_aux().pinned_backend_ext_ref(key, resolve)
+    }
+
     /// Existing policy-only fixtures supply their owner before request entry.
     pub(crate) fn capture_plugin_scope(&mut self, scope: Arc<crate::plugins::publication::GatewayScope>) -> bool {
         if let Some(current) = self.plugin_scope() {

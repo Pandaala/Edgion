@@ -923,23 +923,13 @@ async fn owning_extension_lifecycle_pins_old_scope_and_rebuilds_new_requests() {
     let mut missing = crate::EdgionHttpContext::new();
     assert!(missing.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
     let missing_scope = missing.plugin_scope().unwrap().scope.clone();
-    assert!(missing
-        .pinned_backend_ext_ref("apps/plugins", || missing_scope
-            .http("apps/plugins")
-            .map(|view| view.plugin_runtime.clone()))
-        .is_none());
+    assert!(missing.resolve_pinned_backend_ext_ref("apps/plugins").is_none());
     update_source(&publisher, plugin("dsl", true), false);
     let created = view(&publisher);
     let mut captured = crate::EdgionHttpContext::new();
     assert!(captured.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
     let captured_scope = captured.plugin_scope().unwrap().scope.clone();
-    let original = captured
-        .pinned_backend_ext_ref("apps/plugins", || {
-            captured_scope
-                .http("apps/plugins")
-                .map(|view| view.plugin_runtime.clone())
-        })
-        .unwrap();
+    let original = captured.resolve_pinned_backend_ext_ref("apps/plugins").unwrap();
     assert!(Arc::ptr_eq(&original, &created.plugin_runtime));
     let mut updated = (*plugin("dsl", true)).clone();
     updated.metadata.uid = Some("replacement".into());
@@ -963,14 +953,10 @@ async fn owning_extension_lifecycle_pins_old_scope_and_rebuilds_new_requests() {
     assert!(Arc::ptr_eq(&captured.plugin_scope().unwrap().scope, &captured_scope));
     for _ in 0..3 {
         assert!(Arc::ptr_eq(
-            &captured
-                .pinned_backend_ext_ref("apps/plugins", || panic!("captured hit must stay pinned"))
-                .unwrap(),
+            &captured.resolve_pinned_backend_ext_ref("apps/plugins").unwrap(),
             &original
         ));
-        assert!(missing
-            .pinned_backend_ext_ref("apps/plugins", || panic!("captured miss must stay pinned"))
-            .is_none());
+        assert!(missing.resolve_pinned_backend_ext_ref("apps/plugins").is_none());
     }
     assert!(captured_scope.ai_rule(&source, 0));
     assert!(missing_scope.http("apps/plugins").is_none());

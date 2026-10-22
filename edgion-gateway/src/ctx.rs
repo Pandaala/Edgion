@@ -1832,6 +1832,27 @@ struct PluginAuxState {
     resolved_backend_ext_refs: HashMap<String, Option<Arc<PluginRuntime>>>,
 }
 
+impl PluginAuxState {
+    #[inline]
+    fn get_or_init(slot: &mut Option<Box<Self>>) -> &mut Self {
+        slot.get_or_insert_with(|| Box::new(Self::default())).as_mut()
+    }
+
+    fn pinned_backend_ext_ref(
+        &mut self,
+        key: &str,
+        resolve: impl FnOnce() -> Option<Arc<PluginRuntime>>,
+    ) -> Option<Arc<PluginRuntime>> {
+        let cache = &mut self.resolved_backend_ext_refs;
+        if let Some(runtime) = cache.get(key) {
+            return runtime.as_ref().map(Arc::clone);
+        }
+        let runtime = resolve();
+        cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
+        runtime
+    }
+}
+
 const REQUEST_BODY_SOURCE_HANDLER: u8 = 1 << 0;
 const REQUEST_BODY_SOURCE_WAF: u8 = 1 << 1;
 const REQUEST_BODY_SOURCE_OBSERVER: u8 = 1 << 2;
@@ -2332,9 +2353,7 @@ impl EdgionHttpContext {
 
     #[inline]
     fn ensure_plugin_aux(&mut self) -> &mut PluginAuxState {
-        self.plugin_aux
-            .get_or_insert_with(|| Box::new(PluginAuxState::default()))
-            .as_mut()
+        PluginAuxState::get_or_init(&mut self.plugin_aux)
     }
 
     #[cfg(test)]
@@ -2651,22 +2670,9 @@ impl EdgionHttpContext {
     }
 
     pub(crate) fn resolve_pinned_backend_ext_ref(&mut self, key: &str) -> Option<Arc<PluginRuntime>> {
-        let scope = self.plugin_scope().cloned();
-        self.pinned_backend_ext_ref(key, || scope?.scope.http_runtime(key))
-    }
-
-    pub(crate) fn pinned_backend_ext_ref(
-        &mut self,
-        key: &str,
-        resolve: impl FnOnce() -> Option<Arc<PluginRuntime>>,
-    ) -> Option<Arc<PluginRuntime>> {
-        let cache = &mut self.ensure_plugin_aux().resolved_backend_ext_refs;
-        if let Some(runtime) = cache.get(key) {
-            return runtime.as_ref().map(Arc::clone);
-        }
-        let runtime = resolve();
-        cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
-        runtime
+        let publication = &self.plugin_execution.publication;
+        PluginAuxState::get_or_init(&mut self.plugin_aux)
+            .pinned_backend_ext_ref(key, || publication.as_ref()?.unique_gateway()?.scope.http_runtime(key))
     }
 
     #[inline]

@@ -12821,3 +12821,29 @@ response-callback tests (570 total). Formatting, workspace all-target check/Clip
 and seven repository guards passed with existing unrelated warnings. The canonical
 tokenized-log knowledge describes both log-start paths. No full suite, live
 integration or throughput benchmark ran.
+
+## Borrow publication during backend-reference cache resolution
+
+The production context resolver now borrows its captured publication separately
+from mutable plugin auxiliary state. Scope projection runs only inside the
+existing cache-miss closure; it no longer clones and drops a temporary GatewayScope
+Arc before every lookup. The auxiliary owner retains the same hit/miss cache and
+mechanically unchanged lookup/insert algorithm. One shared initializer preserves
+lazy box allocation for all auxiliary consumers. Runtime Arcs and miss-only key
+copies remain owned, and no request-layout fields or publication rules changed.
+The injected resolver wrapper now lives in the existing unit-test module.
+
+Independent plan review approved the exact scope, including changing the existing
+publication lifecycle test to call the production resolver. Context tests retain
+closure-call counting and allocation assertions and now exercise cached hit/miss
+reads without a publication and after empty-view capture. Baseline context tests
+passed eight cases. Final serial verification passed eight context, 51 publication
+and 12 ExtensionRef tests (71 total). The known unrelated plugin-state layout
+assertion remains explicitly excluded and unresolved in verification-04.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing unrelated warnings. The unit-layout guard initially rejected the
+newly test-only wrapper in src; moving it to the unit-test module resolved the
+failure, and final context verification ran after that correction. No full suite,
+live integration or throughput benchmark ran. This removes temporary scope
+reference-count traffic, not the selected runtime ownership or cache allocation.
