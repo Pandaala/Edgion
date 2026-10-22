@@ -415,6 +415,16 @@ string capture with a caller-declared decoded-byte cap. Its default remains disc
 selected strings use the same UTF-8/escape/grammar and retained budgets before capture.
 Native Responses captures only short status/type metadata, never complete output.
 
+Unselected plain strings batch admitted ordinary ASCII runs without retaining
+their text. This path excludes keys, selected string capture, escapes and pending
+UTF-8 continuations. Admission accounts for source, decoded and work limits and
+both discarded-summary counters before advancing. Special bytes and exhausted
+budgets return to scalar processing, preserving partial charges and error order.
+This changes parser dispatch cost, not token capacity or the declined growth-hint
+policy. Differential tests compare each feed's events, errors, usage, summary,
+retained capacity and UTF-8 state with the forced scalar path, including terminal
+retries and summary overflow. Keep those semantics when changing the fast path.
+
 Default `JsonStream` token borrowing, capture, counters, errors, limits and WAF
 verdicts remain unchanged. Selective coverage is additive: preserve the existing
 test identities and compare whole, byte and mixed schedules under every budget.

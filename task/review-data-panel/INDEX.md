@@ -12882,3 +12882,30 @@ Formatting, workspace all-target check/Clippy and seven repository guards passed
 A new test-only type-complexity warning was corrected with a local function type
 alias; registry tests and workspace checks passed again after that correction.
 Existing unrelated warnings remain.
+
+## Batch admitted ASCII in selective JSON discard
+
+The Gateway usage-observer call chain reaches the canonical JsonStreamSelective
+owner in edgion-waf. Its plain unselected strings now process admitted ordinary
+ASCII runs together, avoiding repeated byte dispatch and accounting. Keys,
+selected string capture, escapes and pending UTF-8 continuations keep their
+existing paths. No text is retained by the new path. Admission includes source,
+decoded and work budgets plus both summary counters; boundary bytes use scalar
+processing so failure priority and partial accounting stay identical. The default
+capture-all parser and the user-declined token growth-hint policy are unchanged.
+This is a narrowly scoped canonical dependency edit supporting Gateway consumers,
+not a WAF-wide coverage claim or measured request-throughput improvement.
+
+Independent plan review passed the four-file allow-list. Two new differential
+tests first passed against unchanged production code, then the final parser suite
+passed 34 cases. Tests compare per-feed events, errors, usage, discarded summary,
+token content/capacity and UTF-8 state against forced scalar execution, including
+all two-chunk splits, byte feeds, competing budgets, DEL, malformed strings,
+terminal retries and summary overflow. Existing selected-capture tests remain.
+Gateway protocol tests passed 78 cases and usage tests passed 52 (164 total with
+the parser suite). No full workspace test suite, live provider, integration test
+or throughput benchmark ran. Canonical fused-JSON knowledge records the boundary.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed;
+existing unrelated warnings remain. No new allocations or retained-capacity
+changes were introduced by this fast path.

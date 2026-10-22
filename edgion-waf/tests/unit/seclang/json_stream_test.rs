@@ -1509,3 +1509,112 @@ fn selected_strings_share_grammar_and_caps_while_large_unselected_values_are_dis
         }
     }
 }
+
+fn assert_selective_ascii_trace(chunks: &[&[u8]], limits: JsonStreamSelectiveLimits) {
+    let mut batched = JsonStreamSelective::new(limits);
+    let mut sequential = JsonStreamSelective::new(limits);
+    sequential.inner.sequential_ascii = true;
+    let mut sinks = [SelectiveEvents::default(), SelectiveEvents::default()];
+    for input in chunks.iter().copied().map(JsonStreamInput::Data).chain([
+        JsonStreamInput::Complete,
+        JsonStreamInput::Abandoned,
+        JsonStreamInput::Complete,
+    ]) {
+        let mut snapshots = Vec::new();
+        for (index, stream) in [&mut batched, &mut sequential].into_iter().enumerate() {
+            let result = stream.feed(input, &mut sinks[index]);
+            let inner = &stream.inner;
+            snapshots.push((
+                result,
+                inner.usage(),
+                inner.discarded,
+                inner.raw_token_bytes,
+                inner.token.to_vec(),
+                inner.token.capacity(),
+                inner.stack.capacity(),
+                (inner.utf8_remaining, inner.utf8_value, inner.utf8_minimum),
+            ));
+        }
+        assert_eq!(snapshots[0], snapshots[1], "limits {limits:?}");
+        assert_eq!(sinks[0].0, sinks[1].0);
+    }
+}
+
+#[test]
+fn selective_ascii_discard_matches_scalar_boundaries_and_failures() {
+    let bodies: &[&[u8]] = &[
+        br#"{"key":["ordinary ascii","a\nb\u00e9",123,true]}"#,
+        "[\"prefix-é€-tail\",\"\"]".as_bytes(),
+        b"[\"prefix\x7f-tail\"]",
+        b"[\"prefix\x1f-tail\"]",
+        b"[\"prefix\xff-tail\"]",
+        b"[\"prefix\xc3-tail\"]",
+        br#"["prefix\uD800x"]"#,
+        br#"["unfinished"#,
+    ];
+    for &body in bodies {
+        let baseline = selective_run(body, body.len(), selective_limits());
+        let mut profiles = vec![selective_limits()];
+        for budget in 0..=baseline.2.work + 2 {
+            let mut limits = selective_limits();
+            limits.lexical.max_work = budget;
+            profiles.push(limits);
+        }
+        for budget in 0..=body.len() + 1 {
+            let mut source = selective_limits();
+            source.lexical.max_source_bytes = budget;
+            profiles.push(source);
+            let mut decoded = selective_limits();
+            decoded.lexical.max_decoded_bytes = budget;
+            profiles.push(decoded);
+            let mut competing = source;
+            competing.lexical.max_work = budget;
+            competing.lexical.max_decoded_bytes = budget / 2;
+            profiles.push(competing);
+        }
+        for budget in 0..=8 {
+            let mut limits = selective_limits();
+            limits.lexical.max_raw_token_bytes = budget;
+            limits.max_key_bytes = budget;
+            limits.max_number_bytes = budget;
+            limits.lexical.max_depth = budget;
+            limits.lexical.max_events = budget;
+            limits.lexical.max_retained_bytes = budget;
+            profiles.push(limits);
+        }
+        for limits in profiles {
+            for split in 0..=body.len() {
+                assert_selective_ascii_trace(&[&body[..split], &body[split..]], limits);
+            }
+            let chunks: Vec<_> = body.chunks(1).collect();
+            assert_selective_ascii_trace(&chunks, limits);
+        }
+    }
+}
+
+#[test]
+fn selective_ascii_discard_preserves_summary_overflow_order() {
+    for summary in [
+        JsonDiscardedStringSummary {
+            decoded_bytes: usize::MAX - 2,
+            decoded_chars: 0,
+        },
+        JsonDiscardedStringSummary {
+            decoded_bytes: 0,
+            decoded_chars: usize::MAX - 2,
+        },
+    ] {
+        let mut results = Vec::new();
+        for sequential in [false, true] {
+            let mut parser = JsonStreamSelective::new(selective_limits());
+            parser.inner.sequential_ascii = sequential;
+            let mut sink = SelectiveEvents::default();
+            parser.feed(JsonStreamInput::Data(b"\""), &mut sink).unwrap();
+            parser.inner.discarded = summary;
+            let result = parser.feed(JsonStreamInput::Data(b"abcdef"), &mut sink);
+            assert_eq!(result, Err(JsonStreamError::Arithmetic));
+            results.push((result, parser.usage(), parser.inner.discarded, sink.0));
+        }
+        assert_eq!(results[0], results[1]);
+    }
+}
