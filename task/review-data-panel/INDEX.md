@@ -254,6 +254,8 @@ destination.
 
 - [Prepared gRPC wire-admission schema](grpc-03-prepared-wire-schema.md)
 
+- [WKT ProtoJSON output intermediates](grpc-09-wkt-output-transcoding.md)
+
 - [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
 
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
