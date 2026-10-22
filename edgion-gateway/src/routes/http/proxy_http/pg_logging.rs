@@ -137,7 +137,7 @@ pub async fn logging(
                 error = %e,
                 "Failed to store access log"
             );
-            global_metrics().access_log_dropped();
+            global_metrics().access_log_dropped(1);
         }
     }
 }

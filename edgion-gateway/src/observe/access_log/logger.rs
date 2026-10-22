@@ -61,12 +61,12 @@ impl AccessLogger {
         for sender in &self.senders {
             if sender.healthy() {
                 if sender.send(data).await.is_err() {
-                    self.log_type.record_drop();
+                    self.log_type.record_drops(1);
                 }
                 return;
             }
         }
-        self.log_type.record_drop();
+        self.log_type.record_drops(1);
     }
 
     /// Send log with pre-serialization metadata to the first healthy sender.
@@ -85,12 +85,12 @@ impl AccessLogger {
         for sender in &self.senders {
             if sender.healthy() {
                 if sender.send_with_meta(data, meta).await.is_err() {
-                    self.log_type.record_drop();
+                    self.log_type.record_drops(1);
                 }
                 return;
             }
         }
-        self.log_type.record_drop();
+        self.log_type.record_drops(1);
     }
 }
 

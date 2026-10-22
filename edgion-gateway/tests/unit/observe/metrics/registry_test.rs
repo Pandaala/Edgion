@@ -1,6 +1,31 @@
 use super::*;
 use metrics_exporter_prometheus::PrometheusBuilder;
 
+#[test]
+fn dropped_log_counts_keep_zero_lazy_and_add_batches() {
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        let m = GatewayMetrics::new();
+        type RecordDrops = fn(&GatewayMetrics, u64);
+        let counters: [(RecordDrops, &str); 5] = [
+            (GatewayMetrics::access_log_dropped, names::ACCESS_LOG_DROPPED),
+            (GatewayMetrics::ssl_log_dropped, names::SSL_LOG_DROPPED),
+            (GatewayMetrics::tcp_log_dropped, names::TCP_LOG_DROPPED),
+            (GatewayMetrics::tls_log_dropped, names::TLS_LOG_DROPPED),
+            (GatewayMetrics::udp_log_dropped, names::UDP_LOG_DROPPED),
+        ];
+        for (record, name) in counters {
+            record(&m, 0);
+            assert!(!handle.render().contains(name));
+            record(&m, 1000);
+            record(&m, 1);
+            record(&m, 0);
+            assert!(handle.render().lines().any(|line| line == format!("{name} 1001")));
+        }
+    });
+}
+
 pub(super) fn lifetime_recorder() -> edgion_common::observe::metrics_api::TestRecorder {
     use edgion_common::observe::{
         cardinality_guard::CardinalityMode,
@@ -134,7 +159,7 @@ fn gateway_metrics_registration_policy() {
         );
 
         // --- After touching one cold counter ---
-        m.access_log_dropped();
+        m.access_log_dropped(1);
         let rendered = handle.render();
         assert!(
             rendered.contains("edgion_access_log_dropped_total"),

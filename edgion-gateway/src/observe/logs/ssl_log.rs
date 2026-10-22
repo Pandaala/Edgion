@@ -47,7 +47,7 @@ impl SslLogger {
         // Reserve first so a saturated/closed channel does not pay the JSON
         // serialization cost on the synchronous TLS callback path.
         let Ok(permit) = self.tx.try_reserve() else {
-            global_metrics().ssl_log_dropped();
+            global_metrics().ssl_log_dropped(1);
             return;
         };
         let payload = serde_json::to_string(entry).unwrap_or_else(|_| "{}".to_string());

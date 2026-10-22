@@ -430,8 +430,11 @@ impl GatewayMetrics {
 
     /// Record a dropped access log entry
     #[inline]
-    pub fn access_log_dropped(&self) {
-        get_or_register_counter(&self.access_log_dropped, names::ACCESS_LOG_DROPPED).increment(1);
+    pub fn access_log_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        get_or_register_counter(&self.access_log_dropped, names::ACCESS_LOG_DROPPED).increment(count);
     }
 
     /// Count documents successfully re-ingested into ES during a backfill run.
@@ -454,26 +457,38 @@ impl GatewayMetrics {
 
     /// Record a dropped SSL log entry
     #[inline]
-    pub fn ssl_log_dropped(&self) {
-        get_or_register_counter(&self.ssl_log_dropped, names::SSL_LOG_DROPPED).increment(1);
+    pub fn ssl_log_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        get_or_register_counter(&self.ssl_log_dropped, names::SSL_LOG_DROPPED).increment(count);
     }
 
     /// Record a dropped TCP log entry
     #[inline]
-    pub fn tcp_log_dropped(&self) {
-        get_or_register_counter(&self.tcp_log_dropped, names::TCP_LOG_DROPPED).increment(1);
+    pub fn tcp_log_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        get_or_register_counter(&self.tcp_log_dropped, names::TCP_LOG_DROPPED).increment(count);
     }
 
     /// Record a dropped TLS access log entry
     #[inline]
-    pub fn tls_log_dropped(&self) {
-        get_or_register_counter(&self.tls_log_dropped, names::TLS_LOG_DROPPED).increment(1);
+    pub fn tls_log_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        get_or_register_counter(&self.tls_log_dropped, names::TLS_LOG_DROPPED).increment(count);
     }
 
     /// Record a dropped UDP log entry
     #[inline]
-    pub fn udp_log_dropped(&self) {
-        get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(1);
+    pub fn udp_log_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(count);
     }
 
     /// Record a reload signal received from controller

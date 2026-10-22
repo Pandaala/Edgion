@@ -6,6 +6,69 @@ use std::sync::atomic::Ordering;
 /// shape that a full disk produces.
 struct FlushFailWriter;
 
+#[test]
+fn failed_batches_count_pending_lines_once_for_each_log_type() {
+    crate::test_subprocess::assert_in_subprocess(
+        "link_sys::providers::local_file::data_sender_impl::tests",
+        "failed_batches_count_pending_lines_once_for_each_log_type",
+        "EDGION_BATCH_LOG_DROP_TEST_CHILD",
+        "batch-drops",
+        || {
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let handle = recorder.handle();
+            metrics::with_local_recorder(&recorder, || {
+                for (kind, name) in [
+                    (LogType::Access, "edgion_access_log_dropped_total"),
+                    (LogType::Ssl, "edgion_ssl_log_dropped_total"),
+                    (LogType::Tcp, "edgion_tcp_log_dropped_total"),
+                    (LogType::Tls, "edgion_tls_log_dropped_total"),
+                    (LogType::Udp, "edgion_udp_log_dropped_total"),
+                ] {
+                    let mut sink = BatchSink::new(
+                        BufWriter::new(FlushFailWriter),
+                        kind,
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        None,
+                    );
+                    assert!(!sink.flush());
+                    assert!(
+                        !handle.render().contains(name),
+                        "empty failure must not register {name}"
+                    );
+                    for line in ["one", "two", "three"] {
+                        sink.write_line(line);
+                    }
+                    assert_eq!(sink.pending_lines, 3);
+                    assert!(!sink.flush());
+                    assert_eq!(sink.pending_lines, 0);
+                    assert_eq!(sink.pending_bytes, 0);
+                    assert_eq!(sink.current_size, 0);
+                    assert!(handle.render().lines().any(|line| line == format!("{name} 3")));
+                    assert!(!sink.flush());
+                    assert!(handle.render().lines().any(|line| line == format!("{name} 3")));
+                    sink.write_line("four");
+                    sink.write_line("five");
+                    assert!(!sink.flush());
+                    assert!(handle.render().lines().any(|line| line == format!("{name} 5")));
+
+                    let mut unbuffered = BatchSink::new(
+                        BufWriter::with_capacity(0, WriteFailWriter),
+                        kind,
+                        0,
+                        Arc::new(AtomicBool::new(true)),
+                        None,
+                    );
+                    unbuffered.write_line("single write failure");
+                    assert_eq!(unbuffered.pending_lines, 0);
+                    assert!(unbuffered.flush());
+                    assert!(handle.render().lines().any(|line| line == format!("{name} 6")));
+                }
+            });
+        },
+    );
+}
+
 impl Write for FlushFailWriter {
     fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
         Err(std::io::Error::other("write failed"))

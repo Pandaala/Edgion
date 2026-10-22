@@ -12851,3 +12851,34 @@ newly test-only wrapper in src; moving it to the unit-test module resolved the
 failure, and final context verification ran after that correction. No full suite,
 live integration or throughput benchmark ran. This removes temporary scope
 reference-count traffic, not the selected runtime ownership or cache allocation.
+
+## Aggregate local-file failed-batch drop accounting
+
+BatchSink now adds pending_lines to the canonical typed dropped counter once per
+failed flush instead of incrementing once per pending line. Single-entry paths
+still add one; zero counts return before global metric access or registration.
+The fixed counter retains the same final integer total, while a concurrent scrape
+can observe the aggregate update instead of intermediate loop increments. Pending
+accounting resets, retained BufWriter bytes, pessimistic loss semantics, health
+thresholds/recovery and first-healthy routing remain unchanged. This reduces
+failure-path counter operations, with no measured throughput claim.
+
+Independent plan review passed. Baseline registry tests passed 13 cases. Fresh
+verification passed 25 local-file sender, 14 registry, eight logger and 11 terminal
+logging tests (58 total). New cases cover all five log types, lazy zero counts,
+batch totals, repeated empty failures and separate buffering loss. No full suite,
+live integration or benchmark ran.
+
+Follow-up knowledge discrepancy: the historical
+`skills/04-review/observability/regression-guards/local-file-write-error-surfaced.md`
+still describes removed write_log_line, current_size advancement on writeln success,
+and rejection of health flips. Current BatchSink advances size on flush success
+and supports failure/recovery health transitions. Reconcile that page separately
+against current implementation and tests; its stale wording is not authority to
+change the current writer. The canonical typed-dispatch knowledge was updated
+within this batch's scope.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed.
+A new test-only type-complexity warning was corrected with a local function type
+alias; registry tests and workspace checks passed again after that correction.
+Existing unrelated warnings remain.
