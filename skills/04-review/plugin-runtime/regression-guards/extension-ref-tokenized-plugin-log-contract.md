@@ -27,7 +27,12 @@ by the plugin-system body-phase logging rules.
 ## Rationale and evidence
 
 `ExtensionRefFilter::prepare_execution` starts the nested resource log before
-dispatch. Its request and response stage loops append completed inner logs with
+request/synchronous dispatch. The async response entry first resolves silently
+for its empty-stage gate, then starts the resource log and moves that same pinned
+runtime into prepared dispatch. It does not resolve the nonempty target twice.
+Both paths set the outer reference before starting the resource log, then check
+IP dependencies before inner execution. Empty async stages create no resource log.
+The request and response stage loops append completed inner logs with
 the same token, preserving the resource container even when stage execution is
 nested. `PingoraSessionAdapter` maps those operations to
 `EdgionHttpContext::start_pending_edgion_plugins_log` and

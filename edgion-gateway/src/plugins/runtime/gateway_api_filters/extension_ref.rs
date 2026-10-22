@@ -248,9 +248,8 @@ impl ExtensionRefFilter {
             // forwarded over by the upstream response (the response runner only
             // aborts on an ErrResponse local-reply, not on ErrTerminateRequest).
             // Return ErrResponse so `check_response_stage_terminate` builds the
-            // single replacement reply. (Normally unreachable here because
-            // `run_upstream_response` pre-resolves; this guards the TOCTOU window
-            // where the ref vanishes between the two lookups.)
+            // single replacement reply. The public response entry dispatches
+            // its already resolved runtime directly through the prepared path.
             if matches!(stage, PluginRunningStage::UpstreamResponse) {
                 return PluginRunningResult::ErrResponse {
                     status: 500,
@@ -265,6 +264,16 @@ impl ExtensionRefFilter {
             return PluginRunningResult::ErrTerminateRequest;
         };
 
+        Self::run_prepared_extension_async(stage, session, plugin_runtime, log_token).await
+    }
+
+    /// Keep the selected request-pinned runtime alive across inner awaits.
+    async fn run_prepared_extension_async(
+        stage: PluginRunningStage,
+        session: &mut dyn PluginSession,
+        plugin_runtime: Arc<PluginRuntime>,
+        log_token: EdgionPluginsLogToken,
+    ) -> PluginRunningResult {
         if !plugin_runtime.ip_dependencies_available(session) {
             return PluginRunningResult::ErrResponse {
                 status: 500,
@@ -458,8 +467,9 @@ impl UpstreamResponse for ExtensionRefFilter {
         // so a direct write would be forwarded over by the upstream response.
         match self.resolve_runtime_silent(session) {
             Some(rt) if rt.upstream_response_async_plugins_count() > 0 => {
-                self.run_extension_async(PluginRunningStage::UpstreamResponse, session, log)
-                    .await
+                log.set_refer_to(self.target.name.clone());
+                let token = session.start_edgion_plugins_log(self.target.name.clone());
+                Self::run_prepared_extension_async(PluginRunningStage::UpstreamResponse, session, rt, token).await
             }
             // Tag the log entry as a reference so the access log records it
             // consistently with the other stages (the runner uses `refer_to` to

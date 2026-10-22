@@ -12800,3 +12800,24 @@ passed 543 runtime, 17 generation and four local-limiter cases (564 total).
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing unrelated warnings. No full suite, live Redis/integration or
 benchmark ran. The canonical local-overflow knowledge records the binding rule.
+
+## Reuse the resolved async ExtensionRef runtime
+
+The nonempty asynchronous response ExtensionRef entry now moves its first
+silently resolved runtime into prepared dispatch instead of resolving it again.
+Route snapshots and backend hit/miss caches are request-pinned; the silent
+resolver already applies backend-scope restrictions. The retained Arc owns the
+runtime across awaits. Reference tagging, resource-log creation, IP dependency
+checks, dye installation, inner-log suppression and result propagation keep their
+order. Empty/missing async targets, request errors and silent body dispatch retain
+their behavior. This removes a repeated lookup and runtime Arc clone/drop on the
+nonempty async path, not the runtime owner or retained log-name copies.
+
+Independent plan review passed. Baseline ExtensionRef tests passed 11 cases.
+A new actual WAF async-entry regression checks one lookup/resource log for both
+phase Skip and Pending-error outcomes, automatic-log suppression and absence of
+direct response writes. Fresh serial verification passed 544 runtime and 26
+response-callback tests (570 total). Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing unrelated warnings. The canonical
+tokenized-log knowledge describes both log-start paths. No full suite, live
+integration or throughput benchmark ran.

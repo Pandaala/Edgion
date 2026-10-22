@@ -184,6 +184,75 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     assert_eq!(log.refer_to.as_deref(), Some("waf"));
 }
 
+#[tokio::test]
+async fn async_response_reuses_resolved_runtime_for_skip_and_error() {
+    for pending in [false, true] {
+        let mut runtime = PluginRuntime::new();
+        runtime
+            .add_waf(&edgion_resources::resources::edgion_plugins::WafConfig {
+                mode: edgion_resources::resources::edgion_plugins::WafMode::On,
+                ..crate::plugins::http::waf::fixture::config("SecAction \"id:1,phase:1,pass,log\"\n")
+            })
+            .unwrap();
+        assert_eq!(runtime.upstream_response_async_plugins_count(), 1);
+        let runtime = Arc::new(runtime);
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(crate::EdgionHttpContext::default());
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .once()
+            .returning(move |_| Some(Arc::clone(&runtime)));
+        session
+            .expect_start_edgion_plugins_log()
+            .with(eq("waf".to_owned()))
+            .once()
+            .returning(|_| EdgionPluginsLogToken::new(0));
+        session.expect_install_dye_plan().once().return_const(());
+        session.expect_push_to_edgion_plugins_log().never();
+        session.expect_write_response_header().never();
+        session.expect_write_response_body().never();
+        let mut waf = MockWafSessionCapability::new();
+        waf.expect_claim_phase().once().returning(move |_, _| {
+            if pending {
+                crate::ctx::WafPhaseClaim::Pending
+            } else {
+                crate::ctx::WafPhaseClaim::Skip
+            }
+        });
+        if pending {
+            waf.expect_record_terminal_error().once().return_const(());
+        }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+        let mut filter = owned_rule_extension_filter(
+            "ns".into(),
+            LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "EdgionPlugins".into(),
+                name: "waf".into(),
+                resolved_namespace: None,
+            },
+        );
+        filter.set_index(0);
+        let mut log = PluginLog::new("ExtensionRef");
+        let result = filter.run_upstream_response(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            if pending {
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+        assert_eq!(log.refer_to.as_deref(), Some("waf"));
+    }
+}
+
 #[test]
 fn backend_scope_uses_request_pinned_runtime_across_attempts() {
     use crate::plugins::runtime::log::EdgionPluginsLogToken;
