@@ -12726,3 +12726,20 @@ and seven static guards passed with existing unrelated warnings. One old rebuild
 Gateway incremental cache was removed before compilation to recover disk space.
 No full suite, live provider or benchmark ran; this removes unused traversal work,
 without a measured allocation or throughput claim.
+
+## Reuse input metadata within window admission
+
+RawWindow::try_retain now computes record.metadata_bytes once for its metadata
+and combined-resident checks. The record remains immutable between those checks;
+the calculation is an allocation-free saturating capacity sum over its fragment
+ranges. The local scalar preserves arithmetic, limit checks, admission before
+allocation and unchanged-record rejection. No persistent cache or new ownership
+mechanism was introduced. This removes a duplicate source-level scan, without a
+measured CPU or allocation claim.
+
+Independent plan review passed. Existing window tests passed 39 cases on baseline;
+final verification passed those 39 plus 25 Guardrail response and 13 canonical SSE
+cases (77 total). Exact-capacity and rejected-retain atomicity coverage was reused
+without adding implementation-mirroring tests. Formatting, workspace check/Clippy
+and seven static guards passed with existing unrelated warnings. No full suite,
+live transport or benchmark ran.

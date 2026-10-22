@@ -521,16 +521,17 @@ impl RawWindow {
             check_limit(ranges, self.limits.ranges, WindowLimit::RawRanges)?;
             check_limit(lines, self.limits.lines, WindowLimit::Lines)?;
             check_limit(events, self.limits.events, WindowLimit::Events)?;
+            let record_metadata = record.metadata_bytes();
             let metadata = add(
                 add(self.raw.slice_metadata_capacity(), self.bucket_metadata)?,
                 add(
-                    record.metadata_bytes(),
+                    record_metadata,
                     add(raw.additional_metadata, buckets.additional_metadata)?,
                 )?,
             )?;
             check_limit(metadata, self.limits.metadata, WindowLimit::MetadataBytes)?;
             self.admit(add(
-                record.metadata_bytes(),
+                record_metadata,
                 add(
                     raw.additional_resident,
                     add(raw.additional_metadata, buckets.additional_metadata)?,
