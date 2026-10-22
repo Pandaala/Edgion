@@ -58,6 +58,7 @@ destination.
 
 - [Wasm pool discard lock scope](wasm-04-pool-discard-lock-scope.md)
 - [Wasm guest allocator preparation](wasm-05-guest-allocator-preparation.md)
+- [Prepared Wasm callout authorization](wasm-06-prepared-callout-authorization.md)
 
 - [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
 
