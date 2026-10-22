@@ -96,6 +96,8 @@ destination.
 
 - [AI accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md)
 
+- [Native Messages iteration-model storage](usage-03-iteration-model-storage.md)
+
 - [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
 
 - [Prepared GeoIP geographic membership](geoip-02-geographic-membership-index.md)
