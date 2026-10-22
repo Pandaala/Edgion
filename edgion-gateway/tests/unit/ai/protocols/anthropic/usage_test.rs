@@ -191,3 +191,77 @@ fn required_native_nulls_are_invalid_but_duplicates_remain_last_wins() {
     assert!(!o.invalid);
     assert_eq!(o.components.output, Some(7));
 }
+
+#[test]
+fn selected_numbers_preserve_strict_unsigned_grammar_and_invalid_bits() {
+    let mut cases: Vec<String> = [
+        "",
+        "0",
+        "00",
+        "00042",
+        "+1",
+        "-0",
+        "-1",
+        "1.0",
+        "1e2",
+        "1E+2",
+        "18446744073709551615",
+        "18446744073709551616",
+        "999999999999999999999x",
+        "é",
+        "1π",
+        " 1",
+        "1 ",
+        "1_0",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    cases.push("0".repeat(128));
+    cases.push(format!("{}18446744073709551615", "0".repeat(64)));
+    for byte in 0..=127u8 {
+        let value = char::from(byte);
+        cases.extend([
+            value.to_string(),
+            format!("{value}12"),
+            format!("1{value}2"),
+            format!("12{value}"),
+        ]);
+    }
+    for raw in cases {
+        let expected = raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| raw.parse::<u64>().ok())
+            .flatten();
+        for (key, bit) in [(Key::Input, 1), (Key::Output, 2), (Key::Read, 4), (Key::Write, 8)] {
+            let mut selector = Selector {
+                depth: 1,
+                components: Components {
+                    input: Some(7),
+                    output: Some(7),
+                    read: Some(7),
+                    write: Some(7),
+                    invalid: 15,
+                },
+                ..Default::default()
+            };
+            selector.frames[0].role = Role::Usage;
+            selector.frames[0].key = key;
+            selector.on_number(&raw).unwrap();
+            let actual = match key {
+                Key::Input => selector.components.input,
+                Key::Output => selector.components.output,
+                Key::Read => selector.components.read,
+                Key::Write => selector.components.write,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, expected, "raw {raw:?}");
+            assert_eq!(
+                selector.components.invalid,
+                if expected.is_some() { 15 & !bit } else { 15 }
+            );
+            assert!(selector.frames[0].key == Key::Other);
+        }
+    }
+}

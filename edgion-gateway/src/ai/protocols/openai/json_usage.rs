@@ -307,8 +307,9 @@ impl JsonStreamSelectiveSink for Selector {
             _ => return Ok(()),
         };
         *destination = raw
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_digit)
             .then(|| raw.parse::<u64>().ok())
             .flatten();
         Ok(())

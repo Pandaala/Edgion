@@ -260,3 +260,82 @@ fn numeric_extensions_and_event_metadata_keep_selection_and_reset_boundaries() {
         assert_eq!(observer.response_outcome(), ResponseOutcome::Unknown);
     }
 }
+
+#[test]
+fn selected_numbers_preserve_strict_unsigned_grammar_and_replacement() {
+    let mut cases: Vec<String> = [
+        "",
+        "0",
+        "00",
+        "00042",
+        "+1",
+        "-0",
+        "-1",
+        "1.0",
+        "1e2",
+        "1E+2",
+        "18446744073709551615",
+        "18446744073709551616",
+        "999999999999999999999x",
+        "é",
+        "1π",
+        " 1",
+        "1 ",
+        "1_0",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    cases.push("0".repeat(128));
+    cases.push(format!("{}18446744073709551615", "0".repeat(64)));
+    for byte in 0..=127u8 {
+        let value = char::from(byte);
+        cases.extend([
+            value.to_string(),
+            format!("{value}12"),
+            format!("1{value}2"),
+            format!("12{value}"),
+        ]);
+    }
+    for raw in cases {
+        let expected = raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| raw.parse::<u64>().ok())
+            .flatten();
+        for key in [
+            Key::Sequence,
+            Key::Input,
+            Key::Output,
+            Key::Cached,
+            Key::Read,
+            Key::Write,
+        ] {
+            let mut selector = Selector {
+                depth: 1,
+                sequence: Some(7),
+                candidate: Candidate {
+                    input: Some(7),
+                    output: Some(7),
+                    cached: Some(7),
+                    read: Some(7),
+                    write: Some(7),
+                },
+                ..Default::default()
+            };
+            selector.frames[0].pending = key;
+            selector.on_number(&raw).unwrap();
+            let actual = match key {
+                Key::Sequence => selector.sequence,
+                Key::Input => selector.candidate.input,
+                Key::Output => selector.candidate.output,
+                Key::Cached => selector.candidate.cached,
+                Key::Read => selector.candidate.read,
+                Key::Write => selector.candidate.write,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, expected, "raw {raw:?}");
+            assert!(matches!(selector.frames[0].pending, Key::Other));
+        }
+    }
+}

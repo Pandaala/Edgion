@@ -12933,3 +12933,29 @@ or throughput benchmark ran; reduced byte dispatch is not a measured speedup.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed;
 existing unrelated warnings remain.
+
+## Remove redundant selected-usage digit prepasses
+
+The OpenAI and Anthropic numeric selectors now require an initial ASCII digit
+and delegate the remaining validation to the existing standard u64 parser,
+instead of scanning every digit before parsing. The first-byte gate preserves
+rejection of the leading plus accepted by Rust's unsigned parser, as well as
+empty/signed inputs. Remaining non-digits and overflow still return None. Local
+Rust 1.96.1 core integer FromStr documentation and implementation were inspected;
+the equivalence does not rely on canonical JSON validation excluding such input.
+Target selection, duplicate resets, Anthropic invalid flags and ignored numeric
+fields retain their existing paths. No custom parser, allocation or new helper
+was introduced. This removes a source-level scan, not a measured throughput cost.
+
+Independent plan review approved the five-file scope. Two new direct-selector
+differential tests passed before the production edits and compare every selected
+destination with the previous expression, including Responses sequence numbers.
+Cases cover every ASCII byte alone and at prefix/infix/suffix positions, permitted
+multibyte text, signs, decimal/exponent syntax, long leading zeros, u64 maximum and
+overflow. Anthropic cases check that valid replacement clears only the relevant
+invalid bit while preserving unrelated bits. Final protocol tests passed 80 cases
+and usage accounting passed 52 (132 total). Existing canonical parser and duplicate
+metadata regressions remain. No full suite, live integration or benchmark ran.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed;
+existing unrelated warnings remain.
