@@ -46,6 +46,8 @@ destination.
 
 - [Stage-specific plugin log capacity policy](log-06-stage-log-capacity-policy.md)
 
+- [GeoIP coordinate formatting in log snapshots](log-08-geo-coordinate-formatting.md)
+
 - [Outbound terminal classification ownership](outbound-04-terminal-classification-ownership.md)
 
 - [Shared outbound ready-endpoint projection](outbound-03-ready-endpoint-projection.md)
