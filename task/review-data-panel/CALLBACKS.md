@@ -570,3 +570,49 @@ trust Arc ownership prevent a whole-accept zero-allocation claim. The existing
 [stream dispatch decision](stream-01-synchronous-plugin-dispatch.md) already
 requires separating outer filter costs from per-plugin dispatch before changing
 representation. No duplicate proposal or measured performance benefit is claimed.
+
+## Synchronous response-header filter direct-entry inventory
+
+Revalidated at `9dd0930aa`. There are nine concrete implementations of
+`UpstreamResponseFilter` under Gateway source. This is the synchronous final-header
+stage, distinct from async `UpstreamResponse` and read-only body filters. Source
+paths below are relative to `edgion-gateway/src/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| ConditionalUpstreamResponseFilter (`plugins/runtime/conditional_filter.rs`) | Evaluate compiled conditions against live session inputs, retain skip cause in the stage log, otherwise delegate; alias/dye and log suppression delegate through the wrapper. |
+| DslPlugin (`plugins/http/dsl/plugin.rs`) | Drive execute_safe through the intentional multithread Tokio block_in_place / Handle::block_on bridge. The synchronous trait does not make DSL outbound calls nonblocking; VM and bounded outbound policies remain authoritative. |
+| WafPlugin (`plugins/http/waf/mod.rs`) | Claim phase, take the transaction, borrow current header bytes into temporary descriptors and publish transaction-owned state; execute/record outcome, intervene or restore the transaction. Dedicated WAF observability suppresses generic stage logging. |
+| ResponseRewrite (`plugins/http/response_rewrite/plugin.rs`) | Prepared status/log and rename-protection facts; dynamic rename values, then prepared add/set values and removals. Preserve rename/add/set/remove order, duplicates and partial-success diagnostics. |
+| DebugAccessLogToHeaderFilter (`plugins/runtime/gateway_api_filters/debug_access_log.rs`) | Wrap suppression precedes context access; otherwise borrow access-log projection, serialize owned JSON and invoke the response setter, ignoring its result. Accepted development-surface size/failure limitations remain. |
+| GapiCorsFilter (`plugins/runtime/gateway_api_filters/cors_filter.rs`) | Read live Origin, check allowed origin, build actual-response CORS headers, set them and append Vary: Origin. Session mutation and reflection ownership remain separate from prepared matching. |
+| ExtensionRefFilter (`plugins/runtime/gateway_api_filters/extension_ref.rs`) | Resolve the pinned runtime, enforce target/backend-scope restrictions and IP dependencies, create nested logging ownership, install each dye plan and dispatch in order until a non-continuing result. Runtime handles outlive mutable session calls. |
+| ResponseHeaderModifierFilter (`plugins/runtime/gateway_api_filters/response_header_modifier.rs`) | Execute the cold validated HeaderModifierPlan in set/add/remove order; prepared HeaderValue clones transfer owned values through guarded session writers. |
+| WasmPlugin (`plugins/http/wasm/plugin.rs`) | Nonblocking module lookup with preload/fail-mode on miss, bounded lease acquisition, request/response header and property projection into guest phase state, response callback and finish_phase result handling. No zero-copy guest projection claim. |
+
+`pg_upstream_response_filter` skips interim informational headers except terminal
+101 and performs origin arbitration before the chain. Its shared sync tail replays
+pending response operations without consuming them, then runs gRPC-preferred route
+and backend runtimes, Gateway runtimes and global runtimes. Later layers stop on
+response_stage_settled. Empty-entry count gates belong to Gateway/global loops;
+route/backend runners still enter runtime IP-dependency checks. Processor framing
+is repaired when unsettled and the late request-body view is released afterward.
+`cached_response_filter` normalizes and selects the cache-hit response, then enters
+the same tail without origin timing, retry, health or persistence work.
+
+`PluginRuntime::run_upstream_response_plugins_sync` checks IP dependencies before
+entries, installs dye plans, honors dedicated-log suppression, times ordinary
+entries and converts termination results through the shared response-stage helper.
+The log vector reserves only on its first retained entry. ExtensionRef retains
+nested resource-log ownership rather than flattening it into the outer entry.
+
+No new runtime edit was selected. Existing decisions remain independent:
+[condition ownership](condition-01-jwt-claim-evaluation.md),
+[rename fidelity](response-02-rename-value-fidelity.md),
+[CORS value transfer](cors-02-session-header-value-transfer.md),
+[stage log capacity](log-06-stage-log-capacity-policy.md) and
+[Wasm map storage](wasm-02-map-decoding-profile-storage.md).
+The original debug-surface and response-header mutation knowledge still govern
+masking, protected fields and failure behavior. This inventory does not close the
+async header entry inventory, deep VM/WAF/guest execution, session mutation,
+serialization or complete transport behavior.
