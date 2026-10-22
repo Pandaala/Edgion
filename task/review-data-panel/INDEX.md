@@ -12656,3 +12656,19 @@ condition, bandwidth, ExtensionRef, callback and standalone Wasm modules; Wasm r
 serially. Formatting, workspace check/Clippy and agent-doc validation passed with
 existing unrelated warnings. No new tests, full suite, live transport or benchmark
 ran.
+
+## Reconcile inbound PROXY policy callback coverage
+
+[The connection callback inventory](CALLBACKS.md#inbound-proxy-policy-callback-inventory)
+now covers the always-installed fatal guard and prepared CIDR trust callback,
+including TCP listener registration, physical-peer timing, conditional versus
+required parsing, and the guard's single pre-await sample. Cold preparation and
+hot callback work are distinguished; no safe runtime optimization or duplicate
+async-dispatch proposal was selected.
+
+Independent plan review passed. Fresh focused runs passed 12 policy tests and
+one socket-policy mapping test. Formatting, workspace check/Clippy and agent-doc
+validation passed with existing unrelated warnings. These unit tests do not
+establish live accept/handshake behavior or allocation counts; the ordering is
+source evidence from the locked fork. No new tests, full suite, live transport or
+benchmark ran.

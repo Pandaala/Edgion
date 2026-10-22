@@ -1,4 +1,4 @@
-# HTTP callback dispatch inventory
+# Gateway callback dispatch inventory
 
 Source baseline: `7ef77da08`. Status: dispatch inventory inspected; delegated
 implementation coverage remains in [INDEX](INDEX.md). This is not a completion
@@ -532,3 +532,41 @@ Fresh tests passed 18 conditional-wrapper, 70 condition, four bandwidth,
 11 ExtensionRef, 31 response-body callback and 44 standalone Wasm cases (178 total).
 Wasm ran serially because process admission is shared. No new tests, full suite,
 live transport or benchmark ran.
+
+## Inbound PROXY policy callback inventory
+
+Revalidated at `4c19f3a93` against the locked fork above. This supplements the
+HTTP inventory with two connection callbacks in
+`runtime/server/proxy_protocol_policy.rs`; it does not close the whole listener
+or fork parser graph.
+
+| Callback | Direct work and ownership |
+| --- | --- |
+| `GuardFirstConnectionFilter::should_accept` | One Acquire load of the monotonic fatal flag; reject immediately when set, otherwise borrow the optional inner filter across its await, or allow when absent. No state-mutex acquisition or Arc clone in this body. |
+| `CidrProxyProtocolTrust::is_trusted` | Pass the physical transport peer IP to the prepared canonical `IpRadixMatcher::contains`; no CIDR parsing or matcher construction in this callback. |
+
+`preflight_and_freeze` prepares CIDR matchers before freezing the initial socket
+policy; publication/diagnostic mutexes are outside these callback bodies.
+`listener_builder::apply_connection_filter` installs the composite for redirect
+HTTP, ordinary HTTP/HTTPS, TCP, TLS termination-to-TCP and TLS passthrough. Its
+current builder always supplies `Some(StreamPluginConnectionFilter)`, despite
+the composite's optional type. UDP admission is a separate path.
+
+The fork's `listeners/l4.rs::ListenerEndpoint::accept` invokes the filter when
+both socket digest and peer address are available; missing digest/peer bypasses
+that call. The filter precedes `UninitializedStream::handshake`, inbound PROXY
+processing and TLS. The guard samples fatal state before awaiting the inner
+filter and does not recheck afterward; this is not an in-flight revocation claim.
+
+In `protocols/l4/proxy_protocol.rs::apply`, TrustedSources checks the transport
+`peer_addr()` before any address override and before header probing. Untrusted
+peers skip parsing; trusted peers without a recognizable header remain ordinary
+connections. Missing identifiable peers fail conditional trust. Required mode
+has no trust object and requires parsing; Disabled skips PROXY processing.
+These distinctions must survive any future dispatch optimization.
+
+No runtime change was selected. Async-trait boxing and the fork's per-stream
+trust Arc ownership prevent a whole-accept zero-allocation claim. The existing
+[stream dispatch decision](stream-01-synchronous-plugin-dispatch.md) already
+requires separating outer filter costs from per-plugin dispatch before changing
+representation. No duplicate proposal or measured performance benefit is claimed.
