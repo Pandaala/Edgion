@@ -114,6 +114,8 @@ destination.
 
 - [Prepared response-cache Content-Length](cache-04-prepared-content-length.md)
 
+- [Response-cache replay header reservation](cache-05-replay-header-capacity.md)
+
 - [Inactive downstream request-body module dispatch](context-02-request-body-module-dispatch.md)
 
 - [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
