@@ -616,3 +616,47 @@ The original debug-surface and response-header mutation knowledge still govern
 masking, protected fields and failure behavior. This inventory does not close the
 async header entry inventory, deep VM/WAF/guest execution, session mutation,
 serialization or complete transport behavior.
+
+## Asynchronous response-header companion direct-entry inventory
+
+Revalidated at `613496476`: seven concrete `UpstreamResponse` implementations.
+An async trait permits waiting; it does not mean every implementation awaits or
+owns a full response. Paths below are relative to `edgion-gateway/src/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| ConditionalUpstreamResponse (`plugins/runtime/conditional_filter.rs`) | Await detailed live condition evaluation; errors return their PluginRunningResult immediately. Skip records an optional cause and returns Nothing; otherwise await the inner entry. Alias/dye and suppression ownership remain with the wrapper/inner contract. |
+| BodyGatedUpstreamResponse (`plugins/runtime/body_gate.rs`) | Body-condition Skip bypasses the read and invokes the inner entry. Otherwise request a capped response-body read, enforce the prepared logical limit and failure policy, then invoke inner on success. This wrapper is not authority for full-response aggregation. |
+| Guardrail (`ai/guards/semantic/plugin.rs`) | Find the attached request owner; require a 2xx SSE identity-encoded canonical AI response; install a bounded semantic processor or apply precommit failure. Client, permit and owner Arcs belong to the subsequent processor; the local owner remains available for installation failure. Generic stage logging is suppressed. |
+| Arc<WasmPlugin> (`plugins/http/wasm/attached.rs`) | Borrow the request binding through an execution loan, gate duplicate headers, supply actual EOS to an enabled guest header hook, handle unsupported pause/local response, then install configured body/trailer companions. Missing binding/loan does not create a new context; shared bindings and loan cleanup own later callbacks. |
+| ExtProc (`plugins/http/ext_proc/plugin.rs`) | Require a nonterminal attached owner, resolve effective modes and actual header EOS. Either execute the no-send terminal/companion plan or await a protobuf header exchange, validate verdict/mode changes, apply mutations and install or finish owners. Immediate-response and failure policy remain authoritative; owned protocol data crosses the awaited exchange. |
+| WafPlugin (`plugins/http/waf/mod.rs`) | Claim ResponseComplete, take the transaction, execute an empty EOS ResponseWindow and logging phase, record dedicated outcomes and select intervention. This runs in the header stage and is not evidence that actual transport body completion occurred. It does not aggregate the upstream body. |
+| ExtensionRefFilter (`plugins/runtime/gateway_api_filters/extension_ref.rs`) | Resolve silently for the empty-async-stage gate; active bundles enter normal pinned-runtime validation, nested log ownership and IP checks, then install dye plans and await entries in order. Return the first non-continuing result. Missing/unsupported targets produce a response-stage 500 result. |
+
+The concrete response-body read adapter in `plugins/runtime/session_adapter.rs`
+returns empty bytes only for its agreed bodyless disposition, returns refusal
+where required, and returns Unimplemented for Buffer. Its immutable/live method
+and status checks remain required. Neither the wrapper nor its mock tests establish
+a supported complete-response read; DSL RespBody validation and the canonical
+streaming/body ownership invariants still apply.
+
+`pg_response_filter` sanitizes interim informational responses and returns before
+plugin dispatch; terminal 101 remains distinct. For ordinary final responses it
+sanitizes before plugins when unsettled, applies server headers, and runs the
+ordered gRPC-preferred route/backend, Gateway and global async layers. Settled
+state prevents later chains but still reaches pending local-reply delivery or
+undeliverable-denial handling. Gateway/global empty-chain gates do not describe
+the route/backend runners. After plugins, unsettled responses receive processor
+framing repair and non-101 sanitizer repair before final commit handling.
+
+The async runtime owns its session adapter across awaited entry execution, checks
+IP dependencies first, installs dye plans, honors dedicated-log suppression and
+applies shared termination conversion before collecting ordinary stage logs. Selected runtime
+owners and attached session/processor handles cannot be replaced with short
+borrows solely because their direct callback bodies look small.
+
+No new runtime change was selected. Existing condition, ExtProc retirement, Wasm
+representation and Guardrail capacity decisions remain separate. Together with the
+synchronous and read-only body inventories, this reconciles current direct
+response-stage plugin entries, not their complete nested condition, protocol,
+VM, transaction, codec or transport dependency graphs.
