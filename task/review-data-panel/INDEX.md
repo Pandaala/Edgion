@@ -57,6 +57,7 @@ destination.
 - [Prepared ForwardAuth denial header names](forward-auth-01-prepared-denial-header-names.md)
 
 - [Wasm pool discard lock scope](wasm-04-pool-discard-lock-scope.md)
+- [Wasm guest allocator preparation](wasm-05-guest-allocator-preparation.md)
 
 - [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
 
