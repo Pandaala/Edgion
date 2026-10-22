@@ -13145,3 +13145,20 @@ key independence; no implementation-mirroring lifetime test was added. Formattin
 workspace all-target check/Clippy, seven repository guards and diff hygiene passed.
 Existing unrelated warnings remain. No full suite, live integration or performance
 benchmark ran.
+
+
+## Wasm detached header replay deduplication audit
+
+Traced `finish_callback` into `apply_ops` after frame payload release. ReplaceAll
+consumes original pairs while retaining unique lowercase keys; each eligible
+pair constructs an owned normalized String. Borrowing keys as local-response
+replay does would extend processed pair lifetimes. Transferring original names
+after replay may instead add lookup/insertion work while preserving spelling.
+The existing wasm-01 task now records these unselected storage alternatives,
+separate from guest-readable snapshot sharing, with peak-lifetime measurements
+and first-write-failure, duplicate-order and protected-header acceptance.
+
+No runtime change or performance claim was made. Independent plan review passed.
+Fresh verification passed 269 Gateway Wasm tests serially, formatting, workspace
+all-target check/Clippy, agent-doc validation and diff hygiene. Existing unrelated
+warnings remain; no full suite, live integration or performance benchmark ran.

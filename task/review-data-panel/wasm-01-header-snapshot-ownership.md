@@ -72,10 +72,54 @@ of a new representation. Validate ordinary and attached callback lifecycles.
 Measure transient and retained allocations as well as CPU before claiming a win.
 
 Any implementation requires its own IMPL plan, frozen file scope, independent
-reviews and project checks. This task records source inspection only; no fresh
-Rust test or performance benchmark ran for this documentation batch.
+reviews and project checks. The original documentation batch recorded source inspection only; no fresh
+Rust test or performance benchmark ran in that batch.
 
 Relevant original knowledge:
 - skills/04-review/wasm/regression-guards/request-execution-lifecycle.md
 - skills/04-review/wasm/regression-guards/buffer-range-snapshot-before-guest-allocation.md
 - skills/04-review/cpu-memory/regression-guards/wasm-abi-retention-budget.md
+
+
+## Detached ReplaceAll deduplication (audit at 6625b4291)
+
+`plugin.rs::apply_ops` consumes each ReplaceAll pair after removing omitted
+headers. It skips protected response fields, constructs an owned ASCII-lowercase
+String for each eligible name, and inserts it into a local HashSet. This repeats
+normalization even for already lowercase names and duplicates. Empty strings
+need not allocate; no per-pair heap-allocation count is established here.
+The set retains unique canonical keys while consumed original names and values
+are released as replay advances.
+
+The neighboring `finish_local_response` borrows its header vector and stores
+Cow keys, borrowing names without uppercase ASCII. Applying that pattern to
+ReplaceAll could avoid some copies but would retain the original pair vector's
+name/value storage through the loop. Large processed values would no longer be
+released as early. Consuming original names into the set after replay is another
+possible design, but preserving the original spelling for the session call can
+require separate lookup and insertion work. Fewer copies alone do not select a
+winner. Neither alternative is implemented or authorized by this audit.
+
+This is a later, detached-replay decision, separate from sharing guest-readable
+snapshots with queued operations. Compare the current consuming loop, borrowed
+keys and ownership-aware replay under a separately frozen scope. Keep expected
+linear deduplication and the canonical header policy; do not add nested scans,
+a new case-folding/hash mechanism or precomputed per-pair metadata without its
+own reviewed value and allocation accounting.
+
+Preserve ordered removals, first-set/later-append behavior, original spelling and
+best-effort writer failures. In particular, the first occurrence remains seen
+even if its session write fails. Protected response fields are skipped before
+seen-set insertion. Unknown map IDs produce no session writes; their current
+internal deduplication is not evidence that changing map handling is authorized.
+Do not coalesce duplicate fields such as Set-Cookie or change ASCII-only folding.
+
+Measure short/long names and values, duplicate-heavy maps, mixed-case names,
+protected fields and writer failures. Track unique-key capacity, remaining pairs,
+processed values and detached outputs together; preserve release on errors and
+unwinding and do not retain request data in pooled VMs. Existing ReplaceAll tests
+cover omitted-field removal, duplicate response values and protected fields,
+while a selected representation needs focused ordering/failure regressions.
+
+Fresh audit verification passed 269 Gateway Wasm tests serially. These verify
+the current implementation, not any proposed representation or performance gain.
