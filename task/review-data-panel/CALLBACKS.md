@@ -434,3 +434,58 @@ live Redis cancellation, failover or wire execution. No runtime changes, new
 tests, live backend experiment, full suite or performance measurement ran.
 The direct owner seam is reviewed; shared Redis transport execution and concrete
 response-processor work remain separately scoped rather than reopening this seam.
+
+## Concrete response processor direct-entry inventory
+
+Reconciled at `6b76ed5ac`. The current Gateway source contains nine
+`StreamingResponseProcessor` implementations. This inventory covers their direct
+trait entry/control flow and ownership handoffs; it does not claim every reachable
+parser, runtime, codec or transport dependency is complete. These are implementations,
+not nine independently installed slots. Read-only body-filter chains and separate
+trailer handlers are outside this enumeration.
+
+Paths below are relative to `edgion-gateway/src/`.
+
+| Implementation / source | Direct entry and owner boundary |
+| --- | --- |
+| `AiAttemptResponseProcessor`, `ai/runtime/dispatch.rs` | Captures raw encoding eligibility before child header normalization; forwards headers, typed body events and cleanup to existing children. Stops child body dispatch after sink termination and records the event-derived EOS latch. It does not override/forward the real-trailer hook. The local usage owner and native Messages quota handoff have already been moved without removing shared owners. |
+| `UsageExtractionProcessor`, `ai/accounting/usage.rs` | Borrows non-SSE input; retaining SSE decode shares raw handles. Publishes canonical batches for active guarding, including explicit EOS, and reclaims current raw bytes when its terminal decision preempts the guard. Encoding diagnostics and quota gates remain distinct. Chat and Responses share the bounded selective JSON owner; their protocol completion policies differ. |
+| `MessagesProcessor`, `ai/protocols/anthropic/processor.rs` | Shares input with the retaining SSE decoder or feeds the bounded JSON observer by reference. Preserves native bytes and reported-only accounting. Actual-model ownership moves from the selected start observation; unknown events cannot supply lifecycle evidence. Incomplete finalization marks unavailable; Reject termination retains native error ownership. |
+| `AnthropicResponseProcessor`, `ai/conversion/chat_to_anthropic/response.rs` | Header-selected fixed/unary/streaming modes remain explicit. Streaming canonical metadata is conditional; terminal reclamation exposes translated client bytes only. Release/preemption drops unary storage/owner and seals the processor. The bounded unary exception is separate from streaming conversion and ordinary HTTP. |
+| `SemanticSseSource`, `ai/protocols/openai/canonical_sse.rs` | Active SSE guarding takes input into the bounded decoder/batch, preserves typed control/poison classification and publishes EOS even without data. Encoded/degraded sources become unavailable; overflow/publication failure arbitrates terminal ownership. Default cleanup hooks perform no extra work. |
+| `GuardrailResponseProcessor`, `ai/guards/semantic/response.rs` | Consumes canonical batches through RawWindow retain/decision/resolve generations. Awaited decisions, rollback output and held-head policy keep separate bounds. Preemption/cancellation discards its window and disables the owner; aggregate summaries publish through the attached owner. |
+| `ExtProcResponseProcessor`, `plugins/http/ext_proc/response_streamed.rs` | Explicit typed terminal handling leaves completion to a configured real trailer exchange; otherwise sends a final bounded body exchange. Keeps original input across the await for failure policy while protobuf owns its copy. Valid replacement Vec moves into Bytes. Common verdict validation precedes mutation; cancellation delegates release to the attached owner. |
+| `WasmResponseObserver`, `plugins/http/wasm/attached.rs` | Both body entries call synchronous observe directly. A binding execution loan installs a shared body handle in a read-only guest frame; guest failure disables the binding rather than replacing the stream. Trailer-aware EOS uses closes_without_trailers. Release/preemption aborts the binding. |
+| `GrpcResponseProcessor`, `plugins/http/grpc_json_transcoder/response.rs` | Takes input into bounded framing/conversion; output owns admission credit. Only this implementation overrides the actual-upstream-trailer hook, which settles from real status evidence. Chunk EOS does not fabricate success. Release/finalization/preemption share local cleanup while separately held output retains its own lifetime. |
+
+Five implementations use the default typed-event bridge to legacy on_chunk:
+Usage, Messages, Anthropic conversion, SemanticSseSource and Guardrail. AiAttempt,
+ExtProc, Wasm and gRPC override on_event. The existing typed-forwarding audit and
+profile-before-public-gate decision still apply; this inventory asserts no
+zero-allocation callback. Semantic flush/EOS, real gRPC status, local release and
+successful downstream delivery are different facts.
+
+Existing decisions remain the owners of disputed changes: Guardrail
+[header storage](guardrail-01-held-replacement-header-storage.md),
+[snapshot encoding](guardrail-02-decision-snapshot-encoding.md),
+[callback output](guardrail-03-callback-output-capacity.md) and
+[window statistics](sse-01-incremental-window-statistics.md); ExtProc
+[protobuf storage](body-02-extproc-protobuf-body-storage.md) and
+[terminal retirement](extproc-01-terminal-stream-retirement.md); gRPC
+[wire schema](grpc-03-prepared-wire-schema.md) and
+[output ownership](grpc-04-single-record-output.md); and the existing Wasm
+representation/lock decisions. No duplicate proposal or new runtime edit was selected.
+
+Remaining deeper investigation includes canonical tokenizer/semantic-window
+operations beyond their recorded audits, converter parsing/serialization beyond
+existing scoped records, Wasmtime/guest ABI internals, gRPC reflection/wire codecs
+and outbound transport execution. This replaces an unspecified processor-entry
+backlog; it does not close those dependency graphs or the overall campaign.
+
+Fresh existing tests passed 52 usage, 36 dispatch, 25 Guardrail response,
+12 canonical SSE, 32 converter response, 13 native Messages, 11 ExtProc response,
+5 Wasm attached and 16 transcoder response cases (202 distinct tests). The first
+parallel Wasm selection passed four and failed its timer test with preparation
+capacity exhausted; all five passed unchanged with --test-threads=1. The process
+preparation semaphore defaults to four permits. Serial success does not establish
+parallel isolation. No new tests, live transport or benchmark ran.
