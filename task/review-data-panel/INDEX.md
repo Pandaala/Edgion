@@ -12590,3 +12590,21 @@ Independent plan review passed. Fresh existing tests passed 25 semantic response
 and 12 canonical SSE cases; formatting, workspace check/Clippy and agent-doc
 validation passed with existing unrelated warnings. No new tests, full suite,
 live transport, allocation measurement or benchmark ran.
+
+## Skip unused native Messages numeric conversion
+
+The native Messages selective usage sink now classifies a numeric field after
+its existing target/reset step and converts only input/output/cache-read/cache-write
+counters to u64. Other fields still run invalid_scalar once; its bitwise-OR and
+sticky-true operations previously ran once or twice depending on an unused parse
+result. The canonical tokenizer retains number grammar, byte/work and other limits.
+Selected counter parsing, duplicate replacement, model attribution, response bytes
+and accounting publication remain unchanged. This removes source-level unused
+conversion work, without an allocation or measured throughput claim.
+
+A parser-boundary matrix passed before the production edit and after it. It covers
+valid ignored negative/fractional/exponent/overflowing numbers, malformed ignored
+numbers, and numeric usage/stop/iteration/model shapes. Fresh module runs passed
+34 native Anthropic and 36 dispatch tests (70 total). Independent plan review,
+formatting, workspace check/Clippy and all seven static guards passed; existing
+unrelated warnings remain. No full suite, live provider or benchmark ran.

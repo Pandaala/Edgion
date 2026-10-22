@@ -50,6 +50,36 @@ fn overflow_invalid_counts_and_malformed_tail_never_become_totals() {
     }
     assert!(observe(br#"{"usage":{"input_tokens":1,"output_tokens":2}}tail"#).invalid);
 }
+
+#[test]
+fn numeric_extensions_preserve_lexical_validation_and_metadata_shapes() {
+    for number in ["0", "-1", "1.5", "1e10", "18446744073709551616"] {
+        let body = format!(
+            r#"{{"type":"message","stop_reason":"end_turn","extension":{number},"usage":{{"input_tokens":5,"output_tokens":7,"extension":{number}}}}}"#
+        );
+        let observed = observe(body.as_bytes());
+        assert!(!observed.invalid && !observed.composite, "{number}");
+        assert!(observed.stop);
+        let usage = observed.components.normalized().unwrap();
+        assert_eq!((usage.input_tokens, usage.output_tokens), (5, 7));
+
+        for metadata in [format!(r#""usage":{number}"#), format!(r#""stop_reason":{number}"#)] {
+            assert!(observe(format!("{{{metadata}}}").as_bytes()).invalid, "{metadata}");
+        }
+        for iterations in [
+            number.to_owned(),
+            format!("[{number}]"),
+            format!(r#"[{{"type":"message","model":{number}}}]"#),
+        ] {
+            let body = format!(r#"{{"usage":{{"iterations":{iterations}}}}}"#);
+            assert!(observe(body.as_bytes()).composite, "{iterations}");
+        }
+    }
+    for number in ["01", "1.", "1e", "--1"] {
+        let body = format!(r#"{{"extension":{number}}}"#);
+        assert!(observe(body.as_bytes()).invalid, "{number}");
+    }
+}
 #[test]
 fn iteration_inspection_distinguishes_subtotals_from_cumulative_usage() {
     for iterations in [

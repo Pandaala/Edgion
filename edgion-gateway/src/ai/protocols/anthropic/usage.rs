@@ -386,6 +386,10 @@ impl JsonStreamSelectiveSink for Selector {
     }
     fn on_number(&mut self, raw: &str) -> Result<(), JsonStreamSinkError> {
         let (role, key) = self.target();
+        if !matches!(key, Key::Input | Key::Output | Key::Read | Key::Write) {
+            self.invalid_scalar(role, key);
+            return Ok(());
+        }
         let value = raw
             .bytes()
             .all(|b| b.is_ascii_digit())
