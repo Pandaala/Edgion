@@ -12707,3 +12707,22 @@ Independent plan review passed. Fresh tests passed 13 canonical SSE, 25 semantic
 response and five chain cases (43 total). Formatting, workspace check/Clippy and
 agent-doc validation passed with existing unrelated warnings. No new tests, full
 suite, prototype, live transport or benchmark ran.
+
+## Skip zero-grant overlap materialization
+
+RawWindow::prepare_overlaps now leaves a bucket's output String empty when its
+computed overlap grant is zero, skipping the second fragment traversal and decode.
+The initial complete semantic scan, checked totals, fair allocation and capacity
+admission still precede this gate. Positive grants, replacement encoding, semantic
+errors and generation transitions remain unchanged. This is not the deferred
+incremental-statistics design and introduces no cached validation result.
+
+New regressions passed on baseline and final code. They cover zero global and
+per-bucket budgets, mixed zero/nonzero grants, Release/Replace byte identity and
+next-generation contexts, and first-release UTF-8/JSON errors followed by raw-only
+recovery. Final focused runs passed 39 window, 25 Guardrail response and 13 canonical
+SSE tests (77 total). Independent plan review, formatting, workspace check/Clippy
+and seven static guards passed with existing unrelated warnings. One old rebuildable
+Gateway incremental cache was removed before compilation to recover disk space.
+No full suite, live provider or benchmark ran; this removes unused traversal work,
+without a measured allocation or throughput claim.

@@ -800,6 +800,9 @@ impl RawWindow {
         self.admit(add(extra, add(scan.scratch.capacity(), capacity)?)?)?;
         let mut output: [String; MAX_BUCKETS] = std::array::from_fn(|_| String::new());
         for (index, bucket) in self.buckets.iter().enumerate() {
+            if grants[index] == 0 {
+                continue;
+            }
             let mut remaining = totals[index] - grants[index];
             output[index] = String::with_capacity(grants[index]);
             let mut append = |text: &str| {

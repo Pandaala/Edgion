@@ -524,6 +524,98 @@ fn configurable_overlap_applies_per_bucket_then_global_fairness() {
 }
 
 #[test]
+fn zero_overlap_grants_preserve_release_and_replacement_output() {
+    let a = key(0, LogicalField::Content);
+    let b = key(1, LogicalField::Content);
+    for (per_bucket, global, keeps_first) in [(0, 4, false), (4, 0, false), (4, 1, true)] {
+        for replace in [false, true] {
+            let mut window = RawWindow::with_policy(RawWindowPolicy {
+                per_bucket_overlap_bytes: per_bucket,
+                global_overlap_bytes: global,
+                max_replacement_bytes: MAX_REPLACEMENT_BYTES,
+            })
+            .unwrap();
+            window.retain(json_record(a, "abéZ")).unwrap();
+            window.retain(json_record(b, "cdR")).unwrap();
+            let output = if replace {
+                window
+                    .resolve_semantic_replace(vec![
+                        SemanticReplacement {
+                            key: a,
+                            current: "xyQ".into(),
+                        },
+                        SemanticReplacement {
+                            key: b,
+                            current: "stU".into(),
+                        },
+                    ])
+                    .unwrap()
+            } else {
+                window.resolve(WindowDecision::Release).unwrap()
+            };
+            let bytes = match output {
+                WindowOutput::Release(slices) => slices.concat(),
+                WindowOutput::Replace(bytes) => bytes.to_vec(),
+                WindowOutput::Discard => panic!("expected emitted output"),
+            };
+            assert_eq!(
+                bytes,
+                if replace { "\"xyQ\"\"stU\"" } else { "\"abéZ\"\"cdR\"" }.as_bytes()
+            );
+            window.start_next().unwrap();
+            let views = window.snapshot_all().unwrap();
+            assert_eq!(
+                views[0].context,
+                if keeps_first {
+                    if replace {
+                        "Q"
+                    } else {
+                        "Z"
+                    }
+                } else {
+                    ""
+                }
+            );
+            assert_eq!(views[1].context, "");
+            assert!(views.iter().all(|view| view.current.is_empty()));
+        }
+    }
+}
+
+#[test]
+fn zero_overlap_still_validates_before_raw_only_recovery() {
+    let bucket = key(0, LogicalField::Content);
+    for (raw, json, expected) in [
+        (Bytes::from_static(b"\xff"), false, WindowError::InvalidUtf8),
+        (Bytes::from_static(b"not-json"), true, WindowError::InvalidJsonString),
+    ] {
+        let mut window = RawWindow::with_policy(RawWindowPolicy {
+            per_bucket_overlap_bytes: 0,
+            global_overlap_bytes: 0,
+            max_replacement_bytes: MAX_REPLACEMENT_BYTES,
+        })
+        .unwrap();
+        let ranges = vec![ByteRange::new(0, raw.len())];
+        let source = if json {
+            SemanticSource::JsonStringTokenRanges(ranges)
+        } else {
+            SemanticSource::Utf8Ranges(ranges)
+        };
+        window
+            .retain(WindowRecord::raw(vec![raw.clone()]).with_fragments(vec![SemanticFragment { bucket, source }]))
+            .unwrap();
+        assert_eq!(window.resolve(WindowDecision::Release), Err(expected));
+        assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), raw);
+        window.start_next().unwrap();
+        assert!(window
+            .snapshot_all()
+            .unwrap()
+            .iter()
+            .all(|view| view.context.is_empty() && view.current.is_empty()));
+    }
+}
+
+#[test]
 fn semantic_replacement_preserves_non_semantic_bytes_and_is_atomic() {
     let key = key(0, LogicalField::Content);
     let raw = Bytes::from_static(
