@@ -12608,3 +12608,22 @@ numbers, and numeric usage/stop/iteration/model shapes. Fresh module runs passed
 34 native Anthropic and 36 dispatch tests (70 total). Independent plan review,
 formatting, workspace check/Clippy and all seven static guards passed; existing
 unrelated warnings remain. No full suite, live provider or benchmark ran.
+
+## Select OpenAI numeric destinations before conversion
+
+The shared Chat/Responses JSON usage selector now resolves the destination before
+its digit scan and u64 conversion. Sequence, input, output, cached, read and write
+fields retain exact conversion behavior; other fields return after the original
+target/reset operation. Numeric duplicate parents/status/type/details therefore
+still clear old state. Canonical tokenizer grammar and limits, publication at EOS,
+source bytes and accounting ownership remain unchanged. This removes unused
+source-level conversion work, without a measured throughput or allocation claim.
+
+The expanded parser tests passed on baseline and final code. They cover valid and
+malformed ignored numbers across Chat JSON, Responses JSON and Responses events,
+plus duplicate metadata and invalid duplicate sequence values. Fresh final tests
+passed 7 JSON usage, 52 accounting usage and 36 dispatch cases (95 total).
+Independent plan review, formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. Initial baseline compilation exhausted
+disk space; removing four old rebuildable Gateway incremental caches allowed the
+same test command to pass on retry. No full suite, live provider or benchmark ran.

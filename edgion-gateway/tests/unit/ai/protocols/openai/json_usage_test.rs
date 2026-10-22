@@ -49,6 +49,8 @@ fn every_byte_partition_preserves_last_wins_and_parent_replacement() {
         br#"{"nested":{"usage":{"prompt_tokens":9,"completion_tokens":9}},"usage":{"prompt_tokens":2,"prompt_tokens":4,"completion_tokens":3}}"#,
         br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"usage":{"completion_tokens":6}}"#,
         br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"usage":null}"#,
+        br#"{"usage":{"prompt_tokens":2,"completion_tokens":3},"usage":1e0}"#,
+        br#"{"usage":{"prompt_tokens":2,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":1},"prompt_tokens_details":-1}}"#,
         br#"{"usage":{"prompt_tokens":2,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":1},"prompt_tokens_details":{},"cache_read_input_tokens":2}}"#,
         br#"{"us\u0061ge":{"prompt_tokens":0,"completion_tokens":0}}"#,
         br#"{"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":0}}"#,
@@ -181,6 +183,7 @@ fn responses_usage_parent_replacement_and_status_never_guess_strings_by_length()
     let cases: &[(&[u8], ResponseOutcome, bool)] = &[
         (br#"{"status":"completed","status":"cancelled","usage":{"input_tokens":4,"output_tokens":5}}"#, ResponseOutcome::Cancelled, true),
         (br#"{"status":"failed","status":"queued","usage":null}"#, ResponseOutcome::Unknown, false),
+        (br#"{"status":"completed","status":1e0,"usage":{"input_tokens":4,"output_tokens":5}}"#, ResponseOutcome::Unknown, true),
         (br#"{"status":"completed","usage":{"input_tokens":4,"output_tokens":5},"usage":{}}"#, ResponseOutcome::Completed, false),
         (br#"{"status":"completed","usage":{"input_tokens":4,"output_tokens":5,"input_tokens_details":{"cached_tokens":9}}}"#, ResponseOutcome::Completed, false),
         (br#"{"status":"completed","usage":{"input_tokens":18446744073709551615,"output_tokens":1}}"#, ResponseOutcome::Completed, false),
@@ -194,5 +197,66 @@ fn responses_usage_parent_replacement_and_status_never_guess_strings_by_length()
             assert_eq!(matches!(observer.finish(), JsonUsageOutcome::Reported(_)), *reported);
             assert_eq!(observer.response_outcome(), *status);
         }
+    }
+}
+
+#[test]
+fn numeric_extensions_and_event_metadata_keep_selection_and_reset_boundaries() {
+    for number in ["0", "-1", "1.5", "1e10", "18446744073709551616", "01", "1.", "1e"] {
+        let valid = serde_json::from_str::<serde_json::Value>(number).is_ok();
+        for mode in 0..3 {
+            let usage = if mode == 0 {
+                r#""usage":{"prompt_tokens":4,"completion_tokens":5}"#
+            } else {
+                r#""usage":{"input_tokens":4,"output_tokens":5}"#
+            };
+            let fields = if mode == 2 {
+                format!(
+                    r#""type":"response.completed","sequence_number":7,"response":{{"status":"completed",{usage}}}"#
+                )
+            } else {
+                usage.to_owned()
+            };
+            let body = format!(r#"{{"extension":{number},{fields}}}"#);
+            let mut observer = if mode == 0 {
+                JsonUsageObserver::new()
+            } else {
+                JsonUsageObserver::responses(mode == 2)
+            };
+            for byte in body.as_bytes() {
+                observer.feed(std::slice::from_ref(byte));
+            }
+            if valid {
+                assert_eq!(
+                    observer.finish(),
+                    JsonUsageOutcome::Reported(ReportedAiUsage {
+                        input_tokens: 4,
+                        output_tokens: 5,
+                        cache_read_input_tokens: 0,
+                        cache_write_input_tokens: 0,
+                    })
+                );
+                if mode == 2 {
+                    assert_eq!(observer.sequence_number(), Some(7));
+                    assert_eq!(observer.event_kind(), ResponsesEventKind::Completed);
+                    assert_eq!(observer.response_outcome(), ResponseOutcome::Completed);
+                }
+            } else {
+                assert!(matches!(observer.finish(), JsonUsageOutcome::Unavailable(_)));
+            }
+        }
+    }
+    for number in ["-1", "1.5", "1e0", "18446744073709551616"] {
+        let body = format!(
+            r#"{{"type":"response.completed","sequence_number":7,"response":{{"status":"completed","usage":{{"input_tokens":4,"output_tokens":5}}}},"type":{number},"sequence_number":{number},"response":{number}}}"#
+        );
+        let mut observer = JsonUsageObserver::responses(true);
+        for byte in body.as_bytes() {
+            observer.feed(std::slice::from_ref(byte));
+        }
+        assert_eq!(observer.finish(), JsonUsageOutcome::Missing);
+        assert_eq!(observer.sequence_number(), None);
+        assert_eq!(observer.event_kind(), ResponsesEventKind::Other);
+        assert_eq!(observer.response_outcome(), ResponseOutcome::Unknown);
     }
 }

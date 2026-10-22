@@ -297,21 +297,20 @@ impl JsonStreamSelectiveSink for Selector {
         if self.depth == 0 {
             return Err(JsonStreamSinkError);
         }
-        let target = self.target();
-        let value = raw
+        let destination = match self.target() {
+            Key::Sequence => &mut self.sequence,
+            Key::Input => &mut self.candidate.input,
+            Key::Output => &mut self.candidate.output,
+            Key::Cached => &mut self.candidate.cached,
+            Key::Read => &mut self.candidate.read,
+            Key::Write => &mut self.candidate.write,
+            _ => return Ok(()),
+        };
+        *destination = raw
             .bytes()
             .all(|byte| byte.is_ascii_digit())
             .then(|| raw.parse::<u64>().ok())
             .flatten();
-        match target {
-            Key::Sequence => self.sequence = value,
-            Key::Input => self.candidate.input = value,
-            Key::Output => self.candidate.output = value,
-            Key::Cached => self.candidate.cached = value,
-            Key::Read => self.candidate.read = value,
-            Key::Write => self.candidate.write = value,
-            _ => {}
-        }
         Ok(())
     }
     fn string_capture_limit(&mut self) -> Option<usize> {
