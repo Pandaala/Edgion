@@ -88,26 +88,13 @@ fn walk<const DESCRIPTOR: bool>(
             }
             2 => {
                 let len = usize::try_from(varint(&mut bytes)?).map_err(|_| TranscodingError::Invalid)?;
-                let mut contents = take(&mut bytes, len)?;
+                let contents = take(&mut bytes, len)?;
                 if let Some((kind, list)) = &shape {
                     match kind {
                         Kind::Message(message) => walk::<DESCRIPTOR>(message, contents, limits, depth + 1, nodes)?,
                         Kind::String | Kind::Bytes => {}
                         kind if *list => {
-                            while !contents.is_empty() {
-                                count(nodes, limits)?;
-                                match kind {
-                                    Kind::Double | Kind::Fixed64 | Kind::Sfixed64 => {
-                                        take(&mut contents, 8)?;
-                                    }
-                                    Kind::Float | Kind::Fixed32 | Kind::Sfixed32 => {
-                                        take(&mut contents, 4)?;
-                                    }
-                                    _ => {
-                                        varint(&mut contents)?;
-                                    }
-                                }
-                            }
+                            packed(kind, contents, limits, nodes)?;
                         }
                         _ => return Err(TranscodingError::Invalid),
                     }
@@ -132,3 +119,46 @@ fn walk<const DESCRIPTOR: bool>(
     }
     Ok(())
 }
+
+fn packed(
+    kind: &Kind,
+    mut contents: &[u8],
+    limits: TranscodingLimits,
+    nodes: &mut u64,
+) -> Result<(), TranscodingError> {
+    let width = match kind {
+        Kind::Double | Kind::Fixed64 | Kind::Sfixed64 => 8,
+        Kind::Float | Kind::Fixed32 | Kind::Sfixed32 => 4,
+        _ => 0,
+    };
+    if width != 0 && contents.len().is_multiple_of(width) {
+        if let Some(next) = u64::try_from(contents.len() / width)
+            .ok()
+            .and_then(|elements| nodes.checked_add(elements))
+            .filter(|next| *next <= limits.nodes)
+        {
+            *nodes = next;
+            return Ok(());
+        }
+    }
+    // Keep partial charges and failure ordering for truncated or over-budget input.
+    while !contents.is_empty() {
+        count(nodes, limits)?;
+        match kind {
+            Kind::Double | Kind::Fixed64 | Kind::Sfixed64 => {
+                take(&mut contents, 8)?;
+            }
+            Kind::Float | Kind::Fixed32 | Kind::Sfixed32 => {
+                take(&mut contents, 4)?;
+            }
+            _ => {
+                varint(&mut contents)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/grpc_transcoding/wire_test.rs"]
+mod tests;

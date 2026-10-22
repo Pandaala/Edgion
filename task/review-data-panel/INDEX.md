@@ -13039,3 +13039,32 @@ and 25 semantic-response tests (99 distinct tests total), formatting, workspace
 all-target check/Clippy, seven repository guards and diff hygiene. Existing
 unrelated warnings remain. No new tests, full suite, live integration or
 performance benchmark ran.
+
+
+## Packed fixed-width wire admission
+
+The Gateway transcoder's canonical Resources wire preflight now charges complete
+packed fixed-width payloads with checked arithmetic when the full element count
+fits the existing node budget. Double/fixed64/sfixed64 use eight bytes;
+float/fixed32/sfixed32 use four. This removes per-element slice advancement and
+node checks on that successful admission path. Reflection still decodes the
+values afterwards; no end-to-end throughput improvement is measured.
+
+A private packed helper retains the original scalar loop for varints, truncated
+fixed-width data, node exhaustion and arithmetic overflow. Those paths preserve
+partial node charges and failure order exactly. Field/depth/tag validation,
+expected-wire checks, descriptor extensions, unknown-field policy and all memory
+bounds remain unchanged. The exact supporting production scope is Resources
+grpc_transcoding/wire.rs; the deferred grpc-03 prepared-schema decision is untouched.
+
+The unchanged baseline passed 33 Resources transcoding tests. Both new regressions
+first passed against the extracted original scalar loop, then passed with the
+fast path. The differential compares result and node count for all six fixed
+kinds, representative valid/malformed varints, partial widths, large payloads,
+exact/exhausted budgets, empty input and u64 overflow boundaries. A real fixed32
+descriptor exercises both walker modes across payload lengths and node limits.
+
+Final verification passed 35 Resources and 29 Gateway transcoder tests (64 total),
+formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene. Existing unrelated warnings remain. No full suite, live integration or
+performance benchmark ran.
