@@ -96,6 +96,9 @@ async fn rate_limit_local_outcomes_are_stable_across_policy_construction_order()
     use tokio::io::AsyncWriteExt;
 
     let source = resource(json!({"requestPlugins": [
+        {"type": "RequestHeaderModifier", "config": {
+            "set": [{"name": "x-before-local", "value": "present"}]
+        }},
         {"type": "RateLimitLocal", "alias": "local", "config": {
             "rate": 100, "interval": "1h", "key": [],
             "onLimitExceeded": "Continue", "showLimitHeaders": false

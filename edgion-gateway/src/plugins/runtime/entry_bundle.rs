@@ -166,15 +166,11 @@ impl EntryCache {
                 .collect();
             entries
                 .iter()
+                .filter(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::RateLimitLocal(_)))
+                .filter_map(|entry| entry.alias.as_deref().filter(|alias| referenced.contains(alias)))
+                // Outcome slots are private generation bindings, not EntrySlot indexes.
                 .enumerate()
-                .filter(|(_, entry)| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::RateLimitLocal(_)))
-                .filter_map(|(index, entry)| {
-                    entry
-                        .alias
-                        .as_deref()
-                        .filter(|alias| referenced.contains(alias))
-                        .map(|alias| (alias.to_owned(), base + index))
-                })
+                .map(|(index, alias)| (alias.to_owned(), base + index))
                 .collect()
         })
     }

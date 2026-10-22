@@ -12778,3 +12778,25 @@ plugin, 39 ExtProc plugin, 36 WAF and five attached Wasm cases. Formatting,
 workspace check/Clippy and agent-doc validation passed with existing unrelated
 warnings. These selections do not prove every live companion/transport interleaving.
 No new tests, full suite, live provider or benchmark ran.
+
+## Compact generation-owned local rate-limit outcome slots
+
+EntryCache now assigns outcome slots after selecting enabled, referenced local
+producers with aliases, instead of using their original plugin-array indexes.
+Unrelated entries no longer create unused prefixes or gaps in request invocation
+frames. Nonzero bases, source order and duplicate-alias overwrite behavior remain;
+invalid alias/dependency validation is unchanged. Constructor EntrySlot identities
+still use original entry positions. Bindings remain frozen before policy masking
+and alias sanitation, so shared producers and consumers agree across policy views.
+This reduces unnecessary initialized outcome slots, not Redis IO or limiter work;
+no throughput or allocation-count improvement was measured.
+
+Independent plan review passed. Baseline generation tests passed 17 cases. A new
+mixed-entry/nonzero-base test checks compact bindings and repeated preparation;
+the existing real-runner policy-order test now includes a preceding ordinary
+plugin while retaining a one-slot frame. An initial fixture omitted required
+Redis quotas and was corrected before final verification. Fresh serial tests
+passed 543 runtime, 17 generation and four local-limiter cases (564 total).
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing unrelated warnings. No full suite, live Redis/integration or
+benchmark ran. The canonical local-overflow knowledge records the binding rule.

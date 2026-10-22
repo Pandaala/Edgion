@@ -25,6 +25,13 @@ trigger engine. Shared validate::collect_rate_limit_dependency_errors and the
 placement profile preserve Controller/Gateway error parity and invalid-resource
 sealing. Gateway compiled conditions bind aliases to numeric producer slots.
 
+Outcome slots are assigned in source order after filtering to enabled, referenced
+local producers with aliases; unrelated entry positions do not create holes.
+This private numbering is separate from constructor EntrySlot indexes and is
+frozen once per source generation before policy masking or alias sanitation.
+Never compact individual policy views: their shared producer instances and
+compiled consumers must retain the same generation binding.
+
 runtime/conditions/rate_limit_local_outcome.rs owns the typed outcome/frame mechanism;
 ctx.rs stores its sparse request data. Both PluginRuntime and ExtensionRef request
 dispatch establish and restore invocation frames. Without the ExtensionRef seam,
