@@ -1,71 +1,96 @@
 ---
 name: local-file-write-error-surfaced
-description: LocalFileWriter's background thread now surfaces writeln! errors (debounced tracing::error! + per-log-type *_log_dropped metric) and only advances current_size on a successful write, so a disk-full / permission failure is observable and cannot drift the tracked size into premature size rotation. Reject re-reports claiming local_file write errors are silently discarded or that current_size is incremented unconditionally.
+description: Use when reviewing LocalFileWriter buffered writes, failed-batch loss accounting, flush-driven health and idle recovery. Distinguish pending accounting from durable delivery and exact file size.
 knowledge_type: regression-guards
 ---
 
-# link-sys F-020 (local_file) — background write errors are surfaced, `current_size` no longer drifts
+# Local-file buffered write failures, accounting and recovery
 
-**Status:** ✅ fixed · 2026-05-25
-**Severity:** Low (BadLogic) — silent log loss on write failure + `current_size` over-count on error
+## Conclusion and scope
 
-## Conclusion
+`LocalFileWriter` delegates background writes to `BatchSink` in
+`edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs`. Buffering
+success is not a successful flush or durable delivery. Writer failures use the
+existing typed dropped-log counters and debounced background diagnostics; health
+combines consecutive flush failures, the disk probe and active-path attachment.
 
-`LocalFileWriter`'s background write thread (`edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs`)
-now routes both the first-line write and every batched write through the module-level
-`write_log_line(file, line, current_size, consecutive_errors, log_type)` helper. The helper:
+The 2026-05-25 link-sys-F020 correction originally introduced `write_log_line`
+and left writer-driven health outside that finding's scope. That helper and the
+old rejection of runtime health flips are superseded. They must not guide edits
+to the current BatchSink implementation.
 
-1. Adds `line.len() + 1` to `current_size` **only when `writeln!` returns `Ok`** — a failed write
-   leaves the tracked size unchanged, so it cannot exceed the real on-disk size and trigger a
-   premature size-based rotation.
-2. On a write error, increments the per-log-type dropped counter
-   (`global_metrics().{access,ssl,tcp,tls,udp}_log_dropped()`) so the failure is visible in
-   Prometheus on the same `edgion_*_log_dropped_total` metric used for queue-full drops.
-3. Logs `tracing::error!` only on the **first** error of a consecutive-failure burst (debounced via
-   a `consecutive_write_errors` counter) and emits one `tracing::info!(recovered_after = N)` when a
-   write next succeeds, so a persistent disk-full / permission error does not flood the log.
+## Rationale and evidence
 
-The thread captures `let log_type = self.log_type;` before the spawn so the metric can be keyed by
-log type. The `tracing::*` calls are legitimate here: this is a dedicated `std::thread`, **not** the
-data-plane hot path (the hot path is `DataSender::send`, which only does a non-blocking
-`try_send`); the same thread already uses `tracing::error!` for file-open / rotation / flush
-failures.
+- `write_line` adds `line.len() + 1` to `pending_bytes` and one to `pending_lines`
+  only when `writeln!` succeeds. A buffering error records one typed drop and
+  emits a debounced error. It does not advance `current_size` or directly
+  increment the consecutive-flush-error count.
+- `flush` success adds the current pending bytes to `current_size`, clears the
+  buffering-error debounce and resets consecutive flush errors. Failure leaves
+  `current_size` unchanged, increments consecutive flush errors, and adds the
+  current pending line count once through `LogType::record_drops`. Both outcomes
+  clear pending accounting and republish health. Zero counts do not register a
+  dropped metric; repeated failures without new pending lines do not recount
+  the previous batch.
+- A writer is healthy only when consecutive flush errors are below three,
+  `disk_ok` is true and `path_ok` is true. Disk or attachment failures can therefore
+  shed it before the flush-error threshold. Queue saturation counts a drop but
+  does not change health; a disconnected queue marks the writer unhealthy.
+- The worker uses `recv_timeout` with an idle interval clamped to at least one
+  second. Idle processing checks attachment and disk usage, then retries a flush
+  when flush errors remain. A successful retry clears that error state and
+  republishes combined health without requiring new traffic. This matters because
+  first-healthy routing sends no new entries to an unhealthy sink. A failed
+  flush need not imply a nonempty buffer: the underlying writer's flush itself
+  can fail. Recovery must not depend on that assumption.
 
-Re-reports of the form "`let _ = writeln!(...)` silently discards the io::Result / write failures
-produce no error, no metric, no operator signal / `current_size` is incremented even when the write
-fails / healthy flag never reflects a degraded writer" are **not accepted** for the write-error and
-size-drift parts — verify the current `write_log_line` helper before re-reporting.
+The dedicated writer thread may emit its existing bounded failure/recovery
+tracing. `DataSender::send` stays nonblocking and uses metrics without request-
+path tracing. The canonical
+[typed-dispatch ownership](access-log-all-senders-unhealthy-metric.md) prevents
+self-counting senders from also returning a dispatch error that would be counted
+again. Do not add another metric family for the same loss signal.
 
-## Fix Suggestions Not Accepted
+## Limits and related decisions
 
-- "Set `self.healthy = false` from the background thread on write failure (via a shared
-  `Arc<AtomicBool>`) so `healthy()` reflects a degraded writer." **Not done — out of scope.** The
-  issue itself marked this "Optionally". `healthy()` feeds sender failover in
-  `observe/access_log/logger.rs` (`send` picks the first healthy sender); flipping it false on a
-  transient disk-full would, in the common single-sender setup, route all logs nowhere and require
-  recovery-flip logic that can oscillate. The transient write-failure signal belongs on the
-  counter + `tracing::error!`, not on a startup-style health bool. (Contrast
-  `system-error-state-metric.md`: the `edgion_system_error_state` gauge is for *startup
-  configuration* degradations, not transient runtime faults, so it does not apply here either.) If
-  failover-on-degraded-writer is ever wanted, track it as a separate task, not under this finding.
-- "Add a new dedicated write-failure metric instead of reusing `*_log_dropped`." Not accepted —
-  reusing the existing per-log-type dropped counter is what the issue's suggested fix shows; both
-  queue-full and write-failure mean "a log line was lost", so one counter answers the operator's
-  question. Adding a parallel metric only doubles the alerting surface.
+The dropped count is best-effort pessimistic, not proof that every counted byte
+was lost. BufWriter can retain bytes after a failed write; partial writes can
+already have reached the underlying file, and later recovery can deliver retained
+bytes. Failed-batch accounting has already been cleared, so later delivery does
+not reconstruct the original size accounting. `current_size` is not an exact
+filesystem-length oracle across failures, and successful flush is not an fsync
+or remote delivery acknowledgement. This page establishes no maximum size drift,
+maximum batch byte size, exactly-once delivery or hard file-size cap.
 
-## Re-evaluation Triggers
+[Health tradeoffs](../../link-sys/intentional-design/healthy-semantics-intentional-non-flips.md)
+own queue saturation and live idle recovery. This correction does not reopen the
+accepted approximate size-accounting policy. For descriptor identity,
+flush-before-replacement, candidate validation and before-batch/idle attachment
+checks, use the current ARCH-026 evidence in
+[fallback and backfill](../../link-sys/intentional-design/access-log-fallback-backfill-tradeoffs.md).
+The proposed probe-cadence performance investigation grants no recovery-policy
+change. First-healthy selection remains health-based, without send-error fallback.
 
-Re-open only if:
+## Verification and re-evaluation
 
-- The write sites revert to `let _ = writeln!(...)` or `current_size` is again advanced before the
-  write result is known.
-- A future requirement genuinely needs writer-level failover (then revisit the `healthy()`
-  `AtomicBool` decision as its own task).
+At `972f0987f`, fresh
+`cargo test -p edgion-gateway --lib link_sys::providers::local_file::data_sender_impl::tests::`
+passed 25 cases. Relevant tests include
+`failed_batches_count_pending_lines_once_for_each_log_type`,
+`batch_sink_flips_unhealthy_after_threshold_flush_failures`,
+`batch_sink_recovers_on_successful_flush`, `batch_sink_write_line_error_debounces`,
+`batch_sink_idle_retry_recovers_after_failures_clear`, and the rename/recreation
+and rotation recovery cases. They exercise injected writers and temporary files;
+they are not live disk-full, durability or performance measurements.
 
-## Reference Cases
+Revalidate this guidance when pending accounting, flush behavior, health signals,
+queue routing or recovery scheduling changes. Do not reject a new finding solely
+because the original F020 issue was fixed. The current implementation and the
+specific failure sequence must support any claimed guarantee.
 
-- link-sys-F020 local_file (review finding, `tasks/link/`, 2026-05-25)
-- `observability/system-error-state-metric.md` — why the startup-degradation gauge does not cover
-  transient write faults.
-- `observability/observability-review-rule.md` — the "zero tracing on the data plane" rule and why
-  the background-thread `tracing::error!` here is exempt (not the request/connection path).
+## Resolution references
+
+- link-sys-F020 local_file, original write-error correction, 2026-05-25.
+- `972f0987f`: failed-batch counters aggregated while retaining existing semantics.
+- Unit tests: `edgion-gateway/tests/unit/link_sys/providers/local_file/data_sender_impl_test.rs`.
+- Canonical tracing boundary: `skills/03-coding/01-log-safety.md`.

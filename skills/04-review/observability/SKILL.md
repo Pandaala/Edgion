@@ -53,7 +53,7 @@ before applying a decision to current code.
 - [GeoIP validators are bound to the configured update source](regression-guards/geoip-validators-bound-to-update-source.md)
 - [GeoIP updater success test uses a fixture-scale cap — FIXED](regression-guards/geoip-updater-success-test-fixture-scale-cap.md)
 - [EgressResolver blocked-address tracing is removed — FIXED](regression-guards/gw-plugin-outbound-01-egress-resolver-tracing-removed.md)
-- [link-sys F-020 (local_file) — background write errors are surfaced, `current_size` no longer drifts](regression-guards/local-file-write-error-surfaced.md)
+- [Local-file buffered write failures, accounting and live recovery](regression-guards/local-file-write-error-surfaced.md)
 - [OIDC `JwksProvider` dual-use tracing — FIXED (4 deleted, 1 relocated to the cold caller)](regression-guards/oidc-jwks-provider-tracing-relocated.md)
 - [OIDC outbound SAN-mismatch hot-path `tracing::warn!` removed — FIXED](regression-guards/oidc-outbound-san-mismatch-tracing-removed.md)
 - [Pingora HTTP/1 Header Logs Have an Error Floor — FIXED](regression-guards/pingora-h1-header-logs-have-an-error-floor.md)

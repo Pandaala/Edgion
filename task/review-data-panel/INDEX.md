@@ -12869,14 +12869,14 @@ logging tests (58 total). New cases cover all five log types, lazy zero counts,
 batch totals, repeated empty failures and separate buffering loss. No full suite,
 live integration or benchmark ran.
 
-Follow-up knowledge discrepancy: the historical
-`skills/04-review/observability/regression-guards/local-file-write-error-surfaced.md`
-still describes removed write_log_line, current_size advancement on writeln success,
-and rejection of health flips. Current BatchSink advances size on flush success
-and supports failure/recovery health transitions. Reconcile that page separately
-against current implementation and tests; its stale wording is not authority to
-change the current writer. The canonical typed-dispatch knowledge was updated
-within this batch's scope.
+The follow-up knowledge discrepancy was reconciled in
+`skills/04-review/observability/regression-guards/local-file-write-error-surfaced.md`.
+The page now describes BatchSink pending/flush accounting, typed aggregate loss,
+combined health and idle recovery; the removed helper and historical rejection of
+health flips are explicitly superseded. It distinguishes approximate file-size
+accounting from exact loss or durable delivery. Fresh unchanged-code verification
+passed the 25 local-file tests, formatting, workspace check/Clippy and agent-doc
+validation. No runtime policy or tests changed in that documentation correction.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed.
 A new test-only type-complexity warning was corrected with a local function type
