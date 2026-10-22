@@ -12963,3 +12963,27 @@ metadata regressions remain. No full suite, live integration or benchmark ran.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed;
 existing unrelated warnings remain.
+
+
+## Responses local error serialization into final storage
+
+Native Responses local_error now serializes its unchanged typed error envelope
+directly into the final SSE byte buffer. This removes the intermediate JSON
+String and its copy into a second formatted String. The initial capacity matches
+the existing serde_json serializer default; subsequent growth remains ordinary
+Vec growth. Checked sequence overflow still returns before allocation, and the
+fixed fields, serialization failure handling, framing and 4096-byte return gate
+are unchanged. The usage processor retains terminal arbitration and sink ownership.
+
+The new differential test passed against the old renderer before implementation.
+It now compares all 13 fixed error variants across absent, decimal-boundary and
+maximum sequence values, including overflow. Exact bytes match, successful cases
+measure fewer allocation calls than the previous expression, and overflow makes
+zero allocation calls. This is a local terminal-error optimization, not a measured
+steady-state SSE throughput improvement. Final storage still allocates.
+
+Fresh verification passed 81 protocol and 52 usage tests (133 total), formatting,
+workspace all-target check/Clippy, seven repository guards and diff hygiene.
+Existing unrelated warnings remain. An initial test compilation exhausted disk
+space; after removing rebuildable stale/failed incremental caches, the test run
+passed. No full suite, live integration or throughput benchmark ran.

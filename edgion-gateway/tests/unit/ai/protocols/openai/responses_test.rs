@@ -49,3 +49,64 @@ fn local_error_uses_typed_sdk_envelope_and_checked_sequence() {
     assert!(value["param"].is_null());
     assert!(local_error(AiProxyError::QuotaExceeded, Some(u64::MAX)).is_none());
 }
+
+#[test]
+fn local_error_preserves_all_fixed_wire_replies() {
+    fn previous(error: AiProxyError, last: Option<u64>) -> Option<Bytes> {
+        let sequence_number = match last {
+            Some(value) => value.checked_add(1)?,
+            None => 0,
+        };
+        let (_, message, _, code) = error.fields();
+        let data = serde_json::to_string(&LocalError {
+            type_: "error",
+            code,
+            message,
+            param: None,
+            sequence_number,
+        })
+        .ok()?;
+        let event = format!("\n\nevent: error\ndata: {data}\n\n");
+        (event.len() <= 4096).then(|| Bytes::from(event))
+    }
+
+    for error in [
+        AiProxyError::ModelNotFound,
+        AiProxyError::UpstreamResponseInvalid,
+        AiProxyError::UpstreamTimeout,
+        AiProxyError::StreamingDisabled,
+        AiProxyError::BackendUnavailable,
+        AiProxyError::MalformedBody,
+        AiProxyError::UnsupportedParameter,
+        AiProxyError::MissingRequiredParameter,
+        AiProxyError::UnsupportedEndpoint,
+        AiProxyError::RequestTooLarge,
+        AiProxyError::QuotaExceeded,
+        AiProxyError::QuotaUnavailable,
+        AiProxyError::ContentFiltered,
+    ] {
+        for last in [
+            None,
+            Some(0),
+            Some(8),
+            Some(9),
+            Some(98),
+            Some(99),
+            Some(u64::MAX - 1),
+            Some(u64::MAX),
+        ] {
+            let (expected, previous_allocations) =
+                crate::test_allocation_counter::count_allocations(|| previous(error, last));
+            let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| local_error(error, last));
+            assert_eq!(actual, expected, "{error:?}, {last:?}");
+            if expected.is_some() {
+                assert!(
+                    allocations < previous_allocations,
+                    "{error:?}, {last:?}: {allocations} versus {previous_allocations}"
+                );
+            } else {
+                assert_eq!(allocations, 0);
+            }
+        }
+    }
+}

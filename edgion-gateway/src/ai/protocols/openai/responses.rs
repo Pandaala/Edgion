@@ -70,9 +70,11 @@ pub(crate) fn local_error(error: AiProxyError, last_sequence: Option<u64>) -> Op
         param: None,
         sequence_number,
     };
-    let data = serde_json::to_string(&event).ok()?;
-    let event = format!("\n\nevent: error\ndata: {data}\n\n");
-    (event.len() <= 4096).then(|| Bytes::from(event))
+    let mut wire = Vec::with_capacity(128);
+    wire.extend_from_slice(b"\n\nevent: error\ndata: ");
+    serde_json::to_writer(&mut wire, &event).ok()?;
+    wire.extend_from_slice(b"\n\n");
+    (wire.len() <= 4096).then(|| Bytes::from(wire))
 }
 
 #[cfg(test)]
