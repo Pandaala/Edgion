@@ -13466,3 +13466,26 @@ Existing non-i64 numeric and malformed-document regressions passed. No full suit
 live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Encode bounded JSON integers without temporary Strings
+
+BoundedVisitor now writes i64/u64 values directly through the existing serde_json
+writer into BoundedJson. The locked serde_json 1.0.151 integer formatter uses a
+stack itoa buffer and writes one complete decimal slice. This removes the former
+temporary String before the same bounded byte copy, including on rejected values.
+The final output Vec remains; no throughput or full-parser allocation claim is made.
+
+The existing bounded writer owns admission, clearing and the oversized marker.
+Decimal bytes, retained capacity and capture outcomes remain unchanged. Float
+formatting, key accounting, duplicate recovery, full-document validation, Body
+ownership and scan budgets are untouched.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 507
+cases; final verification passed 508. A differential test compares the old
+String-based conversion against both visitors at signed/unsigned extremes,
+zero/one, the i64 boundary, and zero/below/exact/above byte limits, including
+retained capacity and resulting captures. Existing container and malformed-input
+regressions passed. No full suite, live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

@@ -344,6 +344,39 @@ fn bounded_map_overlong_key_is_irreversible() {
 }
 
 #[test]
+fn bounded_integer_encoding_matches_decimal_text_at_limits() {
+    fn check(actual: BoundedJson, text: &str, limit: usize) {
+        let expected = BoundedJson::from_bytes(limit, text.as_bytes());
+        assert_eq!(actual.bytes, expected.bytes);
+        assert_eq!(actual.oversized, expected.oversized);
+        assert_eq!(actual.bytes.capacity(), expected.bytes.capacity());
+        if expected.oversized {
+            assert!(matches!(actual.into_scan_value(), JsonScanValue::TooLong));
+        } else {
+            assert!(matches!(
+                actual.into_scan_value(),
+                JsonScanValue::Value(Value::Str(value)) if value.as_ref() == text
+            ));
+        }
+    }
+
+    for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+        let text = value.to_string();
+        for limit in [0, text.len() - 1, text.len(), text.len() + 1] {
+            let actual = BoundedVisitor { limit }.visit_i64::<serde_json::Error>(value).unwrap();
+            check(actual, &text, limit);
+        }
+    }
+    for value in [0, 1, i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
+        let text = value.to_string();
+        for limit in [0, text.len() - 1, text.len(), text.len() + 1] {
+            let actual = BoundedVisitor { limit }.visit_u64::<serde_json::Error>(value).unwrap();
+            check(actual, &text, limit);
+        }
+    }
+}
+
+#[test]
 fn json_encoding_is_counted_and_written_without_expanded_temporaries() {
     let key = "quote\" slash\\ control\u{0001} café";
     let expected = serde_json::to_vec(key).unwrap();
