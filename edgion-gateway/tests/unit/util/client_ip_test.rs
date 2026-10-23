@@ -13,6 +13,18 @@ fn ordinary_connection_has_equal_identities() {
     assert_eq!(got.remote_ip, "192.0.2.10");
     assert_eq!(got.direct_peer_port, 1234);
     assert_eq!(got.remote_port, 1234);
+
+    for ip in ["192.0.2.10", "2001:db8::1", "::ffff:192.0.2.10"] {
+        let ip: IpAddr = ip.parse().unwrap();
+        let effective = inet(ip, 1234);
+        let raw = inet(ip, 5678);
+        let mut got = resolve_transport_client_addrs(Some(&effective), Some(&raw), "unknown");
+        assert_eq!(got.remote_ip, canonicalize_ip(ip));
+        assert_eq!(got.direct_peer_ip, got.remote_ip);
+        assert_eq!((got.direct_peer_port, got.remote_port), (5678, 1234));
+        got.direct_peer_ip.clear();
+        assert_eq!(got.remote_ip, canonicalize_ip(ip));
+    }
 }
 
 #[test]
@@ -45,4 +57,16 @@ fn ipv6_and_missing_effective_are_stable() {
     assert_eq!(missing.remote_ip, "unknown");
     assert_eq!(missing.direct_peer_ip, "unknown");
     assert_eq!(missing.remote_port, 0);
+
+    let raw_only = resolve_transport_client_addrs(None, Some(&ipv6), "unknown");
+    assert_eq!(raw_only.remote_ip, "unknown");
+    assert_eq!(raw_only.direct_peer_ip, "2001:db8::1");
+    assert_eq!((raw_only.direct_peer_port, raw_only.remote_port), (4567, 0));
+
+    let native = inet(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)), 1234);
+    let mapped = inet(IpAddr::V6(Ipv4Addr::new(198, 51, 100, 7).to_ipv6_mapped()), 5678);
+    let got = resolve_transport_client_addrs(Some(&native), Some(&mapped), "unknown");
+    assert_eq!(got.remote_ip, "198.51.100.7");
+    assert_eq!(got.direct_peer_ip, "198.51.100.7");
+    assert_eq!((got.direct_peer_port, got.remote_port), (5678, 1234));
 }

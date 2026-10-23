@@ -14506,3 +14506,24 @@ builder's internal new_custom call remains present even with default arguments.
 Independent source review, formatting, workspace check/Clippy and agent-doc
 validation passed with existing unrelated warnings. No Rust tests, benchmarks,
 custom-transport or wire scenarios were rerun for this documentation-only audit.
+
+## Reuse equal transport-IP formatting
+
+The shared transport client-address extractor now copies the already canonical
+effective-IP text when raw and effective binary IPs are equal. HTTP, redirect,
+TCP and TLS consumers retain independent identity strings and ports. Distinct
+IPs and missing effective addresses still format the raw IP independently;
+missing/non-Inet raw addresses keep the prior effective fallback. Native IPv4
+and its mapped IPv6 form need not compare equal to preserve canonical output.
+
+This removes redundant formatting on equal IPs, not either owned String
+allocation. It adds an IP equality check for present raw addresses. No throughput
+or allocation-count gain is measured. Tests extend the existing fixtures with
+IPv4/native IPv6/mapped IPv6 equal-IP/different-port cases, independent string
+mutation, missing-effective/raw-present input and native/mapped parity.
+
+Baseline and final selections passed four shared client-address, 37 non-cache
+request-filter and 13 redirect tests (54 executions). Formatting, workspace
+all-target check/Clippy and seven campaign guards passed with existing unrelated
+warnings. The unrelated response-cache baseline fixture remains deferred; no
+full suite, TCP/TLS wire run or benchmark was performed.

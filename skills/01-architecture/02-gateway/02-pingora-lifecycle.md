@@ -66,6 +66,7 @@ The most complex phase, responsible for request parsing and route matching:
 1. **Metadata extraction** (`build_request_metadata`):
    - Protocol detection: call the same idempotent `detect_request_protocol` helper for WebSocket/gRPC-Web/gRPC; retain any Phase-1 classification instead of reclassifying rewritten gRPC-Web headers as native gRPC.
    - Address extraction: `direct_peer_ip` (`DirectPeerIp`, physical transport peer), `remote_ip` (`RemoteIp`, resolved client identity after the applicable PROXY/RealIp processing).
+     The shared transport extractor copies the already canonical effective-IP text when the raw and effective binary IPs are equal. Both identity strings remain independently owned, and their ports remain independent; different IPs still use canonical formatting separately.
    - Hostname normalization: URI host → Host header → :authority header, all stripped of port, trailing dot removed, lowercased.
    - TLS metadata: extract `tls_id`, `sni`, and `client_cert_info` from `SslDigestExtension`.
    - Security checks: SNI-Host consistency check, Listener hostname isolation, X-Forwarded-For length limit.

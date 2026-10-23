@@ -31,9 +31,11 @@ pub fn resolve_transport_client_addrs(
 
     let raw = raw.and_then(SocketAddr::as_inet);
     TransportClientAddrs {
-        direct_peer_ip: raw
-            .map(|addr| canonicalize_ip(addr.ip()))
-            .unwrap_or_else(|| remote_ip.clone()),
+        direct_peer_ip: match raw {
+            Some(addr) if effective.map(StdSocketAddr::ip) != Some(addr.ip()) => canonicalize_ip(addr.ip()),
+            // Equal IPs share formatting work, but retain independent strings and ports.
+            _ => remote_ip.clone(),
+        },
         direct_peer_port: raw.map_or(remote_port, StdSocketAddr::port),
         remote_ip,
         remote_port,
