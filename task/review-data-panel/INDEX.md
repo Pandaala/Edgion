@@ -84,6 +84,7 @@ destination.
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
 - [Redis command frame encoding ownership](redis-04-command-frame-encoding.md)
 - [Redis script result conversion storage](redis-05-script-result-conversion.md)
+- [Bounded Redis GET text validation ownership](redis-06-bounded-get-text-validation.md)
 
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
 
