@@ -14423,3 +14423,24 @@ Initial final compilation exhausted disk; removing inactive old-fingerprint
 object files and the failed incremental working directory allowed a clean retry.
 Formatting, workspace all-target check/Clippy and seven campaign guards passed
 with existing unrelated warnings. No full suite, live integration or benchmark ran.
+
+## Copy plain canonical query components directly
+
+Traced HTTP deep-match query predicates through the request's frozen lazy cache
+into the shared resources URI decoder. url_decode now returns an owned copy when
+its input contains neither percent nor plus. This avoids per-scalar appending and
+output growth for plain components, including multibyte UTF-8. Encoded inputs pay
+an initial presence scan and then use the unchanged decoder; no measured speedup
+is claimed. The String API and canonical cache owner remain unchanged.
+
+The existing decoder fixture now covers empty/plain/long UTF-8 inputs and a long
+plain prefix followed by plus or a percent token. Existing malformed scalar-token,
+radix-leading-plus, whole-run Latin-1 fallback and decoded duplicate-key tests
+remain. No alternate parser, borrowed cache lifetime, auth policy or raw LB value
+behavior is introduced; the bounded DSL decoder remains separate.
+
+Baseline and final selections passed 14 resources URI decoder, 44 Gateway query,
+seven cached-query and 19 HTTP match-unit tests (84 executions across overlapping
+selections). Formatting, workspace all-target check/Clippy and all seven campaign
+guards passed with existing unrelated warnings. No full suite, live integration
+or benchmark ran.

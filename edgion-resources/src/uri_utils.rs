@@ -44,6 +44,10 @@ pub fn parse_query_string(query: &str) -> HashMap<String, String> {
 /// runs; invalid escapes (`%` not followed by two hex digits) are
 /// preserved as-is.
 pub fn url_decode(s: &str) -> String {
+    if !s.contains(['%', '+']) {
+        return s.to_owned();
+    }
+
     let mut result = String::new();
     let mut byte_buf: Vec<u8> = Vec::new();
     let mut chars = s.chars();

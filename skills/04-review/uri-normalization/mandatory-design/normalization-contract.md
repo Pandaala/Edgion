@@ -197,6 +197,11 @@ tokens form one UTF-8 byte run. If any byte makes that run invalid UTF-8, the
 entire run falls back to bytewise Latin-1 characters. Malformed tokens and
 ordinary scalars flush pending bytes before being appended.
 
+Inputs with neither `%` nor `+` return an owned copy directly, avoiding the
+scalar-by-scalar append loop and its output growth. The presence scan also runs
+for encoded inputs before the unchanged decoder. Empty and plain UTF-8 inputs
+remain byte-identical; this is not a borrowed API or a second decoding policy.
+
 The output String, byte-run buffer and API remain owned as before. Query parsing
 skips empty pairs, gives no-equals pairs empty values and lets the last decoded
 duplicate key win. Regression assertions live in

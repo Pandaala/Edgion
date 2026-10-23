@@ -38,6 +38,16 @@ fn test_parse_query_string_empty() {
 
 #[test]
 fn test_url_decode_basic() {
+    for plain in ["", "hello", "é€π", "key=value&flag"] {
+        assert_eq!(url_decode(plain), plain);
+    }
+    let long_plain = "abcé€π".repeat(1024);
+    assert_eq!(url_decode(&long_plain), long_plain);
+    assert_eq!(url_decode(&format!("{long_plain}+tail")), format!("{long_plain} tail"));
+    assert_eq!(
+        url_decode(&format!("{long_plain}%20tail")),
+        format!("{long_plain} tail")
+    );
     assert_eq!(url_decode("hello"), "hello");
     assert_eq!(url_decode("hello+world"), "hello world");
     assert_eq!(url_decode("hello%20world"), "hello world");
