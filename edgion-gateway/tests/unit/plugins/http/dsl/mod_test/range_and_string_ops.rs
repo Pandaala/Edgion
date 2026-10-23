@@ -610,6 +610,31 @@ fn test_join_basic() {
 
 // range() items are accessible by direct index.
 #[test]
+fn test_range_preserves_signed_decimal_elements() {
+    for (bounds, expression, expected) in [
+        ("-2, 2", r#"r[0] + "," + r[1] + "," + r[2] + "," + r[3]"#, "-2,-1,0,1"),
+        ("8, 11", r#"r[0] + "," + r[1] + "," + r[2]"#, "8,9,10"),
+        ("-11, -8", r#"r[0] + "," + r[1] + "," + r[2]"#, "-11,-10,-9"),
+        (
+            "-9223372036854775807 - 1, -9223372036854775807",
+            "r[0]",
+            "-9223372036854775808",
+        ),
+        (
+            "9223372036854775806, 9223372036854775807",
+            "r[0]",
+            "9223372036854775806",
+        ),
+    ] {
+        let source = format!(
+            r#"let r = range({bounds})
+req.set_header("X-Out", {expression})"#
+        );
+        assert_sets_request_header(&source, "X-Out", expected);
+    }
+}
+
+#[test]
 fn test_range_index_get() {
     let source = r#"
         let r = range(10, 13)

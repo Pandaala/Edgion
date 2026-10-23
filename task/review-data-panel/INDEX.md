@@ -13678,3 +13678,22 @@ exact StringTooLong { len: 4, limit: 3 } at limit three.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings. No full suite, live integration
 or performance benchmark ran.
+
+## Reuse range element formatting scratch
+
+Range now formats each integer into one invocation-local String, clearing and
+reusing its capacity before copying the text into each independent Arc<str>.
+This replaces per-item temporary String construction with amortized scratch
+growth. Empty ranges do not allocate scratch storage. Final list/Arc ownership,
+standard decimal formatting, iteration order, checked subtraction/addition,
+configured truncation and the 1000-element hard ceiling are unchanged.
+No new formatter, dependency, logging or value-work accounting was introduced.
+No exact allocation total or throughput improvement was measured.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 514
+cases; final verification passed 515. The new regression retains earlier list
+entries while checking sign changes, growing/shrinking decimal widths, i64::MIN
+and i64::MAX - 1. Existing empty, overflow, indexing and truncation cases passed.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings. No full suite or live
+integration ran.

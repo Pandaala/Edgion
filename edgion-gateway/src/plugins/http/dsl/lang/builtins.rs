@@ -1189,7 +1189,16 @@ impl Vm {
                 let end_bound = start
                     .checked_add(count as i64)
                     .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;
-                let list: Vec<Arc<str>> = (start..end_bound).map(|i| Arc::from(i.to_string().as_str())).collect();
+                use std::fmt::Write as _;
+                let mut number = String::new();
+                let list: Vec<Arc<str>> = (start..end_bound)
+                    .map(|i| {
+                        number.clear();
+                        // Primitive integer formatting into String cannot fail.
+                        let _ = write!(&mut number, "{i}");
+                        Arc::from(number.as_str())
+                    })
+                    .collect();
                 Ok(Value::List(list))
             }
 
