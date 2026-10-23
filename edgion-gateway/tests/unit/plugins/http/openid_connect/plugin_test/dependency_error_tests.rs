@@ -36,7 +36,7 @@ pub(super) fn discovery(origin: &str) -> DiscoveryDocument {
 pub(super) fn request(token: Option<&str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const("/resource".to_owned());
-    session.expect_get_query().return_const(None::<String>);
+    session.expect_request_query().return_const(None);
     session.expect_downstream_is_tls().return_const(Some(true));
     let authorization = token.map(|token| format!("Bearer {token}"));
     match authorization.as_deref() {

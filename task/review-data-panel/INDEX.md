@@ -14138,3 +14138,23 @@ formatting, workspace check/Clippy and seven repository guards passed with
 existing unrelated warnings. The first final compile exhausted disk while writing
 an incremental cache; after removing inactive build caches, recompilation and
 tests passed. No full suite, live Redis integration or benchmark ran.
+
+## OIDC borrowed authorization-state query assembly
+
+Authorization redirect construction now borrows request_query when building the
+owned original_url saved in its encrypted state cookie. The adapter reads the
+same current URI as get_query. Absent and empty queries still omit the question
+mark; nonempty raw query bytes preserve duplicates and percent encoding. Random
+state/nonce generation, PKCE, cipher use and cookie publication order are unchanged.
+
+The existing crypto regression now exercises four query shapes and decrypts each
+cookie to check the URL and all existing state/nonce/PKCE assertions. Fixtures use
+the borrowed accessor; the focused case forbids the owned getter. This removes
+the temporary query copy, not the final cookie-owned URL or encryption storage.
+The remaining production get_query caller retains query in AiProxy's cross-stage
+attempt plan. Existing oidc-01 through oidc-07 decisions remain open.
+
+Baseline and final selections each passed 103 OIDC plugin and eight dependency
+error tests (111 executions per selection). Formatting, workspace check/Clippy
+and seven repository guards passed with existing unrelated warnings. No full
+suite, live IdP integration or performance benchmark ran.

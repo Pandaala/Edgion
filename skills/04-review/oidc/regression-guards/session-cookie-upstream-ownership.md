@@ -53,3 +53,17 @@ Re-open this decision only if:
 ## Resolution references
 
 - `D0060` — 2026-09-04.
+
+## Authorization-state return URL ownership
+
+Authorization redirect construction borrows the current request query while
+formatting the state payload's owned original_url. The adapter observes the same
+current URI as the former owned getter. Absent and present-empty queries both
+omit the question mark; nonempty raw query bytes retain duplicates and encoding.
+The final URL remains owned for encrypted cookie serialization. State, nonce,
+PKCE binding and cookie-attribute behavior are unchanged.
+
+The existing authorization redirect regression decodes the encrypted state
+cookie for all four query shapes and checks original_url together with random
+lengths, state/nonce equality and the PKCE digest. This verifies the local
+construction contract, not a live IdP round trip or measured performance gain.

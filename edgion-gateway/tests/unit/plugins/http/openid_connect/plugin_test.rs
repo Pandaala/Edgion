@@ -750,7 +750,7 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     session.expect_get_cookie().returning(|_| None);
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
-    session.expect_get_query().return_const(Some("x=1".to_string()));
+    session.expect_request_query().return_const(Some("x=1"));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -798,35 +798,43 @@ fn authorization_redirect_preserves_random_lengths_and_pkce_binding() {
         end_session_endpoint: None,
         revocation_endpoint: None,
     };
-    let mut session = MockPluginSession::new();
-    session.expect_get_path().return_const("/orders".to_string());
-    session.expect_get_query().return_const(Some("x=1".to_string()));
-    let (redirect, cookie) = plugin.build_authorization_redirect(&session, &discovery).unwrap();
-    let url = url::Url::parse(&redirect).unwrap();
-    let query: HashMap<_, _> = url.query_pairs().collect();
-    let encoded = cookie.split_once('=').unwrap().1.split(';').next().unwrap();
-    let payload: super::AuthorizationStateCookie =
-        OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
-    assert_eq!(payload.original_url, "/orders?x=1");
-    assert_eq!(query["state"], payload.state);
-    assert_eq!(query["nonce"], payload.nonce.as_deref().unwrap());
-    let verifier = payload.code_verifier.as_deref().unwrap();
-    for (value, bytes, chars) in [
-        (payload.state.as_str(), 24, 32),
-        (payload.nonce.as_deref().unwrap(), 24, 32),
-        (verifier, 64, 86),
+    for (raw_query, original_url) in [
+        (None, "/orders"),
+        (Some(""), "/orders"),
+        (Some("x=1"), "/orders?x=1"),
+        (Some("x=1&x=2&encoded=a%20b%26c"), "/orders?x=1&x=2&encoded=a%20b%26c"),
     ] {
-        assert_eq!(value.len(), chars);
-        assert!(value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
-        assert_eq!(URL_SAFE_NO_PAD.decode(value).unwrap().len(), bytes);
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().return_const("/orders".to_string());
+        session.expect_get_query().never();
+        session.expect_request_query().return_const(raw_query);
+        let (redirect, cookie) = plugin.build_authorization_redirect(&session, &discovery).unwrap();
+        let url = url::Url::parse(&redirect).unwrap();
+        let query: HashMap<_, _> = url.query_pairs().collect();
+        let encoded = cookie.split_once('=').unwrap().1.split(';').next().unwrap();
+        let payload: super::AuthorizationStateCookie =
+            OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
+        assert_eq!(payload.original_url, original_url);
+        assert_eq!(query["state"], payload.state);
+        assert_eq!(query["nonce"], payload.nonce.as_deref().unwrap());
+        let verifier = payload.code_verifier.as_deref().unwrap();
+        for (value, bytes, chars) in [
+            (payload.state.as_str(), 24, 32),
+            (payload.nonce.as_deref().unwrap(), 24, 32),
+            (verifier, 64, 86),
+        ] {
+            assert_eq!(value.len(), chars);
+            assert!(value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+            assert_eq!(URL_SAFE_NO_PAD.decode(value).unwrap().len(), bytes);
+        }
+        assert_eq!(query["code_challenge_method"], "S256");
+        assert_eq!(
+            query["code_challenge"],
+            URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+        );
     }
-    assert_eq!(query["code_challenge_method"], "S256");
-    assert_eq!(
-        query["code_challenge"],
-        URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-    );
 }
 
 #[tokio::test]
@@ -861,7 +869,7 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     session.expect_get_cookie().returning(|_| None);
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
-    session.expect_get_query().return_const(Some("x=1".to_string()));
+    session.expect_request_query().return_const(Some("x=1"));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -948,7 +956,7 @@ async fn test_authorization_params_appends_non_reserved_params() {
     session.expect_get_cookie().returning(|_| None);
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
-    session.expect_get_query().return_const(None);
+    session.expect_request_query().return_const(None);
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");

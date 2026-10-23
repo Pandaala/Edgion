@@ -176,7 +176,7 @@ impl OpenidConnect {
             }
         }
 
-        let original_url = match session.get_query() {
+        let original_url = match session.request_query() {
             Some(q) if !q.is_empty() => format!("{}?{}", session.get_path(), q),
             _ => session.get_path().to_string(),
         };
