@@ -180,6 +180,8 @@ destination.
 
 - [HeaderCertAuth connection projection ownership](tls-04-header-cert-connection-projection.md)
 
+- [RequestMirror snapshot transport setup](mirror-01-snapshot-transport-setup.md)
+
 - [JWE plaintext forwarding ownership](jwe-01-plaintext-header-ownership.md)
 
 - [LDAP bind DN template preparation](ldap-01-bind-dn-template-preparation.md)
@@ -14682,3 +14684,17 @@ and release assertions. Baseline and final serial selections each passed all
 28 RequestMirror tests. Formatting, workspace all-target check/Clippy and seven
 campaign guards passed with existing unrelated warnings. No full suite, live
 transport test or benchmark ran.
+
+## RequestMirror snapshot setup decision
+
+The committed snapshot branch still constructs an unused bounded mpsc receiver
+and sender. Locked Tokio 1.53.1 allocates an initial queue block and shared channel
+owner during setup. mirror-01 records queue-only body-source separation versus
+a broader detached snapshot cancellation design for user decision. It does not
+claim that queue-only removal is unsafe or that all shared state is redundant:
+snapshot payload budgets and BufferLimit reason propagation remain necessary.
+
+No runtime design was selected. Fresh serial execution passed 28 RequestMirror
+tests, formatting, workspace all-target check/Clippy and agent-doc validation,
+with existing unrelated warnings. No allocation prototype, benchmark, full suite
+or live transport test ran.
