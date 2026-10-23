@@ -14235,3 +14235,18 @@ formatting, workspace check/Clippy and agent-doc validation with existing unrela
 warnings. The source trace establishes error propagation into lease cleanup; the
 existing tests cover codec outcomes and driver cleanup separately. No new allocation
 measurement, full suite or live integration ran.
+
+## gRPC streaming terminal record storage decision
+
+Traced fixed terminal record construction through JSON length admission and
+capacity-charged output ownership. A standalone extraction of the current formatter
+shows excess Vec capacity for nonzero status records on this build. Preparing
+finite record bytes could remove formatting but still needs owned, credited output
+and may change near-budget acceptance. [grpc-12](grpc-12-stream-terminal-storage.md)
+records the small per-failed-stream benefit, keep-current alternative, probe limits
+and required acceptance. No runtime implementation is selected.
+
+Fresh unchanged-code baseline passed 31 Gateway and 35 Resources transcoder tests,
+formatting, workspace check/Clippy and agent-doc validation with existing unrelated
+warnings. The probe measured lengths/capacities only. No performance benchmark,
+candidate implementation, full suite or live integration ran.
