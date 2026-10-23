@@ -244,7 +244,7 @@ async fn next_opaque_body_chunk(
     {
         let mut state = shared.reader.lock();
         if state.in_flight {
-            state.abort_handle = Some(abort_handle.clone());
+            let abort_handle = state.abort_handle.insert(abort_handle);
             if shared.cancelled.load(Ordering::Acquire) {
                 abort_handle.abort();
             }

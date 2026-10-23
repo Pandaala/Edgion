@@ -13297,3 +13297,26 @@ poll, dropped-future task abort and midstream failure accounting. No mirrored
 reference-count test was added. Formatting, workspace all-target check/Clippy,
 seven repository guards and diff hygiene passed. Existing unrelated warnings
 remain. No full suite, live integration or performance benchmark ran.
+
+## Move the opaque upload cancellation handle into its owner
+
+`next_opaque_body_chunk` inserts its owned AbortHandle into the reader state and
+borrows that stored handle for the subsequent cancellation check. The previous
+clone is unnecessary: Tokio 1.53.1 clones by incrementing the task reference
+count, and dropping the handle only releases that reference. This removes one
+clone/drop pair when the reader is still in flight; it does not remove task
+creation or establish a throughput improvement.
+
+Handle acquisition, publication under the reader mutex, the cancellation Acquire
+load and abort scheduling keep their order. The already-finished branch still
+drops the local handle. Join ownership, reader cleanup, notifications, fetched
+byte accounting and conservative refunds are unchanged. The broader task-owner
+redesign remains deferred in DSL 03.
+
+Independent plan review passed. Four opaque-upload baseline tests and all 46
+final opaque-upload/HTTP-call tests passed. Existing tests cover pending-reader
+cancellation, cleanup without another stream poll, dropped-future task abort and
+midstream accounting; no artificial reference-count test was added. Formatting,
+workspace all-target check/Clippy, seven repository guards and diff hygiene
+passed, with existing unrelated warnings. No full suite, live transport test or
+performance benchmark ran.
