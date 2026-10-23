@@ -14045,3 +14045,22 @@ removes the query copy only; no measured throughput claim follows. All 24
 ProxyRewrite tests passed after the change, as did formatting, workspace
 check/Clippy and seven repository guards. Existing unrelated warnings remain.
 No full suite, live integration or benchmark ran.
+
+## Borrow verified JWT issuer from retained claims
+
+VerifyOk now retains only the verified claims and selected group reference.
+Its issuer accessor borrows the already-validated claims field instead of holding
+a duplicate String, and a shared claims accessor prevents caller mutation of the
+construction invariant. Validation still rejects missing/empty/nonstring issuers
+before expiration checks; key binding, signature validation, clock reads, numeric
+date semantics, log text and sensitive username handling are unchanged.
+
+The existing success regression drops the token and checks issuer/claims pointer
+identity. Opaque Debug still hides an issuer sentinel inside claims. The change
+removes the successful-result issuer copy while adding a claims-map lookup; no
+throughput or whole-verifier allocation-free claim is made. Earlier expiration
+rejection and both JWT decodes retain their existing behavior.
+
+Fresh verification passed 47 JWT and 38 shared-auth tests (85 selected executions),
+formatting, workspace check/Clippy and seven repository guards. Existing unrelated
+warnings remain. No full suite, live integration or throughput benchmark ran.

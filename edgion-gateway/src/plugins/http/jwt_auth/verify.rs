@@ -11,8 +11,20 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::JwtAuthConfig;
 
 pub(super) struct VerifyOk<'a> {
     pub group: &'a CachedJwtIssuerGroup,
-    pub iss: String,
-    pub claims: Value,
+    claims: Value,
+}
+
+impl VerifyOk<'_> {
+    pub(super) fn issuer(&self) -> &str {
+        self.claims
+            .get("iss")
+            .and_then(Value::as_str)
+            .expect("verify_jwt validates issuer before constructing immutable claims")
+    }
+
+    pub(super) fn claims(&self) -> &Value {
+        &self.claims
+    }
 }
 
 impl fmt::Debug for VerifyOk<'_> {
@@ -101,8 +113,8 @@ pub(super) fn verify_jwt<'a>(
             return Err(VerifyDeny::SignatureFail);
         }
     };
-    let verified_iss = match decoded.claims.get("iss").and_then(Value::as_str) {
-        Some(iss) if !iss.is_empty() => iss,
+    match decoded.claims.get("iss").and_then(Value::as_str) {
+        Some(iss) if !iss.is_empty() => {}
         _ => {
             plugin_log.push("Deny missing iss");
             return Err(VerifyDeny::MissingIss);
@@ -127,7 +139,6 @@ pub(super) fn verify_jwt<'a>(
 
     Ok(VerifyOk {
         group: cached_group,
-        iss: verified_iss.to_owned(),
         claims: decoded.claims,
     })
 }

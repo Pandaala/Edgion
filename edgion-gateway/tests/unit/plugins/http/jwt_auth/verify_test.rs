@@ -53,8 +53,9 @@ fn verify_hits_correct_group_by_iss() {
     let token = make_token(Algorithm::HS256, "k1", "https://a.example", secret);
     let ok = verify_jwt(&token, &store, &config, &mut log).unwrap();
     drop(token);
-    assert_eq!(ok.claims["iss"], "https://a.example");
-    assert_eq!(ok.iss, "https://a.example");
+    assert_eq!(ok.claims()["iss"], "https://a.example");
+    assert_eq!(ok.issuer(), "https://a.example");
+    assert!(std::ptr::eq(ok.issuer(), ok.claims()["iss"].as_str().unwrap()));
     assert_eq!(ok.group.group, "partner-a");
 }
 
@@ -199,8 +200,8 @@ fn verify_ok_debug_is_fully_opaque() {
     );
     let ok = VerifyOk {
         group: store.lookup_by_iss("sensitive-issuer").unwrap(),
-        iss: "sensitive-issuer".to_string(),
         claims: json!({
+            "iss": "sensitive-issuer",
             "sub": "sensitive-claim",
             "token": "sensitive-token"
         }),

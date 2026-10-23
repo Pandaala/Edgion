@@ -55,3 +55,22 @@ the snapshot — gateway must not re-derive algorithm from any other source.
 - `tasks/todo/plugin-grouping/03-jwt-auth-spec.md` §3, §6.2 — design record
 - `tasks/todo/plugin-grouping/00-pilot-lessons.md` L7, L10 — failure-log
   topology protection + data-plane tracing iron rule
+
+## Verified-result ownership evidence
+
+VerifyOk owns the verified claims and borrows the selected immutable issuer group.
+It no longer stores a second owned issuer String. The issuer accessor borrows the
+validated nonempty string inside those claims; claims are private and exposed only
+through a shared accessor. The sole production constructor retains issuer
+validation before maximum-expiration checks and constructs the result only after
+all checks succeed. The accessor's explained expect relies on this local invariant,
+not on configuration admission or unverified peek data.
+
+This is implementation ownership evidence, not an additional issuer/key security
+rule. Routing, algorithm and scoped-key checks, signature verification, numeric
+expiration checks and failure precedence are unchanged. Opaque Debug still hides
+both metadata and claims. The success regression drops the original token and
+compares the issuer slice with the claims field's pointer; the redaction fixture
+includes an issuer sentinel in claims. Re-evaluate the accessor if construction
+sites or mutable claims access expand. A claims lookup replaces the issuer copy;
+no throughput improvement is measured.

@@ -74,14 +74,18 @@ impl RequestFilter for JwtAuth {
         // Verify token
         match verify::verify_jwt(token, &self.store, &self.config, plugin_log) {
             Ok(ok) => {
-                let username = ok.claims.get("sub").and_then(|v| v.as_str()).unwrap_or("(missing sub)");
+                let username = ok
+                    .claims()
+                    .get("sub")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(missing sub)");
                 plugin_log.push_fmt(
                     "OK group={} iss={} u={}",
-                    la![ok.group.group.as_str(), ok.iss.as_str(), sensitive(username)],
+                    la![ok.group.group.as_str(), ok.issuer(), sensitive(username)],
                 );
-                self.set_claims_headers(session, &ok.claims);
+                self.set_claims_headers(session, ok.claims());
                 if self.config.store_claims_in_ctx {
-                    if let Ok(claims_json) = serde_json::to_string(&ok.claims) {
+                    if let Ok(claims_json) = serde_json::to_string(ok.claims()) {
                         let _ = session.set_ctx_var("jwt_claims", &claims_json);
                     }
                 }
