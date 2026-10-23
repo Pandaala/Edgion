@@ -271,6 +271,8 @@ destination.
 
 - [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
 
+- [OTLP egress resolver ownership](otlp-01-egress-resolver-ownership.md)
+
 - [Empty-role terminal finalizer locks](body-06-empty-terminal-role-locks.md)
 
 - [Response-cache Age header construction](cache-02-age-header-construction.md)
@@ -14858,3 +14860,15 @@ check/Clippy and seven repository guards passed with existing unrelated warnings
 The tests cover existing local behavior, not a live bind/unbind or measured
 release latency; the ownership conclusion follows from the expression lifetime
 and locked dependency source. No full suite, live LDAP test or benchmark ran.
+
+## OTLP dial resolver ownership decision
+
+The direct transport/probe audit found a zero-TTL canonical egress wrapper
+constructed per dial, while normal production OTLP construction uses the
+allocation-free System resolver spec variant. This is reconnect/probe work,
+not per-log-record work. The [ownership task](otlp-01-egress-resolver-ownership.md)
+records the shared-owner value tradeoff and per-dial private-policy sampling
+boundary, separately from DNS runtime preparation and cached-address storage.
+No runtime change was selected. Fresh verification passed 19 OTLP unit tests,
+formatting, workspace all-target check/Clippy and agent-doc validation with
+existing unrelated warnings. No prototype, benchmark or live transport test ran.
