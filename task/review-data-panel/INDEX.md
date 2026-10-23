@@ -14332,3 +14332,19 @@ header constant and one missed test constructor conversion; both were corrected
 before the successful final run. Formatting, workspace check/Clippy and seven
 repository guards passed with existing unrelated warnings. No full suite, live
 network test or performance benchmark ran.
+
+## RealIp decision-scoped trust lookup reuse
+
+Traced whole-trust availability and per-peer/hop membership through the captured
+ConfigData generation. Scalar readers already avoid duplicate typed lookup within
+one read; readable references still repeat identity/visibility/index work across
+a trust decision. [ip-03](ip-03-real-ip-trust-resolution.md) records reuse options
+versus the allocation-free lazy baseline, with explicit no-loan/no-matcher-vector
+architecture gates and all-reference availability. No runtime capability, cache
+or trust semantics changed.
+
+Fresh unchanged-code selections passed 34 RealIp, 15 owner-bound IP reference,
+22 ConfigData and nine XFF snapshot tests (80 executions across selections),
+formatting, workspace check/Clippy and agent-doc validation with existing unrelated
+warnings. No reuse prototype, performance benchmark, full suite or live network
+verification ran.
