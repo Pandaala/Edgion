@@ -379,9 +379,10 @@ impl AiProxy {
                 return Self::reject(session, log, "continuation-unsupported", error);
             }
         }
-        let Ok(decision) =
-            self.model_routes
-                .decide(&canonical.requested_model, session.request_header_map(), &backends)
+        // Model routing runs once, before logical-model rewrites or quota downgrade.
+        let Ok(decision) = self
+            .model_routes
+            .decide(&canonical.logical_model, session.request_header_map(), &backends)
         else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
@@ -774,7 +775,6 @@ impl AiProxy {
 
 struct CanonicalOpenAiRequest {
     body: Bytes,
-    requested_model: String,
     logical_model: String,
     requested_streaming: bool,
     continuation: bool,
@@ -913,7 +913,6 @@ fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<
     let mutated = changed.is_some();
     Ok(CanonicalOpenAiRequest {
         body: changed.unwrap_or(body),
-        requested_model: metadata.model.clone(),
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
         continuation: false,
@@ -929,7 +928,6 @@ fn canonical_messages_request(body: Bytes) -> Result<CanonicalOpenAiRequest, AiP
     let metadata = crate::ai::protocols::anthropic::request::metadata(&body)?;
     Ok(CanonicalOpenAiRequest {
         body,
-        requested_model: metadata.model.clone(),
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
         continuation: metadata.binding,
@@ -945,7 +943,6 @@ fn canonical_responses_request(body: Bytes) -> Result<CanonicalOpenAiRequest, Ai
     let metadata = request::responses_metadata(&body)?;
     Ok(CanonicalOpenAiRequest {
         body,
-        requested_model: metadata.model.clone(),
         logical_model: metadata.model,
         requested_streaming: metadata.streaming,
         continuation: metadata.continuation,

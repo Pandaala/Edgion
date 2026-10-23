@@ -15101,3 +15101,28 @@ Fresh baseline and final runs each passed 22 AI proxy and four model-router test
 (26 total). Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing unrelated warnings. Independent plan and final reviews
 passed. No full suite, live transport test, alternate serde feature build or benchmark ran.
+
+## Remove the duplicate canonical request model owner
+
+CanonicalOpenAiRequest no longer retains a second requested_model String.
+OpenAI Chat, Responses and Anthropic Messages constructors each move the decoded
+metadata model into logical_model without cloning it. The sole former read of
+the duplicate was the initial model-route decision. At that point logical_model
+still equals the parsed input: only input-character accounting and immutable
+continuation validation occur between construction and routing. A source comment
+records that routing runs once before rewrites or quota downgrade.
+
+The existing decision destructuring and conditional owned rewrite end the model
+borrow before canonical mutation. Later candidate resolution, quota admission,
+downgrade, body rewriting and ready-plan ownership already use logical_model.
+The removed private field had no serialization, logging or retained-plan contract.
+This removes one redundant model-string copy/owner per canonical request, not
+provider-model copies with different lifetimes. No throughput, RSS or async-future
+size improvement is claimed. Re-evaluate if routing gains a second invocation
+or a consumer explicitly requires the original model after rewriting.
+
+Fresh baseline and final runs each passed 22 AI HTTP proxy and four model-router
+tests (26 total). Formatting, workspace all-target check/Clippy and seven guards
+passed with existing unrelated warnings. No new test, full suite, live integration
+or benchmark ran for removing this duplicate private owner. Independent plan
+and final reviews passed.
