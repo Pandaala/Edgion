@@ -211,8 +211,9 @@ impl GrpcMatchEngine {
     ) -> Result<Option<(&Arc<GrpcRouteRuleUnit>, T)>, EdError> {
         // A non-DNS authority cannot hit a named group. Existing HTTP authority
         // validation and the separately authored hostless group remain in charge.
-        for group in RadixHostnameQuery::new(hostname)
-            .ok()
+        for group in (!self.hosts.is_empty())
+            .then(|| RadixHostnameQuery::new(hostname).ok())
+            .flatten()
             .into_iter()
             .flat_map(|query| self.hosts.matching_values(query))
             .chain(std::iter::once(&self.catch_all))

@@ -128,6 +128,29 @@ mod route_matching_tests {
 
     #[tokio::test]
     async fn hostname_path_misses_continue_through_all_wildcards_and_hostless() {
+        let hostless = contract_table(vec![contract_route("hostless", vec![], "/hostless")]);
+        assert!(hostless.hosts.is_empty());
+        let unrestricted = contract_index(&[("shared", None)]);
+        let restricted = contract_index(&[("shared", Some("other.example.com"))]);
+        for hostname in ["api.example.com", "127.0.0.1"] {
+            assert_eq!(
+                match_contract_route(&hostless, hostname, "/hostless", &unrestricted).await,
+                Some("hostname-contract/hostless".into())
+            );
+            assert_eq!(
+                match_contract_route(&hostless, hostname, "/miss", &unrestricted).await,
+                None
+            );
+            assert_eq!(
+                match_contract_route(&hostless, hostname, "/hostless", &restricted).await,
+                None
+            );
+            assert_eq!(
+                match_contract_route(&DomainRouteRules::new(), hostname, "/hostless", &unrestricted).await,
+                None
+            );
+        }
+
         let table = contract_table(vec![
             contract_route("exact", vec!["api.sub.example.com"], "/exact"),
             contract_route("narrow", vec!["*.sub.example.com"], "/narrow"),

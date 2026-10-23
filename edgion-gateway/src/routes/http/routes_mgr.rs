@@ -246,11 +246,13 @@ impl DomainRouteRules {
 
         // A valid HTTP authority outside named hostname syntax (for example an
         // IP literal) may still use an eligible hostless Route and Listener.
-        if let Ok(query) = RadixHostnameQuery::new(hostname) {
-            for rules in self.hosts.matching_values(query) {
-                match rules.match_route(session, ctx, index) {
-                    Err(EdError::RouteNotFound()) => {}
-                    result => return result,
+        if !self.hosts.is_empty() {
+            if let Ok(query) = RadixHostnameQuery::new(hostname) {
+                for rules in self.hosts.matching_values(query) {
+                    match rules.match_route(session, ctx, index) {
+                        Err(EdError::RouteNotFound()) => {}
+                        result => return result,
+                    }
                 }
             }
         }

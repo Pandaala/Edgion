@@ -305,6 +305,8 @@ destination.
 - [Quota worker future representation](quota-01-worker-future-representation.md)
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
+
+- [HTTP route parallel verification failures](verification-05-http-route-parallel-tests.md)
 - [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
 - [Backend TLS verification failures](verification-03-backend-tls-tests.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
@@ -14397,3 +14399,27 @@ linking failed for insufficient disk space; removal of inactive generated build
 artifacts allowed the same test command to pass. Formatting, workspace check,
 workspace Clippy and all seven campaign guards passed with existing unrelated
 warnings. No full suite, live integration or benchmark ran.
+
+## Skip unused hostname queries for hostless route tables
+
+HTTP DomainRouteRules and gRPC selection now check the immutable named index's
+constant-time emptiness before constructing RadixHostnameQuery. Hostless-only
+and empty tables skip unused IP/DNS validation and empty-tree descent. Named
+tables retain the same checked query and exact/wildcard ordering; the added
+emptiness branch is the tradeoff. No latency or throughput benefit is measured.
+This does not implement the deferred content-index or Listener specificity tasks.
+
+Existing behavior fixtures now cover hostless-only DNS/IP hits, path misses,
+empty HTTP tables, Listener hostname rejection, and gRPC invalid-query fallback,
+predicate no-match and terminal error propagation. The shared matcher, hostname
+grammar, snapshot lifetime and hostless deep-match admission remain unchanged.
+
+Baseline and final selections passed 25 gRPC match-engine, 51 HTTP publication
+and 39 serial HTTP matching tests (115 executions per set). The initial parallel
+HTTP baseline failed two snapshot fixtures; each passed alone and the unchanged
+serial group passed. Root cause remains unproven and is recorded in
+verification-05-http-route-parallel-tests.md, not repaired by this optimization.
+Initial final compilation exhausted disk; removing inactive old-fingerprint
+object files and the failed incremental working directory allowed a clean retry.
+Formatting, workspace all-target check/Clippy and seven campaign guards passed
+with existing unrelated warnings. No full suite, live integration or benchmark ran.

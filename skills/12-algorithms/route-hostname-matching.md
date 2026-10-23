@@ -36,6 +36,11 @@ then longest wildcard suffix, then shorter matching suffixes. `*.example.com`
 matches `a.example.com` and `a.b.example.com`, never `example.com` or
 `notexample.com`. Exact and wildcard terminals at the same suffix are distinct.
 HTTP/gRPC adapters own their separate hostless groups; TLSRoute has none.
+HTTP and gRPC adapters skip checked query construction when the named index is
+empty. This avoids unused IP/DNS validation and empty-tree traversal for
+hostless-only tables. Hostless candidates still perform their ordinary path,
+method and Listener eligibility checks; query validation is not an admission
+gate for that group. Named tables retain checked queries and ordered fallback.
 
 ## Contract
 

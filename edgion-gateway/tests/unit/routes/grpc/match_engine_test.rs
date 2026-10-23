@@ -557,6 +557,24 @@ fn regex_method_only_uses_pattern_length_and_checks_the_predicate() {
 
 #[test]
 fn hostname_precedes_service_and_failed_candidates_continue_through_all_suffixes() {
+    let hostless = GrpcMatchEngine::new(vec![make_header_only_route(vec![], "fallback", 0, 0)]);
+    assert!(hostless.hosts.is_empty());
+    for hostname in ["api.example.com", "127.0.0.1", "invalid..name"] {
+        let (winner, ()) = hostless
+            .select("svc.User", "Get", hostname, |_| Ok(Some(())))
+            .unwrap()
+            .unwrap();
+        assert_eq!(winner.resource_key, "default/fallback");
+        assert!(hostless
+            .select::<()>("svc.User", "Get", hostname, |_| Ok(None))
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            hostless.select::<()>("svc.User", "Get", hostname, |_| Err(EdError::BackendNotFound())),
+            Err(EdError::BackendNotFound())
+        ));
+    }
+
     let engine = GrpcMatchEngine::new(vec![
         with_hosts(
             make_route(None, Some("Get"), None, "exact-host"),
