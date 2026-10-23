@@ -335,3 +335,60 @@ fn batch_raw_materialization_allocates_only_its_final_output() {
         assert_eq!(allocations, 1, "fallback pieces: {fallback_pieces}");
     }
 }
+
+#[test]
+fn irrelevant_containers_cannot_reenter_semantic_context() {
+    let value = serde_json::json!({
+        "aaa": {"choices":[{"index":0,"delta":{"content":"hidden"}}]},
+        "choices":[
+            {"index":2,"delta":{
+                "aaa":[{"content":"hidden","tool_calls":[{"index":3,"function":{"arguments":"hidden"}}]}],
+                "content":"visible \"é\"",
+                "tool_calls":[
+                    {"index":3,"function":{"arguments":"{\"ok\":true}"}},
+                    {"index":4294967296u64,"function":{"arguments":"hidden"}},
+                    {"function":{"arguments":"hidden"}}
+                ]
+            }},
+            {"delta":{"content":"missing index"}},
+            {"index":4294967296u64,"delta":{"content":"overflow index"}}
+        ],
+        "usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}
+    });
+    let expected = format!("data: {}\n\n", serde_json::to_string(&value).unwrap());
+    for capture in [false, true] {
+        for limit in 0..expected.len() {
+            assert!(write_canonical_record(&value, limit, capture).is_err());
+        }
+        let (bytes, _) = write_canonical_record(&value, expected.len(), capture).unwrap();
+        assert_eq!(bytes.as_ref(), expected.as_bytes());
+    }
+    let mut writer = ValueWriter {
+        bytes: Vec::new(),
+        fragments: Vec::new(),
+        limit: expected.len(),
+    };
+    writer.append(b"data: ").unwrap();
+    writer.value(&value, WriteContext::Root).unwrap();
+    writer.append(b"\n\n").unwrap();
+    assert_eq!(writer.bytes, expected.as_bytes());
+    assert_eq!(writer.fragments.len(), 2);
+    for fragment in writer.fragments {
+        assert_eq!(fragment.bucket.choice_index, 2);
+        let expected_text = match fragment.bucket.field {
+            LogicalField::Content => "visible \"é\"",
+            LogicalField::ToolArguments { tool_call_index } => {
+                assert_eq!(tool_call_index, 3);
+                "{\"ok\":true}"
+            }
+            other => panic!("unexpected semantic field: {other:?}"),
+        };
+        let SemanticSource::JsonStringTokenRanges(ranges) = fragment.source else {
+            panic!("expected JSON token range");
+        };
+        assert_eq!(ranges.len(), 1);
+        let range = ranges[0];
+        let decoded: String = serde_json::from_slice(&writer.bytes[range.start..range.end]).unwrap();
+        assert_eq!(decoded, expected_text);
+    }
+}

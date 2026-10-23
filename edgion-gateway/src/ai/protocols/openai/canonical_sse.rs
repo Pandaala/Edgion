@@ -229,6 +229,7 @@ impl ValueWriter {
 
     fn value(&mut self, value: &Value, context: WriteContext) -> Result<(), ()> {
         match value {
+            Value::Object(_) | Value::Array(_) if matches!(context, WriteContext::Other) => self.json(value),
             Value::Object(map) => {
                 self.append(b"{")?;
                 for (position, (key, child)) in map.iter().enumerate() {

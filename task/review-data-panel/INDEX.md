@@ -15274,3 +15274,32 @@ Final verification passed the same 100 tests, formatting, workspace all-target
 check/Clippy and seven repository guards, with existing unrelated warnings.
 No full suite, live integration or performance benchmark ran.
 Independent plan and final reviews passed.
+
+## Serialize non-semantic containers without field classification
+
+The canonical SSE writer now sends Object/Array values in WriteContext::Other
+straight to its existing bounded serde writer. Other is absorbing: no descendant
+can regain Root/Choice/Delta/Tool/Function context or acquire a semantic fragment.
+Scalar handling and all potentially semantic paths retain their existing walk.
+This extends the prior no-capture optimization to irrelevant containers during
+active capture, without introducing another writer, parser or cached result.
+
+The current sole producer is the Anthropic streaming converter. Its ordinary
+content/tool events mostly have scalar Other fields; the optional terminal usage
+object is the principal current container beneficiary. The change removes that
+redundant recursive field classification, not JSON serialization. Writer call
+segmentation and Vec capacity may differ; no throughput, allocation-count, RSS
+or capacity improvement is measured or claimed. Prefix/suffix bytes, checked
+inclusive limits, complete-record publication and semantic offsets are preserved.
+
+The original baseline passed 13 canonical SSE, 62 converter and 25 semantic
+response tests (100 total). A new regression passed against unchanged production:
+it includes real usage fields, unknown containers with fake semantic paths,
+missing/overflowing choice and tool indexes, exact bytes in both capture modes,
+every insufficient byte limit, and valid semantic ranges after irrelevant data.
+Existing scalar and escaping coverage remains unchanged.
+Final verification passed 14 canonical SSE, 62 converter and 25 semantic response
+tests (101 total), formatting, workspace all-target check/Clippy and seven
+repository guards, with existing unrelated warnings. No full suite, live
+integration or performance benchmark ran.
+Independent plan and final reviews passed.
