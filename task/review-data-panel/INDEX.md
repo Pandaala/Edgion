@@ -15002,3 +15002,23 @@ No hash, cache or expiry policy was changed. Fresh verification passed 47 Algo
 cache, 21 Gateway storage and six policy tests (74 total), formatting, workspace
 all-target check/Clippy and agent-doc validation with existing warnings. No
 prototype, benchmark, full suite or live origin test ran.
+
+## Reuse compiled RequestId destination names
+
+RequestId target extraction now passes its already compiled HeaderName directly
+to the canonical single_header helper. The helper accepts AsHeaderName while
+retaining its same get_all iterator, duplicate/sensitivity rejection and owned
+HeaderValue result. Configured source names and core traceparent lookup retain
+their existing string inputs. No source is skipped or moved earlier/later, and
+per-rule reconciliation, masking, suppression and capacity checks are unchanged.
+
+In locked http 1.5.0, the string lookup invokes HdrName::from_bytes before map
+lookup, whereas the borrowed HeaderName lookup directly uses map.find. This
+avoids repeated destination-name interpretation; it is not an allocation or
+throughput claim. The separate trace-02 source-evaluation decision remains open.
+
+Baseline and final filtered runs passed 29 trace-ID, 15 RequestId and 17 early-
+request-filter tests (filters can overlap). Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing unrelated warnings.
+No new tests, full suite, live integration or benchmark ran for this small
+lookup substitution. Independent plan and final reviews passed.

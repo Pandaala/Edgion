@@ -1638,7 +1638,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
         let mut within_limit = true;
         for rule in rules {
-            let target = single_header(&self.inner.req_header().headers, rule.header.as_str());
+            let target = single_header(&self.inner.req_header().headers, &rule.header);
             let source = rule.source.as_ref().and_then(|key| {
                 if let KeyGet::Header { name } = key {
                     single_header(&self.inner.req_header().headers, name.as_str())

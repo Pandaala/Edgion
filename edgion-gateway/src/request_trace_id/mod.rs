@@ -8,7 +8,7 @@ use edgion_resources::{
     DefaultIdConfig, KeyGet, PluginValidation, RequestIdConfig, RequestIdGenerator, RequestIdGeneratorKind,
     RequestIdRule,
 };
-use http::{HeaderMap, HeaderName, HeaderValue};
+use http::{header::AsHeaderName, HeaderMap, HeaderName, HeaderValue};
 use md5::{Digest, Md5};
 use rand::Rng;
 use serde::{ser::SerializeMap, Serialize, Serializer};
@@ -320,11 +320,11 @@ pingora_managed_headers!(pingora_http::RequestHeader);
 pingora_managed_headers!(pingora_http::ResponseHeader);
 
 /// Duplicate header lines are ambiguous even when their values happen to match.
-pub fn single_header(headers: &HeaderMap, name: &str) -> Option<HeaderValue> {
+pub fn single_header<K: AsHeaderName>(headers: &HeaderMap, name: K) -> Option<HeaderValue> {
     single_header_ref(headers, name).cloned()
 }
 
-fn single_header_ref<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a HeaderValue> {
+fn single_header_ref<K: AsHeaderName>(headers: &HeaderMap, name: K) -> Option<&HeaderValue> {
     let mut values = headers.get_all(name).iter();
     let first = values.next()?;
     if values.next().is_some() || first.is_sensitive() {
