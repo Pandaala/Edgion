@@ -161,7 +161,7 @@ impl RequestFilter for RequestRedirectFilter {
 
         let status = self.config.status_code();
 
-        plugin_log.push_fmt("redirect {}", la![status.as_u16().to_string().as_str()]);
+        plugin_log.push_fmt("redirect {}", la![status.as_u16()]);
 
         let Ok(mut resp) = ResponseHeader::build(status, None) else {
             plugin_log.push_err("redirect response build failed");

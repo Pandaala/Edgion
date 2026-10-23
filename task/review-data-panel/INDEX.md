@@ -4577,6 +4577,23 @@ passed. Existing warnings remain outside changed code. The separately recorded
 TLS admission fixture failure remains outside this batch; no full backend suite,
 live transport or throughput benchmark ran.
 
+## Native RequestRedirect numeric log argument
+
+RequestRedirect now passes its u16 status directly to the existing PluginLog
+unsigned argument formatter instead of constructing a temporary decimal String.
+The log call stays at the same point with the same template and plain status
+semantics. Location construction, response writes, terminal errors and ordering
+are unchanged. Disabled/bounded logs retain their canonical behavior; no new
+formatter or observability surface was introduced.
+
+Independent plan review passed. Baseline and final verification each passed
+11 request-redirect and 32 plugin-log tests (43 total). Existing numeric-log
+tests cover decimal equality, scratch allocation, masking and entry limits;
+redirect tests cover response status, Location and terminal behavior. Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated warnings.
+No new test, full suite, live transport or throughput benchmark ran. This is
+one eliminated temporary allocation, not complete request-entry coverage.
+
 ## Borrowed ExternalName DNS lookup identity
 
 DnsCache now uses a private Cow query representation shared with an owned
