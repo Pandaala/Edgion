@@ -301,6 +301,7 @@ destination.
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
 - [DSL outbound method normalization](dsl-02-http-method-normalization.md)
+- [DSL opaque upload task ownership](dsl-03-opaque-upload-task-ownership.md)
 - [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
