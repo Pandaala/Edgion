@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Request conditional-wrapper dispatch](request-01-conditional-wrapper-dispatch.md)
+
 - [Canonical SSE fallback record handoff](sse-02-fallback-record-handoff.md)
 
 - [Guardrail callback output capacity](guardrail-03-callback-output-capacity.md)
