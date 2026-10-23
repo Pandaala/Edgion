@@ -129,6 +129,8 @@ destination.
 
 - [Multi-pattern regex route result storage](routing-05-regex-result-storage.md)
 
+- [Route predicate dispatch preparation](routing-07-predicate-kind-preparation.md)
+
 - [Route header-name preparation](routing-04-header-name-preparation.md)
 
 - [Hostname ID-to-content representation](routing-03-hostname-content-index.md)
@@ -14444,3 +14446,24 @@ seven cached-query and 19 HTTP match-unit tests (84 executions across overlappin
 selections). Formatting, workspace all-target check/Clippy and all seven campaign
 guards passed with existing unrelated warnings. No full suite, live integration
 or benchmark ran.
+
+## Route predicate dispatch preparation decision
+
+Traced HTTP header/query and gRPC header evaluation through their cold regex
+constructors and request-time dispatch. Regexes are already prepared, but the
+original type string is still inspected per reached predicate. Missing/failed
+regex slots cannot stand in for complete kind state, and HTTP/gRPC unknown-type
+behavior differs. Raw match metadata and positional vectors retain separate
+contracts. This is distinct from prepared header names and path RegexSet results.
+
+routing-07 records the representation decision, including retaining current
+code, replacement versus additional metadata, cold/retained-memory costs and
+measurement requirements. The existing prohibition on a second condition
+language/index remains an explicit gate; no new enum or runtime design is
+approved. No source, schema, admission or publication behavior changed.
+
+Fresh selections passed 11 gRPC match-unit, 19 HTTP match-unit, 51 HTTP publication
+and four resource header-match tests (85 executions). Formatting, workspace
+all-target check/Clippy and documentation validation passed with existing unrelated
+warnings. These tests are a baseline, not full coverage of a future representation.
+No implementation prototype, performance benchmark, full suite or live traffic ran.
