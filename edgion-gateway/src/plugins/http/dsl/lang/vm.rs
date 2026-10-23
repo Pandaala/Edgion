@@ -989,7 +989,11 @@ impl Vm {
                                         limit: self.limits.max_string_len,
                                     });
                                 }
-                                Value::Str(Arc::from(found))
+                                if m.start() == 0 && m.end() == s.len() {
+                                    Value::Str(s)
+                                } else {
+                                    Value::Str(Arc::from(found))
+                                }
                             } else {
                                 Value::Nil
                             }
@@ -1012,7 +1016,7 @@ impl Vm {
                         });
                     };
                     let result: Arc<str> = match replace_all_bounded(re, &s, replacement, self.limits.max_string_len) {
-                        Ok(None) => Arc::clone(&s),
+                        Ok(None) => s,
                         Ok(Some(output)) => Arc::from(output),
                         Err(BoundedRegexReplacementError::OutputTooLong { len }) => {
                             return Err(RuntimeError::StringTooLong {

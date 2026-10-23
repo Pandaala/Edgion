@@ -28,7 +28,7 @@ Each unchanged slice, literal, and capture expansion is checked before it is
 appended. The inclusive caller limit accepts an exact-boundary result and
 rejects the first crossing prefix. Checked length overflow reports
 `usize::MAX`. A no-match call returns no helper-owned output, allowing DSL to
-clone its original `Arc<str>` and AI Guard to leave the span unchanged.
+move its owned original `Arc<str>` and AI Guard to leave the span unchanged.
 
 The bound applies to the helper-owned output's logical length and its requested
 growth. ARCH-030 replaces exact per-prefix growth with a simple doubling policy:

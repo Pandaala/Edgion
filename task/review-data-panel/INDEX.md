@@ -13586,3 +13586,28 @@ cases passed after adapting to the shared path argument. No full suite, live
 integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Move whole-subject regex results from consumed operands
+
+RegexFind now moves its owned Arc string when the matched byte range covers the
+entire subject, after the existing result-length check. Partial matches still
+allocate their independent result. RegexReplace moves its subject on the
+canonical helper's no-match outcome instead of cloning and then dropping it;
+the final length check and error mappings remain unchanged. The owning bounded
+replacement knowledge page now describes that move.
+
+Full matches avoid one result Arc allocation and payload copy; no-match
+replacement avoids a reference-count increment/decrement pair. No throughput
+improvement was measured. Nil behavior, regex preparation, replacement grammar,
+bounded output construction and DSL budgets are unchanged.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 511
+cases; final verification passed 512, and 11 canonical bounded-replacement tests
+passed. New cases cover ASCII/multibyte/empty full matches and zero-width matches
+on nonempty input while reusing the original local. The existing no-match
+replacement test now also checks local reuse. Existing partial, nil, invalid
+pattern, capture expansion and limit tests passed. No full suite or live
+integration ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

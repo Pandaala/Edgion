@@ -32,6 +32,23 @@ fn test_regex_find_match() {
 }
 
 #[test]
+fn test_regex_find_full_and_zero_width_matches_preserve_original_local() {
+    for (input, pattern, expected) in [
+        ("abc", "^.*$", "abc|abc"),
+        ("é", "^.*$", "é|é"),
+        ("", "^.*$", "|"),
+        ("abc", "^", "|abc"),
+    ] {
+        let source = format!(
+            r#"let original = "{input}"
+let found = regex_find(original, "{pattern}")
+req.set_header("X-Out", found + "|" + original)"#
+        );
+        assert_sets_request_header(&source, "X-Out", expected);
+    }
+}
+
+#[test]
 fn test_regex_find_no_match() {
     let session = MockPluginSession::new();
     let result = run(
@@ -168,13 +185,15 @@ fn test_regex_replace_literal_emits_dedicated_opcode() {
     );
 }
 
-// regex_replace with no match returns the original string unchanged (Arc clone path)
+// regex_replace with no match transfers the original string unchanged.
 #[test]
 fn test_regex_replace_no_match_returns_original() {
     assert_sets_request_header(
-        r#"req.set_header("X-Out", regex_replace("hello", "\\d+", "X"))"#,
+        r#"let original = "hello"
+let replaced = regex_replace(original, "\\d+", "X")
+req.set_header("X-Out", replaced + "|" + original)"#,
         "X-Out",
-        "hello",
+        "hello|hello",
     );
 }
 
