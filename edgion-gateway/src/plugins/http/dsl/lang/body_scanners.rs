@@ -484,8 +484,8 @@ struct ExpectedKeyVisitor<'a> {
     expected: &'a str,
 }
 
-struct SelectedMapKey {
-    selected: Option<Arc<JsonSelectNode>>,
+struct SelectedMapKey<'a> {
+    selected: Option<&'a JsonSelectNode>,
     retained: Option<Arc<str>>,
     overlong_for_parent: bool,
 }
@@ -496,8 +496,8 @@ struct SelectedMapKeySeed<'a> {
     limit: usize,
 }
 
-impl<'de> DeserializeSeed<'de> for SelectedMapKeySeed<'_> {
-    type Value = SelectedMapKey;
+impl<'de, 'a> DeserializeSeed<'de> for SelectedMapKeySeed<'a> {
+    type Value = SelectedMapKey<'a>;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
@@ -517,8 +517,8 @@ struct SelectedMapKeyVisitor<'a> {
     limit: usize,
 }
 
-impl Visitor<'_> for SelectedMapKeyVisitor<'_> {
-    type Value = SelectedMapKey;
+impl<'a> Visitor<'_> for SelectedMapKeyVisitor<'a> {
+    type Value = SelectedMapKey<'a>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("a JSON object key")
@@ -526,7 +526,7 @@ impl Visitor<'_> for SelectedMapKeyVisitor<'_> {
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
         let selected_entry = self.node.members.get_key_value(value);
-        let selected = selected_entry.map(|(_, node)| Arc::clone(node));
+        let selected = selected_entry.map(|(_, node)| node.as_ref());
         let (retained, overlong_for_parent) = if self.retain_for_parent {
             if !encoded_string_fits(value, self.limit).map_err(E::custom)? {
                 (None, true)
@@ -628,7 +628,7 @@ fn parse_json_select_stream(
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let state = Rc::new(RefCell::new(JsonSelectState::new(plan.capture_count, limit)));
     let result = JsonSelectSeed {
-        node: Arc::clone(&plan.root),
+        node: &plan.root,
         state: Rc::clone(&state),
         emit_to_parent: false,
         limit,
@@ -643,14 +643,14 @@ fn parse_json_select_stream(
 }
 
 #[derive(Clone)]
-struct JsonSelectSeed {
-    node: Arc<JsonSelectNode>,
+struct JsonSelectSeed<'a> {
+    node: &'a JsonSelectNode,
     state: Rc<RefCell<JsonSelectState>>,
     emit_to_parent: bool,
     limit: usize,
 }
 
-impl<'de> DeserializeSeed<'de> for JsonSelectSeed {
+impl<'de> DeserializeSeed<'de> for JsonSelectSeed<'_> {
     type Value = BoundedJson;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
@@ -681,15 +681,15 @@ struct JsonSelectValue {
     captured: JsonScanValue,
 }
 
-struct JsonSelectVisitor {
-    node: Arc<JsonSelectNode>,
+struct JsonSelectVisitor<'a> {
+    node: &'a JsonSelectNode,
     state: Rc<RefCell<JsonSelectState>>,
     capture_current: bool,
     emit_to_parent: bool,
     limit: usize,
 }
 
-impl JsonSelectVisitor {
+impl JsonSelectVisitor<'_> {
     fn scalar(self, captured: JsonScanValue, encoded: &[u8]) -> JsonSelectValue {
         JsonSelectValue {
             encoded: if self.emit_to_parent {
@@ -715,7 +715,7 @@ impl JsonSelectVisitor {
     }
 }
 
-impl<'de> Visitor<'de> for JsonSelectVisitor {
+impl<'de> Visitor<'de> for JsonSelectVisitor<'_> {
     type Value = JsonSelectValue;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -797,7 +797,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
         let mut index = 0u64;
         let mut first = true;
         loop {
-            let selected = self.node.indices.get(&index).cloned();
+            let selected = self.node.indices.get(&index).map(AsRef::as_ref);
             let retain_for_parent = encode_current && !output.oversized;
             let value = match selected {
                 Some(node) => {
@@ -843,7 +843,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
         let encode_current = self.emit_to_parent || self.capture_current;
         let mut output = BoundedMapAccumulator::new(self.limit);
         while let Some(key) = map.next_key_seed(SelectedMapKeySeed {
-            node: &self.node,
+            node: self.node,
             retain_for_parent: encode_current && output.accepts_candidates(),
             limit: self.limit,
         })? {

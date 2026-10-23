@@ -13510,3 +13510,28 @@ Existing member/duplicate/limit/malformed-document regressions passed. No full
 suite, live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Borrow JSON selection nodes from the worker-owned plan
+
+JsonSelectSeed, JsonSelectVisitor and selected map-key results now borrow trie
+nodes from the immutable plan held by the parser worker. Root/member/index
+traversal no longer clones and drops an Arc for each visited selected node.
+This removes atomic reference-count operations, not node payload copies or the
+plan's allocations; no throughput result is claimed.
+
+The cross-thread Arc<JsonSelectPlan>, compiled tree representation, owned retained
+key Arcs and Rc capture state are unchanged. Node references live only within
+synchronous deserialization and never enter returned captures. Canonical key
+identity, descendant resets, duplicate behavior, aggregate limits, complete-document
+validation, body ownership, worker lifetime and scan accounting are preserved.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 509
+cases; final verification passed 510. The new regression drops the caller's plan
+before sending chunks, verifies parent/member/index capture values and confirms
+those owned results survive release of the worker's final plan reference.
+Existing shared-prefix, alias, duplicate, oversized-parent/descendant, canonical
+key and malformed-document cases passed. No full suite, live integration or
+performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

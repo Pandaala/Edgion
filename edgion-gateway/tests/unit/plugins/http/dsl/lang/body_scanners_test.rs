@@ -170,6 +170,37 @@ async fn invalid_json_returns_missing() {
 }
 
 #[tokio::test]
+async fn json_select_worker_retains_plan_until_owned_captures_are_complete() {
+    let plan = Arc::new(JsonSelectPlan::new(
+        [
+            ("parent", "$.items[0]"),
+            ("name", "$.items[0].name"),
+            ("second", "$.items[1]"),
+        ]
+        .into_iter()
+        .map(|(name, path)| (name.to_string(), DefiniteJsonPath::parse(path).unwrap())),
+    ));
+    let captures: Vec<_> = plan.outputs().iter().map(|(_, capture)| *capture).collect();
+    let weak = Arc::downgrade(&plan);
+    let mut scanner = JsonSelectScanner::new(Arc::clone(&plan), 128).await.unwrap();
+    drop(plan);
+    assert!(weak.upgrade().is_some());
+    scanner.push(br#"{"items":[{"name":"al"#).unwrap();
+    scanner.push(br#"ice"},7]}"#).unwrap();
+    let values = scanner.finish().unwrap();
+    assert!(weak.upgrade().is_none());
+    assert!(matches!(
+        &values[captures[0]],
+        JsonScanValue::Value(Value::Str(value)) if value.as_ref() == r#"{"name":"alice"}"#
+    ));
+    assert!(matches!(
+        &values[captures[1]],
+        JsonScanValue::Value(Value::Str(value)) if value.as_ref() == "alice"
+    ));
+    assert!(matches!(&values[captures[2]], JsonScanValue::Value(Value::Int(7))));
+}
+
+#[tokio::test]
 async fn json_select_shares_prefixes_and_duplicate_paths_across_chunks() {
     let (plan, values) = scan_json_select(
         &[
