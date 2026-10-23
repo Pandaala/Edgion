@@ -344,6 +344,7 @@ impl EdgionTlsPassthroughProxy {
             ctx.err_log = Some(last_err);
             return;
         };
+        drop(last_err);
 
         // 5. Send Proxy Protocol v2 if configured
         if !send_proxy_protocol_v2(
@@ -356,6 +357,8 @@ impl EdgionTlsPassthroughProxy {
         {
             return;
         }
+
+        drop(upstream_addr_str);
 
         // 6. Forward the initial ClientHello bytes already read from downstream
         if !replay_initial_bytes(&mut upstream_stream, ctx, initial_bytes).await {

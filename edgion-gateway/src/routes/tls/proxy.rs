@@ -426,6 +426,7 @@ impl EdgionTlsTcpProxy {
             ctx.err_log = Some(last_err);
             return;
         };
+        drop(last_err);
 
         // 5. Send Proxy Protocol v2 header if configured
         if !send_proxy_protocol_v2(
@@ -438,6 +439,8 @@ impl EdgionTlsTcpProxy {
         {
             return;
         }
+
+        drop(upstream_addr_str);
 
         // 6. Bidirectional data forwarding
         self.duplex(

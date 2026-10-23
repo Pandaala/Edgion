@@ -14569,3 +14569,24 @@ bytes, disabled/invalid-source skips and write/flush failures. Formatting,
 workspace all-target check/Clippy and seven campaign guards passed with existing
 unrelated warnings. No new test mechanism, full suite, live wire run or benchmark
 was added for this local lifetime change.
+
+## Release TLS connect strings before relay
+
+Both terminate and passthrough handle_connection paths now drop last_err after
+the successful upstream destructure. A prior failed attempt can leave an owned
+diagnostic there; exhausted retries still move the same text into ctx.err_log.
+First-attempt success starts with an empty, unallocated String. Retry log entries
+already own their recorded content and remain unchanged.
+
+Both paths also drop upstream_addr_str after the canonical PP2 helper succeeds,
+before passthrough ClientHello replay or bidirectional relay. The complete
+bracket-safe address remains available throughout PP2 parsing and its awaited
+write/flush. Structured upstream metadata, redaction, retry policy, setup failure
+accounting and route-generation ownership are unchanged.
+
+These ordinary String drops shorten temporary heap ownership across subsequent
+network waits. No allocation-count, generated-future-size, throughput or RSS
+improvement was measured. Baseline and final selections each passed 85 TLS
+tests. Formatting, workspace all-target check/Clippy and seven campaign guards
+passed with existing unrelated warnings. No full suite, live network run or
+new implementation-mirroring test was added.
