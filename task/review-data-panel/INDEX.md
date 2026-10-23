@@ -15303,3 +15303,17 @@ tests (101 total), formatting, workspace all-target check/Clippy and seven
 repository guards, with existing unrelated warnings. No full suite, live
 integration or performance benchmark ran.
 Independent plan and final reviews passed.
+
+## Canonical streaming event envelope ownership
+
+The [event-envelope task](sse-03-canonical-event-envelope.md) records remaining
+per-event identity copies and outer JSON construction after the owned-choice
+optimization. Borrowed or prepared fields require a canonical interface decision:
+active semantic capture needs structural token ranges, and capture is selected
+per callback. Processor-owned prepared bytes also require lifetime and memory
+accounting. No representation was selected or runtime behavior changed.
+Fresh unchanged-source verification passed 14 canonical SSE, 62 converter and
+25 semantic response tests (101 total). Formatting and workspace all-target
+check/Clippy passed with existing unrelated warnings. No prototype, full suite,
+live integration or performance benchmark ran.
+Agent-doc validation and independent plan/final reviews passed.
