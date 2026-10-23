@@ -450,6 +450,15 @@ fn test_to_lower() {
 fn test_substr() {
     for (source, expected) in [
         (r#"req.set_header("X-Out", substr("hello", 1, 3))"#, "el"),
+        (r#"req.set_header("X-Out", substr("hello", 0, 5))"#, "hello"),
+        (r#"req.set_header("X-Out", substr("aéπz", 0, 4))"#, "aéπz"),
+        (r#"req.set_header("X-Out", substr("aéπz", -1, 99))"#, "aéπz"),
+        (
+            r#"let original = "aéπz"
+let result = substr(original, 0, 4)
+req.set_header("X-Out", result + "|" + original)"#,
+            "aéπz|aéπz",
+        ),
         (r#"req.set_header("X-Out", substr("aéπz", 1, 3))"#, "éπ"),
         (r#"req.set_header("X-Out", substr("aéπz", 2, 99))"#, "πz"),
         (r#"req.set_header("X-Out", substr("aéπz", 2, 2))"#, ""),
@@ -458,6 +467,29 @@ fn test_substr() {
     ] {
         assert_sets_request_header(source, "X-Out", expected);
     }
+}
+
+#[test]
+fn test_substr_full_range_preserves_utf8_byte_limit() {
+    let source = r#"let result = substr("éπ", 0, 2)"#;
+    let result = run_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 4,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result, good_next());
+    let error = run_expect_runtime_err_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
 }
 
 // substr clamps an overflowing end to the string end; an overflowing start yields "".

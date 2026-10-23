@@ -936,7 +936,7 @@ impl Vm {
                     }
                 };
                 let s = state.pop()?;
-                match &s {
+                match s {
                     Value::Str(s) => {
                         // Single char_indices pass resolves both UTF-8 boundaries,
                         // avoiding three separate O(n) scans. Defaults of s.len() cover
@@ -956,15 +956,19 @@ impl Vm {
                         if byte_start <= byte_end {
                             let out = &s[byte_start..byte_end];
                             check_string_len(out, self.limits.max_string_len)?;
-                            Ok(Value::Str(Arc::from(out)))
+                            if byte_start == 0 && byte_end == s.len() {
+                                Ok(Value::Str(s))
+                            } else {
+                                Ok(Value::Str(Arc::from(out)))
+                            }
                         } else {
                             Ok(Value::Str(Arc::from("")))
                         }
                     }
                     Value::Nil => Ok(Value::Str(Arc::from(""))),
-                    _ => Err(RuntimeError::TypeError {
+                    other => Err(RuntimeError::TypeError {
                         expected: "Str",
-                        got: s.type_name(),
+                        got: other.type_name(),
                         operation: "substr()",
                     }),
                 }

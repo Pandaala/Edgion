@@ -13611,3 +13611,27 @@ pattern, capture expansion and limit tests passed. No full suite or live
 integration ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Move full-range substring results
+
+Substr now matches its consumed input by value and moves the Arc string when
+the resolved byte range covers the whole input, after the existing byte-limit
+check. This removes the result Arc allocation/copy for that case. Partial slices
+retain independent storage; this supersedes the earlier substring entry's
+independent-result statement only for full-range results, not general substring
+storage. No throughput improvement was measured.
+
+Argument order, character-index scanning, negative clamping, end-overflow,
+reversed/empty/out-of-range behavior, nil/type errors and byte limits remain
+unchanged. This does not implement DSL 01's deferred coercion ownership changes.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 512
+cases; final verification passed 513. Extended substring cases cover full ASCII
+and multibyte ranges, negative-start/end-overflow clamping and original-local
+reuse. A new full-range regression accepts a four-byte/two-character result at
+limit four and returns exact StringTooLong { len: 4, limit: 3 } at limit three.
+Existing partial, reversed, out-of-range and empty-input cases passed. No full
+suite, live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.
