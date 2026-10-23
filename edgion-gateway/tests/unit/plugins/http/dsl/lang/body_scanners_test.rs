@@ -41,6 +41,19 @@ async fn scan_json(input: &[&[u8]], path: &str, limit: usize) -> JsonScanValue {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn threaded_json_path_scan_owns_quoted_members_indices_and_root() {
+    let chunks: &[&[u8]] = &[br#"{"a.b":[0,{"value":"sel"#, br#"ected"}]}"#];
+    let result = scan_json(chunks, r#"$["a.b"][1].value"#, 64).await;
+    assert!(matches!(result, JsonScanValue::Value(Value::Str(value)) if &*value == "selected"));
+
+    let result = scan_json(chunks, "$", 64).await;
+    assert!(matches!(
+        result,
+        JsonScanValue::Value(Value::Str(value)) if &*value == r#"{"a.b":[0,{"value":"selected"}]}"#
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn owned_json_path_scan_preserves_last_wins_limits_and_invalid_input() {
     let path = DefiniteJsonPath::parse("$.value").unwrap();
     let result = JsonPathScanner::scan_owned(Arc::from(r#"{"value":"old","value":"new"}"#), path.clone(), 8)

@@ -13489,3 +13489,24 @@ retained capacity and resulting captures. Existing container and malformed-input
 regressions passed. No full suite, live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Move the owned JSON path into its scanner worker
+
+JsonPathScanner::new now transfers its existing DefiniteJsonPath into the
+parser thread and borrows its segments during synchronous parsing. It no longer
+clones the segment Vec and each member String into a separate Arc slice.
+The VM's path clone remains unchanged; scan_owned already uses the same
+move-and-borrow pattern. Retaining the original Vec capacity prevents a universal
+retained-heap reduction claim; this removes duplicate copying/allocation work,
+not a measured throughput bottleneck.
+
+Thread ownership, semaphore lifetime, bounded channel, chunk copying, parsing,
+whole-document validation, failure mapping and scan accounting remain unchanged.
+Independent plan review passed. Baseline Gateway DSL verification passed 508
+cases; final verification passed 509. A focused test exercises the changed
+threaded path across chunks with a quoted member, array index and root selection.
+Existing member/duplicate/limit/malformed-document regressions passed. No full
+suite, live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

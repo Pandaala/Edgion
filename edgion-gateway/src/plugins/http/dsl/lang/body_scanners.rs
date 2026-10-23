@@ -85,10 +85,9 @@ impl JsonPathScanner {
     pub(crate) async fn new(path: DefiniteJsonPath, limit: usize) -> Result<Self, BodyOperationError> {
         let permit = acquire_json_scan_permit().await?;
         let (sender, receiver) = mpsc::sync_channel(2);
-        let segments: Arc<[JsonPathSegment]> = Arc::from(path.segments().to_vec());
         let worker = std::thread::Builder::new()
             .name("edgion-json-path".to_string())
-            .spawn(move || parse_json_stream(receiver, segments, limit, permit))
+            .spawn(move || parse_json_stream(receiver, path, limit, permit))
             .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
         Ok(Self {
             sender: Some(sender),
@@ -333,12 +332,12 @@ impl Read for ChannelReader {
 
 fn parse_json_stream(
     receiver: mpsc::Receiver<Vec<u8>>,
-    segments: Arc<[JsonPathSegment]>,
+    path: DefiniteJsonPath,
     limit: usize,
     _permit: OwnedSemaphorePermit,
 ) -> JsonScanValue {
     let reader = ChannelReader::new(receiver);
-    parse_json(serde_json::Deserializer::from_reader(reader), &segments, limit)
+    parse_json(serde_json::Deserializer::from_reader(reader), path.segments(), limit)
 }
 
 fn parse_json<'de, R>(
