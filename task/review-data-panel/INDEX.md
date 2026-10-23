@@ -14698,3 +14698,23 @@ No runtime design was selected. Fresh serial execution passed 28 RequestMirror
 tests, formatting, workspace all-target check/Clippy and agent-doc validation,
 with existing unrelated warnings. No allocation prototype, benchmark, full suite
 or live transport test ran.
+
+## Borrow the process-wide mirror client into detached writers
+
+RequestMirror now captures the &'static Client returned by its process-wide
+OnceLock instead of cloning that client before spawning each writer. The
+singleton still initializes at the same call site and remains alive for every
+task. Locked reqwest 0.12.28 Client contains an Arc<ClientRef>; request(&self)
+still clones its own handle into RequestBuilder. Only the extra outer client
+clone/drop pair is removed, not client allocation or connection ownership.
+
+Pool sharing, dedicated mirror timeout configuration, TLS, redirects, proxy
+policy, admission and cancellation are unchanged. The owning F-017 knowledge
+page now describes borrowing while retaining the original pooling rationale.
+No throughput improvement was measured.
+
+Baseline and final selections each passed 28 mirror and eight shared-client
+tests. These mirror tests replace the network writer under cfg(test); workspace
+all-target check and Clippy also passed to compile the changed production
+capture. Formatting and seven campaign guards passed with existing unrelated
+warnings. No full suite or live transport test ran.

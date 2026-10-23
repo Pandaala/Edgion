@@ -373,7 +373,7 @@ impl RequestFilter for RequestMirrorPlugin {
         let uses_committed_snapshot = committed_body.is_some();
         let snapshot_body_budget = body_budget.clone();
         #[cfg(not(test))]
-        let client = get_mirror_http_client().clone();
+        let client = get_mirror_http_client();
         #[cfg(test)]
         let writer_events = self
             .writer_events

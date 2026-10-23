@@ -23,7 +23,7 @@ plugin-load time on builder failure instead of returning a request error.
 The fix removes the `client` field entirely and pulls a shared singleton at request time:
 
 ```rust
-let client = get_mirror_http_client().clone(); // process-level OnceLock from common::http_client
+let client = get_mirror_http_client(); // borrow the process-level OnceLock client
 ```
 
 `get_mirror_http_client()` is a **dedicated** singleton (not the default `get_http_client()`):
@@ -38,7 +38,7 @@ timeout contract is preserved exactly.
 
 Re-reports of the form "RequestMirrorPlugin builds its own reqwest client" or "mirror plugin
 fragments the connection pool" are **not accepted**; verify the current `plugin.rs` carries
-`get_mirror_http_client().clone()` and has no `client: reqwest::Client` field before re-reporting.
+`get_mirror_http_client()` and has no `client: reqwest::Client` field before re-reporting.
 Re-reports of "mirror should reuse `get_http_client()` instead of having its own singleton" are
 also **not accepted** — the dedicated singleton exists specifically to avoid the auth client's
 total/connect timeout caps clipping operator-configured mirror timeouts.
@@ -53,6 +53,14 @@ process-wide `OnceLock<Client>` ownership in
 `edgion-gateway/src/plugins/http/common/http_client.rs`; the default `get_http_client()` and the
 timeout-free `get_mirror_http_client()` now each share one pool for their distinct contracts.
 RequestMirror's former per-instance ownership was the outlier.
+
+The original pooled implementation cloned the singleton for each detached writer.
+The writer now captures its `&'static Client` directly: OnceLock owns the client
+for the process lifetime, so a task does not need another owning handle. Locked
+reqwest 0.12.28 still clones the client inside `request(&self)` for its request
+builder. Only the outer clone/drop pair is removed; pooling and request ownership
+are unchanged. Mirror unit tests substitute an in-memory writer under cfg(test),
+so workspace production compilation is required to verify this capture boundary.
 
 **2. The per-plugin differentiator collapses into the outer timeout wrapper**
 
