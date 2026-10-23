@@ -99,6 +99,8 @@ destination.
 
 - [Service outlier completion-token ownership](outlier-01-completion-token-ownership.md)
 
+- [Consistent-hash fallback visited storage](lb-05-consistent-hash-visited-storage.md)
+
 - [Prepared configured session-persistence header names](lb-04-prepared-session-header-name.md)
 
 - [AI accounting snapshot reuse](usage-02-accounting-snapshot-reuse.md)
