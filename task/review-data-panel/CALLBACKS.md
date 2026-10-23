@@ -666,8 +666,8 @@ VM, transaction, codec or transport dependency graphs.
 Revalidated at `3d231f9df`: source search across `edgion-gateway/src` finds 60
 explicit RequestFilter implementations, 57 under plugins and three under ai
 (AiProxy, AiGuard and Guardrail). This table covers the ten runtime orchestration
-entries only. The other 50 implementation entries still require inventory
-reconciliation; they are not 50 unique or wholly unreviewed plugins. In particular,
+entries only. The other 50 implementation entries are outside this table; later
+inventories below reconcile subsets. They are not 50 unique or wholly unreviewed plugins. In particular,
 WasmPlugin and Arc<WasmPlugin> are separate entries. Existing scoped findings and
 verification remain useful without establishing complete transitive coverage.
 Paths below are relative to `edgion-gateway/src/plugins/runtime/`.
@@ -715,3 +715,57 @@ tests and two policy/reject ordering regressions (116 total), formatting,
 workspace check/Clippy and agent-doc validation. The wrapper/filter selections
 also contain response-stage cases; they are not 116 distinct request-entry proofs.
 Existing unrelated warnings remain; no full suite or live integration ran.
+
+## GraphQL, body capture and cache nomination direct-entry inventory
+
+Revalidated at `25eb25bef`: these six entries are disjoint from the ten runtime
+entries above, reconciling 16 of the current 60 explicit RequestFilter
+implementations. The remaining 44 entries still need inventory reconciliation.
+Paths below are relative to `edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| GraphqlSafelist (`graphql_safelist/mod.rs`) | Run the shared bounded evaluator with the compiled whole-document/selected-operation check, then record allow or return the evaluator's fixed rejection. The parsed owner is consumed inside evaluation; the compiled registration set belongs to the plugin generation. |
+| GraphqlGuard (`graphql_guard/mod.rs`) | Inspect the parsed request with the compiled guard, then format scalar shape/cost/measure results into bounded stack scratch and optionally record the cost header. Measure mode does not bypass parser or hard safety limits. |
+| GraphqlRateLimit (`graphql_rate_limit/plugin.rs`) | Estimate total/root costs under shared evaluation, record the completed total, copy bounded scalar costs into 16 fixed slots, reject over-capacity reports, then await the canonical Redis limiter. Parsed owners and evaluation permit are released before this Redis await; quota order and failures remain owned by the limiter. |
+| GraphqlOperationRouter (`graphql_operation_router/plugin.rs`) | Pin the route Arc and reject an existing jump, evaluate selected metadata against prepared exact/default mappings, validate the named backend, then copy selected name/namespace into the strict owned jump. The returned mapping borrows plugin configuration, not the parsed request. |
+| RequestBodyBuffer (`request_body_buffer/plugin.rs`) | Return GoodNext without capturing or materializing bytes itself. The mounted body gate performs ordered shared capture; the plugin explicitly reports that materialization is unnecessary. No second body owner lives in the entry. |
+| ResponseCache (`response_cache/mod.rs`) | Pass its cold-compiled policy Arc by reference to nomination and return GoodNext. Production nomination can bypass, reuse an equivalent intent, or invalidate conflicting intent; new state requires an active epoch and a ledger lease before allocation. It is not a cache lookup or an allocation-free no-op. |
+
+All six report requires_materialized_request_body=false. For GraphQL this avoids
+an eager body-gate read, not the evaluator's explicit POST materialization. Shared
+evaluation independently checks request stage, protocol, method, media and byte
+limits, then acquires one of four nonwaiting process-wide permits. POST reads the
+canonical request body; GET parses the current query. Parsing and synchronous
+computation share the bounded frontend owner and Work counter under panic handling.
+Successful evaluation can publish a fixed POST proof when its OnceLock is empty,
+then freezes body mutation. GET publishes no POST proof. Later evaluations still
+parse and execute their own computation; the earlier proof is not a parsed cache.
+
+Evaluation success is not whole-plugin success: router no-mapping/backend denial
+and rate-limit capacity/Redis denial can occur after that freeze. Selected metadata
+does not authorize fields or backends by itself. Route Arcs and owned jump fields
+retain cross-await/cross-stage ownership; replacing them with short borrows needs
+more than observing that the entry's local lookup returns a reference.
+
+ResponseCache's successful proxy tail owns subsequent compatibility checks and
+key/origin binding. The state is taken out of context across awaited binding and
+restored only on success. Hit lookup, capture admission, integrity, freshness,
+actual-origin proof and terminal publication remain separate stages. The
+[cache ownership guard](../../skills/04-review/http-body/regression-guards/bounded-response-cache-capture.md)
+does not make nomination proof of eventual cache eligibility.
+
+No new runtime edit is selected here. Existing frontend reuse, type-condition and
+operation-name storage decisions remain [graphql-01](graphql-01-repeated-frontend-parsing.md),
+[graphql-02](graphql-02-prepared-type-conditions.md) and
+[graphql-03](graphql-03-operation-name-dedup-storage.md); prepared origin components
+remain [cache-06](cache-06-prepared-origin-stamp-components.md). This direct-entry
+inventory does not close deeper parser, visitor, Redis, cache or transport work.
+
+Fresh checks passed 44 GraphQL-selected tests, 31 body-gate tests, seven cache
+lifecycle tests, 21 cache-storage tests and the mounted RequestBodyBuffer capture
+refusal test (104 selected executions), formatting, workspace check/Clippy and
+agent-doc validation. These selections include supporting and response cases;
+they are not distinct proofs of every request behavior. The broader
+[cache admission fixture issue](verification-01-cache-policy-fixture.md) remains
+outside this verification. Existing warnings remain; no full suite or live IO ran.
