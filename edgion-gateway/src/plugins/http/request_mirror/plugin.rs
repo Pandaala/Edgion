@@ -346,13 +346,17 @@ impl RequestFilter for RequestMirrorPlugin {
             headers.remove(reqwest::header::CONTENT_LENGTH);
             headers.remove(reqwest::header::TRANSFER_ENCODING);
         }
-        let trace_id = session
-            .ctx()
-            .request_info
-            .trace_id
-            .standard_trace_id()
-            .map(str::to_owned)
-            .unwrap_or_else(|| "-".to_string());
+        let trace_id = if self.tuning.mirror_log {
+            session
+                .ctx()
+                .request_info
+                .trace_id
+                .standard_trace_id()
+                .map(str::to_owned)
+                .unwrap_or_else(|| "-".to_string())
+        } else {
+            String::new()
+        };
 
         let cfg = self.mirror_config();
         let body_budget = self.budget.body_budget(self.max_buffered_bytes);

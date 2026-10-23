@@ -14635,3 +14635,27 @@ claimed for replacing the enum clone. Baseline and final serial selections each
 passed 59 UDP route/session and four UDP log tests. Formatting, workspace
 all-target check/Clippy and seven campaign guards passed with existing unrelated
 warnings. No full suite, live socket test or benchmark ran.
+
+## Skip RequestMirror trace copies when mirror logging is disabled
+
+RequestMirror now reads and copies the standard trace ID only when its immutable
+mirror_log tuning is enabled. Disabled logging carries an empty, unallocated
+String instead of an unused owned trace ID or dash fallback through the writer.
+The existing writer log gate receives the same tuning value; enabled capture
+timing, dash fallback, entry contents and emitter behavior remain unchanged.
+This gate does not depend on the current logger sender count. Admission, body
+budgets, snapshots, cancellation, outcome metrics and task completion are intact.
+
+Endpoint-consumer follow-through also confirmed that mirror resolve_target and
+HTTP build_peer_from_lb_selection consume their selected section synchronously.
+HTTP needs the section's prepared app protocol before peer construction, while
+its selected backend remains in the upstream context for completion accounting.
+Neither synchronous helper has the L4 cross-await endpoint retention just fixed.
+
+Baseline and final serial selections each passed 28 RequestMirror tests.
+Formatting and seven campaign guards passed. The initial workspace check failed
+with simultaneous rustc SIGBUS errors and build-file creation failures; the
+workspace directory was briefly inaccessible. Once it was accessible again,
+the unchanged-source workspace all-target check and Clippy retry passed with
+existing warnings. The underlying environment cause was not established.
+No full suite, live transport test or throughput benchmark ran.
