@@ -81,3 +81,17 @@ teardown to cancel unobserved work.
 
 - D0067 / `isolate-request-mirror-unit-tests-from-network.md`: fixed test-isolation
   defect; originated in B0102.
+
+## Current query ownership at writer preparation
+
+RequestMirror borrows request_query when formatting the target URL, avoiding an
+intermediate get_query String. Both production accessors read the current URI.
+The final URL is still owned before body snapshot awaits or detached writer
+creation. Absent query omits the question mark; present-empty query retains it,
+and duplicate/encoded query bytes are appended unchanged.
+
+The existing header-END_STREAM case runs all three query shapes and observes
+WriterEvent::Prepared.url before requiring the successful completion event and
+released plugin permit. Other arming/snapshot/cancellation cases retain their
+checks. This verifies URL handoff without a real transport; it does not establish
+peer behavior or a callback-wide allocation-free path.

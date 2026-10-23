@@ -309,7 +309,7 @@ impl RequestFilter for RequestMirrorPlugin {
         };
 
         let path = session.get_path();
-        let query = session.get_query();
+        let query = session.request_query();
         let url = if let Some(q) = query {
             format!("{base_url}{path}?{q}")
         } else {

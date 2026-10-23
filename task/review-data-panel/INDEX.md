@@ -14082,3 +14082,20 @@ Fresh verification passed 13 ForwardAuth and 46 network-free shared outbound-cal
 tests (59 selected executions), formatting, workspace check/Clippy and seven
 repository guards. Existing unrelated warnings remain; no full suite, live
 integration or throughput benchmark ran.
+
+## RequestMirror borrowed current query assembly
+
+RequestMirror now formats its owned target URL directly from request_query,
+removing the temporary get_query String. The same current URI supplies both
+accessors. The owned URL is ready before body snapshot reading and detached task
+creation, so body/header budgets, task lifetimes, cancellation and endpoint
+selection remain unchanged.
+
+The existing network-free END_STREAM regression checks absent and present-empty
+queries plus duplicate/encoded raw query bytes at the writer handoff. Every case
+still checks final status/counters and plugin permit release. No throughput or
+whole-callback allocation-free claim is made.
+
+Fresh verification passed all 28 RequestMirror module tests, formatting,
+workspace check/Clippy and seven repository guards. Existing unrelated warnings
+remain. No full suite, live HTTP integration or benchmark ran.

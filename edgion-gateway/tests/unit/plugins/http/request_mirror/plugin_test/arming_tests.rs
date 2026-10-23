@@ -81,7 +81,11 @@ async fn next_event(events: &mut mpsc::UnboundedReceiver<WriterEvent>) -> Writer
         .unwrap()
 }
 
-async fn assert_prepared(events: &mut mpsc::UnboundedReceiver<WriterEvent>, snapshot: Option<Bytes>) {
+async fn assert_prepared(
+    events: &mut mpsc::UnboundedReceiver<WriterEvent>,
+    snapshot: Option<Bytes>,
+    query_suffix: &str,
+) {
     let WriterEvent::Prepared {
         method,
         url,
@@ -92,7 +96,7 @@ async fn assert_prepared(events: &mut mpsc::UnboundedReceiver<WriterEvent>, snap
         panic!("expected prepared mirror request");
     };
     assert_eq!(method, reqwest::Method::POST);
-    assert_eq!(url, format!("http://{TEST_ADDR}:{TEST_PORT}/mirror"));
+    assert_eq!(url, format!("http://{TEST_ADDR}:{TEST_PORT}/mirror{query_suffix}"));
     assert_eq!(headers["host"], format!("{TEST_ADDR}:{TEST_PORT}"));
     assert_eq!(headers["x-mirror"], "true");
     assert_eq!(actual, snapshot);
@@ -206,13 +210,14 @@ fn different_plugin_generations_share_the_process_mirror_client() {
 }
 
 fn test_session(headers_end_stream: Option<bool>) -> MockPluginSession {
-    test_session_with_context(headers_end_stream, EdgionHttpContext::new(), &[])
+    test_session_with_context(headers_end_stream, EdgionHttpContext::new(), &[], None)
 }
 
 fn test_session_with_context(
     headers_end_stream: Option<bool>,
     ctx: EdgionHttpContext,
     headers: &[(&str, &str)],
+    query: Option<&'static str>,
 ) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(ctx);
@@ -221,7 +226,7 @@ fn test_session_with_context(
         .return_const(headers_end_stream);
     session.expect_declares_body().never();
     session.expect_get_path().return_const("/mirror".to_string());
-    session.expect_get_query().return_const(None);
+    session.expect_request_query().return_const(query);
     session.expect_get_method().return_const("POST".to_string());
     setup_header_mocks(&mut session, headers);
     session
@@ -311,6 +316,7 @@ async fn committed_snapshot_has_independent_body_and_framing() {
         Some(false),
         ctx,
         &[("content-length", "8"), ("transfer-encoding", "chunked")],
+        None,
     );
     let snapshot = view.snapshot_reader().unwrap();
     session
@@ -327,7 +333,7 @@ async fn committed_snapshot_has_independent_body_and_framing() {
     );
     assert_eq!(log.render_for_test(), "mirror sent");
     view.overwrite_body(Bytes::from_static(b"later")).unwrap();
-    assert_prepared(&mut events, Some(Bytes::from_static(b"committed"))).await;
+    assert_prepared(&mut events, Some(Bytes::from_static(b"committed")), "").await;
     assert_finished(&mut events, &plugin, ("ok", 9, 1)).await;
     assert_eq!(view.read_all().await.unwrap(), "later");
 }
@@ -335,20 +341,29 @@ async fn committed_snapshot_has_independent_body_and_framing() {
 #[tokio::test]
 async fn headers_end_stream_does_not_install_armed_streaming_state() {
     insert_test_endpoint_slice();
-    let mut plugin = test_plugin();
-    let mut events = observe_writer(&mut plugin);
-    let mut session = test_session(Some(true));
-    // A transport-level header END_STREAM proves the empty body complete,
-    // so no armed mirror state is installed.
-    session.expect_set_mirror_state().never();
-    let mut log = PluginLog::new("RequestMirror");
+    for (query, query_suffix) in [
+        (None, ""),
+        (Some(""), "?"),
+        (
+            Some("key=one&key=two&encoded=a%20b%26c"),
+            "?key=one&key=two&encoded=a%20b%26c",
+        ),
+    ] {
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
+        let mut session = test_session_with_context(Some(true), EdgionHttpContext::new(), &[], query);
+        // A transport-level header END_STREAM proves the empty body complete,
+        // so no armed mirror state is installed.
+        session.expect_set_mirror_state().never();
+        let mut log = PluginLog::new("RequestMirror");
 
-    let result = plugin.run_request(&mut session, &mut log).await;
+        let result = plugin.run_request(&mut session, &mut log).await;
 
-    assert_eq!(result, PluginRunningResult::GoodNext);
-    assert_eq!(log.render_for_test(), "mirror sent");
-    assert_prepared(&mut events, None).await;
-    assert_finished(&mut events, &plugin, ("ok", 0, 0)).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "mirror sent");
+        assert_prepared(&mut events, None, query_suffix).await;
+        assert_finished(&mut events, &plugin, ("ok", 0, 0)).await;
+    }
 }
 
 #[tokio::test]
@@ -373,7 +388,7 @@ async fn headers_without_end_stream_keep_armed_streaming_state() {
 
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(log.render_for_test(), "mirror sent");
-    assert_prepared(&mut events, None).await;
+    assert_prepared(&mut events, None, "").await;
     assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent - 1);
     let MirrorState::Streaming {
         body_tx,
@@ -415,7 +430,7 @@ async fn unknown_headers_end_stream_keeps_armed_streaming_state() {
 
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(log.render_for_test(), "mirror sent");
-    assert_prepared(&mut events, None).await;
+    assert_prepared(&mut events, None, "").await;
     drop(state_rx.await.unwrap());
     assert_finished(&mut events, &plugin, ("body_abandoned", 0, 0)).await;
 }
