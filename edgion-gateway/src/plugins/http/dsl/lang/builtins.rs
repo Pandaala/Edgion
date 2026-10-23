@@ -975,9 +975,17 @@ impl Vm {
             }
             BuiltinId::ToStr => {
                 let v = state.pop()?;
-                let s = v.runtime_string()?;
-                check_string_len(&s, self.limits.max_string_len)?;
-                Ok(Value::Str(s.into()))
+                match v {
+                    Value::Str(s) => {
+                        check_string_len(&s, self.limits.max_string_len)?;
+                        Ok(Value::Str(s))
+                    }
+                    other => {
+                        let s = other.runtime_string()?;
+                        check_string_len(&s, self.limits.max_string_len)?;
+                        Ok(Value::Str(s.into()))
+                    }
+                }
             }
             BuiltinId::ToInt => {
                 let v = state.pop()?;

@@ -578,6 +578,37 @@ if v == nil { req.set_header("X-Out", "nil") }"#,
 #[test]
 fn test_to_str() {
     assert_sets_request_header(r#"req.set_header("X-Out", to_str(42))"#, "X-Out", "42");
+    for input in ["hello", "éπ", ""] {
+        let source = format!(
+            r#"let original = "{input}"
+let converted = to_str(original)
+req.set_header("X-Out", converted + "|" + to_str(original) + "|" + original)"#
+        );
+        assert_sets_request_header(&source, "X-Out", &format!("{input}|{input}|{input}"));
+    }
+}
+
+#[test]
+fn test_to_str_identity_preserves_utf8_byte_limit() {
+    let source = r#"let result = to_str("éπ")"#;
+    let result = run_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 4,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result, good_next());
+    let error = run_expect_runtime_err_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
 }
 
 #[test]

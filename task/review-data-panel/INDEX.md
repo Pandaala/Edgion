@@ -13655,3 +13655,26 @@ snapshots retain exact HTTP, termination, gRPC and error-only entries.
 Formatting, workspace all-target check/Clippy, seven repository guards and
 diff hygiene passed, with existing unrelated warnings. No full suite or live
 integration ran.
+
+## Move existing strings through explicit to_str conversion
+
+ToStr now checks the consumed Str's UTF-8 byte length and moves its Arc directly
+into the result. Previously it copied the payload into a temporary String and
+then into a new Arc. The identity case now avoids both copies and their
+nonempty-string allocations; empty strings also reuse the existing Arc.
+Non-string values still use the canonical runtime_string conversion unchanged.
+This is an identity fast path, not the deferred DSL 01 general coercion-owner
+redesign. No throughput improvement was measured.
+
+The length guard remains before return, and argument evaluation, value-work,
+stack/call limits and error policy are unchanged. The complete immutable
+Arc<str> is retained, without small-slice backing amplification.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 513
+cases; final verification passed 514. Extended conversion tests cover ASCII,
+multibyte and empty strings, repeated conversion and original-local reuse. A
+new identity regression accepts four UTF-8 bytes at limit four and returns
+exact StringTooLong { len: 4, limit: 3 } at limit three.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings. No full suite, live integration
+or performance benchmark ran.
