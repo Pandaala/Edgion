@@ -13986,3 +13986,25 @@ Final verification passed 44 GraphQL-selected Gateway tests and seven cache
 lifecycle tests (51 total), formatting, workspace check/Clippy and seven guards.
 Existing unrelated warnings remain. This removes redundant digest work, not a
 proven allocation or throughput cost; no benchmark or live integration ran.
+
+## DirectEndpoint success address formatting
+
+Successful DirectEndpoint selection now formats the numeric SocketAddr into a
+64-byte stack buffer before the existing synchronous sensitive log and dye calls.
+The same standard Display produces at most 58 ASCII bytes, including a full IPv6
+address, maximum scope ID and port. Formatting remains inside Set; rejected jumps
+still publish neither a success value nor the endpoint log. Resolution, route/TLS
+proofs, error branches, sensitivity and sink order are unchanged.
+
+Independent plan review passed. The existing successful Service/EndpointSlice
+fixture now includes IPv6 alongside IPv4 and passed all 13 plugin tests before
+the runtime edit. A formatter differential covers 99 IPv4/IPv6, mapped, scope,
+flow-info and port combinations; outputs equal standard String formatting, each
+helper call allocates zero, and the maximum observed length is 58. This removes
+the temporary address String, not sink allocations or measured request latency.
+
+The first final build exhausted disk space before tests ran. After removing
+verified inactive incremental build caches, fresh verification passed 19
+DirectEndpoint-selected, 32 plugin-log and 24 dye tests, formatting, workspace
+check/Clippy and seven guards. Existing unrelated warnings remain. No full suite,
+live transport or throughput benchmark ran.

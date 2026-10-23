@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::net::{IpAddr, Ipv6Addr};
+use std::io::Write as _;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use crate::backends::{
     get_global_backend_tls_policy_store, get_service_discovery_coordinator, validate_endpoint_backend_addr,
@@ -94,6 +95,13 @@ enum ResolutionError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InvalidEndpoint;
 
+fn format_endpoint(addr: SocketAddr, buffer: &mut [u8; 64]) -> &str {
+    let mut remaining = buffer.as_mut_slice();
+    write!(&mut remaining, "{addr}").expect("numeric SocketAddr text including IPv6 scope and port fits in 58 bytes");
+    let len = 64 - remaining.len();
+    std::str::from_utf8(&buffer[..len]).expect("numeric SocketAddr formatting produces only ASCII")
+}
+
 #[async_trait]
 impl RequestFilter for DirectEndpoint {
     fn name(&self) -> &str {
@@ -143,9 +151,10 @@ impl RequestFilter for DirectEndpoint {
                 let addr = info.addr;
                 match session.set_upstream_jump(UpstreamJumpTarget::Direct(info)) {
                     SetJumpOutcome::Set => {
-                        let addr_str = addr.to_string();
-                        log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
-                        session.record_outcome(DyeOutcome::Success, &addr_str);
+                        let mut buffer = [0u8; 64];
+                        let addr_str = format_endpoint(addr, &mut buffer);
+                        log.push_fmt("endpoint {}", la![sensitive(addr_str)]);
+                        session.record_outcome(DyeOutcome::Success, addr_str);
                     }
                     SetJumpOutcome::Rejected => {
                         log.push("jump locked, rejected");

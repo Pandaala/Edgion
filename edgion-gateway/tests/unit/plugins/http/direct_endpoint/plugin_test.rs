@@ -50,7 +50,7 @@ fn insert_test_endpoint_slice(ns: &str, service_name: &str, slice_name: &str, ip
             labels: Some(labels),
             ..Default::default()
         },
-        address_type: "IPv4".to_string(),
+        address_type: if ip.contains(':') { "IPv6" } else { "IPv4" }.to_string(),
         endpoints: vec![Endpoint {
             addresses: vec![ip.to_string()],
             ..Default::default()
@@ -192,40 +192,80 @@ fn direct_endpoint_name_is_static_across_instances() {
 /// log/header writes below" comment site now carries the record call.
 #[tokio::test]
 async fn direct_endpoint_records_success_outcome_with_addr() {
-    insert_test_endpoint_slice("unit-test-ns", "app-v1", "de-success-slice", "10.0.9.9", 9191);
+    for (ns, ip, endpoint) in [
+        ("unit-test-ns", "10.0.9.9", "10.0.9.9:9191"),
+        ("unit-test-v6-ns", "2001:db8::9", "[2001:db8::9]:9191"),
+    ] {
+        insert_test_endpoint_slice(ns, "app-v1", "de-success-slice", ip, 9191);
 
-    let plugin = DirectEndpoint::new(&base_config());
+        let plugin = DirectEndpoint::new(&base_config());
 
-    let mut session = MockPluginSession::new();
-    session
-        .expect_ctx()
-        .return_const(ctx_with_backend_refs("unit-test-ns", vec![test_backend_ref("app-v1")]));
-    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("10.0.9.9:9191")));
-    session
-        .expect_set_upstream_jump()
-        .withf(|target| {
-            matches!(
-                target,
-                UpstreamJumpTarget::Direct(info)
-                    if info.addr == "10.0.9.9:9191".parse().unwrap()
-                        && info.tls_policy.is_absent()
-                        && info.backend_ref_idx == 0
-                        && info.app_protocol == Some(BackendAppProtocol::H2c)
-            )
-        })
-        .times(1)
-        .return_const(SetJumpOutcome::Set);
-    session
-        .expect_record_outcome()
-        .withf(|o, v| *o == DyeOutcome::Success && v == "10.0.9.9:9191")
-        .times(1)
-        .return_const(());
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(ns, vec![test_backend_ref("app-v1")]));
+        set_endpoint_header(&mut session, Some(http::HeaderValue::from_static(endpoint)));
+        session
+            .expect_set_upstream_jump()
+            .withf(move |target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Direct(info)
+                        if info.addr == endpoint.parse().unwrap()
+                            && info.tls_policy.is_absent()
+                            && info.backend_ref_idx == 0
+                            && info.app_protocol == Some(BackendAppProtocol::H2c)
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(move |o, v| *o == DyeOutcome::Success && v == endpoint)
+            .times(1)
+            .return_const(());
 
-    let mut log = PluginLog::new("DirectEndpoint");
-    let result = plugin.run_request(&mut session, &mut log).await;
-    assert_eq!(result, PluginRunningResult::GoodNext);
-    assert!(log.contains("endpoint "));
-    assert!(!log.contains("jump locked, rejected"));
+        let mut log = PluginLog::new("DirectEndpoint");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("endpoint "));
+        assert!(!log.contains("jump locked, rejected"));
+    }
+}
+
+#[test]
+fn endpoint_format_matches_standard_display_without_allocating() {
+    use std::net::{Ipv4Addr, SocketAddrV4, SocketAddrV6};
+    let mut addresses = Vec::new();
+    for port in [0, 1, 65535] {
+        for ip in [Ipv4Addr::UNSPECIFIED, Ipv4Addr::LOCALHOST, Ipv4Addr::BROADCAST] {
+            addresses.push(SocketAddr::V4(SocketAddrV4::new(ip, port)));
+        }
+        for ip in [
+            Ipv6Addr::UNSPECIFIED,
+            Ipv6Addr::LOCALHOST,
+            Ipv6Addr::from([u16::MAX; 8]),
+            Ipv4Addr::BROADCAST.to_ipv6_mapped(),
+            "2001:db8::1234".parse().unwrap(),
+        ] {
+            for scope in [0, 1, u32::MAX] {
+                for flow in [0, u32::MAX] {
+                    addresses.push(SocketAddr::V6(SocketAddrV6::new(ip, port, flow, scope)));
+                }
+            }
+        }
+    }
+    let mut max_len = 0;
+    for addr in addresses {
+        let expected = addr.to_string();
+        let mut buffer = [0u8; 64];
+        let (actual, allocations) =
+            crate::test_allocation_counter::count_allocations(|| format_endpoint(addr, &mut buffer));
+        assert_eq!(actual, expected);
+        assert_eq!(allocations, 0);
+        max_len = max_len.max(actual.len());
+    }
+    assert_eq!(max_len, 58);
 }
 
 #[tokio::test]
