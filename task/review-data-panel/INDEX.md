@@ -308,6 +308,7 @@ destination.
 - [JSON selection capture transfer](dsl-05-json-select-capture-transfer.md)
 - [JSON object key encoded-length ownership](dsl-06-json-key-encoded-length.md)
 - [JSON scan transport ownership](dsl-07-json-scan-transport-ownership.md)
+- [List-loop source ownership](dsl-08-list-loop-source-ownership.md)
 - [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
