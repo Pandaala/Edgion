@@ -14375,3 +14375,25 @@ Fresh selections passed 51 Algo radix-IP, 34 Gateway RealIp, 15 IP-reference and
 22 ConfigData tests (122 executions across selections), formatting, workspace
 check/Clippy and agent-doc validation with existing unrelated warnings. No new
 layout, performance benchmark, full suite or live network verification ran.
+
+## XFF snapshot early limit rejection
+
+The metadata helper now returns an absent over-limit snapshot as soon as checked
+aggregate length exceeds the captured cap or overflows. Remaining fields cannot
+reverse that decision, so their iteration and text validation are skipped. The
+single-field success path reuses its first text conversion. Admitted repeated
+fields retain ordered separator accounting and the existing allocation boundary.
+Invalid text below the cap still requires counting later fields; Host/path error
+precedence, configured defaults, RealIp consumption and owned access-log state
+remain unchanged. No throughput improvement is quantified.
+
+The expanded existing boundary fixture covers zero limits, empty fields, exact
+limits, invalid text before/after a crossing, and unlimited valid/invalid input.
+Before edits, the broader pg_request_filter selection passed 45 tests and failed
+only the known response-cache reload admission fixture (backend policy ancestor
+limit), tracked in verification-01-cache-policy-fixture.md. After edits, all 37
+non-cache pg_request_filter tests passed, including all nine XFF tests. Initial
+linking failed for insufficient disk space; removal of inactive generated build
+artifacts allowed the same test command to pass. Formatting, workspace check,
+workspace Clippy and all seven campaign guards passed with existing unrelated
+warnings. No full suite, live integration or benchmark ran.

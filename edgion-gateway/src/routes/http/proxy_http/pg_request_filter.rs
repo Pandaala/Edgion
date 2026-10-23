@@ -71,27 +71,42 @@ fn snapshot_x_forwarded_for(req_header: &RequestHeader, limit: Option<usize>) ->
 
     let mut count = 1usize;
     let mut total_len = first.len();
-    let mut overflowed = false;
-    let mut valid = first.to_str().is_ok();
+    if limit.is_some_and(|limit| total_len > limit) {
+        return XffSnapshot {
+            value: None,
+            too_long: true,
+        };
+    }
+    let first_text = first.to_str();
+    let mut valid = first_text.is_ok();
 
     for value in iter {
         count += 1;
-        valid &= value.to_str().is_ok();
-        if !overflowed {
-            match total_len.checked_add(2).and_then(|len| len.checked_add(value.len())) {
-                Some(len) => total_len = len,
-                None => overflowed = true,
-            }
+        let Some(len) = total_len.checked_add(2).and_then(|len| len.checked_add(value.len())) else {
+            return XffSnapshot {
+                value: None,
+                too_long: true,
+            };
+        };
+        if limit.is_some_and(|limit| len > limit) {
+            return XffSnapshot {
+                value: None,
+                too_long: true,
+            };
         }
+        total_len = len;
+        valid &= value.to_str().is_ok();
     }
 
-    let too_long = overflowed || limit.is_some_and(|limit| total_len > limit);
-    if too_long || !valid {
-        return XffSnapshot { value: None, too_long };
+    if !valid {
+        return XffSnapshot {
+            value: None,
+            too_long: false,
+        };
     }
 
     if count == 1 {
-        let Ok(first) = first.to_str() else {
+        let Ok(first) = first_text else {
             return XffSnapshot {
                 value: None,
                 too_long: false,

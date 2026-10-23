@@ -54,6 +54,17 @@ existing distinction: absent `securityProtect` means no byte cap, while a presen
 block with an omitted field defaults to 200. Exceeding the cap returns HTTP 400;
 it never truncates XFF.
 
+The request metadata snapshot counts repeated XFF fields in order, including the
+two-byte separator between empty fields. It returns no value immediately when
+checked aggregate length overflows or exceeds the captured limit. Invalid text
+within the limit still requires counting later fields: a later limit crossing
+must retain the over-limit result. Exact-limit values remain accepted, and no
+limit still means unbounded aggregate length subject to checked arithmetic.
+Single-field snapshots reuse their first text validation. Host and path error
+precedence remains owned by metadata validation, not by this snapshot helper.
+The XFF snapshot boundary fixtures cover these cases; early rejection reduces
+remaining field scanning without asserting a measured throughput improvement.
+
 ## Alternatives and limits
 
 There is no polling worker or duplicate resolved configuration. A weak binding

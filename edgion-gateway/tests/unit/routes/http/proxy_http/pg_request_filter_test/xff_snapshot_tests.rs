@@ -98,6 +98,34 @@ fn snapshot_handles_missing_single_repeated_and_empty_field_lines() {
 
 #[test]
 fn snapshot_limit_counts_separators_and_invalid_lines_cannot_bypass_it() {
+    for (fields, limit, expected, too_long) in [
+        (vec![], Some(0), None, false),
+        (vec![b"".as_slice()], Some(0), Some(""), false),
+        (vec![b"".as_slice(), b""], Some(1), None, true),
+        (vec![b"".as_slice(), b""], Some(2), Some(", "), false),
+        (vec![b"abc".as_slice()], Some(3), Some("abc"), false),
+        (vec![b"abc".as_slice()], Some(2), None, true),
+        (vec![b"\xff".as_slice(), b"12345"], Some(7), None, true),
+        (vec![b"12345".as_slice(), b"\xff"], Some(4), None, true),
+        (vec![b"a".as_slice(), b"bc", b"\xff"], Some(4), None, true),
+        (vec![b"\xff".as_slice()], Some(1), None, false),
+        (vec![b"a".as_slice(), b"bc"], None, Some("a, bc"), false),
+        (vec![b"a".as_slice(), b"\xff"], None, None, false),
+    ] {
+        let values: Vec<_> = fields
+            .iter()
+            .map(|field| HeaderValue::from_bytes(field).unwrap())
+            .collect();
+        let request = request_with_xff(&values);
+        let snapshot = snapshot_x_forwarded_for(&request, limit);
+        assert_eq!(
+            snapshot.value.as_deref(),
+            expected,
+            "fields={fields:?}, limit={limit:?}"
+        );
+        assert_eq!(snapshot.too_long, too_long, "fields={fields:?}, limit={limit:?}");
+    }
+
     let repeated = request_with_xff(&[HeaderValue::from_static("a"), HeaderValue::from_static("bc")]);
     let exact = snapshot_x_forwarded_for(&repeated, Some(5));
     assert_eq!(exact.value.as_deref(), Some("a, bc"));
