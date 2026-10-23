@@ -354,7 +354,7 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        let endpoint =
+        let upstream_addr =
             match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
                 select_service_endpoint(
                     target.key(),
@@ -366,7 +366,12 @@ impl EdgionUdpProxy {
                     None,
                 )
             }) {
-                Ok((_, endpoint)) => endpoint,
+                Ok((_, endpoint)) => {
+                    let PingoraSocketAddr::Inet(addr) = &endpoint.backend.inner().addr else {
+                        return;
+                    };
+                    *addr
+                }
                 Err(error) => {
                     let status = match error {
                         L4ResolveError::Rejected(L4BackendRejection::Denied) => UdpStatus::RefDenied,
@@ -384,10 +389,6 @@ impl EdgionUdpProxy {
                 }
             };
 
-        let upstream_pingora_addr = endpoint.backend.inner().addr.clone();
-        let PingoraSocketAddr::Inet(upstream_addr) = upstream_pingora_addr else {
-            return;
-        };
         if validate_endpoint_backend_addr(
             &PingoraSocketAddr::Inet(upstream_addr),
             gateway_config.allow_loopback_upstream,

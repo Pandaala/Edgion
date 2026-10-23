@@ -14613,3 +14613,25 @@ selector and 36 outlier-detection tests (160 executions). Formatting, workspace
 all-target check/Clippy and seven campaign guards passed with existing unrelated
 warnings. No full suite, live network verification, benchmark or new test-only
 production mechanism was introduced.
+
+## Release UDP endpoint ownership after copying its socket address
+
+The UDP new-session selection arm now borrows the selected backend's Inet
+address and copies the complete std SocketAddr outward. Its unused endpoint,
+backend and Service section owners drop at the arm boundary before safety-
+failure logging, socket binding, session publication or packet-send awaits.
+Previously the outer endpoint retained its backend and section through these
+waits after cloning the Pingora socket enum solely to extract that address.
+
+IPv6 flow/scope values are preserved by the value copy. Non-Inet selection still
+returns silently, and the same reconstructed Inet value reaches the canonical
+safety check. UDP has no outlier completion token or LB attempt guard dependent
+on this endpoint. Established-session fast paths, fixed session destinations,
+route ownership, admission, retirement, cancellation and logs are unchanged.
+
+This shortens unused ownership; other publication/connection owners may still
+retain the section. No allocation saving, RSS or throughput improvement is
+claimed for replacing the enum clone. Baseline and final serial selections each
+passed 59 UDP route/session and four UDP log tests. Formatting, workspace
+all-target check/Clippy and seven campaign guards passed with existing unrelated
+warnings. No full suite, live socket test or benchmark ran.
