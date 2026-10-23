@@ -137,7 +137,7 @@ destination.
 
 - [Route predicate dispatch preparation](routing-07-predicate-kind-preparation.md)
 
-- [Route header-name preparation](routing-04-header-name-preparation.md)
+- [Route header-name preparation, including AI model-route predicates](routing-04-header-name-preparation.md)
 
 - [Hostname ID-to-content representation](routing-03-hostname-content-index.md)
 
@@ -15022,3 +15022,16 @@ request-filter tests (filters can overlap). Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing unrelated warnings.
 No new tests, full suite, live integration or benchmark ran for this small
 lookup substitution. Independent plan and final reviews passed.
+
+## AI model-route header-name preparation boundary
+
+Followed AiProxy request decisions and model listing into the shared model-route
+header predicate helper. The existing [header-name preparation task](routing-04-header-name-preparation.md#ai-model-route-extension-baseline-ac85e6947)
+now distinguishes AI any-occurrence byte matching, its existing compiled String
+owner, validated publication and broader direct-constructor failure behavior.
+Replacing that owner requires a selected representation/constructor contract;
+no implementation was chosen. Rewrite/quota identity and listing visibility remain
+part of acceptance. Four unchanged-source model-router tests passed; no prototype,
+benchmark or live integration ran.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing unrelated warnings. Independent plan and final reviews passed.
