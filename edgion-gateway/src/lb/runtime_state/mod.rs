@@ -81,14 +81,14 @@ fn sp_affinity_get_or_build_from(
     if active.membership_identity != Some(membership) {
         return Arc::new(std::collections::HashMap::new());
     }
-    if let Some(snapshot) = cell.sp.load_full().get(section) {
+    if let Some(snapshot) = cell.sp.load().get(section) {
         if snapshot.membership_identity == membership {
             return Arc::clone(&snapshot.entries);
         }
     }
 
     let _build_guard = cell.sp_build_lock.lock();
-    if let Some(snapshot) = cell.sp.load_full().get(section) {
+    if let Some(snapshot) = cell.sp.load().get(section) {
         if snapshot.membership_identity == membership {
             return Arc::clone(&snapshot.entries);
         }

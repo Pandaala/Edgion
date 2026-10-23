@@ -14924,3 +14924,29 @@ Fresh baseline and final runs each passed 14 Resources authority and six Gateway
 authority tests (20 total). Formatting, workspace all-target check/Clippy and
 seven repository guards passed with existing unrelated warnings. No live
 upstream integration, full suite or allocation/throughput benchmark ran.
+
+## Borrow Service affinity cache-hit snapshots
+
+Both cache-hit checks in sp_affinity_get_or_build_from now use ArcSwap::load
+instead of load_full for the outer section map. Each short guard protects the
+selected snapshot until its membership check and owned entries Arc clone finish.
+The returned entries remain independent of later outer publication or retirement.
+On misses, the first guard ends before acquiring the build lock and the second
+ends before the existing publication helper; no guard crosses an await.
+
+Locked arc-swap 1.9.2 implements load_full by converting a load guard into an
+owned pointer. The change avoids that unconditional outer ownership promotion
+on the normal guard path. Guard-slot exhaustion and writer-paid promotion can
+still perform reference-count work; this is not an allocation-free or measured
+throughput claim. The inner result Arc clone is still required.
+
+Active snapshot ownership, generation/membership checks, lock/recheck ordering,
+miss construction and publication, scoped uncached views, canonical token/address
+derivation and endpoint limits remain unchanged. No new cache or precomputation
+was introduced.
+
+Fresh baseline and final runs each passed seven runtime-state, 28 session-
+persistence and 41 discovery-coordinator tests (76 total). Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing unrelated
+warnings. No new test, live transport experiment, full suite or contention/
+throughput benchmark ran.
