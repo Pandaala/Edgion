@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Response-cache replay body ownership](cache-07-replay-body-owner-lifetime.md)
+
 - [Prepared DynamicInternalUpstream rule lookup](routing-06-prepared-dynamic-rule-index.md)
 
 - [GraphQL operation-name deduplication storage](graphql-03-operation-name-dedup-storage.md)
@@ -14974,3 +14976,15 @@ Fresh baseline and final runs each passed 36 outlier-detection and 41 discovery-
 coordinator tests (77 total). Formatting, workspace all-target check/Clippy and
 seven repository guards passed with existing unrelated warnings. No new test,
 live integration, full suite or contention/throughput benchmark ran.
+
+## Response-cache replay body ownership decision
+
+The replay ownership audit traced Hit.entry, the Reader-backed parent Bytes,
+16 KiB output slices, header-work transfer and separate EOS/finish awaits. The
+[replay ownership task](cache-07-replay-body-owner-lifetime.md) records potential
+earlier release/final-chunk transfer and the reader/ledger acceptance boundary.
+Shared handles do not duplicate the payload, and index or transport ownership
+can prevent arena reclamation after a local release. No runtime change was
+selected. Fresh verification passed 21 storage and seven lifecycle tests,
+formatting, workspace all-target check/Clippy and agent-doc validation with
+existing unrelated warnings. No prototype, live origin or benchmark ran.
