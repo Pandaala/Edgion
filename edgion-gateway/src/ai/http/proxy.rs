@@ -399,6 +399,7 @@ impl AiProxy {
         {
             return Self::reject(session, log, "model-rewrite-invalid", AiProxyError::BackendUnavailable);
         }
+        drop(model_rewrite);
 
         let mut gate_candidates = Vec::with_capacity(backends.len());
         for (order, backend) in backends.iter().enumerate() {
@@ -426,6 +427,7 @@ impl AiProxy {
                 return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
             }
         }
+        drop(gate_candidates);
 
         if canonical.composite
             && (self.config.token_quota.is_some()
@@ -458,6 +460,7 @@ impl AiProxy {
                 Some((logical, slot, weights.get(slot).copied().unwrap_or(0), key))
             })
             .collect();
+        drop(weights);
         let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, _, key)| *key));
         let passthrough_allowed = unknown_model_passthrough_allowed(
             rewrite_requires_canonical,
@@ -602,6 +605,8 @@ impl AiProxy {
         let Ok(scheduler) = AttemptScheduler::new(&backends, route_retries) else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
+        drop(backends);
+        drop(credential_weights);
 
         let mut quota_status = None;
         let quota = if let Some(quota) = &self.quota {

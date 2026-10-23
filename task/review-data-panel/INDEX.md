@@ -15155,3 +15155,25 @@ copies. No representation or runtime change was selected. Fresh 22 adaptive and
 22 AI proxy tests passed (44 total); no prototype, benchmark or live integration ran.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing unrelated warnings. Independent plan and final reviews passed.
+
+## Release AI planning scratch before quota waits
+
+Request planning now explicitly drops the optional model-rewrite String after
+canonical replacement, the scalar RouteCandidate vector after the invalid-weight
+gate, and the decision weight vector after candidate specifications copy its
+values. After AttemptScheduler construction, it drops the borrowed BackendCredentials
+projection vector before dropping its backing Vec<Vec<u32>>. The scheduler already
+copies those weights into its own fixed arrays and retains no input borrow.
+
+These owners have no custom destruction or admission/settlement state. Early
+rejection still follows its existing natural cleanup. Captured snapshots,
+candidates, policy handles, entropy/error order, model rewriting, quota waits and
+downgrade/readmission are unchanged. The change ends scratch ownership at the last
+use instead of the enclosing async function scope; allocation counts, RSS,
+throughput and generated future size were not measured or claimed improved.
+
+Fresh baseline and final runs each passed 22 proxy, four model-router, 13 candidate
+and nine scheduler tests (48 total). Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing unrelated warnings. No new test,
+full suite, live integration or benchmark ran for these last-use releases.
+Independent plan and final reviews passed, including scheduler ownership verification.
