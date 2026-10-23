@@ -281,6 +281,8 @@ destination.
 
 - [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
 
+- [gRPC request reflection bridge](grpc-11-request-reflection-bridge.md)
+
 - [gRPC mapping selector storage](grpc-10-mapping-selector-storage.md)
 
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
@@ -14173,5 +14175,18 @@ representation. Existing grpc-01 preflight and grpc-03 wire-schema decisions are
 separate and remain open.
 
 Fresh verification passed 35 Resources codec and 31 Gateway transcoder tests,
+formatting, workspace check/Clippy and agent-doc validation with existing unrelated
+warnings. No runtime change, candidate benchmark or live integration ran.
+
+## gRPC normalized request reflection bridge
+
+Traced normalized JSON serialization, explicit tree release, capped text
+compaction, DynamicMessage parsing and input release before framing. Generic
+Serde support permits investigating a tree-backed deserializer, but bypassing
+the bridge must retain normalized serialized-byte admission and re-establish
+the reviewed memory overlap. [grpc-11](grpc-11-request-reflection-bridge.md)
+records that decision separately from numeric, selector and response-WKT storage.
+
+Fresh verification passed 35 Resources and 31 Gateway transcoder tests,
 formatting, workspace check/Clippy and agent-doc validation with existing unrelated
 warnings. No runtime change, candidate benchmark or live integration ran.
