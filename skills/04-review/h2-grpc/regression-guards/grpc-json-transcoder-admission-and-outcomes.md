@@ -109,6 +109,17 @@ describes configuration and scope. H1.1/H2 downstream selection is independent o
 mandatory H2 upstream; canonical backend/TLS/egress and pool owners are preserved.
 Unary Hold replacement currently abandons the origin connection.
 
+### Gateway request input handle release
+
+After synchronous encoding (including a caught error or unwind), the request
+entry explicitly drops its local input Bytes before result handling and body
+publication. Encoding returns an owned binding/frame and borrows no input bytes.
+The conversion reservation and canonical BodyStorage retain their own owners.
+Initial memory and cached initial-disk materializations may remain shared with
+storage; an independently materialized mutation snapshot can be released earlier.
+This shortens local ownership, not the lifetime of every source allocation or a
+measured RSS bound. The conservative exchange reservation is unchanged.
+
 ### Current query binding ownership
 
 The request entry borrows request_query directly into synchronous binding.

@@ -14190,3 +14190,17 @@ records that decision separately from numeric, selector and response-WKT storage
 Fresh verification passed 35 Resources and 31 Gateway transcoder tests,
 formatting, workspace check/Clippy and agent-doc validation with existing unrelated
 warnings. No runtime change, candidate benchmark or live integration ran.
+
+## gRPC request input handle release
+
+The request entry now drops its local input Bytes immediately after synchronous
+encoding, before result handling and body publication. The owned binding/frame
+needs no input borrow. Shared initial BodyStorage allocations can remain retained;
+independently materialized mutation buffers can be released earlier. Reservation,
+error ordering, generation checks and response ownership are unchanged. This is
+a local lifetime reduction, without a measured RSS or throughput claim.
+
+Baseline and final selections each passed 31 Gateway and 35 Resources transcoder
+tests (66 executions). Formatting, workspace check/Clippy and seven repository
+guards passed with existing unrelated warnings. No full suite, live integration
+or performance benchmark ran. Deferred grpc-11 remains open.

@@ -152,6 +152,7 @@ impl RequestFilter for GrpcJsonTranscoder {
         let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             binding.encode(&body, self.compiled.limits)
         }));
+        drop(body);
         let (binding, frame) = match encoded {
             Ok(Ok(encoded)) => encoded,
             Ok(Err(TranscodingError::TooLarge)) => {
