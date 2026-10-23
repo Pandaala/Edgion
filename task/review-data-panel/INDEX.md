@@ -15250,3 +15250,27 @@ Final verification passed 62 converter and 36 dispatch tests (98 total), formatt
 workspace all-target check/Clippy and all seven repository guards, with existing
 unrelated warnings. No full suite, live integration or performance benchmark ran.
 Independent plan and final reviews passed.
+
+## Move the owned streaming conversion choice
+
+AnthropicResponseProcessor::push_chunk now moves its owned choice into the
+OpenAI chunk's choices array. The former outer json! expression recursively
+rebuilt the completed choice through serde_json 1.0.151's borrowed to_value path.
+The replacement constructs the same five outer fields in the same insertion
+order. Message ID and canonical-model output strings retain their existing
+copies; the outer object and choices array still allocate.
+
+The existing push_json_event and canonical SSE writer remain unchanged, including
+semantic capture, event and aggregate-output caps, output-character accounting,
+raw record handoff and failure behavior. Text/tool delta construction, terminal
+usage chunks and DONE records are unchanged. This removes an owned-subtree copy;
+it does not claim measured throughput, RSS or total-request allocation savings.
+
+The unchanged baseline passed 62 converter, 13 canonical SSE and 25 semantic
+response tests (100 total). Existing exact-wire text/tool, every-byte-split,
+semantic-range and bounded-output coverage is retained without adding a test
+that merely mirrors the new object construction.
+Final verification passed the same 100 tests, formatting, workspace all-target
+check/Clippy and seven repository guards, with existing unrelated warnings.
+No full suite, live integration or performance benchmark ran.
+Independent plan and final reviews passed.

@@ -688,16 +688,13 @@ impl AnthropicResponseProcessor {
     }
 
     fn push_chunk(&mut self, output: &mut Vec<u8>, choice: Value) -> Result<(), ()> {
-        self.push_json_event(
-            output,
-            &json!({
-                "id":self.message_id,
-                "object":"chat.completion.chunk",
-                "created":self.created,
-                "model":self.canonical_model,
-                "choices":[choice]
-            }),
-        )
+        let mut chunk = Map::new();
+        chunk.insert("id".to_string(), Value::String(self.message_id.clone()));
+        chunk.insert("object".to_string(), Value::String("chat.completion.chunk".to_string()));
+        chunk.insert("created".to_string(), Value::from(self.created));
+        chunk.insert("model".to_string(), Value::String(self.canonical_model.clone()));
+        chunk.insert("choices".to_string(), Value::Array(vec![choice]));
+        self.push_json_event(output, &Value::Object(chunk))
     }
 
     fn push_json_event(&mut self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
