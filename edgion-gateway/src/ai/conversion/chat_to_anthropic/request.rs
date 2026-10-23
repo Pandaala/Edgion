@@ -378,7 +378,7 @@ fn parse_messages(
                 require_exact_keys(message, &["role", "content"])?;
                 seen_non_system = true;
                 let content = parse_required_text_content(message.get("content"))?;
-                translated.push(json!({ "role": "user", "content": content }));
+                translated.push(translated_message("user", content));
             }
             "assistant" => {
                 require_allowed_and_required_keys(message, &["role", "content", "tool_calls"], &["role"])?;
@@ -394,7 +394,7 @@ fn parse_messages(
                     return Err(AnthropicRequestError::InvalidRequestBody);
                 }
                 content.extend(tool_calls);
-                translated.push(json!({ "role": "assistant", "content": content }));
+                translated.push(translated_message("assistant", content));
             }
             "tool" => {
                 require_exact_keys(message, &["role", "tool_call_id", "content"])?;
@@ -407,16 +407,13 @@ fn parse_messages(
                     return Err(AnthropicRequestError::InvalidRequestBody);
                 }
                 let content = parse_required_text_content(message.get("content"))?;
-                tool_results.push(json!({
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": content,
-                }));
+                let mut result = Map::new();
+                result.insert("type".to_string(), Value::String("tool_result".to_string()));
+                result.insert("tool_use_id".to_string(), Value::String(tool_call_id.to_string()));
+                result.insert("content".to_string(), Value::Array(content));
+                tool_results.push(Value::Object(result));
                 if pending_tool_ids.is_empty() {
-                    translated.push(json!({
-                        "role": "user",
-                        "content": std::mem::take(&mut tool_results),
-                    }));
+                    translated.push(translated_message("user", std::mem::take(&mut tool_results)));
                 }
             }
             "developer" => return Err(AnthropicRequestError::UnsupportedParameter),
@@ -436,6 +433,13 @@ fn parse_messages(
         return Err(AnthropicRequestError::UnsupportedParameter);
     }
     Ok((system, translated))
+}
+
+fn translated_message(role: &str, content: Vec<Value>) -> Value {
+    let mut message = Map::new();
+    message.insert("role".to_string(), Value::String(role.to_string()));
+    message.insert("content".to_string(), Value::Array(content));
+    Value::Object(message)
 }
 
 fn parse_required_text_content(value: Option<&Value>) -> Result<Vec<Value>, AnthropicRequestError> {
@@ -520,12 +524,12 @@ fn parse_assistant_tool_calls<'a>(
             return Err(AnthropicRequestError::InvalidRequestBody);
         }
         pending_tool_ids.insert(id);
-        translated.push(json!({
-            "type": "tool_use",
-            "id": id,
-            "name": name,
-            "input": arguments,
-        }));
+        let mut tool_use = Map::new();
+        tool_use.insert("type".to_string(), Value::String("tool_use".to_string()));
+        tool_use.insert("id".to_string(), Value::String(id.to_string()));
+        tool_use.insert("name".to_string(), Value::String(name.to_string()));
+        tool_use.insert("input".to_string(), arguments);
+        translated.push(Value::Object(tool_use));
     }
     Ok(translated)
 }

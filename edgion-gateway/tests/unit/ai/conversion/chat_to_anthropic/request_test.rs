@@ -480,3 +480,48 @@ fn tool_ids_remain_unique_across_completed_rounds() {
         assert_eq!(prepare(invalid_result), Err(AnthropicRequestError::InvalidRequestBody));
     }
 }
+
+#[test]
+fn nested_tool_messages_preserve_wire_values_and_exact_output_cap() {
+    let arguments = r#"{"nested":[null,true,{"text":"quoted\" slash\\ newline\n π","empty":[]}],"unsigned":18446744073709551615,"signed":-9223372036854775808,"zero":-0.0}"#;
+    let mut request = base_request();
+    request["tools"] = json!([{"type":"function","function":{"name":"lookup","parameters":{}}}]);
+    request["messages"] = json!([
+        {"role":"user","content":[{"type":"text","text":"Question\nπ"}]},
+        {"role":"assistant","content":"Checking\" now","tool_calls":[
+            {"id":"call-1","type":"function","function":{"name":"lookup","arguments":arguments}}
+        ]},
+        {"role":"tool","tool_call_id":"call-1","content":[
+            {"type":"text","text":"Result\\value"},{"type":"text","text":""}
+        ]}
+    ]);
+    let expected = json!({
+        "model":"claude-canonical","max_tokens":64,"stream":false,
+        "tools":[{"name":"lookup","input_schema":{}}],
+        "messages":[
+            {"role":"user","content":[{"type":"text","text":"Question\nπ"}]},
+            {"role":"assistant","content":[
+                {"type":"text","text":"Checking\" now"},
+                {"type":"tool_use","id":"call-1","name":"lookup",
+                 "input":serde_json::from_str::<Value>(arguments).unwrap()}
+            ]},
+            {"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"call-1","content":[
+                    {"type":"text","text":"Result\\value"},{"type":"text","text":""}
+                ]}
+            ]}
+        ]
+    });
+    let expected = serde_json::to_vec(&expected).unwrap();
+    assert_eq!(prepare(request.clone()).unwrap().body, expected);
+    assert_eq!(
+        prepare_anthropic_request(request.clone(), "claude-canonical", None, false, expected.len())
+            .unwrap()
+            .body,
+        expected
+    );
+    assert_eq!(
+        prepare_anthropic_request(request, "claude-canonical", None, false, expected.len() - 1),
+        Err(AnthropicRequestError::OutputTooLarge)
+    );
+}

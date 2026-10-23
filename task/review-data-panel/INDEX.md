@@ -15224,3 +15224,29 @@ passed 11 scheduler, 36 dispatch and 22 proxy tests (69 total); no benchmark,
 prototype, full suite or live integration ran. Formatting and workspace all-target
 check/Clippy passed with existing unrelated warnings.
 Agent-doc validation and independent plan/final reviews also passed.
+
+## Move owned Anthropic request message trees
+
+Chat-to-Anthropic request conversion now moves its translated content arrays,
+collected tool-result arrays and parsed tool-argument object into their parent
+JSON objects. Five former json! expressions reserialized these already-owned
+values through serde_json 1.0.151's to_value reference path, recursively rebuilding
+their trees. Borrowed input text, names and IDs still become owned output strings;
+this change does not consume the original request or replace its validation sets.
+
+A private message constructor centralizes the role/content assembly. Field
+insertion order, tool-result grouping, validation/error precedence, number values,
+output byte limits and bounded serialization remain unchanged. No body cache,
+response aggregation, schema, observability or retry behavior changes. Removed
+recursive reconstruction is established by source inspection; total allocations,
+throughput and RSS were not measured.
+
+The existing baseline passed 61 converter and 36 dispatch tests. A new exact-wire
+fixture also passed before implementation; it exercises nested tool arguments,
+integer boundaries, negative zero, escaped/multibyte text, empty text parts and
+the exact output cap versus a one-byte-short cap. Existing multi-round tool-ID,
+reverse-result-order and error-precedence assertions remain unchanged.
+Final verification passed 62 converter and 36 dispatch tests (98 total), formatting,
+workspace all-target check/Clippy and all seven repository guards, with existing
+unrelated warnings. No full suite, live integration or performance benchmark ran.
+Independent plan and final reviews passed.
