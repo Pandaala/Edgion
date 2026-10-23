@@ -413,7 +413,18 @@ impl RequestFilter for WafPlugin {
         let request_id = session.get_request_id_ref().unwrap_or_default();
         let method = session.get_method();
         let remote_addr = session.remote_ip();
-        let request_line = format!("{method} {raw_uri} {protocol}");
+        let mut request_line = String::with_capacity(
+            method
+                .len()
+                .saturating_add(raw_uri.len())
+                .saturating_add(protocol.len())
+                .saturating_add(2),
+        );
+        request_line.push_str(method);
+        request_line.push(' ');
+        request_line.push_str(&raw_uri);
+        request_line.push(' ');
+        request_line.push_str(protocol);
         let request = RequestHead::new(
             request_line.as_bytes(),
             method.as_bytes(),

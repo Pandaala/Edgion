@@ -13822,3 +13822,25 @@ Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated warnings. No full suite or live
 integration ran. This closes only composition growth, not URI representation
 or the remaining callback dependency review.
+
+## Reserve WAF request-line capacity before construction
+
+WafPlugin::run_request now reserves the combined method, frozen entry URI,
+protocol and two separator byte lengths before constructing REQUEST_LINE.
+Appending those same strings avoids formatter-driven buffer growth without
+changing the exposed bytes. Capacity arithmetic saturates rather than wrapping.
+The constructor still validates and copies the complete head into transaction
+storage, and the temporary line is released at the existing publication boundary.
+No API, input limit, retained-byte accounting or observability changes.
+
+A mounted phase-one chained-rule test requires exact REQUEST_LINE,
+REQUEST_URI_RAW and REQUEST_URI matches with distinct raw and rewritten targets.
+It runs for HTTP/1.1 and HTTP/2.0, including the latter's existing authority view,
+and denies before body reads. This tests the existing current-method/frozen-target
+composition; it does not claim the line is the untouched downstream wire line.
+
+Independent plan review passed. Fresh baseline/final Gateway WAF verification
+passed 51/52 tests. Formatting, workspace all-target check/Clippy, seven repository
+guards and diff hygiene passed with existing unrelated warnings. No full suite,
+live integration, allocation benchmark or throughput measurement ran. The change
+closes this temporary construction cost, not the remaining WAF dependencies.

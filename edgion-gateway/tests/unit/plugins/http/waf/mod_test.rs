@@ -161,6 +161,54 @@ async fn phase_one_denial_happens_before_request_body_read() {
 }
 
 #[tokio::test]
+async fn request_line_keeps_raw_entry_target_after_uri_rewrite() {
+    for protocol in ["HTTP/1.1", "HTTP/2.0"] {
+        let plugin = plugin(
+            &format!(
+                "SecRule REQUEST_LINE \"@streq POST /%61dmin?entry=%26 {protocol}\" \
+                 \"id:1,phase:1,deny,status:403,chain\"\n\
+                 SecRule REQUEST_URI_RAW \"@streq /%61dmin?entry=%26\" \"chain\"\n\
+                 SecRule REQUEST_URI \"@streq /rewritten?current=+\" \"\"\n"
+            ),
+            WafMode::On,
+        );
+        let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
+        waf.expect_claim_phase().returning(|_, _| WafPhaseClaim::Execute);
+        waf.expect_record_phase_outcome().returning(|_, _, _, _| ());
+        session.expect_ctx().times(1).return_const(EdgionHttpContext::default());
+        session.expect_request_header_map().return_const(http::HeaderMap::new());
+        session.expect_get_method().return_const("POST".to_string());
+        session
+            .expect_get_uri()
+            .return_const("/rewritten?current=+".to_string());
+        session
+            .expect_get_request_uri()
+            .return_const("/%61dmin?entry=%26".to_string());
+        session.expect_get_http_protocol().return_const(protocol);
+        session
+            .expect_request_uri()
+            .times(usize::from(protocol == "HTTP/2.0"))
+            .return_const("https://example.test/rewritten?current=+".parse::<http::Uri>().unwrap());
+        session.expect_remote_ip().return_const("192.0.2.1".to_string());
+        session.expect_get_request_id_ref().returning(|| Some("request-1"));
+        session.expect_ensure_request_body().never();
+        session.expect_read_request_body().never();
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None,
+            },
+            "{protocol}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn header_only_generation_does_not_capture_an_unused_body() {
     let plugin = plugin(
         "SecRule REQUEST_URI \"@contains /allowed\" \"id:1,phase:1,pass\"\n",
