@@ -123,9 +123,12 @@ impl RoundRobinSelector {
         }
 
         // Fallback: walk unique backends starting from the actual weighted pick.
-        let offset = idx;
-        for step in 1..max_iterations.min(blen) {
-            let i = (offset + step) % blen;
+        let mut i = idx;
+        for _ in 1..max_iterations.min(blen) {
+            i += 1;
+            if i == blen {
+                i = 0;
+            }
             if health_filter(&self.backends[i]) {
                 return Some(&self.backends[i]);
             }

@@ -13846,3 +13846,27 @@ passed 51/52 tests. Formatting, workspace all-target check/Clippy, seven reposit
 guards and diff hygiene passed with existing unrelated warnings. No full suite,
 live integration, allocation benchmark or throughput measurement ran. The change
 closes this temporary construction cost, not the remaining WAF dependencies.
+
+## Advance round-robin fallback without repeated remainder
+
+RoundRobinSelector::select now increments the fallback index and resets it at
+the backend-list boundary instead of calculating (primary + step) % count for
+each candidate. The constructor bounds the list to u16::MAX slots, and the
+weighted primary is a valid index, so the increment cannot overflow. The first
+weighted remainder and single relaxed atomic cursor advance are unchanged.
+The same loop range preserves the current zero-budget primary check, fallback
+budget, candidate order and borrowed winner. No health result is cached or
+predicate evaluation removed.
+
+A differential test compares ordered predicate traces and pointer-identified
+winners against the original modulo formula for every slot of a weighted
+three-backend sequence, every health mask, boundary budgets and usize::MAX
+cursor/budget values. It also verifies the wrapping cursor advance. Existing
+empty/singleton, distribution, weighted fallback and truncation tests remain.
+
+Independent plan review passed. Fresh baseline selection/compiled-selector
+tests passed 40/8; final tests passed 41/8. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed with existing
+unrelated warnings. The removed source-level remainder is not a measured
+throughput or latency improvement. No full suite, live integration or benchmark
+ran; P2C/EWMA arithmetic and other selector dependencies remain separate.

@@ -194,6 +194,55 @@ fn max_iterations_caps_fallback_search() {
 }
 
 #[test]
+fn fallback_trace_matches_modulo_walk_across_wrap_and_budgets() {
+    let selector = RoundRobinSelector::build(&[
+        make_backend_weighted(3, 2),
+        make_backend_weighted(1, 3),
+        make_backend_weighted(2, 1),
+    ]);
+    let count = selector.backends.len();
+    for start in (0..selector.weighted.len()).chain(std::iter::once(usize::MAX)) {
+        for budget in [0, 1, 2, 3, 4, usize::MAX] {
+            for healthy in 0..(1_usize << count) {
+                let primary = usize::from(selector.weighted[start % selector.weighted.len()]);
+                let mut expected = vec![primary];
+                expected.extend((1..budget.min(count)).map(|step| (primary + step) % count));
+                let winner = expected.iter().position(|&index| healthy & (1 << index) != 0);
+                if let Some(position) = winner {
+                    expected.truncate(position + 1);
+                }
+                let expected_winner = winner.map(|position| expected[position]);
+                let trace = std::cell::RefCell::new(Vec::new());
+                selector.counter.store(start, Ordering::Relaxed);
+                let picked = selector.select(budget, |backend| {
+                    let index = selector
+                        .backends
+                        .iter()
+                        .position(|owned| std::ptr::eq(owned, backend))
+                        .expect("candidate must borrow selector storage");
+                    trace.borrow_mut().push(index);
+                    healthy & (1 << index) != 0
+                });
+                let actual_winner = picked.map(|backend| {
+                    selector
+                        .backends
+                        .iter()
+                        .position(|owned| std::ptr::eq(owned, backend))
+                        .expect("winner must borrow selector storage")
+                });
+                assert_eq!(
+                    trace.into_inner(),
+                    expected,
+                    "start={start}, budget={budget}, healthy={healthy}"
+                );
+                assert_eq!(actual_winner, expected_winner);
+                assert_eq!(selector.counter.load(Ordering::Relaxed), start.wrapping_add(1));
+            }
+        }
+    }
+}
+
+#[test]
 fn huge_per_backend_weight_is_capped_and_light_backend_survives() {
     // Defense-in-depth: an adversarially large per-backend weight must not
     // expand the `weighted` index array without bound. With the cap, build
