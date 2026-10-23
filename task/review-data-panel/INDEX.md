@@ -14872,3 +14872,27 @@ boundary, separately from DNS runtime preparation and cached-address storage.
 No runtime change was selected. Fresh verification passed 19 OTLP unit tests,
 formatting, workspace all-target check/Clippy and agent-doc validation with
 existing unrelated warnings. No prototype, benchmark or live transport test ran.
+
+## LDAP request temporary release after bind
+
+The request filter now stores ldap_bind's owned result and drops the temporary
+bind DN before dispatching its outcome. The bind future has already completed
+its existing connection/bind/unbind path; no result borrows the DN. Previously
+the DN remained in the request scope across credential-rejection delay and
+error-response writes. Credentials remain available for success headers and
+sensitive username logging, with their existing ownership unchanged.
+
+The SAN-mismatch branch also drops its owned reason after the existing log and
+metric calls, before writing the service-unavailable response. PluginLog::push_fmt
+renders synchronously into scratch and copies into its own bounded buffers; no
+reason borrow survives the call. Diagnostic text, masking, truncation, metrics,
+response outcomes and their order are unchanged. These are earlier transient
+String release points, not fewer allocations, physical erasure, smaller future
+size or measured throughput improvement. SDK and transport owners are separate.
+
+Fresh baseline and final runs each passed 26 non-network LDAP and 36 PluginLog
+tests (62 total). The existing live TCP cases dial_skips_refused_candidate_and_uses_next
+and all_refused_candidates_fail_closed were excluded. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing
+unrelated warnings. Source ownership establishes these drop boundaries; no
+live LDAP/TLS response-write timing, full suite or allocation benchmark ran.

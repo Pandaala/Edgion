@@ -550,7 +550,9 @@ impl RequestFilter for LdapAuth {
             return self.unauthorized(session).await;
         };
 
-        match self.ldap_bind(&bind_dn, credentials.password()).await {
+        let bind_result = self.ldap_bind(&bind_dn, credentials.password()).await;
+        drop(bind_dn);
+        match bind_result {
             Ok(()) => {
                 self.apply_authenticated_headers(session, credentials.username());
                 self.hide_credentials_if_needed(session);
@@ -577,6 +579,7 @@ impl RequestFilter for LdapAuth {
                 plugin_log.push_fmt("san {}", la![reason.as_str()]);
                 record_ldap_auth_error("tls_san_mismatch");
                 record_outbound_tls_san_mismatch("ldap_auth");
+                drop(reason);
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::Timeout) => {
