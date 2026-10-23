@@ -65,6 +65,8 @@ destination.
 
 - [Wasm map decoding profile storage](wasm-02-map-decoding-profile-storage.md)
 
+- [WAF head descriptor transport](waf-12-head-view-transport.md)
+
 - [WAF final transformation buffer transfer](waf-11-final-transform-buffer-transfer.md)
 
 - [WAF sealed outcome lookup indexing](waf-10-sealed-outcome-lookup-index.md)
