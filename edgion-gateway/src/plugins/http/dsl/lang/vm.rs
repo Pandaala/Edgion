@@ -858,7 +858,7 @@ impl Vm {
                     };
                     expect_body(state.pop()?, "body.hmac_sha256")?;
                     let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
-                        .hmac_sha256(key.as_bytes())
+                        .hmac_sha256(key)
                         .await?;
                     state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
                 }

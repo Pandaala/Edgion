@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 
@@ -217,9 +218,10 @@ impl<'a> DslBodyOps<'a> {
         Ok(hex::encode(self.scan_with(async { Ok(Md5Scanner::new()) }).await?))
     }
 
-    pub(crate) async fn hmac_sha256(&mut self, key: &[u8]) -> Result<String, RuntimeError> {
+    pub(crate) async fn hmac_sha256(&mut self, key: Arc<str>) -> Result<String, RuntimeError> {
         self.check_string_len(64)?;
-        let scanner = HmacSha256Scanner::new(key).map_err(map_body_error)?;
+        let scanner = HmacSha256Scanner::new(key.as_bytes()).map_err(map_body_error)?;
+        drop(key);
         Ok(hex::encode(self.scan_with(async { Ok(scanner) }).await?))
     }
 

@@ -478,12 +478,14 @@ fn repeated_body_sha256_reuses_one_spilled_scan() {
 #[test]
 fn body_md5_and_hmac_sha256_match_raw_byte_vectors_in_memory_and_spill() {
     let source = r#"
+        let key = "secret"
         if req.body.md5() != "900150983cd24fb0d6963f7d28e17f72" {
             return deny(400, "MD5 mismatch")
         }
-        if req.body.hmac_sha256("secret") != "9946dad4e00e913fc8be8e5d3f7e110a4a9e832f83fb09c345285d78638d8a0e" {
+        if req.body.hmac_sha256(key) != "9946dad4e00e913fc8be8e5d3f7e110a4a9e832f83fb09c345285d78638d8a0e" {
             return deny(400, "HMAC mismatch")
         }
+        if key != "secret" { return deny(400, "key changed") }
     "#;
     for memory_limit in [4, 1] {
         assert_eq!(

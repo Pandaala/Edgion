@@ -13720,3 +13720,25 @@ rollback and frozen-generation coverage. No implementation-shaped lifetime test
 or production visibility change was added. Formatting, workspace all-target
 check/Clippy, seven repository guards and diff hygiene passed, with existing
 unrelated warnings. No full suite, live integration or performance benchmark ran.
+
+## Release the consumed Body HMAC key before scanning
+
+BodyHmacSha256 now moves its consumed Arc<str> into DslBodyOps. After the same
+64-byte output preflight and owned HmacSha256Scanner construction, the facade
+drops that Arc before awaiting the canonical scan. The scanner retains its
+independent HMAC state, not a borrow of the original key.
+
+This removes the current call's key owner across scan waits. Sole-owner payloads
+can be reclaimed earlier; constants, locals or other aliases can still retain
+them. This is neither zeroization nor a guaranteed heap/throughput reduction.
+Strict key/Body validation, raw-byte hashing, output-limit precedence, scan
+reservation/settlement and cancellation/worker ownership remain unchanged.
+
+Independent plan review passed. Baseline and final Gateway DSL verification
+passed 515 cases. The existing memory/spill known-vector test now uses and
+subsequently checks a retained local key. It verifies alias correctness; the
+explicit move and pre-await drop establish the shortened lifetime. Existing
+binary vectors, scan-budget, output-limit and type-error tests passed.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings. No full suite, live integration
+or performance benchmark ran.
