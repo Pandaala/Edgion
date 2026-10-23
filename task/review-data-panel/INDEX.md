@@ -306,6 +306,7 @@ destination.
 - [DSL opaque upload task ownership](dsl-03-opaque-upload-task-ownership.md)
 - [DSL outbound request-header preparation](dsl-04-outbound-header-preparation.md)
 - [JSON selection capture transfer](dsl-05-json-select-capture-transfer.md)
+- [JSON object key encoded-length ownership](dsl-06-json-key-encoded-length.md)
 - [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
