@@ -774,8 +774,8 @@ outside this verification. Existing warnings remain; no full suite or live IO ra
 ## Routing and request metadata direct-entry inventory
 
 Revalidated at `5b72b1d1e`: these eight entries are disjoint from the preceding
-16, reconciling 24 of 60 explicit RequestFilter implementations. The remaining
-36 entries still need inventory reconciliation. Paths below are relative to
+16, reconciling 24 of 60 explicit RequestFilter implementations. The other
+36 are outside this table; later inventories below reconcile further subsets. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -813,3 +813,56 @@ tests, plus 29 supporting request_trace_id tests (126 selected executions).
 RequestId has no direct module tests; the supporting selection is not a direct
 entry test. Formatting, workspace check/Clippy and agent-doc validation passed.
 Existing warnings remain; no full suite or live integration ran.
+
+## Request transformation and validation direct-entry inventory
+
+Revalidated at `cf240a80c`: these five entries are disjoint from the preceding
+24, reconciling 29 of 60 explicit RequestFilter implementations. The remaining
+31 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| CtxSet (`ctx_set/plugin.rs`) | Process rules sequentially: static value, compiled template or canonical source; then configured extraction, one transform and mapping. Produce an owned String before passing its slice to set_ctx_var, whose production adapter owns the stored key/value. Later rules observe earlier writes. Missing values/defaults and setter failures preserve their existing behavior. |
+| ProxyRewrite (`proxy_rewrite/plugin.rs`) | Complete optional bounded JSON patching first, then retain the original path and regex captures for URI, Host, method and add/set/remove header operations in order. URI assembly borrows the current query after substitution and creates an owned URI before mutation. The path snapshot remains necessary for later header substitutions. |
+| FormJsonTransform (`form_json_transform/plugin.rs`) | Check media and available length, explicitly materialize and recheck the cap, convert under structural/output limits and transfer the output Vec into Bytes. Keep original Bytes across replacement and content-type update; if the header setter fails, attempt body rollback and reject even if rollback succeeds. Rollback itself may fail. Success returns Nothing. |
+| RestToGraphql (`rest_to_graphql/mod.rs`) | Enforce request stage, frozen client method/query, GET body/mutation rules, protocol, encoding and size/media preflight. Acquire a shared nonwaiting evaluation permit, read when needed, parse/bind/serialize and validate the final envelope, then release computation owners before body publication. Publish body, POST method, target URI and JSON content type in that order; success returns GoodNext. |
+| JsonSchemaValidation (`json_schema_validation/plugin.rs`) | Claim the one-validator request slot before length/media checks, reject empty/oversized input and explicitly read the shared body. Strictly parse one owned instance and validate against the retained compiled schema using its checked work profile and boolean validator. Fixed mismatch/work/panic errors avoid constructing an attacker-controlled validation error list. Success returns Nothing. |
+
+ProxyRewrite's JSON document remains private through all patch operations,
+per-operation shape/work checks and capped serialization. Only successful
+computation proceeds to overwrite_request_body; later URI/header mutations are
+not part of that atomic computation. Its operation-value and pointer copying
+remain the separate [rewrite-02](rewrite-02-json-patch-execution-ownership.md)
+decision. Staged URI/header template semantics remain
+[rewrite-01](rewrite-01-staged-template-compilation.md). CtxSet extraction/trim and
+replacement-result storage remain [ctx-02](ctx-02-extract-trim-projection.md) and
+[ctx-01](ctx-01-regex-replacement-storage.md); sequential publication is not
+permission to retain session borrows across a setter.
+
+RestToGraphql shares the four process-wide evaluation permits with canonical
+GraphQL consumers. Its permit spans async body reading and synchronous
+parse/bind/envelope construction; panic handling surrounds the synchronous
+computation. Body pointers borrow from the parsed input before bounded binding
+produces owned output values; existing KeyGet-owned text transfers into binding.
+Final envelope reparsing verifies aggregate structure rather than reusing an
+unrelated plugin's parsed owner. The permit and parsed input are released before
+the body overwrite await. Later publication setters short-circuit on error and
+reject; this is not a transactional rollback of all request fields. The canonical
+[adaptation contract](../../skills/04-review/http-body/regression-guards/rest-to-graphql-request-adaptation.md)
+retains freeze/refusal behavior for late writes after GraphQL inspection.
+
+The four body consumers explicitly opt out of eager body-gate materialization,
+while CtxSet retains the trait default. That opt-out does not eliminate the
+consumer's own materialization or authorize a second body cache. Form decoding
+already borrows plain components and serializes grouped values directly; parsed
+JSON, schema-engine internals, template engines and patch dependencies remain
+separate deeper inspection scope. No new runtime change or performance claim is
+made in this inventory.
+
+Fresh verification passed 12 CtxSet, 24 ProxyRewrite, 23 FormJsonTransform, ten
+RestToGraphql and nine JsonSchemaValidation Gateway tests, plus nine REST binding
+and 25 JSON-schema Resources tests (112 selected executions). These include
+supporting helper cases, not 112 distinct entry proofs. Formatting, workspace
+check/Clippy and agent-doc validation passed with existing unrelated warnings.
+No full suite or live integration ran.
