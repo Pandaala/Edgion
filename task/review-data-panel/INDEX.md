@@ -15210,3 +15210,17 @@ tests across proxy, scheduler, dispatch, HTTP attempt/response, connect-failure,
 model-router and candidate modules. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing unrelated warnings. Independent
 plan and final reviews passed. No full suite, live integration or benchmark ran.
+
+## AI scheduler initialization boundary
+
+The [initialization task](routing-11-scheduler-initialization-boundary.md) separates
+pre-quota scheduler validation from first-dispatch final retry-cap resolution.
+Both constructors still initialize bounded fixed storage; the prior iterator
+change already removed their temporary heap containers. A pristine-state cap
+finalizer or delayed construction needs a lifecycle/API decision, especially for
+per-call explicit-cap validation, continuation and preserved scan/dispatch progress.
+No alternative or runtime change was selected. Fresh unchanged-source verification
+passed 11 scheduler, 36 dispatch and 22 proxy tests (69 total); no benchmark,
+prototype, full suite or live integration ran. Formatting and workspace all-target
+check/Clippy passed with existing unrelated warnings.
+Agent-doc validation and independent plan/final reviews also passed.
