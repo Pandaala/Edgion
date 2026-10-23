@@ -13535,3 +13535,27 @@ key and malformed-document cases passed. No full suite, live integration or
 performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Borrow local JSON selection capture state
+
+The parser worker now owns one local RefCell<JsonSelectState>; recursive seeds
+and visitors borrow it instead of cloning Rc wrappers. This removes one wrapper
+heap allocation and non-atomic reference-count operations. RefCell checks and
+the capture/accounting vectors remain; no throughput measurement is claimed.
+
+All state borrowers are synchronous visitors. No result contains state references,
+and there are no ownership cycles or escaped Rc clones in the previous path.
+Successful parsing therefore no longer needs the unreachable Rc::try_unwrap
+failure fallback; it takes the local state directly. Parse or trailing-document
+failure still returns all Missing. Mutation ordering, borrow scopes, duplicate
+subtree resets, aggregate budgets, worker/plan lifetime and owned results remain
+unchanged.
+
+Independent plan review passed. Baseline and final Gateway DSL verification each
+passed 510 cases. Existing worker/capture lifetime, shared-prefix/alias, duplicate
+parent, individual/aggregate overflow and malformed-document regressions cover
+this ownership-only change; no implementation-shaped test was added. No full
+suite, live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

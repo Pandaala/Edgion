@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
-use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
@@ -626,10 +625,10 @@ fn parse_json_select_stream(
 ) -> Vec<JsonScanValue> {
     let reader = ChannelReader::new(receiver);
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    let state = Rc::new(RefCell::new(JsonSelectState::new(plan.capture_count, limit)));
+    let state = RefCell::new(JsonSelectState::new(plan.capture_count, limit));
     let result = JsonSelectSeed {
         node: &plan.root,
-        state: Rc::clone(&state),
+        state: &state,
         emit_to_parent: false,
         limit,
     }
@@ -637,15 +636,13 @@ fn parse_json_select_stream(
     if result.is_err() || deserializer.end().is_err() {
         return vec![JsonScanValue::Missing; plan.capture_count];
     }
-    Rc::try_unwrap(state)
-        .map(|state| state.into_inner().values)
-        .unwrap_or_else(|_| vec![JsonScanValue::Missing; plan.capture_count])
+    state.into_inner().values
 }
 
 #[derive(Clone)]
 struct JsonSelectSeed<'a> {
     node: &'a JsonSelectNode,
-    state: Rc<RefCell<JsonSelectState>>,
+    state: &'a RefCell<JsonSelectState>,
     emit_to_parent: bool,
     limit: usize,
 }
@@ -660,7 +657,7 @@ impl<'de> DeserializeSeed<'de> for JsonSelectSeed<'_> {
         let capture = self.node.capture;
         let value = deserializer.deserialize_any(JsonSelectVisitor {
             node: self.node,
-            state: Rc::clone(&self.state),
+            state: self.state,
             capture_current: capture.is_some(),
             emit_to_parent: self.emit_to_parent,
             limit: self.limit,
@@ -683,7 +680,7 @@ struct JsonSelectValue {
 
 struct JsonSelectVisitor<'a> {
     node: &'a JsonSelectNode,
-    state: Rc<RefCell<JsonSelectState>>,
+    state: &'a RefCell<JsonSelectState>,
     capture_current: bool,
     emit_to_parent: bool,
     limit: usize,
@@ -804,7 +801,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor<'_> {
                     self.state.borrow_mut().reset(&node.descendant_captures);
                     seq.next_element_seed(JsonSelectSeed {
                         node,
-                        state: Rc::clone(&self.state),
+                        state: self.state,
                         emit_to_parent: retain_for_parent,
                         limit: self.limit,
                     })?
@@ -856,7 +853,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor<'_> {
                     self.state.borrow_mut().reset(&node.descendant_captures);
                     map.next_value_seed(JsonSelectSeed {
                         node,
-                        state: Rc::clone(&self.state),
+                        state: self.state,
                         emit_to_parent: retain_for_parent,
                         limit: self.limit,
                     })?
