@@ -817,8 +817,8 @@ Existing warnings remain; no full suite or live integration ran.
 ## Request transformation and validation direct-entry inventory
 
 Revalidated at `cf240a80c`: these five entries are disjoint from the preceding
-24, reconciling 29 of 60 explicit RequestFilter implementations. The remaining
-31 entries still need inventory reconciliation. Paths below are relative to
+24, reconciling 29 of 60 explicit RequestFilter implementations. The other
+31 are outside this table; later inventories below reconcile further subsets. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -866,3 +866,54 @@ and 25 JSON-schema Resources tests (112 selected executions). These include
 supporting helper cases, not 112 distinct entry proofs. Formatting, workspace
 check/Clippy and agent-doc validation passed with existing unrelated warnings.
 No full suite or live integration ran.
+
+## Access policy and local response direct-entry inventory
+
+Revalidated at `0e01c0269`: these six entries are disjoint from the preceding
+29, reconciling 35 of 60 explicit RequestFilter implementations. The remaining
+25 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| RequestRestriction (`request_restriction/plugin.rs`) | Borrow prepared polarity/status/body and await the canonical compiled condition set. Only True counts as matched before applying Allow/Deny polarity; terminal evaluation results propagate. Invalid policy takes the fixed fail-closed path. Denial clones prepared Bytes into the shared response helper and returns termination, including write failure. |
+| RequestAccessPolicy (`request_access_policy/plugin.rs`) | Reject failed initialization, capture a ConfigData view when required and borrow the selected compiled profile. Demand flags gate primary IP parsing and Host normalization; URL candidates produce a request-local match vector. Required groups are ANDed, rules within each group are ordered alternatives, and matching primary rules evaluate supplemental conditions asynchronously. Denial returns prepared body/status through ErrResponse. |
+| IpRestriction (`ip_restriction/plugin.rs`) | Ensure the ConfigData view, parse the configured live IP source and evaluate the canonical bound ACL. Reduce the decision before the response await. Missing/invalid IP passes only for Default(Allow); named group decisions retain their diagnostics. Denial transfers a cloned prepared Bytes handle to the shared response helper and terminates. |
+| Cors (`cors/plugin.rs`) | Borrow live Origin for prepared configuration matching, then retain an echoed owned origin or literal wildcard across session mutation. Missing Origin passes. Rejected preflight attempts a local 204 and terminates; rejected actual requests pass without CORS headers. Accepted preflight either queues headers and continues or writes a local 204 and terminates; actual requests queue headers and continue. Existing setter/write failure branches remain distinct. |
+| Mock (`mock/plugin.rs`) | Await the configured prepared delay, apply configured response headers then Content-Type, ignoring setter errors. Terminating mode returns prepared status and a cloned shared Bytes body with a prepared status diagnostic; nonterminating mode returns GoodNext after header setup. |
+| FaultInjection (`fault_injection/plugin.rs`) | Sample independent delay/abort decisions in a scoped RNG block before any await. Ratio endpoints and fixed/equal delay bounds avoid sampling. Await the selected u64-millisecond delay before applying an abort; abort sets Content-Type, appends configured headers and returns prepared status/shared Bytes. No selected fault or delay-only completion continues. |
+
+The restriction response helper builds headers, awaits header/body writes and
+shuts down after successful writes. Its callers still return termination on
+error; an attempted local write is not proof of a completed response. CORS's
+rejected preflight ignores write errors, while accepted preflight propagates
+helper errors into termination. Queueing failure in preflight_continue can
+therefore terminate before a complete response; canonical runtime handling
+remains responsible for that state. This inventory does not redefine transport
+success or [preflight continuation ownership](../../skills/04-review/cors/regression-guards/gw-http-proxy-req-01-preflight-result-mapping.md).
+
+Restriction's invalid/unresolved Deny policy is sealed separately from live
+condition evaluation and runtime IP-availability gates. Do not turn unavailable
+references into a negatable false predicate or collapse all consumers into one
+failure rule; the [consumer-specific contract](../../skills/04-review/plugin-metadata/regression-guards/unresolved-condition-references-need-consumer-policy.md)
+remains authoritative. RAP borrows its immutable selected profile through
+supplemental awaits; its match vector also survives those awaits. These are not
+claims that the full condition, reference-publication or matcher dependency
+graph has been inspected here.
+
+All six retain the trait's default body-materialization declaration. Prepared
+response Bytes avoid per-request configured-body copies but still require owned
+handles across response awaits. No new runtime edit is selected: RAP result
+storage remains [rap-01](rap-01-url-match-storage.md), address projection remains
+[ip-01](ip-01-session-address-projection.md), and CORS derived Max-Age and queued
+value transfer remain [cors-01](cors-01-derived-max-age-preparation.md) and
+[cors-02](cors-02-session-header-value-transfer.md). Native Gateway API CORS is a
+separate implementation already inventoried above. Condition execution and
+transport internals remain deeper inspection scope.
+
+Fresh verification passed 18 RequestRestriction, 23 RequestAccessPolicy,
+16 IpRestriction, 17 Cors, six Mock and nine FaultInjection tests, plus 70 shared
+condition tests (159 selected executions). Supporting tests do not constitute
+159 distinct entry proofs. Formatting, workspace check/Clippy and agent-doc
+validation passed with existing unrelated warnings. No full suite, live
+integration or performance benchmark ran.
