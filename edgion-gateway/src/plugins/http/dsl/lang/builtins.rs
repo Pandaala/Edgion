@@ -1477,6 +1477,7 @@ impl Vm {
                 message: format!("invalid URL: {}", url_str),
             });
         };
+        drop(url_str);
         if !matches!(parsed_url.scheme(), "http" | "https") {
             return Err(RuntimeError::ApiError {
                 function: "http.call".into(),
@@ -1551,6 +1552,7 @@ impl Vm {
             }
         };
 
+        drop(method_str);
         let mut request_headers = Vec::new();
         if let Some(hv) = headers_val {
             match hv {

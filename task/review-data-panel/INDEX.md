@@ -13245,3 +13245,29 @@ Final verification passed 7 body tests, 42 HTTP-call tests and 5 collector tests
 hygiene. An initial format check raced the formatter; the post-format rerun
 passed. Existing unrelated warnings remain. No full suite, live integration or
 performance benchmark ran.
+
+
+## Release DSL outbound source strings after preparation
+
+`call_builtin_http` now explicitly drops the raw URL String immediately after
+successful parsing, and the method String immediately after selecting a supported
+Method. The parsed URL owns its serialization independently; selected methods
+are independent values. The raw URL therefore no longer survives the later body
+snapshot await, and neither source String survives outbound network waiting.
+The method String remains available during the earlier body snapshot step.
+
+Malformed-URL and unsupported-method error branches still have their original
+inputs. Scheme/SSRF checks, body and timeout validation, Unicode method selection,
+header preparation, client policy, body limits, cancellation and failure order
+remain unchanged. This shortens source ownership without removing initial string
+allocation; no measured heap/RSS or throughput benefit is claimed. The existing
+dsl-02 method-normalization decision remains deferred.
+
+Independent plan review passed. Fresh baseline and final runs each passed 42
+HTTP-call tests; five collector tests also passed (47 final tests total). Existing
+coverage includes scheme/private-address rejection, argument type failures and
+body/header bounds; no malformed-URL-specific test or artificial lifetime test
+is claimed. Owned types and the narrow diff establish input independence.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed. Existing unrelated warnings remain. No full suite, live
+integration or performance benchmark ran.
