@@ -357,10 +357,9 @@ impl RegistrySession {
                 "GET {url}: body exceeds {max_bytes} bytes"
             )));
         }
-        // Stream the body with a running cap: peak host allocation is bounded
-        // to `max_bytes` plus one chunk, so a response with no/false/chunked
-        // Content-Length cannot make reqwest buffer an arbitrarily large body
-        // before the size check fires.
+        // Cap logical accumulated bytes while streaming, even with absent or
+        // false Content-Length. Vec capacity and the delivered transport chunk
+        // also contribute to peak memory; this is not a total host-heap bound.
         let (body, truncated) = stream_body_capped(resp, max_bytes)
             .await
             .map_err(|e| GetError::Retryable(format!("read body of {url}: {}", e.without_url())))?;
