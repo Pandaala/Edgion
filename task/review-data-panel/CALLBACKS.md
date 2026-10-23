@@ -1152,7 +1152,7 @@ unrelated warnings. No full suite, live IdP/gRPC integration or benchmark ran.
 
 Revalidated at `696adcb11`: these four entries are disjoint from the preceding
 52, reconciling 56 of 60 explicit RequestFilter implementations. The remaining
-four are GrpcJsonTranscoder, AiProxy, AiGuard and Guardrail. Paths below are
+four are reconciled in the following AI and transcoder inventory. Paths below are
 relative to `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -1206,3 +1206,64 @@ evidence, not complete engine, callout, transport or performance coverage.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live network integration or benchmark ran.
 No runtime change or deferred-task closure is selected by this inventory.
+
+## AI and transcoder request direct-entry inventory
+
+Revalidated at `543e4fcc8`: these four entries complete reconciliation of all
+60 explicit RequestFilter implementations in 59 source files. This closes the
+direct-entry inventory, not the goal or their reachable dependencies. Inherited
+trait defaults, dispatch wrappers, later callbacks and deferred optimization
+choices retain their separately recorded scopes.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| GrpcJsonTranscoder (`plugins/http/grpc_json_transcoder/plugin.rs`) | Check conversion scope and synchronously bind current method/path/borrowed query into owned fields. Own capture admission to preserve REST errors, check input/media limits, acquire conversion reservation and encode bounded input. Publish the framed body, upstream method/URI and headers before installing the response conversion plan. |
+| AiProxy (`ai/http/proxy.rs`) | Capture client API, route and one backend snapshot, then validate endpoint/body generation and canonicalize the request. Build model/policy/credential candidates and a scheduler, await configured quota admission, recheck body generation and install the owned attempt plan. The entry delegates through the global store and per-invocation entropy helper. |
+| AiGuard (`ai/guards/request/plugin.rs`) | Mark actual invocation before applicability checks, skip a settled entry identity and reject execution after an AI attempt plan. Read the canonical body, select bounded spans and evaluate prepared rules. An optional evaluator receives locally masked text unless local rules already reject. Publish replacements against the captured generation, then record the settled decision/generation. |
+| Guardrail (`ai/guards/semantic/plugin.rs`) | Reject unsupported native guard plans, install one attached Arc owner with prepared head limits and tag the plugin log with its entry identity. Duplicate claims record failure on the existing owner and return fixed 500 regardless of fail-open settings. Semantic response decisions occur in the response companion, not this entry. |
+
+Paths are relative to `edgion-gateway/src/`. The transcoder query borrow is already
+in this baseline. Bound fields and the compiled binding outlive the query source;
+conversion admission remains after capture/size/media checks. Encoding is caught
+for unwind isolation. Body/method/URI/header publication is ordered but not a
+whole-request rollback transaction. The installed plan retains compiled state,
+binding and reservation under the
+[transcoder contract](../../skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
+Successful installation returns Nothing; it is not proof of upstream delivery or
+valid terminal gRPC status. Codec, metadata and response framing remain deeper scope.
+
+AiProxy's model-list branch is distinct from configured POST endpoints. Backend
+publication skew, invalid declared shares, native guard incompatibility,
+continuation, model eligibility and retry bounds are checked before publishing a
+ready plan. Canonicalization may rewrite a body privately; the plan records whether
+its bytes still match shared storage. Quota downgrade re-resolves candidates and
+readmits under the changed logical model. Captured policies, scheduler and quota
+ownership survive later attempts; the final post-await body-generation check must
+not label old bytes with a new generation. Saved canonical path/query Strings are
+plan-owned cross-stage data, not temporary lookup copies. Actual credential
+admission, endpoint resolution and transport commit remain later boundaries; see
+[prepared attempt ownership](../../skills/04-review/ai-routing/regression-guards/prepared-attempt-owns-admission-input.md).
+
+AiGuard's applicability is POST plus the /chat/completions suffix, whereas AiProxy
+uses its configured exact endpoint. Invocation marking precedes that gate so a
+later rewrite cannot conceal native guard incompatibility. Owned body/spans stay
+alive across evaluator awaits; borrowed rule spans do not replace them. Local
+rejection avoids the external evaluation. Replacement validation preserves whole
+quoted-token ranges, overlap checks, generation-checked publication and physical
+body limits. Pass/Reject do not independently recheck the captured generation;
+settlement records the current generation for AiProxy's later comparison.
+Refusal parsing remains [ai-guard-01](ai-guard-01-refusal-facts-parser.md).
+
+Guardrail's owner and identity enable later response-header/body/terminal work.
+Installing them neither performs an evaluator call nor proves a response is
+applicable. The companion checks status, SSE type, identity encoding and the
+canonical AI processor before installation. Held-header storage, decision encoding
+and callback output capacity remain guardrail-01 through guardrail-03. No new
+whole-response buffer, cross-stage cache or guard failure policy is introduced.
+
+Fresh verification passed 31 Gateway transcoder, 21 AiProxy, 31 AiGuard plugin
+and two Guardrail plugin tests (85 selected executions). These supporting tests
+do not prove complete parser, quota, engine, network or later-phase coverage.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live integration or benchmark ran. No runtime
+change or deferred-task closure is selected by this inventory.
