@@ -446,6 +446,8 @@ fn compiled_ai_identity_key_and_retained_generation_agree() {
         };
         assert_eq!(target.key(), key);
         assert_eq!((target.namespace(), target.name()), (namespace, name));
+        assert_eq!(logical.identity().namespace, namespace);
+        assert_eq!(logical.identity().name, name);
         assert_eq!(
             target.policy_target(),
             &PolicyTargetKey {

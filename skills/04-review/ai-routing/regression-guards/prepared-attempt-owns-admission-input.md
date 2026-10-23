@@ -30,8 +30,10 @@ changes the runtime projection and admission contract without changing transport
 or adding another prepared policy copy. The existing owned input representation
 allows its source borrows to end before admission awaits; it introduces no extra
 credential/body copies, locks or request allocations. Earlier redundant prepared
-Redis-reference, limit and limiter copies are removed. Backend-key formatting
-remains at admission; this change does not extend ARCH-008.
+Redis-reference, limit and limiter copies are removed. Admission now copies the
+backend key from the selected logical target's cold-compiled identity, retaining
+owned input across the await. ARCH-009 initially left key formatting at admission;
+a later data-plane optimization reuses the ARCH-008 prepared key instead.
 
 Canonical sources are `edgion-gateway/src/ai/runtime/dispatch.rs`,
 `edgion-gateway/src/ai/runtime/attempt_runtime.rs` and

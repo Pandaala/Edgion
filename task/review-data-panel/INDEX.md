@@ -15343,3 +15343,31 @@ Final verification passed the same 172 tests, formatting, workspace all-target
 check/Clippy and seven repository guards, with existing unrelated warnings.
 No full suite, live Redis/provider exchange or performance benchmark ran.
 Independent plan and final reviews passed.
+
+## Reuse the prepared AI backend key during admission
+
+PreparedAiAttempt::admission_input now copies the selected logical target's
+cold-compiled namespace/name key rather than formatting its logical identity
+again. A checked EdgionBackend projection follows the existing checked credential
+lookup. SelectedAiBackend construction already guarantees this target variant;
+no new constructor, panic, global lookup or compatibility accessor is introduced.
+
+Both logical identity and target key derive from the same effective route
+reference, including omitted and explicit namespaces. The admission input keeps
+its owned backend name across async work, and namespace, backend UID, credential,
+policy and limiter ownership remain unchanged. The key is a display/log identity,
+not new authorization evidence. Existing reservation keys, bounded attempt-log
+projection and transport ordering retain their owners.
+
+The owning prepared-admission knowledge page now distinguishes current prepared
+key reuse from ARCH-009's historical admission-time formatting. Two assertions in
+the existing backend-generation test pin logical namespace/name equality alongside
+the prepared target key; they passed before the production change. Existing
+retained-generation dispatch coverage verifies the projected backend name.
+Baseline verification passed 36 dispatch, 25 attempt-runtime, seven HTTP-attempt,
+104 upstream-peer and 14 backend-runtime tests (186 total). This removes repeated
+formatting; no measured allocation-count, throughput or RSS benefit is claimed.
+Final verification passed the same 186 tests, formatting, workspace all-target
+check/Clippy and seven repository guards, with existing unrelated warnings.
+No full suite, live Redis/provider exchange or performance benchmark ran.
+Independent plan and final reviews passed, including the owning knowledge update.

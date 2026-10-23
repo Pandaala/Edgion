@@ -27,6 +27,7 @@ use crate::ai::{
     AiAttemptPlan, AiProviderLabel, AiProxyError, AiRequestContext, AiUsageShared, ReadyAiAttemptPlan,
     UsageExtractionProcessor,
 };
+use crate::backends::runtime::CompiledBackendTarget;
 use crate::backends::SelectedHttpBackend;
 #[cfg(test)]
 use crate::backends::SelectedLogicalBackend;
@@ -58,11 +59,14 @@ impl PreparedAiAttempt {
             .credentials
             .get(selected.credential_index)
             .ok_or(AiDispatchError::InvalidConfiguration)?;
+        let CompiledBackendTarget::EdgionBackend(target) = selected.logical().target() else {
+            return Err(AiDispatchError::InvalidConfiguration);
+        };
         Ok(AiAttemptAdmissionInput {
             namespace: identity.namespace.clone(),
             backend_uid: selected.backend.uid.clone(),
             credential_alias: credential.name.clone(),
-            backend_name: format!("{}/{}", identity.namespace, identity.name),
+            backend_name: target.key().to_owned(),
             provider: context.provider,
             pricing: context.pricing,
             redis_ref: pool.redis_ref.clone(),
