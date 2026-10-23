@@ -72,7 +72,7 @@ absence of allocation throughout their callees.
 | `custom_forwarding` | Ok(()) |
 | `downstream_custom_message_proxy_filter` | Returns supplied Bytes by move |
 | `upstream_custom_message_proxy_filter` | Returns supplied Bytes by move |
-| `response_body_filter` | Ok(None), no downstream body change/delay |
+| `response_body_filter` | Synchronous Ok(None); direct call creates no hook future and requests no delay; call-site boundary clarified below |
 | `suppress_proxy_warn_log` | false; eleven call sites inspected; ownership decision deferred below |
 | `should_serve_stale` | True only for an error with Upstream source; cache-gated contract |
 | `is_purge` | false |
@@ -257,6 +257,15 @@ only for Some trailers: returned Bytes become a terminal Body task; otherwise
 the existing trailer owner moves through mem::take and normalization. Downstream
 body filtering then observes the resulting task. Module-level trailer-to-body
 translation in Session is a separate stage, including gRPC-Web behavior.
+
+Revalidated at `85973e45f`: the inherited downstream response_body_filter is a
+synchronous function, unlike the asynchronous upstream event hook. The fork
+helper invokes it directly and sleeps only for a returned Some(Duration); this
+Gateway default returns None. There is no per-hook async future or requested
+sleep to remove by adding an equivalent override. The surrounding task helper
+remains async, and this observation makes no generated-code allocation or
+whole-pipeline scheduling claim. Existing terminal and module ordering stays as
+recorded above. This clarification used source inspection, not new wire tests.
 
 The locked fork already owns a separate downstream terminal latch and rejects
 nonempty output from a synthetic terminal observation. The
