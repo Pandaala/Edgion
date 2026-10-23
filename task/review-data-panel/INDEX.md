@@ -182,6 +182,8 @@ destination.
 
 - [RequestMirror snapshot transport setup](mirror-01-snapshot-transport-setup.md)
 
+- [Common egress cached address ownership](egress-01-cached-address-ownership.md)
+
 - [JWE plaintext forwarding ownership](jwe-01-plaintext-header-ownership.md)
 
 - [LDAP bind DN template preparation](ldap-01-bind-dn-template-preparation.md)
@@ -14784,3 +14786,17 @@ Final verification passed the same 10 tests, 71 Common DNS and three Gateway
 egress tests (84 executions), formatting, workspace all-target check/Clippy and
 seven campaign guards with existing warnings. No live DNS/socket test, full
 suite or benchmark ran.
+
+## Common egress cached result ownership decision
+
+Common EgressResolver copies fresh nonempty vectors under its memo read lock and
+duplicates allowed results for insertion on misses. egress-01 records immutable
+shared storage alternatives and required measurements for its 16-entry memo.
+This is distinct from native ExternalName LRU/first-safe selection: Common keeps
+filtered full lists, negative empty results and existing fresh-filter observation.
+Reqwest needs an owning iterator; direct transports still return owned sockets.
+
+No representation, cache policy or public API was selected. Fresh execution
+passed 10 Common and three Gateway egress tests, formatting, workspace all-target
+check/Clippy and agent-doc validation with existing warnings. No prototype,
+benchmark, full suite or live DNS/socket test ran.
