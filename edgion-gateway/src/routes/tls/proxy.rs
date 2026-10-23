@@ -154,14 +154,17 @@ pub(super) async fn send_proxy_protocol_v2<W: AsyncWrite + Unpin>(
     let dst_addr: std::net::SocketAddr = upstream_addr_str
         .parse()
         .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
-    let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
-    builder.add_authority(ctx.sni.as_deref().unwrap_or_default());
-    let pp2_header = builder.build();
+    let pp2_header = {
+        let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
+        builder.add_authority(ctx.sni.as_deref().unwrap_or_default());
+        builder.build()
+    };
 
     if let Err(e) = upstream.write_all(&pp2_header).await {
         ctx.err_log = Some(format!("PP2 write failed: {e}"));
         return false;
     }
+    drop(pp2_header);
     if upstream.flush().await.is_err() {
         ctx.err_log = Some("PP2 flush failed".to_string());
         return false;

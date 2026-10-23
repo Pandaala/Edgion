@@ -14548,3 +14548,24 @@ Fresh selections passed five collector, 42 DSL HTTP-call and 27 bulk-receipt tes
 (74 executions), formatting, workspace check/Clippy and agent-doc validation with
 existing unrelated warnings. No retention prototype, performance measurement,
 full suite or live network verification ran.
+
+## Release PP2 construction and write buffers before later awaits
+
+send_proxy_protocol_v2 now scopes its builder to header construction, releasing
+the TLV collection before the socket write. Its build output is an independent
+Vec, so neither address nor borrowed authority bytes depend on the builder after
+construction. After successful write_all, the encoded header is explicitly
+dropped before flush. A pending flush no longer retains that local header.
+
+Write/flush order, partial-write errors, flush errors, success flags, accounting,
+log order, source parsing and destination fallback are unchanged. Both owners
+have ordinary allocation drops, not custom protocol cleanup. The benefit is
+earlier temporary release; allocation count, generated future size, throughput
+and RSS were not measured. The existing borrowed-authority improvement remains.
+
+Baseline and final selections passed eight PP2 encoder and 85 TLS tests (93
+executions), including output survival after builder destruction, exact wire
+bytes, disabled/invalid-source skips and write/flush failures. Formatting,
+workspace all-target check/Clippy and seven campaign guards passed with existing
+unrelated warnings. No new test mechanism, full suite, live wire run or benchmark
+was added for this local lifetime change.
