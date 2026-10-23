@@ -720,7 +720,8 @@ Existing unrelated warnings remain; no full suite or live integration ran.
 
 Revalidated at `25eb25bef`: these six entries are disjoint from the ten runtime
 entries above, reconciling 16 of the current 60 explicit RequestFilter
-implementations. The remaining 44 entries still need inventory reconciliation.
+implementations. The other 44 are outside this table; later inventories below
+reconcile further subsets.
 Paths below are relative to `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -769,3 +770,46 @@ agent-doc validation. These selections include supporting and response cases;
 they are not distinct proofs of every request behavior. The broader
 [cache admission fixture issue](verification-01-cache-policy-fixture.md) remains
 outside this verification. Existing warnings remain; no full suite or live IO ran.
+
+## Routing and request metadata direct-entry inventory
+
+Revalidated at `5b72b1d1e`: these eight entries are disjoint from the preceding
+16, reconciling 24 of 60 explicit RequestFilter implementations. The remaining
+36 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| DirectEndpoint (`direct_endpoint/plugin.rs`) | Skip matched gRPC routes; extract through canonical key_value, resolve against borrowed route backends and validate endpoint membership/policy. Publish the owned direct preset with its captured proof; only accepted jumps format the address in stack scratch for canonical logs/dye. Missing and invalid input retain separate configured policies. |
+| DynamicInternalUpstream (`dynamic_internal_upstream/plugin.rs`) | Read an owned key through session.key_get, borrow optional regex capture, then select a borrowed configured target or direct key. Preserve first-match rule order, no-route/no-backend pass-through and canonical backend authorization. Copy selected target fields into the owned jump; only accepted jumps produce success dye. |
+| DynamicExternalUpstream (`dynamic_external_upstream/plugin.rs`) | Extract through canonical key_value, borrow optional regex capture and look up the prepared domain map. Copy domain/SNI into the owned external jump. Apply optional Host override only after acquiring the jump, then format success dye; rejected jumps leave Host unchanged. |
+| Canary (`canary/plugin.rs`) | Apply the internal enable switch, borrow the active profile and validate its target with the route's canonical matcher. No route/backend references pass through. Copy target fields for the internal jump; accepted jumps dye the profile name. Missing-profile fail-open and configured invalid-target policy retain their existing branches. |
+| RegionRoute (`region_route/plugin.rs`) | Check initialization, retain the effective overlay generation and borrow its table or the base table. Ordered direct/map rules may fall through; hash-range is terminal even on a miss. Borrow extracted input until hashing/logging completes, then perform configured writes, one-hop failover and local pass-through or owned external jump publication. |
+| RequestId (`request_id/mod.rs`) | Pass prepared rules and optional default configuration to apply_request_ids, log capacity failure and continue. The production adapter applies/reconciles defaults, then reads each live target/source, applies the rule and reconciles request headers in order. This is separate from core trace propagation and early-stage runner selection. |
+| RealIp (`real_ip/plugin.rs`) | Establish the configuration view, borrow the configured header and resolve through the shared policy. Format the typed result before exact textual comparison; call the setter only on change. Production setter owns canonical address replacement and remote-GeoIP invalidation; failed setters log and pass through. |
+| GeoIpLocation (`geoip_location/plugin.rs`) | Unavailable references deny even with failOpen. Parse-only initializes both lazy lookup slots without retaining clones. Rule mode obtains only required facts/IPs, borrows lookups inside a decision scope and carries a copyable decision into mutation/logging. Lookup failure precedes unavailable-database handling; CIDR-only sides avoid database lookup. |
+
+Canonical key_value can still own composed values; these entries are not all
+borrow-only or allocation-free. Jump presets survive into later upstream stages,
+so their required owned fields are not removable merely because selection borrows
+configuration. RegionRoute nonlocal selection still parses the selected endpoint
+and owns request-derived SNI; local-region success does not acquire a jump.
+Canary's internal switch does not undo wrapper-level dye stripping performed
+before entry invocation.
+
+No runtime edit is selected in this reconciliation. Existing input/index and dye
+decisions remain [routing-01](routing-01-dynamic-internal-input-ownership.md),
+[routing-06](routing-06-prepared-dynamic-rule-index.md) and
+[dye-02](dye-02-lazy-outcome-value-formatting.md). RegionRoute selection/endpoint
+decisions remain region-01/02; the newly isolated static writeback-label tradeoff
+is [region-03](region-03-prepared-writeback-log-targets.md). RealIp scratch,
+RequestId source evaluation and GeoIP decoding/membership retain their existing
+ip-02, trace-02 and geoip-01/02 tasks. Deeper policy, discovery, DNS, trace-ID and
+GeoIP dependencies remain open; this table is not transitive coverage.
+
+Fresh verification passed 14 DirectEndpoint, ten DynamicInternalUpstream, seven
+DynamicExternalUpstream, 15 Canary, 23 RegionRoute, 16 RealIp and 12 GeoIpLocation
+tests, plus 29 supporting request_trace_id tests (126 selected executions).
+RequestId has no direct module tests; the supporting selection is not a direct
+entry test. Formatting, workspace check/Clippy and agent-doc validation passed.
+Existing warnings remain; no full suite or live integration ran.
