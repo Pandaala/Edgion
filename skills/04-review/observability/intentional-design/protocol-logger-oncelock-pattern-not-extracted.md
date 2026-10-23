@@ -30,7 +30,8 @@ Each declares:
 
 `edgion-gateway/src/observe/logs/ssl_log.rs:16,55-73` follows the same outer
 shape over a different backend (`SslLogger` with a `mpsc::Sender<String>` +
-sync `try_send`, bumps `global_metrics().ssl_log_dropped()` on overflow — not
+sync `try_reserve` before serialization and `permit.send`, bumps
+`global_metrics().ssl_log_dropped()` on failed admission — not
 `Arc<AccessLogger>`).
 
 Folding the four async variants into a `ProtocolLogger<T>` struct / macro is
@@ -79,7 +80,8 @@ abstraction reads have to chase.
 `SslLogger` is a `struct` with its own `tx: mpsc::Sender<String>` and a
 `spawn`-ed receiver loop (`edgion-gateway/src/observe/logs/ssl_log.rs:21-52`);
 its `log(&self, entry: &TlsConnMeta)` is **sync** (must be safe to call from
-TLS callbacks), and on `try_send` failure it bumps
+TLS callbacks), reserves with `try_reserve` before JSON serialization, and on
+failed reservation it bumps
 `global_metrics().ssl_log_dropped()`. None of that fits an
 `Arc<AccessLogger>`-shaped wrapper. Even after a successful extraction the
 codebase would have "four async loggers via `ProtocolLogger<T>` + one
@@ -139,7 +141,7 @@ This finding sits in the same class as:
   additionally hides the `OnceLock::set` failure path and the `tracing::info!`
   literals from grep, and re-introduces kind-name coupling at the macro level.
 - "Fold `ssl_log.rs` into the same abstraction by parameterizing over the
-  backend" — the sync `try_send` + `ssl_log_dropped` metric semantics differ
+  backend" — the sync reservation/send + `ssl_log_dropped` metric semantics differ
   from the async `AccessLogger::send`; an abstraction broad enough to cover
   both leaks backend details into the wrapper's API.
 

@@ -14296,3 +14296,20 @@ Fresh unchanged-code baseline passed 30 TLS store, 15 tls_pingora and 16 canonic
 RFC 6125 matcher tests (61 executions), formatting, workspace check/Clippy and
 agent-doc validation with existing unrelated warnings. No candidate benchmark,
 new index, full suite or live handshake ran.
+
+## SSL failure snapshot admission decision
+
+Traced mTLS audit claiming through ex_data snapshot cloning and the SSL logger.
+Disabled logging still prepares a snapshot/reason; full/closed queues already avoid
+JSON serialization but not that earlier preparation. [log-10](log-10-ssl-failure-snapshot-admission.md)
+records the lazy producer/borrowed projection decision and preserves missing-context
+versus rejected-admission accounting, native lifetimes and the existing audit owner.
+The owning OnceLock knowledge now describes current reservation-before-serialization
+instead of stale try_send wording; its no-generic-framework decision is unchanged.
+No runtime interface or behavior is modified.
+
+Fresh baseline passed 14 mTLS callback, 15 tls_pingora and two TLS sensitive-log
+tests (31 top-level executions, with isolated sensitive-mode children), formatting,
+workspace check/Clippy and agent-doc validation with existing unrelated warnings.
+These tests support the existing callback/serialization contracts, not a new SSL
+admission API. No allocation benchmark, full suite or live handshake ran.
