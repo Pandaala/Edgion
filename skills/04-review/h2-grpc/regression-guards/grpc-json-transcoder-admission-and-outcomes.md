@@ -109,6 +109,24 @@ describes configuration and scope. H1.1/H2 downstream selection is independent o
 mandatory H2 upstream; canonical backend/TLS/egress and pool owners are preserved.
 Unary Hold replacement currently abandons the origin connection.
 
+### Unary terminal-error cleanup boundary
+
+A direct call to the transcoder's trailer callback can leave unary Vec capacity
+retained after settlement fails: one branch clears its length, while decode errors
+return before the successful release. Production callers use
+ResponseProcessorDriver::finalize_grpc_transcoding under BodyExecutionLease.
+Error propagation drops the incomplete lease synchronously, invoking
+BodyProcessorSet::release_inflight and the transcoder's release method, which
+replaces unary storage with an empty Vec. No await separates settlement error
+propagation from this cleanup. The other internal settle call is streaming-only.
+
+Direct callback tests bypass this lease and do not establish production retention
+beyond the error boundary. Keep the existing cleanup owner; no additional local
+buffer transfer is selected on this evidence. Re-evaluate new settlement callers,
+lease completion/error propagation changes, or changes to release_inflight. Existing
+transcoder outcome tests and response driver cancellation tests support their
+respective boundaries; source inspection establishes their production connection.
+
 ### Gateway request input handle release
 
 After synchronous encoding (including a caught error or unwind), the request

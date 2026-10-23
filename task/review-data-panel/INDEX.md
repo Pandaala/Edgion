@@ -14219,3 +14219,19 @@ tests. Formatting, workspace check/Clippy and seven repository guards passed wit
 existing unrelated warnings. The first workspace check exhausted disk space; after
 removing inactive old build artifacts and the failed incremental directory, its
 retry passed. No full suite, live integration or performance benchmark ran.
+
+## Unary terminal-error buffer cleanup ownership
+
+Revalidated both production trailer-finalization paths through the response driver.
+A failed unary settle can retain capacity when called directly, but the production
+BodyExecutionLease immediately releases inflight state on error propagation, with
+no intervening await. The other settle call is streaming-only. A proposed local
+mem::take therefore has no established production retention benefit and was not
+implemented. The existing gRPC admission/outcome knowledge records the caller and
+lease boundaries and re-evaluation triggers. No runtime or test code changed.
+
+Fresh verification passed 31 Gateway transcoder and three response driver tests,
+formatting, workspace check/Clippy and agent-doc validation with existing unrelated
+warnings. The source trace establishes error propagation into lease cleanup; the
+existing tests cover codec outcomes and driver cleanup separately. No new allocation
+measurement, full suite or live integration ran.
