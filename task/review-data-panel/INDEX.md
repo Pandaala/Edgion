@@ -210,6 +210,7 @@ destination.
 - [Local limiter initialization and window ownership](rate-limit-01-local-estimator-initialization.md)
 
 - [Gateway-owned CORS Max-Age preparation](cors-01-derived-max-age-preparation.md)
+- [Prepare native CORS origin patterns](cors-03-native-origin-preparation.md)
 
 - [Dynamic fallback metric label capacity](metrics-01-fallback-label-capacity.md)
 
