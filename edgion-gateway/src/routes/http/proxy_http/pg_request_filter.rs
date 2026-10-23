@@ -547,7 +547,7 @@ async fn build_request_metadata(
 
     ctx.request_info.remote_ip = if let Some(policy) = &ctx.egc.real_ip_policy {
         let view = crate::plugins::runtime::edgion_config_data::capture_global_edgion_config_data_snapshot();
-        let header = if policy.real_ip_header().eq_ignore_ascii_case("x-forwarded-for") {
+        let header = if policy.real_ip_header().as_str() == "x-forwarded-for" {
             xff_snapshot.value.as_deref()
         } else {
             req_header

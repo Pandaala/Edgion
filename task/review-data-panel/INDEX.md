@@ -14313,3 +14313,22 @@ tests (31 top-level executions, with isolated sensitive-mode children), formatti
 workspace check/Clippy and agent-doc validation with existing unrelated warnings.
 These tests support the existing callback/serialization contracts, not a new SSL
 admission API. No allocation benchmark, full suite or live handshake ran.
+
+## Prepare RealIp header names at policy binding
+
+RealIpPolicy now converts its canonically validated header name into HeaderName
+once after trust-reference binding. The extractor stores this instead of its
+String, and both plugin/current-map and global custom-header reads borrow it.
+Global XFF selection compares normalized text and keeps the bounded aggregate
+snapshot. No new header parser, trust view, schema or general session API is added.
+This avoids repeated name processing; http's existing string lookup did not
+allocate, so no request-allocation or measured throughput gain is claimed.
+
+The existing isolated trusted-peer regression now exercises mixed-case standard
+and custom names while retaining IP update and sensitive-log assertions. Baseline
+and final selections each passed 34 Gateway RealIp, nine XFF snapshot and ten
+Resources RealIp tests (53 executions). Initial compilation found an unavailable
+header constant and one missed test constructor conversion; both were corrected
+before the successful final run. Formatting, workspace check/Clippy and seven
+repository guards passed with existing unrelated warnings. No full suite, live
+network test or performance benchmark ran.

@@ -57,7 +57,7 @@ async fn session_from_request(raw_request: &[u8]) -> (Session, DuplexStream) {
 }
 
 fn trusted_proxy_extractor(header: &str) -> RealIpExtractor {
-    RealIpExtractor::new(header.into(), true, None)
+    RealIpExtractor::new(header.parse().unwrap(), true, None)
 }
 
 fn trusted(ip: &std::net::IpAddr) -> bool {
@@ -128,7 +128,7 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
     let snapshot = snapshot_x_forwarded_for(&request, Some(200));
 
     let xff = trusted_proxy_extractor("X-FoRwArDeD-FoR");
-    assert!(xff.real_ip_header().eq_ignore_ascii_case("x-forwarded-for"));
+    assert_eq!(xff.real_ip_header().as_str(), "x-forwarded-for");
     assert_eq!(
         xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref(), trusted)
             .remote_ip
@@ -137,7 +137,7 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
     );
 
     let custom = trusted_proxy_extractor("X-Client-IP");
-    assert!(!custom.real_ip_header().eq_ignore_ascii_case("x-forwarded-for"));
+    assert_ne!(custom.real_ip_header().as_str(), "x-forwarded-for");
     assert_eq!(
         custom
             .resolve_real_ip(

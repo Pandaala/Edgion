@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::plugins::runtime::conditions::ip_refs::{BoundIpPredicate, IpConditionCompiler};
 use crate::plugins::runtime::edgion_config_data::EdgionConfigDataSnapshot;
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::util::real_ip_extractor::RealIpResolution;
 use crate::util::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
@@ -28,12 +28,14 @@ impl RealIpPolicy {
         let trusted = compiler
             .bind(&config.trusted)
             .ok_or_else(|| "invalid owning RealIp trust references".to_string())?;
+        let header = http::HeaderName::from_bytes(config.real_ip_header.as_bytes())
+            .map_err(|_| "'real_ip_header' must be a valid HTTP header name".to_string())?;
         Ok(Self {
-            extractor: RealIpExtractor::new(config.real_ip_header.clone(), config.recursive, config.max_trusted_hops),
+            extractor: RealIpExtractor::new(header, config.recursive, config.max_trusted_hops),
             trusted,
         })
     }
-    pub(crate) fn real_ip_header(&self) -> &str {
+    pub(crate) fn real_ip_header(&self) -> &http::HeaderName {
         self.extractor.real_ip_header()
     }
     pub(crate) fn resolve_session(&self, session: &dyn PluginSession, header_value: Option<&str>) -> RealIpResolution {
@@ -92,7 +94,10 @@ impl RequestFilter for RealIp {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         session.ensure_config_data_view();
         plugin_log.push(self.header_log);
-        let header_value = session.header_str(self.policy.real_ip_header());
+        let header_value = session
+            .request_header_map()
+            .get(self.policy.real_ip_header())
+            .and_then(|value| value.to_str().ok());
         let resolution = self.policy.resolve_session(session, header_value);
 
         if resolution.downstream_trusted {

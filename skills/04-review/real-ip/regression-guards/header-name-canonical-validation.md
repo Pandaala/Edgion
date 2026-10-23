@@ -25,6 +25,22 @@ path", "add a RealIp-local header-name parser", or "reuse
 `validate_remote_ip_header_name` so reserved names are rejected too" are **not
 accepted**.
 
+## Prepared runtime header representation
+
+After shared configuration validation and trust-reference binding, RealIpPolicy
+prepares the http HeaderName once and stores it in place of the extractor's String.
+Both the plugin's current-map lookup and the global custom-header lookup borrow
+that prepared name. Global XFF selection compares the normalized name with the
+fixed lowercase name and retains its bounded aggregate snapshot; plugin lookup still
+uses the first current-map value and rejects non-text values through to_str.
+
+This is native cold representation preparation, not a new validation grammar or
+hot-path normalization. Canonical token/length admission and fixed validation
+errors remain authoritative. Configured spelling is not used for request mutation;
+prepared log categories retain their existing behavior. The change avoids repeated
+header-name processing, not request-time allocation: http's string lookup already
+uses borrowed bytes or stack scratch. No throughput improvement is measured.
+
 ## Core Rationale
 
 **1. The defect was silent inertness, not a runtime bug**

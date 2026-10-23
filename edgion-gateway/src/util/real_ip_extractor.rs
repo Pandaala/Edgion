@@ -31,7 +31,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Header traversal policy; the caller supplies one captured trust decision view.
 pub struct RealIpExtractor {
-    real_ip_header: String,
+    real_ip_header: http::HeaderName,
     recursive: bool,
     max_trusted_hops: Option<u32>,
 }
@@ -47,14 +47,14 @@ pub(crate) struct RealIpResolution {
 }
 
 impl RealIpExtractor {
-    pub(crate) fn new(real_ip_header: String, recursive: bool, max_trusted_hops: Option<u32>) -> Self {
+    pub(crate) fn new(real_ip_header: http::HeaderName, recursive: bool, max_trusted_hops: Option<u32>) -> Self {
         Self {
             real_ip_header,
             recursive,
             max_trusted_hops,
         }
     }
-    pub(crate) fn real_ip_header(&self) -> &str {
+    pub(crate) fn real_ip_header(&self) -> &http::HeaderName {
         &self.real_ip_header
     }
 

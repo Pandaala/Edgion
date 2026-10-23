@@ -66,34 +66,41 @@ async fn trusted_peer_updates_remote_ip_with_one_read_per_input() {
     crate::test_subprocess::assert_in_subprocess_async(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || async {
         edgion_resources::sensitive::SENSITIVE_MODE.store(1, std::sync::atomic::Ordering::SeqCst);
 
-        let plugin = create_plugin(&create_test_config());
-        let mut session = MockPluginSession::new();
-        trust_mock(&mut session);
-        setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1, 192.168.1.1")]);
-        session
-            .expect_downstream_peer_ip()
-            .times(1)
-            .return_const("192.168.1.254".to_string());
-        session
-            .expect_remote_ip()
-            .times(1)
-            .return_const("192.168.1.254".to_string());
-        session
-            .expect_set_remote_ip()
-            .with(eq("203.0.113.1"))
-            .times(1)
-            .returning(|_| Ok(()));
-        let mut log = PluginLog::new(plugin.name());
+        for (configured_name, request_name, expected_header_log) in [
+            ("X-FoRwArDeD-FoR", "x-forwarded-for", "header xff"),
+            ("X-CuStOm-Ip", "x-custom-ip", "header custom"),
+        ] {
+            let mut config = create_test_config();
+            config.real_ip_header = configured_name.into();
+            let plugin = create_plugin(&config);
+            let mut session = MockPluginSession::new();
+            trust_mock(&mut session);
+            setup_header_mocks(&mut session, &[(request_name, "203.0.113.1, 192.168.1.1")]);
+            session
+                .expect_downstream_peer_ip()
+                .times(1)
+                .return_const("192.168.1.254".to_string());
+            session
+                .expect_remote_ip()
+                .times(1)
+                .return_const("192.168.1.254".to_string());
+            session
+                .expect_set_remote_ip()
+                .with(eq("203.0.113.1"))
+                .times(1)
+                .returning(|_| Ok(()));
+            let mut log = PluginLog::new(plugin.name());
 
-        assert_eq!(
-            plugin.run_request(&mut session, &mut log).await,
-            PluginRunningResult::GoodNext
-        );
-        let entries = serde_json::to_value(&log).unwrap()["log"].as_array().unwrap().clone();
-        assert_eq!(entries[0], json!("header xff"));
-        assert_eq!(entries[1], json!("trusted proxy:match"));
-        assert!(entries[2].as_str().unwrap().starts_with("ip updated: "));
-        assert!(!serde_json::to_string(&log).unwrap().contains("203.0.113.1"));
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
+            );
+            let entries = serde_json::to_value(&log).unwrap()["log"].as_array().unwrap().clone();
+            assert_eq!(entries[0], json!(expected_header_log));
+            assert_eq!(entries[1], json!("trusted proxy:match"));
+            assert!(entries[2].as_str().unwrap().starts_with("ip updated: "));
+            assert!(!serde_json::to_string(&log).unwrap().contains("203.0.113.1"));
+        }
     })
     .await;
 }

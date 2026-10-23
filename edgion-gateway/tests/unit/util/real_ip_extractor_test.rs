@@ -9,7 +9,7 @@ fn private(ip: &IpAddr) -> bool {
 
 #[test]
 fn canonical_resolution_returns_remote_ip_and_downstream_trust() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None);
     for (peer, header, expected, trusted) in [
         (
             "192.168.1.254:45678",
@@ -36,7 +36,7 @@ fn canonical_resolution_returns_remote_ip_and_downstream_trust() {
 
 #[test]
 fn recursive_all_trusted_returns_leftmost_parsed_hop() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None);
     assert_eq!(
         extractor
             .resolve_real_ip("192.168.1.254", Some("10.0.0.9, 192.168.1.1"), private)
@@ -49,7 +49,7 @@ fn recursive_all_trusted_returns_leftmost_parsed_hop() {
 #[test]
 fn non_recursive_untrusted_rightmost_and_trusted_peer_fallback() {
     for cap in [None, Some(0), Some(1)] {
-        let extractor = RealIpExtractor::new("X-Forwarded-For".into(), false, cap);
+        let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), false, cap);
         assert_eq!(
             extractor
                 .resolve_real_ip("10.0.0.1", Some("1.2.3.4, 10.0.0.99"), private)
@@ -76,7 +76,7 @@ fn test_max_trusted_hops_caps_recursive_traversal() {
         (Some(2), "10.0.0.50"),
         (Some(3), "10.0.0.99"),
     ] {
-        let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, cap);
+        let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, cap);
         assert_eq!(
             extractor
                 .resolve_real_ip(
@@ -93,7 +93,7 @@ fn test_max_trusted_hops_caps_recursive_traversal() {
 
 #[test]
 fn membership_callback_covers_effective_peer_and_each_valid_hop_once() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None);
     let mut seen = Vec::new();
     let result = extractor.resolve_real_ip("10.0.0.1", Some("1.2.3.4, bad, 10.0.0.99"), |ip| {
         seen.push(*ip);
@@ -108,7 +108,7 @@ fn membership_callback_covers_effective_peer_and_each_valid_hop_once() {
 
 #[test]
 fn unavailable_whole_trust_ignores_forwarded_input() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None);
     let result = extractor.resolve_real_ip("192.168.1.254:45678", Some("203.0.113.7"), |_| false);
     assert_eq!(result.remote_ip.to_string(), "192.168.1.254");
     assert!(!result.downstream_trusted);
@@ -117,7 +117,7 @@ fn unavailable_whole_trust_ignores_forwarded_input() {
 #[test]
 fn non_utf8_header_falls_back_to_the_trusted_peer() {
     let header = http::HeaderValue::from_bytes(&[0xff]).unwrap();
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, None).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None).resolve_real_ip(
         "192.168.1.254",
         header.to_str().ok(),
         private,
@@ -128,7 +128,7 @@ fn non_utf8_header_falls_back_to_the_trusted_peer() {
 
 #[test]
 fn test_client_not_trusted() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, None).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None).resolve_real_ip(
         "192.168.1.1:45678",
         Some("203.0.113.1"),
         |ip| matches!(ip, IpAddr::V4(ip) if ip.octets()[0] == 10),
@@ -138,7 +138,7 @@ fn test_client_not_trusted() {
 
 #[test]
 fn test_recursive_extraction() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, None).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None).resolve_real_ip(
         "192.168.1.254:45678",
         Some("203.0.113.1, 198.51.100.2, 192.168.1.1"),
         |ip| private(ip) || *ip == "198.51.100.2".parse::<IpAddr>().unwrap(),
@@ -148,7 +148,7 @@ fn test_recursive_extraction() {
 
 #[test]
 fn test_non_recursive_extraction() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), false, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), false, None);
     assert_eq!(
         extractor
             .resolve_real_ip(
@@ -171,7 +171,7 @@ fn test_non_recursive_extraction() {
 
 #[test]
 fn test_all_ips_trusted_fallback() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, None).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None).resolve_real_ip(
         "192.168.1.254:45678",
         Some("203.0.113.1, 198.51.100.2"),
         |_| true,
@@ -181,7 +181,7 @@ fn test_all_ips_trusted_fallback() {
 
 #[test]
 fn test_zero_max_trusted_hops_stops_at_first_trusted_header_ip() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, Some(0)).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, Some(0)).resolve_real_ip(
         "10.0.0.1:45678",
         Some("1.2.3.4, 10.0.0.50, 10.0.0.99"),
         private,
@@ -191,7 +191,7 @@ fn test_zero_max_trusted_hops_stops_at_first_trusted_header_ip() {
 
 #[test]
 fn test_max_trusted_hops_does_not_block_real_client_within_window() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), true, Some(3)).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, Some(3)).resolve_real_ip(
         "10.0.0.99:45678",
         Some("1.2.3.4, 10.0.0.99"),
         private,
@@ -201,7 +201,7 @@ fn test_max_trusted_hops_does_not_block_real_client_within_window() {
 
 #[test]
 fn test_max_trusted_hops_ignored_in_non_recursive_mode() {
-    let result = RealIpExtractor::new("X-Forwarded-For".into(), false, Some(1)).resolve_real_ip(
+    let result = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), false, Some(1)).resolve_real_ip(
         "10.0.0.1:45678",
         Some("1.2.3.4, 10.0.0.99"),
         private,
@@ -211,7 +211,7 @@ fn test_max_trusted_hops_ignored_in_non_recursive_mode() {
 
 #[test]
 fn forwarded_ipv6_parser_preserves_recursive_hops_and_skips_socket_forms() {
-    let extractor = RealIpExtractor::new("X-Forwarded-For".into(), true, None);
+    let extractor = RealIpExtractor::new("X-Forwarded-For".parse().unwrap(), true, None);
     let result = extractor.resolve_real_ip(
         "[2001:db8::2]:443",
         Some("2001:db9::1, [2001:db9::2]:123, 2001:db8::3"),
@@ -257,7 +257,7 @@ fn typed_resolution_avoids_text_allocation_and_preserves_projection() {
         (true, None, "[::ffff:203.0.113.1]:443", None, "::ffff:203.0.113.1"),
         (true, None, "", None, "0.0.0.0"),
     ] {
-        let extractor = RealIpExtractor::new("x-forwarded-for".into(), recursive, cap);
+        let extractor = RealIpExtractor::new("x-forwarded-for".parse().unwrap(), recursive, cap);
         let expected = expected.parse::<IpAddr>().unwrap();
         let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             extractor.resolve_real_ip(peer, header, |ip| matches!(ip, IpAddr::V4(ip) if ip.is_private()))
