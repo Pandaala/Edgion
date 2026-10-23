@@ -3971,7 +3971,13 @@ pub(crate) fn pick_effective_sp<T>(http_sp: Option<T>, grpc_sp: Option<T>) -> Op
 
 fn compose_uri(path: &str, query: Option<&str>) -> String {
     match query {
-        Some(q) if !q.is_empty() => format!("{}?{}", path, q),
+        Some(q) if !q.is_empty() => {
+            let mut uri = String::with_capacity(path.len().saturating_add(1).saturating_add(q.len()));
+            uri.push_str(path);
+            uri.push('?');
+            uri.push_str(q);
+            uri
+        }
         _ => path.to_string(),
     }
 }

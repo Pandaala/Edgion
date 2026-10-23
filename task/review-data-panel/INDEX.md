@@ -13795,3 +13795,30 @@ and URI behavior and body-read tests cover the unchanged behavior; no new
 implementation-shaped test or leaf API was introduced. Formatting, workspace
 all-target check/Clippy, seven repository guards and diff hygiene passed, with
 existing unrelated warnings. No full suite, live integration or benchmark ran.
+
+## Reserve complete context URI composition capacity
+
+The WAF request callback reads current and entry URI strings through the session
+adapter and EdgionHttpContext::compose_uri. The canonical helper now reserves the
+combined path, separator and nonempty query byte length before appending. Missing
+and empty queries still return only the path. Saturating size arithmetic avoids
+wrapping the capacity calculation; this does not add a URI limit or cache.
+Current normalized path/live query and frozen raw entry path/query remain
+distinct. The owned getter APIs, WAF transaction copies and access-log masking
+are unchanged.
+
+An isolated source-extracted probe using the existing allocation counter on the
+current toolchain observed three allocation/reallocation calls before and one
+after for a 27-byte composed URI. The five-byte and queryless four-byte samples
+each remained at one. This is local allocation-call evidence, not measured
+allocator footprint, complete callback cost or throughput. The committed matrix
+checks literal byte output and one allocation for nonempty results, zero for
+empty results, with empty/missing queries, escapes, UTF-8, punctuation and a long
+query. A separate context test checks current-versus-entry source selection.
+
+Independent plan review passed. Fresh verification passed six context path-view
+tests, 51 Gateway WAF tests and the real-adapter entry/current identity test.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated warnings. No full suite or live
+integration ran. This closes only composition growth, not URI representation
+or the remaining callback dependency review.
