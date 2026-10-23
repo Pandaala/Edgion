@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [GraphQL operation-name deduplication storage](graphql-03-operation-name-dedup-storage.md)
+
 - [Prepared response-cache origin stamp components](cache-06-prepared-origin-stamp-components.md)
 
 - [Request conditional-wrapper dispatch](request-01-conditional-wrapper-dispatch.md)
