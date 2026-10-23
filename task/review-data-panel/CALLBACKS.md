@@ -11,6 +11,12 @@ inside ProxyHttp, excluding the file's separate Future::poll implementation.
 There are 52 source methods: 30 overrides and 22 inherited methods. Two inherited
 upstream-module methods are feature-gated, so 52 is not a compiled-method count.
 
+Source method sets revalidated at `eda87e58f`: both tables still exactly match
+the Gateway overrides and locked fork trait declarations (30 + 22). The two
+feature-gated declarations remain included. This refresh checks inventory
+consistency only; it does not rerun historical runtime tests or extend the
+reachability and downstream coverage claims below.
+
 ## Edgion overrides
 
 Paths below are relative to `routes/http/proxy_http/`. Each row records current
@@ -295,7 +301,10 @@ transforms and full transport/interleaving coverage are not closed by this audit
 - Fork cache defaults: ordinary HTTP enablement and entry guards are inspected
   above. Reopen this boundary when a cache owner, override or dependency changes;
   do not expand the conclusion to uninspected custom/injected sessions. Edgion
-  ResponseCache internals remain a separate inspection scope.
+  ResponseCache has separate [replay ownership](INDEX.md#response-cache-replay-body-ownership-decision)
+  and [canonical LRU lookup](INDEX.md#canonical-lru-routing-and-map-hashing-decision)
+  evidence. Those scoped audits do not establish complete cache coverage or
+  resolve the deferred ownership and hashing decisions.
 - Continue the stage-specific open dependencies in INDEX. The dispatcher table
   supplies entry points, not replacement evidence for those reviews. Other
   transport inventories remain governed by their existing coverage records.
