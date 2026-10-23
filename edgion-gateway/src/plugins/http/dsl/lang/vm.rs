@@ -1118,9 +1118,12 @@ impl Vm {
                             if *i < 0 {
                                 Value::Nil
                             } else {
-                                l.get(*i as usize)
-                                    .map(|s| Value::Str(Arc::clone(s)))
-                                    .unwrap_or(Value::Nil)
+                                let index = *i as usize;
+                                if index < l.len() {
+                                    Value::Str(l.swap_remove(index))
+                                } else {
+                                    Value::Nil
+                                }
                             }
                         }
                         (Value::Map(m), Value::Str(k)) => {

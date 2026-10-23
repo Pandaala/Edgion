@@ -13372,3 +13372,24 @@ That negative mutation was restored before the production move. The final Gatewa
 DSL suite passed all 503 tests. Formatting, workspace all-target check/Clippy,
 seven repository guards and diff hygiene passed, with existing unrelated warnings.
 No full suite, live integration or performance benchmark ran.
+
+
+## Move indexed strings from consumed DSL Lists
+
+The List IndexGet path now checks the existing converted index against length,
+then transfers the selected Arc through swap_remove instead of cloning it.
+The popped Vec is exclusively owned and discarded after extraction, so its
+remaining order is not observable. GetLocal retains its independent Vec copy;
+Map indexing, Value layout, work budgets and stack admission are unchanged.
+This removes one Arc clone/drop pair for a successful list access, not initial
+list construction or local copying. No throughput improvement was measured.
+
+Negative indices, the existing integer-to-usize cast, missing indices and wrong
+index types retain their Nil behavior. Existing split-index tests now also join
+the original local after first/middle/last reads to verify content/order. The
+out-of-bounds test includes negative, exact-length, large, wrong-type and empty
+list cases. Independent plan review passed; baseline and final Gateway DSL runs
+each passed all 503 tests. No artificial reference-count test was added.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings. No full suite, live integration
+or performance benchmark ran.

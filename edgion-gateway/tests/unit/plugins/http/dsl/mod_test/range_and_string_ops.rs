@@ -545,7 +545,7 @@ fn test_split_no_delimiter_found() {
     assert_eq!(result, good_next());
 }
 
-// Direct index access on a list — exercises the IndexGet Arc::clone path.
+// Extracting indexed items preserves the original local list and its order.
 #[test]
 fn test_split_index_get() {
     let source = r#"
@@ -553,6 +553,7 @@ fn test_split_index_get() {
         req.set_header("X-Zero", parts[0])
         req.set_header("X-One", parts[1])
         req.set_header("X-Two", parts[2])
+        req.set_header("X-Original", join(parts, ":"))
     "#;
     let mut session = MockPluginSession::new();
     session
@@ -570,6 +571,11 @@ fn test_split_index_get() {
         .withf(|h, v| h == "X-Two" && v == "z")
         .times(1)
         .returning(|_, _| Ok(()));
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Original" && v == "x:y:z")
+        .times(1)
+        .returning(|_, _| Ok(()));
     let result = run(source, session);
     assert_eq!(result, good_next());
 }
@@ -577,14 +583,18 @@ fn test_split_index_get() {
 // Out-of-bounds index returns Nil, not panic.
 #[test]
 fn test_list_index_oob_returns_nil() {
-    let source = r#"
-        let parts = split("a:b", ":")
-        let v = parts[99]
-        if v == nil {
-            req.set_header("X-Out", "nil")
-        }
-    "#;
-    assert_sets_request_header(source, "X-Out", "nil");
+    for (list, index) in [
+        (r#"split("a:b", ":")"#, "-1"),
+        (r#"split("a:b", ":")"#, "2"),
+        (r#"split("a:b", ":")"#, "99"),
+        (r#"split("a:b", ":")"#, "9223372036854775807"),
+        (r#"split("a:b", ":")"#, r#""key""#),
+        ("range(0,0)", "0"),
+    ] {
+        let source =
+            format!("let parts = {list}\nlet v = parts[{index}]\nif v == nil {{ req.set_header(\"X-Out\", \"nil\") }}");
+        assert_sets_request_header(&source, "X-Out", "nil");
+    }
 }
 
 // join() reassembles a split list correctly.
