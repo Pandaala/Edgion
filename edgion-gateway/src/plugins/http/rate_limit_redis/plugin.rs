@@ -385,6 +385,7 @@ impl RateLimitRedis {
             Some(client) if client.healthy() => client,
             _ => {
                 log.push_err("redis unavail");
+                drop(jobs);
                 return self.apply_redis_failure_policy(session).await;
             }
         };

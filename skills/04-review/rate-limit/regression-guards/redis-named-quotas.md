@@ -36,7 +36,10 @@ Resolve one client Arc and sequentially check active quotas under one deadline.
 Each quota retains existing all-policy core evaluation and within-quota result
 merge. Stop at first denial or dependency error. Intermediate checks must not
 queue HTTP headers or write a response. Render once outside the timed data-only
-future; release prepared keys before response awaits.
+future; release prepared keys before response awaits. The missing/unhealthy-client
+early branch also drops prepared jobs before entering its failure policy. Keys
+and any spilled job storage are no longer needed there; key extraction, client
+lookup, diagnostics and failure-policy ordering remain unchanged.
 
 Successful headers use the selected checked quota, or first checked quota when
 not configured. Explicitly selected skipped quotas emit no headers. Denial uses

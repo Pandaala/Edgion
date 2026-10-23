@@ -14118,3 +14118,23 @@ Fresh baseline passed 30 Gateway transcoder and 35 Resources codec tests. Final
 verification passed 31 and 35 respectively (66 selected executions), formatting,
 workspace check/Clippy and seven repository guards with existing unrelated
 warnings. No full suite, live gRPC integration or benchmark ran.
+
+## Redis unavailable-client prepared-key release
+
+run_quotas now explicitly drops prepared jobs before entering the failure policy
+when the Redis client is missing or unhealthy. Each job owns only a String key
+and scalar metadata; the client lookup has already decided that no quota checks
+will run. Keys and any spilled SmallVec storage therefore stop spanning delayed
+failure-response writes. The normal checked-decision path already released jobs.
+
+Preparation order, bounded-key semantics, lookup/health checks, PluginLog and dye
+ordering, configured Allow/Deny behavior and rejection responses are unchanged.
+This is a structural lifetime reduction, not an allocation-count, RSS or latency
+measurement. Existing no-network missing-client tests exercise both policies and
+require fail-close dye recording before the response header write.
+
+Baseline and final selections each passed all 24 Redis plugin tests. Final
+formatting, workspace check/Clippy and seven repository guards passed with
+existing unrelated warnings. The first final compile exhausted disk while writing
+an incremental cache; after removing inactive build caches, recompilation and
+tests passed. No full suite, live Redis integration or benchmark ran.

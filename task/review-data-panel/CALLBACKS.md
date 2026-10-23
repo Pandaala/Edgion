@@ -1039,7 +1039,7 @@ Revalidated at `d7b6331a4`: these five entries are disjoint from the preceding
 | Implementation / source | Direct work and ownership boundary |
 | --- | --- |
 | RateLimitLocal (`rate_limit_local/plugin.rs`) | Resolve an owned key through the shared helper, read the prepared interval and current effective rate, then observe the per-plugin lazy CMS. Publish a configured outcome slot before Continue, rejection or normal headers. Key-miss Allow bypasses observation; key-miss Deny uses zero retry delay. Logs expose key length, not identity. |
-| RateLimitRedis (`rate_limit_redis/plugin.rs`) | Prepare ordered quota jobs with owned bounded keys before client lookup. Pin one healthy client and check jobs sequentially under the optional data-only timeout. Stop at first denial/error; select one checked result for headers. On the checked-decision path, release jobs before response awaits. Unavailable-client handling instead enters the configured failure policy while jobs remain in scope. |
+| RateLimitRedis (`rate_limit_redis/plugin.rs`) | Prepare ordered quota jobs with owned bounded keys before client lookup. Pin one healthy client and check jobs sequentially under the optional data-only timeout. Stop at first denial/error; select one checked result for headers. Release jobs before response awaits, both after checked decisions and before unavailable-client failure handling. The latter release was added after this inventory baseline. |
 | WebhookKeyGet (`webhook_key_get/plugin.rs`) | Resolve configured variables sequentially through the canonical bounded outbound call. Emit diagnostics after each await, borrow the owned extracted value or configured default into the context setter, then proceed to the next variable. A resolved empty string wins over default; absent resolution without default skips publication. Setter errors are logged and processing continues. |
 | RequestMirrorPlugin (`request_mirror/plugin.rs`) | Apply target/sampling checks and nonwaiting instance/process task admission. Build an owned URL from borrowed current path/query before snapshot awaits or task handoff. The detached writer owns prepared headers, trace identity, permits and either an isolated committed snapshot or the bounded tee receiver. Runtime skips continue the primary request. |
 | AllEndpointStatus (`all_endpoint_status/plugin.rs`) | Claim the configured process interval before acquiring the global semaphore with a five-second wait limit. Capture discovery/policy generations, collect endpoint projections and borrow current path/query during fan-out. Selected probes retain owned results for ordered assembly and JSON response writing; the global permit spans local response handling. |
@@ -1053,10 +1053,10 @@ CMS observations or guarantee that a later Redis consumer runs. Preserve the
 
 Redis's timeout excludes key preparation and local response writing. Sequential
 quota checks can retain earlier debits after later denial, failure or timeout;
-this is not a transaction or refund contract. The explicit early unavailable-client
-exception above limits the release-before-response wording in the
-[named-quota ownership page](../../skills/04-review/rate-limit/regression-guards/redis-named-quotas.md).
-No key-lifetime change is selected here. Existing redis-01 through redis-07
+this is not a transaction or refund contract. At the inventory baseline, the early unavailable-client
+branch retained jobs across its failure-policy await. A later narrow correction
+explicitly releases them first, aligning both branches with the
+[named-quota ownership page](../../skills/04-review/rate-limit/regression-guards/redis-named-quotas.md). Existing redis-01 through redis-07
 investigations remain deferred. Attempted rejection writes do not prove delivery.
 
 Webhook results remain owned across resolver return, then are copied into request
