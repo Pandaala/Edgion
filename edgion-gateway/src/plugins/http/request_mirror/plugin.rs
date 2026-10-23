@@ -52,6 +52,12 @@ struct PreparedSnapshot {
     _memory_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
+#[derive(Default)]
+struct MirrorCounters {
+    bytes_sent: AtomicU64,
+    chunks_sent: AtomicU64,
+}
+
 fn prepare_snapshot(
     mut reader: Box<dyn crate::request_body::RequestBodySnapshotReader>,
     budget: &MirrorBudget,
@@ -73,12 +79,11 @@ fn snapshot_stream(
     body: PreparedSnapshot,
     budget: MirrorBodyBudget,
     abandon_reason: Arc<std::sync::atomic::AtomicU8>,
-    bytes_sent: Arc<AtomicU64>,
-    chunks_sent: Arc<AtomicU64>,
+    counters: Arc<MirrorCounters>,
 ) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send {
     futures::stream::try_unfold(
-        (body, budget, abandon_reason, bytes_sent, chunks_sent),
-        |(mut body, budget, abandon_reason, bytes_sent, chunks_sent)| async move {
+        (body, budget, abandon_reason, counters),
+        |(mut body, budget, abandon_reason, counters)| async move {
             // The canonical storage lane bounds transient disk-read scratch.
             // Only retained send payload and isolated snapshot memory belong to
             // this budget; never materialize an entire disk-backed request.
@@ -94,9 +99,9 @@ fn snapshot_stream(
                 abandon_reason.store(MirrorAbandonReason::BufferLimit as u8, Ordering::Release);
                 return Err(std::io::Error::other("mirror body budget exhausted"));
             };
-            bytes_sent.fetch_add(owned.len() as u64, Ordering::Relaxed);
-            chunks_sent.fetch_add(1, Ordering::Relaxed);
-            Ok(Some((owned, (body, budget, abandon_reason, bytes_sent, chunks_sent))))
+            counters.bytes_sent.fetch_add(owned.len() as u64, Ordering::Relaxed);
+            counters.chunks_sent.fetch_add(1, Ordering::Relaxed);
+            Ok(Some((owned, (body, budget, abandon_reason, counters))))
         },
     )
 }
@@ -381,17 +386,16 @@ impl RequestFilter for RequestMirrorPlugin {
             let begin = Instant::now();
             let total_timeout = cfg.connect_timeout + cfg.write_timeout;
 
-            // Arc<AtomicU64> instead of Rc<Cell<u64>>: tokio::spawn requires Send futures,
-            // so Rc is not usable here even though the closure runs in a single task.
-            let bytes_sent = Arc::new(AtomicU64::new(0));
-            let chunks_sent = Arc::new(AtomicU64::new(0));
+            // Both counters share one allocation; the body stream must remain Send.
+            let counters = Arc::new(MirrorCounters::default());
 
-            let bytes_ref = bytes_sent.clone();
-            let chunks_ref = chunks_sent.clone();
+            let stream_counters = Arc::clone(&counters);
             let tracked_stream = ReceiverStream::new(body_rx).map(move |chunk_result| {
                 if let Ok(ref data) = chunk_result {
-                    bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    chunks_ref.fetch_add(1, Ordering::Relaxed);
+                    stream_counters
+                        .bytes_sent
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
+                    stream_counters.chunks_sent.fetch_add(1, Ordering::Relaxed);
                 }
                 chunk_result
             });
@@ -401,8 +405,7 @@ impl RequestFilter for RequestMirrorPlugin {
                     body,
                     snapshot_body_budget,
                     Arc::clone(&abandon_reason),
-                    Arc::clone(&bytes_sent),
-                    Arc::clone(&chunks_sent),
+                    Arc::clone(&counters),
                 )),
                 None => futures::future::Either::Right(tracked_stream),
             };
@@ -457,8 +460,8 @@ impl RequestFilter for RequestMirrorPlugin {
                     target,
                     status,
                     Instant::now().saturating_duration_since(begin).as_millis() as u64,
-                    bytes_sent.load(Ordering::Relaxed),
-                    chunks_sent.load(Ordering::Relaxed),
+                    counters.bytes_sent.load(Ordering::Relaxed),
+                    counters.chunks_sent.load(Ordering::Relaxed),
                     error,
                 );
                 emit_mirror_log(entry).await;
@@ -471,8 +474,8 @@ impl RequestFilter for RequestMirrorPlugin {
                 writer_events
                     .send(arming_tests::WriterEvent::Finished {
                         status,
-                        bytes: bytes_sent.load(Ordering::Relaxed),
-                        chunks: chunks_sent.load(Ordering::Relaxed),
+                        bytes: counters.bytes_sent.load(Ordering::Relaxed),
+                        chunks: counters.chunks_sent.load(Ordering::Relaxed),
                     })
                     .unwrap();
             }

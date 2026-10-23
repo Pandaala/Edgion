@@ -14659,3 +14659,26 @@ workspace directory was briefly inaccessible. Once it was accessible again,
 the unchanged-source workspace all-target check and Clippy retry passed with
 existing warnings. The underlying environment cause was not established.
 No full suite, live transport test or throughput benchmark ran.
+
+## Share one allocation for mirror send counters
+
+The mirror writer now owns one Arc<MirrorCounters> containing its two AtomicU64
+fields instead of two separately allocated Arcs. The channel stream and snapshot
+stream each clone one handle where they previously cloned a pair. Both relaxed
+fetch_add operations and terminal loads keep their order and original update
+sites; the counters still describe chunks yielded to the outbound body, not
+confirmed network delivery or an atomic pair snapshot.
+
+The private struct owns no reader, payload, budget permit or cancellation state.
+PreparedSnapshot destruction order and budget ownership remain intact. Stream
+construction, collection with mirror logging disabled, status metrics and log
+fields are unchanged. This removes one counter allocation per started writer
+and one reference-count increment/decrement per existing paired handle; no
+atomic-operation or measured throughput improvement is claimed.
+
+Existing snapshot tests now check successful byte/chunk totals and zero counts
+after budget rejection and pending cancellation, alongside their retained-memory
+and release assertions. Baseline and final serial selections each passed all
+28 RequestMirror tests. Formatting, workspace all-target check/Clippy and seven
+campaign guards passed with existing unrelated warnings. No full suite, live
+transport test or benchmark ran.
