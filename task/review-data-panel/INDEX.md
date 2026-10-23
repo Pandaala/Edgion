@@ -62,6 +62,8 @@ destination.
 
 - [Outbound terminal classification ownership](outbound-04-terminal-classification-ownership.md)
 
+- [Bounded outbound single-chunk storage](outbound-05-single-chunk-storage.md)
+
 - [Shared outbound ready-endpoint projection](outbound-03-ready-endpoint-projection.md)
 
 - [Prepared ForwardAuth denial header names](forward-auth-01-prepared-denial-header-names.md)
@@ -14527,3 +14529,22 @@ request-filter and 13 redirect tests (54 executions). Formatting, workspace
 all-target check/Clippy and seven campaign guards passed with existing unrelated
 warnings. The unrelated response-cache baseline fixture remains deferred; no
 full suite, TCP/TLS wire run or benchmark was performed.
+
+## Bounded outbound single-chunk ownership decision
+
+The shared capped collector still copies nonempty transport chunks, including
+single-chunk responses, into its own allocation. outbound-05 records whether
+first-chunk retention and later promotion justify the changed backing-memory
+lifetime and downstream conversion costs. Small slices can retain large parents;
+Bytes length is not retained capacity, and Wasm/OCI consumers can require another
+owned conversion. The earlier lazy-first-allocation improvement remains intact.
+
+No runtime representation was selected. Prefix/overflow/error/EOF semantics,
+exact-cap pending/error behavior, post-first-chunk cancellation and caller memory
+accounting are explicit gates. This is separate bounded outbound acquisition,
+not permission to aggregate main proxy responses.
+
+Fresh selections passed five collector, 42 DSL HTTP-call and 27 bulk-receipt tests
+(74 executions), formatting, workspace check/Clippy and agent-doc validation with
+existing unrelated warnings. No retention prototype, performance measurement,
+full suite or live network verification ran.
