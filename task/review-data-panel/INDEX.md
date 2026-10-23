@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Candidate provider-model ownership](routing-09-candidate-provider-model-ownership.md)
+
 - [AI model-route selector and weight preparation](routing-08-model-route-weight-preparation.md)
 
 - [Canonical LRU routing and map hashing](lru-01-shard-and-map-hashing.md)
@@ -15126,3 +15128,16 @@ tests (26 total). Formatting, workspace all-target check/Clippy and seven guards
 passed with existing unrelated warnings. No new test, full suite, live integration
 or benchmark ran for removing this duplicate private owner. Independent plan
 and final reviews passed.
+
+## Candidate provider-model retention boundary
+
+The [ownership task](routing-09-candidate-provider-model-ownership.md) records
+candidate name copies, retained backend generations, downgrade re-resolution and
+processor-specific selected-name copies. Plain borrowed replacements do not
+satisfy those retained lifetimes. Shared-name or resolved-model handles remain
+unselected alternatives, with passthrough, pricing and actual-model attribution
+acceptance distinct from logical quota identity. No runtime code changed.
+Fresh 22 proxy, four router and 36 dispatch tests passed (62 total); no prototype,
+benchmark or live integration ran.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing unrelated warnings. Independent plan and final reviews passed.
