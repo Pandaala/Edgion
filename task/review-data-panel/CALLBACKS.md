@@ -1091,7 +1091,7 @@ Deeper algorithms, client lifecycle, transport and body storage remain open.
 
 Revalidated at `00776bd1e`: these two entries are disjoint from the preceding
 50, reconciling 52 of 60 explicit RequestFilter implementations. Eight entries
-remain: DslPlugin, WafPlugin, WasmPlugin, Arc<WasmPlugin>, GrpcJsonTranscoder,
+were outstanding before the following engine inventory: DslPlugin, WafPlugin, WasmPlugin, Arc<WasmPlugin>, GrpcJsonTranscoder,
 AiProxy, AiGuard and Guardrail. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
@@ -1147,3 +1147,62 @@ tests (112 selected executions). The streamed direct path was source-inspected;
 these selected ExtProc tests do not establish fresh streamed or wire acceptance.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live IdP/gRPC integration or benchmark ran.
+
+## Embedded engine request direct-entry inventory
+
+Revalidated at `696adcb11`: these four entries are disjoint from the preceding
+52, reconciling 56 of 60 explicit RequestFilter implementations. The remaining
+four are GrpcJsonTranscoder, AiProxy, AiGuard and Guardrail. Paths below are
+relative to `edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| DslPlugin (`dsl/plugin.rs`) | Borrow the configured VM, error policy and runtime into execute_safe. The VM creates invocation-local execution state while reusing prepared script/constants. The entry opts out of eager body materialization; individual body operations retain their own capture/read boundaries. |
+| WafPlugin (`waf/mod.rs`) | Claim the request phase for the selected owner, construct a fresh transaction from borrowed header descriptors and owned temporary URI/request-line values, then drop those temporaries after transaction construction. Execute request-header rules before body inspection. Successful request phases install the owned transaction for later response processing. |
+| WasmPlugin (`wasm/plugin.rs`) | Await the loaded module generation, acquire an exclusive lease and install a request binding. Loan that execution while building callback snapshots, invoking the guest, awaiting permitted callouts and optionally processing the complete request body. Successful callback completion returns execution to its binding for later hooks. |
+| Arc<WasmPlugin> (`wasm/attached.rs`) | Delegate by shared reference to WasmPlugin::run_request. This is a distinct explicit trait implementation, not a second VM, independent body capture or additional execution binding. |
+
+DSL compilation, static validation, runtime limits, Redis alias mapping and rate
+configuration belong to construction. Borrowing those owners does not make VM
+execution allocation-free: invocation state and builtin results have their own
+lifetimes. execute_safe catches unwinding from the execution future and applies
+the configured error policy to ordinary runtime errors/panics. BodyAccess errors
+instead record fail-close and return the fixed 500 response. DSL representation,
+JSON and outbound-client decisions remain dsl-01 through dsl-10; this inventory
+does not close builtin or leaf compiler dependencies.
+
+WAF keeps the captured immutable compiled generation through its transaction.
+Phase claims can skip or fail before construction. Header views preserve the
+existing HTTP/2 authority-to-Host synthesis; transaction-owned bytes must outlive
+the live session views. Descriptor transport remains [waf-12](waf-12-head-view-transport.md).
+Request-header intervention returns before body work. Format-specific limits,
+full structured JSON/XML inspection, raw capture and explicit prefix inspection
+retain distinct paths and failure outcomes. Physical limits, inspection windows,
+storage limits and completion evidence are not interchangeable. Failed transaction
+installation returns 500; no cross-generation transaction reuse is introduced.
+Existing WAF matcher, capture and result-storage decisions remain deferred.
+
+Wasm header snapshots and properties are owned by callback frames. Paused
+callouts retain the exclusive lease and use existing request deadlines;
+fire-and-forget callouts are rejected. A clean header result precedes the optional
+whole-body hook. Captured Bytes are copied into the guest-frame Vec, and one
+terminal request-body callback runs even for an empty body. A staged replacement
+is published through canonical request storage before pending header operations;
+a deliberate local reply skips irrelevant body publication. NotBuffered and
+storage failures return 500, BufferLimitExceeded returns 413, and other read
+failures retain the configured failure policy with bounded diagnostics.
+
+Only DSL overrides requires_materialized_request_body to false; WAF and both
+Wasm implementations inherit the trait default. Optional wrapper capture and
+plugin-specific lazy capture must therefore be distinguished. The
+[Wasm lifecycle contract](../../skills/04-review/wasm/regression-guards/request-execution-lifecycle.md)
+owns cancellation, terminal cleanup, generation pinning and admission. Releasing
+host callback payloads does not scrub guest memory; instance/guest budgets are
+not total RSS bounds. Existing wasm-01 through wasm-07 decisions remain open.
+
+Fresh verification passed ten DSL plugin, 52 Gateway WAF, five attached-Wasm and
+eight Wasm request-body tests (75 selected executions). This is supporting unit
+evidence, not complete engine, callout, transport or performance coverage.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live network integration or benchmark ran.
+No runtime change or deferred-task closure is selected by this inventory.
