@@ -14487,3 +14487,22 @@ SourceIp and does not establish encoded Arg parity. Formatting, workspace
 check/Clippy and agent-doc validation passed with existing unrelated warnings.
 An initial test_hash filter selected zero tests and is not counted. No runtime
 change, comparison prototype, benchmark, full suite or live traffic run occurred.
+
+## Inherited admission and custom-message reachability
+
+CALLBACKS now records the actual call gates for application subrequest permission,
+upstream admission and custom-message defaults. Ordinary Gateway construction
+registers no custom connector/session handler or Custom ALPN. H1/H2 custom-message
+setup requires a custom downstream writer; ordinary HTTP relay channels remain.
+The inherited application-subrequest predicate skips its spawner installation,
+while the upstream gate is a reached constant-true default. Core background cache
+subrequests retain independent gates.
+
+No duplicate overrides or runtime optimization were selected. This narrows the
+previous dispatch-only coverage without claiming arbitrary injected-session,
+compiler allocation, WebSocket transport or whole-network verification. The fork
+builder's internal new_custom call remains present even with default arguments.
+
+Independent source review, formatting, workspace check/Clippy and agent-doc
+validation passed with existing unrelated warnings. No Rust tests, benchmarks,
+custom-transport or wire scenarios were rerun for this documentation-only audit.

@@ -112,6 +112,46 @@ pg_init_downstream_modules.rs, pg_request_filter.rs and response_cache/lifecycle
 Seven existing own-cache lifecycle tests passed, but they do not execute every
 inherited fork cache branch or establish custom-connector reachability.
 
+## Inherited admission and custom-message call-site boundaries
+
+Revalidated at `bcaa1b8ad` against fork `1aaa45cc70430bc782990bc20ddee3fef36d6b99`.
+`process_request` calls `allow_spawning_subrequest` after successful early
+filtering and before downstream request modules. Edgion's inherited false
+avoids installing the application SubrequestSpawner in the new session. It
+does not prohibit proxy-core background cache subrequests; those retain their
+separate cache gates described above.
+
+After request filtering, cache handling and subrequest cleanup, the ordinary
+upstream path awaits the inherited `proxy_upstream_filter`, which returns true.
+There is no Edgion rejection policy or additional header work in that default.
+This source observation does not prove compiler elimination or allocation-free
+async-trait dispatch, and adding an identical override is not an optimization.
+
+The Gateway listener builder uses `ProxyServiceBuilder::new(...).server_options(...).build()`
+without registering a custom connector/session handler. The fork builder defaults
+to connector `()` and no handler; its build still calls internal `HttpProxy::new_custom`.
+Gateway source has no Custom ALPN registration, and ordinary peer construction
+selects HTTP versions. The fork upstream connector enters custom negotiation only
+for Custom ALPN; the unit custom connector's methods are unreachable stubs, not
+a transport fallback. This is a current ordinary-construction boundary, not a
+guarantee for arbitrary externally injected peer/session values.
+
+In both H1 and H2 proxy paths, custom downstream writers are taken only from
+`downstream_session.as_custom_mut()`. Without such a writer, reader extraction
+returns None and the custom-message injection channel/callback setup is skipped.
+Ordinary HttpTask relay channels still exist; this audit does not claim a
+channel-free HTTP path. The separate custom-upstream path has its own queues and
+forwarding call. The inherited custom-forwarding method does nothing, and both
+message filters return the supplied Bytes by move rather than copying its payload.
+
+No new runtime optimization is selected for these defaults. Re-evaluate if
+Gateway registers a custom connector, handler or ALPN, installs custom sessions,
+overrides these hooks, enables application subrequests or updates the locked fork.
+WebSocket upgrades and ordinary HTTP body processing are not themselves evidence
+of Custom message-session reachability. Network transports, compiler-generated
+future storage and other inherited callback call sites remain separate work.
+This is source-level reachability evidence; no custom-transport or wire test ran.
+
 ## Direct response-head owner orchestration
 
 Inspected at `a5c4a1d81`: pg_response_head.rs, the transcoder transport.rs,
