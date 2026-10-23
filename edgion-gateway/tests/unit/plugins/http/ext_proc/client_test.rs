@@ -499,6 +499,54 @@ async fn observable_unsolicited_verdict_is_rejected_before_send() {
     assert_eq!(status.message(), "ext_proc processor returned an unsolicited verdict");
 }
 
+/// Pending probes must retain partial gRPC framing in the real tonic stream.
+#[tokio::test]
+async fn tonic_unsolicited_poll_preserves_partial_frame_across_pending_checks() {
+    use bytes::Bytes;
+    use prost::Message;
+    use tonic::codec::Codec;
+
+    let response = ProcessingResponse {
+        response: Some(processing_response::Response::RequestHeaders(Default::default())),
+        ..Default::default()
+    };
+    let payload = response.encode_to_vec();
+    assert!(!payload.is_empty());
+    let mut frame = vec![0];
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&payload);
+
+    for split in [2, 5, frame.len() - 1] {
+        let (frames, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, tonic::Status>>(2);
+        let (sender, mut outbound) = tokio::sync::mpsc::channel(1);
+        let mut codec = tonic::codec::ProstCodec::<ProcessingRequest, ProcessingResponse>::default();
+        let streaming = tonic::Streaming::new_response(
+            codec.decoder(),
+            axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)),
+            http::StatusCode::OK,
+            None,
+            Some(1024),
+        );
+        let mut stream = ExtProcStream {
+            sender: Some(sender),
+            inbound: InboundState::Open(streaming),
+            timeout: Duration::from_secs(1),
+            _permit: Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap(),
+        };
+        frames.send(Ok(Bytes::copy_from_slice(&frame[..split]))).await.unwrap();
+        stream.reject_observable_unsolicited().unwrap();
+        stream.reject_observable_unsolicited().unwrap();
+        frames.send(Ok(Bytes::copy_from_slice(&frame[split..]))).await.unwrap();
+        let status = stream.reject_observable_unsolicited().unwrap_err();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition, "split={split}");
+        assert_eq!(status.message(), "ext_proc processor returned an unsolicited verdict");
+        assert!(matches!(
+            outbound.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+}
+
 /// Deterministic channel-backed tests for the request-scoped stream state
 /// machine. Real gRPC transport coverage belongs to the integration suite.
 mod stream_state {

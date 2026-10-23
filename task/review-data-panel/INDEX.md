@@ -13925,3 +13925,36 @@ contention/performance validation.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings. No full suite or live
 integration ran.
+
+## ExtProc observable-verdict poll and partial-frame ownership
+
+Traced ExtProcStream::reject_observable_unsolicited through the locked workspace
+tonic 0.12.3 codec/decode.rs and futures-util 0.3.33 FutureExt::now_or_never.
+The separately declared OTLP tonic 0.14 dependency is not this client. message()
+borrows Streaming through poll_fn; now_or_never stack-pins that future and polls
+once with a noop waker. There is no extra boxed message future to remove here.
+Streaming owns decoder state, partial frame bytes, pending message length,
+decompression scratch and trailers. Returning Pending and dropping this borrowed
+future does not move those owners out of the stream.
+
+This does not make the whole operation allocation-free or a single-frame poll:
+tonic's poll_next loop can consume multiple ready frames, grow buffers and decode
+an owned protobuf response before returning. The check rejects only an observable
+complete verdict/error/EOF; it does not prove remote causality or detect a verdict
+whose remaining bytes have not arrived. Replacing it with a different readiness
+test could weaken the protocol boundary without eliminating the decoder's work.
+
+Added a network-free production-branch regression using actual tonic Streaming,
+ProstCodec and the existing Axum streaming Body over a controlled byte channel.
+Independent streams split a nonempty gRPC message within the five-byte header,
+at the header boundary and within the payload. Two pending checks retain state;
+completing each frame produces the exact unsolicited-verdict rejection and sends
+no outbound request. This extends the existing test-only receiver coverage; it
+does not establish HTTP/2 interoperability, compression behavior or all transport
+cancellation interleavings. No runtime code or dependency changed.
+
+Independent plan review passed. Fresh client baseline passed 29 tests; final
+ExtProc tests passed 147. Formatting, workspace all-target check/Clippy, seven
+repository guards and diff hygiene passed with existing unrelated warnings.
+No full suite, live integration or performance benchmark ran. Revalidate the
+source ownership proof and regression when the codec dependencies change.
