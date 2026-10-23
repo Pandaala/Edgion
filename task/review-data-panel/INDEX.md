@@ -14740,3 +14740,25 @@ Baseline and final serial selections each passed 123 shared outbound and 13
 ForwardAuth tests (136 executions). Formatting, workspace all-target check/Clippy
 and seven campaign guards passed with existing unrelated warnings. Scripted
 transport tests use no sockets; no full suite or live transport test ran.
+
+## Outbound retry timing and passive recovery helper audit
+
+Inspected compute_retry_delay_ms, parse_retry_after_ms, record_passive_result,
+should_halfopen_probe and their call-loop ordering. Retry delay uses bounded
+integer arithmetic, caps before fresh jitter and consumes a Retry-After override
+once. An over-cap Retry-After stops subsequent body-predicate retry. No fixed
+configuration recompilation or owned-copy batch was identified in these helpers.
+Live health reads and the single-shot admission CAS are not configuration values
+to cache; precomputed jitter would change sampling behavior.
+
+The owning concurrency knowledge now distinguishes current monotonic/saturating
+code from the removed legacy module and qualifies its single-winner argument.
+Zero current interval, unchanged timestamps, concurrent health resets and global
+in-flight exclusivity are outside that argument. Existing zero-backoff acceptance
+is retained without approving arbitrary configuration or claiming all races fixed.
+
+No runtime code changed. Fresh serial execution passed 123 shared outbound tests,
+formatting, workspace all-target check/Clippy and agent-doc validation with
+existing warnings. No new contention experiment, live transport test or
+benchmark ran. This closes only the named helper inspection, not the broader
+outbound transport and health-state concurrency analysis.

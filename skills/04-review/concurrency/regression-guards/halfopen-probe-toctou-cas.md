@@ -1,116 +1,90 @@
 ---
 name: halfopen-probe-toctou-cas
-description: should_halfopen_probe (webhook passive-only circuit recovery) now gates the probe with a compare_exchange on last_halfopen, so concurrent callers admit exactly one half-open probe per backoff window. Reject re-reports claiming the load-check-store gap lets multiple simultaneous probes through.
+description: Review the passive-only outbound recovery timestamp CAS, current backoff interval, and limits of the single-winner argument.
 knowledge_type: regression-guards
 ---
 
-# link-sys F-B02 — `should_halfopen_probe` admits exactly one probe per window via CAS
+# Passive-only recovery timestamp CAS and zero-backoff scope
 
-**Status:** ✅ fixed · 2026-05-25
-**Severity:** Low (BadLogic) — concurrent webhook callers could each pass the half-open gate and flood a recovering backend with simultaneous probes
-**Note (2026-07-08)**: the legacy webhook `health.rs` module this describes was removed
-entirely as dead code (production had moved to the shared outbound `should_halfopen_probe`
-in `plugins/http/common/outbound/call.rs`). Kept for historical design-rationale context.
+## Conclusion and scope
 
-## Conclusion
+The current owner is `plugins/http/common/outbound/call.rs::should_halfopen_probe`.
+It reads the live healthy flag, excludes active-health-managed clients, requires
+passive backoff configuration, and uses a single timestamp compare_exchange to
+claim a due window. A failed CAS returns false without retrying. The calling
+health gate also reads healthy; these are live observations, not immutable
+configuration values that can be cached as a performance shortcut.
 
-`should_halfopen_probe`
-(formerly `edgion-gateway`'s `link_sys/providers/webhook/health.rs`) gates circuit-breaker
-recovery for passive-only webhook health checking. It previously decided as a
-non-atomic load → check → store on `last_halfopen`: it loaded `last`, tested
-`interval == 0 || now >= last + interval`, then — in a separate step — did a plain
-`last_halfopen.store(now)`. Between the load and the store there was no
-serialization, so N concurrent async webhook-call tasks could all read the same
-`last`, all satisfy the condition, and all return `true`, admitting up to N
-simultaneous half-open probes when the window should release exactly one
-(over-admission bounded by the number of concurrent callers).
+For a positive current interval and a due timestamp strictly greater than the
+observed baseline, competing callers with that same baseline cannot all win the
+CAS. This is a conditional timestamp-arbitration property, not a coherent
+snapshot of all HealthState atomics or a guarantee of one globally in-flight
+probe. Another window can arrive while an earlier request remains pending.
+Concurrent recovery/reset writers require their own analysis.
 
-The decision and the timestamp write are now fused with a `compare_exchange`:
+A zero current interval intentionally allows probing on every call. When now
+and last are equal, compare_exchange(last, now) can succeed repeatedly. The
+historical decision accepted this disabled-backoff behavior. A positive initial
+interval alone does not establish a positive current interval: the next interval
+is computed from the multiplier and maximum, and successful recovery resets it.
+This page does not newly approve every possible multiplier/cap configuration.
+
+## Current implementation boundary
+
+HealthState stores healthy, passive_failures, last_halfopen and backoff_sec as
+separate atomics. `record_passive_result` resets failures, healthy and backoff on
+success; a threshold-crossing failure establishes the configured interval and
+process-monotonic baseline. It does not turn these fields into one transaction.
+
+`process_elapsed_secs` uses a process-wide OnceLock<Instant> origin and
+saturating elapsed duration. Zero elapsed seconds is a real timestamp, not an
+uninitialized sentinel. The current due predicate is:
 
 ```rust
-let last = runtime.last_halfopen.load(Ordering::Acquire);
-let interval = runtime.backoff_sec.load(Ordering::Relaxed);
-if interval == 0 || now >= last + interval {
-    if runtime
-        .last_halfopen
-        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
-        .is_ok()
-    {
-        let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
-        runtime.backoff_sec.store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
-        return true;
-    }
-}
-false
+interval == 0 || now >= last.saturating_add(interval)
 ```
 
-Only the caller whose `last_halfopen` is still `last` wins the swap and sends the
-probe (and is the only one to advance `backoff_sec`); every other concurrent
-caller fails the CAS and falls through to `false`. Re-reports of the form "the
-load-check-store on `last_halfopen` is not atomic / two callers can both pass the
-gate / thundering-herd of half-open probes at the backoff boundary" are **not
-accepted** — verify the current `should_halfopen_probe` uses the
-`compare_exchange` gate before re-reporting.
+The gate loads last with Acquire, interval with Relaxed, and performs one
+compare_exchange with AcqRel success and Relaxed failure ordering. A winner
+stores the multiplied/capped next interval with Relaxed ordering. At the
+synthetic saturated boundary now == last == u64::MAX, the due predicate alone
+does not imply a timestamp-changing CAS; exclude that case from the conditional
+single-winner argument. Do not replace the saturating arithmetic with unchecked
+addition or claim that changing the atomics independently creates a snapshot.
 
-## Core Rationale
+## Historical evidence and limits
 
-**1. No retry loop — exactly one probe is the goal.** Unlike F-006's rate-limit
-counter (where a CAS loser must retry because it still needs a permit), a
-half-open probe loser must NOT retry: the window has already released its single
-probe to the winner. So the loser returns `false` (caller gets
-`WebhookCallError::Unhealthy`) and waits for the next backoff boundary.
+F-B02 replaced a load/check/plain-store admission sequence with a CAS on
+2026-05-25. The former `link_sys/providers/webhook/health.rs` implementation was
+removed on 2026-07-08; current production uses the shared outbound call loop.
+The historical contention-test name is not evidence of a current test run.
+The earlier blanket assertion that every other caller must lose omitted the
+zero-interval and timestamp-changing qualifications above.
 
-**2. Single-caller semantics unchanged.** With one caller the CAS always succeeds
-(value is unchanged since the load), so the existing single-threaded tests
-(`test_passive_health_check_marks_unhealthy`,
-`test_passive_health_check_resets_on_success`) pass byte-identically.
+A CAS retry loop would change admission behavior: a loser currently returns
+Unhealthy rather than retrying against a newly observed baseline. Removing a
+live read or replacing the gate with a blocking lock is not an established
+performance improvement. A new admission/lifetime contract requires independent
+analysis rather than relying on the mere presence of compare_exchange.
 
-**3. `interval == 0` degenerate config is acceptable.** When `backoff_sec == 0`
-(operator set `initial_sec == 0`, i.e. backoff effectively disabled) and
-`now == last`, the CAS `compare_exchange(last, now)` is a no-op that can succeed
-for more than one caller. This is acceptable: that config means "probe on every
-call", so admitting multiple probes is the configured intent, not a regression.
-Under any real backoff (`initial_sec > 0`) the gate opens only when
-`now >= last + interval` ⇒ `now > last`, so the CAS strictly distinguishes the
-winner.
+## Verification and re-evaluation
 
-**4. Same atomic-mutation principle as the sibling link-sys / backends fixes.**
-This is the "make the multi-step read-modify-write on a shared atomic atomic via
-compare-and-swap" class, identical in spirit to
-[sliding-window-check-then-increment](sliding-window-check-then-increment.md)
-(`compare_exchange_weak` retry),
-[link-sys-runtime-insert-remove-rcu](link-sys-runtime-insert-remove-rcu.md)
-(`ArcSwap::rcu`), and backends-F002 / F004 / F005.
+Current `call_test.rs::halfopen_window_due_preserves_zero_interval_and_saturates_boundaries`
+covers zero interval, exact boundary and saturating arithmetic. Existing retry
+and scripted-transport tests cover fixed/exponential delays, jitter bounds,
+Retry-After behavior, deadlines and terminal outcomes. A fresh serial shared
+outbound selection passed 123 tests during this documentation audit. No new
+contention test, live transport test, benchmark or proof of every concurrent
+health-state transition was produced.
 
-## Fix Suggestions Not Accepted
+Re-evaluate when baseline writers, current-interval semantics, clock units,
+recovery/reset ordering, active-health interaction or probe lifetime requirements
+change. Verify source and tests before applying this historical conclusion.
 
-- "Wrap `should_halfopen_probe` in a `Mutex`" — unnecessary; the gate is a couple
-  of atomics and a single CAS already serializes the writers without blocking.
-- "Add a CAS retry loop like F-006" — wrong semantics here; a loser must not
-  retry-and-probe (that would re-introduce the multi-probe behavior). Single-shot
-  CAS is correct.
+## References
 
-## Re-evaluation Triggers
-
-Re-open only if:
-
-- `should_halfopen_probe` reverts to a separate load-check-then-`store` on
-  `last_halfopen` (reopening the multi-probe window), or
-- a new caller advances `last_halfopen` outside the CAS, breaking the
-  one-probe-per-window invariant.
-
-## Reference Cases
-
-- link-sys F-B02 (review finding, `tasks/link/`, 2026-05-25)
-- [sliding-window-check-then-increment](sliding-window-check-then-increment.md)
-  — structurally identical sibling (rate-limit counter CAS), fixed the same day.
-- backends-F002 / F004 / F005 — same atomic-CAS principle on config-sync–driven
-  shared state.
-- Formerly `edgion-gateway`'s `link_sys/providers/webhook/health.rs` (removed 2026-07-08) —
-  `should_halfopen_probe` and its only production caller `call.rs::webhook_call`
-  (health gate). Concurrency regression test
-  `test_halfopen_probe_admits_exactly_one_under_contention`.
-
-## Resolution references
-
-- `link-sys-FB02` — 2026-05-25.
+- F-B02 / link-sys-FB02: original passive recovery TOCTOU correction.
+- `edgion-gateway/src/plugins/http/common/outbound/{call,client}.rs`: current owners.
+- [Shared outbound unit-test boundary](../../testing/regression-guards/shared-outbound-call-unit-tests-are-network-free.md).
+- [Sliding-window CAS](sliding-window-check-then-increment.md): a different CAS
+  retry policy; its acquisition loop is not permission to retry this probe gate.

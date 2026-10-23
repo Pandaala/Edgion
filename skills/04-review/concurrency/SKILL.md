@@ -41,7 +41,7 @@ before applying a decision to current code.
 - [Failover / EdgionConfigData write TOCTOU fixed with a shared per-resource lock (fr-capi-01, fr-capi-02)](regression-guards/failover-read-modify-write-per-key-lock.md)
 - [FileSystem conditional delete validates before it destroys — FIXED](regression-guards/fs-conditional-delete-validate-before-unlink.md)
 - [gRPC watch pipeline `None => break` arms now log before breaking (Fix 04)](regression-guards/grpc-watch-none-arm-silent-break.md)
-- [link-sys F-B02 — `should_halfopen_probe` admits exactly one probe per window via CAS](regression-guards/halfopen-probe-toctou-cas.md)
+- [Passive-only recovery timestamp CAS and zero-backoff scope](regression-guards/halfopen-probe-toctou-cas.md)
 - [Leader Lease Never Released on Shutdown — FIXED (best-effort release in the shutdown branch)](regression-guards/leader-lease-release-on-shutdown.md)
 - [Leader Pod Label Fire-and-Forget Desync — FIXED (tick-based resync)](regression-guards/leader-pod-label-tick-resync.md)
 - [LinkSys runtime mutation preserves concurrent updates](regression-guards/link-sys-runtime-insert-remove-rcu.md)
