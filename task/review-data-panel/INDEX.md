@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Adaptive telemetry lookup-key ownership](routing-10-adaptive-lookup-key-ownership.md)
+
 - [Candidate provider-model ownership](routing-09-candidate-provider-model-ownership.md)
 
 - [AI model-route selector and weight preparation](routing-08-model-route-weight-preparation.md)
@@ -15139,5 +15141,17 @@ unselected alternatives, with passthrough, pricing and actual-model attribution
 acceptance distinct from logical quota identity. No runtime code changed.
 Fresh 22 proxy, four router and 36 dispatch tests passed (62 total); no prototype,
 benchmark or live integration ran.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing unrelated warnings. Independent plan and final reviews passed.
+
+## Adaptive telemetry temporary lookup-key boundary
+
+The [lookup-key task](routing-10-adaptive-lookup-key-ownership.md) records five
+owned String constructions before the read-only adaptive-state lookup. Borrowed
+compound keys or publication-owned identities need hash/equality and lifecycle
+proof; per-candidate snapshots and wildcard-resolved exact-key misses must retain
+their semantics. The earlier outer store-Arc optimization did not remove these
+copies. No representation or runtime change was selected. Fresh 22 adaptive and
+22 AI proxy tests passed (44 total); no prototype, benchmark or live integration ran.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing unrelated warnings. Independent plan and final reviews passed.
