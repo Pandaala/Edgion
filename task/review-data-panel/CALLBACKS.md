@@ -870,8 +870,8 @@ No full suite or live integration ran.
 ## Access policy and local response direct-entry inventory
 
 Revalidated at `0e01c0269`: these six entries are disjoint from the preceding
-29, reconciling 35 of 60 explicit RequestFilter implementations. The remaining
-25 entries still need inventory reconciliation. Paths below are relative to
+29, reconciling 35 of 60 explicit RequestFilter implementations. The other
+25 are outside this table; later inventories below reconcile further subsets. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -917,3 +917,59 @@ condition tests (159 selected executions). Supporting tests do not constitute
 159 distinct entry proofs. Formatting, workspace check/Clippy and agent-doc
 validation passed with existing unrelated warnings. No full suite, live
 integration or performance benchmark ran.
+
+## Local authentication and credential staging direct-entry inventory
+
+Revalidated at `147030d72`: these six entries are disjoint from the preceding
+35, reconciling 41 of 60 explicit RequestFilter implementations. The remaining
+19 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| BasicAuth (`basic_auth/plugin.rs`) | Borrow Authorization for decoding, then move owned username/password and a pinned known-user generation into spawn_blocking. Returned username/group survive that task. Missing credentials may select anonymous access; bad credentials never do. Failure delay precedes attempted authentication response writing; success sets sensitive consumer metadata then optionally removes Authorization. |
+| KeyAuth (`key_auth/plugin.rs`) | Select the first nonempty supported Header/Query/Cookie/Ctx source through canonical key_value, hash the key and borrow prepared metadata from the runtime map. Clone prepared sensitive HeaderValues into the setter, then optionally hide only the selected credential source. Missing credentials may allow anonymous access; a supplied invalid key takes delayed rejection. |
+| JwtAuth (`jwt_auth/plugin.rs`) | Borrow a token in header, opt-in query, then cookie priority. Synchronous verification routes issuer/group/key and returns owned verified claims with a borrowed group. Success logs the issuer borrowed from immutable claims, projects headers, optionally serializes context claims and then hides the selected source. Missing-token anonymous access remains distinct from invalid-token rejection. |
+| JweDecrypt (`jwe_decrypt/plugin.rs`) | Borrow the trimmed selected token, enforce token length and prepared-key state, decode/decrypt into owned plaintext and reject header controls. Publish the sensitive forwarding header before optional JSON claim projection, context storage and source hiding. Strict missing-token rejection differs from nonstrict bypass; failed forwarding stops later consumers. |
+| Csrf (`csrf/plugin.rs`) | Read the live method at execution. GET/HEAD/OPTIONS generate and append a new token cookie before continuing. Other methods borrow header/cookie values, require equality, decode an owned token and verify signature/age. Missing, mismatched or invalid tokens return fixed 401 responses without exposing token contents. |
+| CredentialInjector (`credential_injector/plugin.rs`) | Check the prepared monotonic expiry, reserved target and all current Connection nominations. Remove the client target value, then stage an owned HeaderName and shared sensitive HeaderValue handle for later attempt-local insertion. Deferral failure rejects; successful staging does not insert the secret into the current request. |
+
+BasicAuth's Arc and decoded credentials are required by the blocking-task handoff;
+this inventory does not assert that dropping the request cancels a task already
+running. KeyAuth metadata remains tied to the immutable plugin while live setters
+consume owned header values. JWT still performs its unverified routing decode and
+separate verified decode; borrowing issuer from the success result removes neither.
+The [issuer/key binding contract](../../skills/04-review/jwt-auth/mandatory-design/issuer-key-binding.md)
+retains algorithm checks, group-scoped keys and verification order. Authentication
+response helpers can fail; termination after an attempted write does not establish
+successful delivery.
+
+JWE decrypts its ciphertext buffer in place and transfers it into a UTF-8 String;
+plaintext still feeds multiple ordered consumers. Its header transfer remains
+[jwe-01](jwe-01-plaintext-header-ownership.md), not permission to release plaintext
+before optional consumers finish. CSRF checks the current execution point, not a
+frozen method or a guarantee against later rewrites; see the
+[method-order contract](../../skills/04-review/csrf/regression-guards/execution-time-method-rewrite-boundary.md).
+Cookie production remains [csrf-01](csrf-01-cookie-header-ownership.md).
+
+Credential staging preserves the owned sensitive generation across later stages
+and retries. The adapter can reject protected transcoder-header mutations. Final
+upstream-request processing still rechecks expiry and both Connection views
+before inserting credentials under the
+[deferred-materialization contract](../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md).
+Request-stage checks alone are not proof of eventual injection or delivery.
+
+All six retain the default body-materialization declaration. No new runtime edit
+is selected here; JWT issuer borrowing is already in the baseline. Existing
+[strip storage](auth-01-strip-survivor-storage.md),
+[challenge preparation](auth-02-prepared-challenge-generation.md),
+[claim paths](auth-03-claim-path-preparation.md) and
+[BasicAuth MD5 result storage](basic-auth-01-md5-result-storage.md) decisions remain
+open. Crypto/parser engines, credential publication, blocking-pool behavior and
+transport dependencies are deeper scope, not closed by this direct inventory.
+
+Fresh verification passed 19 BasicAuth, 15 KeyAuth, 47 JwtAuth, 21 JweDecrypt,
+20 CSRF and seven CredentialInjector tests, plus 38 shared-auth helper tests
+(167 selected executions). Supporting cases are not distinct direct-entry proofs.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live integration or performance benchmark ran.
