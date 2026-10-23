@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared DynamicInternalUpstream rule lookup](routing-06-prepared-dynamic-rule-index.md)
+
 - [GraphQL operation-name deduplication storage](graphql-03-operation-name-dedup-storage.md)
 
 - [Prepared response-cache origin stamp components](cache-06-prepared-origin-stamp-components.md)
