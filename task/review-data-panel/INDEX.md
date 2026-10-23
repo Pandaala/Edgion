@@ -14950,3 +14950,27 @@ persistence and 41 discovery-coordinator tests (76 total). Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing unrelated
 warnings. No new test, live transport experiment, full suite or contention/
 throughput benchmark ran.
+
+## Borrow passive state during Service cooldown expiry
+
+EndpointRuntimeState::outlier_ejected now borrows its passive-outlier slot through
+a short ArcSwapOption guard while expiring the passive cooldown. The guard ends
+before clear_outlier_ejected clears that slot and settles the runtime gate/gauge.
+The endpoint completion lock and the passive inner-state lock retain their order;
+expiry performs no await or reentrant slot mutation. PassiveEjectionState has no
+custom destructor, and no borrowed pointer escapes this synchronous operation.
+
+This avoids unconditional owned-Arc promotion on the cold expiry edge only.
+Ordinary non-expired selection takes neither this load nor this recovery lock.
+ArcSwap guard fallback and writer-paid reference-count operations remain possible;
+no allocation-free, lock-free or measured throughput claim is made. The test-only
+owned deadline-expiry read stays unchanged.
+
+Attachment and frozen retirement semantics, deadline samples/rechecks, passive
+counter reset, state generation, once-only gauge settlement and policy completion
+serialization are unchanged. This adds no cache, state machine or observability.
+
+Fresh baseline and final runs each passed 36 outlier-detection and 41 discovery-
+coordinator tests (77 total). Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing unrelated warnings. No new test,
+live integration, full suite or contention/throughput benchmark ran.

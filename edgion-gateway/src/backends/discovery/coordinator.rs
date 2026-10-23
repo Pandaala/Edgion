@@ -406,7 +406,7 @@ impl EndpointRuntimeState {
         {
             return self.outlier_ejected.load(Ordering::Acquire);
         }
-        if let Some(passive) = self.passive_outlier.load_full() {
+        if let Some(passive) = self.passive_outlier.load().as_ref() {
             passive.expire_legacy_ejection();
         }
         self.clear_outlier_ejected();
