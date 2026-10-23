@@ -100,7 +100,7 @@ impl RequestFilter for GrpcJsonTranscoder {
         }
         let binding = match self
             .compiled
-            .bind(session.get_method(), session.get_path(), session.get_query().as_deref())
+            .bind(session.get_method(), session.get_path(), session.request_query())
         {
             Ok(binding) => binding,
             Err(error) => {

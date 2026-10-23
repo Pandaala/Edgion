@@ -1207,7 +1207,7 @@ async fn transcoder_body_admission_preserves_json_errors_and_operator_limit() {
         session.expect_grpc_transcoding_allowed().times(1).return_const(true);
         session.expect_get_method().return_const("POST".to_string());
         session.expect_get_path().return_const("/v1/hello".to_string());
-        session.expect_get_query().return_const(None);
+        session.expect_request_query().return_const(None);
         session.expect_ctx().return_const(EdgionHttpContext::new());
         session
             .expect_ensure_request_body()
@@ -1238,6 +1238,75 @@ async fn transcoder_body_admission_preserves_json_errors_and_operator_limit() {
                     b"{\"error\":\"gRPC transcoding request failed\"}"
                 )),
             }
+        );
+    }
+}
+
+#[tokio::test]
+async fn transcoder_current_query_binding_precedes_body_capture() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::BodyReadError;
+    use crate::EdgionHttpContext;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
+
+    let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
+        "descriptor": {
+            "type": "inline",
+            "base64": STANDARD.encode(include_bytes!("../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb"))
+        },
+        "services": ["test.TestService"]
+    }))
+    .unwrap();
+    let mut runtime = PluginRuntime::new();
+    assert!(runtime
+        .add_from_request_filters(
+            &[RequestFilterEntry::new(EdgionPlugin::GrpcJsonTranscoder(config))],
+            "default",
+            "query-transcoder",
+        )
+        .is_empty());
+    let filter = runtime.request_plugins_iter().next().unwrap();
+    for (query, status) in [
+        (None, 500),
+        (Some(""), 500),
+        (Some("count=%33"), 500),
+        (Some("count=1&count=2"), 400),
+        (Some("count=%GG"), 400),
+    ] {
+        let mut session = MockPluginSession::new();
+        session.expect_grpc_transcoding_allowed().times(1).return_const(true);
+        session.expect_get_method().return_const("GET".to_string());
+        session.expect_get_path().return_const("/v1/numbers".to_string());
+        session.expect_get_query().never();
+        session.expect_request_query().times(1).return_const(query);
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        if status == 500 {
+            session
+                .expect_ensure_request_body()
+                .times(1)
+                .return_once(|_| Err(BodyReadError::NotBuffered));
+        } else {
+            session.expect_ensure_request_body().never();
+        }
+        session
+            .expect_set_response_header()
+            .with(
+                mockall::predicate::eq("content-type"),
+                mockall::predicate::eq("application/json"),
+            )
+            .times(1)
+            .return_once(|_, _| Ok(()));
+        let mut log = PluginLog::new("GrpcJsonTranscoder");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status,
+                body: Some(bytes::Bytes::from_static(
+                    b"{\"error\":\"gRPC transcoding request failed\"}"
+                )),
+            },
+            "query={query:?}",
         );
     }
 }

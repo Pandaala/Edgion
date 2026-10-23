@@ -109,6 +109,18 @@ describes configuration and scope. H1.1/H2 downstream selection is independent o
 mandatory H2 upstream; canonical backend/TLS/egress and pool owners are preserved.
 Unary Hold replacement currently abandons the origin connection.
 
+### Current query binding ownership
+
+The request entry borrows request_query directly into synchronous binding.
+The adapter reads the same current URI as get_query, without its intermediate
+String copy. BoundRequest owns its selected binding and decoded fields before
+body capture begins; no query borrow crosses that await. Path/query limits,
+duplicate-field rejection, percent decoding and REST error routing are unchanged.
+The runtime regression covers absent/empty queries, an encoded scalar, duplicate
+scalar rejection and malformed escapes, including rejection before capture.
+Resources codec tests retain decoded-value coverage. This removes one temporary
+query copy, not all binding allocations or a measured throughput bottleneck.
+
 ## Callback output acquisition (ARCH-033)
 
 `GrpcResponseProcessor::feed` owns an optional callback-local canonical CappedWriter.

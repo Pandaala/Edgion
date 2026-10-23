@@ -14099,3 +14099,22 @@ whole-callback allocation-free claim is made.
 Fresh verification passed all 28 RequestMirror module tests, formatting,
 workspace check/Clippy and seven repository guards. Existing unrelated warnings
 remain. No full suite, live HTTP integration or benchmark ran.
+
+## GrpcJsonTranscoder borrowed current query binding
+
+The request entry now passes request_query directly into synchronous descriptor
+binding instead of creating a temporary get_query String. Both adapter accessors
+read the current URI. BoundRequest owns decoded fields and its binding Arc before
+the first body-capture await, so capture admission, REST errors, conversion
+reservations, body publication and transport-plan ownership remain unchanged.
+
+The runtime regression checks absent/empty queries, an encoded scalar, duplicate
+scalar fields and malformed escapes. It forbids the owned getter and verifies
+invalid binding returns the fixed JSON 400 before body capture. Existing Resources
+codec tests retain decoded-value assertions. No binding-wide allocation-free or
+measured throughput claim follows from removing this temporary copy.
+
+Fresh baseline passed 30 Gateway transcoder and 35 Resources codec tests. Final
+verification passed 31 and 35 respectively (66 selected executions), formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. No full suite, live gRPC integration or benchmark ran.
