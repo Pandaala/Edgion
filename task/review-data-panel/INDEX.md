@@ -14064,3 +14064,21 @@ rejection and both JWT decodes retain their existing behavior.
 Fresh verification passed 47 JWT and 38 shared-auth tests (85 selected executions),
 formatting, workspace check/Clippy and seven repository guards. Existing unrelated
 warnings remain. No full suite, live integration or throughput benchmark ran.
+
+## ForwardAuth borrowed current query metadata
+
+context_headers now borrows request_query from the current session together with
+Host/path/method. The entry no longer constructs an owned get_query snapshot.
+The shared outbound session borrow spans the call; final HeaderValues remain
+owned by the outbound request. Body acquisition precedes metadata selection,
+and current versus frozen auth-hop identity, metadata precedence, retries,
+response caps and denial semantics are unchanged.
+
+The existing metadata regression now distinguishes absent and present-empty
+queries, preserves duplicate/encoded raw text and checks nonempty query pointer
+identity. No measured throughput or outbound-wide allocation-free claim is made.
+
+Fresh verification passed 13 ForwardAuth and 46 network-free shared outbound-call
+tests (59 selected executions), formatting, workspace check/Clippy and seven
+repository guards. Existing unrelated warnings remain; no full suite, live
+integration or throughput benchmark ran.

@@ -98,12 +98,12 @@ pub struct ForwardAuth {
 impl ForwardAuth {
     /// Describe the request at authorization time, independently of the auth hop.
     /// The shared outbound engine inserts these after ordinary configured headers.
-    fn context_headers<'a>(session: &'a dyn PluginSession, query: &'a str) -> [(&'static str, &'a str); 4] {
+    fn context_headers(session: &dyn PluginSession) -> [(&'static str, &str); 4] {
         [
             ("X-Forwarded-Host", session.header_str("host").unwrap_or_default()),
             ("X-Forwarded-Uri", session.get_path()),
             ("X-Forwarded-Method", session.get_method()),
-            ("X-Forwarded-Query", query),
+            ("X-Forwarded-Query", session.request_query().unwrap_or_default()),
         ]
     }
 
@@ -304,8 +304,7 @@ impl RequestFilter for ForwardAuth {
 
         // Read current context after earlier rewrites. Auth-hop method/path defaults
         // separately use entry identity; they do not determine these metadata values.
-        let query = session.get_query().unwrap_or_default();
-        let extra_headers = Self::context_headers(session, &query);
+        let extra_headers = Self::context_headers(session);
 
         // Call the shared outbound engine:
         //   health gate → rate gate → compile+build request → retry loop →

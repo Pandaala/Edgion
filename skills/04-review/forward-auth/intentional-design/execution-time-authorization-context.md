@@ -99,3 +99,18 @@ ownership changes, or inline ExternalAuth stops sharing ForwardAuth.
 
 - T03-A / T03: original-request description mismatch; corrected documentation
   and accepted execution-time context, with boundary regression coverage.
+
+## Borrowed current query metadata
+
+ForwardAuth context_headers reads request_query directly alongside the other
+current-session metadata. Both production query accessors read the same current
+request-header URI; this removes the get_query temporary String without switching
+to frozen entry-query data. Body acquisition still finishes before these reads.
+
+The borrowed array and shared session remain valid through the outbound call.
+Final request construction owns its HeaderValues before sending/retrying, and
+session mutation resumes after the call result. This does not remove outbound
+header storage or change metadata precedence, failure handling or retry behavior.
+The existing metadata test covers current/rewritten identity, absent and present
+empty queries, duplicate/encoded raw query text and nonempty query slice identity.
+These checks concern this ownership boundary, not live authorization topology.

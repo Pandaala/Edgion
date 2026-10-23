@@ -37,7 +37,7 @@ fn make_request_session() -> MockPluginSession {
     setup_header_mocks(&mut s, &[("host", "example.com")]);
     s.expect_get_path().return_const("/api/data".to_string());
     s.expect_get_method().return_const("GET".to_string());
-    s.expect_get_query().return_const(None::<String>);
+    s.expect_request_query().return_const(None);
     s
 }
 
@@ -50,30 +50,36 @@ fn response(status: u16, headers: HeaderMap, body: Bytes) -> OutboundResponse {
 #[test]
 fn context_metadata_describes_current_request_after_rewrite_or_without_rewrite() {
     for (host, path, method, query) in [
-        ("entry.test", "/users/42", "GET", "verbose=1"),
-        ("rewritten.test", "/graphql", "POST", "mode=rest"),
-        ("entry.test", "/users/42", "GET", ""),
+        ("entry.test", "/users/42", "GET", Some("verbose=1")),
+        ("rewritten.test", "/graphql", "POST", Some("mode=rest")),
+        ("entry.test", "/users/42", "GET", None),
+        ("entry.test", "/users/42", "GET", Some("")),
+        (
+            "rewritten.test",
+            "/graphql",
+            "POST",
+            Some("key=one&key=two&encoded=a%20b%26c"),
+        ),
     ] {
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("host", host), ("X-Forwarded-Method", "spoofed")]);
         session.expect_get_path().return_const(path.to_string());
         session.expect_get_method().return_const(method.to_string());
-        session.expect_get_query().return_const(if query.is_empty() {
-            None
-        } else {
-            Some(query.to_string())
-        });
+        session.expect_request_query().return_const(query);
         // Entry accessors are deliberately unset: metadata must use the live view.
-        let current_query = session.get_query().unwrap_or_default();
+        let headers = ForwardAuth::context_headers(&session);
         assert_eq!(
-            ForwardAuth::context_headers(&session, &current_query),
+            headers,
             [
                 ("X-Forwarded-Host", host),
                 ("X-Forwarded-Uri", path),
                 ("X-Forwarded-Method", method),
-                ("X-Forwarded-Query", query),
+                ("X-Forwarded-Query", query.unwrap_or_default()),
             ]
         );
+        if let Some(query) = session.request_query().filter(|query| !query.is_empty()) {
+            assert!(std::ptr::eq(headers[3].1, query));
+        }
     }
 }
 
