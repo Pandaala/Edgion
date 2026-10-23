@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Canonical LRU routing and map hashing](lru-01-shard-and-map-hashing.md)
+
 - [Response-cache replay body ownership](cache-07-replay-body-owner-lifetime.md)
 
 - [Prepared DynamicInternalUpstream rule lookup](routing-06-prepared-dynamic-rule-index.md)
@@ -14988,3 +14990,15 @@ can prevent arena reclamation after a local release. No runtime change was
 selected. Fresh verification passed 21 storage and seven lifecycle tests,
 formatting, workspace all-target check/Clippy and agent-doc validation with
 existing unrelated warnings. No prototype, live origin or benchmark ran.
+
+## Canonical LRU routing and map hashing decision
+
+The cache lookup audit followed ResponseCache into the shared sharded/local LRU.
+Multi-shard routing hashes before the local mutex, then the map performs its own
+hashing; single-shard lookup skips routing hashing. The [hashing task](lru-01-shard-and-map-hashing.md)
+records precomputation/API tradeoffs, seed and borrowed-key coherence, distribution
+and eviction boundaries, plus admission accounting for any added metadata.
+No hash, cache or expiry policy was changed. Fresh verification passed 47 Algo
+cache, 21 Gateway storage and six policy tests (74 total), formatting, workspace
+all-target check/Clippy and agent-doc validation with existing warnings. No
+prototype, benchmark, full suite or live origin test ran.
