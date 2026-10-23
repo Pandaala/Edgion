@@ -13742,3 +13742,29 @@ binary vectors, scan-budget, output-limit and type-error tests passed.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings. No full suite, live integration
 or performance benchmark ran.
+
+## Transfer owned native CORS preflight reflections
+
+GapiCorsFilter's terminating preflight builder now consumes its Cow header pairs.
+Already-owned method/header reflections move through Pingora insertion; fixed
+values and the borrowed Origin retain the previous insertion path. Native
+ignored insertion errors, subsequent headers, Vary, 204 status, casing/order and
+capacity are unchanged. Actual-response session mutation remains separate under
+cors-02; this does not change origin matching or preparation policy.
+
+This extends the established EdgionPlugins preflight transfer to the native
+builder. It removes the second payload copy for owned reflections. Pinned
+http 1.5.0 still validates the same bytes and initializes sensitivity identically;
+String-to-Bytes conversion may retain spare capacity or allocate metadata, so no
+unconditional allocation-count, retained-memory or throughput gain is claimed.
+The native CORS knowledge page now describes the insertion boundary.
+
+Independent plan review passed. Baseline Gateway CORS verification passed 46
+cases; final verification passed 47. A new 20-case differential test compares
+status, headers, sensitivity and HTTP/1 wire bytes against the previous borrowed
+insertion. It covers fixed/reflected values, missing/empty/non-ASCII text and
+synthetic invalid values, including preserved later headers after rejection.
+Invalid mock values are defensive handling tests, not wire-admission acceptance.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings. No full suite, live integration
+or performance benchmark ran.

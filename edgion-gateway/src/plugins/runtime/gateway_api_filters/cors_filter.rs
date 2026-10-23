@@ -178,8 +178,11 @@ impl GapiCorsFilter {
     fn build_preflight_response(&self, session: &dyn PluginSession, origin: &str) -> Option<Box<ResponseHeader>> {
         let headers = self.build_cors_headers(session, origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).ok()?;
-        for (name, value) in &headers {
-            let _ = resp.insert_header(*name, value.as_ref());
+        for (name, value) in headers {
+            let _ = match value {
+                Cow::Borrowed(value) => resp.insert_header(name, value),
+                Cow::Owned(value) => resp.insert_header(name, value),
+            };
         }
         let _ = resp.append_header("Vary", "Origin");
         Some(Box::new(resp))

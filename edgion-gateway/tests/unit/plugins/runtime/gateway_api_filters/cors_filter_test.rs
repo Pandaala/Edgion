@@ -487,3 +487,63 @@ async fn request_origin_is_borrowed_until_local_response_is_built() {
         }
     }
 }
+
+#[test]
+fn preflight_owned_reflections_preserve_borrowed_insertion_behavior() {
+    fn session(reflected: Option<&str>) -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        let reflected = reflected.map(str::to_owned);
+        session.expect_header_value().returning(move |name| {
+            assert!(matches!(
+                name,
+                "access-control-request-method" | "access-control-request-headers"
+            ));
+            reflected.clone()
+        });
+        session
+    }
+
+    // Preserve the old borrowed insertion boundary as a differential reference.
+    // Invalid mock values exercise ignored insertion failures, not wire admission.
+    fn borrowed_response(filter: &GapiCorsFilter, session: &dyn PluginSession, origin: &str) -> ResponseHeader {
+        let headers = filter.build_cors_headers(session, origin, true);
+        let mut response = ResponseHeader::build(204, Some(headers.len() + 1)).unwrap();
+        for (name, value) in &headers {
+            let _ = response.insert_header(*name, value.as_ref());
+        }
+        let _ = response.append_header("Vary", "Origin");
+        response
+    }
+
+    for reflect in [false, true] {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
+            allow_origins: Some(vec!["https://app.example".into()]),
+            allow_credentials: Some(true),
+            allow_methods: Some(vec![if reflect { "*" } else { "GET" }.into()]),
+            allow_headers: Some(vec![if reflect { "*" } else { "X-Test" }.into()]),
+            expose_headers: Some(vec!["X-Result".into()]),
+            max_age: 17,
+        })
+        .unwrap();
+        for reflected in [None, Some(""), Some("PATCH"), Some("café"), Some("invalid\r\nvalue")] {
+            for origin in ["https://app.example", "invalid\norigin"] {
+                let expected = borrowed_response(&filter, &session(reflected), origin);
+                let actual = filter.build_preflight_response(&session(reflected), origin).unwrap();
+                assert_eq!(actual.status, expected.status);
+                assert_eq!(actual.headers, expected.headers);
+                let mut expected_wire = Vec::new();
+                let mut actual_wire = Vec::new();
+                expected.header_to_h1_wire(&mut expected_wire);
+                actual.header_to_h1_wire(&mut actual_wire);
+                assert_eq!(actual_wire, expected_wire);
+                assert!(actual.headers.values().all(|value| !value.is_sensitive()));
+                assert_eq!(actual.headers["vary"], "Origin");
+                assert_eq!(actual.headers["access-control-max-age"], "17");
+                if reflect && reflected.is_some_and(|value| value.contains('\r')) {
+                    assert!(!actual.headers.contains_key("access-control-allow-methods"));
+                    assert!(!actual.headers.contains_key("access-control-allow-headers"));
+                }
+            }
+        }
+    }
+}

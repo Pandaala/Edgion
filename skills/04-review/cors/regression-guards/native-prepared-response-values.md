@@ -38,5 +38,15 @@ Callback tests forbid the owned getter for Origin and cover allowed/denied,
 missing/empty/non-text/duplicate origins and actual/preflight dispatch.
 This removes the Origin copy, not every allocation in the async callback.
 
+The preflight builder consumes its header pairs. Owned method/header reflections
+move into Pingora insertion; borrowed fixed values and Origin keep the borrowed
+insertion path. Invalid header insertions are still ignored individually, so
+later headers and Vary survive. The pinned String conversion validates the same
+bytes and sensitivity state, but can retain spare capacity or allocate Bytes
+metadata. This removes a payload copy, not necessarily every allocation.
+The differential native preflight test compares status, headers and HTTP/1 wire
+bytes against borrowed insertion for fixed/reflected, absent/empty, non-ASCII and
+synthetic invalid values. Actual-response session mutation remains unchanged.
+
 Re-evaluate when adding configuration fields, changing canonical validation,
 reflection ownership, origin credential policy or header-pair capacity.
