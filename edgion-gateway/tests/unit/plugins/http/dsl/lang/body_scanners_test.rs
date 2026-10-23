@@ -206,6 +206,35 @@ async fn json_select_root_and_descendant_share_one_parse() {
 }
 
 #[tokio::test]
+async fn json_select_integer_captures_preserve_parent_encoding_limits() {
+    for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+        let input = format!(r#"{{"n":{value}}}"#);
+        let (plan, values) = scan_json_select(&[input.as_bytes()], &[("number", "$.n")], 0).await;
+        assert!(matches!(
+            selected(&plan, &values, "number"),
+            JsonScanValue::Value(Value::Int(actual)) if *actual == value
+        ));
+
+        for limit in [input.len() - 1, input.len()] {
+            let (plan, values) =
+                scan_json_select(&[input.as_bytes()], &[("root", "$"), ("number", "$.n")], limit).await;
+            assert!(matches!(
+                selected(&plan, &values, "number"),
+                JsonScanValue::Value(Value::Int(actual)) if *actual == value
+            ));
+            if limit == input.len() {
+                assert!(matches!(
+                    selected(&plan, &values, "root"),
+                    JsonScanValue::Value(Value::Str(actual)) if actual.as_ref() == input
+                ));
+            } else {
+                assert!(matches!(selected(&plan, &values, "root"), JsonScanValue::TooLong));
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn json_select_preserves_existing_non_i64_number_conversion() {
     let (plan, values) = scan_json_select(
         &[br#"{"float":1.5,"big":18446744073709551615}"#],

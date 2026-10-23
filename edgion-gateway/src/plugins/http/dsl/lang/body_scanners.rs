@@ -729,11 +729,17 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        if !self.emit_to_parent {
+            return Ok(self.scalar(JsonScanValue::Value(Value::Int(value)), b""));
+        }
         let encoded = value.to_string();
         Ok(self.scalar(JsonScanValue::Value(Value::Int(value)), encoded.as_bytes()))
     }
 
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        if let Ok(value) = i64::try_from(value) {
+            return self.visit_i64(value);
+        }
         let encoded = value.to_string();
         let captured = match i64::try_from(value) {
             Ok(value) => JsonScanValue::Value(Value::Int(value)),

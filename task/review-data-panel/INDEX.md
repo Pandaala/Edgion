@@ -13445,3 +13445,24 @@ exercise simultaneous root/nested-container captures so parent reuse is covered.
 No full suite, live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Skip unused JSON selection integer formatting
+
+JsonSelectVisitor now skips decimal String construction for i64-compatible
+integers when no parent encoding is required. Checked u64 conversion delegates
+to the same signed-integer visitor; integers retained in a parent still use the
+same decimal representation and bounded accumulator. Overflowing u64 and float
+string conversion remain unchanged. This removes transient integer formatting
+and its String allocation on the affected path; no throughput result is claimed.
+
+Integer capture identity, string/aggregate limits, duplicate handling, complete
+JSON validation, scan accounting and worker ownership remain unchanged.
+Independent plan review passed. Baseline Gateway DSL verification passed 506
+cases; final verification passed 507. The added parser test covers signed extrema,
+negative/zero/positive values at zero string allowance, exact and insufficient
+parent encoding limits, and independent integer captures under oversized parents.
+Existing non-i64 numeric and malformed-document regressions passed. No full suite,
+live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.
