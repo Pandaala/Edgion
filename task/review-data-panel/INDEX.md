@@ -15035,3 +15035,27 @@ part of acceptance. Four unchanged-source model-router tests passed; no prototyp
 benchmark or live integration ran.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing unrelated warnings. Independent plan and final reviews passed.
+
+## Borrow AI model-route decision identity
+
+ModelRouteDecision now borrows its effective model name from the requested name
+or the immutable compiled rewrite. Model-list visibility reads that borrow
+synchronously. Request handling separates the borrowed identity from the owned
+weights and canonical-rewrite flag, then materializes a String only when the
+logical model actually differs, before mutating the canonical request. The
+borrow never spans that mutation. Actual rewrite handling keeps its owned input;
+the no-rewrite path and listing avoid the discarded identity String copy.
+
+Matching, specificity, weights, invalid-share gating, canonical-model checks,
+rewrite-before-quota ordering and captured-generation ownership are unchanged.
+An explicit rewrite equal to the current name still requires canonical ownership
+while skipping body mutation. Neither HeaderMap nor backend inputs are tied to
+the returned name lifetime. The deferred routing-04 name-preparation decision is
+unaffected. No throughput, RSS or async-future-size improvement is claimed.
+
+Baseline and final runs each passed four model-router and 21 AI HTTP proxy tests
+(25 total). Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing unrelated warnings. Existing tests cover matching,
+listing visibility, canonical request mutation and candidate semantics; no new
+test, full suite, live integration or benchmark ran. Independent plan and final
+reviews passed; the plan included a compiled lifetime probe before implementation.

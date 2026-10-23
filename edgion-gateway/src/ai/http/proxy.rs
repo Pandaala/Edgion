@@ -16,7 +16,7 @@ use pingora_http::ResponseHeader;
 
 use crate::ai::quota::{CompiledAiQuotaPlan, QuotaAdmission, QuotaExceededAction};
 use crate::ai::routing::candidate::{invalid_weight_gate, CandidateEligibility, ConformanceGate, RouteCandidate};
-use crate::ai::routing::model_router::ModelRouteTable;
+use crate::ai::routing::model_router::{ModelRouteDecision, ModelRouteTable};
 use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, MAX_AI_ROUTE_RETRIES};
 use crate::ai::{
     get_adaptive_telemetry_store, global_ai_backend_store, AdaptiveTelemetryKey, AdaptiveTelemetryStore, AiAttemptPlan,
@@ -93,7 +93,7 @@ fn visible_model_ids(
                     return false;
                 };
                 lookup(key).is_some_and(|runtime| {
-                    let resolved = runtime.resolve_model(&decision.identity_model);
+                    let resolved = runtime.resolve_model(decision.identity_model);
                     let has_symbolic_owner = !model_id.ends_with('*')
                         || decision.rewrite_requires_canonical
                         || runtime
@@ -103,7 +103,7 @@ fn visible_model_ids(
                     resolved.is_some_and(|model| model.public)
                         && has_symbolic_owner
                         && (!decision.rewrite_requires_canonical
-                            || runtime.has_canonical_model(&decision.identity_model))
+                            || runtime.has_canonical_model(decision.identity_model))
                 })
             })
         })
@@ -376,8 +376,16 @@ impl AiProxy {
         else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
-        if decision.identity_model != canonical.logical_model
-            && canonical.replace_logical_model(&decision.identity_model).is_err()
+        let ModelRouteDecision {
+            identity_model,
+            weights,
+            rewrite_requires_canonical,
+            ..
+        } = decision;
+        let model_rewrite = (identity_model != canonical.logical_model).then(|| identity_model.to_owned());
+        if model_rewrite
+            .as_deref()
+            .is_some_and(|model| canonical.replace_logical_model(model).is_err())
         {
             return Self::reject(session, log, "model-rewrite-invalid", AiProxyError::BackendUnavailable);
         }
@@ -395,11 +403,7 @@ impl AiProxy {
             // Otherwise the filter would silently normalize onto healthy
             // candidates during publication skew.
             if runtime_available {
-                candidate.weight = decision
-                    .weights
-                    .get(backend.slot())
-                    .copied()
-                    .unwrap_or(candidate.weight);
+                candidate.weight = weights.get(backend.slot()).copied().unwrap_or(candidate.weight);
             }
             gate_candidates.push(candidate);
         }
@@ -418,7 +422,7 @@ impl AiProxy {
                 || self.config.backend_selection.selection_type == AiBackendSelection::LowestUsage
                 || backends
                     .iter()
-                    .filter(|b| decision.weights.get(b.slot()).copied().unwrap_or(0) > 0)
+                    .filter(|b| weights.get(b.slot()).copied().unwrap_or(0) > 0)
                     .any(|b| {
                         ai_candidate_spec(b)
                             .and_then(|(_, _, k)| snapshot.get_by_key(k))
@@ -441,12 +445,12 @@ impl AiProxy {
             .filter_map(|(index, backend)| {
                 let (slot, _, key) = ai_candidate_spec(backend)?;
                 let logical = crate::backends::LogicalBackendHandle::new(Arc::clone(&backends), index)?;
-                Some((logical, slot, decision.weights.get(slot).copied().unwrap_or(0), key))
+                Some((logical, slot, weights.get(slot).copied().unwrap_or(0), key))
             })
             .collect();
         let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, _, key)| *key));
         let passthrough_allowed = unknown_model_passthrough_allowed(
-            decision.rewrite_requires_canonical,
+            rewrite_requires_canonical,
             self.config.on_unknown_model,
             candidate_specs
                 .iter()
@@ -510,7 +514,7 @@ impl AiProxy {
                 }
             })
             .collect::<Vec<_>>();
-        if decision.rewrite_requires_canonical
+        if rewrite_requires_canonical
             && !candidates.iter().any(|candidate| {
                 candidate.weight > 0
                     && candidate

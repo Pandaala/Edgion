@@ -26,9 +26,9 @@ pub struct ModelRouteTable {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelRouteDecision {
+pub struct ModelRouteDecision<'a> {
     pub matched: bool,
-    pub identity_model: String,
+    pub identity_model: &'a str,
     /// Effective weights indexed by raw backend declaration slot.
     pub weights: Vec<i32>,
     /// A matched rewrite must resolve as a canonical catalog name and cannot
@@ -79,12 +79,12 @@ impl ModelRouteTable {
         Some(Self { routes })
     }
 
-    pub fn decide(
-        &self,
-        requested_model: &str,
+    pub fn decide<'a>(
+        &'a self,
+        requested_model: &'a str,
         request_headers: &http::HeaderMap,
         backends: &[CompiledBackend],
-    ) -> Result<ModelRouteDecision, ModelRouteDecisionError> {
+    ) -> Result<ModelRouteDecision<'a>, ModelRouteDecisionError> {
         let winner = self
             .routes
             .iter()
@@ -102,7 +102,7 @@ impl ModelRouteTable {
         let Some(winner) = winner else {
             return Ok(ModelRouteDecision {
                 matched: false,
-                identity_model: requested_model.to_string(),
+                identity_model: requested_model,
                 weights: backends
                     .iter()
                     .map(|backend| backend.schema().weight.unwrap_or(1))
@@ -137,11 +137,7 @@ impl ModelRouteTable {
         }
         Ok(ModelRouteDecision {
             matched: true,
-            identity_model: winner
-                .action
-                .rewrite
-                .clone()
-                .unwrap_or_else(|| requested_model.to_string()),
+            identity_model: winner.action.rewrite.as_deref().unwrap_or(requested_model),
             weights,
             rewrite_requires_canonical: winner.action.rewrite.is_some(),
         })
