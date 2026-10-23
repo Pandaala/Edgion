@@ -13769,3 +13769,27 @@ Invalid mock values are defensive handling tests, not wire-admission acceptance.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings. No full suite, live integration
 or performance benchmark ran.
+
+## Release temporary WAF heads after transaction publication
+
+The Gateway WAF request callback now releases its temporary request-line,
+normalized URI, raw URI and header-view Vec after successful transaction
+construction. RequestState has already copied required bytes into its owned
+arena/collections. The response callback similarly releases its header-view Vec
+after successful publish_response_head builds the owned ResponseState.
+
+Previously these locals remained in the callback drop scope during subsequent
+rule execution, and request temporaries could remain across body-read waits.
+Explicit drops shorten temporary retention without removing transaction-owned
+copies or changing borrowed live headers. String and view carriers have no
+custom destructor behavior. All drops precede the existing execution timer;
+validation, admission, failure paths, metrics and access-log ownership are
+unchanged. No retained-byte accounting is refunded. No RSS or throughput
+improvement was measured.
+
+Independent plan review passed. Baseline and final Gateway WAF verification
+passed 51 cases. Existing request/response publication, phase execution, header
+and URI behavior and body-read tests cover the unchanged behavior; no new
+implementation-shaped test or leaf API was introduced. Formatting, workspace
+all-target check/Clippy, seven repository guards and diff hygiene passed, with
+existing unrelated warnings. No full suite, live integration or benchmark ran.

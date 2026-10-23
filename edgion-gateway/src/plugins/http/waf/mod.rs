@@ -448,6 +448,12 @@ impl RequestFilter for WafPlugin {
             Err(error) => return self.runtime_failure(session, WafLogPhase::RequestHeaders, &error),
         };
 
+        // The transaction owns the head bytes before rule execution and body waits.
+        drop(request_line);
+        drop(raw_uri);
+        drop(uri);
+        drop(headers);
+
         let started = Instant::now();
         let execution = transaction.execute_request_headers();
         let request_headers_us = elapsed_micros(started);
@@ -735,6 +741,7 @@ impl UpstreamResponseFilter for WafPlugin {
         if let Err(error) = transaction.publish_response_head(ResponseHead::new(status, &headers)) {
             return self.runtime_failure(session, WafLogPhase::ResponseHeaders, &error);
         }
+        drop(headers);
         let started = Instant::now();
         let execution = transaction.execute_response_headers();
         let response_headers_us = elapsed_micros(started);
