@@ -15317,3 +15317,29 @@ Fresh unchanged-source verification passed 14 canonical SSE, 62 converter and
 check/Clippy passed with existing unrelated warnings. No prototype, full suite,
 live integration or performance benchmark ran.
 Agent-doc validation and independent plan/final reviews passed.
+
+## Remove duplicate selected credential alias ownership
+
+SelectedAiBackend no longer stores a second credential-name String or accepts it
+as a constructor argument. Its sole constructor caller already supplies the
+captured backend and selected credential index. PreparedAiAttempt::admission_input
+now clones the name from the credential it already retrieves by checked indexing
+for credential limits. This removes one preparation-time name clone without an
+additional lookup or a replacement accessor/compatibility field.
+
+The owned admission alias remains available across the admission await and still
+feeds the same Redis reservation identity, bounded runtime alias and attempt log.
+The selected backend generation stays pinned; no current global or plan-candidate
+lookup replaces it. Invalid index and post-context-commit errors, authorization,
+policy projection, redaction, token bounds and settlement ordering are unchanged.
+No measured throughput, RSS or total-request allocation saving is claimed.
+
+Baseline verification passed 36 dispatch, 25 attempt-runtime, seven HTTP-attempt
+and 104 upstream-peer tests (172 total). Existing tests select the second
+credential, replace the plan candidate and verify the original prepared alias and
+limits; invalid-index and committed-context failures are also retained. No new
+test is needed to mirror this redundant-owner removal.
+Final verification passed the same 172 tests, formatting, workspace all-target
+check/Clippy and seven repository guards, with existing unrelated warnings.
+No full suite, live Redis/provider exchange or performance benchmark ran.
+Independent plan and final reviews passed.

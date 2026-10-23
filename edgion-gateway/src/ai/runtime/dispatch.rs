@@ -61,7 +61,7 @@ impl PreparedAiAttempt {
         Ok(AiAttemptAdmissionInput {
             namespace: identity.namespace.clone(),
             backend_uid: selected.backend.uid.clone(),
-            credential_alias: selected.credential_alias.clone(),
+            credential_alias: credential.name.clone(),
             backend_name: format!("{}/{}", identity.namespace, identity.name),
             provider: context.provider,
             pricing: context.pricing,
@@ -415,7 +415,6 @@ fn prepare_ready_attempt(
         candidate.adaptive.clone(),
         credential_outlier,
         selected.credential,
-        credential.name.clone(),
         candidate.weight,
     )
     .ok_or(AiDispatchError::InvalidConfiguration)?;

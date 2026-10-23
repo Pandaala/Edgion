@@ -19,7 +19,6 @@ pub struct SelectedAiBackend {
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     pub credential_outlier: Option<AiCredentialOutlierHandle>,
     pub credential_index: usize,
-    pub credential_alias: String,
     pub effective_weight: i32,
 }
 
@@ -33,7 +32,6 @@ impl SelectedAiBackend {
         adaptive: Option<Arc<AdaptiveTelemetryState>>,
         credential_outlier: Option<AiCredentialOutlierHandle>,
         credential_index: usize,
-        credential_alias: String,
         effective_weight: i32,
     ) -> Option<Self> {
         (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::EdgionBackend(_))).then_some(
@@ -45,7 +43,6 @@ impl SelectedAiBackend {
                 adaptive,
                 credential_outlier,
                 credential_index,
-                credential_alias,
                 effective_weight,
             },
         )
