@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared response-cache origin stamp components](cache-06-prepared-origin-stamp-components.md)
+
 - [Request conditional-wrapper dispatch](request-01-conditional-wrapper-dispatch.md)
 
 - [Canonical SSE fallback record handoff](sse-02-fallback-record-handoff.md)
