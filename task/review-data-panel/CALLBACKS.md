@@ -921,8 +921,8 @@ integration or performance benchmark ran.
 ## Local authentication and credential staging direct-entry inventory
 
 Revalidated at `147030d72`: these six entries are disjoint from the preceding
-35, reconciling 41 of 60 explicit RequestFilter implementations. The remaining
-19 entries still need inventory reconciliation. Paths below are relative to
+35, reconciling 41 of 60 explicit RequestFilter implementations. The other
+19 are outside this table; later inventories below reconcile further subsets. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -973,3 +973,58 @@ Fresh verification passed 19 BasicAuth, 15 KeyAuth, 47 JwtAuth, 21 JweDecrypt,
 (167 selected executions). Supporting cases are not distinct direct-entry proofs.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live integration or performance benchmark ran.
+
+## Body, certificate and external authentication direct-entry inventory
+
+Revalidated at `1fa2b7ccc`: these four entries are disjoint from the preceding
+41, reconciling 45 of 60 explicit RequestFilter implementations. The remaining
+15 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| HmacAuth (`hmac_auth/plugin.rs`) | Run header/credential/timestamp/signed-field/signature checks before optional body capture and digest verification. Retain the verified username and expected digest across body awaits, then reborrow immutable credential metadata for prepared header publication, credential hiding and group-attributed success logging. Capture/logical-cap failures, digest-read failures, absent credentials and invalid authentication retain separate outcomes. |
+| HeaderCertAuth (`header_cert_auth/plugin.rs`) | Connection mode clones the existing ClientCertInfo projection; header mode borrows and trims text, decodes the configured representation and checks the leaf against the prepared CA pool before constructing owned metadata. Apply identity or DN/SAN projections and fingerprint headers, then optionally hide the source in header mode. Extraction or identity errors may select configured anonymous access; otherwise reject. |
+| ForwardAuth (`forward_auth/plugin.rs`) | Optionally read the current committed body, then borrow current Host/path/method/query metadata into the canonical bounded outbound exchange. Emit collected diagnostics after the await. Success copies configured response fields into request headers and optionally removes Authorization. A rejected body predicate becomes 403; status rejection preserves the auth response status. Denial retains the owned bounded response body/headers across delay and local response writing. |
+| LdapAuth (`ldap_auth/plugin.rs`) | Prefer Proxy-Authorization over Authorization and reject a malformed selected header without falling through. Decode one owned credential buffer and retain username/password ranges, build the escaped owned bind DN and borrow both across connection/bind awaits. Success publishes sensitive consumer metadata and hides configured credentials. Missing credentials may be anonymous; invalid credentials and service/TLS/timeout failures retain separate rejection paths. |
+
+HmacAuth is an explicit exception in PluginRuntime::use_generic_body_gate. Its
+trait default must not be read as proof of generic eager capture. The dedicated
+verifier owns the resolved requirement, enforces capture and logical limits and
+hashes the current immutable body without forcing disk-backed storage into a
+contiguous buffer. The [cheap-auth-before-body contract](../../skills/04-review/hmac-auth/regression-guards/request-body-hash-after-cheap-auth.md)
+remains authoritative. Missing authentication can be anonymous. After an auth
+header is found, no usable configured credentials returns the fixed internal
+failure; supplied invalid credentials never select anonymous access.
+
+HeaderCertAuth's configured anonymous policy also covers extraction/identity
+failures; it is not the missing-only policy used by several other authenticators.
+Its sensitive header setter errors are currently ignored, distinct from explicit
+identity-validation errors. Header-mode checks are the existing configured-CA
+leaf checks, not proof of a new full-chain verifier or trusted header origin.
+Connection projection and CA public-key preparation remain
+[tls-04](tls-04-header-cert-connection-projection.md) and
+[tls-03](tls-03-header-ca-public-key-preparation.md).
+
+ForwardAuth's current metadata differs from omitted auth-hop defaults, which
+use entry identity. Denial copying preserves repeated configured fields subject
+to protected-header and Connection-nomination filtering; local write attempts
+are not delivery proof. Its query borrow is already in the baseline, while
+[denial-header preparation](forward-auth-01-prepared-denial-header-names.md)
+remains deferred. LDAP uses the canonical dial-time EgressResolver and admitted
+socket addresses while retaining the original hostname for TLS. Connection and
+bind have separate timeout scopes; unbind is another awaited operation, not a
+proof of one end-to-end deadline or cancellation cleanup. Preserve the
+[dial-time egress contract](../../skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md).
+
+No new runtime change is selected here. LDAP DN preparation remains
+[ldap-01](ldap-01-bind-dn-template-preparation.md); HMAC membership, MAC state,
+signing-input and missing-field diagnostics retain hmac-01 through hmac-04.
+Crypto/certificate parsers, LDAP driver lifecycle, outbound transport and shared
+body-storage internals remain deeper scope; this table does not close them.
+
+Fresh verification passed 36 HmacAuth, 20 HeaderCertAuth, 13 ForwardAuth and
+28 LdapAuth tests, plus 31 body-gate and 46 network-free outbound-call tests
+(174 selected executions). Supporting cases are not distinct entry proofs.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live LDAP/HTTP integration or benchmark ran.
