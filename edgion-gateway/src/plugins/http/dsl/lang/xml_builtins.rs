@@ -274,6 +274,7 @@ impl Vm {
                 let output = node
                     .stringify(limit, &mut state.value_work_budget)
                     .map_err(|error| body_access_error(xml_error(error).to_string()))?;
+                drop(node);
                 // Bytes consumes String allocation; no second payload copy or partial publish.
                 session
                     .overwrite_request_body(Bytes::from(output))

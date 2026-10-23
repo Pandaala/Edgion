@@ -13698,3 +13698,25 @@ and i64::MAX - 1. Existing empty, overflow, indexing and truncation cases passed
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings. No full suite or live
 integration ran.
+
+## Release serialized DSL body inputs before publication waits
+
+JsonSetBody now drops its consumed source Arc after validation, budget admission
+and copying into the independent outgoing Vec. XmlSetBody drops its consumed
+XmlValue after bounded stringify produces the owned output String. Both releases
+precede the canonical asynchronous overwrite_request_body call, whose adapter
+can await replay-owner preparation.
+
+This shortens input ownership across publication waits. Sole-owned JSON payloads
+or XML tree allocations can be released earlier; locals and other shared aliases
+remain owners, so no fixed freed-byte or throughput benefit is claimed. XML
+nodes have no custom destructor, and output bytes no longer borrow either input.
+All existing limits, work charges, allocation errors, validation order, body
+publication/freeze behavior and error mappings remain unchanged.
+
+Independent plan review passed. Baseline and final Gateway DSL verification
+passed 515 cases, including existing JSON/XML publication, output failure,
+rollback and frozen-generation coverage. No implementation-shaped lifetime test
+or production visibility change was added. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed, with existing
+unrelated warnings. No full suite, live integration or performance benchmark ran.

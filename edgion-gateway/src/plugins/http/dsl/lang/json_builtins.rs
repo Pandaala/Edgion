@@ -166,6 +166,7 @@ impl Vm {
                 .try_reserve_exact(source.len())
                 .map_err(|_| body_access_error("bounded JSON body allocation failed"))?;
             outgoing.extend_from_slice(source.as_bytes());
+            drop(source);
             session
                 .overwrite_request_body(bytes::Bytes::from(outgoing))
                 .await
