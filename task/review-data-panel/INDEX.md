@@ -14281,3 +14281,18 @@ Fresh unchanged-code baseline passed 14 callback, six mTLS validator, 18 certifi
 extractor and 20 HeaderCertAuth tests (58 executions), formatting, workspace
 check/Clippy and agent-doc validation with existing unrelated warnings. No candidate
 implementation, allocation/CPU benchmark, full suite or live handshake ran.
+
+## Exact TLS attachment hostname lookup decision
+
+Traced handshake overlay lookup through immutable attachment buckets and canonical
+RFC 6125 comparisons. The scan is bounded by 64 candidates and 16 hosts each,
+and resource precedence applies across exact and wildcard patterns. Existing
+exact-first lookup is not an equivalent replacement. [tls-07](tls-07-attachment-host-index.md)
+records prepared-host/index alternatives versus retaining the scan, including
+validation, overflow, snapshot ownership and resident-memory/update tradeoffs.
+No runtime change or performance conclusion is selected.
+
+Fresh unchanged-code baseline passed 30 TLS store, 15 tls_pingora and 16 canonical
+RFC 6125 matcher tests (61 executions), formatting, workspace check/Clippy and
+agent-doc validation with existing unrelated warnings. No candidate benchmark,
+new index, full suite or live handshake ran.
