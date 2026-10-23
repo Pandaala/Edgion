@@ -14590,3 +14590,26 @@ improvement was measured. Baseline and final selections each passed 85 TLS
 tests. Formatting, workspace all-target check/Clippy and seven campaign guards
 passed with existing unrelated warnings. No full suite, live network run or
 new implementation-mirroring test was added.
+
+## Release unused L4 Service sections at endpoint handoff
+
+TCP and both TLS connect paths now extract endpoint.backend inside the successful
+selection match arm. Previously the outer ResolvedServiceEndpoint binding was
+only partially moved, leaving its section Arc alive across TCP connect/relay or
+TLS connect/retry delay. The arm-local remainder now drops before those waits.
+The section owns all/ready slot arrays, compiled selectors and its direct endpoint
+index; the selected backend Arc is moved intact and keeps its previous lifetime.
+
+Outlier completion uses that backend's identity and the separate captured policy
+token, not the discarded section. No custom section drop or section-reference-
+count consumer was found in the affected discovery/LB path. Route generations,
+selected backend ownership, safety validation, live degradation, retry order,
+completion reporting, PP2 and logging are unchanged. No shared selection API or
+new helper was introduced. Other owners may retain the section; this removes one
+unnecessary connection/attempt owner, not allocations or measured RSS/latency.
+
+Baseline and final serial selections each passed 27 TCP, 85 TLS, 12 endpoint
+selector and 36 outlier-detection tests (160 executions). Formatting, workspace
+all-target check/Clippy and seven campaign guards passed with existing unrelated
+warnings. No full suite, live network verification, benchmark or new test-only
+production mechanism was introduced.

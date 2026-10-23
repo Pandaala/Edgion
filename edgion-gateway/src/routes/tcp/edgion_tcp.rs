@@ -202,7 +202,7 @@ impl EdgionTcpProxy {
             ctx.status = TcpStatus::NoBackendSelected;
             return;
         };
-        let endpoint =
+        let backend =
             match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
                 select_service_endpoint(
                     target.key(),
@@ -214,7 +214,7 @@ impl EdgionTcpProxy {
                     None,
                 )
             }) {
-                Ok((_, endpoint)) => endpoint,
+                Ok((_, endpoint)) => endpoint.backend,
                 Err(L4ResolveError::Rejected(L4BackendRejection::Denied)) => {
                     ctx.status = TcpStatus::RefDenied;
                     ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
@@ -230,8 +230,6 @@ impl EdgionTcpProxy {
                     return;
                 }
             };
-        let backend = endpoint.backend;
-
         // 6. Build upstream address
         let upstream_addr = &backend.inner().addr;
         let upstream_addr_str = upstream_addr.to_string();

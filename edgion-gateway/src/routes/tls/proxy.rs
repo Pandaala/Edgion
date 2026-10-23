@@ -322,7 +322,7 @@ impl EdgionTlsTcpProxy {
 
         for attempt in 0..max_attempts {
             // 4a. Select backend (re-select on each retry for load-balancing rotation)
-            let (target, endpoint) =
+            let (target, backend) =
                 match super::resolve_tls_backend_attempt(&unit, ctx, Some(selected.owner.gateway_key()), |target| {
                     select_service_endpoint(
                         target.key(),
@@ -334,15 +334,13 @@ impl EdgionTlsTcpProxy {
                         None,
                     )
                 }) {
-                    super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint),
+                    super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint.backend),
                     super::TlsBackendAttempt::Terminal => return,
                     super::TlsBackendAttempt::Retryable(target) => {
                         last_err = format!("no endpoint: {}", target.key());
                         continue;
                     }
                 };
-            let backend = endpoint.backend;
-
             let upstream_addr = &backend.inner().addr;
             let upstream_addr_str = upstream_addr.to_string();
             let outlier_store = crate::backends::get_outlier_detection_store();
