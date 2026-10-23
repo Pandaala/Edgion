@@ -281,6 +281,8 @@ destination.
 
 - [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
 
+- [gRPC mapping selector storage](grpc-10-mapping-selector-storage.md)
+
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
 
 - [JSON value profiling worklist representation](json-01-profile-worklist-representation.md)
@@ -14158,3 +14160,18 @@ Baseline and final selections each passed 103 OIDC plugin and eight dependency
 error tests (111 executions per selection). Formatting, workspace check/Clippy
 and seven repository guards passed with existing unrelated warnings. No full
 suite, live IdP integration or performance benchmark ran.
+
+## gRPC request mapping selector ownership
+
+Traced bind through resolve_field, repeated-field merge and later encode. Path
+selectors are cold-prepared but copied into bound request storage; successful
+query resolution builds fresh descriptor vectors. Existing indexed protobuf/JSON
+name lookup and Arc-backed handles rule out a deep-schema-copy premise.
+[grpc-10](grpc-10-mapping-selector-storage.md) records the allocation versus retained
+record-size decision without selecting an inline capacity or static/dynamic
+representation. Existing grpc-01 preflight and grpc-03 wire-schema decisions are
+separate and remain open.
+
+Fresh verification passed 35 Resources codec and 31 Gateway transcoder tests,
+formatting, workspace check/Clippy and agent-doc validation with existing unrelated
+warnings. No runtime change, candidate benchmark or live integration ran.
