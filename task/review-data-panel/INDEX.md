@@ -91,6 +91,8 @@ destination.
 - [Bounded Redis GET text validation ownership](redis-06-bounded-get-text-validation.md)
 - [Bounded Redis hash result conversion](redis-07-bounded-hash-result-conversion.md)
 
+- [ExtProc codec buffer policy](extproc-02-codec-buffer-policy.md)
+
 - [ExtProc terminal stream retirement scope](extproc-01-terminal-stream-retirement.md)
 
 - [Unary tool-argument serialization staging](unary-01-tool-argument-staging.md)
