@@ -14266,3 +14266,18 @@ parity and Cow ownership, not an end-to-end handshake or throughput result. The
 probe required an explicit Rust 2021 edition for its C-string literals. Formatting,
 workspace check/Clippy and seven repository guards passed with existing unrelated
 warnings. No full suite, live handshake or performance benchmark ran.
+
+## mTLS CN-only projection decision
+
+Traced nonempty CN constraints from the leaf callback through complete certificate
+projection into an exact CN-only comparison. Subject rendering, display SAN/DER
+work and fingerprinting are unused for CN success. [tls-06](tls-06-mtls-cn-projection.md)
+records minimal canonical inspection versus retained full projection, first-CN
+decoding and native ownership constraints, and mismatch re-extraction tradeoffs.
+Handshake metadata and HeaderCertAuth keep their separate full projection needs.
+No implementation or interface change is selected.
+
+Fresh unchanged-code baseline passed 14 callback, six mTLS validator, 18 certificate
+extractor and 20 HeaderCertAuth tests (58 executions), formatting, workspace
+check/Clippy and agent-doc validation with existing unrelated warnings. No candidate
+implementation, allocation/CPU benchmark, full suite or live handshake ran.
