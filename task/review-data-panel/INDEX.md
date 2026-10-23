@@ -14204,3 +14204,18 @@ Baseline and final selections each passed 31 Gateway and 35 Resources transcoder
 tests (66 executions). Formatting, workspace check/Clippy and seven repository
 guards passed with existing unrelated warnings. No full suite, live integration
 or performance benchmark ran. Deferred grpc-11 remains open.
+
+## Release reflected response trees before output compaction
+
+CompiledBinding::decode_inner now drops its owned DynamicMessage after successful
+ProtoJSON serialization, before writing the envelope suffix and compacting the
+output buffer. The synchronous borrowed serializer leaves owned bytes in the
+capped writer. Unary, NDJSON and SSE keep the same caps, error ordering and
+reservation. This shortens local tree lifetime overlap without a measured memory
+or throughput claim; grpc-09 WKT representation remains deferred.
+
+Baseline and final selections each passed 35 Resources and 31 Gateway transcoder
+tests. Formatting, workspace check/Clippy and seven repository guards passed with
+existing unrelated warnings. The first workspace check exhausted disk space; after
+removing inactive old build artifacts and the failed incremental directory, its
+retry passed. No full suite, live integration or performance benchmark ran.

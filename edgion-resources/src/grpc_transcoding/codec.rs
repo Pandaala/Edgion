@@ -119,6 +119,7 @@ impl CompiledBinding {
         writer.write_all(prefix).map_err(|_| TranscodingError::Invalid)?;
         serde_json::to_writer(&mut writer, &super::serialize::ProtoJson(&message))
             .map_err(|_| TranscodingError::Invalid)?;
+        drop(message);
         writer.write_all(suffix).map_err(|_| TranscodingError::Invalid)?;
         Ok(writer.into_bytes())
     }

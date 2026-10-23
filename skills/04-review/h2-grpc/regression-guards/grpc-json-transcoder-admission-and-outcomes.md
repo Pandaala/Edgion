@@ -207,6 +207,12 @@ and response peaks are alternatives, not concurrent full trees):
   plus the admitted nodes, capped JSON writer and callback batch <=1 MiB each,
   and <=1 MiB outstanding output credits. The borrowed recursive serializer adds
   no JSON tree and forwards collect_str to the capped streaming formatter.
+  After successful JSON serialization, the reflected message is explicitly dropped
+  before envelope suffix writing and output-buffer compaction. The writer owns all
+  emitted bytes; no field borrow survives serialization. This reduces local tree
+  lifetime overlap without changing caps, reservation or error ordering, and makes
+  no measured RSS or throughput claim. WKT transcode temporaries during serialization
+  remain a separate optimization decision.
 - The remaining 2 MiB covers bounded binding selectors, JSON parsing scratch,
   metadata (header template <=8 KiB/64 fields), driver state, and allocator slack.
   String-producing path/query bindings transfer already-owned decoded buffers
