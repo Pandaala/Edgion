@@ -234,13 +234,12 @@ impl ProxyRewrite {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
         original_path: &str,
-        original_query: Option<&str>,
         captures: Option<&regex::Captures>,
     ) {
         // uri takes priority over regex_uri
         if let Some(ref new_uri) = self.config.uri {
             let resolved = self.resolve_variables(new_uri, original_path, session, captures, TemplateContext::Uri);
-            let final_uri = self.build_uri_with_query(resolved, original_query);
+            let final_uri = self.build_uri_with_query(resolved, session.request_query());
 
             if let Err(_e) = session.set_upstream_uri(&final_uri) {
                 plugin_log.push_err("uri rewrite fail");
@@ -265,7 +264,7 @@ impl ProxyRewrite {
                     }
                 }
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
-                let final_uri = self.build_uri_with_query(result, original_query);
+                let final_uri = self.build_uri_with_query(result, session.request_query());
 
                 if let Err(_e) = session.set_upstream_uri(&final_uri) {
                     plugin_log.push_err("uri rewrite fail");
@@ -719,9 +718,8 @@ impl RequestFilter for ProxyRewrite {
             return result;
         }
 
-        // Get original path and query for variable substitution and preservation
+        // Retain the original path for URI and later header substitutions
         let original_path = session.get_path().to_string();
-        let original_query = session.get_query();
 
         // Try to match regex and get captures (for variable substitution)
         let captures = self
@@ -731,13 +729,7 @@ impl RequestFilter for ProxyRewrite {
             .and_then(|r| r.captures(&original_path));
 
         // 1. URI rewrite (preserves query string)
-        self.rewrite_uri(
-            session,
-            plugin_log,
-            &original_path,
-            original_query.as_deref(),
-            captures.as_ref(),
-        );
+        self.rewrite_uri(session, plugin_log, &original_path, captures.as_ref());
 
         // 2. Host rewrite
         self.rewrite_host(session, plugin_log);

@@ -115,3 +115,22 @@ execution coverage. This registration correction leaves the assertion body and
 fixture topology unchanged; source/fixture checks are not live integration or
 mutation-test results. Multi-value append remains covered by its separate
 canonical regression, and this case does not assert X-Request-Id.
+
+## Borrow current query during final URI assembly
+
+ProxyRewrite borrows session.request_query after template resolution in each
+URI-rewrite branch, then creates the owned final URI before set_upstream_uri.
+This removes the earlier get_query String snapshot. Both production getters read
+the current request-header URI, not the frozen entry query used by argument
+substitution. The resolver retains mutable session access because named-path
+lookup can initialize the context's path-parameter cache; that initialization
+does not mutate the URI. Re-evaluate this boundary if resolver getters gain URI
+mutation or another query owner.
+
+The original path remains owned across URI mutation for later header expansion.
+URI priority, raw regex captures, query separators, substitution stages and body
+mutation ordering remain unchanged. The entry regression covers both URI
+branches with absent, empty and duplicate/encoded current queries, distinguishes
+frozen argument values, and checks the later original-path header sink. It passed
+against the original snapshot implementation before the ownership change. This
+is not a throughput benchmark or proof that the whole callback is allocation-free.

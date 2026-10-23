@@ -14028,3 +14028,20 @@ verified inactive incremental build caches, fresh verification passed 19
 DirectEndpoint-selected, 32 plugin-log and 24 dye tests, formatting, workspace
 check/Clippy and seven guards. Existing unrelated warnings remain. No full suite,
 live transport or throughput benchmark ran.
+
+## ProxyRewrite borrowed current query assembly
+
+The request entry no longer copies get_query into a temporary String. Both URI
+branches finish substitution, borrow the current query through request_query and
+build the final owned URI before calling the setter. The original path snapshot
+still supports later header substitutions. Resolver path-cache initialization
+requires mutable access but does not alter the query; no session trait changes
+or staged-template semantic changes are introduced. rewrite-01/02 remain deferred.
+
+The new six-case entry regression passed with the original implementation and
+checks ordinary/regex URI rewrites, absent/empty/duplicate encoded current queries,
+frozen argument substitution and later original-path headers. The source change
+removes the query copy only; no measured throughput claim follows. All 24
+ProxyRewrite tests passed after the change, as did formatting, workspace
+check/Clippy and seven repository guards. Existing unrelated warnings remain.
+No full suite, live integration or benchmark ran.

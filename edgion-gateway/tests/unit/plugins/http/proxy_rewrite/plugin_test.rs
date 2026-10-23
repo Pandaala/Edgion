@@ -16,6 +16,54 @@ fn plugin(config: &ProxyRewriteConfig) -> ProxyRewrite {
 }
 
 #[tokio::test]
+async fn request_entry_preserves_current_query_and_original_path_across_rewrite() {
+    for regex_mode in [false, true] {
+        for query in [None, Some(""), Some("key=current&dup=1&dup=2&encoded=a%20b")] {
+            let rewrite = if regex_mode {
+                serde_json::json!({"regexUri": {"pattern": "^/source/(.+)$", "replacement": "/$1?own=1"}})
+            } else {
+                serde_json::json!({"uri": "/$arg_key?own=1"})
+            };
+            let mut config = rewrite;
+            config["headers"] = serde_json::json!({"set": [{"name": "X-Original-Path", "value": "$uri"}]});
+            let plugin = plugin(&serde_json::from_value(config).unwrap());
+            let mut session = MockPluginSession::new();
+            session.expect_get_path().return_const("/source/tail".to_string());
+            session.expect_get_query().returning(move || query.map(str::to_owned));
+            session.expect_request_query().return_const(query);
+            session.expect_get_query_param_ref().returning(|name| {
+                assert_eq!(name, "key");
+                Some("entry")
+            });
+            let mut expected = if regex_mode { "/tail?own=1" } else { "/entry?own=1" }.to_string();
+            if let Some(query) = query.filter(|query| !query.is_empty()) {
+                expected.push('&');
+                expected.push_str(query);
+            }
+            let mut sequence = mockall::Sequence::new();
+            session
+                .expect_set_upstream_uri()
+                .with(mockall::predicate::eq(expected))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Ok(()));
+            session
+                .expect_set_request_header()
+                .withf(|name, value| name == "X-Original-Path" && value == "/source/tail")
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            assert!(matches!(
+                plugin
+                    .run_request(&mut session, &mut PluginLog::new("ProxyRewrite"))
+                    .await,
+                PluginRunningResult::GoodNext
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn json_body_patch_is_ordered_and_published_once() {
     let plugin = plugin(&ProxyRewriteConfig {
         json_body: Some(JsonBodyRewrite {
@@ -702,7 +750,8 @@ fn path_tokens_reach_ordinary_uri_and_add_set_header_sinks() {
         .times(1)
         .returning(|_, _| Ok(()));
     let mut log = PluginLog::new("ProxyRewrite");
-    plugin.rewrite_uri(&mut session, &mut log, "/literal/$id/$id2", Some("keep=a%20b"), None);
+    session.expect_request_query().return_const(Some("keep=a%20b"));
+    plugin.rewrite_uri(&mut session, &mut log, "/literal/$id/$id2", None);
     plugin.modify_headers(&mut session, &mut log, "/literal/$id/$id2", None);
 }
 
@@ -722,13 +771,8 @@ fn regex_uri_raw_captures_keep_named_dollars_literal() {
         .with(mockall::predicate::eq("/$id/$id2/first/second/$id3?keep=1"))
         .times(1)
         .returning(|_| Ok(()));
-    plugin.rewrite_uri(
-        &mut session,
-        &mut PluginLog::new("ProxyRewrite"),
-        path,
-        Some("keep=1"),
-        Some(&captures),
-    );
+    session.expect_request_query().return_const(Some("keep=1"));
+    plugin.rewrite_uri(&mut session, &mut PluginLog::new("ProxyRewrite"), path, Some(&captures));
 }
 
 #[test]
@@ -757,12 +801,7 @@ fn regex_uri_capture_markers_preserve_sequential_and_unmatched_behavior() {
             .with(mockall::predicate::eq(expected))
             .times(1)
             .returning(|_| Ok(()));
-        plugin.rewrite_uri(
-            &mut session,
-            &mut PluginLog::new("ProxyRewrite"),
-            path,
-            Some("keep=1"),
-            Some(&captures),
-        );
+        session.expect_request_query().return_const(Some("keep=1"));
+        plugin.rewrite_uri(&mut session, &mut PluginLog::new("ProxyRewrite"), path, Some(&captures));
     }
 }
