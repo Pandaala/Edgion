@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [AI model-route selector and weight preparation](routing-08-model-route-weight-preparation.md)
+
 - [Canonical LRU routing and map hashing](lru-01-shard-and-map-hashing.md)
 
 - [Response-cache replay body ownership](cache-07-replay-body-owner-lifetime.md)
@@ -15059,3 +15061,15 @@ guards passed with existing unrelated warnings. Existing tests cover matching,
 listing visibility, canonical request mutation and candidate semantics; no new
 test, full suite, live integration or benchmark ran. Independent plan and final
 reviews passed; the plan included a compiled lifetime probe before implementation.
+
+## AI model-route selector and weight preparation boundary
+
+The [deferred preparation task](routing-08-model-route-weight-preparation.md)
+records per-decision selector scans and temporary weights/overrides, distinguishing
+structural route/plugin inputs from captured runtime availability and invalid-share
+gating. A publication pairing owner is not assumed to exist. Keeping current
+calculation, bounded scratch storage and exact-generation preparation remain
+alternatives requiring a decision. No runtime code changed. Fresh four router
+and 21 proxy tests passed; no prototype, benchmark or live integration ran.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing unrelated warnings. Independent plan and final reviews passed.
