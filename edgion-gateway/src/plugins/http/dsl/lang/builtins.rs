@@ -158,8 +158,8 @@ impl Drop for InFlightBodyReader {
 }
 
 async fn read_opaque_body_chunk_task(mut in_flight: InFlightBodyReader) -> Result<Option<Bytes>, BodyReadError> {
-    let shared = Arc::clone(&in_flight.shared);
     let read_result = in_flight.reader_mut().next_chunk().await;
+    let shared = &in_flight.shared;
 
     let mut output = None;
     let mut stream_error = None;

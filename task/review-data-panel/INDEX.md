@@ -13271,3 +13271,28 @@ is claimed. Owned types and the narrow diff establish input independence.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed. Existing unrelated warnings remain. No full suite, live
 integration or performance benchmark ran.
+
+
+## Borrow opaque DSL upload task state after reading
+
+`read_opaque_body_chunk_task` now borrows the shared state from its owned
+InFlightBodyReader after `next_chunk().await`, instead of cloning another Arc
+before that await. The borrow's last use is the cancellation load before the
+reader is consumed by finish or return-to-slot. This removes one reference-count
+increment/decrement per chunk task; it does not remove task allocation or prove
+a throughput gain.
+
+The in-flight owner retains its Arc throughout suspension and unwinding. Task
+transfer still clones ownership, and Drop still releases the reader, marks
+ambiguous cancellation and notifies waiters before releasing state ownership.
+Locks, atomic ordering, fetched-byte accounting, error snapshots, settlement,
+refunds and cancellation behavior remain unchanged. No body storage or transport
+policy changed.
+
+Independent plan review passed. The four opaque-upload baseline tests passed;
+final verification passed those four, 42 HTTP-call tests and five collector tests
+(51 total), including pending-reader cancellation, cleanup without another stream
+poll, dropped-future task abort and midstream failure accounting. No mirrored
+reference-count test was added. Formatting, workspace all-target check/Clippy,
+seven repository guards and diff hygiene passed. Existing unrelated warnings
+remain. No full suite, live integration or performance benchmark ran.
