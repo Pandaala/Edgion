@@ -8,8 +8,8 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-The thirteen basic `redis.*` builtins resolve their live client through
-`resolve_redis_client`. A successful alias lookup borrows the stored
+The fourteen non-rate-limit `redis.*` builtins, including `get_bounded`, resolve
+their live client through `resolve_redis_client`. A successful alias lookup borrows the stored
 `namespace/name` string from `DslRuntime.redis_links` for the synchronous
 LinkSys store lookup and performs no deep key clone. Only the returned
 `Arc<RedisLinkClient>` survives into asynchronous command execution.
@@ -17,6 +17,15 @@ LinkSys store lookup and performs no deep key clone. Only the returned
 `redis.rate_limit` uses the same borrowed-key shape directly. Every Redis
 builtin still resolves the current client on each call; no plugin generation
 captures or pins a provider client.
+
+The caller-owned alias is distinct from the stored `namespace/name` key. After
+successful resolution, each non-rate-limit caller explicitly drops its temporary
+alias String before awaiting the command. The rate-limit caller similarly drops
+its alias and policy-name Arcs after lookup; the selected policy belongs to the
+immutable runtime, and the business key remains available for evaluation. This
+shortens input ownership without changing per-call resolution or eliminating the
+original string conversion. Dropping an Arc does not reclaim a shared payload
+until its last owner is gone.
 
 ## Rationale and evidence
 

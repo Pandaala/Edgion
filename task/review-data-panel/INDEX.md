@@ -13321,3 +13321,27 @@ midstream accounting; no artificial reference-count test was added. Formatting,
 workspace all-target check/Clippy, seven repository guards and diff hygiene
 passed, with existing unrelated warnings. No full suite, live transport test or
 performance benchmark ran.
+
+
+## Release DSL Redis lookup inputs before awaiting commands
+
+All fourteen non-rate-limit Redis branches now drop their temporary alias String
+immediately after successful client resolution. The rate-limit branch drops its
+alias and policy-name Arcs after selecting the runtime-owned policy and live
+client. Required command keys, values, policy and client ownership remain intact.
+This shortens temporary-name retention across asynchronous work; it removes no
+initial string conversion and does not guarantee reclamation of shared Arc data.
+
+Per-call live-client lookup, argument evaluation/coercion, validation order,
+error classes, deadlines, bounded results and sensitive logging are unchanged.
+The existing borrowed namespace/name lookup is a distinct optimization. Its owning
+review page now distinguishes that stored key from caller-owned aliases and
+corrects the current operation count while preserving historical evidence.
+
+Independent plan review passed. Baseline and final Gateway DSL runs each passed
+501 tests, including lookup/error classifications and pre-I/O rate-limit budgets.
+The narrow diff and compiler establish that released inputs are no longer needed;
+these tests are not a live Redis success/cancellation or memory-retention probe.
+No implementation-shaped lifetime test was added. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed, with existing
+unrelated warnings. No full suite, live integration or benchmark ran.

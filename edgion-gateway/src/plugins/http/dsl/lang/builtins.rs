@@ -1768,6 +1768,8 @@ impl Vm {
                     log.push_err("redis provider not ready");
                     return Ok(redis_err(RedisFailure::ProviderNotReady, self.limits.max_string_len));
                 };
+                drop(policy_name);
+                drop(link);
                 let check = runtime.rate_limits.limiter.eval_policy(
                     &client,
                     &policy.algorithm,
@@ -1821,6 +1823,7 @@ impl Vm {
                     Ok(client) => client,
                     Err(result) => return Ok(result),
                 };
+                drop(link);
                 match client.get_bounded(&key, cap).await {
                     Ok(BoundedGet::Missing) => Ok(redis_ok(Value::Nil)),
                     Ok(BoundedGet::TooLarge) => Ok(redis_err(RedisFailure::ResultTooLarge, self.limits.max_string_len)),
@@ -1851,6 +1854,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.get(&key).await {
                     Ok(Some(v)) => {
                         let v = truncate_to_max_string_len(v, self.limits.max_string_len);
@@ -1873,6 +1877,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 let result = match ttl_ms_val {
                     None => client.set(&key, &value, None).await,
                     Some(Value::Nil) => client.set(&key, &value, None).await,
@@ -1895,6 +1900,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.del(&[key.as_str()]).await {
                     Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -1908,6 +1914,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.exists(&key).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -1921,6 +1928,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 // TTL: -1 = no expiry, -2 = key not found; ok=false only on connection error
                 match client.ttl(&key).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
@@ -1942,6 +1950,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.expire(&key, seconds).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -1955,6 +1964,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.incr(&key).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -1975,6 +1985,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.incr_by(&key, delta).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -1991,6 +2002,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.hget(&key, &field).await {
                     Ok(Some(v)) => {
                         let v = truncate_to_max_string_len(v, self.limits.max_string_len);
@@ -2010,6 +2022,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.hset(&key, &field, &val).await {
                     Ok(_count) => Ok(redis_ok(Value::Bool(true))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -2024,6 +2037,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.hdel(&key, &[field.as_str()]).await {
                     Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
@@ -2037,6 +2051,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client
                     .hgetall_bounded(&key, self.limits.max_map_size, MAX_DSL_HOST_RESULT_BYTES)
                     .await
@@ -2054,6 +2069,7 @@ impl Vm {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
+                drop(link);
                 match client.hexists(&key, &field).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
                     Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
