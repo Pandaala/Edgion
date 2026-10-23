@@ -5414,6 +5414,10 @@ contention benchmark or performance measurement ran.
 
 ## ExtProc TLS server-name ownership
 
+Historical step: the later borrowed-name conversion below supersedes the
+unconditional input String copy while retaining this removal of a redundant
+copy of an already-owned DNS name.
+
 The TLS dial connector now uses the owned ServerName returned by TryFrom<String>
 directly, with an explicit static lifetime annotation. Locked rustls-pki-types
 1.15.1 already consumes the supplied String; its former trailing to_owned cloned
@@ -5435,6 +5439,9 @@ static lifetime check cover this local ownership change. No live TLS handshake,
 allocation benchmark or throughput measurement ran.
 
 ## ExtProc dial host sharing
+
+Historical step: host Arc sharing remains current; the later borrowed-name
+conversion below narrows the dial-time text copy to successful DNS names.
 
 Plain and TLS connector construction now moves the existing host String into one
 Arc<String>. Service clones and newly created dial futures clone that shared handle
@@ -14800,3 +14807,28 @@ No representation, cache policy or public API was selected. Fresh execution
 passed 10 Common and three Gateway egress tests, formatting, workspace all-target
 check/Clippy and agent-doc validation with existing warnings. No prototype,
 benchmark, full suite or live DNS/socket test ran.
+
+## ExtProc borrowed TLS server-name conversion
+
+The TLS dial future now validates the borrowed original host with
+ServerName::try_from(&str), then converts a successful result to an independent
+ServerName<'static>. Locked rustls-pki-types 1.15.1 uses the same DNS byte
+validator and subsequent IP parser for borrowed and owned input. DNS spelling
+and case remain unchanged. DNS results still require one owned string copy;
+IP results copy only the parsed address, and invalid names no longer require
+the preliminary host String copy. Empty invalid input previously had no
+string-buffer allocation to save. No throughput improvement is measured.
+
+The conversion remains inside the polled dial future, before connect_admitted,
+with the same fixed InvalidInput error. The existing Arc host still supplies
+its original bytes to canonical egress resolution. SNI, certificate policy,
+ALPN, target identity, address fallback and connection deadlines are unchanged.
+No cold prepared-name storage, cache, parser or observability was added. The
+new to_owned operates on a borrowed result; it does not restore the redundant
+clone of an already-owned DNS name removed in the earlier historical step.
+
+Fresh baseline and final runs each passed all 147 ExtProc unit tests. Formatting,
+workspace all-target check/Clippy and seven repository guards passed; existing
+unrelated warnings remain. Dependency-source inspection establishes conversion
+equivalence; lazy constructor tests do not establish live TLS behavior. No new
+unit test, live handshake, full suite or allocation benchmark was run.
