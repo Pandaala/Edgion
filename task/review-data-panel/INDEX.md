@@ -289,6 +289,8 @@ destination.
 
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
 
+- [Canonical decoded query-name comparison](uri-01-decoded-name-comparison.md)
+
 - [JSON value profiling worklist representation](json-01-profile-worklist-representation.md)
 
 - [Prepared GraphQL type-condition lookup](graphql-02-prepared-type-conditions.md)
@@ -14467,3 +14469,21 @@ and four resource header-match tests (85 executions). Formatting, workspace
 all-target check/Clippy and documentation validation passed with existing unrelated
 warnings. These tests are a baseline, not full coverage of a future representation.
 No implementation prototype, performance benchmark, full suite or live traffic ran.
+
+## Encoded query-name comparison decision
+
+Traced consistent-hash key extraction and authentication query stripping into
+the canonical decoder. Raw values and ordinary names already borrow; encoded
+names can allocate decoded output used only for equality. uri-01 records the
+comparison-interface versus scratch versus retain-current decision, without
+introducing a second decoder. Whole-run invalid UTF-8 fallback prevents naive
+incremental character comparison, and LB raw-equality/first-value rules differ
+from auth decoded-only/all-match removal. Frozen cached-query substitution is
+not equivalent to either live raw consumer.
+
+Fresh baseline selections passed 14 resource URI, 44 Gateway query and one
+ordinary-selection borrowed-input test (59 executions). The ownership test uses
+SourceIp and does not establish encoded Arg parity. Formatting, workspace
+check/Clippy and agent-doc validation passed with existing unrelated warnings.
+An initial test_hash filter selected zero tests and is not counted. No runtime
+change, comparison prototype, benchmark, full suite or live traffic run occurred.
