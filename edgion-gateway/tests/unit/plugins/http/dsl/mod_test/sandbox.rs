@@ -147,6 +147,24 @@ fn test_map_literal_exactly_at_limit() {
     assert_eq!(result, good_next());
 }
 
+#[test]
+fn nested_map_construction_preserves_outer_operands_and_last_duplicate() {
+    let source = r#"
+let outer = {
+    "before": "keep",
+    "nested": {"duplicate": "first", "items": range(0,3), "duplicate": "last", "empty": {}},
+    "after": "tail"
+}
+if outer["before"] != "keep" { return deny(500, "lost prefix") }
+if outer["after"] != "tail" { return deny(500, "lost suffix") }
+if outer["nested"]["duplicate"] != "last" { return deny(500, "wrong duplicate") }
+if join(outer["nested"]["items"], ",") != "0,1,2" { return deny(500, "lost list") }
+if outer["nested"]["empty"]["missing"] != nil { return deny(500, "wrong empty map") }
+return next()
+"#;
+    assert_eq!(run(source, MockPluginSession::new()), good_next());
+}
+
 // ⑥ Boundary case: split() returning exactly max_list_len elements must succeed.
 #[test]
 fn test_split_exactly_at_limit() {

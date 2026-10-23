@@ -1174,16 +1174,15 @@ impl Vm {
                         shape.add_map_entry(key_len, child)?;
                     }
                     let mut map: IndexMap<String, Value> = IndexMap::with_capacity(count);
-                    let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        let val = state.pop()?;
-                        let key = state.pop()?;
-                        pairs.push((key, val));
+                    let mut entries = state.stack.drain(start..);
+                    while let Some(key) = entries.next() {
+                        let value = entries.next().ok_or_else(|| RuntimeError::Internal {
+                            message: "stack underflow".to_string(),
+                        })?;
+                        let key_str = key.runtime_string()?;
+                        map.insert(key_str, value);
                     }
-                    for (k, v) in pairs.into_iter().rev() {
-                        let key_str = k.runtime_string()?;
-                        map.insert(key_str, v);
-                    }
+                    drop(entries);
                     state.push(Value::Map(Box::new(map)), self.limits.max_stack_depth)?;
                 }
 

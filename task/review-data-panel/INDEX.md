@@ -13393,3 +13393,30 @@ each passed all 503 tests. No artificial reference-count test was added.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings. No full suite, live integration
 or performance benchmark ran.
+
+
+## Construct DSL Maps directly from the admitted stack suffix
+
+MakeMap now drains the admitted interleaved key/value suffix in forward order,
+converts each key and inserts its value directly into the destination IndexMap.
+It no longer allocates a temporary Vec of reversed pairs. Locked SmallVec 1.15.2
+Drain borrows the backing storage without allocating; suffix draining preserves
+the lower operands and drops unconsumed entries on early return. The drain is
+explicitly dropped before pushing the completed Map.
+
+Count, underflow, shape and work preflight remain before destination allocation
+or operand removal. Key conversion order, duplicate replacement and insertion
+order, defensive missing-value error, Map boxing and stack admission are unchanged.
+Value destruction has no script-visible hook; no new unsafe code or generalized
+container mechanism was introduced. This removes temporary staging, not the final
+Map or key conversions, and does not establish a throughput gain.
+
+Independent plan review passed. The 503-test baseline passed; final verification
+passed 504 Gateway DSL tests. The added source regression combines duplicate
+literal keys, nested Map/List values, empty Maps and retained outer operands.
+Source syntax admits only literal string keys; this test does not claim coverage
+of injected scalar-key bytecode. Existing limit, depth and discriminating work
+budget regressions passed unchanged. No full suite, live integration or benchmark
+ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.
