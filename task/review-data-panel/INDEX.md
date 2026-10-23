@@ -13421,3 +13421,26 @@ budget regressions passed unchanged. No full suite, live integration or benchmar
 ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Borrow encoded JSON while producing an independent capture
+
+BoundedJson::to_scan_value now validates its borrowed byte slice with
+str::from_utf8 and builds the same independent Arc string directly. It no longer
+clones the encoded Vec into a temporary String first. This removes that temporary
+payload copy while retaining final capture ownership; the consuming conversion
+is unchanged and no throughput improvement was measured.
+
+The caller still owns the original encoding for parent reconstruction. Oversized
+results return TooLong before validation, malformed UTF-8 returns Missing, and
+valid text is byte-identical. Individual/aggregate limits, duplicate handling,
+scan accounting, worker ownership and whole-document validation remain unchanged.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 504
+cases; final verification passed 506. Added tests compare borrowed and consuming
+results for empty, ASCII, multibyte, malformed and boundary inputs, verify repeated
+reads leave the source unchanged and results survive source destruction, and
+exercise simultaneous root/nested-container captures so parent reuse is covered.
+No full suite, live integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

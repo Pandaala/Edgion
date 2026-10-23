@@ -1361,7 +1361,7 @@ impl BoundedJson {
         if self.oversized {
             JsonScanValue::TooLong
         } else {
-            match String::from_utf8(self.bytes.clone()) {
+            match std::str::from_utf8(&self.bytes) {
                 Ok(value) => JsonScanValue::Value(Value::Str(value.into())),
                 Err(_) => JsonScanValue::Missing,
             }

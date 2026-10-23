@@ -336,6 +336,44 @@ fn json_encoding_is_counted_and_written_without_expanded_temporaries() {
 }
 
 #[test]
+fn borrowed_json_capture_matches_consuming_conversion_without_mutating_source() {
+    for bytes in [b"".as_slice(), b"{}", "\"é\"".as_bytes(), &[0xff], &[b'a', 0xe2, 0x82]] {
+        for limit in [0, bytes.len().saturating_sub(1), bytes.len(), 64] {
+            let bounded = BoundedJson::from_bytes(limit, bytes);
+            let original = bounded.bytes.clone();
+            let oversized = bounded.oversized;
+            let expected = BoundedJson::from_bytes(limit, bytes).into_scan_value();
+            let first = bounded.to_scan_value();
+            let second = bounded.to_scan_value();
+            assert_eq!(bounded.bytes, original);
+            assert_eq!(bounded.oversized, oversized);
+            drop(bounded);
+            for actual in [first, second] {
+                match (&actual, &expected) {
+                    (JsonScanValue::Value(actual), JsonScanValue::Value(expected)) => assert_eq!(actual, expected),
+                    (JsonScanValue::Missing, JsonScanValue::Missing)
+                    | (JsonScanValue::TooLong, JsonScanValue::TooLong) => {}
+                    _ => panic!("capture conversion differs for {bytes:?} at limit {limit}"),
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn json_select_retains_parent_encoding_after_capturing_nested_container() {
+    let (plan, values) = scan_json_select(&[br#"{"a":{"x":1}}"#], &[("root", "$"), ("nested", "$.a")], 64).await;
+    assert!(matches!(
+        selected(&plan, &values, "root"),
+        JsonScanValue::Value(Value::Str(value)) if &**value == r#"{"a":{"x":1}}"#
+    ));
+    assert!(matches!(
+        selected(&plan, &values, "nested"),
+        JsonScanValue::Value(Value::Str(value)) if &**value == r#"{"x":1}"#
+    ));
+}
+
+#[test]
 fn selected_map_keys_reuse_the_bounded_plan_key() {
     let plan = JsonSelectPlan::new([("value".to_string(), DefiniteJsonPath::parse("$.selected").unwrap())]);
     let (canonical, _) = plan.root.members.get_key_value("selected").unwrap();
