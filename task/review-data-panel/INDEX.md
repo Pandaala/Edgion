@@ -15177,3 +15177,36 @@ and nine scheduler tests (48 total). Formatting, workspace all-target check/Clip
 and seven repository guards passed with existing unrelated warnings. No new test,
 full suite, live integration or benchmark ran for these last-use releases.
 Independent plan and final reviews passed, including scheduler ownership verification.
+
+## Build AI schedulers directly from borrowed weight iterators
+
+AttemptScheduler construction now accepts exact-length iterators over backend
+weight rows and copies each scalar into its existing fixed arrays. Both request
+planning and initialize_retry_cap supply standard slice/map iterators directly
+from their captured candidates. They no longer materialize per-backend weight
+Vecs, the outer weight Vec or a BackendCredentials projection Vec. The obsolete
+slice wrapper and all callers were migrated; no compatibility constructor remains.
+The earlier explicit releases of those two scratch containers are superseded by
+removing their construction. Other planning-scratch releases remain in place.
+
+Validation still checks backend count, then retry cap, then each credential count
+in declaration order. Missing backends provide empty rows; zero weights remain
+zero. Initial request scheduling and once-only dispatch-cap initialization remain
+separate at their established boundaries, with continuation retries still forced
+to zero. No selection result, live eligibility or retry state is precomputed.
+The scheduler retains owned arrays and no candidate borrow across awaits.
+
+Two constructor regressions passed on the original slice implementation before
+the API change. They pin multi-error precedence, exact backend/credential/retry
+limits, final-slot selection, empty rows and zero-weight exhaustion. Existing
+transition, continuation and dispatch assertions remain unchanged. The current
+producers obey ExactSizeIterator's length contract; no arbitrary user iterator or
+new unsafe assumption is introduced. Allocation layers are removed by inspection;
+no throughput, RSS or future-size measurement is claimed.
+
+Baseline verification passed 106 existing focused tests; the two new constructor
+regressions then passed against the original API. Final verification passed 108
+tests across proxy, scheduler, dispatch, HTTP attempt/response, connect-failure,
+model-router and candidate modules. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing unrelated warnings. Independent
+plan and final reviews passed. No full suite, live integration or benchmark ran.

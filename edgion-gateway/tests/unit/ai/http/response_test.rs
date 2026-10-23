@@ -174,7 +174,7 @@ fn openai_reset_headers_accept_absolute_epoch_and_reject_unsafe_values() {
 #[tokio::test]
 async fn encoded_reject_stages_json_reply_before_conversion_and_header_plugins() {
     use crate::ai::quota::{QuotaApplyResult, QuotaFuture, QuotaSink};
-    use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials};
+    use crate::ai::runtime::attempt::AttemptScheduler;
     use crate::ai::{AiAttemptPlan, AiBackendStore, AiRequestContext, AiUsageShared, ReadyAiAttemptPlan};
     use edgion_resources::resources::edgion_plugins::AiBackendSelection;
     use std::sync::Arc;
@@ -209,7 +209,7 @@ async fn encoded_reject_stages_json_reply_before_conversion_and_header_plugins()
             Duration::from_secs(1),
         )),
     });
-    let mut scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 0).unwrap();
+    let mut scheduler = AttemptScheduler::new([&[1][..]].iter().map(|weights| weights.iter().copied()), 0).unwrap();
     scheduler.select_backend(0).unwrap();
     scheduler.select_credential(1, 0).unwrap();
     ctx.ensure_ai_state().attempt_plan = Some(AiAttemptPlan::Ready(ReadyAiAttemptPlan {

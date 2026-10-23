@@ -17,7 +17,7 @@ use pingora_http::ResponseHeader;
 use crate::ai::quota::{CompiledAiQuotaPlan, QuotaAdmission, QuotaExceededAction};
 use crate::ai::routing::candidate::{invalid_weight_gate, CandidateEligibility, ConformanceGate, RouteCandidate};
 use crate::ai::routing::model_router::{ModelRouteDecision, ModelRouteTable};
-use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, MAX_AI_ROUTE_RETRIES};
+use crate::ai::runtime::attempt::{AttemptScheduler, MAX_AI_ROUTE_RETRIES};
 use crate::ai::{
     get_adaptive_telemetry_store, global_ai_backend_store, AdaptiveTelemetryKey, AdaptiveTelemetryStore, AiAttemptPlan,
     AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError, AiProxyError, ReadyAiAttemptPlan,
@@ -570,27 +570,15 @@ impl AiProxy {
             &mut candidates,
         );
 
-        let credential_weights: Vec<Vec<u32>> = candidates
-            .iter()
-            .map(|candidate| {
-                candidate
-                    .backend
-                    .as_ref()
-                    .map(|backend| {
-                        backend
-                            .credential_pool
-                            .credentials
-                            .iter()
-                            .map(|credential| credential.weight)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            })
-            .collect();
-        let backends: Vec<_> = credential_weights
-            .iter()
-            .map(|weights| BackendCredentials { weights })
-            .collect();
+        let backends = candidates.iter().map(|candidate| {
+            candidate
+                .backend
+                .as_ref()
+                .map(|backend| backend.credential_pool.credentials.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(|credential| credential.weight)
+        });
         let route_retries = if canonical.continuation {
             0
         } else {
@@ -602,11 +590,9 @@ impl AiProxy {
         if route_retries > MAX_AI_ROUTE_RETRIES {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
-        let Ok(scheduler) = AttemptScheduler::new(&backends, route_retries) else {
+        let Ok(scheduler) = AttemptScheduler::new(backends, route_retries) else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
-        drop(backends);
-        drop(credential_weights);
 
         let mut quota_status = None;
         let quota = if let Some(quota) = &self.quota {

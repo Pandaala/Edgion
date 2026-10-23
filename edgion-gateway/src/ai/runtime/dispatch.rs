@@ -20,8 +20,7 @@ use crate::ai::conversion::chat_to_anthropic::{
 };
 use crate::ai::routing::candidate::{pick, CandidateEligibility, CostSnapshot, PickerInput, RouteCandidate};
 use crate::ai::runtime::attempt::{
-    AttemptScheduler, BackendCredentials, DispatchFailureKind, DispatchOutcome, NextStep, SchedulerEvent,
-    MAX_AI_ROUTE_RETRIES,
+    AttemptScheduler, DispatchFailureKind, DispatchOutcome, NextStep, SchedulerEvent, MAX_AI_ROUTE_RETRIES,
 };
 use crate::ai::SelectedAiBackend;
 use crate::ai::{
@@ -651,26 +650,16 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
     if plan.retry_cap_initialized {
         return Ok(());
     }
-    let weights: Vec<Vec<u32>> = plan
-        .candidates
-        .iter()
-        .map(|candidate| {
-            candidate
-                .backend
-                .as_ref()
-                .map(|backend| {
-                    backend
-                        .credential_pool
-                        .credentials
-                        .iter()
-                        .map(|credential| credential.weight)
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
-        .collect();
-    let backends: Vec<_> = weights.iter().map(|weights| BackendCredentials { weights }).collect();
-    plan.scheduler = AttemptScheduler::new(&backends, if plan.continuation { 0 } else { retry_cap })
+    let backends = plan.candidates.iter().map(|candidate| {
+        candidate
+            .backend
+            .as_ref()
+            .map(|backend| backend.credential_pool.credentials.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|credential| credential.weight)
+    });
+    plan.scheduler = AttemptScheduler::new(backends, if plan.continuation { 0 } else { retry_cap })
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     plan.retry_cap_initialized = true;
     Ok(())

@@ -11,13 +11,6 @@ pub const MAX_AI_DISPATCH_ATTEMPTS: u8 = 8;
 pub const MAX_AI_ROUTE_RETRIES: u8 = MAX_AI_DISPATCH_ATTEMPTS - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BackendCredentials<'a> {
-    /// Zero disables a credential. Positive values participate in weighted
-    /// selection among credentials not yet tried in the current round.
-    pub weights: &'a [u32],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttemptTarget {
     pub backend: u8,
     pub credential: u8,
@@ -171,8 +164,14 @@ const EMPTY_FAILURE: DispatchFailure = DispatchFailure {
 };
 
 impl AttemptScheduler {
-    pub fn new(backends: &[BackendCredentials<'_>], route_retries: u8) -> Result<Self, SchedulerError> {
-        if backends.len() > MAX_AI_BACKENDS {
+    /// Copy exact-length weight rows into request-owned fixed storage.
+    pub fn new<B, C>(backends: B, route_retries: u8) -> Result<Self, SchedulerError>
+    where
+        B: ExactSizeIterator<Item = C>,
+        C: ExactSizeIterator<Item = u32>,
+    {
+        let backend_count = backends.len();
+        if backend_count > MAX_AI_BACKENDS {
             return Err(SchedulerError::TooManyBackends);
         }
         if route_retries > MAX_AI_ROUTE_RETRIES {
@@ -180,19 +179,25 @@ impl AttemptScheduler {
         }
 
         let mut compiled = [EMPTY_BACKEND; MAX_AI_BACKENDS];
-        for (backend_index, backend) in backends.iter().enumerate() {
-            if backend.weights.len() > MAX_AI_CREDENTIALS_PER_BACKEND {
+        for (backend_index, weights) in backends.enumerate() {
+            let credential_count = weights.len();
+            if credential_count > MAX_AI_CREDENTIALS_PER_BACKEND {
                 return Err(SchedulerError::TooManyCredentials {
                     backend: backend_index as u8,
                 });
             }
-            compiled[backend_index].credential_count = backend.weights.len() as u8;
-            compiled[backend_index].weights[..backend.weights.len()].copy_from_slice(backend.weights);
+            compiled[backend_index].credential_count = credential_count as u8;
+            for (slot, weight) in compiled[backend_index].weights[..credential_count]
+                .iter_mut()
+                .zip(weights)
+            {
+                *slot = weight;
+            }
         }
 
         Ok(Self {
             backends: compiled,
-            backend_count: backends.len() as u8,
+            backend_count: backend_count as u8,
             max_dispatches: route_retries + 1,
             dispatches: 0,
             round: 0,

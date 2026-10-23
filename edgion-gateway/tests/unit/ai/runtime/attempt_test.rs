@@ -1,8 +1,7 @@
 use super::*;
 
 fn scheduler(weights: &[&[u32]], retries: u8) -> AttemptScheduler {
-    let backends: Vec<_> = weights.iter().map(|weights| BackendCredentials { weights }).collect();
-    AttemptScheduler::new(&backends, retries).unwrap()
+    AttemptScheduler::new(weights.iter().map(|weights| weights.iter().copied()), retries).unwrap()
 }
 
 fn choose(scheduler: &mut AttemptScheduler, backend: u8, eligible: u16, entropy: u64) -> AttemptTarget {
@@ -217,23 +216,73 @@ fn denied_retry_records_one_failure_with_requested_kind() {
 
 #[test]
 fn bounded_configuration_is_rejected() {
-    let too_many_backends = vec![BackendCredentials { weights: &[] }; MAX_AI_BACKENDS + 1];
+    let too_many_backends = vec![&[][..]; MAX_AI_BACKENDS + 1];
     assert!(matches!(
-        AttemptScheduler::new(&too_many_backends, 0),
+        AttemptScheduler::new(too_many_backends.iter().map(|weights| weights.iter().copied()), 0),
         Err(SchedulerError::TooManyBackends)
     ));
     let too_many_credentials = [1; MAX_AI_CREDENTIALS_PER_BACKEND + 1];
     assert!(matches!(
         AttemptScheduler::new(
-            &[BackendCredentials {
-                weights: &too_many_credentials,
-            }],
+            [&too_many_credentials[..]]
+                .iter()
+                .map(|weights| weights.iter().copied()),
             0
         ),
         Err(SchedulerError::TooManyCredentials { backend: 0 })
     ));
     assert!(matches!(
-        AttemptScheduler::new(&[], MAX_AI_ROUTE_RETRIES + 1),
+        AttemptScheduler::new(std::iter::empty::<std::iter::Empty<u32>>(), MAX_AI_ROUTE_RETRIES + 1),
         Err(SchedulerError::TooManyRetries)
     ));
+}
+
+#[test]
+fn constructor_error_precedence_is_stable() {
+    let oversized = [1; MAX_AI_CREDENTIALS_PER_BACKEND + 1];
+    let rows = vec![&oversized[..]; MAX_AI_BACKENDS + 1];
+    assert!(matches!(
+        AttemptScheduler::new(
+            rows.iter().map(|weights| weights.iter().copied()),
+            MAX_AI_ROUTE_RETRIES + 1
+        ),
+        Err(SchedulerError::TooManyBackends)
+    ));
+    assert!(matches!(
+        AttemptScheduler::new(
+            rows[..1].iter().map(|weights| weights.iter().copied()),
+            MAX_AI_ROUTE_RETRIES + 1
+        ),
+        Err(SchedulerError::TooManyRetries)
+    ));
+    let rows = [&[][..], &oversized[..], &oversized[..]];
+    assert!(matches!(
+        AttemptScheduler::new(rows.iter().map(|weights| weights.iter().copied()), 0),
+        Err(SchedulerError::TooManyCredentials { backend: 1 })
+    ));
+}
+
+#[test]
+fn constructor_accepts_exact_limits_and_empty_or_zero_weights() {
+    let mut weights = [0; MAX_AI_CREDENTIALS_PER_BACKEND];
+    weights[MAX_AI_CREDENTIALS_PER_BACKEND - 1] = u32::MAX;
+    let rows = vec![&weights[..]; MAX_AI_BACKENDS];
+    let mut state =
+        AttemptScheduler::new(rows.iter().map(|weights| weights.iter().copied()), MAX_AI_ROUTE_RETRIES).unwrap();
+    assert_eq!(state.max_dispatches(), MAX_AI_DISPATCH_ATTEMPTS);
+    let target = choose(&mut state, (MAX_AI_BACKENDS - 1) as u8, u16::MAX, u64::MAX);
+    assert_eq!(target.backend, (MAX_AI_BACKENDS - 1) as u8);
+    assert_eq!(target.credential, (MAX_AI_CREDENTIALS_PER_BACKEND - 1) as u8);
+
+    let mut empty = AttemptScheduler::new(std::iter::empty::<std::iter::Empty<u32>>(), 0).unwrap();
+    assert!(matches!(empty.select_backend(0), Err(SchedulerError::InvalidBackend)));
+    for weights in [&[][..], &[0, 0][..]] {
+        let mut state = AttemptScheduler::new([weights].iter().map(|weights| weights.iter().copied()), 0).unwrap();
+        state.select_backend(0).unwrap();
+        assert_eq!(
+            state.select_credential(u16::MAX, u64::MAX).unwrap().event,
+            SchedulerEvent::BackendExhausted { backend: 0 }
+        );
+        assert_eq!(state.dispatch_count(), 0);
+    }
 }

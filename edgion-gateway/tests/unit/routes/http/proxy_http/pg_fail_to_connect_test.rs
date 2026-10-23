@@ -1,6 +1,6 @@
 use super::{finish_expired_connect_deadline, select_expired_connect_deadline, ExpiredConnectDeadline};
 use crate::ai::http::attempt::on_connect_failure;
-use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, NextStep, SchedulerError};
+use crate::ai::runtime::attempt::{AttemptScheduler, NextStep, SchedulerError};
 use crate::ai::{AiAttemptPlan, AiBackendStore, ReadyAiAttemptPlan};
 use crate::observe::RequestDiagnostic;
 use crate::{BackendContext, EdgionHttpContext, UpstreamInfo};
@@ -49,14 +49,9 @@ fn ctx_with_selected_ai_target() -> EdgionHttpContext {
     let failed_service_weights = [1, 1];
     let successor_service_weights = [1];
     let mut scheduler = AttemptScheduler::new(
-        &[
-            BackendCredentials {
-                weights: &failed_service_weights,
-            },
-            BackendCredentials {
-                weights: &successor_service_weights,
-            },
-        ],
+        [&failed_service_weights[..], &successor_service_weights[..]]
+            .iter()
+            .map(|weights| weights.iter().copied()),
         0,
     )
     .unwrap();

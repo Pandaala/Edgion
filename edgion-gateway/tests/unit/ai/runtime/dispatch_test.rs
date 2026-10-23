@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::*;
 use serde_json::Value;
 
-use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials};
+use crate::ai::runtime::attempt::AttemptScheduler;
 use crate::ai::{
     AiBackendStore, AiCandidateModel, AiPlanCandidate, ReadyAiAttemptPlan, RuntimeAiBackend, RuntimeAiCredential,
     RuntimeAiCredentialPool, RuntimeAiEndpoint,
@@ -33,7 +33,7 @@ fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<
 }
 
 fn candidate_scheduler() -> AttemptScheduler {
-    let mut scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 0).unwrap();
+    let mut scheduler = AttemptScheduler::new([&[1][..]].iter().map(|weights| weights.iter().copied()), 0).unwrap();
     scheduler.select_backend(0).unwrap();
     scheduler.select_credential(1, 0).unwrap();
     scheduler
@@ -71,7 +71,8 @@ fn candidate_plan() -> ReadyAiAttemptPlan {
 
 fn candidate_plan_with_retries(retries: u8) -> ReadyAiAttemptPlan {
     let mut plan = candidate_plan();
-    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1, 1] }], retries).unwrap();
+    plan.scheduler =
+        AttemptScheduler::new([&[1, 1][..]].iter().map(|weights| weights.iter().copied()), retries).unwrap();
     plan.scheduler.select_backend(0).unwrap();
     plan.scheduler.select_credential(u16::MAX, 0).unwrap();
     plan
@@ -144,7 +145,7 @@ fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan 
         public_model_ids: BTreeSet::new(),
     });
     let mut plan = candidate_plan();
-    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();
+    plan.scheduler = AttemptScheduler::new([&weights[..]].iter().map(|weights| weights.iter().copied()), 0).unwrap();
     plan.candidates = vec![AiPlanCandidate {
         policy_ancestor_admitted: true,
         logical: compiled_ai_logical(None),
@@ -757,7 +758,8 @@ fn target_selection_allocations_follow_backend_scans_and_retry_rounds() {
                 .collect(),
         );
         let weights = vec![1; credential_count];
-        plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 1).unwrap();
+        plan.scheduler =
+            AttemptScheduler::new([&weights[..]].iter().map(|weights| weights.iter().copied()), 1).unwrap();
         let candidate_bytes = std::mem::size_of::<RouteCandidate>();
         let (first, first_stats) =
             crate::test_allocation_counter::count_allocation_stats(|| select_target(&mut plan, 0));
@@ -876,14 +878,9 @@ fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
     let second_weights = [1];
     let mut plan = candidate_plan();
     plan.scheduler = AttemptScheduler::new(
-        &[
-            BackendCredentials {
-                weights: &first_weights,
-            },
-            BackendCredentials {
-                weights: &second_weights,
-            },
-        ],
+        [&first_weights[..], &second_weights[..]]
+            .iter()
+            .map(|weights| weights.iter().copied()),
         0,
     )
     .unwrap();
@@ -1245,7 +1242,7 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
     plan.body_generation = ctx.request_body.generation();
     plan.body_is_current = true;
     plan.usage_observation = AiUsageObservation::Off;
-    plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 1).unwrap();
+    plan.scheduler = AttemptScheduler::new([&[1][..]].iter().map(|weights| weights.iter().copied()), 1).unwrap();
     let mut session = test_session().await;
     let first = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
     drop(first);
@@ -1324,14 +1321,8 @@ async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
             plan.canonical_path = "/v1/messages".into();
             plan.usage_observation = AiUsageObservation::Off;
             plan.selection = AiBackendSelection::Priority;
-            plan.scheduler = AttemptScheduler::new(
-                &[
-                    BackendCredentials { weights: &[1] },
-                    BackendCredentials { weights: &[1] },
-                ],
-                1,
-            )
-            .unwrap();
+            plan.scheduler =
+                AttemptScheduler::new([&[1][..], &[1][..]].iter().map(|weights| weights.iter().copied()), 1).unwrap();
             let body = Bytes::from_static(br#"{"model":"logical","max_tokens":10,"messages":[]}"#);
             plan.request_body = body.clone();
             let mut ctx = EdgionHttpContext::new();

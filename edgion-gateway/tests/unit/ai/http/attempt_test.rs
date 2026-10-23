@@ -221,7 +221,7 @@ pub(crate) fn proxy_fixture() -> EdgionHttpProxy {
     }
 }
 
-use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, DispatchFailureKind, NextStep, StopReason};
+use crate::ai::runtime::attempt::{AttemptScheduler, DispatchFailureKind, NextStep, StopReason};
 use crate::ai::{AiAttemptPlan, AiBackendStore, ReadyAiAttemptPlan};
 use crate::backends::policy::backend_traffic::{EffectiveBackendTrafficPolicy, RetryBudget};
 use crate::plugins::PluginRuntime;
@@ -277,10 +277,7 @@ fn retry_route() -> Arc<HttpRouteRuleUnit> {
 
 fn ready_context(retries: u8) -> EdgionHttpContext {
     let mut scheduler = AttemptScheduler::new(
-        &[
-            BackendCredentials { weights: &[1, 1] },
-            BackendCredentials { weights: &[1] },
-        ],
+        [&[1, 1][..], &[1][..]].iter().map(|weights| weights.iter().copied()),
         retries,
     )
     .unwrap();
