@@ -13870,3 +13870,56 @@ check/Clippy, seven repository guards and diff hygiene passed with existing
 unrelated warnings. The removed source-level remainder is not a measured
 throughput or latency improvement. No full suite, live integration or benchmark
 ran; P2C/EWMA arithmetic and other selector dependencies remain separate.
+
+## P2C live score reads and EWMA per-attempt factor reuse audit
+
+Inspected select_p2c, LbBackend::conn/score and PeakEwmaScore's direct read/update
+paths. P2C borrows candidates and clones only the winner. Its two-host second
+index is deterministic; larger lists use the existing distinct-index mapping.
+Each sampled pair reads live metrics before ordered health checks; retries can
+sample a backend again and observe newer atomics. The final linear scan checks
+health without scoring. Caching metrics across attempts would change those
+observations, so no such runtime change was selected.
+
+PeakEwmaScore::read projects one packed relaxed load without write-back. In
+observe, decay_to_default and the faster-sample blend visibly call decay_parts
+with the same elapsed value. An isolated optimized compilation of the current
+source already merges that interpolation: the LLVM observe body computes q16
+once and its blend block reuses q16 and whole-half-life values. Failed cmpxchg
+returns to the loop and recalculates from the newly observed packed state.
+Moving these values outside the CAS loop would violate the canonical estimator
+invariant. No helper extraction or runtime refactor is justified by the apparent
+duplicate source calls alone.
+
+Reproduction from the repository root (temporary probe only):
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+source = Path('edgion-gateway/src/lb/ewma/score.rs').resolve()
+Path('/tmp/edgion-ewma-observe-probe.rs').write_text(
+    f'#[path = "{source}"] mod score;\n'
+    '#[no_mangle]\n'
+    'pub fn observe_probe(value: &score::PeakEwmaScore, sample: u32, now: u32) '
+    '{ value.observe(sample, now); }\n'
+)
+PY
+rustc --edition=2021 --crate-type lib -O --emit=llvm-ir /tmp/edgion-ewma-observe-probe.rs -o /tmp/edgion-ewma-observe-probe.ll
+```
+
+Observed with rustc 1.96.1 (31fca3adb), LLVM 22.1.2, host aarch64-apple-darwin.
+Inspect the observe/observe_probe function bodies and the blend's use-def chain,
+not merely the total division count across the module. This is isolated optimized
+IR evidence, not a full Gateway release-binary inspection, CPU benchmark or
+guarantee for other toolchains/targets. Re-evaluate if code or compilation changes.
+The larger exact fractional table in [lb-01](lb-01-precomputed-ewma-decay.md)
+remains deferred; common-expression elimination does not settle that tradeoff.
+
+Independent plan review passed. Fresh tests passed 21 estimator, six P2C and
+30 tests selected by lb::backend (three counter tests plus 27 BackendRef-selector
+tests). No runtime code changed. This closes this scoped duplicate-computation
+candidate, not rand internals, discovery, estimator policy tuning or full
+contention/performance validation.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings. No full suite or live
+integration ran.
