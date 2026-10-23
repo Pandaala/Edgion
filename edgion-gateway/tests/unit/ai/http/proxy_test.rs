@@ -248,6 +248,26 @@ fn model_list_is_deterministic_public_and_requires_symbolic_wildcard_owner() {
 }
 
 #[test]
+fn model_list_encoding_preserves_wire_bytes() {
+    for ids in [vec![], vec!["plain", "quote\"slash\\line\n", "π", "", "owned*"]] {
+        let visible = ids.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
+        let data = ids
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "edgion"
+                })
+            })
+            .collect::<Vec<_>>();
+        let previous = serde_json::to_vec(&serde_json::json!({"object": "list", "data": data})).unwrap();
+        assert_eq!(encode_model_list(visible).unwrap(), previous);
+    }
+}
+
+#[test]
 fn canonical_request_preserves_logical_model_and_injects_usage_once() {
     let input =
         Bytes::from_static(br#"{"model":"fast","stream":true,"stream_options":{"custom":7,"include_usage":false}}"#);

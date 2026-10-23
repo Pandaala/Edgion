@@ -15073,3 +15073,31 @@ alternatives requiring a decision. No runtime code changed. Fresh four router
 and 21 proxy tests passed; no prototype, benchmark or live integration ran.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing unrelated warnings. Independent plan and final reviews passed.
+
+## Move owned model-list JSON values
+
+The private model-list encoder now moves each visible model String directly into
+Value::String and moves the completed data array into the response object.
+Locked serde_json 1.0.151 expands arbitrary json! expressions through
+`to_value(&$other)`: the former id expression copied its string, and the outer
+data expression recursively reconstructed the array, objects, keys and strings.
+Those intermediate copies are removed; maps, fixed strings and output bytes
+still allocate. The encoder releases its intermediate JSON owners before the
+response-writing awaits. No throughput, RSS or future-size claim is made.
+
+The object construction retains the original insertion sequence and selected
+serde_json map backend. A byte-parity regression against the former construction
+covers empty/multiple names, quotes, backslashes, newline, permitted multibyte
+UTF-8, an empty name and a wildcard. This tests encoding inputs, not admission
+permission for every test string. It passed with the extracted old implementation
+before the ownership change. No alternate-feature build is claimed.
+
+Model visibility, ordering and deduplication stay with visible_model_ids. Encode
+failure classification, 200 status, headers, Content-Length calculation, error
+logging and header/body write order are unchanged. This is the existing locally
+generated model-list response, not a new upstream aggregation or body-storage API.
+
+Fresh baseline and final runs each passed 22 AI proxy and four model-router tests
+(26 total). Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing unrelated warnings. Independent plan and final reviews
+passed. No full suite, live transport test, alternate serde feature build or benchmark ran.

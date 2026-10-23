@@ -110,6 +110,26 @@ fn visible_model_ids(
         .collect()
 }
 
+fn encode_model_list(visible: Vec<String>) -> serde_json::Result<Vec<u8>> {
+    use serde_json::{Map, Value};
+
+    let data = visible
+        .into_iter()
+        .map(|id| {
+            Value::Object(Map::from_iter([
+                ("id".into(), Value::String(id)),
+                ("object".into(), Value::String("model".into())),
+                ("created".into(), Value::from(0)),
+                ("owned_by".into(), Value::String("edgion".into())),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&Value::Object(Map::from_iter([
+        ("object".into(), Value::String("list".into())),
+        ("data".into(), Value::Array(data)),
+    ])))
+}
+
 fn unknown_model_passthrough_allowed<'a>(
     rewrite_requires_canonical: bool,
     configured: OnUnknownModel,
@@ -220,18 +240,7 @@ impl AiProxy {
         let visible = visible_model_ids(&self.model_routes, backends, session.request_header_map(), |key| {
             snapshot.get_by_key(key)
         });
-        let data = visible
-            .into_iter()
-            .map(|id| {
-                serde_json::json!({
-                    "id": id,
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "edgion"
-                })
-            })
-            .collect::<Vec<_>>();
-        let Ok(body) = serde_json::to_vec(&serde_json::json!({"object": "list", "data": data})) else {
+        let Ok(body) = encode_model_list(visible) else {
             return Self::reject(session, log, "model-list-encode", AiProxyError::BackendUnavailable);
         };
         let body = Bytes::from(body);
