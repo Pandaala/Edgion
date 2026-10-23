@@ -13636,3 +13636,21 @@ Existing partial, reversed, out-of-range and empty-input cases passed. No full
 suite, live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+## Format DSL decision status without temporary Strings
+
+The two numeric decision entries in execute_safe now use the canonical
+PluginLog::push_fmt integer arguments instead of format! plus push. Both
+status fields are u16; the fixed templates and decimal digits fit inline and
+reach the same push_via buffer routing. This removes one temporary String
+per HTTP/gRPC denial decision without changing log text, overflow behavior,
+masking, return values, panic isolation or error policy. No throughput gain
+was measured and no new observability was added.
+
+Independent plan review passed. Baseline and final Gateway DSL verification
+passed 513 cases; 36 canonical plugin-log tests passed, including decimal
+formatting allocation checks and buffer/masking boundaries. Existing DSL
+snapshots retain exact HTTP, termination, gRPC and error-only entries.
+Formatting, workspace all-target check/Clippy, seven repository guards and
+diff hygiene passed, with existing unrelated warnings. No full suite or live
+integration ran.

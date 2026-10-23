@@ -1295,9 +1295,11 @@ pub async fn execute_safe(
                 // The VM only returns GoodNext / ErrResponse / ErrGrpcError.
                 // Keep the other shared plugin-result arms exhaustive.
                 PluginRunningResult::GoodNext | PluginRunningResult::Nothing => log.push("OK"),
-                PluginRunningResult::ErrResponse { status, .. } => log.push(&format!("Deny {status}")),
+                PluginRunningResult::ErrResponse { status, .. } => log.push_fmt("Deny {}", crate::la![*status]),
                 PluginRunningResult::ErrTerminateRequest => log.push("Deny terminate"),
-                PluginRunningResult::ErrGrpcError { grpc_status, .. } => log.push(&format!("Deny grpc {grpc_status}")),
+                PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
+                    log.push_fmt("Deny grpc {}", crate::la![*grpc_status])
+                }
             };
             running_result
         }
