@@ -14718,3 +14718,25 @@ tests. These mirror tests replace the network writer under cfg(test); workspace
 all-target check and Clippy also passed to compile the changed production
 capture. Formatting and seven campaign guards passed with existing unrelated
 warnings. No full suite or live transport test ran.
+
+## Release outbound base URL text before retries
+
+The shared outbound call now drops the original dial URL immediately after a
+successful dynamic-authority replacement has produced its independent String.
+Previously the shadowed original could remain owned through network waits.
+The final base URL is also dropped after request construction and finalization,
+before the retry loop. The no-authority branch still moves the original Cow,
+and static target borrowing remains intact.
+
+replace_url_host returns independent storage, including its fallback; the
+canonical builder parses an owned Url and moves it into reqwest::Request.
+Neither temporary is needed by retry templates or transport. Authority lookup,
+rejection metrics, SSRF checks, timeout resolution, header/body diagnostics,
+request replay and response classification retain their order and values.
+This shortens owned temporary lifetimes without removing formatting/parsing or
+allocation calls; future size, RSS and throughput were not measured.
+
+Baseline and final serial selections each passed 123 shared outbound and 13
+ForwardAuth tests (136 executions). Formatting, workspace all-target check/Clippy
+and seven campaign guards passed with existing unrelated warnings. Scripted
+transport tests use no sockets; no full suite or live transport test ran.

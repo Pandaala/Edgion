@@ -330,7 +330,11 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     .map(|compiled| render_authority_in(compiled, context))
             })
     }) {
-        Some(Ok(authority)) => Cow::Owned(replace_url_host(&base, &authority)),
+        Some(Ok(authority)) => {
+            let rewritten = Cow::Owned(replace_url_host(&base, &authority));
+            drop(base);
+            rewritten
+        }
         Some(Err(e)) => {
             crate::observe::metrics::record_authority_rejected(e.reason());
             return Err(OutboundCallError::AuthorityRejected);
@@ -364,6 +368,8 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
             Err(_) => return Err(OutboundCallError::Connect),
         },
     );
+
+    drop(base);
 
     // ── 4. Execute with retry ─────────────────────────────────────────────────
     let max_attempts = 1 + client.retry.as_ref().map_or(0, |r| r.max_retries);
