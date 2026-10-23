@@ -221,7 +221,17 @@ async fn reqwest_resolve_uses_cached_port_zero_and_rejects_empty() {
     let Err(error) = result else {
         panic!("all-blocked cache entry must surface as an error");
     };
-    assert!(error.to_string().contains("evil.example.com"));
+    assert_eq!(
+        error.to_string(),
+        "egress policy blocked all resolved addresses for host 'evil.example.com'"
+    );
+    assert_eq!(
+        resolver
+            .resolve_socket_addrs("evil.example.com", 443)
+            .await
+            .unwrap_err(),
+        "egress policy blocked all resolved addresses"
+    );
 }
 
 #[tokio::test]

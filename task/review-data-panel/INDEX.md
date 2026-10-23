@@ -14762,3 +14762,25 @@ formatting, workspace all-target check/Clippy and agent-doc validation with
 existing warnings. No new contention experiment, live transport test or
 benchmark ran. This closes only the named helper inspection, not the broader
 outbound transport and health-state concurrency analysis.
+
+## Format blocked egress text at its consuming adapter
+
+Common EgressResolver now carries a private unit Blocked failure from resolve_ips.
+The non-reqwest socket-address adapter still returns its fixed generic error;
+it no longer first creates and discards a hostname-bearing String. The reqwest
+Resolve adapter formats the identical hostname-bearing error at the boundary
+that actually returns it. Name.as_str is the same input passed to resolve_ips,
+and DNS-error conversion remains unchanged.
+
+Policy classification, filtering order, empty-result negative caching, TTL,
+Gateway-owned rejection metrics and resolver lifetime are unchanged. This is
+removal of discarded error formatting on blocked non-reqwest resolutions, not
+a successful-lookup allocation or measured-throughput claim. No new log surface,
+host disclosure, public error type or resolver implementation was introduced.
+
+The existing negative-cache test now asserts both exact adapter messages; all
+10 Common egress tests passed with those assertions before production changes.
+Final verification passed the same 10 tests, 71 Common DNS and three Gateway
+egress tests (84 executions), formatting, workspace all-target check/Clippy and
+seven campaign guards with existing warnings. No live DNS/socket test, full
+suite or benchmark ran.

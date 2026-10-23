@@ -141,7 +141,7 @@ pub struct EgressResolver {
 
 enum ResolveFailure {
     Dns(DnsError),
-    Blocked(String),
+    Blocked,
 }
 
 impl EgressResolver {
@@ -177,7 +177,7 @@ impl EgressResolver {
     pub async fn resolve_socket_addrs(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
         let allowed = self.resolve_ips(host).await.map_err(|failure| match failure {
             ResolveFailure::Dns(error) => format!("DNS resolution failed for outbound target: {error}"),
-            ResolveFailure::Blocked(_) => "egress policy blocked all resolved addresses".to_string(),
+            ResolveFailure::Blocked => "egress policy blocked all resolved addresses".to_string(),
         })?;
         Ok(allowed.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
     }
@@ -207,9 +207,7 @@ impl EgressResolver {
             }
         };
         if allowed.is_empty() {
-            return Err(ResolveFailure::Blocked(format!(
-                "egress policy blocked all resolved addresses for host '{host}'"
-            )));
+            return Err(ResolveFailure::Blocked);
         }
         Ok(allowed)
     }
@@ -285,7 +283,11 @@ impl Resolve for EgressResolver {
                 |failure| -> Box<dyn std::error::Error + Send + Sync> {
                     match failure {
                         ResolveFailure::Dns(error) => Box::new(error),
-                        ResolveFailure::Blocked(message) => message.into(),
+                        ResolveFailure::Blocked => format!(
+                            "egress policy blocked all resolved addresses for host '{}'",
+                            name.as_str()
+                        )
+                        .into(),
                     }
                 },
             )?;
