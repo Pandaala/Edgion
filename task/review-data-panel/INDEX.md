@@ -310,6 +310,7 @@ destination.
 - [JSON scan transport ownership](dsl-07-json-scan-transport-ownership.md)
 - [List-loop source ownership](dsl-08-list-loop-source-ownership.md)
 - [DSL HTTP client initialization](dsl-09-http-client-initialization.md)
+- [Reuse across strict raw JSON reads](dsl-10-raw-json-read-reuse.md)
 - [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
