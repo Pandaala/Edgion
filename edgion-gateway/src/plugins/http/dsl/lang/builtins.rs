@@ -537,7 +537,8 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
         if name.len() > max_string_len || value.len() > max_string_len {
             return http_call_failure_map();
         }
-        let (previous_value_bytes, name_bytes) = match response_headers.get(name) {
+        let previous = response_headers.get_mut(name);
+        let (previous_value_bytes, name_bytes) = match previous.as_deref() {
             Some(Value::Str(previous)) => (previous.len(), 0),
             _ => (0, name.len()),
         };
@@ -549,7 +550,11 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
             return http_call_failure_map();
         };
         header_bytes = next;
-        response_headers.insert(name.to_owned(), Value::Str(Arc::from(value)));
+        if let Some(previous) = previous {
+            *previous = Value::Str(Arc::from(value));
+        } else {
+            response_headers.insert(name.to_owned(), Value::Str(Arc::from(value)));
+        }
     }
 
     let Ok((body, truncated)) = stream_body_capped(response, effective_body_cap).await else {

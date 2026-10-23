@@ -13196,3 +13196,26 @@ link initially failed with disk-full errno 28; after removing confirmed old
 rebuildable incremental artifacts, the failed test command passed. Existing
 unrelated warnings remain. No full suite, live integration or throughput benchmark
 ran.
+
+
+## Reuse duplicate DSL outbound header slots
+
+`complete_http_call_response` now retains the mutable existing header slot used
+for retained-byte accounting and replaces its value after admission succeeds.
+A duplicate no longer allocates a new copy of the same name or performs the
+second map lookup through insert. New names retain the existing insertion path.
+Header order and key storage remain unchanged; no throughput gain is measured.
+
+The full-map stop still precedes inspection of the next header, including a
+duplicate. Text eligibility, individual string limits, old-value byte refunds,
+cumulative payload bounds, failure maps and body polling retain their previous
+order. The value Arc remains independently owned, and the slot borrow ends before
+the next iteration or body await. No storage representation or limit changed.
+
+Independent plan review passed. Fresh baseline and final runs each passed 42
+DSL HTTP-call tests, including duplicate replacement/full-map skipping, refunds
+in both directions, exact/overflow budgets and panic-on-poll body boundaries.
+Five canonical body collector tests also passed (47 final tests total).
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed. Existing unrelated warnings remain. No implementation-mirroring
+test, full suite, live integration or performance benchmark ran.
