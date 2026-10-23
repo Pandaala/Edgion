@@ -176,9 +176,9 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
             // SAFETY: X509_verify_cert_error_string takes c_long; c_int → i64 is lossless.
             let error_ptr = boring_sys::X509_verify_cert_error_string(error_code as i64);
             let error_str = if error_ptr.is_null() {
-                format!("Unknown error code: {}", error_code)
+                std::borrow::Cow::Owned(format!("Unknown error code: {}", error_code))
             } else {
-                std::ffi::CStr::from_ptr(error_ptr).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(error_ptr).to_string_lossy()
             };
             emit_mtls_failure(ssl_ptr, &format!("mTLS chain verify failed: {}", error_str));
             0

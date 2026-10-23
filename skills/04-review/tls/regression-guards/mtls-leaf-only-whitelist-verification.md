@@ -47,6 +47,18 @@ invocations, so a missing `VerifyContext` still has a single writer for that
 handshake. A second in-callback `ssl.log` writer that does not consult
 `audit_emitted` (and does not return 0) would be a regression.
 
+## Chain failure diagnostic ownership
+
+The reject-chain branch retains the Cow returned by CStr::to_string_lossy until
+immediate formatting of the final owned diagnostic. Locked boring-sys 5.2.0
+returns static string literals from X509_verify_cert_error_string, including its
+default case. Valid UTF-8 therefore needs no intermediate owned text copy; lossy
+conversion remains owned if necessary. The defensive null-pointer branch retains
+its owned unknown-code fallback. Final diagnostic bytes, audit claims, rejection
+and the redacted panic boundary remain unchanged. This removes a temporary copy
+on chain failure, without claiming a measured handshake throughput improvement.
+Re-evaluate the pointer lifetime if the dependency's error-string API changes.
+
 ## Fix Suggestions Not Accepted
 
 - Re-checking the allowlist at every successful depth "for defense in depth" —
@@ -71,7 +83,7 @@ handshake. A second in-callback `ssl.log` writer that does not consult
 
 - `tasks/todo/mtls-leaf-only-whitelist-verification.md` (closed by this fix)
 - `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs`
-- Unit tests in that file: one-through-nine-cert walks, preverify rejection,
+- Unit tests in `edgion-gateway/tests/unit/tls/boringssl/mtls_verify_callback_test.rs`: one-through-nine-cert walks, preverify rejection,
   missing leaf context, and single terminal-audit claim
 
 ## Resolution references

@@ -14250,3 +14250,19 @@ Fresh unchanged-code baseline passed 31 Gateway and 35 Resources transcoder test
 formatting, workspace check/Clippy and agent-doc validation with existing unrelated
 warnings. The probe measured lengths/capacities only. No performance benchmark,
 candidate implementation, full suite or live integration ran.
+
+## Borrow mTLS chain failure diagnostic input
+
+The BoringSSL verify callback now retains the error-string Cow until immediate
+formatting of the final owned diagnostic. Locked boring-sys 5.2.0 returns static
+literals, so valid UTF-8 no longer needs an intermediate String copy. Lossy input
+remains owned and the defensive null fallback is unchanged. Audit claims, rejection,
+redaction and panic containment retain their existing owners and ordering.
+
+Baseline and final selections each passed 14 mTLS callback and 18 certificate
+extraction tests. An external 20-case formatting probe checked normal/empty/invalid
+UTF-8 and null fallback across signed error-code boundaries; it establishes text
+parity and Cow ownership, not an end-to-end handshake or throughput result. The
+probe required an explicit Rust 2021 edition for its C-string literals. Formatting,
+workspace check/Clippy and seven repository guards passed with existing unrelated
+warnings. No full suite, live handshake or performance benchmark ran.
