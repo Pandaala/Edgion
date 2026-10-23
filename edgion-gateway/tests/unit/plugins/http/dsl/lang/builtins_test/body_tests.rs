@@ -1,6 +1,6 @@
 use super::super::validator::{compile_dsl_source, ValidationLimits};
 use super::super::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
-use super::{body_bytes_to_value, checked_bounded_len, lossy_utf8_output_len};
+use super::{body_bytes_to_value, checked_bounded_len, decode_http_call_body, lossy_utf8_output_len};
 use crate::plugins::http::dsl::lang::bytecode::CompiledScript;
 use crate::plugins::http::dsl::runtime::DslRuntime;
 use crate::plugins::runtime::traits::session::MockPluginSession;
@@ -26,6 +26,46 @@ fn lossy_utf8_output_len_preflights_replacement_expansion() {
     assert_eq!(lossy_utf8_output_len(&[0xFF], 2), None);
     assert_eq!(lossy_utf8_output_len(&[b'a', 0xFF, b'b'], 5), Some(5));
     assert_eq!(lossy_utf8_output_len(&[0xF0, 0x90, 0x80], 3), Some(3));
+}
+
+#[test]
+fn http_body_decode_preserves_lossy_bytes_and_prefix_limits() {
+    let mut cases = vec![
+        Bytes::new(),
+        Bytes::from_static(b"plain"),
+        Bytes::from_static("é€".as_bytes()),
+    ];
+    for prefix in [String::new(), "a".into(), "é€".into(), "a".repeat(4096)] {
+        for invalid in [&[0xFF][..], &[0x80][..], &[0xFF, 0x80][..], &[0xE2, 0x82][..]] {
+            for suffix in ["", "tail", "€"] {
+                let mut bytes = prefix.as_bytes().to_vec();
+                bytes.extend_from_slice(invalid);
+                bytes.extend_from_slice(suffix.as_bytes());
+                cases.push(Bytes::from(bytes));
+            }
+        }
+    }
+    for bytes in cases {
+        let expected = String::from_utf8_lossy(&bytes);
+        let prefix = std::str::from_utf8(&bytes).map_or_else(|error| error.valid_up_to(), str::len);
+        for limit in [
+            0,
+            bytes.len(),
+            prefix.saturating_sub(1),
+            prefix,
+            prefix + 1,
+            expected.len().saturating_sub(1),
+            expected.len(),
+            expected.len() + 1,
+        ] {
+            let decoded = decode_http_call_body(&bytes, limit);
+            assert_eq!(
+                decoded.as_deref(),
+                (expected.len() <= limit).then_some(expected.as_ref()),
+                "input={bytes:?}, limit={limit}"
+            );
+        }
+    }
 }
 
 #[test]

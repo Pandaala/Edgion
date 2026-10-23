@@ -496,8 +496,11 @@ fn decode_http_call_body(bytes: &Bytes, limit: usize) -> Option<Arc<str>> {
             checked_bounded_len(0, text.len(), limit)?;
             Some(Arc::from(text))
         }
-        Err(_) => {
-            lossy_utf8_output_len(bytes, limit)?;
+        Err(error) => {
+            // The first validation already established this unchanged prefix.
+            let valid_prefix_len = error.valid_up_to();
+            let suffix_limit = limit.checked_sub(valid_prefix_len)?;
+            lossy_utf8_output_len(&bytes[valid_prefix_len..], suffix_limit)?;
             Some(Arc::from(String::from_utf8_lossy(bytes).into_owned()))
         }
     }

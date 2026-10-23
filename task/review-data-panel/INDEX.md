@@ -13219,3 +13219,29 @@ Five canonical body collector tests also passed (47 final tests total).
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed. Existing unrelated warnings remain. No implementation-mirroring
 test, full suite, live integration or performance benchmark ran.
+
+
+## Reuse the validated DSL response-text prefix
+
+On invalid UTF-8, `decode_http_call_body` now uses the first validation's
+`valid_up_to` offset to skip the already validated prefix during lossy-length
+preflight. It subtracts that exact byte count from the limit with checked
+arithmetic, then runs the existing bounded length helper on the suffix. The
+immutable input and error metadata describe the same bytes.
+
+Valid text, replacement grouping, final whole-input standard-library conversion,
+Arc ownership and failure envelopes remain unchanged. Over-limit input still
+fails before lossy conversion allocates. This removes a repeated valid-prefix
+scan in preflight, not all UTF-8 scans, conversion copies or allocations; no
+throughput gain is measured.
+
+Independent plan review passed. Six baseline body tests passed; the added
+differential first passed against the old implementation before the production
+edit. It compares accepted bytes and rejection against standard-library lossy
+conversion for empty/valid input, ASCII and multibyte prefixes, long prefixes,
+repeated invalid bytes, truncated sequences, suffixes and exact/adjacent limits.
+Final verification passed 7 body tests, 42 HTTP-call tests and 5 collector tests
+(54 total), workspace all-target check/Clippy, seven repository guards and diff
+hygiene. An initial format check raced the formatter; the post-format rerun
+passed. Existing unrelated warnings remain. No full suite, live integration or
+performance benchmark ran.
