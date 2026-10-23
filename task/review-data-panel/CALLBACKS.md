@@ -1033,7 +1033,7 @@ unrelated warnings. No full suite, live LDAP/HTTP integration or benchmark ran.
 
 Revalidated at `d7b6331a4`: these five entries are disjoint from the preceding
 45, reconciling 50 of 60 explicit RequestFilter implementations. The remaining
-10 entries still need inventory reconciliation. Paths below are relative to
+10 entries are reduced by the following OIDC and ExtProc inventory. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -1086,3 +1086,64 @@ Fresh verification passed four local-limiter, 24 Redis-limiter, four WebhookKeyG
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live Redis/HTTP integration or benchmark ran.
 Deeper algorithms, client lifecycle, transport and body storage remain open.
+
+## OIDC and ExtProc request direct-entry inventory
+
+Revalidated at `00776bd1e`: these two entries are disjoint from the preceding
+50, reconciling 52 of 60 explicit RequestFilter implementations. Eight entries
+remain: DslPlugin, WafPlugin, WasmPlugin, Arc<WasmPlugin>, GrpcJsonTranscoder,
+AiProxy, AiGuard and Guardrail. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| OpenidConnect (`openid_connect/request_filter_impl.rs`) | Handle logout before callback, then select bearer or session authentication. Callback code/state, bearer tokens and decoded session/raw-cookie values remain owned across mutable-session operations and awaits. Session resolution, refresh, verification and optional userinfo precede header projection and Gateway-cookie stripping on successful continuation. |
+| ExtProc (`ext_proc/plugin.rs`) | Create and install one attached Arc owner with client/mode/identity state before dispatch. Streamed mode checks the transport header-END_STREAM fact and either performs a header-only exchange or installs the request-body handler after its header verdict. Buffered mode captures the canonical immutable body before headers, but constructs the protobuf Vec only after the body phase is admitted. |
+
+OIDC logout takes the ID token for redirect construction, awaits best-effort
+revocation, removes cached access-token state and attempts a redirect with cleared
+cookies. Callback handling requires nonempty code and state. Missing bearer-only
+credentials take delayed rejection; session mode instead distinguishes cache-miss,
+preemptive and expiry refresh. The raw cookie supplies a lazily computed singleflight
+key. A failed preemptive refresh can still use a valid token. Expired-token grace
+is restricted to the expiry-refresh wait-timeout branch and requires verification
+with the separate expiry-leeway check; it is not general dependency fail-open.
+
+Session recovery can reach configured Pass/Deny/Auth fallback. Userinfo and
+revocation remain best-effort. The ordinary bearer path preserves its own
+401/403 versus dependency-502 routing and delay boundary. Header publication is
+bounded and best-effort, not proof that every requested projection was inserted.
+Gateway cookies are stripped on every continuation path under the
+[cookie ownership contract](../../skills/04-review/oidc/regression-guards/session-cookie-upstream-ownership.md).
+When a fresh Authorization value is configured, bearer hiding does not remove it.
+Attempted redirects and authentication replies do not prove successful delivery.
+
+The generation-owned [signing policy](../../skills/04-review/oidc/regression-guards/prepared-signing-policy.md)
+is already prepared before dispatch. Claims serialization, cookie formatting,
+scope membership, introspection ownership, prepared JWKS keys and borrowed
+cookie projection remain oidc-01 through oidc-07. No new token-borrowing interface
+or runtime change is selected; cache, refresh-lock, crypto and HTTP internals
+remain deeper scope. Preserve the caller-specific
+[dependency error projection](../../skills/04-review/oidc/regression-guards/dependency-error-projection.md).
+
+ExtProc's attachment identity and Arc survive into response companions and body
+handlers. Missing transport capability, duplicate attachment and failed handler
+installation retain configured failure handling. Header END_STREAM is a transport
+fact, not a Content-Length inference. The owner validates matching verdicts and
+allowed mode overrides; request-header Continue-and-Replace stops the buffered
+body direction, while streamed replacement is rejected. Immediate-response handling
+and terminalization remain separate from successful local response delivery.
+
+The buffered capture retains the original body generation across header verdicts.
+Skipping/replacing that direction avoids its protobuf conversion. Body publication
+precedes header mutation within the applicable verdict, but previously accepted
+phase mutations are not rolled back after later failure. Preserve the
+[interactive phase contract](../../skills/04-review/ext-proc/regression-guards/ext-proc-interactive-continue-and-replace.md).
+Terminal stream retirement, codec policy, protobuf body storage and local-reply
+ownership remain extproc-01, extproc-02, body-02 and response-03 respectively.
+
+Fresh verification passed 103 OIDC plugin tests and nine ExtProc buffered-request
+tests (112 selected executions). The streamed direct path was source-inspected;
+these selected ExtProc tests do not establish fresh streamed or wire acceptance.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live IdP/gRPC integration or benchmark ran.
