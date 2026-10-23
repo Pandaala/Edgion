@@ -9,7 +9,11 @@ fn session(body: &'static [u8]) -> MockPluginSession {
     session_with_context(body, EdgionHttpContext::default())
 }
 
-fn session_with_context(body: &'static [u8], mut ctx: EdgionHttpContext) -> MockPluginSession {
+fn session_with_context(body: &'static [u8], ctx: EdgionHttpContext) -> MockPluginSession {
+    session_with_context_reads(body, ctx, 1)
+}
+
+fn session_with_context_reads(body: &'static [u8], mut ctx: EdgionHttpContext, reads: usize) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_set_response_header().returning(|_, _| Ok(()));
     ctx.request_info.in_request_body_stage = true;
@@ -26,8 +30,61 @@ fn session_with_context(body: &'static [u8], mut ctx: EdgionHttpContext) -> Mock
     session.expect_record_error().return_const(());
     session
         .expect_read_request_body()
-        .return_once(move |_| Ok(Bytes::from_static(body)));
+        .times(reads)
+        .returning(move |_| Ok(Bytes::from_static(body)));
     session
+}
+
+#[tokio::test]
+async fn repeated_post_evaluations_keep_first_proof_and_run_each_policy() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    let body = br#"{"query":"query First { ping }"}"#;
+    let (mut storage, view) = BodyStorage::new(65536, 65536);
+    storage.write(&Bytes::from_static(body)).await.unwrap();
+    storage.finish().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body.install(view.clone());
+    let mut session = session_with_context_reads(body, ctx, 5);
+    let mut log = PluginLog::new("GraphqlGuard");
+    let mut calls = 0;
+    let mut first_proof = None;
+    for attempt in 0..5 {
+        let result = evaluate(&mut session, &mut log, 65536, |parsed| {
+            calls += 1;
+            assert_eq!(parsed.operation_name(), Some("First"));
+            match attempt {
+                0 | 3 => Err(GraphqlError::Forbidden),
+                4 => panic!("test repeated evaluation panic"),
+                _ => Ok(()),
+            }
+        })
+        .await;
+        match attempt {
+            0 | 3 => assert!(matches!(
+                result,
+                Err(PluginRunningResult::ErrResponse { status: 403, .. })
+            )),
+            4 => assert!(matches!(
+                result,
+                Err(PluginRunningResult::ErrResponse { status: 500, .. })
+            )),
+            _ => assert!(result.is_ok()),
+        }
+        assert_eq!(calls, attempt + 1);
+        assert_eq!(EVALUATIONS.available_permits(), MAX_EVALUATIONS);
+        if attempt == 0 {
+            assert!(session.ctx().response_cache_graphql_proof.get().is_none());
+            view.overwrite_body(Bytes::from_static(body)).unwrap();
+        } else {
+            let proof = *session.ctx().response_cache_graphql_proof.get().unwrap();
+            let fields = (proof.generation, proof.operation, proof.name_digest);
+            assert_eq!(*first_proof.get_or_insert(fields), fields);
+            assert_eq!(Some(proof.generation), session.ctx().request_body.generation());
+            assert!(view.overwrite_body(Bytes::from_static(body)).is_err());
+        }
+    }
 }
 
 #[tokio::test]

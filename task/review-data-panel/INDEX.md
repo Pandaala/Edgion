@@ -13964,3 +13964,23 @@ ExtProc tests passed 147. Formatting, workspace all-target check/Clippy, seven
 repository guards and diff hygiene passed with existing unrelated warnings.
 No full suite, live integration or performance benchmark ran. Revalidate the
 source ownership proof and regression when the codec dependencies change.
+
+## Skip discarded GraphQL operation proof digests
+
+Shared GraphQL evaluation now computes POST operation proof metadata only while
+the request's proof OnceLock is empty. After the first successful publication,
+later evaluations previously computed a SHA-256 digest that set would discard.
+The existing proof cannot be reset by the serving path. Fresh body reads, parsing,
+per-evaluation Work, business computation, admission, errors and successful body
+freeze remain unchanged. GET still computes no POST proof; failed first checks
+leave proof publication available. This does not implement graphql-01 frontend
+reuse or retain a parser owner, and does not change cache generation validation.
+
+Independent plan review passed. The new sequential POST regression passed on
+the original implementation as part of eight shared-evaluation tests. It checks
+five body reads and computations, initial rejection followed by success, later
+success/rejection/panic, unchanged proof fields, freeze and permit release.
+Final verification passed 44 GraphQL-selected Gateway tests and seven cache
+lifecycle tests (51 total), formatting, workspace check/Clippy and seven guards.
+Existing unrelated warnings remain. This removes redundant digest work, not a
+proven allocation or throughput cost; no benchmark or live integration ran.

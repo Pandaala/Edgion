@@ -149,8 +149,9 @@ where
         log.push_err("query budget exhausted");
         return Err(reject(session, 503));
     };
+    let needs_proof = is_post && session.ctx().response_cache_graphql_proof.get().is_none();
     let evaluate = |parsed: ParsedGraphqlRequest| {
-        let proof = is_post.then(|| {
+        let proof = needs_proof.then(|| {
             use sha2::{Digest, Sha256};
             let mut digest = Sha256::new();
             digest.update(b"edgion response cache selected operation\0");
