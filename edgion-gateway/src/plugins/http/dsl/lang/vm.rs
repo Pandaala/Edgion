@@ -251,7 +251,7 @@ pub struct Vm {
     // Parallel to script.constants: Some for pre-compiled Regex entries, None for others.
     regex_cache: Vec<Option<regex::Regex>>,
     streaming_regex_cache: Vec<Option<Arc<dense::DFA<Vec<u32>>>>>,
-    json_path_cache: Vec<Option<DefiniteJsonPath>>,
+    json_path_cache: Vec<Option<Arc<DefiniteJsonPath>>>,
     json_select_cache: Vec<Option<Arc<JsonSelectPlan>>>,
     // Parallel to script.constants: Some for Str entries, None for Int/Regex.
     const_str_cache: Vec<Option<Arc<str>>>,
@@ -302,7 +302,7 @@ impl Vm {
                     })?;
                     regex_cache.push(None);
                     streaming_regex_cache.push(None);
-                    json_path_cache.push(Some(path));
+                    json_path_cache.push(Some(Arc::new(path)));
                     json_select_cache.push(None);
                     const_str_cache.push(None);
                 }
@@ -870,13 +870,15 @@ impl Vm {
                         });
                     };
                     let result = match input {
-                        Value::Str(text) => JsonPathScanner::scan_owned(text, path.clone(), self.limits.max_string_len)
-                            .await
-                            .map_err(map_body_error)?,
+                        Value::Str(text) => {
+                            JsonPathScanner::scan_owned(text, Arc::clone(path), self.limits.max_string_len)
+                                .await
+                                .map_err(map_body_error)?
+                        }
                         Value::Body(_) => {
                             DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
                                 .scan_with(async {
-                                    JsonPathScanner::new(path.clone(), self.limits.max_string_len).await
+                                    JsonPathScanner::new(Arc::clone(path), self.limits.max_string_len).await
                                 })
                                 .await?
                         }

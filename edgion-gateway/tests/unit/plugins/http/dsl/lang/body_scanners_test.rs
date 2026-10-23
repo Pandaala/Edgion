@@ -30,7 +30,7 @@ fn regex_empty_pattern_matches() {
 }
 
 async fn scan_json(input: &[&[u8]], path: &str, limit: usize) -> JsonScanValue {
-    let path = DefiniteJsonPath::parse(path).unwrap();
+    let path = Arc::new(DefiniteJsonPath::parse(path).unwrap());
     let mut scanner = JsonPathScanner::new(path, limit).await.unwrap();
     for chunk in input {
         if scanner.push(chunk).unwrap() == ScanControl::Stop {
@@ -38,6 +38,22 @@ async fn scan_json(input: &[&[u8]], path: &str, limit: usize) -> JsonScanValue {
         }
     }
     scanner.finish().unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shared_json_path_scanners_keep_document_results_independent() {
+    let path = Arc::new(DefiniteJsonPath::parse(r#"$["a.b"][1].value"#).unwrap());
+    let weak = Arc::downgrade(&path);
+    let mut valid = JsonPathScanner::new(Arc::clone(&path), 64).await.unwrap();
+    let mut invalid = JsonPathScanner::new(Arc::clone(&path), 64).await.unwrap();
+    drop(path);
+    assert!(weak.upgrade().is_some());
+    valid.push(br#"{"a.b":[0,{"value":"good"}]}"#).unwrap();
+    invalid.push(br#"{"a.b":[0,{"value":"discard"}]} trailing"#).unwrap();
+    let result = valid.finish().unwrap();
+    assert!(matches!(invalid.finish().unwrap(), JsonScanValue::Missing));
+    assert!(weak.upgrade().is_none());
+    assert!(matches!(result, JsonScanValue::Value(Value::Str(value)) if value.as_ref() == "good"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -55,7 +71,7 @@ async fn threaded_json_path_scan_owns_quoted_members_indices_and_root() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn owned_json_path_scan_preserves_last_wins_limits_and_invalid_input() {
-    let path = DefiniteJsonPath::parse("$.value").unwrap();
+    let path = Arc::new(DefiniteJsonPath::parse("$.value").unwrap());
     let result = JsonPathScanner::scan_owned(Arc::from(r#"{"value":"old","value":"new"}"#), path.clone(), 8)
         .await
         .unwrap();

@@ -13560,3 +13560,29 @@ this ownership-only change; no implementation-shaped test was added. No full
 suite, live integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed, with existing unrelated warnings.
+
+
+## Share cold JSON path preparation across scans
+
+Vm::new now stores each successfully parsed JSON path in an Arc. Body and String
+JsonGet executions clone that handle into their worker instead of cloning the
+segment Vec and member Strings. Path parsing and validation still happen at VM
+construction; the canonical path type, bytecode and parser remain unchanged.
+
+The tradeoff is one additional cold Arc allocation per path constant and atomic
+reference-count operations per use. Nonempty paths avoid repeated segment/member
+copies; the root path has no payload-copy saving. No universal retained-heap or
+measured throughput improvement is claimed. Workers retain immutable paths through
+completion, independently of the VM owner; document state and results remain
+per scan. Permits, queue bounds, cancellation, body budgets and error mappings
+are unchanged.
+
+Independent plan review passed. Baseline Gateway DSL verification passed 510
+cases; final verification passed 511. Added coverage runs two scanners sharing
+one path after dropping the caller handle: valid and malformed documents retain
+independent results, and the path is released after both workers finish. Existing
+String-input repeated-use/duplicate/limit/malformed and threaded root/member/index
+cases passed after adapting to the shared path argument. No full suite, live
+integration or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed, with existing unrelated warnings.

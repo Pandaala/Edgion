@@ -81,7 +81,7 @@ pub(crate) struct JsonPathScanner {
 }
 
 impl JsonPathScanner {
-    pub(crate) async fn new(path: DefiniteJsonPath, limit: usize) -> Result<Self, BodyOperationError> {
+    pub(crate) async fn new(path: Arc<DefiniteJsonPath>, limit: usize) -> Result<Self, BodyOperationError> {
         let permit = acquire_json_scan_permit().await?;
         let (sender, receiver) = mpsc::sync_channel(2);
         let worker = std::thread::Builder::new()
@@ -99,7 +99,7 @@ impl JsonPathScanner {
 impl JsonPathScanner {
     pub(crate) async fn scan_owned(
         input: Arc<str>,
-        path: DefiniteJsonPath,
+        path: Arc<DefiniteJsonPath>,
         limit: usize,
     ) -> Result<JsonScanValue, BodyOperationError> {
         let permit = acquire_json_scan_permit().await?;
@@ -331,7 +331,7 @@ impl Read for ChannelReader {
 
 fn parse_json_stream(
     receiver: mpsc::Receiver<Vec<u8>>,
-    path: DefiniteJsonPath,
+    path: Arc<DefiniteJsonPath>,
     limit: usize,
     _permit: OwnedSemaphorePermit,
 ) -> JsonScanValue {
