@@ -236,6 +236,49 @@ fn repeated_long_string_equality_is_charged_before_comparison() {
 }
 
 #[test]
+fn map_index_preserves_nested_values_and_original_local() {
+    let source = r#"
+let parent = {"child": {"value": "ok", "items": range(0,3)}}
+let child = parent["child"]
+if child["value"] != "ok" { return deny(500, "index mismatch") }
+if child["items"][2] != "2" { return deny(500, "index mismatch") }
+if parent["child"]["value"] != "ok" { return deny(500, "index mismatch") }
+if parent["child"]["items"][0] != "0" { return deny(500, "index mismatch") }
+if parent["missing"] != nil { return deny(500, "index mismatch") }
+if parent[1] != nil { return deny(500, "index mismatch") }
+return next()
+"#;
+    assert_eq!(run(source, MockPluginSession::new()), good_next());
+}
+
+#[test]
+fn map_index_retains_conservative_work_charge() {
+    let entries = (0..100).map(|i| format!("\"k{i}\": {i}")).collect::<Vec<_>>().join(",");
+    let source = |iterations| {
+        format!(
+            "let mut i = 0\nwhile i < {iterations} {{ let child = {{\"child\": {{{entries}}}}}[\"child\"]\ni = i + 1 }}"
+        )
+    };
+    let limits = VmLimits {
+        max_steps: 1_000_000,
+        max_loop_iterations: 700,
+        max_stack_depth: 512,
+        ..Default::default()
+    };
+    // Literal containers avoid GetLocal copy charges. At 700 iterations the
+    // legacy IndexGet precharge crosses the budget; omitting it would succeed.
+    assert_eq!(
+        run_with_limits(&source(650), MockPluginSession::new(), limits.clone()),
+        good_next()
+    );
+    let error = run_expect_runtime_err_with_limits(&source(700), MockPluginSession::new(), limits);
+    assert!(
+        matches!(error, RuntimeError::ValueWorkLimitExceeded { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn map_index_value_copy_is_charged() {
     let source = "let m = {\"x\": range(0,1000)}\nfor i in range(0,3000) { let y = m[\"x\"] }";
     let limits = VmLimits {

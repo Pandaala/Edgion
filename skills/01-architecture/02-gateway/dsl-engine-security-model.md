@@ -45,8 +45,10 @@ VM Value admission has separate fixed limits in `edgion-dsl/src/value.rs`:
 64 Map levels, 32,768 aggregate Map entries plus List elements, and 262,144
 aggregate Map-key bytes per Value. `vm.rs` preflights VM-built Maps before
 their `IndexMap` allocation and checks values as they enter the VM stack.
-`GetLocal` and `IndexGet` precharge deep copies; `Equal` and `NotEqual`
-precharge recursive comparisons. Every shape traversal consumes a fixed
+`GetLocal` precharges deep copies. Map `IndexGet` retains the same conservative
+shape inspection and copy charge, then moves the selected value out of its
+consumed container instead of deep-copying it; local-variable copies remain
+independent. `Equal` and `NotEqual` precharge recursive comparisons. Every shape traversal consumes a fixed
 16 MiB-equivalent per-execution work budget (32 units per container item,
 one per visited or copied Map-key byte or compared string byte). These limits do not
 replace the configurable per-container limits or the operand-stack limit.

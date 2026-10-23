@@ -13347,3 +13347,28 @@ these tests are not a live Redis success/cancellation or memory-retention probe.
 No implementation-shaped lifetime test was added. Formatting, workspace all-target
 check/Clippy, seven repository guards and diff hygiene passed, with existing
 unrelated warnings. No full suite, live integration or benchmark ran.
+
+
+## Move selected DSL Map values out of consumed containers
+
+Map IndexGet now borrows the selected slot mutably and replaces it with Nil,
+returning the owned Value instead of recursively cloning it. The opcode already
+owns the popped container. GetLocal still clones local values independently, and
+the List indexing path remains unchanged. This avoids a redundant selected
+subtree copy and destruction, without changing Value layout or shared XML/Body
+semantics. No allocation count or request-throughput improvement was measured.
+
+Shape inspection, conservative copy-work charge and result stack admission retain
+their order and limits. The security model now explains that the charge remains
+even though the selected Map value moves. Missing/wrong-type keys and failure
+precedence are unchanged; no cache, response buffer or logging was introduced.
+
+Independent plan review passed. New regressions cover nested Map/List access,
+original-local preservation, missing/wrong-type keys and a discriminating work
+budget boundary. The 650/700-iteration literal-Map case passes with the original
+charge; removing only IndexGet charge_clone makes the new test fail because 700
+iterations incorrectly succeed, while the older copy-budget test still passes.
+That negative mutation was restored before the production move. The final Gateway
+DSL suite passed all 503 tests. Formatting, workspace all-target check/Clippy,
+seven repository guards and diff hygiene passed, with existing unrelated warnings.
+No full suite, live integration or performance benchmark ran.

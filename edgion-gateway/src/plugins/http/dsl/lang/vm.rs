@@ -1112,8 +1112,8 @@ impl Vm {
                 }
                 OpCode::IndexGet => {
                     let idx = state.pop()?;
-                    let container = state.pop()?;
-                    let val = match (&container, &idx) {
+                    let mut container = state.pop()?;
+                    let val = match (&mut container, &idx) {
                         (Value::List(l), Value::Int(i)) => {
                             if *i < 0 {
                                 Value::Nil
@@ -1124,10 +1124,10 @@ impl Vm {
                             }
                         }
                         (Value::Map(m), Value::Str(k)) => {
-                            if let Some(value) = m.get(k.as_ref()) {
+                            if let Some(value) = m.get_mut(k.as_ref()) {
                                 let shape = value.inspect_shape(&mut state.value_work_budget)?;
                                 state.value_work_budget.charge_clone(shape)?;
-                                value.clone()
+                                std::mem::replace(value, Value::Nil)
                             } else {
                                 Value::Nil
                             }
