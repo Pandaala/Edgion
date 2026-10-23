@@ -660,3 +660,58 @@ representation and Guardrail capacity decisions remain separate. Together with t
 synchronous and read-only body inventories, this reconciles current direct
 response-stage plugin entries, not their complete nested condition, protocol,
 VM, transaction, codec or transport dependency graphs.
+
+## Request-stage orchestration direct-entry inventory
+
+Revalidated at `3d231f9df`: source search across `edgion-gateway/src` finds 60
+explicit RequestFilter implementations, 57 under plugins and three under ai
+(AiProxy, AiGuard and Guardrail). This table covers the ten runtime orchestration
+entries only. The other 50 implementation entries still require inventory
+reconciliation; they are not 50 unique or wholly unreviewed plugins. In particular,
+WasmPlugin and Arc<WasmPlugin> are separate entries. Existing scoped findings and
+verification remain useful without establishing complete transitive coverage.
+Paths below are relative to `edgion-gateway/src/plugins/runtime/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| ConditionalRequestFilter (`conditional_filter.rs`) | Own alias/dye metadata and compiled optional conditions; evaluate live conditions asynchronously, return errors or a logged Skip, otherwise await inner. Absence of conditions does not imply absence of metadata. |
+| BodyGatedRequestFilter (`body_gate.rs`) | Secondary condition Skip invokes inner without body enforcement. Otherwise capture under the physical cap, materialize only when the inner trait requires it, apply the logical limit and failure policy, then invoke inner on success. Tolerated read failures return Nothing rather than invoking inner; refusal/physical-cap/storage failures retain their hard failure rules. |
+| RejectFilter (`reject_filter.rs`) | Log static invalid-plugin names and return a fixed generic 500 body. Shared static Bytes and prepared names require no per-request body construction; publication and last-known-good retention remain separate owners. |
+| PolicyBlockFilter (`policy_filter.rs`) | Record the prepared first blocked plugin and existing metric, then return its prepared status and fixed generic body. The block gate precedes invalid-config rejection when both exist. |
+| PolicyBypassNote (`policy_filter.rs`) | Iterate prepared bypassed names through canonical logs/metrics and return Nothing. It is an observation entry, not permission to hide another reject gate. |
+| RequestHeaderModifierFilter (`gateway_api_filters/request_header_modifier.rs`) | Apply prepared Set, Add and Remove lists in that order. HeaderValue clones supply owned setter arguments; failures retain static diagnostics and subsequent operations continue. |
+| RequestRedirectFilter (`gateway_api_filters/request_redirect.rs`) | Borrow live host/path/query and matched-prefix context, build Location with prepared transform policy, log numeric status, construct/write a zero-length response and terminate. Missing context/build/header/write failures return fixed 500. Location must survive the owned response write. |
+| URLRewriteFilter (`gateway_api_filters/url_rewrite.rs`) | Compute the optional effective URI, publish it before an optional prepared hostname, and return GoodNext. Missing prefix context or mutation failure returns fixed 500; URI and Host have separate mutation boundaries. |
+| GapiCorsFilter (`gateway_api_filters/cors_filter.rs`) | Read live Origin and preflight state. Preflight handles allowed/denied responses locally; ordinary requests defer actual CORS headers to response filtering. Existing write-result and termination behavior remains subject to the common runtime fallback. |
+| ExtensionRefFilter (`gateway_api_filters/extension_ref.rs`) | Resolve the request-pinned runtime, enforce target/backend-scope restrictions, establish tokenized nested logs, check live IP dependencies and await inner entries in order. Preserve local outcome-frame ownership, identity/dye installation, anti-spoof stripping, dedicated-log suppression and first non-continuing result. Preparation failure writes the request-stage error response before termination. |
+
+The ordinary PluginRuntime runner returns immediately for an empty input chain.
+For a nonempty chain it captures gRPC disposition, prepares the phase's local
+rate-limit frame and session adapter, then selects the IP-unavailable gate unless
+policy blocking takes precedence. RequestId early/after-early filtering occurs
+before each eligible invocation. Entry identity and dye installation/stripping
+precede condition/body wrappers. Completed invocations restore identity before
+result handling; retained ordinary logs reserve on first insertion. HTTP/gRPC
+error conversion, termination framing, stage log completion and frame ending
+remain centralized. These normal-return paths are not a claim that every cleanup
+callback runs when an awaited future is dropped.
+
+ExtensionRef keeps its runtime Arc across inner awaits and writes completed inner
+logs through the existing context-owned token. It does not flatten nested logs
+into the outer entry or replace pinned runtime ownership with a short borrow.
+The [log-token contract](../../skills/04-review/plugin-runtime/regression-guards/extension-ref-tokenized-plugin-log-contract.md)
+and [body materialization contract](../../skills/04-review/http-body/regression-guards/request-body-gate-lazy-materialization.md)
+remain authoritative for their respective boundaries.
+
+This reconciliation makes no new runtime change. RequestRedirect's numeric-log
+allocation was removed separately in the baseline commit. Wrapper elision remains
+[request-01](request-01-conditional-wrapper-dispatch.md); CORS matching/value
+transfer, stage-log capacity, live condition dependencies and attached business
+execution retain their existing decisions and open inspection scope. No whole
+request lifecycle, all-entry coverage or cancellation/transport proof is claimed.
+
+Fresh verification passed 18 conditional-wrapper, 31 body-gate, 65 native-filter
+tests and two policy/reject ordering regressions (116 total), formatting,
+workspace check/Clippy and agent-doc validation. The wrapper/filter selections
+also contain response-stage cases; they are not 116 distinct request-entry proofs.
+Existing unrelated warnings remain; no full suite or live integration ran.
