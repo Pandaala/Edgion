@@ -108,19 +108,34 @@ fn validate_label_rejects_every_escape_character() {
     assert!(validate_label("-a").is_err(), "leading hyphen");
     assert!(validate_label("a-").is_err(), "trailing hyphen");
 
-    // Note on byte length vs. char count: this does NOT distinguish a
-    // byte-counting `len()` bound from a char-counting `chars().count()`
-    // bound. 32 copies of the 2-byte 'é' fail the CHARSET check first
-    // (its bytes are all >= 0x80), so the length check is never reached
-    // either way. The distinction is provably unobservable: any input
-    // that survives the charset check is pure ASCII, and for ASCII text
-    // `len()` (bytes) and `chars().count()` are always equal — so the
-    // byte bound and the char bound agree on every input that could
-    // otherwise pass.
+    // The byte-length guard precedes charset validation, including for UTF-8.
     let multi_byte = "é".repeat(32);
     assert!(multi_byte.chars().count() < 63, "sanity: char count stays under 63");
-    assert!(multi_byte.len() > 63, "sanity: byte length exceeds 63");
-    assert!(validate_label(&multi_byte).is_err(), "must reject on charset");
+    assert_eq!(validate_label(&multi_byte).unwrap_err(), "longer than 63 bytes");
+}
+
+#[test]
+fn label_normalization_preserves_ascii_grammar_and_error_priority() {
+    let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for byte in 0u8..=127 {
+        let label = format!("a{}z", char::from(byte));
+        let result = validate_label(&label);
+        if alphabet.contains(char::from(byte)) || byte == b'-' {
+            assert_eq!(result.unwrap(), label.to_ascii_lowercase());
+        } else {
+            assert_eq!(result.unwrap_err(), "must contain only [a-z0-9-]");
+        }
+    }
+    assert_eq!(validate_label("").unwrap_err(), "empty");
+    assert_eq!(validate_label("-a.").unwrap_err(), "must contain only [a-z0-9-]");
+    assert_eq!(validate_label("-A").unwrap_err(), "must not start or end with '-'");
+    assert_eq!(validate_label("A-").unwrap_err(), "must not start or end with '-'");
+    assert_eq!(validate_label(&"A".repeat(63)).unwrap(), "a".repeat(63));
+    assert_eq!(
+        validate_label(&format!("{}.", "A".repeat(63))).unwrap_err(),
+        "longer than 63 bytes"
+    );
+    assert_eq!(validate_label("tenant-42").unwrap(), "tenant-42");
 }
 
 #[test]

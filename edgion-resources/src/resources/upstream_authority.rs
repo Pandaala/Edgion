@@ -10,6 +10,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 use crate::resources::common::request_template::{
     CompiledTemplate, SecretPolicy, TemplateAdmission, TemplateSegment, VariablePolicy,
@@ -97,28 +98,33 @@ pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
 }
 
 /// Validate a rendered wildcard label and return it lowercase-normalized.
+/// Already-lowercase labels borrow the input.
 ///
 /// The character set excludes `.`, `/`, `?`, `#`, `@`, `:` and CR/LF — every
 /// character an injected value would need to grow a second label, escape the
 /// host, or split the request.
-pub fn validate_label(label: &str) -> Result<String, &'static str> {
+pub fn validate_label(label: &str) -> Result<Cow<'_, str>, &'static str> {
     if label.is_empty() {
         return Err("empty");
     }
     if label.len() > 63 {
         return Err("longer than 63 bytes");
     }
-    let lower = label.to_ascii_lowercase();
-    if !lower
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    {
-        return Err("must contain only [a-z0-9-]");
+    let mut has_uppercase = false;
+    for byte in label.bytes() {
+        if !byte.is_ascii_alphanumeric() && byte != b'-' {
+            return Err("must contain only [a-z0-9-]");
+        }
+        has_uppercase |= byte.is_ascii_uppercase();
     }
-    if lower.starts_with('-') || lower.ends_with('-') {
+    if label.starts_with('-') || label.ends_with('-') {
         return Err("must not start or end with '-'");
     }
-    Ok(lower)
+    Ok(if has_uppercase {
+        Cow::Owned(label.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(label)
+    })
 }
 
 /// The compiled form: a template for the label slot ONLY, plus the fixed suffix.

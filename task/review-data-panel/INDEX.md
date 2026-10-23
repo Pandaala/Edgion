@@ -14896,3 +14896,31 @@ and all_refused_candidates_fail_closed were excluded. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing
 unrelated warnings. Source ownership establishes these drop boundaries; no
 live LDAP/TLS response-write timing, full suite or allocation benchmark ran.
+
+## Borrow normalized lowercase authority labels
+
+The canonical Resources validate_label helper now returns Cow<str>. It validates
+the original ASCII bytes while recording uppercase presence, then borrows an
+already-lowercase valid label or owns its lowercase normalization. Gateway
+render_authority_in consumes that result synchronously while composing the same
+owned host. This removes the intermediate normalization String for lowercase
+success and avoids constructing it for rejected labels that previously reached
+normalization. Uppercase success still allocates; rendering and final host
+ownership are unchanged. No measured latency or throughput claim is made.
+
+Empty, byte-length, character-set and edge-hyphen error precedence is preserved.
+ASCII alphanumeric validation accepts exactly the old lowercase-then-check
+grammar; Unicode letters and separator/control injection remain rejected. The
+63-byte limit, fixed suffix, composed-IP guard, trusted template capability and
+existing consumers in pattern admission and health-host matching are unchanged.
+No schema, template runtime, parser cache or observability mechanism was added.
+
+Baseline-first tests pin every ASCII byte inside a label, mixed-case normalization,
+63-byte acceptance, mixed-invalid error ordering and multibyte length rejection.
+The old test comment incorrectly claimed charset validation preceded the length
+guard; its correction and exact error assertion reflect the existing code.
+
+Fresh baseline and final runs each passed 14 Resources authority and six Gateway
+authority tests (20 total). Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing unrelated warnings. No live
+upstream integration, full suite or allocation/throughput benchmark ran.
