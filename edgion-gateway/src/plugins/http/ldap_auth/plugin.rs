@@ -451,16 +451,17 @@ impl LdapAuth {
 
         ldap3::drive!(conn);
 
-        let bind_result = tokio::time::timeout(self.timeout, ldap.simple_bind(bind_dn, password))
+        let bind_rc = tokio::time::timeout(self.timeout, ldap.simple_bind(bind_dn, password))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|_| LdapAuthError::BindFailed)?;
+            .map_err(|_| LdapAuthError::BindFailed)?
+            .rc;
 
         let _ = ldap.unbind().await;
 
-        if bind_result.rc == 0 {
+        if bind_rc == 0 {
             Ok(())
-        } else if bind_result.rc == 49 {
+        } else if bind_rc == 49 {
             Err(LdapAuthError::InvalidCredentials)
         } else {
             Err(LdapAuthError::BindFailed)

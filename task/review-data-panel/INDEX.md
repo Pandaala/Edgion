@@ -14832,3 +14832,29 @@ workspace all-target check/Clippy and seven repository guards passed; existing
 unrelated warnings remain. Dependency-source inspection establishes conversion
 equivalence; lazy constructor tests do not establish live TLS behavior. No new
 unit test, live handshake, full suite or allocation benchmark was run.
+
+## LDAP bind response release before unbind
+
+LdapAuth::ldap_bind now projects the numeric rc from the completed simple_bind
+result in its initialization statement. The temporary LdapResult releases its
+unused matched DN, diagnostic text, referrals and response controls before
+ldap.unbind().await. Locked ldap3 0.12.1 owns those strings/vectors independently
+and has no custom result/control Drop behavior; unbind operates on the separate
+LDAP handle. Only the copied u32 result code remains for the existing outcome
+branches after cleanup.
+
+Timeout and SDK errors still return before unbind, and a completed result still
+awaits the same unbind operation with its error ignored. Code 0 succeeds, 49
+reports invalid credentials, and every other code reports bind failure. Fresh
+per-request connections, TLS identity, canonical dial-time egress, credentials,
+driver lifetime and logging are unchanged. This shortens unused response-buffer
+residency across an await; it adds no allocation-count, throughput, async-future
+size or physical-erasure claim.
+
+Fresh baseline and final runs each passed 26 LDAP unit tests, excluding the two
+existing live TCP tests (dial_skips_refused_candidate_and_uses_next and
+all_refused_candidates_fail_closed). Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing unrelated warnings.
+The tests cover existing local behavior, not a live bind/unbind or measured
+release latency; the ownership conclusion follows from the expression lifetime
+and locked dependency source. No full suite, live LDAP test or benchmark ran.
