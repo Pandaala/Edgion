@@ -42,6 +42,8 @@ destination.
 
 - [Explicit DNS resolver preparation](dns-03-standard-resolver-preparation.md)
 
+- [Prepared retry-status membership](retry-02-status-membership-preparation.md)
+
 - [Retry backoff cancellation scope](retry-01-backoff-cancellation-scope.md)
 
 - [Stage-specific plugin log capacity policy](log-06-stage-log-capacity-policy.md)
