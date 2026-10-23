@@ -978,7 +978,7 @@ unrelated warnings. No full suite, live integration or performance benchmark ran
 
 Revalidated at `1fa2b7ccc`: these four entries are disjoint from the preceding
 41, reconciling 45 of 60 explicit RequestFilter implementations. The remaining
-15 entries still need inventory reconciliation. Paths below are relative to
+15 entries are reduced by the following admission and outbound inventory. Paths below are relative to
 `edgion-gateway/src/plugins/http/`.
 
 | Implementation / source | Direct work and ownership boundary |
@@ -1028,3 +1028,61 @@ Fresh verification passed 36 HmacAuth, 20 HeaderCertAuth, 13 ForwardAuth and
 (174 selected executions). Supporting cases are not distinct entry proofs.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live LDAP/HTTP integration or benchmark ran.
+
+## Admission and outbound request direct-entry inventory
+
+Revalidated at `d7b6331a4`: these five entries are disjoint from the preceding
+45, reconciling 50 of 60 explicit RequestFilter implementations. The remaining
+10 entries still need inventory reconciliation. Paths below are relative to
+`edgion-gateway/src/plugins/http/`.
+
+| Implementation / source | Direct work and ownership boundary |
+| --- | --- |
+| RateLimitLocal (`rate_limit_local/plugin.rs`) | Resolve an owned key through the shared helper, read the prepared interval and current effective rate, then observe the per-plugin lazy CMS. Publish a configured outcome slot before Continue, rejection or normal headers. Key-miss Allow bypasses observation; key-miss Deny uses zero retry delay. Logs expose key length, not identity. |
+| RateLimitRedis (`rate_limit_redis/plugin.rs`) | Prepare ordered quota jobs with owned bounded keys before client lookup. Pin one healthy client and check jobs sequentially under the optional data-only timeout. Stop at first denial/error; select one checked result for headers. On the checked-decision path, release jobs before response awaits. Unavailable-client handling instead enters the configured failure policy while jobs remain in scope. |
+| WebhookKeyGet (`webhook_key_get/plugin.rs`) | Resolve configured variables sequentially through the canonical bounded outbound call. Emit diagnostics after each await, borrow the owned extracted value or configured default into the context setter, then proceed to the next variable. A resolved empty string wins over default; absent resolution without default skips publication. Setter errors are logged and processing continues. |
+| RequestMirrorPlugin (`request_mirror/plugin.rs`) | Apply target/sampling checks and nonwaiting instance/process task admission. Build an owned URL from borrowed current path/query before snapshot awaits or task handoff. The detached writer owns prepared headers, trace identity, permits and either an isolated committed snapshot or the bounded tee receiver. Runtime skips continue the primary request. |
+| AllEndpointStatus (`all_endpoint_status/plugin.rs`) | Claim the configured process interval before acquiring the global semaphore with a five-second wait limit. Capture discovery/policy generations, collect endpoint projections and borrow current path/query during fan-out. Selected probes retain owned results for ordered assembly and JSON response writing; the global permit spans local response handling. |
+
+The local limiter's interval is prepared, but Cluster-scope effective rate still
+reads the current instance count. Its lazy estimator remains
+[rate-limit-01](rate-limit-01-local-estimator-initialization.md). Continue publishes
+the local outcome without normal limit headers or rejection; it does not refund
+CMS observations or guarantee that a later Redis consumer runs. Preserve the
+[local-overflow contract](../../skills/04-review/rate-limit/regression-guards/local-allowance-redis-overflow.md).
+
+Redis's timeout excludes key preparation and local response writing. Sequential
+quota checks can retain earlier debits after later denial, failure or timeout;
+this is not a transaction or refund contract. The explicit early unavailable-client
+exception above limits the release-before-response wording in the
+[named-quota ownership page](../../skills/04-review/rate-limit/regression-guards/redis-named-quotas.md).
+No key-lifetime change is selected here. Existing redis-01 through redis-07
+investigations remain deferred. Attempted rejection writes do not prove delivery.
+
+Webhook results remain owned across resolver return, then are copied into request
+context by its setter. Later variables can observe earlier publications. Its
+existing fail-soft contract does not authorize parallel resolution. JSON projection
+and extraction-path preparation remain [webhook-01](webhook-01-selective-json-projection.md)
+and [webhook-02](webhook-02-extraction-path-preparation.md).
+
+Mirror snapshots and headers-ended requests disarm the body cancellation guard
+and detach; other requests install streaming state. Rejected installation drops
+the armed state and cancels the writer. The production exchange drops the response
+after headers and never aggregates its body. The
+[mirror budgets](../../skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md)
+bound retained mirror payload, not total RSS. Current query borrowing is already
+in this baseline; the network-free writer seam does not verify wire behavior.
+
+Endpoint fan-out has its own wall timeout and per-probe timeout; neither covers
+all preceding admission/collection work or the final local response write.
+Completed partial results survive the fan-out deadline. The selected endpoint cap
+does not bound all preselection projections: [endpoint-02](endpoint-02-bounded-endpoint-projection.md)
+remains open, alongside endpoint-01, endpoint-03 and endpoint-04. Preserve the
+[per-invocation TLS identity contract](../../skills/04-review/backends/regression-guards/all-endpoint-status-tls-identity.md).
+
+Fresh verification passed four local-limiter, 24 Redis-limiter, four WebhookKeyGet,
+28 RequestMirror and 24 AllEndpointStatus tests, plus 11 webhook-resolver tests
+(95 selected executions). Supporting cases are not distinct entry proofs.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No full suite, live Redis/HTTP integration or benchmark ran.
+Deeper algorithms, client lifecycle, transport and body storage remain open.
