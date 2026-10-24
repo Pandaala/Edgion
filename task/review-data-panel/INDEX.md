@@ -15786,3 +15786,26 @@ repository guards passed with existing warnings. No new test merely mirrors the
 drop statement; ownership inspection and compilation establish its location,
 while existing tests cover selection, metadata, PP2, replay and relay behavior.
 No full suite, live transport/TLS handshake or performance benchmark ran.
+
+## TCP endpoint and completion token release before relay
+
+TCP now drops its completion token and selected backend after the existing
+synchronous connect-success report, before awaiting relay. Capture timing and
+failure reporting remain unchanged. The token owns only policy identity; the
+canonical backend contains ordinary address/counter/identity storage and empty
+Pingora extensions. Neither owner is a connection-accounting guard or completion
+permit, and TCP creates no LbCommitGuard, CbPermit or HalfOpenProbe on this path.
+TLS already releases its corresponding attempt locals at the loop boundary.
+
+This releases only the connection's now-unused references. Other discovery,
+policy and connection owners may retain their data; no allocation-count, RSS,
+async-frame-size or throughput gain is measured. The deferred outlier-01 token
+representation decision remains unselected. Peer and logical Gateway ownership,
+relay accounting, endpoint identity checks and diagnostics are unchanged.
+
+Baseline and final verification each passed 27 TCP, 21 shared-relay, five TCP-log
+and 36 outlier tests (89 total). Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing warnings. The original TCP ownership
+knowledge records the source/compiler basis and re-evaluation triggers; existing
+tests do not directly drive the new production drop location. No new test solely
+mirrors the drop statement, and no full suite, live network or benchmark ran.

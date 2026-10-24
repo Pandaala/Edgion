@@ -277,6 +277,9 @@ impl EdgionTcpProxy {
         if let Some(token) = outlier_token.as_ref() {
             outlier_store.record_success_for_backend_with_token(backend.as_ref(), token);
         }
+        // Completion is synchronous; relay has no endpoint or policy-token dependency.
+        drop(outlier_token);
+        drop(backend);
 
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx, gateway_config.l4_timeouts.idle_timeout)

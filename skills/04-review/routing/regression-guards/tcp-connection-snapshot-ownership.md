@@ -26,6 +26,15 @@ ends before connection I/O; backend ownership for outlier completion is unchange
 Internet socket-address cloning was a value copy, so this is not a heap-allocation
 or measured throughput claim.
 
+After a successful connect, the existing synchronous outlier success report is
+the last consumer of the backend and its completion token. The connection drops
+both local owners before relay. Failure still reports with the same captured
+token before returning. The token owns only a policy identity; the canonical
+Service backend owns ordinary address/counter/identity data with empty Pingora
+extensions. Neither is a completion permit or connection-accounting guard, and
+neither has a lifecycle-sensitive drop callback. TCP does not create a
+`LbCommitGuard`, `CbPermit` or `HalfOpenProbe` on this path.
+
 ## Rationale and evidence
 
 Previously a named route-table guard lived in the async connection function
@@ -75,8 +84,16 @@ Re-evaluate when selection stops returning an owned unit, connection code loads
 another table guard across I/O, prepared peer/backend data borrows the unit, a
 unit-owned resource gains lifecycle effects, or relay hook/error semantics change.
 
-The explicit pre-connect unit drop is established by the production ownership
-boundary and compiler checks. The existing Weak-reference selection test checks
+Also re-evaluate if endpoint/token destruction gains lifecycle effects, canonical
+backend extensions gain resource owners, or relay begins consuming backend state.
+The explicit post-completion drops release this connection's references only;
+other discovery, policy, selection or connection owners may retain their data.
+They do not change token representation or select the deferred completion-token
+ownership redesign.
+
+The explicit pre-connect unit drop and post-completion backend/token drops are
+established by production ownership boundaries and compiler checks. The existing
+Weak-reference selection test checks
 generation independence and release after its own final owner is dropped; it
 does not drive the production connect path or measure reload-time memory. No
 allocation-count, RSS, async-frame-size or throughput improvement is claimed.
