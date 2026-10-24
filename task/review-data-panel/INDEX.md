@@ -16251,3 +16251,24 @@ and anonymous controls. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. Source ownership and compilation
 establish the release boundary; tests do not instrument deallocation timing.
 No full suite, live TLS/authentication transport or performance benchmark ran.
+
+## Release JWT routing scratch before real verification
+
+JWT verification now drops the insecure decode's unused Header before moving
+out its claims. After successful issuer routing, algorithm equality and scoped
+key selection, it releases those peek claims and the separately decoded initial
+Header before real verification. The selected group and key borrow the immutable
+store independently of the lookup strings.
+
+Both decodes, issuer/key security checks, signature validation, expiration checks
+and failure/log ordering remain unchanged. The original issuer-binding knowledge
+records the independent owners and partial-move boundary. This removes overlap
+of routing scratch with real decode without claiming fewer allocations, physical
+erasure, measured overall peak memory or throughput. No credentials, parser
+acceptance, token source, clock policy or shared JWT/OIDC ownership is redesigned.
+
+Independent plan and final source review passed. Baseline and final JWT runs
+passed identical sets of 47 tests. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. Source/dependency
+ownership and compilation establish these release points; no deallocation-timing
+instrumentation, full suite, live authentication transport or benchmark ran.

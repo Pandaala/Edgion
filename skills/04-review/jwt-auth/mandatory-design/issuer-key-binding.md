@@ -74,3 +74,19 @@ compares the issuer slice with the claims field's pointer; the redaction fixture
 includes an issuer sentinel in claims. Re-evaluate the accessor if construction
 sites or mutable claims access expand. A claims lookup replaces the issuer copy;
 no throughput improvement is measured.
+
+## Unverified routing scratch release
+
+After insecure decode, verify_jwt explicitly releases that TokenData's unused
+header before moving out its claims. Moving only claims would leave the other
+field owned until the original local's scope ends. Once issuer routing, algorithm
+equality and scoped key selection succeed, it releases the peek claims and the
+separate initial decode_header result before invoking real decode. The chosen
+group/key references borrow the immutable store, not the lookup strings.
+
+Both decode calls and all validation/error ordering remain unchanged. Signature
+verification still consumes the original token with the selected group's key
+and validation policy; unverified claims never become the authenticated result.
+The plain owned parser fields have no custom cleanup behavior. This reduces
+source-level overlap between routing scratch and real decode, not allocation
+count or a measured whole-request peak/throughput; drop is not erasure.

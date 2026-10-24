@@ -65,6 +65,7 @@ pub(super) fn verify_jwt<'a>(
         plugin_log.push("Deny malformed token");
         return Err(VerifyDeny::Malformed);
     };
+    drop(peek.header);
     let peek = peek.claims;
 
     // 3. Extract iss (REQUIRED, must be non-empty string).
@@ -104,6 +105,9 @@ pub(super) fn verify_jwt<'a>(
             return Err(VerifyDeny::MissingKey);
         }
     };
+
+    drop(peek);
+    drop(header);
 
     // 7. Real verification -- group.algorithm + this cred's secret/public_key.
     let decoded = match decode::<Value>(token, decoding_key, cached_group.validation()) {
