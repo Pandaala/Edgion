@@ -15456,3 +15456,16 @@ comparisons remained ignored. Existing pinned parser fixtures cover closed,
 unterminated, minimal, nested/overlapping and conditional comments plus following
 tokens. No new fixture, full pinned-checkout comparison, benchmark, full suite or
 live Gateway integration ran. Deferred WAF representation tasks remain unselected.
+
+## Boolean regex VM cache initialization
+
+The [VM-cache task](waf-15-regex-vm-cache-initialization.md) records eager PikeVM
+cache construction inside an already-lazy first-use boolean scratch slot. Exact
+hints and negative guards can resolve accelerated scans without using that cache;
+grouped Reference scans still need it. Delaying construction requires an explicit
+owner/layout decision and reconciled compiler/request scratch accounting, with
+full-generation admission preserved. This is separate from WAF-01 budget-subtotal
+preparation. No representation or runtime change was selected. Fresh checks passed
+46 matcher tests and one transaction lazy-slot test; two release witnesses stayed
+ignored. Formatting and workspace all-target check/Clippy passed with existing
+warnings. No prototype, benchmark, full suite or live integration ran.
