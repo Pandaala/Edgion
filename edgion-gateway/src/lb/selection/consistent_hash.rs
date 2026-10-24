@@ -59,6 +59,7 @@ impl ConsistentHashRing {
     pub fn build(backends: &[Backend]) -> Self {
         let (buckets, addr_to_idx) = prepare_ring(backends);
         let ring = Continuum::new(&buckets);
+        drop(buckets);
         let backends_vec: Vec<Backend> = backends.to_vec();
 
         ConsistentHashRing {

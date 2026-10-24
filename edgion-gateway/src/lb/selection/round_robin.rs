@@ -92,7 +92,7 @@ impl RoundRobinSelector {
         let weights = normalize_rr_weights(sorted.iter().map(|b| b.weight.max(1)).collect());
         let total_len: usize = weights.iter().sum();
         let mut weighted = Vec::with_capacity(total_len);
-        for (index, &w) in weights.iter().enumerate() {
+        for (index, w) in weights.into_iter().enumerate() {
             for _ in 0..w {
                 weighted.push(index as u16);
             }

@@ -15965,3 +15965,26 @@ scratch, compiled winner resolution and live eligibility proposals; no runtime o
 fork edit is selected. Fresh checks passed 41 selection and eight compiled-selector
 tests, formatting, workspace check/Clippy with existing warnings and doc validation.
 No prototype, benchmark, full suite or live transport ran.
+
+## Release selector construction scratch before final assembly
+
+RR now consumes the normalized numeric weight Vec during index expansion, ending
+its lifetime at loop completion before boxed outputs are assembled. CH drops the
+Bucket Vec once the pinned Continuum owns its ring/address arrays, before cloning
+final backend storage. Bucket contains only address/weight values; this does not
+change Backend extension ownership or runtime generation owners.
+
+The changes shorten cold construction scratch overlap. They do not remove
+allocation calls or establish throughput, RSS or global peak-memory gains; RR
+boxing may need no allocation. Weight caps/normalization, original indices,
+ordering, ring points, cursor initialization and request selection are unchanged.
+Original weight-bound knowledge records these limits. No drop-mirroring test or
+runtime representation change was added; deferred index and membership designs
+remain unselected.
+
+Baseline and final checks passed 41 selection and eight compiled-selector tests
+(49 total), with unchanged test identities. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. Existing
+weighted, capped, empty, fallback and borrowed-winner tests verify behavior;
+source ownership/compilation establish scratch release. No full suite, live
+transport or benchmark ran.

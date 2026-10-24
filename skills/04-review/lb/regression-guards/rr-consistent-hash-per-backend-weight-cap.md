@@ -98,3 +98,21 @@ Re-open / revisit only if:
 ## Resolution references
 
 - `lb-F013` — 2026-05-25.
+
+## Constructor scratch lifetime
+
+RR consumes its normalized numeric weights while expanding the final index
+array, releasing that temporary Vec at loop completion before boxed outputs are
+assembled. CH drops the Bucket list after Continuum construction and before
+cloning the final backend list. The pinned Pingora continuum owns its ring and
+address arrays; Bucket contains only a SocketAddr and weight, not backend
+extensions or runtime owners. Neither final selector borrows this scratch.
+
+Weight normalization/clamping, backend ordering and limits, ring construction,
+selection budgets and final generation ownership remain unchanged. These release
+points shorten temporary lifetime overlap on the cold construction path. They do
+not reduce allocation counts or establish RSS, throughput or global peak-memory
+improvement; RR boxing may not allocate when capacity is already exact. Existing
+behavior tests cover outputs, while source ownership and compilation establish
+the release boundaries. Backend-bearing staging lists retain their existing
+ownership; this change concerns only numeric weights and Bucket values.
