@@ -546,6 +546,7 @@ impl RequestFilter for LdapAuth {
         };
 
         let Ok(bind_dn) = self.build_bind_dn(credentials.username()) else {
+            drop(credentials);
             plugin_log.push("Deny bad username");
             return self.unauthorized(session).await;
         };
@@ -560,6 +561,7 @@ impl RequestFilter for LdapAuth {
                 PluginRunningResult::GoodNext
             }
             Err(LdapAuthError::InvalidCredentials) => {
+                drop(credentials);
                 // Uniform credential-rejection tag, matching basic/key/hmac/jwt_auth.
                 // LDAP rc 49 (invalidCredentials) is returned for both a nonexistent DN
                 // and a wrong password, so this branch cannot — and must not appear to —
@@ -569,11 +571,13 @@ impl RequestFilter for LdapAuth {
                 self.unauthorized(session).await
             }
             Err(LdapAuthError::ConnectionFailed) => {
+                drop(credentials);
                 plugin_log.push_err("ldap unreachable");
                 record_ldap_auth_error("unreachable");
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::TlsSanMismatch(reason)) => {
+                drop(credentials);
                 session.record_error(edgion_resources::EdgionErrorCode::OutboundTlsSanMismatch);
                 plugin_log.push_err("outbound tls san mismatch");
                 plugin_log.push_fmt("san {}", la![reason.as_str()]);
@@ -583,11 +587,13 @@ impl RequestFilter for LdapAuth {
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::Timeout) => {
+                drop(credentials);
                 plugin_log.push_err("ldap timeout");
                 record_ldap_auth_error("timeout");
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::BindFailed) => {
+                drop(credentials);
                 plugin_log.push_err("ldap bind fail");
                 record_ldap_auth_error("bind_fail");
                 self.service_unavailable(session).await

@@ -16118,3 +16118,30 @@ live-method policy and token-free diagnostics, and requires differential evidenc
 including derived-struct sequence-form JSON. Fresh unchanged-code checks passed
 20 Gateway CSRF tests and workspace all-target check/Clippy with existing warnings.
 No prototype, new parity matrix, benchmark, full suite or live integration ran.
+
+## Release LDAP decoded credentials before failure awaits
+
+LdapAuth now drops its decoded credential buffer on bind-DN construction failure
+and at entry to every completed bind-error branch. No later operation in those
+branches needs the username/password. The successful branch retains them for
+identity-header projection and sensitive username logging. The existing bind-DN
+and SAN-reason release points remain unchanged.
+
+DecodedCredentials owns one String and two ranges with no custom destructor.
+The completed bind result owns its error data independently, so these drops
+release only the application parsing buffer before credential-rejection delay
+or error-response writes. Logs, masking, metrics, outcome recording, delay
+configuration, status and response behavior retain their existing order.
+
+The credential owner inventory now records these precise boundaries. This is
+earlier transient release, not physical erasure, fewer allocations, smaller
+future size, measured throughput, or a guarantee about SDK/driver teardown.
+
+Independent plan and final source reviews passed. Baseline and final runs each
+passed the same 26 non-network LDAP test identities; existing live TCP cases
+`dial_skips_refused_candidate_and_uses_next` and
+`all_refused_candidates_fail_closed` were excluded. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+Tests preserve parsing/header/failure behavior; source ownership and compilation
+establish the drop boundaries, not a new runtime allocation-release experiment.
+No full suite, live LDAP transport or performance benchmark ran.
