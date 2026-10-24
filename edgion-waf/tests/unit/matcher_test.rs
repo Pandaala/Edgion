@@ -1806,3 +1806,41 @@ fn member_pattern_ranges_preserve_word_boundaries_and_reject_invalid_ranges() {
         assert_eq!(scratch.contains_any_in_range(130, 0..130), Some(false));
     }
 }
+
+#[test]
+fn pattern_range_queries_match_individual_bits_for_all_boundaries() {
+    let word_sets = [
+        [0; 4],
+        [u64::MAX; 4],
+        [0xaaaa_aaaa_aaaa_aaaa; 4],
+        [1, 1 << 63, 0, 1],
+        [1 << 63, 1, 1 << 63, 0],
+        [0, 0, 0, u64::MAX],
+    ];
+    for words in word_sets {
+        for stored_words in [0, 1, 2, 4] {
+            for pattern_count in [0, 1, 63, 64, 65, 127, 128, 130, 193] {
+                let results = MatchResults {
+                    matched_words: &words[..stored_words],
+                    pattern_count,
+                };
+                for start in 0..=pattern_count {
+                    for end in start..=pattern_count {
+                        let expected = (start..end).any(|id| results.contains(PatternId(id)));
+                        assert_eq!(
+                            results.contains_any_in_range(start..end),
+                            Some(expected),
+                            "words={words:?}, stored={stored_words}, count={pattern_count}, range={start}..{end}"
+                        );
+                    }
+                }
+                assert_eq!(results.contains_any_in_range(0..pattern_count + 1), None);
+                assert_eq!(
+                    results.contains_any_in_range(std::ops::Range { start: 1, end: 0 }),
+                    None
+                );
+                assert_eq!(results.contains_any_in_range(usize::MAX..usize::MAX), None);
+            }
+        }
+    }
+}

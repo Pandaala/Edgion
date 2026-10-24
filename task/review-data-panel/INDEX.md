@@ -15469,3 +15469,22 @@ preparation. No representation or runtime change was selected. Fresh checks pass
 46 matcher tests and one transaction lazy-slot test; two release witnesses stayed
 ignored. Formatting and workspace all-target check/Clippy passed with existing
 warnings. No prototype, benchmark, full suite or live integration ran.
+
+## Query WAF match ranges by bitmap word
+
+MatchResults::contains_any_in_range now tests intersecting u64 words with masks
+for the first and last word instead of calling contains for every pattern ID.
+Both masks apply when the range occupies one word. Invalid ranges still return
+None before empty-range handling; missing storage stays a nonmatch, and bits
+outside the requested range or logical pattern count are ignored. Cached and
+fresh transaction evaluation share this canonical query. Scratch ownership,
+physical-result publication, logical work charges, ordering and layout are unchanged.
+No allocation or measured throughput improvement is claimed.
+
+A new test first passed on the original implementation, comparing every valid
+range against individual-bit queries across empty, boundary and multiword counts,
+zero/full/alternating/boundary bitmaps, truncated and surplus storage. Invalid and
+maximum-sized bounds retain rejection. Existing compiled scans cover both modes,
+reuse and foreign pattern counts. Baseline checks passed 55 existing tests; final
+checks passed 56 including the new boundary test. Two matcher release witnesses
+remained ignored. No benchmark, full suite or live Gateway integration ran.

@@ -3097,7 +3097,26 @@ impl MatchResults<'_> {
         if range.start > range.end || range.end > self.pattern_count {
             return None;
         }
-        Some(range.map(PatternId).any(|pattern| self.contains(pattern)))
+        if range.is_empty() {
+            return Some(false);
+        }
+        let bits = u64::BITS as usize;
+        let first = range.start / bits;
+        let last = (range.end - 1) / bits;
+        let first_mask = u64::MAX << (range.start % bits);
+        let last_mask = u64::MAX >> (bits - 1 - (range.end - 1) % bits);
+        Some(
+            self.matched_words
+                .iter()
+                .enumerate()
+                .skip(first)
+                .take(last - first + 1)
+                .any(|(index, &word)| {
+                    let word = if index == first { word & first_mask } else { word };
+                    let word = if index == last { word & last_mask } else { word };
+                    word != 0
+                }),
+        )
     }
 
     /// Iterate over every matching ID exactly once in source order.
