@@ -33,8 +33,11 @@ framing correction applied only to the first clone is therefore not durable.
 `BodyStorage` owns the final immutable version and rewinds its replay cursor for
 each retry. The plugin-readable `BodyStorageView` can be released after the
 request plugin stage, but the final length is still needed to rebuild every
-attempt's headers. `EdgionHttpContext::modified_request_body_len` carries only
-that framing fact and does not extend plugin access.
+attempt's headers. The current owner is `EdgionHttpContext::request_body` (`RequestBodyState`),
+whose private backend retains `modified_len: Option<u64>` separately from its
+plugin-readable view. `modified_len_for_framing` reads the live modified length
+when a view exists; `release_view` preserves that scalar before dropping the view.
+Later attempts recover the retained length without extending plugin access.
 
 **3. Unmodified requests preserve streaming semantics**
 
@@ -45,8 +48,8 @@ bodies into a new buffering mode.
 
 ## Fix Suggestions Not Accepted
 
-- Keep `ctx.request_body` until retries finish — unnecessarily extends the
-  plugin-readable body's lifecycle.
+- Keep the plugin-readable view until retries finish — unnecessarily extends
+  plugin access; retaining the RequestBodyState framing scalar is required.
 - Share one mutable cursor between plugins and upstream replay — couples
   serial plugin reads to transport retries and mutation ordering.
 - Patch only the first upstream request header — Pingora creates a fresh clone
@@ -67,7 +70,11 @@ Re-open this decision only if:
   `tasks/review-body-buffering-runtime/body-001-retry-framing.md`
 - Implementation:
   `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs`
-- Request context: `edgion-gateway/src/ctx.rs`
+- Request context: `edgion-gateway/src/ctx.rs`; framing owner:
+  `edgion-gateway/src/request_body/state.rs` and `state/enabled.rs`.
+- Unit regressions: `pg_upstream_request_filter_test/body_framing_tests.rs`
+  rebuilds a retry header after view release; `request_body/state_test.rs`
+  verifies released plugin access and retained mutation length.
 - Integration coverage: `EdgionPlugins_BodyPlugins` shorter HTTP/1 and longer
   HTTP/2 mutation retry cases.
 

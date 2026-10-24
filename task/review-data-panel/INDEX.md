@@ -15933,3 +15933,19 @@ Standalone and body-condition outcomes/negate remain explicit acceptance gates.
 Fresh unchanged-runtime HMAC/condition filters passed 57 and 70 tests (124 unique),
 plus workspace check/Clippy with existing warnings. No prototype, full suite,
 live transport or benchmark ran.
+
+## Main-proxy body framing storage audit
+
+The [integer-storage decision](outbound-01-content-length-integer-storage.md#related-main-proxy-framing-boundary)
+now distinguishes the main proxy's owned String transfer from the shared outbound
+helper's borrowed decimal copy. The u64 integer conversion reserves 20 bytes;
+neither source shape establishes an unconditional allocation improvement. No
+runtime conversion or prepared-header cache is selected, and gRPC timeout storage
+remains a separate decision.
+
+The original retry-framing knowledge now names the current RequestBodyState
+backend owner instead of the removed context scalar. Releasing the plugin view
+preserves only the modified length needed by subsequent attempt headers. Fresh
+checks passed 15 upstream-request-filter and six request-body-state tests,
+workspace check/Clippy with existing warnings, formatting and doc validation.
+No prototype, full suite, live transport or benchmark ran.
