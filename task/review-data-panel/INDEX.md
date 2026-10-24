@@ -15949,3 +15949,19 @@ preserves only the modified length needed by subsequent attempt headers. Fresh
 checks passed 15 upstream-request-filter and six request-body-state tests,
 workspace check/Clippy with existing warnings, formatting and doc validation.
 No prototype, full suite, live transport or benchmark ran.
+
+## Ketama candidate projection dependency audit
+
+The [candidate-index task](lb-06-ketama-candidate-index.md) records address-map
+resolution on every visited vnode, before duplicate suppression. The pinned fork
+hashes the key once and binary-searches the starting point; cursor steps borrow
+addresses. Neither per-step key hashing nor ring reconstruction is present.
+
+A stable bucket-index API plus cold mapping, or a larger vnode projection, needs
+separate dependency/ownership and retained-memory review. Duplicate-address
+last-retained original indices, non-Inet gaps, collision ordering, distinct budgets
+and health-call order remain acceptance gates. This is distinct from visited
+scratch, compiled winner resolution and live eligibility proposals; no runtime or
+fork edit is selected. Fresh checks passed 41 selection and eight compiled-selector
+tests, formatting, workspace check/Clippy with existing warnings and doc validation.
+No prototype, benchmark, full suite or live transport ran.
