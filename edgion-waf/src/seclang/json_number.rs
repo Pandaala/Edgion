@@ -27,7 +27,7 @@ impl JsonNumber {
     /// The caller has already accepted the complete spelling with the JSON
     /// number grammar FSM. This function is not a standalone syntax validator.
     pub(super) fn from_validated_lexeme(raw: &str) -> Result<Self, ()> {
-        if !raw.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
+        if memchr::memchr3(b'.', b'e', b'E', raw.as_bytes()).is_none() {
             let negative = raw.starts_with('-');
             let digits = if negative { &raw.as_bytes()[1..] } else { raw.as_bytes() };
             let magnitude = digits.iter().try_fold(0u64, |value, byte| {

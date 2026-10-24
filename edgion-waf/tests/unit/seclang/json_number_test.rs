@@ -49,6 +49,8 @@ fn signed_zero_extreme_exponents_and_nonfinite_rejection() {
     for raw in [
         "-0",
         "-0.0",
+        "-0E0",
+        "-0E+99999999999999999999999999999",
         "-0e99999999999999999999999999999",
         "-0e-99999999999999999999999999999",
         "-1e-99999999999999999999999999999",
@@ -58,7 +60,8 @@ fn signed_zero_extreme_exponents_and_nonfinite_rejection() {
         assert_eq!(canonical(raw), "-0.0");
     }
     assert_eq!(canonical("0e99999999999999999999999999999"), "0.0");
-    for raw in ["1e309", "-1e309", "1e99999999999999999999999999999"] {
+    assert_eq!(canonical("1E0"), "1.0");
+    for raw in ["1e309", "-1e309", "1E309", "-1E309", "1e99999999999999999999999999999"] {
         assert!(JsonNumber::from_validated_lexeme(raw).is_err());
     }
 }

@@ -15588,3 +15588,23 @@ and one collector release witness stayed ignored. Formatting, workspace all-targ
 check/Clippy, documentation, SSA, metrics, Pingora source policy, Gateway API
 transform, unit-test layout and gateway no-tracing guards passed. Existing Clippy
 warnings remain; no full suite, benchmark or live integration ran.
+
+## Search WAF JSON numeric markers with the existing byte-search primitive
+
+The full WAF JSON checker reaches JsonNumber through the canonical stream
+parser's completed-number event. Numeric form classification now uses memchr3
+for dot and lower/uppercase exponent markers instead of a scalar byte predicate.
+Integer accumulation, overflow fallback, signed zero, finite-value rejection,
+canonical serialization and conservative parser work charges remain unchanged.
+Selective raw-number observation bypasses this conversion and is unaffected.
+No new dependency, allocation, parsing policy or measured speedup is introduced.
+
+The existing number regression gained uppercase exponent, negative-zero and
+nonfinite cases and passed before the production edit. Existing integer boundary,
+long fractional rounding and extreme exponent cases retain their assertions.
+
+Baseline and final checks passed four numeric, 36 stream, 28 checker and 52
+Gateway WAF tests (120 total). Formatting, workspace all-target check/Clippy,
+agent-doc validation, SSA, metrics, Pingora source policy, Gateway API transform,
+unit-test layout and gateway no-tracing guards passed with existing Clippy
+warnings. No benchmark, full suite or live integration ran.
