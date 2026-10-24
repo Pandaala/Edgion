@@ -15655,3 +15655,15 @@ ordering, late declarations and shadowing remain unchanged. This is separate
 from completed QName split reuse. Fresh unchanged-source checks passed 21 XML
 stream and 52 Gateway WAF tests, formatting and workspace check/Clippy with
 existing warnings. No runtime change or measured benefit is claimed.
+
+## TX write-key ownership decision
+
+The [write-key task](waf-19-tx-write-key-ownership.md) records owned static key
+expansion before assignment/arithmetic even when canonical TX replacement retains
+the original key and discards the incoming one. Borrowing until insertion remains
+unselected: setter/capture ownership and insertion-copy failure timing need review.
+It does not alter the earlier deletion-only optimization or authorize merged
+lookups, skipped metered reads, changed semantic charges or rollback behavior.
+Fresh unchanged-source checks passed six setvar-selected and 52 Gateway WAF tests,
+formatting and workspace check/Clippy with existing warnings. No runtime change
+or measured performance benefit is claimed.
