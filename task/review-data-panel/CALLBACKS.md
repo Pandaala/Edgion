@@ -1337,7 +1337,7 @@ claiming complete discovery, transport or dependency implementation coverage.
 | Native Service peer capture | upstream_peer reaches backends::try_get_peer and CapturedServiceSelection. One membership-matched runtime snapshot supplies the section and selection; HTTP/gRPC policy is captured separately. | Policy publication, transport interleavings and global shutdown are not proved by this inspection. |
 | RR endpoint selection | RrCore uses RoundRobinSelector's cold expanded index array, shared atomic cursor and bounded unique fallback. Candidates and final winner use the canonical address resolver. | [backend-01](backend-01-selected-slot-lookup.md) retains winner/slot projection choices. |
 | Nonempty CH key | ChCore uses the prepared ring; pinned Continuum hashes the key once, binary-searches and returns borrowed addresses while advancing a wrapping cursor. Edgion resolves original indices before visited checks. | [lb-05](lb-05-consistent-hash-visited-storage.md) covers visited storage; [lb-06](lb-06-ketama-candidate-index.md) covers earlier vnode projection. Empty keys use the already-built RR fallback. |
-| LeastConn/EWMA | P2C samples distinct candidates, reads live metrics, checks preferred then alternate eligibility, and falls back to a linear health-only scan. The direct estimator read/update was separately inspected. | Bounded RNG mapping is inspected in [lb-07](lb-07-prepared-p2c-range-sampling.md); generator/reseeding/OS entropy and full contention/performance validation remain open. [lb-01](lb-01-precomputed-ewma-decay.md) remains deferred. |
+| LeastConn/EWMA | P2C samples distinct candidates, reads live metrics, checks preferred then alternate eligibility, and falls back to a linear health-only scan. The direct estimator read/update was separately inspected. | Bounded RNG mapping is inspected in [lb-07](lb-07-prepared-p2c-range-sampling.md); the [thread-owner/refill boundary](#p2c-thread-rng-owner-and-refill-boundary) is inspected below. Primitive/OS entropy internals, failure-policy impact and full contention/performance validation remain open. [lb-01](lb-01-precomputed-ewma-decay.md) remains deferred. |
 | Eligibility and degrade | CapturedServiceSelection counts survivors with the quiet predicate, then either bypasses eligibility in degrade mode or performs live per-candidate checks with rejection recording. | [backend-02](backend-02-runtime-eligibility-lookup.md) remains deferred; no eligibility result is cached by this audit. |
 | Cold section construction | materialize_sections reuses aliases and materialize_section compiles all four selectors from ready backends. Numeric/Bucket staging release is recorded in INDEX. | Complete normalization/publication lifecycle and external Backend extension behavior remain separate. |
 | L4 Service consumers | TCP, UDP and TLS passthrough call select_service_endpoint with no endpoint-policy override and live degrade policy. Retained TLS Terminate code has the same call shape but product admission disables it. | This is not authorization to enable Terminate or extend endpoint policy to L4. |
@@ -1350,3 +1350,37 @@ Fresh tests passed 41 selection, eight compiled-selector, 27 BackendRef-selector
 workspace check/Clippy with existing warnings and agent-doc validation. Tests
 support the named behavior boundaries, not a completion audit of the entire goal.
 No full suite, live transport, benchmark or dependency implementation test ran.
+
+## P2C thread RNG owner and refill boundary
+
+Inspected at `294ae9856` with rand 0.9.5, rand_core 0.9.5, rand_chacha 0.9.0
+and getrandom 0.3.4. This is a direct ownership/lifecycle inspection, not a
+cryptographic or operating-system implementation audit.
+
+select_p2c returns for empty/singleton input before rand::rng. For larger lists,
+it acquires one ThreadRng handle outside the retry loop. Even max_retries == 0
+acquires that handle before the final health-only scan, although it draws no
+random words. The compiled production caller supplies 256 retries.
+
+| Operation | Pinned source evidence | Optimization implication |
+| --- | --- | --- |
+| First thread-local access | ThreadRng initializes ReseedingRng from OsRng and creates Rc<UnsafeCell<...>>. Initialization can fail with a dependency panic. | Do not claim every selection or the first selection is allocation/entropy-free. No warmup or failure-policy change is selected. |
+| Later rng() calls | Clone the existing Rc handle; do not clone the generator or its block buffer. ThreadRng is not Send/Sync. | No new generator owner or heap allocation arises from the warmed handle clone itself. Moving ThreadRng into shared MetricCore is not an ownership-preserving cache substitution. |
+| Random-word consumption | ReseedingRng delegates to BlockRng, which consumes inline Array64<u32> results and refills on exhaustion. ChaCha12Core supplies the 256-byte result block. | Buffering already spans selection calls and other consumers on the same thread; this is not a per-request Vec or RNG rebuild. Primitive refill internals are a separate boundary. |
+| Reseeding | The 64 KiB generated-byte quota is decremented by block generation. At the next exhausted-quota refill, the core reseeds through OsRng before generating another block. | Quota is shared thread consumption, not a request counter or a promise of entropy IO on every selection. Reseed errors panic in this pinned dependency; that observation is not acceptance of a Gateway failure policy. |
+| Entropy bridge | OsRng delegates its fallible fill to getrandom::fill. | OS/backend behavior, failure injection and full callback panic impact are not verified here. |
+
+This inspection does not justify a new global RNG lock, shared ThreadRng owner,
+custom generator, reseed suppression, or precomputed random choices. Each would
+change ownership or sampling semantics without demonstrated benefit. The separate
+[bounded-range preparation proposal](lb-07-prepared-p2c-range-sampling.md) remains
+unselected. No per-request instrumentation or new RNG abstraction was added.
+
+Fresh unchanged-runtime checks passed six P2C and eight compiled-selector tests,
+formatting, workspace check/Clippy with existing warnings and agent-doc validation.
+Those exercise selection behavior, not deterministic reseed counts, first-use
+allocation, entropy failure or cryptographic correctness. No lifecycle fault
+injection, allocation/latency benchmark, full suite or live transport test ran.
+Source references are rand src/rngs/thread.rs and reseeding.rs, rand_core
+src/block.rs and os.rs, and rand_chacha src/chacha.rs. Re-evaluate these conclusions
+when dependency versions/features or the P2C handle lifetime change.
