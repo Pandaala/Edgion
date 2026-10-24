@@ -77,6 +77,14 @@ This shortens parent/child temporary-storage overlap without changing validation
 order, node charging, reservation or allocation count. It establishes no measured
 RSS or throughput improvement; existing behavioral tests do not instrument the
 set's production deallocation point.
+Collection classification uses protobuf cardinality directly where map/list
+distinction is already resolved: null pruning rejects every repeated field,
+and the normalization branch treats a repeated non-map field as a list. Locked
+prost-reflect 0.14.7 defines is_list as repeated and not is_map, and maps require
+repeated cardinality. These equivalent predicates avoid reclassifying map shape
+and constructing its temporary Kind handles; scalar sentinel behavior and all
+charging remain unchanged. This adds no prepared schema or lookup cache and
+makes no measured performance claim. Re-evaluate on descriptor API changes.
 Only the nine exact canonical scalar-wrapper names take the wrapper shortcut;
 similarly named ordinary messages in google.protobuf follow full field traversal.
 The [reviewed memory and time ledger](#memory-and-time-ledger) includes temporary

@@ -15851,3 +15851,28 @@ boundary and its limits. Existing alias/null/WKT/depth tests verify behavior;
 source ownership and compilation establish the drop point, not allocation
 instrumentation. No new test merely mirrors the drop statement, full suite,
 live transport or benchmark ran.
+
+## gRPC normalization reuses collection classification
+
+Ordinary-message null pruning now tests non-repeated cardinality before the same
+scalar sentinel check. Recursive normalization checks repeated cardinality in the
+branch where map classification already returned false. Locked prost-reflect
+0.14.7 defines maps as repeated message fields with map-entry type, and lists as
+repeated non-map fields. Both substitutions therefore preserve map/list/singular
+decisions without repeating is_map and its temporary Kind construction. Only
+message/enum kinds carry cloned Arc-backed handles; no per-field heap allocation
+or measured speedup is claimed.
+
+Complete name/alias validation, early set release, null sentinel rules, map-entry
+charging, list-element checks, traversal/error order and every cap/reservation
+remain unchanged. This uses existing descriptor properties; it adds no schema
+cache, metadata collection or field lookup index. Broader descriptor reuse still
+needs its own ownership and memory analysis.
+
+Baseline and final verification each passed 35 Resources grpc_transcoding and
+29 Gateway plugin transcoder tests (64 total). Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. Original
+admission knowledge records dependency equivalence and re-evaluation on API
+changes. Existing null collection, sentinel, numeric list/map and WKT/depth tests
+provide behavioral coverage; no redundant predicate-mirroring test, full suite,
+live transport or benchmark ran.

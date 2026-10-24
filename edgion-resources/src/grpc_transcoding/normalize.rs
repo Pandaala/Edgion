@@ -1,6 +1,6 @@
 //! Admit the reflected protobuf shape before dependency visitors allocate it.
 use super::{TranscodingError as Error, TranscodingLimits};
-use prost_reflect::{Kind, MessageDescriptor};
+use prost_reflect::{Cardinality, Kind, MessageDescriptor};
 use serde_json::Value;
 
 struct Budget {
@@ -70,7 +70,7 @@ fn message(desc: &MessageDescriptor, value: &mut Value, depth: usize, budget: &m
             .get_field_by_json_name(name)
             .or_else(|| desc.get_field_by_name(name))
             .expect("validated field");
-        !field.is_list() && !field.is_map() && sentinel(&field.kind())
+        field.cardinality() != Cardinality::Repeated && sentinel(&field.kind())
     });
     for (name, value) in object {
         let field = desc
@@ -88,7 +88,7 @@ fn message(desc: &MessageDescriptor, value: &mut Value, depth: usize, budget: &m
                 budget.charge(depth + 1, 2)?; // Entry message and its key.
                 scalar(&kind, value, depth + 1, budget)?;
             }
-        } else if field.is_list() {
+        } else if field.cardinality() == Cardinality::Repeated {
             budget.charge(depth, 1)?; // List container, including spare capacity.
             for value in value.as_array_mut().ok_or(Error::Invalid)? {
                 if value.is_null() && !sentinel(&kind) {
