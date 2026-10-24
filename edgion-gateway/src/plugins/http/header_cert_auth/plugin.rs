@@ -303,6 +303,7 @@ impl RequestFilter for HeaderCertAuth {
         };
 
         if let Err(detail) = self.apply_headers(session, &cert_info) {
+            drop(cert_info);
             if self.config.allow_anonymous {
                 self.set_anonymous_headers(session);
                 if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {

@@ -16229,3 +16229,25 @@ workspace all-target check/Clippy and seven repository guards passed with existi
 warnings. Source ownership and compilation establish the release points; these
 tests do not instrument deallocation timing. No full suite, live authentication
 transport or performance benchmark ran.
+
+## Release rejected HeaderCertAuth identity snapshots
+
+When apply_headers rejects a missing or control-containing identity, HeaderCertAuth
+now releases the local ClientCertInfo before anonymous handling or rejection
+delay/response writes. The static error detail does not borrow that snapshot,
+and both terminal branches have no later identity consumer. Its String/Vec owners
+have no custom destructor. Connection mode still clones the complete source
+identity; Header mode still extracts the same owned information.
+
+Original session identity, successful projection, certificate verification,
+anonymous header order, credential hiding and fixed diagnostics are unchanged.
+The owner inventory records this earlier local release, not physical erasure,
+fewer allocations or measured performance. The tls-04 selective connection
+projection ownership decision remains deferred.
+
+Independent plan and final source reviews passed. Baseline and final runs passed
+the same 20 HeaderCertAuth test identities, including exact subject-only denial
+and anonymous controls. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. Source ownership and compilation
+establish the release boundary; tests do not instrument deallocation timing.
+No full suite, live TLS/authentication transport or performance benchmark ran.
