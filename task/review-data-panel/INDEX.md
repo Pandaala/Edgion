@@ -15510,7 +15510,14 @@ witnesses remained ignored. No benchmark, full suite or live integration ran.
 
 ## Share bounded set-bit iteration with stream result projection
 
-Raw request-body streaming consumes MatchResults::iter after each successful
+Reachability revalidated at `6814acb0d`: the leaf raw-stream API is dormant in
+production WafPlugin, which uses pre-dispatch prefix/full evaluation instead.
+The adapter bridge alone does not establish active traffic. This outer iterator
+change therefore establishes no current Gateway hot-path benefit. The native
+PatternSet iterator separately serves active scan/scan_reference consumers.
+See the earlier raw-stream reachability entry and the prefix-before-dispatch guard.
+
+The dormant raw request-body API consumes MatchResults::iter after each successful
 group scan. That outer iterator now uses the same bounded set-bit traversal as
 the native PatternSet instead of probing every logical ID. The index iterator
 lives in one private bitset module; each owner retains its own PatternId conversion
@@ -15532,11 +15539,19 @@ No benchmark, full suite or live Gateway integration ran.
 
 The [streaming-hit task](waf-16-streaming-hit-projection.md) records repeated
 local-to-global and global-to-member projection of cumulative hits on later chunks.
+Its current scope is a conditional dormant-API investigation, not an active Gateway
+performance finding or permission to reactivate post-dispatch WAF inspection.
 Set-bit iteration already skips absent IDs; it does not suppress historical hits.
 Per-chunk scratch and first-hit deltas are different alternatives, each requiring
 measurement and preserved layered error/publication boundaries. Native cumulative
 API behavior, raw-lane admission, early-positive completion and EOS decisions stay
-unchanged. No implementation was selected. Fresh unchanged-source checks passed
+unchanged. No implementation was selected. The initial unchanged-source checks passed
 122 native/matcher/raw-stream tests, with two release witnesses ignored. Formatting
 and workspace all-target check/Clippy passed with existing warnings. No prototype,
 benchmark, full suite or live integration ran.
+
+The reachability correction passed 52 Gateway WAF tests, three prefix-adapter tests
+and 24 leaf prefix tests, with one leaf release witness ignored. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed. Static activation
+inspection establishes the dormant scope; tests verify unchanged active prefix
+behavior. No runtime code or test body changed, and no reactivation was selected.

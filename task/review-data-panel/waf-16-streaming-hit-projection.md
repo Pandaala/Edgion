@@ -1,11 +1,30 @@
 # Streaming phrase hit projection
 
-Status: deferred state/performance decision for user review. No runtime change.
+Status: conditional dormant-API investigation for user review. No runtime change.
 Source baseline: `7b873d7a4`.
+
+## Current Gateway reachability
+
+Revalidated at `6814acb0d`: production WafPlugin does not call
+start_request_body_stream or enable_request_body_streaming. Its active request
+path executes the pre-dispatch prefix evaluator or full-body evaluator. The
+context flag defaults to false, and run_waf_body_stream returns immediately unless
+enabled. Adapter/context bridges and test activation remain in the tree; their
+presence does not establish active Gateway traffic through this lane.
+
+The [prefix-before-dispatch contract](../../skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md)
+records why the old post-dispatch raw handler was replaced: a late stream verdict
+cannot retract upstream headers or bytes already forwarded. This task authorizes
+neither reactivation nor a change to that admission boundary. Revisit the candidate
+only in separately authorized work with a demonstrated consumer. It is not a
+current Gateway hot-path performance backlog item. The earlier stream-only outer
+iterator improvement supplies no evidence of an online Gateway gain; the shared
+native PatternSet iterator also serves active non-streaming scans independently.
+Continue current Gateway optimization investigation through prefix/full execution.
 
 ## Evidence
 
-The raw request-body lane reaches the native phrase scanner through
+The dormant leaf raw request-body lane reaches the native phrase scanner through
 Transaction::execute_request_body_stream_chunk, CompiledMatcher::scan_stream_chunk
 and PhraseGroup::scan_stream. The native try_stream_pattern_set_chunk accumulates
 matching IDs in PatternSet while retaining automaton state across chunks.
@@ -75,9 +94,15 @@ chosen projection mechanism; existing happy-path tests alone are insufficient.
 - `edgion-waf/src/seclang/transaction.rs`: raw-body setup, per-group charges and publication.
 - [Streaming control boundary](../../skills/04-review/waf/regression-guards/request-scoped-control-actions.md)
 
-Fresh unchanged-source checks passed 72 native matcher, 47 combined matcher and
+The initial audit's unchanged-source checks passed 72 native matcher, 47 combined matcher and
 three raw-body streaming transaction tests (122 total). Two matcher release
 witnesses remained ignored. Formatting and workspace all-target check/Clippy
 passed with existing unrelated warnings. These checks describe the current
 implementation, not an accepted delta design. No prototype, benchmark, full suite
 or live Gateway integration ran.
+
+Reachability-correction verification passed 52 Gateway WAF tests, three canonical
+prefix-adapter tests and 24 leaf prefix tests (79 total); one leaf release witness
+remained ignored. Formatting, workspace all-target check/Clippy and agent-doc
+validation passed. Dormancy follows from the inspected production activation
+calls and flag gate, not from these test counts. No source or test body changed.
