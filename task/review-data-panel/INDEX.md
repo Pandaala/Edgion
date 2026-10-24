@@ -82,6 +82,7 @@ destination.
 - [Wasm guest allocator preparation](wasm-05-guest-allocator-preparation.md)
 - [Prepared Wasm callout authorization](wasm-06-prepared-callout-authorization.md)
 - [Wasm URL module buffer transfer](wasm-07-url-module-buffer-transfer.md)
+- [Wasm callout collector result ownership](wasm-08-callout-collector-result-ownership.md)
 
 - [Wasm shared-data read snapshots](wasm-03-shared-data-read-snapshots.md)
 
@@ -16378,3 +16379,22 @@ preserved. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Tests do not instrument vector release;
 source ownership establishes that boundary. No full suite, ignored live-IdP
 cases, new network fixtures or performance benchmark ran.
+
+## Wasm callout collector result ownership audit
+
+The successful callout path consumes an unsliced, unique collector Bytes into
+its Vec result. Locked bytes 1.12.1 recovers the original payload allocation and
+capacity. A local conversion-only probe observed one metadata allocation/free
+when the input Vec had spare capacity, and none for empty or exact-capacity
+inputs. This is not an unconditional body-copy defect or workload performance
+measurement. The [ownership task](wasm-08-callout-collector-result-ownership.md)
+records the shared collector API and guest-buffer alternatives for decision.
+
+The consumer audit distinguishes retained outbound Bytes, borrowed parse/decode
+readers, consuming OCI results and the separately deferred URL-module copy.
+No runtime, ABI, body-cap, admission, deadline or guest snapshot policy changed.
+
+Fresh unchanged-code verification passed five collector and eleven callout tests;
+callout tests ran serially and include existing loopback fixtures. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed with existing
+warnings. No new tests, runtime prototype, full suite or workload benchmark ran.
