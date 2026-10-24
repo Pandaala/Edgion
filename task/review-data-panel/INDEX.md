@@ -15632,3 +15632,14 @@ passed 117 tests including that regression. Formatting, workspace all-target
 check/Clippy, agent-doc validation, SSA, metrics, Pingora source policy, Gateway
 API transform, unit-test layout and gateway no-tracing guards passed. Existing
 Clippy warnings remain. No benchmark, full suite or live integration ran.
+
+## JSON structural key comparison work batching
+
+The [key-comparison task](json-03-key-comparison-work-batching.md) records per-byte
+checked work charging during AVL key comparison. Bounded batching is unselected;
+it must retain first-mismatch/length charges, partial usage and error precedence.
+Unlike lexical charging, structural Budget::work assigns the checked sum before
+rejecting a limit excess. Current scoped key ownership, duplicate semantics and
+tree structure remain unchanged. No measured gain or runtime change is claimed.
+Fresh unchanged-source checks passed 28 checker, 37 stream and 52 Gateway WAF
+tests, formatting and workspace all-target check/Clippy with existing warnings.
