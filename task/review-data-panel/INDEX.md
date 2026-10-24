@@ -16088,3 +16088,18 @@ Fresh unchanged-code checks passed 47 Algo cache, 22 Gateway cache storage and
 six cache policy tests (75 total), workspace all-target check and Clippy with
 existing warnings. No source change, prototype, benchmark, full suite or live
 origin test ran; existing tests do not prove a future destructor concurrency design.
+
+## Replay header-name parsing through the pinned fork
+
+The [header-name task](cache-08-replay-header-name-parsing.md) traces Entry::decode's
+HeaderName parse through Pingora's typed-to-case conversion and normalized-name
+reparse. The title table covers only selected standard names; other names copy
+normalized bytes. Raw Bytes substitution changes case representation, so no
+behavior-preserving runtime edit is selected. A canonical typed insertion API
+would need a separate fork-boundary decision and memory/validation review.
+
+This narrows the replay decode dependency inspection without claiming complete
+fork header/transport coverage. Existing capacity, Vary, numeric-header and body
+ownership decisions remain separate. Fresh unchanged-code verification passed
+43 Gateway response-cache tests and workspace all-target check/Clippy with existing
+warnings. No prototype, benchmark, full suite or live origin test ran.
