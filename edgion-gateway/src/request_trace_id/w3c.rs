@@ -17,6 +17,7 @@ const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 pub struct GeneratedRoot {
     /// Full `traceparent` header value (`00-<trace_id>-<span_id>-<flags>`).
     traceparent: String,
+    trace_id: [u8; 16],
 }
 
 impl GeneratedRoot {
@@ -25,8 +26,8 @@ impl GeneratedRoot {
         &self.traceparent
     }
 
-    pub(super) fn into_traceparent(self) -> String {
-        self.traceparent
+    pub(super) fn into_parts(self) -> (String, [u8; 16]) {
+        (self.traceparent, self.trace_id)
     }
 
     /// Borrow the 32-hex trace ID used for access-log correlation.
@@ -87,7 +88,10 @@ pub fn generate_root(sampled: bool) -> GeneratedRoot {
     traceparent.push('-');
     push_lower_hex(&mut traceparent, &span_uuid.as_bytes()[..8]);
     traceparent.push_str(if sampled { "-01" } else { "-00" });
-    GeneratedRoot { traceparent }
+    GeneratedRoot {
+        traceparent,
+        trace_id: *trace_uuid.as_bytes(),
+    }
 }
 
 fn push_lower_hex(output: &mut String, bytes: &[u8]) {

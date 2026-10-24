@@ -78,6 +78,7 @@ fn invalid_or_duplicate_parent_restarts_and_drops_state() {
     let mut sensitive = HeaderValue::from_static(PARENT);
     sensitive.set_sensitive(true);
     for values in [
+        vec![],
         vec![HeaderValue::from_static("bad")],
         vec![HeaderValue::from_static(PARENT), HeaderValue::from_static(PARENT)],
         vec![sensitive],
@@ -93,6 +94,10 @@ fn invalid_or_duplicate_parent_restarts_and_drops_state() {
         assert_ne!(headers["traceparent"], PARENT);
         assert!(w3c::parse_trace_id(headers["traceparent"].to_str().unwrap()).is_some());
         assert!(headers["traceparent"].to_str().unwrap().ends_with("-00"));
+        assert_eq!(
+            state.typed_trace_id().map(|id| lower_hex(&id)).as_deref(),
+            state.standard_trace_id()
+        );
         assert!(!headers.contains_key("tracestate"));
     }
 }

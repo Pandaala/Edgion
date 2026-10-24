@@ -16471,3 +16471,28 @@ packages; one filtered Gateway case overlaps). Formatting, workspace all-target
 check/Clippy and agent-doc validation passed with existing warnings. These runs
 support current boundaries, not correctness of an unimplemented lazy API. No
 runtime prototype, new test, full suite or performance benchmark ran.
+
+## Reuse generated W3C trace ID bytes
+
+GeneratedRoot now carries the original trace UUID bytes alongside its encoded
+traceparent and consumes both through into_parts. RequestTraceId initialization
+uses those bytes directly on the generated-root branch rather than decoding the
+32 hexadecimal characters it just encoded. Incoming accepted traceparent still
+validates tracestate before running the original byte-decoding loop.
+
+Both UUID calls and their order, header validation/ownership, unsampled fallback,
+invalid/duplicate/sensitive-parent handling, canonical typed/text identity and
+header/log reconciliation remain unchanged. The temporary root gains a 16-byte
+array; no allocation-count, total-memory or measured throughput gain is claimed.
+The source-evaluation and tracestate-ownership decisions remain deferred.
+
+Independent plan review passed. The existing fallback regression was extended
+with absent headers and typed/text equality for every fallback case, then passed
+on the original production code. Existing incoming identity equality and protocol
+checks remain intact; no test identities or integration fixtures changed.
+
+Final focused runs passed 29 trace-ID, 15 RequestId and 17 early-filter cases;
+all baseline identities/outcomes were preserved (60 distinct tests, one filtered
+case overlaps). Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Independent final source review passed.
+No full suite, new network fixture or performance benchmark ran.

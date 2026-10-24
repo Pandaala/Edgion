@@ -119,20 +119,22 @@ impl RequestTraceId {
         let inbound = single_header_ref(headers, "traceparent")
             .filter(|value| value.to_str().ok().and_then(w3c::parse_trace_id).is_some())
             .cloned();
-        let (traceparent, tracestate) = if let Some(value) = inbound {
-            (value, validated_tracestate(headers))
+        let (traceparent, tracestate, trace_id) = if let Some(value) = inbound {
+            let tracestate = validated_tracestate(headers);
+            let mut trace_id = [0; 16];
+            for (byte, pair) in trace_id.iter_mut().zip(value.as_bytes()[3..35].chunks_exact(2)) {
+                *byte = hex_digit(pair[0]) * 16 + hex_digit(pair[1]);
+            }
+            (value, tracestate, trace_id)
         } else {
-            let root = w3c::generate_root(false);
+            let (traceparent, trace_id) = w3c::generate_root(false).into_parts();
             // Generated ASCII has a fixed valid header representation.
             (
-                HeaderValue::try_from(root.into_traceparent()).expect("generated W3C header is valid"),
+                HeaderValue::try_from(traceparent).expect("generated W3C header is valid"),
                 None,
+                trace_id,
             )
         };
-        let mut trace_id = [0; 16];
-        for (byte, pair) in trace_id.iter_mut().zip(traceparent.as_bytes()[3..35].chunks_exact(2)) {
-            *byte = hex_digit(pair[0]) * 16 + hex_digit(pair[1]);
-        }
         self.w3c = Some(W3cTraceContext {
             traceparent,
             trace_id,
