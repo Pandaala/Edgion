@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [HTTP/1 body-buffer handoff ownership](transport-01-h1-body-buffer-handoff.md)
+
 - [Owned context-write handoff](ctx-03-owned-context-write-handoff.md)
 
 - [RequestId random-byte batching](trace-03-random-byte-batching.md)
@@ -16605,3 +16607,24 @@ Independent plan review passed. Fresh baseline selections passed 15 CtxSet-relat
 Formatting and workspace all-target check/Clippy passed with existing warnings. These verify current
 behavior, not the proposed setter or complete authentication flows. No full
 suite, new test fixture or live network probe ran.
+
+## H1 reader-to-pump payload ownership
+
+Traced ordinary and upgraded H1 body reads in the locked fork. Server and client
+owned-output APIs copy ranges from reusable reader storage into independent
+Bytes. Existing owned preread adoption does not remove this later handoff.
+The request callback path and proxy task queues retain ownership, and writers
+borrow their owned chunks across await; replacing the copy with a raw reader
+borrow is not equivalent. Close-delimited upgraded transport does not decode
+WebSocket frames here or imply that body callbacks are bypassed.
+
+The [transport decision](transport-01-h1-body-buffer-handoff.md) records a possible
+owned output design with buffer replenishment, shared-capacity retention and
+framing/capture/lifecycle gates. External fork implementation and dependency
+adoption remain unapproved. No runtime change, zero-copy whole-proxy claim or
+measured performance result is recorded.
+
+Independent plan review passed. Fresh unchanged-code verification passed
+19 request-body-action and 31 upstream response-body-filter tests, formatting
+and workspace all-target check/Clippy with existing warnings. This is not a
+fresh fork suite, ownership prototype or live WebSocket exchange.
