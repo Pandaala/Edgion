@@ -411,10 +411,12 @@ impl RequestFilter for JweDecrypt {
         };
 
         if Self::contains_header_control_chars(&plaintext) {
+            drop(plaintext);
             return self.reject(session, plugin_log, JweFailure::InvalidFormat).await;
         }
 
         if set_sensitive_request_header(session, &self.config.forward_header, &plaintext).is_err() {
+            drop(plaintext);
             return self.reject(session, plugin_log, JweFailure::InvalidFormat).await;
         }
 

@@ -16208,3 +16208,24 @@ consumers. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Source ownership and compilation establish
 these release boundaries; no allocation-release instrumentation, full suite,
 live authentication service or performance benchmark was added/run.
+
+## Release rejected JWE plaintext before response awaits
+
+JweDecrypt now releases its local plaintext String when header controls are
+rejected or sensitive forward-header insertion fails, before the fixed rejection
+helper awaits its delay and response write. Neither branch has another plaintext
+consumer. The synchronous shared header helper constructs an independently owned
+HeaderValue; the failed result is consumed before the release.
+
+Successful forwarding, claims projection, optional context storage and credential
+hiding retain their order and plaintext access. The credential owner inventory
+records only this local release; it does not establish erasure or release of
+session/cipher/transport owners, reduce allocation count or claim a performance
+measurement. The separate jwe-01 successful header-transfer decision remains open.
+
+Independent plan and final source reviews passed. Baseline and final checks
+passed identical sets of 21 JWE and 38 shared-auth tests (59 total). Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. Source ownership and compilation establish the release points; these
+tests do not instrument deallocation timing. No full suite, live authentication
+transport or performance benchmark ran.
