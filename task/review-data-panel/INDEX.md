@@ -15678,3 +15678,15 @@ limit errors, zero-segment identity and dynamic macro metering must survive.
 This is separate from WAF-19 write-key ownership. Fresh unchanged-source checks
 passed 17 unique leaf tests and 52 Gateway WAF tests, formatting and workspace
 check/Clippy with existing warnings. No runtime change or measured gain is claimed.
+
+## UDP upstream receiver ownership decision
+
+The [receiver-owner task](udp-02-upstream-receiver-ownership.md) records one socket
+Arc clone alongside the receiver's session owner at session creation. It is not
+a per-packet copy or new allocation. Borrowing remains unselected because the
+receive seam must preserve permit/socket/buffer release before terminal logging,
+including blocked-logger behavior not proven by current controlled-receiver tests.
+The lifecycle, source pin and shutdown contracts remain unchanged, as does
+UDP-01's separate timeout/wakeup decision. Fresh checks passed 59 UDP and four
+UDP log tests, formatting and workspace check/Clippy with existing warnings.
+No runtime change or measured benefit is claimed.
