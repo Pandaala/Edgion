@@ -15876,3 +15876,21 @@ admission knowledge records dependency equivalence and re-evaluation on API
 changes. Existing null collection, sentinel, numeric list/map and WKT/depth tests
 provide behavioral coverage; no redundant predicate-mirroring test, full suite,
 live transport or benchmark ran.
+
+## gRPC normalization metadata reuse decision
+
+The [normalization metadata task](grpc-13-normalization-field-metadata.md) records
+repeated indexed field resolution across complete alias validation, null pruning
+and recursive conversion. Successful ordinary fields have two resolution
+sequences, or three for retained null sentinels; invalid and WKT paths differ.
+The dependency already indexes names and returns Arc-backed handles, so this is
+not a deep-schema-copy or per-lookup-allocation claim.
+
+Request-local reuse adds storage and ancestor/child overlap; a prepared generation
+adds cold metadata and reload overlap. Neither is selected. Complete validation
+before mutation, full null pruning before recursive errors, survivor alignment,
+current traversal/charging and the reviewed memory ledger remain explicit gates.
+This differs from wire-schema, binding-selector and textual-bridge proposals.
+Fresh unchanged-source checks passed 35 Resources and 29 Gateway tests, formatting
+and workspace check/Clippy with existing warnings. No prototype, benchmark,
+full suite or live transport test ran.
