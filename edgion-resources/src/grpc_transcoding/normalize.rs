@@ -60,6 +60,8 @@ fn message(desc: &MessageDescriptor, value: &mut Value, depth: usize, budget: &m
             return Err(Error::Invalid);
         }
     }
+    // Alias validation is complete; recursive normalization needs no parent set.
+    drop(fields);
     object.retain(|name, value| {
         if !value.is_null() {
             return true;

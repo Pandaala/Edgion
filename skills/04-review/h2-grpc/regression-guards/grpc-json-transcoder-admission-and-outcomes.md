@@ -70,6 +70,13 @@ Resources normalizes bounded JSON before reflection: validate names and aliases 
 remove ordinary null fields, including whole repeated/map fields; preserve singular
 and element Value nulls. Count the protobuf/WKT shape, including Struct entries,
 ListValue/Value expansion and FieldMask paths, before typed/reflected allocation.
+Each ordinary message drops its temporary field-number uniqueness set after the
+complete name/alias validation pass, before null pruning and recursive traversal.
+The set contains owned integers, and later descriptor lookup does not borrow it.
+This shortens parent/child temporary-storage overlap without changing validation
+order, node charging, reservation or allocation count. It establishes no measured
+RSS or throughput improvement; existing behavioral tests do not instrument the
+set's production deallocation point.
 Only the nine exact canonical scalar-wrapper names take the wrapper shortcut;
 similarly named ordinary messages in google.protobuf follow full field traversal.
 The [reviewed memory and time ledger](#memory-and-time-ledger) includes temporary

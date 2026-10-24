@@ -15826,3 +15826,28 @@ scopes; no runtime behavior changed. Existing tests establish protected rejectio
 delivery, not the invalid-only case. Fresh unchanged-source checks passed 147
 ExtProc and 19 body-action tests, formatting and workspace check/Clippy with
 existing warnings. No prototype, new reproducer, wire test or benchmark ran.
+
+## gRPC request alias-validation set lifetime
+
+The canonical Resources normalizer now drops each ordinary message's temporary
+field-number BTreeSet after the complete name/alias validation pass, before null
+pruning and recursive scalar/message traversal. The set contains owned u32 values
+and later descriptor lookups do not consume it. Parent validation sets therefore
+no longer remain owned across child normalization. Unknown names and aliases are
+still rejected before mutation, and null sentinels, traversal order, node/depth
+charging, error paths and the existing conservative reservation are unchanged.
+
+This supporting Resources edit is reached by the Gateway transcoder's request
+encode path; it is not additional crate-wide coverage. It shortens temporary
+storage overlap, without claiming fewer allocation calls, measured RSS or
+throughput, or smaller budget requirements. Existing integer-storage, prepared
+wire-schema and reflection-bridge decisions remain unselected.
+
+Baseline and final verification each passed 35 Resources grpc_transcoding tests
+and 29 Gateway plugin transcoder tests (64 total for these exact filters).
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Original admission knowledge now records the lifetime
+boundary and its limits. Existing alias/null/WKT/depth tests verify behavior;
+source ownership and compilation establish the drop point, not allocation
+instrumentation. No new test merely mirrors the drop statement, full suite,
+live transport or benchmark ran.
