@@ -15398,3 +15398,17 @@ was selected. Fresh unchanged-source verification passed 25 attempt-runtime,
 all-target check/Clippy passed with existing unrelated warnings. No runtime change,
 prototype, full suite, live integration or performance benchmark ran.
 Agent-doc validation and independent plan/final reviews passed.
+
+## XSS URL prefix decoding reuse
+
+The [prefix-decoding task](waf-13-xss-url-prefix-decoding.md) follows the Gateway
+WAF operator into the native detector. Four short-circuit protocol probes can
+repeat numeric-entity decoding of long encoded prefixes. The current path is
+heap-free and linear; tag/attribute binary searches are separate. A fused prefix
+must retain the exact pinned byte/decoder behavior, all HTML contexts and existing
+work charges, with differential and CPU evidence before adoption. No algorithm
+was selected. Fresh checks passed 13 focused test functions; two external-checkout
+comparisons remained ignored. Formatting and workspace all-target check/Clippy
+passed with existing unrelated warnings. No runtime change, full pinned comparison,
+prototype, full suite, live integration or performance benchmark ran.
+Agent-doc validation and independent plan/final reviews passed.
