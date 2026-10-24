@@ -785,6 +785,14 @@ fn quoted_values_borrow_unescaped_input_and_preserve_escape_rules() {
         (r#""a\\b""#, "a\\b"),
         (r#""a\qb""#, "aqb"),
         (r#""\é""#, "é"),
+        (r#""\qtail""#, "qtail"),
+        (r#""head\q""#, "headq"),
+        (r#""\\\\""#, r"\\"),
+        (r#""café\€tail\ñend""#, "café€tailñend"),
+        (
+            r#""long-plain-prefix\qmiddle-span\"quoted\\suffix""#,
+            r#"long-plain-prefixqmiddle-span"quoted\suffix"#,
+        ),
     ] {
         let value = HmacAuth::parse_quoted_value(raw).unwrap();
         assert!(matches!(value, Cow::Owned(_)));
@@ -792,6 +800,10 @@ fn quoted_values_borrow_unescaped_input_and_preserve_escape_rules() {
     }
     assert_eq!(
         HmacAuth::parse_quoted_value(r#""tail\""#),
+        Err("Invalid escape in quoted value")
+    );
+    assert_eq!(
+        HmacAuth::parse_quoted_value(r#""valid\qthen\""#),
         Err("Invalid escape in quoted value")
     );
     for raw in ["", "plain", "\"", "\"open", "close\""] {

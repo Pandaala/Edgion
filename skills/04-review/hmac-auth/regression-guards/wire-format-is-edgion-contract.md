@@ -56,8 +56,11 @@ Re-open this decision only if:
 ## Borrowed quoted-parameter decoding
 
 `parse_quoted_value` borrows the trimmed quoted interior when it contains no
-backslash. Values requiring unescaping retain the original character decoder and
-owned output. The parsed username retains that Cow through synchronous header
+backslash. Values requiring unescaping copy unchanged spans directly and decode
+the single Unicode scalar after each backslash into the same owned output.
+ASCII delimiter positions and the decoded scalar's byte length keep slice
+boundaries valid; a dangling backslash still returns the original error.
+The parsed username retains that Cow through synchronous header
 verification. Only a successful header-verification outcome takes ownership,
 before asynchronous body capture or session mutation. Signed-header names and
 the decoded signature remain owned parser outputs. This avoids copying an

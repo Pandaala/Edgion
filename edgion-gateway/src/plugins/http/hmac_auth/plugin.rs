@@ -360,23 +360,15 @@ impl HmacAuth {
             return Ok(Cow::Borrowed(inner));
         }
         let mut out = String::with_capacity(inner.len());
-        let mut escaped = false;
-
-        for ch in inner.chars() {
-            if escaped {
-                out.push(ch);
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
+        let mut remaining = inner;
+        while let Some(pos) = remaining.find('\\') {
+            out.push_str(&remaining[..pos]);
+            remaining = &remaining[pos + 1..];
+            let ch = remaining.chars().next().ok_or("Invalid escape in quoted value")?;
             out.push(ch);
+            remaining = &remaining[ch.len_utf8()..];
         }
-        if escaped {
-            return Err("Invalid escape in quoted value");
-        }
+        out.push_str(remaining);
         Ok(Cow::Owned(out))
     }
 

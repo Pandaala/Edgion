@@ -16706,3 +16706,27 @@ all baseline/final test identities and outcomes match. Formatting, workspace
 all-target check/Clippy and all seven repository guards passed with existing
 warnings. No full suite, live HTTP/gRPC exchange or benchmark ran. The known
 fixture failure remains unresolved and is not an all-green test result.
+
+## Copy unchanged spans in escaped HMAC parameter values
+
+The canonical quoted-value decoder now copies the spans between backslashes with
+push_str, decoding only each escaped Unicode scalar. Its unescaped fast path still
+borrows input; the escaped path retains the same inner-length capacity and owned
+output. ASCII delimiter positions and scalar byte lengths preserve UTF-8 boundaries.
+Outer quote/trim rules, permissive inner quotes, arbitrary escaped characters and
+trailing-backslash errors remain unchanged, including unknown-parameter validation
+and duplicate-before-value rejection in the caller.
+
+The existing quoted-value regression was extended with boundary escapes, repeated
+backslashes, mixed Unicode, multiple unchanged spans and a dangling escape after
+a valid one. It passed against the original decoder before implementation.
+Independent plan review passed. This replaces per-character copying of unchanged
+spans in escaped inputs; it does not reduce the decoder's allocation count or
+establish a parser-wide throughput gain. No new parser, dependency or observation
+mechanism was added.
+
+Final runs passed 36 HMAC and 70 shared-condition cases with identical baseline/
+final test identities and outcomes. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. Independent final
+source review passed. No full suite, live authentication exchange or performance
+benchmark ran.
