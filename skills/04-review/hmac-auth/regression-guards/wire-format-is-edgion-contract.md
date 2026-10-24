@@ -138,3 +138,18 @@ of length zero through five from a six-character alphabet, plus longer escaped
 and whitespace cases. It measures zero allocation calls and requested bytes for
 segment iteration only. The complete Authorization parser still allocates its
 parameter map and owned results; this is not a throughput benchmark.
+
+## Header-verification scratch release
+
+After successful signature comparison, verify_headers_with releases the signing
+String and decoded signature Vec before checking the existing signed-digest
+requirement. After that check, it releases owned signed-header names before
+converting the verified username Cow into its result owner. The username either
+borrows the original Authorization value or owns independent unescaped text; it
+does not borrow these released fields. No custom destructor is involved.
+
+This shortens temporary overlap with successful username materialization. It
+does not reduce allocation count, change the HMAC input, move body capture, or
+change rejection order. Parser scratch, credentials, body-digest snapshots and
+asynchronous body-read owners remain distinct. Rust drop is not physical erasure
+and no throughput or overall peak-memory improvement is established.

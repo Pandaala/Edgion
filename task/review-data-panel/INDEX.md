@@ -16185,3 +16185,26 @@ requested a compact HeaderCertAuth constructor; rustfmt applied that correction
 and the repeated format check passed. Workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. No literal-only tests, full suite,
 live authentication transport or performance benchmarks were added/run.
+
+## Release HMAC header-verification scratch before username ownership
+
+Successful signature comparison now releases its temporary signing String and
+decoded signature Vec before the existing signed-digest requirement check. Once
+that check succeeds, owned signed-header names release before the verified
+username Cow becomes the result String. The username is independent of these
+plain owners; all failed checks and later body verification retain their order.
+
+This avoids retaining consumed verification scratch alongside successful username
+materialization. It does not remove allocations, establish physical erasure or
+claim measured throughput/future-size/overall peak-memory improvement. The
+original wire-contract knowledge records the owner boundaries; deferred signing
+representation and credential-state decisions remain separate. BodyReadError
+inspection found only fixed enum payloads, so no heap-release edit was justified
+for the digest-read failure branch.
+
+Independent plan and final source review passed. Baseline and final Gateway
+HMAC-filtered runs passed the same 57 test identities, including shared-condition
+consumers. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Source ownership and compilation establish
+these release boundaries; no allocation-release instrumentation, full suite,
+live authentication service or performance benchmark was added/run.

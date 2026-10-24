@@ -241,9 +241,12 @@ impl HmacVerifier {
         if !HmacAuth::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadSignature);
         }
+        drop(signing_string);
+        drop(params.signature);
         if validate_request_body && !params.headers.iter().any(|header| header == "digest") {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::DigestNotSigned);
         }
+        drop(params.headers);
         HmacVerifyOutcome::Verified {
             username: params.username.into_owned(),
         }
