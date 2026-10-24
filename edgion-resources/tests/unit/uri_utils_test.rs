@@ -110,6 +110,16 @@ fn test_url_decode_malformed_scalar_consumption() {
 fn test_url_decode_percent_run_flush_boundaries() {
     assert_eq!(url_decode("%C3%A9%GG%E2%82%AC"), "é%GG€");
     assert_eq!(url_decode("%C3%A9x%E2%82%AC+%41"), "éx€ A");
+    let plain = "abcé€π".repeat(1024);
+    for (input, expected) in [
+        (format!("%C3%A9{plain}%E2%82%AC{plain}"), format!("é{plain}€{plain}")),
+        (format!("+{plain}++{plain}+"), format!(" {plain}  {plain} ")),
+        (format!("%GG{plain}%é+{plain}%"), format!("%GG{plain}%é+{plain}%")),
+        (format!("%C3%A9%FF{plain}%41"), format!("\u{c3}©\u{ff}{plain}A")),
+        (format!("%+A{plain}%G++{plain}"), format!("\n{plain}%G+ {plain}")),
+    ] {
+        assert_eq!(url_decode(&input), expected);
+    }
 }
 
 #[test]

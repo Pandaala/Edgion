@@ -16747,3 +16747,28 @@ performance gain is claimed. Independent plan review passed. Fresh verification
 passed 19 BasicAuth cases plus one incidental Elasticsearch case; formatting and
 workspace all-target check/Clippy passed with existing warnings. No full suite,
 live reload or benchmark ran.
+
+## Copy ordinary spans in encoded query components
+
+Followed KeyAuth's borrowed Query source through the frozen query cache to the
+canonical resources URI decoder. Its encoded-input path now copies the ordinary
+span after an ordinary scalar with push_str, stopping before the next percent or
+plus marker. This removes per-scalar append/flush iterations for the rest of that
+span. Marker boundaries are UTF-8 safe, and the next marker stays unconsumed.
+The existing no-marker fast path, two-scalar percent tokens, leading-plus radix
+acceptance, malformed-token preservation and whole-run Latin-1 fallback remain.
+
+The existing flush-boundary test now covers long middle/trailing Unicode spans,
+adjacent plus markers, malformed scalar tokens, incomplete tokens and invalid
+UTF-8 runs. It passed on the original production decoder before implementation.
+Independent plan review passed. This supporting shared-decoder edit changes no
+query snapshot, duplicate-key policy or auth stripping behavior. The bounded DSL
+decoder remains separate. Output growth may differ; no allocation-count, retained
+capacity or measured throughput improvement is claimed.
+
+Final selections passed 14 resources URI, 53 Gateway query, 38 shared-auth,
+16 KeyAuth and 19 HTTP match-unit tests (134 distinct identities after overlap).
+Original/extended/final decoder identities and baseline/final consumer identities
+and outcomes match. Formatting, workspace all-target check/Clippy and all seven
+repository guards passed with existing warnings. Independent final source review
+passed. No full suite, live integration exchange or performance benchmark ran.

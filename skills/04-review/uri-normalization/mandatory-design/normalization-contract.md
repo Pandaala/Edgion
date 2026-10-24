@@ -202,8 +202,13 @@ ordinary scalars flush pending bytes before being appended.
 
 Inputs with neither `%` nor `+` return an owned copy directly, avoiding the
 scalar-by-scalar append loop and its output growth. The presence scan also runs
-for encoded inputs before the unchanged decoder. Empty and plain UTF-8 inputs
-remain byte-identical; this is not a borrowed API or a second decoding policy.
+for encoded inputs. In that path, after flushing pending bytes and appending an
+ordinary scalar, the decoder copies the following ordinary span up to the next
+percent or plus marker with push_str. ASCII marker positions are UTF-8 boundaries;
+the next marker remains unconsumed for the existing percent/plus branches. Empty
+and plain UTF-8 inputs remain byte-identical; this is not a borrowed API or a
+second decoding policy. Output growth may differ; no allocation-count or retained
+capacity reduction is claimed.
 
 The output String, byte-run buffer and API remain owned as before. Query parsing
 skips empty pairs, gives no-equals pairs empty values and lets the last decoded

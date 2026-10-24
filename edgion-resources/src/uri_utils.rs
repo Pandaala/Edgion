@@ -91,6 +91,10 @@ pub fn url_decode(s: &str) -> String {
                 result.push(' ');
             } else {
                 result.push(c);
+                let remaining = chars.as_str();
+                let end = remaining.find(['%', '+']).unwrap_or(remaining.len());
+                result.push_str(&remaining[..end]);
+                chars = remaining[end..].chars();
             }
         }
     }
