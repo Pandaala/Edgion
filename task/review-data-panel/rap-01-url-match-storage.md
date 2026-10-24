@@ -17,11 +17,13 @@ it in their own candidate order, combined with Host and condition predicates.
 An earlier primary IP rule can settle a group or deny the profile after this
 lookup has already occurred. These are observed costs, not measured hotspots.
 
-The canonical `PathRadixTree::match_all_ext` in
-`edgion-algo/src/matcher/radix_path/frozen.rs` separately uses SmallVec capacities
-8 for results and 16 for traversal state, with possible heap spill. Changing the
-RAP result vector does not remove those costs. The completed per-rule candidate
-Range change removes cold index arrays, not this request-local match vector.
+RAP uses canonical `PathRadixTree::for_each_match_ext` in
+`edgion-algo/src/matcher/radix_path/frozen.rs`, which visits matches without an
+intermediate result buffer. Its SmallVec traversal stack has inline capacity 16
+and can still spill. The separate match_all_ext wrapper collects results but is
+not called here. Changing the RAP result vector does not remove traversal scratch.
+The completed per-rule candidate Range change removes cold index arrays, not
+this request-local match vector.
 
 The URL reference validation maximum of 10,000 rules is per reference. Controller
 `handlers/plugins/request_access_policy_data.rs` checks each referenced list

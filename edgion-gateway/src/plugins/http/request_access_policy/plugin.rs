@@ -178,7 +178,7 @@ impl RuntimeUrlIndex {
             });
         }
         for (candidate_index, regex) in &self.regex_paths {
-            if regex.is_match(path) {
+            if !matched[*candidate_index] && regex.is_match(path) {
                 matched[*candidate_index] = true;
             }
         }

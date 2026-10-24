@@ -349,6 +349,29 @@ fn profile_url_index_preserves_exact_prefix_regex_and_candidate_ownership() {
             }],
             conditions: None,
         },
+        UrlAccessCandidate {
+            name: "overlap".to_string(),
+            hosts: vec![],
+            paths: vec![
+                AccessPathMatch {
+                    match_type: AccessPathMatchType::Exact,
+                    value: "/events/exact".to_string(),
+                },
+                AccessPathMatch {
+                    match_type: AccessPathMatchType::PathPrefix,
+                    value: "/events/:tenant".to_string(),
+                },
+                AccessPathMatch {
+                    match_type: AccessPathMatchType::RegularExpression,
+                    value: r"^/(events/(exact|v[0-9]+)|regex-first)$".to_string(),
+                },
+                AccessPathMatch {
+                    match_type: AccessPathMatchType::RegularExpression,
+                    value: r"^/regex-(first|later)$".to_string(),
+                },
+            ],
+            conditions: None,
+        },
     ];
     let index = RuntimeUrlIndex::compile(
         candidates
@@ -365,10 +388,13 @@ fn profile_url_index_preserves_exact_prefix_regex_and_candidate_ownership() {
         None,
     )
     .unwrap();
-    assert_eq!(index.lookup("/events/exact"), vec![true, true, false]);
-    assert_eq!(index.lookup("/events/exact/suffix"), vec![false, true, false]);
-    assert_eq!(index.lookup("/events"), vec![false, false, false]);
-    assert_eq!(index.lookup("/events/v12"), vec![false, true, true]);
+    assert_eq!(index.lookup("/events/exact"), vec![true, true, false, true]);
+    assert_eq!(index.lookup("/events/exact/suffix"), vec![false, true, false, true]);
+    assert_eq!(index.lookup("/events"), vec![false, false, false, false]);
+    assert_eq!(index.lookup("/events/v12"), vec![false, true, true, true]);
+    assert_eq!(index.lookup("/regex-first"), vec![false, false, false, true]);
+    assert_eq!(index.lookup("/regex-later"), vec![false, false, false, true]);
+    assert_eq!(index.lookup("/miss"), vec![false, false, false, false]);
 }
 
 #[tokio::test]

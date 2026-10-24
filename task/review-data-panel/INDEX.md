@@ -16647,3 +16647,29 @@ Independent plan review passed. Fresh Gateway runs passed 19 request-body-action
 31 upstream response-body and 11 trailer-filter tests. Formatting and workspace
 all-target check/Clippy passed with existing warnings. No fork suite, live
 flow-control exchange or performance benchmark ran.
+
+## Skip regex work for already-matched access-policy candidates
+
+RuntimeUrlIndex::lookup now checks a candidate's existing match bit before
+invoking each regex. A prior exact/prefix path or earlier regex already proves
+the same candidate's OR result, so further regex evaluations cannot change it.
+Other candidates continue to be evaluated. The result vector, entry-time path
+snapshot, Host checks, supplemental conditions and ordered group evaluation are
+unchanged; no configuration-time matcher or runtime cache was added.
+
+The existing mixed-path regression now includes one candidate with overlapping
+exact/prefix/regex paths, two matching regexes, a later-only regex hit and a total
+miss, alongside independent candidates. It passed on original production code
+before the guard was introduced. Existing group/condition tests remain intact.
+The stale rap-01 traversal paragraph now describes the current visitor instead
+of the already-removed collected result buffer; its storage decision stays open.
+
+Independent plan review passed. This skips regex invocations for already-true
+candidates and adds a boolean guard for the others; no universal throughput or
+allocation improvement is claimed.
+
+Final focused runs passed 23 RequestAccessPolicy and 70 shared-condition tests,
+with identical original/extended/final test identities and outcomes. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. Independent final code review passed. No full suite, live policy
+reload exchange or performance benchmark ran.
