@@ -420,9 +420,13 @@ impl HmacAuth {
         let algorithm_raw = params.remove("algorithm").ok_or("Invalid HMAC authorization format")?;
         let headers_raw = params.remove("headers").ok_or("Invalid HMAC authorization format")?;
         let signature_raw = params.remove("signature").ok_or("Invalid HMAC authorization format")?;
+        // Required values own their storage or borrow the original header, not this map.
+        drop(params);
 
         let algorithm = HmacAlgorithm::parse(&algorithm_raw).ok_or("Unsupported algorithm")?;
+        drop(algorithm_raw);
         let headers: Vec<String> = headers_raw.split_whitespace().map(|h| h.to_ascii_lowercase()).collect();
+        drop(headers_raw);
         if headers.is_empty() {
             return Err("Invalid HMAC authorization format");
         }
@@ -432,6 +436,7 @@ impl HmacAuth {
                 return Err("Invalid HMAC authorization format");
             }
         }
+        drop(seen);
 
         let signature = STANDARD
             .decode(signature_raw.as_bytes())

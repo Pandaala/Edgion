@@ -80,6 +80,19 @@ owned verified results after session release, and duplicate/unknown-parameter
 error precedence. Other parser structures and final results still allocate; no
 whole-parser allocation or throughput claim follows.
 
+After all required values have been extracted in the original order, the parser
+drops the remaining parameter map before algorithm/header conversion. Extracted
+Cows own their buffers or borrow the original Authorization input, never the map.
+The decoded algorithm and signed-header source values drop after conversion;
+the duplicate-header set drops after validation and before signature decoding.
+Unknown escaped values and folded keys can own buffers, while unescaped values
+borrow input. Final username/header/signature ownership and every rejection order
+remain unchanged. This shortens temporary storage overlap, without reducing the
+number of parser allocations or establishing physical erasure, RSS or throughput
+improvement. It changes neither the accepted credential-map ownership nor the
+deferred signed-header membership representation. Source ownership and compilation
+establish these release points; behavioral tests do not measure peak lifetime.
+
 ## Borrowed current query in signing targets
 
 Signing-string construction uses the existing `request_query` borrow instead of

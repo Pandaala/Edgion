@@ -15894,3 +15894,25 @@ This differs from wire-schema, binding-selector and textual-bridge proposals.
 Fresh unchanged-source checks passed 35 Resources and 29 Gateway tests, formatting
 and workspace check/Clippy with existing warnings. No prototype, benchmark,
 full suite or live transport test ran.
+
+## HMAC Authorization parser scratch release
+
+The shared request/condition verifier now releases the remaining parameter map
+immediately after required-value extraction, decoded algorithm/header source
+values after their conversions, and the duplicate-header set before Base64
+signature decoding. Extracted Cows own storage or borrow the original header;
+normalized signed headers own their strings. No later stage borrows these scratch
+owners. Required-value order, unknown-parameter validation, duplicate rejection,
+error precedence, signing inputs and final result ownership remain unchanged.
+
+This reduces temporary storage overlap, not allocation counts, and makes no
+physical-erasure, measured RSS, throughput or async-frame-size claim. Accepted
+credential-map ownership and the deferred signed-header membership proposal are
+unchanged. The existing wire-format knowledge records these boundaries.
+
+Baseline and final HMAC/condition filters passed 57 and 70 tests respectively,
+with three shared identities (124 unique tests); baseline/final identities match.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Existing parser, signing and condition tests check behavior;
+source ownership and compilation establish early release. No redundant drop-only
+test, full suite, live transport or benchmark ran.
