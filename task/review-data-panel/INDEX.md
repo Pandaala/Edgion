@@ -15527,3 +15527,16 @@ Baseline and final native, matcher, cached/current-input and raw-body stream che
 passed the same 130 tests; two matcher release witnesses remained ignored. This
 reduces source-level result traversal without an allocation or throughput claim.
 No benchmark, full suite or live Gateway integration ran.
+
+## Streaming phrase hit projection
+
+The [streaming-hit task](waf-16-streaming-hit-projection.md) records repeated
+local-to-global and global-to-member projection of cumulative hits on later chunks.
+Set-bit iteration already skips absent IDs; it does not suppress historical hits.
+Per-chunk scratch and first-hit deltas are different alternatives, each requiring
+measurement and preserved layered error/publication boundaries. Native cumulative
+API behavior, raw-lane admission, early-positive completion and EOS decisions stay
+unchanged. No implementation was selected. Fresh unchanged-source checks passed
+122 native/matcher/raw-stream tests, with two release witnesses ignored. Formatting
+and workspace all-target check/Clippy passed with existing warnings. No prototype,
+benchmark, full suite or live integration ran.
