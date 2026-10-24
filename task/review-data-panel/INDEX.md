@@ -16068,3 +16068,23 @@ identity. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. This removes source-visible unused work,
 not a measured throughput or allocation claim. No full suite, live transport,
 failure-fixture repair or benchmark ran.
+
+## Canonical LRU retired-value destruction boundary
+
+The [retired-value task](lru-02-retired-value-destruction.md) records replacement,
+expiry, eviction and clear destruction under the canonical local shard mutex.
+Explicit remove returns its value beyond that mutex; key destruction is separate.
+ResponseCache Arc retirement only frees payload/lease on the last owner, and its
+outer publication fence can remain held after shard unlock.
+
+Moving destruction needs a decision on generic Drop semantics, bounded bulk
+retirement storage and lease-release/admission timing. No automatic optimization
+is selected. Structural mutations remain atomic under the mutex; counters retain
+their existing outside-lock ordering and approximate snapshots. This supports
+the Gateway anchor without claiming Algo-wide coverage or reopening the bounded
+expiration-index design.
+
+Fresh unchanged-code checks passed 47 Algo cache, 22 Gateway cache storage and
+six cache policy tests (75 total), workspace all-target check and Clippy with
+existing warnings. No source change, prototype, benchmark, full suite or live
+origin test ran; existing tests do not prove a future destructor concurrency design.
