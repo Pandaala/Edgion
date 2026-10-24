@@ -272,7 +272,7 @@ impl EdgionUdpProxy {
         // DashMap read guard is dropped before the `.await` below.
         if let Some(session) = self.client_sessions.get(&direct_peer_addr).map(|s| s.value().clone()) {
             let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-            Self::record_upstream_send_result(send_result, &session, self.listener_port, direct_peer_addr).await;
+            Self::record_upstream_send_result(send_result, session, self.listener_port, direct_peer_addr).await;
             return;
         }
 
@@ -426,7 +426,7 @@ impl EdgionUdpProxy {
         };
 
         let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-        Self::record_upstream_send_result(send_result, &session, self.listener_port, direct_peer_addr).await;
+        Self::record_upstream_send_result(send_result, session, self.listener_port, direct_peer_addr).await;
     }
 
     /// Get or create a client session.
@@ -566,7 +566,7 @@ impl EdgionUdpProxy {
 
     async fn record_upstream_send_result(
         result: std::io::Result<usize>,
-        session: &ClientSession,
+        session: Arc<ClientSession>,
         listener_port: u16,
         direct_peer_addr: std::net::SocketAddr,
     ) {
@@ -580,6 +580,7 @@ impl EdgionUdpProxy {
                 }
             }
             Err(_) => {
+                drop(session);
                 log_udp(&UdpLogEntry::failure(
                     listener_port,
                     crate::ctx::canonicalize_ip(direct_peer_addr.ip()),

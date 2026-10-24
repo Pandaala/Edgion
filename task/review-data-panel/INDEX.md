@@ -15711,3 +15711,25 @@ tests. Formatting, workspace all-target check/Clippy, agent-doc validation, SSA,
 metrics, Pingora source policy, Gateway API transform, unit-test layout and
 gateway no-tracing guards passed. Existing Clippy warnings remain. No blocked
 logger experiment, datagram wire test, full suite or benchmark was run.
+
+## Release the completed UDP sender before failure logging
+
+Both upstream-send call sites now move their existing session Arc into result
+handling after send_to completes. No production clone is added. Failed sends
+drop that sender owner before constructing and awaiting the fixed failure log,
+whose fields depend only on listener and direct-peer metadata. Success counters,
+activity timestamps, retired checks and wrapping arithmetic retain their existing
+lifecycle-lock scope. Downstream receiver ownership and UDP-02 are unchanged.
+
+An existing expiry-race regression first passed on the original implementation
+with an injected send failure: activity and success counters stay unchanged,
+the session remains current/unretired, and a later successful send prevents
+expiration. Tests retain their observation Arcs explicitly. This shortens one
+owner's lifetime without claiming that other owners release resources, that a
+blocked logger was exercised, or that throughput/RSS was measured.
+
+Baseline and final verification passed 59 UDP route/session and four UDP log
+tests. Formatting, workspace all-target check/Clippy, agent-doc validation, SSA,
+metrics, Pingora source policy, Gateway API transform, unit-test layout and gateway
+no-tracing guards passed. Existing Clippy warnings remain. No full suite,
+datagram wire test or benchmark ran.

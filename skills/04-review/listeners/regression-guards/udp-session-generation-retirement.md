@@ -53,6 +53,13 @@ retired session. The permit remains held until that owner and the receiver
 release their Arcs. Normal process shutdown retains its existing join and
 remaining-session log pass; see [UDP process shutdown](udp-process-shutdown.md).
 
+Upstream send-result handling consumes the sender's existing session Arc after
+the send completes. On failure it releases that owner before constructing and
+awaiting the fixed failure log; failed sends still neither refresh activity nor
+retire the map entry. Map, receiver or other owners may keep the session alive.
+Successful accounting remains under the lifecycle lock. Downstream receive-loop
+handling retains its session because subsequent receives still need that owner.
+
 These local lifecycle tests do not establish UDP wire behavior or prove a
 particular resource-growth rate. The existing integration scenarios are not
 changed.

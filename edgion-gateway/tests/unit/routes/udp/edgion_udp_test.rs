@@ -466,7 +466,20 @@ async fn expiry_candidate_refreshed_before_retirement_stays_active() {
     proxy.client_sessions.insert(peer, session.clone());
     let candidate_time = Instant::now();
 
-    EdgionUdpProxy::record_upstream_send_result(Ok(3), &session, proxy.listener_port, peer).await;
+    let before_error = session.lifecycle.lock().last_activity;
+    EdgionUdpProxy::record_upstream_send_result(
+        Err(std::io::Error::other("controlled send failure")),
+        session.clone(),
+        proxy.listener_port,
+        peer,
+    )
+    .await;
+    assert_eq!(session.lifecycle.lock().last_activity, before_error);
+    assert_eq!(session.lifecycle.lock().packets_sent, 0);
+    assert!(!session.lifecycle.lock().retired);
+    assert!(Arc::ptr_eq(proxy.client_sessions.get(&peer).unwrap().value(), &session));
+
+    EdgionUdpProxy::record_upstream_send_result(Ok(3), session.clone(), proxy.listener_port, peer).await;
     assert!(!EdgionUdpProxy::retire_session(
         &proxy.client_sessions,
         peer,
@@ -650,7 +663,7 @@ async fn session_accounting_wraps_and_freezes_after_retirement() {
     }
     proxy.client_sessions.insert(peer, session.clone());
 
-    EdgionUdpProxy::record_upstream_send_result(Ok(3), &session, proxy.listener_port, peer).await;
+    EdgionUdpProxy::record_upstream_send_result(Ok(3), session.clone(), proxy.listener_port, peer).await;
     EdgionUdpProxy::record_downstream_send_result(Ok(5), &session, proxy.listener_port, peer).await;
     assert!(EdgionUdpProxy::retire_session(
         &proxy.client_sessions,
@@ -659,7 +672,7 @@ async fn session_accounting_wraps_and_freezes_after_retirement() {
         None
     ));
     let activity = session.lifecycle.lock().last_activity;
-    EdgionUdpProxy::record_upstream_send_result(Ok(7), &session, proxy.listener_port, peer).await;
+    EdgionUdpProxy::record_upstream_send_result(Ok(7), session.clone(), proxy.listener_port, peer).await;
     EdgionUdpProxy::record_downstream_send_result(Ok(9), &session, proxy.listener_port, peer).await;
     assert_eq!(session.lifecycle.lock().last_activity, activity);
     let log = EdgionUdpProxy::session_log_entry(proxy.listener_port, peer, &session);
