@@ -15667,3 +15667,14 @@ lookups, skipped metered reads, changed semantic charges or rollback behavior.
 Fresh unchanged-source checks passed six setvar-selected and 52 Gateway WAF tests,
 formatting and workspace check/Clippy with existing warnings. No runtime change
 or measured performance benefit is claimed.
+
+## Prepared WAF template shape decision
+
+The [template-shape task](waf-20-prepared-template-shape.md) records runtime macro
+classification that the compiler already performs but does not retain per template.
+A flag or prepared literal descriptor remains unselected: actual layout and
+compiler admission costs must be weighed against avoided scans, and per-segment
+limit errors, zero-segment identity and dynamic macro metering must survive.
+This is separate from WAF-19 write-key ownership. Fresh unchanged-source checks
+passed 17 unique leaf tests and 52 Gateway WAF tests, formatting and workspace
+check/Clippy with existing warnings. No runtime change or measured gain is claimed.
