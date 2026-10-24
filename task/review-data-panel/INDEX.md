@@ -15371,3 +15371,17 @@ Final verification passed the same 186 tests, formatting, workspace all-target
 check/Clippy and seven repository guards, with existing unrelated warnings.
 No full suite, live Redis/provider exchange or performance benchmark ran.
 Independent plan and final reviews passed, including the owning knowledge update.
+
+## Optional credential-reservation input ownership
+
+The [reservation-input task](redis-08-optional-credential-reservation-input.md)
+records namespace/UID/reference copies and a limiter Arc acquisition projected
+even when credential limits are absent. Avoiding them requires an input ownership
+choice; no-limits admission must still enforce breaker and outlier gates, and
+alias/accounting/runtime ownership remains necessary. Optional owned projection,
+explicit borrowing and retaining the flat input remain unselected alternatives.
+Fresh unchanged-source verification passed 36 dispatch, 25 attempt-runtime,
+seven HTTP-attempt and 104 upstream-peer tests (172 total). Formatting and workspace
+all-target check/Clippy passed with existing unrelated warnings. No runtime change,
+prototype, full suite, live Redis exchange or performance benchmark ran.
+Agent-doc validation and independent plan/final reviews passed.
