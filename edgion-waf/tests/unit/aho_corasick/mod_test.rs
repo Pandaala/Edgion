@@ -1020,6 +1020,41 @@ fn pattern_set_reuse_preserves_capacity_and_clears_results() {
 }
 
 #[test]
+fn pattern_set_iteration_preserves_order_across_sparse_word_boundaries() {
+    for count in [0, 1, 63, 64, 65, 127, 128, 129, 257] {
+        let mut set = PatternSet::new(count);
+        let capacity = set.word_capacity();
+        let allocation = set.word_allocation_ptr();
+        for mode in 0..5 {
+            set.clear();
+            for index in (0..count).rev() {
+                let selected = match mode {
+                    0 => false,
+                    1 => true,
+                    2 => index % 2 == 0,
+                    3 => matches!(index % 64, 0 | 63),
+                    _ => index >= 128 && index % 13 == 0,
+                };
+                if selected {
+                    set.insert(PatternId::try_from_usize(index).unwrap()).unwrap();
+                }
+            }
+            let expected = (0..count)
+                .filter(|&index| set.contains(PatternId::try_from_usize(index).unwrap()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                set.iter().take(2).map(PatternId::as_usize).collect::<Vec<_>>(),
+                expected.iter().copied().take(2).collect::<Vec<_>>()
+            );
+            assert_eq!(set.iter().map(PatternId::as_usize).collect::<Vec<_>>(), expected);
+            assert_eq!(set.iter().count(), expected.len());
+            assert_eq!(set.word_capacity(), capacity);
+            assert_eq!(set.word_allocation_ptr(), allocation);
+        }
+    }
+}
+
+#[test]
 fn mismatched_pattern_set_shape_is_rejected() {
     let first = AhoCorasick::new([b"a".as_slice()]).unwrap();
     let second = AhoCorasick::new([b"a".as_slice(), b"b".as_slice()]).unwrap();

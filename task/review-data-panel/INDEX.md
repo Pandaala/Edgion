@@ -15488,3 +15488,22 @@ maximum-sized bounds retain rejection. Existing compiled scans cover both modes,
 reuse and foreign pattern counts. Baseline checks passed 55 existing tests; final
 checks passed 56 including the new boundary test. Two matcher release witnesses
 remained ignored. No benchmark, full suite or live Gateway integration ran.
+
+## Iterate WAF phrase matches by set bits
+
+The native PatternSet iterator now walks bounded bitmap words and removes the
+lowest set bit from a local word copy for each yielded ID. Empty words no longer
+require one contains check per represented pattern. Ascending word/bit order,
+logical-count tail filtering and fallible PatternId conversion preserve unique
+source-order output. PhraseGroup uses this iterator for accelerated, reference
+and streaming scans before mapping local IDs back to rule patterns. Storage,
+shape validation, clearing, scan budgets and error handling remain unchanged.
+This reduces source-level sparse-result traversal without claiming measured
+throughput or allocation savings; no result collection or compiled field was added.
+
+The new sequence test passed before the production change and covers empty,
+63/64/65 and later word boundaries, reverse insertion, dense/sparse/boundary-only
+hits, partial and repeated iteration, and clear/reuse with stable allocation.
+Existing native, matcher, cached/current-input and streaming transaction checks
+passed 129 tests at baseline and 130 after the change. Two matcher release
+witnesses remained ignored. No benchmark, full suite or live integration ran.
