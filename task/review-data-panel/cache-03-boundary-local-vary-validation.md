@@ -17,7 +17,7 @@ response header twice within each of these separate boundaries:
 | Boundary | First parse | Second parse |
 | --- | --- | --- |
 | `Pending::create` | Parse Vary and check request-certificate permission | `Freshness::from_headers` calls the supported-header validator |
-| `Entry::decode` | `self.vary.matches` parses and compares the stored certificate | `Freshness::from_headers` validates the decoded public-origin contract |
+| `Entry::decode` | `self.vary.matches` parses and compares the stored certificate | `policy::valid_origin_headers` shares the origin parser and supported-header validator |
 | `retain_header_charge` | `matches_contract` calls `policy::supported_headers` | `permitted_vary` checks request-certificate permission |
 | `seal_pending_headers` | `matches_contract` calls `policy::supported_headers` | `permitted_vary` checks the chosen header |
 | `prepare_publication` | `matches_final_transport_contract` calls the supported-header validator | `permitted_vary` checks the final header |
@@ -73,3 +73,9 @@ check/Clippy and agent-doc validation. Existing unrelated warnings remain. The
 broader policy admission fixture in verification-01 remains unresolved; these
 focused passes neither exercise nor repair that fixture. No live integration or
 alternative validation-result implementation was run.
+
+Decode validation now shares the private origin-header parser with capture rather
+than constructing and discarding a Freshness value. It no longer samples the wall
+clock or computes an unused age, but still invokes supported-header validation
+and its Vary parser. Both Vary parses in the decode row therefore remain; this
+lifetime/validation split does not select or implement the proposal above.

@@ -34,6 +34,16 @@ alive through retained slices after eviction/replacement. Strict metadata decode
 consumes every record; the seal/replay/publication contract checks gather first
 case-insensitive field values into fixed borrowed slots in one complete metadata
 pass. Finding all contract fields never permits skipping a malformed suffix.
+Decoded origin headers use the same private supported-header/Date/Age parser as
+capture. Decode checks integrity without reading the wall clock or constructing
+a discarded Freshness value; stored monotonic origin freshness remains the sole
+expiry/replay-age source. This preserves validation because the former decode
+call used equal request/header instants: corrected-age addition had zero delay,
+and wall-derived apparent age and TTL clamping could not reject the metadata.
+Capture still samples its original clocks and applies the same age arithmetic.
+Vary parsing remains independent at each boundary; this does not implement the
+deferred boundary-local Vary reuse proposal.
+
 Absent and empty values remain distinct; final transport still permits only its
 separately validated singleton Date replacement. Corruption evicts only the matching current identity and
 falls through before final headers. Postheader failures never fall back to origin.

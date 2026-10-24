@@ -16037,3 +16037,34 @@ still governs range-mapping changes. Fresh tests passed six P2C and eight compil
 selector cases plus formatting, workspace check/Clippy with existing warnings and
 doc validation. These are baseline selection tests, not RNG lifecycle, allocation
 or entropy-failure validation. No full suite, live transport or benchmark ran.
+
+## Validate replay metadata without recomputing discarded freshness
+
+Entry::decode now calls the canonical origin-header validator rather than
+constructing and discarding Freshness. A private parsed-field result is shared
+with capture, preserving supported-header, singleton Date and absent/single Age
+validation order. Capture keeps its clocks and corrected/apparent-age arithmetic.
+Replay removes a wall-clock call and unused freshness calculations; actual expiry
+and replay Age still use the cached origin's monotonic freshness.
+
+The former decode call passed identical request/header instants, so adding the
+zero request delay to parsed u64 Age could not fail. Apparent-age fallback and
+TTL minimum did not reject either. The new integrity path therefore keeps valid
+metadata acceptance even for maximal Age, distant Date or zero stored lifetime;
+lookup separately rejects expired entries. It still validates every metadata
+record, Vary, policy and header bytes before returning a replay header.
+
+A new 19-case decode matrix passed on the original implementation before the
+production change. It checks valid past/future Date and absent/maximal Age,
+missing/invalid/nontext/repeated fields and policy rejection while proving stored
+freshness remains untouched. Deferred Vary parsing reuse and the separate
+policy-admission fixture remain unresolved; no lease, body, publication, epoch,
+transport, metadata format or cache-key behavior changed.
+
+Baseline checks passed 41 policy/storage/key/lifecycle tests; the new decode
+regression separately passed before production edits. Final checks passed all
+42 tests (6 policy, 22 storage, 7 key, 7 lifecycle), preserving every prior test
+identity. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. This removes source-visible unused work,
+not a measured throughput or allocation claim. No full suite, live transport,
+failure-fixture repair or benchmark ran.

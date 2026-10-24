@@ -966,3 +966,81 @@ fn contract_scans_preserve_first_fields_and_reject_every_malformed_suffix() {
         }
     }
 }
+
+#[test]
+fn decoded_origin_integrity_does_not_recompute_or_replace_stored_freshness() {
+    let (_store, _epoch, mut state) = fixture(8);
+    state.capture(&response(), Instant::now());
+    let mut entry = state.pending.take().unwrap().entry;
+    let origin_at = entry.freshness.header_at;
+    // Decode validates metadata; lookup separately enforces the stored expiry.
+    entry.freshness.initial_age = Duration::MAX;
+    entry.freshness.lifetime = Duration::ZERO;
+
+    let mut cases = Vec::new();
+    for date in ["Sun, 06 Nov 1994 08:49:37 GMT", "Fri, 31 Dec 9999 23:59:59 GMT"] {
+        for age in [None, Some("0"), Some("18446744073709551615")] {
+            let mut header = response();
+            header.insert_header("date", date).unwrap();
+            header.remove_header("age");
+            if let Some(age) = age {
+                header.insert_header("age", age).unwrap();
+            }
+            cases.push((header, true));
+        }
+    }
+    for (name, value) in [
+        ("date", "invalid"),
+        ("age", "18446744073709551616"),
+        ("age", " 1"),
+        ("cache-control", "private,max-age=60"),
+        ("vary", "*"),
+        ("set-cookie", "token=test"),
+    ] {
+        let mut header = response();
+        header.insert_header(name, value).unwrap();
+        cases.push((header, false));
+    }
+    for name in ["date", "cache-control"] {
+        let mut header = response();
+        header.remove_header(name);
+        cases.push((header, false));
+    }
+    for name in ["date", "age", "cache-control"] {
+        let mut header = response();
+        let value = if name == "age" {
+            header.insert_header(name, "0").unwrap();
+            http::HeaderValue::from_static("0")
+        } else {
+            header.headers.get(name).unwrap().clone()
+        };
+        header.append_header(name, value).unwrap();
+        cases.push((header, false));
+    }
+    for name in ["date", "age"] {
+        let mut header = response();
+        header
+            .insert_header(name, http::HeaderValue::from_bytes(&[0xff]).unwrap())
+            .unwrap();
+        cases.push((header, false));
+    }
+
+    for (index, (header, valid)) in cases.into_iter().enumerate() {
+        entry.metadata.clear();
+        for (name, value) in &header.headers {
+            entry
+                .metadata
+                .extend_from_slice(&u16::try_from(name.as_str().len()).unwrap().to_be_bytes());
+            entry
+                .metadata
+                .extend_from_slice(&u32::try_from(value.len()).unwrap().to_be_bytes());
+            entry.metadata.extend_from_slice(name.as_str().as_bytes());
+            entry.metadata.extend_from_slice(value.as_bytes());
+        }
+        assert_eq!(entry.decode().is_some(), valid, "case {index}");
+        assert_eq!(entry.freshness.header_at, origin_at);
+        assert_eq!(entry.freshness.initial_age, Duration::MAX);
+        assert_eq!(entry.freshness.lifetime, Duration::ZERO);
+        assert!(entry.freshness.remaining(Instant::now()).is_none());
+    }
+}

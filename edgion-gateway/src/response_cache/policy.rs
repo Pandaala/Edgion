@@ -121,6 +121,33 @@ fn supported_header_lifetime(response: &ResponseHeader) -> Option<Duration> {
     singleton(&response.headers, "cache-control").and_then(public_max_age)
 }
 
+struct ParsedOriginHeaders {
+    lifetime: Duration,
+    date: SystemTime,
+    age: u64,
+}
+
+fn parse_origin_headers(response: &ResponseHeader) -> Option<ParsedOriginHeaders> {
+    let lifetime = supported_header_lifetime(response)?;
+    let date = httpdate::parse_http_date(std::str::from_utf8(singleton(&response.headers, "date")?).ok()?).ok()?;
+    let mut ages = response.headers.get_all("age").iter();
+    let age = match ages.next() {
+        None => 0,
+        Some(value) => {
+            if ages.next().is_some() {
+                return None;
+            }
+            decimal(value.as_bytes())?
+        }
+    };
+    Some(ParsedOriginHeaders { lifetime, date, age })
+}
+
+/// Revalidate stored origin metadata without recalculating its captured freshness.
+pub(super) fn valid_origin_headers(response: &ResponseHeader) -> bool {
+    parse_origin_headers(response).is_some()
+}
+
 impl Freshness {
     pub(super) fn from_headers(
         response: &ResponseHeader,
@@ -129,18 +156,8 @@ impl Freshness {
         received_wall: SystemTime,
         max_ttl: Duration,
     ) -> Option<Self> {
-        let lifetime = supported_header_lifetime(response)?.min(max_ttl);
-        let date = httpdate::parse_http_date(std::str::from_utf8(singleton(&response.headers, "date")?).ok()?).ok()?;
-        let mut ages = response.headers.get_all("age").iter();
-        let age = match ages.next() {
-            None => 0,
-            Some(value) => {
-                if ages.next().is_some() {
-                    return None;
-                }
-                decimal(value.as_bytes())?
-            }
-        };
+        let ParsedOriginHeaders { lifetime, date, age } = parse_origin_headers(response)?;
+        let lifetime = lifetime.min(max_ttl);
         let apparent_age = received_wall.duration_since(date).unwrap_or(Duration::ZERO);
         let corrected_age = Duration::from_secs(age).checked_add(header_at.saturating_duration_since(request_at))?;
         Some(Self {

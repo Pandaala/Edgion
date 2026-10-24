@@ -328,13 +328,9 @@ impl Entry {
         }
         // Stored fields must still form the raw public-origin contract. A
         // syntactically valid HeaderMap alone does not establish integrity.
-        Freshness::from_headers(
-            &header,
-            self.freshness.header_at,
-            self.freshness.header_at,
-            SystemTime::now(),
-            self.freshness.lifetime,
-        )?;
+        if !policy::valid_origin_headers(&header) {
+            return None;
+        }
         Some(header)
     }
 
