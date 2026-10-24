@@ -15809,3 +15809,20 @@ seven repository guards passed with existing warnings. The original TCP ownershi
 knowledge records the source/compiler basis and re-evaluation triggers; existing
 tests do not directly drive the new production drop location. No new test solely
 mirrors the drop statement, and no full suite, live network or benchmark ran.
+
+## ExtProc local-reply scan and diagnostic projection decision
+
+The [scan/diagnostic task](extproc-03-local-reply-scan-and-diagnostics.md) records
+the immediate-reply protected-name pre-scan before canonical conversion. Its
+short-circuiting predicates are repeated only as reached; no universal two-full-
+scan or ordinary-body-chunk claim is made. A canonical result summary remains
+unselected, separately from value-byte transfer and protobuf body representation.
+
+Source inspection also found that an allowed-name invalid-value-only mutation
+buffers a static error without setting the handler's log-drain flag. This is an
+unresolved diagnostic discrepancy, not accepted behavior. Preserving the exact
+protected-only flag and correcting diagnostic delivery are explicitly different
+scopes; no runtime behavior changed. Existing tests establish protected rejection
+delivery, not the invalid-only case. Fresh unchanged-source checks passed 147
+ExtProc and 19 body-action tests, formatting and workspace check/Clippy with
+existing warnings. No prototype, new reproducer, wire test or benchmark ran.
