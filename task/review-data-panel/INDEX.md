@@ -16730,3 +16730,20 @@ final test identities and outcomes. Formatting, workspace all-target check/Clipp
 and seven repository guards passed with existing warnings. Independent final
 source review passed. No full suite, live authentication exchange or performance
 benchmark ran.
+
+## BasicAuth immutable verifier preparation decision
+
+Traced the request filter through generation pinning and blocking verification
+back to prepare_users. Stored SHA digest strings are decoded on every known-user
+verification; plaintext construction first encodes the digest into that same
+representation. The decode already uses stack scratch, so its removal would not
+eliminate a request allocation. MD5 salt parsing is likewise repeated, separately
+from its password-dependent rounds and deferred result storage.
+
+[Prepared verifier alternatives](basic-auth-02-prepared-verifier.md) record the
+SHA-only versus common representation decision, mixed-format storage tradeoffs,
+and malformed/unsupported-entry dispatch constraints. No runtime change or
+performance gain is claimed. Independent plan review passed. Fresh verification
+passed 19 BasicAuth cases plus one incidental Elasticsearch case; formatting and
+workspace all-target check/Clippy passed with existing warnings. No full suite,
+live reload or benchmark ran.
