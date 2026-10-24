@@ -1348,12 +1348,9 @@ fn host_http_call(
         Err(s) => return s,
     };
     let all_headers = {
-        let profile = match profile_guest_range(&mut caller, headers_ptr, headers_size) {
+        let (memory, profile) = match profile_guest_memory_range(&mut caller, headers_ptr, headers_size) {
             Ok(profile) => profile,
             Err(status) => return status,
-        };
-        let Some(memory) = guest_memory(&mut caller) else {
-            return STATUS_INVALID_MEMORY_ACCESS;
         };
         let bytes = match guest_bytes(&caller, memory, &profile) {
             Ok(bytes) => bytes,
@@ -2082,12 +2079,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 None
             };
             let headers_profile = if headers_size > 0 {
-                let guest_result = profile_guest_range(&mut caller, headers_ptr, headers_size);
-                let Ok(guest) = guest_result else {
+                let guest_result = profile_guest_memory_range(&mut caller, headers_ptr, headers_size);
+                let Ok((memory, guest)) = guest_result else {
                     return guest_result.expect_err("failed guest-range profiling must carry an ABI status");
-                };
-                let Some(memory) = guest_memory(&mut caller) else {
-                    return STATUS_INVALID_MEMORY_ACCESS;
                 };
                 let bytes_result = guest_bytes(&caller, memory, &guest);
                 let Ok(bytes) = bytes_result else {

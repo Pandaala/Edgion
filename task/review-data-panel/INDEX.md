@@ -16426,3 +16426,27 @@ regression added. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. Existing Wasm loopback fixtures
 ran; no new network fixture, full suite or performance benchmark was added/run.
 Independent plan and final source review passed.
+
+## Reuse Wasm memory handles in direct map readers
+
+Callout header decoding and local-response header preflight now reuse the Memory
+returned by profile_guest_memory_range, removing their immediately repeated export
+lookups. Checked guest_bytes access remains unchanged. No guest execution, memory
+growth, mutation or await separates the former lookup pairs; the handle stays
+local to each synchronous read.
+
+Callout preflight, permissive wire decoding, admission and token-before-state
+publication are unchanged. Local responses retain body-first validation,
+nonpositive-size behavior and malformed-map BAD_ARGUMENT fallback to empty headers.
+Other admission-to-copy lookups and post-allocator lookup in write_to_guest remain
+intact. No new cache, payload-copy reduction or measured performance claim follows.
+
+Independent plan review passed. All 270 Wasm tests passed serially on the baseline;
+existing map/publication, local-response preflight and memory-error precedence
+regressions cover these boundaries without a new implementation-shaped test.
+
+Final verification passed all 270 Wasm tests serially and 11 upstream trailer
+tests. All baseline Wasm identities/outcomes were preserved. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. Existing Wasm loopback fixtures ran; no new test, full suite or
+performance benchmark was added/run. Final independent source review passed.
