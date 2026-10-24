@@ -16357,3 +16357,24 @@ preserved. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Source ownership and compilation establish
 release boundaries; tests do not instrument deallocation timing. No full suite,
 ignored live-IdP tests, new network fixtures or performance benchmark ran.
+
+## Release serialized OIDC form parameter vectors
+
+Authorization-code exchange and refresh now release their temporary parameter
+Vec before sending the prepared request. Locked reqwest 0.12.28 serializes form
+parameters synchronously into an owned request body; neither the builder nor its
+error retains references to this vector. Revocation already confines its form
+vectors to builder blocks, and introspection uses temporary arrays.
+
+Only the small vector allocation releases earlier. Its entries borrow strings,
+so this does not erase or release credential bytes, change allocation count,
+or establish a smaller future, measured memory saving or throughput gain.
+Form order/content, PKCE, endpoint admission, client authentication, error order,
+timeouts, response caps and cache behavior remain unchanged.
+
+Independent plan and final source review passed. Baseline and final OIDC runs
+each passed 159 tests with 16 existing ignores; all 175 identities/outcomes were
+preserved. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Tests do not instrument vector release;
+source ownership establishes that boundary. No full suite, ignored live-IdP
+cases, new network fixtures or performance benchmark ran.

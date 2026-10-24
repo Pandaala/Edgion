@@ -174,6 +174,8 @@ impl OpenidConnect {
             }
         };
 
+        drop(params);
+
         let resp = request
             .send()
             .await
@@ -328,6 +330,8 @@ impl OpenidConnect {
                 }
             }
         };
+
+        drop(params);
 
         let resp = request
             .send()
