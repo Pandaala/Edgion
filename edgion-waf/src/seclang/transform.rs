@@ -332,14 +332,13 @@ fn materialized_walk_error(error: TransformWalkError<TransformError>) -> Transfo
     }
 }
 
+// The caller supplies empty output with the capped projected capacity already reserved.
 fn apply_one(
     transformation: TransformationKind,
     input: &[u8],
     output: &mut Vec<u8>,
     limit: usize,
 ) -> Result<(), TransformError> {
-    let projected = projected_output(transformation, input.len())?;
-    reserve_output(output, projected.min(limit))?;
     match transformation {
         TransformationKind::Base64Decode => base64_decode(input, output, limit),
         TransformationKind::CmdLine => cmd_line(input, output, limit),
@@ -373,12 +372,6 @@ fn projected_output(transformation: TransformationKind, input: usize) -> Result<
         _ => Some(input),
     }
     .ok_or(TransformError::Arithmetic)
-}
-
-fn reserve_output(output: &mut Vec<u8>, additional: usize) -> Result<(), TransformError> {
-    output
-        .try_reserve(additional.saturating_sub(output.capacity()))
-        .map_err(|_| TransformError::Allocation)
 }
 
 fn append(output: &mut Vec<u8>, value: &[u8], limit: usize) -> Result<(), TransformError> {

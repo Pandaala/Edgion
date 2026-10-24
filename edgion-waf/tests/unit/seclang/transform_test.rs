@@ -519,6 +519,9 @@ fn decoding_identity_matches_materialization_for_bytes_and_marker_sequences() {
         ]);
         for input in inputs {
             let mut expected = Vec::new();
+            expected
+                .try_reserve_exact(projected_output(kind, input.len()).unwrap().min(4096))
+                .unwrap();
             apply_one(kind, &input, &mut expected, 4096).unwrap();
             for multi_match in [false, true] {
                 let mut scratch = TransformScratch::default();

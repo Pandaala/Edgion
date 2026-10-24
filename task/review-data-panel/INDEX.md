@@ -15566,3 +15566,25 @@ explicit input/profile identity, bounded ownership and scratch-writer invalidati
 while retaining every reached rule's transformations, checks, work charges and
 lazy execution order. No runtime design or measured benefit is selected; WAF-16's
 dormant stream investigation remains separate. No source or test body changed.
+
+## Keep WAF transformation reservation in the walker
+
+The canonical transformation walker already computes capped projected output,
+admits growth, clears and fallibly reserves scratch, then reconciles actual
+capacity before dispatch. Its private apply_one helper no longer repeats that
+projection and a guaranteed-zero additional reservation. The duplicate projection
+had identical immutable inputs; the earlier successful check proves it cannot
+introduce another arithmetic failure. The helper's sole direct test caller now
+explicitly prepares empty capacity under the same contract.
+
+Admission, observer aborts, byte/output checks, logical work and stage publication
+keep their original order. Ordinary, multi-match and fused JSON consumers retain
+the same canonical walker. This removes redundant source-level preparation, with
+no measured throughput or allocation-saving claim.
+
+Baseline and final checks passed 18 transformation, 24 prefix and 52 Gateway WAF
+tests. Final fused JSON collector checks additionally passed 30 tests. One prefix
+and one collector release witness stayed ignored. Formatting, workspace all-target
+check/Clippy, documentation, SSA, metrics, Pingora source policy, Gateway API
+transform, unit-test layout and gateway no-tracing guards passed. Existing Clippy
+warnings remain; no full suite, benchmark or live integration ran.
