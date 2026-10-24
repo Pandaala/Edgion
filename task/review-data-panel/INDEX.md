@@ -15424,3 +15424,18 @@ Fresh unchanged-source checks passed 12 focused test functions; two external-che
 comparisons remained ignored. Formatting and workspace all-target check/Clippy
 passed with existing unrelated warnings. No runtime change, full pinned comparison,
 prototype, full suite, live integration or performance benchmark ran.
+
+## Normalize SQLi fingerprint case only at canonical lookup
+
+The blacklist projection now copies the bounded fingerprint bytes after the zero
+prefix and leaves case normalization to sqli_data::lookup_word. Previously it
+ASCII-uppercased each byte before the same lookup uppercased each Unicode scalar.
+ASCII lowercase yields the same normalized key either way; non-ASCII UTF-8 bytes
+were unchanged by the removed operation. Empty/over-five-byte rejection, the
+six-byte stack buffer, UTF-8 check, pinned table and whitelist/capture paths remain
+unchanged. Generated tables and deferred token-storage alternatives are untouched.
+This removes redundant source-level normalization; no measured speedup or allocation
+reduction is claimed. Baseline and final verification passed 12 focused SQLi,
+injection, built-in differential/robustness and transaction/work/capture tests;
+two external-checkout comparisons remained ignored. No full pinned-checkout
+comparison, benchmark, full suite or live Gateway integration ran.

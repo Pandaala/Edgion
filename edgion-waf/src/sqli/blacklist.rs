@@ -5,9 +5,8 @@ use super::sqli_data;
 /// Check if a fingerprint is blacklisted
 /// This matches libinjection_sqli_blacklist from the C version
 pub fn is_blacklisted(fingerprint: &str) -> bool {
-    // Match the C version: convert v0 fingerprint to v1 format
-    // v0: up to 5 chars, mixed case
-    // v1: '0' prefix, up to 5 more chars, upper case
+    // Prefix the bounded v0 fingerprint for the v1 table lookup.
+    // The canonical lookup_word normalizes case before searching the table.
 
     if fingerprint.is_empty() {
         return false;
@@ -20,7 +19,7 @@ pub fn is_blacklisted(fingerprint: &str) -> bool {
         if len == prefixed.len() {
             return false;
         }
-        prefixed[len] = byte.to_ascii_uppercase();
+        prefixed[len] = byte;
         len += 1;
     }
     let Ok(key) = std::str::from_utf8(&prefixed[..len]) else {
