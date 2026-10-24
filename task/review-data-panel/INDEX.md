@@ -16103,3 +16103,18 @@ fork header/transport coverage. Existing capacity, Vary, numeric-header and body
 ownership decisions remain separate. Fresh unchanged-code verification passed
 43 Gateway response-cache tests and workspace all-target check/Clippy with existing
 warnings. No prototype, benchmark, full suite or live origin test ran.
+
+## CSRF decoded-token ownership boundary
+
+The [decoded-token task](csrf-02-decoded-token-ownership.md) distinguishes existing
+borrowed header/Cookie reads from owned JSON fields. Decode currently releases
+the Base64-decoded document before verification; borrowing nonce/signature fields
+could reduce unescaped copies but retain the complete document through HMAC.
+Escapes require fallback ownership, and ignored fields/whitespace affect the
+memory tradeoff. No runtime representation or parser change is selected.
+
+The task preserves exact serde/Base64 acceptance, lifetime/signature ordering,
+live-method policy and token-free diagnostics, and requires differential evidence
+including derived-struct sequence-form JSON. Fresh unchanged-code checks passed
+20 Gateway CSRF tests and workspace all-target check/Clippy with existing warnings.
+No prototype, new parity matrix, benchmark, full suite or live integration ran.
