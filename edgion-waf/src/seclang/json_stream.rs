@@ -149,6 +149,12 @@ pub struct JsonStreamUsage {
     pub peak_retained_bytes: usize,
 }
 
+impl JsonStreamUsage {
+    fn event(&mut self, limit: usize) -> Result<(), JsonStreamError> {
+        charge(&mut self.events, 1, limit, JsonStreamLimit::Events)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Terminal {
     Active,
@@ -628,7 +634,7 @@ impl JsonStream {
             match byte {
                 b'"' => {
                     self.work(offset)?;
-                    self.event()?;
+                    self.usage.event(self.limits.max_events)?;
                     let value = std::str::from_utf8(&bytes[..offset]).map_err(|_| JsonStreamError::Utf8)?;
                     sink.token(if key {
                         JsonStreamToken::Key(value)
@@ -845,7 +851,7 @@ impl JsonStream {
                     match byte {
                         b'"' => {
                             self.work(self.token.len())?;
-                            self.event()?;
+                            self.usage.event(self.limits.max_events)?;
                             if self.selective.is_some() && !key {
                                 if self.selected_string_limit.is_some() {
                                     let value = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Utf8)?;
@@ -993,19 +999,17 @@ impl JsonStream {
     where
         F: InternalSink,
     {
-        // Charge both UTF-8 views, form classification, integer accumulation,
-        // and possible float fallback as a conservative linear scan bound.
+        // Retain the conservative five-pass bound for UTF-8, form classification,
+        // integer accumulation and float fallback even when the UTF-8 view is reused.
         self.work(self.token.len().checked_mul(5).ok_or(JsonStreamError::Arithmetic)?)?;
         let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
         if self.selective.is_some() {
             // Grammar is already validated. Do not coerce exact spelling through f64.
-            self.event()?;
-            let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+            self.usage.event(self.limits.max_events)?;
             sink.number(raw).map_err(|_| JsonStreamError::SinkRejected)?;
         } else {
             let value = JsonNumber::from_validated_lexeme(raw).map_err(|_| JsonStreamError::Number)?;
-            self.event()?;
-            let raw = std::str::from_utf8(&self.token).map_err(|_| JsonStreamError::Number)?;
+            self.usage.event(self.limits.max_events)?;
             sink.token(JsonStreamToken::Number { raw, value })
                 .map_err(|_| JsonStreamError::SinkRejected)?;
         }
@@ -1018,17 +1022,8 @@ impl JsonStream {
     where
         F: InternalSink,
     {
-        self.event()?;
+        self.usage.event(self.limits.max_events)?;
         sink.token(token).map_err(|_| JsonStreamError::SinkRejected)
-    }
-
-    fn event(&mut self) -> Result<(), JsonStreamError> {
-        charge(
-            &mut self.usage.events,
-            1,
-            self.limits.max_events,
-            JsonStreamLimit::Events,
-        )
     }
 
     fn work(&mut self, amount: usize) -> Result<(), JsonStreamError> {

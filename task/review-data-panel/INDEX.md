@@ -15608,3 +15608,27 @@ Gateway WAF tests (120 total). Formatting, workspace all-target check/Clippy,
 agent-doc validation, SSA, metrics, Pingora source policy, Gateway API transform,
 unit-test layout and gateway no-tracing guards passed with existing Clippy
 warnings. No benchmark, full suite or live integration ran.
+
+## Reuse the validated JSON number view across event charging
+
+JsonStream number completion now retains its first validated UTF-8 view through
+event charging and passes it directly to the sink. Private event accounting lives
+on JsonStreamUsage, which borrows only the counters rather than the entire parser;
+the canonical charge implementation and all event call-site ordering are unchanged.
+This removes one repeated token validation on either typed or selective completion,
+without copying or moving the token buffer. Typed numeric conversion still precedes
+event admission; selective numbers still retain exact spelling without coercion.
+
+The conservative five-times-token-length work charge, callback failure behavior,
+terminal cleanup and successful token clearing remain unchanged. A new regression
+passed on the original source and covers delimiter/EOF completion, numeric failure
+versus event-limit failure, sink rejection after charging, sticky terminal state,
+and selective acceptance of numbers outside finite binary64. No parsing policy,
+new owner, unsafe code or measured throughput improvement is introduced.
+
+Baseline checks passed 36 stream, 28 checker and 52 Gateway WAF tests; the new
+ordering regression separately passed before production edits. Final checks
+passed 117 tests including that regression. Formatting, workspace all-target
+check/Clippy, agent-doc validation, SSA, metrics, Pingora source policy, Gateway
+API transform, unit-test layout and gateway no-tracing guards passed. Existing
+Clippy warnings remain. No benchmark, full suite or live integration ran.

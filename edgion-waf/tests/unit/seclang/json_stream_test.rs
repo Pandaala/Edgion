@@ -716,6 +716,62 @@ fn typed_numbers_preserve_raw_spelling_and_value_at_every_split() {
 }
 
 #[test]
+fn number_completion_preserves_conversion_event_and_sink_failure_order() {
+    for raw in ["123", "1e400"] {
+        for delimiter in ["", " "] {
+            let body = format!("{raw}{delimiter}");
+            for max_events in [0, 1] {
+                let limits = JsonStreamLimits {
+                    max_events,
+                    ..JsonStreamLimits::default()
+                };
+                let mut stream = JsonStream::new(limits);
+                let mut calls = 0;
+                let mut sink = |token: JsonStreamToken<'_>| {
+                    let JsonStreamToken::Number { raw: spelling, .. } = token else {
+                        panic!("expected numeric token")
+                    };
+                    assert_eq!(spelling, raw);
+                    calls += 1;
+                    Err(JsonStreamSinkError)
+                };
+                let result = stream
+                    .feed(JsonStreamInput::Data(body.as_bytes()), &mut sink)
+                    .and_then(|()| stream.feed(JsonStreamInput::Complete, &mut sink));
+                let expected = if raw == "1e400" {
+                    JsonStreamError::Number
+                } else if max_events == 0 {
+                    limit_error(JsonStreamLimit::Events, 0)
+                } else {
+                    JsonStreamError::SinkRejected
+                };
+                let expected_calls = usize::from(raw == "123" && max_events == 1);
+                assert_eq!(result, Err(expected));
+                assert_eq!(calls, expected_calls);
+                assert_eq!(stream.usage().events, expected_calls);
+                assert_eq!(stream.usage().retained_bytes, 0);
+                assert_eq!(
+                    stream.feed(JsonStreamInput::Complete, |_| panic!("terminal stream must not emit")),
+                    Err(expected)
+                );
+
+                let mut selective = selective_limits();
+                selective.lexical.max_events = max_events;
+                let (result, events, usage) = selective_run(body.as_bytes(), 1, selective);
+                if max_events == 0 {
+                    assert_eq!(result, Err(limit_error(JsonStreamLimit::Events, 0)));
+                    assert!(events.is_empty());
+                } else {
+                    assert_eq!(result, Ok(()));
+                    assert_eq!(events, [format!("number:{raw}")]);
+                }
+                assert_eq!(usage.events, max_events);
+            }
+        }
+    }
+}
+
+#[test]
 fn contiguous_unescaped_strings_and_keys_borrow_the_original_chunk() {
     let source = "{\"key\":\"value-é\",\"\":\"\"}".as_bytes();
     let mut stream = JsonStream::new(JsonStreamLimits::default());
@@ -966,7 +1022,7 @@ impl JsonStream {
             match byte {
                 b'"' => {
                     self.work(offset)?;
-                    self.event()?;
+                    self.usage.event(self.limits.max_events)?;
                     let value = std::str::from_utf8(&bytes[..offset]).map_err(|_| JsonStreamError::Utf8)?;
                     sink(if key {
                         JsonStreamToken::Key(value)
