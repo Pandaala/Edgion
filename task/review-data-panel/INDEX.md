@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [RequestId random-byte batching](trace-03-random-byte-batching.md)
+
 - [Adaptive telemetry lookup-key ownership](routing-10-adaptive-lookup-key-ownership.md)
 
 - [Candidate provider-model ownership](routing-09-candidate-provider-model-ownership.md)
@@ -16496,3 +16498,23 @@ all baseline identities/outcomes were preserved (60 distinct tests, one filtered
 case overlaps). Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Independent final source review passed.
 No full suite, new network fixture or performance benchmark ran.
+
+## RequestId random-byte consumption audit
+
+Locked rand 0.9.5 samples one buffered u32 per RandomHex output byte; its MD5
+seed array also samples per element. The shared BlockRng bulk-fill path consumes
+ceil(n/4) buffered words for n bytes. This is a possible reduction in sampling
+work, not an OS call per byte or a demonstrated throughput gain.
+
+The [batching task](trace-03-random-byte-batching.md) records the distribution/value
+decision. Bulk filling changes output bits and thread-stream consumption, hence
+possible buffer exhaustion and reseed timing; the configured quota and RNG owner
+need not change. Sequence difference alone is not a proven regression, and no
+current entropy defect is claimed. MD5 inclusion requires explicit scope; UUID,
+NanoId, W3C root and P2C implementations remain unchanged.
+
+Fresh unchanged-runtime runs passed 29 trace-ID, 15 RequestId and 17 early-filter
+cases (60 distinct identities). Formatting, workspace all-target check/Clippy and
+agent-doc validation passed with existing warnings. These shape/lifecycle tests
+do not verify a bulk candidate's distribution or reseed behavior. No new tests,
+prototype, full suite or workload benchmark ran.
