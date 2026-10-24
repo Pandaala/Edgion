@@ -171,7 +171,6 @@ enum PreparedDecryptor {
 
 /// JWE Decrypt plugin.
 pub struct JweDecrypt {
-    name: String,
     config: JweDecryptConfig,
     claim_header_projection: ClaimHeaderProjectionPlan,
     decryptor: PreparedDecryptor,
@@ -184,7 +183,6 @@ impl JweDecrypt {
         let claim_header_projection = config.compile_claim_header_projection().unwrap_or_default();
         let decryptor = Self::prepare_decryptor(&mut config, &plugin_namespace);
         Self {
-            name: "JweDecrypt".to_string(),
             config,
             claim_header_projection,
             decryptor,
@@ -374,7 +372,7 @@ impl JweDecrypt {
 #[async_trait]
 impl RequestFilter for JweDecrypt {
     fn name(&self) -> &str {
-        &self.name
+        "JweDecrypt"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {

@@ -35,7 +35,6 @@ struct ParsedCa {
 
 /// Header Cert Auth request plugin.
 pub struct HeaderCertAuth {
-    name: String,
     config: HeaderCertAuthConfig,
     ca_pool: Vec<ParsedCa>,
 }
@@ -47,11 +46,7 @@ impl HeaderCertAuth {
         let config = field.config();
         let mut config = config.clone();
         config.resolved_ca_secrets = None;
-        Self {
-            name: "HeaderCertAuth".to_string(),
-            config,
-            ca_pool,
-        }
+        Self { config, ca_pool }
     }
 
     fn load_ca_certs(field: &BoundHeaderCertAuth<'_>) -> Vec<ParsedCa> {
@@ -282,7 +277,7 @@ impl HeaderCertAuth {
 #[async_trait]
 impl RequestFilter for HeaderCertAuth {
     fn name(&self) -> &str {
-        &self.name
+        "HeaderCertAuth"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {

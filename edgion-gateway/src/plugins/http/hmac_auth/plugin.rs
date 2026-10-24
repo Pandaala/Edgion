@@ -54,7 +54,6 @@ impl std::fmt::Debug for HmacAuthParams<'_> {
 
 /// HMAC Auth plugin.
 pub struct HmacAuth {
-    name: String,
     auth_failure_delay_ms: u64,
     realm: String,
     anonymous: Option<String>,
@@ -298,7 +297,6 @@ impl HmacAuth {
     fn with_body_requirement(config: &HmacAuthConfig, body_requirement: Option<BodyRequirement>) -> Self {
         let verifier = HmacVerifier::new(&config.match_config, body_requirement);
         Self {
-            name: "HmacAuth".to_string(),
             auth_failure_delay_ms: config.auth_failure_delay_ms,
             realm: config.realm.clone(),
             anonymous: config.anonymous.clone(),
@@ -676,7 +674,7 @@ impl HmacAuth {
 #[async_trait]
 impl RequestFilter for HmacAuth {
     fn name(&self) -> &str {
-        &self.name
+        "HmacAuth"
     }
 
     // Body requirement is declared on `EdgionPlugin::body_requirement` (schema

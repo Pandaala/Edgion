@@ -16163,3 +16163,25 @@ Independent plan and final source review passed. Baseline and final checks passe
 the same 19 BasicAuth test identities. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No literal-only test,
 full suite, live authentication service or performance benchmark was added/run.
+
+## Use static names for HMAC, JWE and header-certificate authentication
+
+HmacAuth, JweDecrypt and HeaderCertAuth now return their existing name literals
+directly from RequestFilter::name. Each private name String had one constructor
+assignment and one getter read, with no customization or external construction.
+The change removes one cold fixed-name allocation and owner per corresponding
+plugin instance. HMAC's public constructors still converge on the same runtime
+constructor; JWE cipher preparation and HeaderCertAuth CA loading are untouched.
+
+Trait signatures, wrapper delegation, dynamic aliases and PluginLog name bytes
+remain the same. No credential, crypto, request-body, certificate, error-policy
+or diagnostic path changes. This is not a per-request allocation reduction or
+a measured throughput/object-layout improvement. Existing independent credential
+owner decisions and deferred parsing/representation tasks remain unchanged.
+
+Independent plan and final source review passed. Baseline and final tests passed
+the same 77 identities: 36 HMAC, 21 JWE and 20 HeaderCertAuth. Formatting initially
+requested a compact HeaderCertAuth constructor; rustfmt applied that correction
+and the repeated format check passed. Workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No literal-only tests, full suite,
+live authentication transport or performance benchmarks were added/run.
