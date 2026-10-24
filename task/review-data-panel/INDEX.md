@@ -15733,3 +15733,14 @@ tests. Formatting, workspace all-target check/Clippy, agent-doc validation, SSA,
 metrics, Pingora source policy, Gateway API transform, unit-test layout and gateway
 no-tracing guards passed. Existing Clippy warnings remain. No full suite,
 datagram wire test or benchmark ran.
+
+## UDP expiry candidate ownership decision
+
+The [expiry-owner task](udp-03-expiry-candidate-ownership.md) records unprocessed
+strong session candidates retained while earlier retirement logs await. Weak
+candidates remain unselected: backing-allocation retention, upgrade cost,
+generation identity and earlier permit availability need explicit evaluation.
+The shared collection time and sequential activity rechecks/logging remain frozen;
+peer-only candidates or batched retirement are not authorized. Fresh unchanged
+checks passed 59 UDP and four UDP log tests, formatting and workspace check/Clippy
+with existing warnings. No runtime change or measured benefit is claimed.
