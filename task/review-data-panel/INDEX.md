@@ -15555,3 +15555,14 @@ and 24 leaf prefix tests, with one leaf release witness ignored. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed. Static activation
 inspection establishes the dormant scope; tests verify unchanged active prefix
 behavior. No runtime code or test body changed, and no reactivation was selected.
+
+## Active WAF prefix matcher scan reuse
+
+The [prefix scan task](waf-17-prefix-matcher-scan-reuse.md) records repeated scans
+for compatible boolean Pm members in the active pre-dispatch prefix evaluator.
+Contains is outside this candidate. The ordinary request-arena cache cannot be
+passed through unchanged for a separately borrowed prefix. Any reuse requires
+explicit input/profile identity, bounded ownership and scratch-writer invalidation,
+while retaining every reached rule's transformations, checks, work charges and
+lazy execution order. No runtime design or measured benefit is selected; WAF-16's
+dormant stream investigation remains separate. No source or test body changed.
