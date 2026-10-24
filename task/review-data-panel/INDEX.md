@@ -16145,3 +16145,21 @@ all-target check/Clippy and seven repository guards passed with existing warning
 Tests preserve parsing/header/failure behavior; source ownership and compilation
 establish the drop boundaries, not a new runtime allocation-release experiment.
 No full suite, live LDAP transport or performance benchmark ran.
+
+## Use the static BasicAuth plugin name
+
+BasicAuth no longer stores a private String initialized to the same literal in
+every constructor. RequestFilter::name returns "BasicAuth" directly with its
+existing borrowed-str signature. The sole constructor and all field consumers
+were checked; there was no mutable/custom name or external struct construction.
+Conditional wrappers and plugin-log consumers still receive the same name bytes.
+
+This removes one cold per-instance name String allocation and owner, not an
+allocation on every name lookup. Authentication, immutable credential-generation
+pinning, blocking verification, header projection, aliases and success/failure
+logging remain unchanged. No throughput or overall object-layout claim is made.
+
+Independent plan and final source review passed. Baseline and final checks passed
+the same 19 BasicAuth test identities. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No literal-only test,
+full suite, live authentication service or performance benchmark was added/run.

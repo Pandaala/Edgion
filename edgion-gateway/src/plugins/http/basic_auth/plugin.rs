@@ -39,7 +39,6 @@ enum PasswordEncoding {
 
 /// Basic Authentication plugin
 pub struct BasicAuth {
-    name: String,
     // The Arc pins one immutable user-map generation across spawn_blocking.
     user_passwords: Arc<PreparedUserMap>,
     config: BasicAuthConfig,
@@ -53,7 +52,6 @@ impl BasicAuth {
         let user_passwords = Arc::new(Self::load_users(users));
 
         BasicAuth {
-            name: "BasicAuth".to_string(),
             user_passwords,
             config: runtime_config,
         }
@@ -203,7 +201,7 @@ impl BasicAuth {
 #[async_trait]
 impl RequestFilter for BasicAuth {
     fn name(&self) -> &str {
-        &self.name
+        "BasicAuth"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
