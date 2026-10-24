@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Owned context-write handoff](ctx-03-owned-context-write-handoff.md)
+
 - [RequestId random-byte batching](trace-03-random-byte-batching.md)
 
 - [Adaptive telemetry lookup-key ownership](routing-10-adaptive-lookup-key-ownership.md)
@@ -16583,3 +16585,23 @@ and extended-baseline/final identities and outcomes match. Formatting, workspace
 all-target check/Clippy and all seven repository guards passed with existing
 warnings. Independent final source review passed. No full suite, new network
 fixture or throughput benchmark ran.
+
+## Final context-write ownership audit
+
+Traced final owned-value publication from CtxSet, JWT/OIDC claims, JWE plaintext
+and DSL ctx.set into the canonical slice setter. The adapter copies key/value
+into request storage. Existing KeySet::Ctx moves its owned value after the prior
+batch, but a newly constructed dynamic KeySet would introduce an extra owned name
+before the adapter's key clone. These are distinct handoff costs.
+
+The [owned-write decision](ctx-03-owned-context-write-handoff.md) records consumer
+scope, interface choices, capacity/lifetime accounting and existing failure/log
+contracts. It does not authorize moving large producer buffers into request-long
+storage or extend ctx-01/02's intermediate-projection proposals. No runtime or
+schema change was selected; no allocation or throughput improvement is measured.
+
+Independent plan review passed. Fresh baseline selections passed 15 CtxSet-related,
+180 adapter and seven DSL context-builtin cases (199 distinct tests, three overlap).
+Formatting and workspace all-target check/Clippy passed with existing warnings. These verify current
+behavior, not the proposed setter or complete authentication flows. No full
+suite, new test fixture or live network probe ran.
