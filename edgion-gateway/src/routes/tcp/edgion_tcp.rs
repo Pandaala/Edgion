@@ -252,6 +252,8 @@ impl EdgionTcpProxy {
         peer.options.tcp_keepalive = unit
             .tcp_keepalive()
             .map(crate::routes::common::to_pingora_tcp_keepalive);
+        // Peer options and the selected backend no longer borrow the route generation.
+        drop(unit);
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.
@@ -291,7 +293,7 @@ impl EdgionTcpProxy {
     }
 }
 
-/// Retain only the selected unit across connection I/O, not the full table.
+/// Retain only the selected unit through admission and preparation, not the full table.
 fn select_route_unit(manager: &TcpPortRouteManager) -> Option<Arc<TcpRouteUnit>> {
     manager.load_route_table().match_route()
 }

@@ -15744,3 +15744,22 @@ The shared collection time and sequential activity rechecks/logging remain froze
 peer-only candidates or batched retirement are not authorized. Fresh unchanged
 checks passed 59 UDP and four UDP log tests, formatting and workspace check/Clippy
 with existing warnings. No runtime change or measured benefit is claimed.
+
+## TCP selected route release before connect
+
+After copying keepalive into the prepared peer, TCP now drops its selected route
+unit Arc before awaiting connect or relay. Admission and backend selection still
+borrow one unchanged generation; the selected endpoint, peer settings and outlier
+completion token own their required data independently. The route's compiled
+selector has no completion permit or custom drop callback. This shortens one
+owner's retention of an obsolete generation after reload; other configuration
+or connection owners can still retain it. No allocation-count or measured RSS,
+async-frame-size or throughput improvement is claimed.
+
+Updated the original TCP snapshot-ownership knowledge to limit its former
+whole-connection retention statement to admission and preparation. Existing
+Weak-reference tests cover selection ownership, not the new production drop
+location; source lifetimes and compilation establish that boundary. Baseline and
+final selections each passed 27 TCP, 21 shared-relay and five TCP-log tests (53).
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live transport or benchmark ran.

@@ -10,9 +10,11 @@ knowledge_type: regression-guards
 
 `EdgionTcpProxy::handle_connection` obtains its owned `Arc<TcpRouteUnit>` through
 the private synchronous `select_route_unit` helper. The table guard is dropped
-before stream-plugin evaluation, upstream connect, or relay can suspend. An
-existing connection keeps its selected schema and compiled runtime generation;
-new connections select from the latest table.
+before stream-plugin evaluation, upstream connect, or relay can suspend. A
+connection keeps its selected schema and compiled runtime generation through
+admission, backend selection and peer preparation. After copying keepalive into
+the peer, it explicitly drops its unit Arc before upstream connect and relay.
+New connections select from the latest table.
 
 The upstream address String is moved into `TcpContext.upstream_addr` before
 address validation and borrowed for `BasicPeer` construction. Unsafe-address
@@ -36,10 +38,14 @@ and complements [configuration-time schema sharing](tcp-route-schema-arc-sharing
 
 ## Alternatives and limits
 
-The selected unit intentionally remains alive; retaining no route generation
-would invalidate the connection's borrowed configuration. This change does not
-promise immediate release when another connection or configuration cache still
-owns a unit. It does not alter global cache ownership, listener publication,
+The selected unit must remain alive while admission and preparation borrow its
+configuration. The earlier whole-connection retention description was too broad:
+the selected backend owns its endpoint independently, keepalive copies durations
+and counts, and the later connect/relay path has no route-unit borrow. Its compiled
+selector owns slots and WRR storage, with no completion permit or custom drop
+callback. Releasing this connection's Arc does not promise immediate deallocation
+when another connection or configuration cache still owns a unit. It does not
+alter global cache ownership, listener publication,
 stream-plugin live lookup, endpoint safety, outlier completion tokens, or
 timeout resolution. No TLS/UDP lifetime change or measured latency claim is
 implied.
@@ -66,7 +72,14 @@ and `observe::logs::tcp_log` (4 passed), using
 `git diff --check`, and agent-doc validation also passed.
 
 Re-evaluate when selection stops returning an owned unit, connection code loads
-another table guard across I/O, or relay hook/error semantics change.
+another table guard across I/O, prepared peer/backend data borrows the unit, a
+unit-owned resource gains lifecycle effects, or relay hook/error semantics change.
+
+The explicit pre-connect unit drop is established by the production ownership
+boundary and compiler checks. The existing Weak-reference selection test checks
+generation independence and release after its own final owner is dropped; it
+does not drive the production connect path or measure reload-time memory. No
+allocation-count, RSS, async-frame-size or throughput improvement is claimed.
 
 ## Resolution references
 
