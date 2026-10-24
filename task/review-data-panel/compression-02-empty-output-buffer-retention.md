@@ -13,7 +13,8 @@ min(16 KiB, input length) in the encoder's output Vec, writes the input, optiona
 finishes, updates statistics, then unconditionally returns
 `mem::take(self.compress.get_mut()).into()`. This resets the encoder's output
 buffer even when a call produced no bytes. The encoder need not emit data for
-every input chunk; actual empty-output frequency remains to be measured.
+every input chunk; deployment empty-output frequency remains to be measured.
+The isolated gzip probe below establishes examples, not deployment frequency.
 
 The same ownership pattern exists in the fork's
 `pingora-core/src/protocols/http/compression/brotli.rs::Compressor::encode`:
@@ -76,6 +77,46 @@ verify exactly-once finishing and footer-before-trailer behavior through the
 actual downstream module. Keep enabled/disabled, origin/cache and known-length
 eligibility tests. No throughput or peak-memory improvement is established yet.
 
-The Brotli extension reuses this decision rather than creating a second task.
+The earlier Brotli extension reused this decision rather than creating a second task.
 No fork code, dependency revision, runtime tests or benchmarks were changed or
-run for this documentation-only extension.
+run for that documentation-only extension.
+
+## Isolated gzip output probe
+
+At Edgion `701c15579`, a temporary standalone Rust probe linked the workspace's
+existing flate2 1.1.9 artifact, confirmed against Cargo.lock and its dependency
+file. It reproduced the locked fork compressor's level-6 sequence: reserve
+min(16 KiB, input length), write_all, try_finish on the final call, then take the
+output Vec. It did not invoke the fork module, convert Vec to Bytes, measure
+allocations or duration, or implement the proposed retention branch.
+
+Each case used 65,536 input bytes, split into the chunk size below, followed by
+one separate empty terminal call. Repeat input is ASCII `a`. Xorshift input starts
+with u32 state `0x12345678`; for each byte apply XOR-left-13, XOR-right-17 and
+XOR-left-5 in that order, then emit the low byte. This is a deterministic fixture,
+not an entropy or worst-case compression claim. Concatenated outputs were decoded
+with GzDecoder and asserted equal to the complete original input in every case.
+
+| Chunk bytes | Input | Calls including EOS | Empty outputs | Empty outputs with capacity | Sum of empty Vec capacities |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Repeat | 65,537 | 65,535 | 65,535 | 524,280 |
+| 1 | Xorshift | 65,537 | 65,532 | 65,532 | 524,256 |
+| 64 | Repeat | 1,025 | 1,023 | 1,023 | 65,472 |
+| 64 | Xorshift | 1,025 | 1,020 | 1,020 | 65,280 |
+| 1,024 | Repeat | 65 | 63 | 63 | 64,512 |
+| 1,024 | Xorshift | 65 | 60 | 60 | 61,440 |
+| 16,384 | Repeat | 5 | 3 | 3 | 49,152 |
+| 16,384 | Xorshift | 5 | 1 | 1 | 16,384 |
+
+Capacity sums are bytes summed across successive empty outputs, not simultaneous
+live memory, allocation counts/bytes, or estimated savings. The probe immediately
+appended output to a collector and dropped each output Vec; it did not model
+downstream Bytes retention, backpressure, cancellation or concurrency. Compressed
+lengths were 97 bytes for Repeat and 65,576 for Xorshift for every chunk size.
+Two coordinator runs and an independent plan-review rerun reproduced the table.
+The current gzip sequence can therefore produce empty allocated output; the
+memory/CPU tradeoff and external-fork authorization remain deferred. Brotli was
+not exercised by this probe.
+
+Formatting and workspace all-target check/Clippy passed with existing warnings.
+No full suite, live compressed-wire exchange or throughput benchmark ran.

@@ -16540,3 +16540,20 @@ with identical baseline/final test identities and outcomes. Formatting, workspac
 all-target check/Clippy and all seven repository guards passed; Clippy retained
 existing warnings. Independent final code review passed. No full suite, live
 handshake probe or performance benchmark ran.
+
+## Gzip empty-output probe
+
+An isolated probe of locked flate2 1.1.9 reproduced the fork compressor's
+reserve/write/finish/take sequence for 64 KiB repeated and deterministic xorshift
+inputs, with 1/64/1,024/16,384-byte chunks and separate empty EOS. All eight cases
+round-tripped, and every case produced empty output retaining Vec capacity.
+The existing [compression decision](compression-02-empty-output-buffer-retention.md#isolated-gzip-output-probe)
+now records reproducible counts and capacity sums. This establishes the behavior
+for these codec fixtures, not deployment frequency, allocation savings, peak
+memory or throughput. Bytes transfer and downstream output lifetime were not
+modeled; Brotli and the proposed retention branch were not exercised.
+
+The memory/CPU decision and external Pingora scope remain deferred. No runtime,
+dependency or integration fixture changed. Independent plan review reproduced
+the probe; formatting and workspace all-target check/Clippy passed with existing
+warnings. No full suite or live compressed-wire exchange ran.
