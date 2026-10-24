@@ -15916,3 +15916,20 @@ Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. Existing parser, signing and condition tests check behavior;
 source ownership and compilation establish early release. No redundant drop-only
 test, full suite, live transport or benchmark ran.
+
+## HMAC expected body-digest snapshot decision
+
+The [expected-digest snapshot task](hmac-05-expected-digest-snapshot.md) records
+the owned trimmed Digest text retained across capture and hashing. A bounded
+44-byte candidate plus wrong-length marker may replace that allocation, but
+future layout/copying and ownership costs require a decision; no implementation
+or measured benefit is selected. This is separate from computed Base64 stack
+encoding and existing hmac-01 through hmac-04 proposals.
+
+Wrong-length text must still reach capture, logical-limit checking and hashing:
+their failures currently precede mismatch. Syntax errors stay before capture,
+and canonical textual comparison must not become permissive Base64 equivalence.
+Standalone and body-condition outcomes/negate remain explicit acceptance gates.
+Fresh unchanged-runtime HMAC/condition filters passed 57 and 70 tests (124 unique),
+plus workspace check/Clippy with existing warnings. No prototype, full suite,
+live transport or benchmark ran.
