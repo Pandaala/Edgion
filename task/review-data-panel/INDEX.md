@@ -15439,3 +15439,20 @@ reduction is claimed. Baseline and final verification passed 12 focused SQLi,
 injection, built-in differential/robustness and transaction/work/capture tests;
 two external-checkout comparisons remained ignored. No full pinned-checkout
 comparison, benchmark, full suite or live Gateway integration ran.
+
+## Reuse the SQLi block-comment terminator search
+
+SqliTokenizer::parse_c_comment now searches once for the first closing star/slash
+pair and reuses that offset for comment length and nested-comment inspection.
+The old two calls read the same immutable slice with no intervening state change.
+The separate nested opening-pair scan retains its intentional close_pos + 1 region,
+including overlapping markers; conditional MySQL comments, token truncation,
+comment statistics and advancement remain unchanged. The local memchr2 helper
+finds an adjacent pair, not either byte, and its algorithm is unchanged.
+This removes a duplicate source-level scan without claiming measured CPU or
+allocation savings. Baseline and final checks passed 12 focused SQLi, injection,
+built-in differential/robustness and transaction/work/capture tests; two external
+comparisons remained ignored. Existing pinned parser fixtures cover closed,
+unterminated, minimal, nested/overlapping and conditional comments plus following
+tokens. No new fixture, full pinned-checkout comparison, benchmark, full suite or
+live Gateway integration ran. Deferred WAF representation tasks remain unselected.

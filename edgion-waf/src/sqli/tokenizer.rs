@@ -666,7 +666,8 @@ impl<'a> SqliTokenizer<'a> {
         // Search for */ in the part after /*
         let search_slice = if pos + 2 < slen { &self.input[pos + 2..] } else { &[] };
 
-        let clen = if let Some(close_pos) = self.memchr2(search_slice, b'*', b'/') {
+        let close_offset = self.memchr2(search_slice, b'*', b'/');
+        let clen = if let Some(close_pos) = close_offset {
             // Found */: include everything from /* to */
             (pos + 2) + close_pos + 2 - pos // +2 to include the */
         } else {
@@ -679,7 +680,7 @@ impl<'a> SqliTokenizer<'a> {
         // Check for nested comments - matching C logic exactly, including the off-by-one bug
         // C code: memchr2(cur + 2, (size_t)(ptr - (cur + 1)), '/', '*')
         // where ptr points to the '*' in the closing '*/'
-        if let Some(close_pos) = self.memchr2(search_slice, b'*', b'/') {
+        if let Some(close_pos) = close_offset {
             // In C terms:
             // - cur = pos (start of /*)
             // - ptr = pos + 2 + close_pos (points to * in */)
