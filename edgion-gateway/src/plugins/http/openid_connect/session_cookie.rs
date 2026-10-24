@@ -86,6 +86,7 @@ impl OpenidConnect {
         rng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let encrypted = cipher.encrypt(nonce, payload.as_ref()).map_err(|_| ())?;
+        drop(payload);
         let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce_bytes);
         let encrypted_b64 = URL_SAFE_NO_PAD.encode(encrypted);
         Ok(format!("{}.{}", nonce_b64, encrypted_b64))
@@ -112,6 +113,7 @@ impl OpenidConnect {
         let payload = cipher
             .decrypt(nonce, encrypted.as_ref())
             .map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidCookieSignature))?;
+        drop(encrypted);
         serde_json::from_slice::<T>(&payload).map_err(|_| OidcVerifyError::Auth(AuthFailure::MalformedCookie))
     }
 

@@ -83,3 +83,17 @@ verification, cache behavior, cookie encryption, size limits or redirect order.
 Session headers, cache entries, crypto buffers and returned ciphertext remain
 independent owners; drop does not establish erasure. No allocation-count, future
 size, measured peak-memory or throughput improvement is claimed.
+
+## Cookie cryptographic input release
+
+The shared encoder releases serialized plaintext after successful encryption
+before constructing Base64 output. The decoder releases decoded ciphertext
+after successful decryption before deserializing JSON. Locked aes-gcm 0.10.3
+uses aead 0.5.2's allocating Aead implementation, which copies input into a
+separate Vec and returns that owned output; neither result borrows the input.
+
+Only input lifetime changes. Nonce/RNG, key use, ciphertext framing, Base64,
+error precedence and generic serialization/deserialization remain unchanged.
+The plain Vec drops neither zeroize data nor release independent caller/crypto
+owners. No in-place crypto or Base64 output redesign is selected, and no lower
+allocation count, measured peak memory or throughput claim follows.

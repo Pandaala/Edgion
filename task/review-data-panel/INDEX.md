@@ -16336,3 +16336,24 @@ preserved. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Source ownership and compilation establish
 release boundaries; tests do not instrument deallocation timing. No full suite,
 ignored live-IdP tests, new network fixtures or performance benchmark ran.
+
+## Release OIDC cookie crypto inputs after consumption
+
+Cookie encoding now releases serialized plaintext after encryption and before
+Base64 output construction; decoding releases decoded ciphertext after decryption
+and before JSON deserialization. The locked Aead blanket implementation returns
+an independently allocated Vec, so subsequent work retains only the needed
+result plus independent caller owners. Error handling, nonce generation, crypto,
+encoding bytes, cookie limits and cache/publication behavior are unchanged.
+
+Current cookie knowledge records this input/output ownership boundary. The
+existing oidc-02 Base64 output decision remains deferred. This shortens local
+storage overlap without claiming erasure, fewer allocations, measured overall
+peak memory or throughput.
+
+Independent plan and final source review passed. Baseline and final OIDC runs
+each passed 159 tests with 16 existing ignores; all 175 identities/outcomes were
+preserved. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Source ownership and compilation establish
+release boundaries; tests do not instrument deallocation timing. No full suite,
+ignored live-IdP tests, new network fixtures or performance benchmark ran.
