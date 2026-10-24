@@ -1082,3 +1082,38 @@ async fn ai_capability_frozen_empty_processor_slot_rejects_without_state_allocat
     assert_eq!(drops.load(Ordering::Relaxed), 1);
     assert!(ctx.ai_state().is_none());
 }
+
+#[tokio::test]
+async fn key_set_context_writes_share_store_and_preserve_request_isolation() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(1024);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    let key = KeySet::Ctx {
+        name: "selection".into(),
+    };
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.key_set(&key, Some("first".into())).unwrap();
+        assert_eq!(adapter.get_ctx_var_ref("selection"), Some("first"));
+        assert_eq!(adapter.get_ctx_var("selection").as_deref(), Some("first"));
+        adapter.set_ctx_var("selection", "replacement").unwrap();
+        assert_eq!(adapter.get_ctx_var_ref("selection"), Some("replacement"));
+        adapter.set_ctx_var("other", "retained").unwrap();
+        adapter.key_set(&key, Some(String::new())).unwrap();
+        assert_eq!(adapter.get_ctx_var_ref("selection"), Some(""));
+        adapter.key_set(&key, None).unwrap();
+        assert_eq!(adapter.get_ctx_var_ref("selection"), None);
+        adapter.key_set(&key, None).unwrap();
+        assert_eq!(adapter.get_ctx_var_ref("other"), Some("retained"));
+        adapter.key_set(&key, Some("final".into())).unwrap();
+    }
+    assert_eq!(ctx.get_ctx_var("selection"), Some("final"));
+    let mut next_ctx = EdgionHttpContext::default();
+    let next = PingoraSessionAdapter::new(&mut session, &mut next_ctx);
+    assert_eq!(next.get_ctx_var_ref("selection"), None);
+    assert_eq!(next.get_ctx_var_ref("other"), None);
+}

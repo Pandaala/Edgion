@@ -16557,3 +16557,29 @@ The memory/CPU decision and external Pingora scope remain deferred. No runtime,
 dependency or integration fixture changed. Independent plan review reproduced
 the probe; formatting and workspace all-target check/Clippy passed with existing
 warnings. No full suite or live compressed-wire exchange ran.
+
+## Move owned KeySet context values into request storage
+
+PingoraSessionAdapter::key_set now passes its already-owned Ctx value directly
+to EdgionHttpContext::set_ctx_var. Previously it borrowed that String for the
+adapter's slice setter, which immediately copied the value into the same store.
+The key remains independently owned; other KeySet variants and Ctx deletion are
+unchanged. RegionRoute's computed-hash writeback remains the current production
+caller, with its write order, ignored setter results and diagnostics unchanged.
+
+The canonical request ctx_map still owns values and preserves replacement,
+empty-versus-missing semantics and request isolation. No new accessor, cache or
+log projection was added. This removes the redundant nonempty value copy; no
+throughput or request-wide allocation-free claim is made.
+
+Independent plan review passed. A real adapter regression using in-memory duplex
+I/O verifies interoperability with the slice setter, both read APIs, replacement,
+empty values, repeated deletion, unrelated-key retention and a fresh context.
+It passed against the original production code before changing the handoff.
+
+Final verification passed 180 adapter-selected and 30 RegionRoute tests. All
+179 original adapter identities remain, the new regression passed old/new code,
+and extended-baseline/final identities and outcomes match. Formatting, workspace
+all-target check/Clippy and all seven repository guards passed with existing
+warnings. Independent final source review passed. No full suite, new network
+fixture or throughput benchmark ran.

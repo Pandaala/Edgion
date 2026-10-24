@@ -2271,7 +2271,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 // queue drains after the upstream header, so this line wins per RFC 6265.
                 self.append_response_header("Set-Cookie", &format!("{}=; Max-Age=0", name))
             }
-            (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
+            (KeySet::Ctx { name }, Some(v)) => {
+                self.ctx.set_ctx_var(name.clone(), v);
+                Ok(())
+            }
             (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),
         }
     }
