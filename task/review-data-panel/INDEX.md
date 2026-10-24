@@ -15412,3 +15412,15 @@ comparisons remained ignored. Formatting and workspace all-target check/Clippy
 passed with existing unrelated warnings. No runtime change, full pinned comparison,
 prototype, full suite, live integration or performance benchmark ran.
 Agent-doc validation and independent plan/final reviews passed.
+
+## SQLi folding and finalized token storage
+
+The [token-storage task](waf-14-sqli-token-storage.md) follows native SQLi dispatch
+into folding and whitelist consumers. Token clones copy fixed arrays and scalars;
+the scratch and finalized lists have different filtering, comment and Evil-token
+semantics. Fixed scratch or shared finalization requires measurement before a
+representation decision; no allocation removal is proven or alternative selected.
+Fresh unchanged-source checks passed 12 focused test functions; two external-checkout
+comparisons remained ignored. Formatting and workspace all-target check/Clippy
+passed with existing unrelated warnings. No runtime change, full pinned comparison,
+prototype, full suite, live integration or performance benchmark ran.
