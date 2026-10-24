@@ -1421,3 +1421,51 @@ premise. The generic pre-capture query-cache caveat is separate.
 This closes the direct source-adapter inventory, not all generic KeyGet consumers,
 query decoders, protocol header storage, RNG internals or policy publication.
 No runtime change or selected lazy-source implementation follows from this audit.
+
+## H2 asynchronous body payload ownership
+
+Source revalidated at Edgion `0d0a7c2d3`, locked Pingora
+`1aaa45cc70430bc782990bc20ddee3fef36d6b99`, h2 0.4.19 and bytes 1.12.1.
+This covers the direct asynchronous receive adapters and writer handoff, not
+all dependency codecs, queues, poll-based APIs or transport interleavings.
+
+The h2 RecvStream::data API returns owned Bytes. In the fork's
+pingora-core/src/protocols/http/v2/client.rs, read_response_body returns that
+owner after releasing received capacity and updating its payload counter.
+Capacity-release errors propagate there. Its EOF/trailer validation is retained;
+an empty DATA value is not automatically interchangeable with clean EOF.
+
+In v2/server.rs::read_body_bytes_inner, the received owner remains intact through
+payload accounting and optional retry-buffer writes. The server ignores the
+capacity-release result and releases credit before the cancellable capture await,
+so cancellation cannot strand that consumed chunk's credit. Capture/finish poison
+and terminal observations remain separate from ownership. Unlike the H1 adapters,
+these receive handoffs do not copy a reusable reader slice into a new Bytes.
+Retry capture or other consumers can still have their own storage costs.
+
+The proxy H2 response pump moves received data into HttpTask::Body and its channel
+after existing empty/EOS checks. The request path's send_body_to2 first runs the
+canonical relay callback path, then passes owned data through
+write_upstream_body_watching_stall into the core v2 writer. The watcher retains
+its pinned write across probe ticks; restarting it would lose partial-write state.
+This source trace does not establish complete timeout/cancellation correctness.
+
+The shared v2::write_body owns remaining Bytes. For nonempty output it reserves
+capacity, awaits a grant, splits min(remaining length, grant), then transfers the
+piece to SendStream::send_data. END_STREAM accompanies only the final piece when
+requested. Empty output is sent directly without waiting for zero capacity.
+bytes 1.12.1 split_to already moves the whole owner when splitting its full length;
+partial splits clone the handle and adjust ranges without copying payload bytes.
+Handle metadata/refcount work can remain, so this is not an allocation-free claim.
+
+No additional safe copy-removal candidate was selected at these boundaries.
+The [H1 proposal](transport-01-h1-body-buffer-handoff.md) concerns different reader
+storage. Delaying H2 credit until Bytes destruction or bypassing callback/writer
+owners would change lifecycle and backpressure policy, rather than remove an
+established redundant copy. No such redesign was proposed in this audit.
+
+Fresh Gateway selections passed 19 request-body-action, 31 upstream response-body
+and 11 upstream trailer-filter tests. Formatting, workspace all-target check/
+Clippy and agent-doc validation passed with existing warnings. These are current
+Gateway regressions, not fresh fork-suite, live flow-control, allocation or
+throughput results. No runtime, dependency or test fixture changed.

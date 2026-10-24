@@ -16628,3 +16628,22 @@ Independent plan review passed. Fresh unchanged-code verification passed
 19 request-body-action and 31 upstream response-body-filter tests, formatting
 and workspace all-target check/Clippy with existing warnings. This is not a
 fresh fork suite, ownership prototype or live WebSocket exchange.
+
+## H2 asynchronous body handoff audit
+
+The [direct H2 handoff inventory](CALLBACKS.md#h2-asynchronous-body-payload-ownership)
+traces owned RecvStream Bytes through receive adapters, callback/pump ownership
+and the capacity-aware writer. These adapters do not have the H1 reusable-buffer
+payload copy. Full-length Bytes splitting already transfers the owner; partial
+splitting shares storage. This does not prove allocation-free transport or cover
+all h2 codec/queue internals.
+
+Server receive credit is released before cancellable capture; client release
+errors propagate while the server ignores its release result. Changing credit
+lifetime or restarting a partially progressed writer is not an equivalent
+copy-removal optimization. No runtime candidate or new deferred task was selected.
+
+Independent plan review passed. Fresh Gateway runs passed 19 request-body-action,
+31 upstream response-body and 11 trailer-filter tests. Formatting and workspace
+all-target check/Clippy passed with existing warnings. No fork suite, live
+flow-control exchange or performance benchmark ran.
