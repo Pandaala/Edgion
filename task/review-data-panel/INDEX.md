@@ -15643,3 +15643,15 @@ rejecting a limit excess. Current scoped key ownership, duplicate semantics and
 tree structure remain unchanged. No measured gain or runtime change is claimed.
 Fresh unchanged-source checks passed 28 checker, 37 stream and 52 Gateway WAF
 tests, formatting and workspace all-target check/Clippy with existing warnings.
+
+## XML namespace prefix lookup reuse
+
+The [namespace task](waf-18-xml-prefix-lookup-reuse.md) records repeated reverse
+binding searches for ordinary attributes sharing a prefix within one start tag.
+Reuse remains unselected: it needs bounded call-local ownership, expiry before
+arena compaction/reclamation, and exact binding-work failure checkpoints.
+Element/default-attribute namespace distinctions, lexical/expanded duplicate
+ordering, late declarations and shadowing remain unchanged. This is separate
+from completed QName split reuse. Fresh unchanged-source checks passed 21 XML
+stream and 52 Gateway WAF tests, formatting and workspace check/Clippy with
+existing warnings. No runtime change or measured benefit is claimed.
