@@ -343,16 +343,12 @@ impl EdgionTlsPassthroughProxy {
             return;
         };
         drop(last_err);
+        let proxy_protocol_version = unit.proxy_protocol_version();
+        // Retries are complete; setup and relay no longer borrow the route generation.
+        drop(unit);
 
         // 5. Send Proxy Protocol v2 if configured
-        if !send_proxy_protocol_v2(
-            unit.proxy_protocol_version(),
-            ctx,
-            &upstream_addr_str,
-            &mut upstream_stream,
-        )
-        .await
-        {
+        if !send_proxy_protocol_v2(proxy_protocol_version, ctx, &upstream_addr_str, &mut upstream_stream).await {
             return;
         }
 

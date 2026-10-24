@@ -8,10 +8,16 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`proxy.rs::select_route_unit` selects an owned `Arc<TlsRouteUnit>` synchronously.
+TLSRoute Terminate is retained implementation, not an enabled product mode;
+the Controller rejects explicit TLS/Terminate listeners. This page describes
+that code without claiming production traffic or enabling the mode.
+
+The shared `tls::select_tls_route` selects an owned `Arc<TlsRouteUnit>` synchronously.
 The per-listener table guard ends before stream-plugin, connect, or relay awaits.
-Existing connections retain their selected schema and backend selector generation;
-new connections select from the current table.
+Connections retain their selected schema and backend selector generation through
+admission and all connect attempts. After successful connection, they copy the
+PROXY protocol version and drop the unit Arc before PP2 writes and relay.
+New connections select from the current table.
 
 `EdgionTlsTcpProxy::process_new` binds the owned Pingora SSL digest in a short
 synchronous scope and borrows its `TlsConnMeta` extension. `install_tls_metadata`
@@ -39,7 +45,11 @@ This does not promise immediate release of units held by other readers or the
 canonical configuration cache, nor a measured latency or RSS improvement. The
 SSL stream still owns its original digest throughout the connection; only the
 unnecessary local metadata copy and digest handle are removed from the async scope.
-The selected unit intentionally stays alive for connection configuration reads.
+The selected unit stays alive for connection configuration reads and retries.
+After those reads, PP2 needs only the copied `Option<u8>`; context metadata and
+the connected stream own their data independently. The compiled selector owns
+slots, a WRR sequence and cursor, with no completion permit or drop callback.
+The separate selected logical Gateway owner is unaffected.
 
 No temporary SNI take/restore, shared helper abstraction, new logging, or metrics
 are introduced. Plugin decisions, denied/unsupported backend terminal gates,
@@ -51,8 +61,10 @@ are separate concerns; ownership optimization did not resolve those findings.
 
 ## Verification and re-evaluation
 
-Inline tests in `edgion-gateway/src/routes/tls/proxy.rs` exercise production helpers.
-Weak references cover two distinct published hostname winners: the old table and
+Tests in `edgion-gateway/tests/unit/routes/tls/proxy_test.rs` exercise metadata
+and PP2 helpers. Weak references use the test-only `select_route_unit` ownership
+view, not the production `select_tls_route` policy path. They cover two distinct
+published hostname winners: the old table and
 unselected winner are released after rebuild, while the selected unit and selector
 survive until the connection owner drops them. Tests also cover empty tables,
 misses, case-insensitive matching, and next-generation selection.
@@ -63,7 +75,11 @@ and the absence of handshake diagnostics in the connection context. They do not
 perform a real TLS handshake, allocator instrumentation, or network integration.
 
 Re-evaluate if selection stops returning an owned unit, another table guard or
-metadata clone crosses connection awaits, or the set of installed TLS fields changes.
+metadata clone crosses connection awaits, the set of installed TLS fields changes,
+or later setup/relay needs route-owned data or gains unit-owned lifecycle effects.
+The explicit post-connect drop is supported by source ownership and compilation;
+existing tests do not exercise its production location. No allocation-count,
+async-frame-size or throughput improvement is measured.
 
 ## Resolution references
 

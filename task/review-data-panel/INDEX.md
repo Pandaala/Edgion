@@ -15763,3 +15763,26 @@ location; source lifetimes and compilation establish that boundary. Baseline and
 final selections each passed 27 TCP, 21 shared-relay and five TCP-log tests (53).
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live transport or benchmark ran.
+
+## TLS selected route release after successful connect
+
+Both TLS proxy implementations now copy the compiled PROXY protocol version
+after successful connection and drop their selected route unit before PP2 writes,
+ClientHello replay and relay. The original unit still supplies admission and all
+retry attempts. The copied Option, owned context metadata and connected stream
+do not borrow it; the separate logical Gateway owner is unchanged. Other readers
+and configuration caches may retain the unit, so no immediate deallocation,
+allocation-count, async-frame-size, RSS or throughput result is claimed.
+
+Passthrough is the enabled TLSRoute product path. Terminate remains retained
+implementation rejected by Controller listener validation; its symmetric change
+does not enable that mode or establish online benefit. The two original ownership
+knowledge pages now identify canonical production select_tls_route and distinguish
+the test-only select_route_unit Weak fixtures from the production drop boundary.
+
+Baseline and final verification each passed 85 TLS, 21 shared-relay and eight PP2
+encoder tests (114 total). Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No new test merely mirrors the
+drop statement; ownership inspection and compilation establish its location,
+while existing tests cover selection, metadata, PP2, replay and relay behavior.
+No full suite, live transport/TLS handshake or performance benchmark ran.
