@@ -16398,3 +16398,31 @@ Fresh unchanged-code verification passed five collector and eleven callout tests
 callout tests ran serially and include existing loopback fixtures. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed with existing
 warnings. No new tests, runtime prototype, full suite or workload benchmark ran.
+
+## Reuse Wasm memory handles within input profiling
+
+String, serialized-map and property-path profiling now reuse the Memory handle
+already resolved while validating their guest range. A common tuple-returning
+helper retains the original range validation; the existing range-only helper
+remains a wrapper for other consumers. No guest execution, growth, mutation or
+await separates the former adjacent lookups. Locked Wasmtime 49.0.2 Memory is a
+Copy handle, and the export remains associated with the same caller instance.
+
+This removes one repeated export lookup in each of the three profiling paths.
+It introduces no persistent handle cache, guest-memory borrow across execution,
+allocation claim or measured throughput claim. Negative arguments still precede
+missing/wrong-type memory errors; checked range/slice access, decoding, admission
+and mutation order are unchanged. The guest allocator and post-allocation memory
+lookup in write_to_guest remain untouched; wasm-05 stays deferred.
+
+A new real-guest regression passed on the original implementation. It covers all
+three host consumers with exported, missing and wrong-type memory, negative and
+out-of-bounds inputs, and unchanged state/accounting after rejection. The original
+269 Wasm tests also passed serially before editing production.
+
+Final verification passed all 270 Wasm tests serially and 11 upstream trailer
+tests. All original 269 Wasm identities/outcomes were preserved, with one new
+regression added. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. Existing Wasm loopback fixtures
+ran; no new network fixture, full suite or performance benchmark was added/run.
+Independent plan and final source review passed.

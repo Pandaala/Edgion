@@ -1777,3 +1777,46 @@ fn configured_host_allocation_limits_tighten_the_existing_profiles() {
         },
     );
 }
+
+#[test]
+fn guest_input_profiles_preserve_memory_error_precedence() {
+    for (memory, has_memory) in [
+        ("(memory (export \"memory\") 4)", true),
+        ("(memory 4)", false),
+        ("(memory 4) (global (export \"memory\") i32 (i32.const 0))", false),
+    ] {
+        let wat = ALLOCATION_PREFLIGHT_GUEST.replace("(memory (export \"memory\") 4)", memory);
+        let (mut store, instance) = instantiate_guest(&wat);
+        let log = instance.get_typed_func::<(i32, i32), i32>(&mut store, "log").unwrap();
+        let set_pairs = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "set_pairs")
+            .unwrap();
+        let set_property = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "set_property")
+            .unwrap();
+        let mut cases = vec![
+            (-1, 0, STATUS_BAD_ARGUMENT),
+            (0, -1, STATUS_BAD_ARGUMENT),
+            (i32::MAX, 1, STATUS_INVALID_MEMORY_ACCESS),
+            (0, i32::MAX, STATUS_INVALID_MEMORY_ACCESS),
+        ];
+        if !has_memory {
+            cases.push((0, 0, STATUS_INVALID_MEMORY_ACCESS));
+        }
+        for (ptr, len, expected) in cases {
+            assert_eq!(log.call(&mut store, (ptr, len)).unwrap(), expected);
+            assert_eq!(
+                set_pairs
+                    .call(&mut store, (MAP_HTTP_REQUEST_HEADERS, ptr, len))
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(set_property.call(&mut store, (ptr, len, 0, 0)).unwrap(), expected);
+            assert!(store.data().frame.log_lines.is_empty());
+            assert!(store.data().frame.pending_ops.is_empty());
+            assert!(store.data().frame.properties.is_empty());
+            assert_eq!(store.data().frame.retained_bytes, 0);
+            assert_eq!(store.data().frame.retained_ops, 0);
+        }
+    }
+}

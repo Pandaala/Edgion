@@ -999,7 +999,11 @@ struct PropertyPathProfile {
     segment_count: usize,
 }
 
-fn profile_guest_range(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestRangeProfile, i32> {
+fn profile_guest_memory_range(
+    caller: &mut Caller<'_, HostState>,
+    ptr: i32,
+    len: i32,
+) -> Result<(wasmtime::Memory, GuestRangeProfile), i32> {
     // Preserve ABI precedence: negative arguments are malformed even when the
     // guest failed to export memory.
     if ptr < 0 || len < 0 {
@@ -1007,12 +1011,15 @@ fn profile_guest_range(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -
     }
     let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
     let range = guest_range(ptr, len, memory.data_size(&*caller))?;
-    Ok(GuestRangeProfile { range })
+    Ok((memory, GuestRangeProfile { range }))
+}
+
+fn profile_guest_range(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestRangeProfile, i32> {
+    profile_guest_memory_range(caller, ptr, len).map(|(_, guest)| guest)
 }
 
 fn profile_guest_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestStringProfile, i32> {
-    let guest = profile_guest_range(caller, ptr, len)?;
-    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let (memory, guest) = profile_guest_memory_range(caller, ptr, len)?;
     let bytes = memory
         .data(&*caller)
         .get(guest.range.clone())
@@ -1022,8 +1029,7 @@ fn profile_guest_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) 
 }
 
 fn profile_guest_map(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestMapProfile, i32> {
-    let guest = profile_guest_range(caller, ptr, len)?;
-    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let (memory, guest) = profile_guest_memory_range(caller, ptr, len)?;
     let bytes = memory
         .data(&*caller)
         .get(guest.range.clone())
@@ -1033,8 +1039,7 @@ fn profile_guest_map(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> 
 }
 
 fn profile_property_path(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<PropertyPathProfile, i32> {
-    let guest = profile_guest_range(caller, ptr, len)?;
-    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let (memory, guest) = profile_guest_memory_range(caller, ptr, len)?;
     let bytes = memory
         .data(&*caller)
         .get(guest.range.clone())
