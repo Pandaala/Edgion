@@ -15690,3 +15690,24 @@ The lifecycle, source pin and shutdown contracts remain unchanged, as does
 UDP-01's separate timeout/wakeup decision. Fresh checks passed 59 UDP and four
 UDP log tests, formatting and workspace check/Clippy with existing warnings.
 No runtime change or measured benefit is claimed.
+
+## Release UDP shutdown owners before drain and logging waits
+
+After stopping the receive loop and signalling cancellation, serve now drops its
+packet buffer before joining children. The remaining-session pass still starts
+only after JoinSet and TaskTracker completion. Each removed session is projected
+through the existing owned terminal-log snapshot and dropped before the logger
+await. The private single-call wrapper that retained the session across that await
+is removed; timestamps, counters, peer order and child-error handling are unchanged.
+
+An existing accounting regression first passed with added weak-reference and
+permit assertions on the original production code: the terminal snapshot remains
+usable after its sole session owner is dropped. Other owners may still keep a
+session alive. This is earlier release of specific owners, not a claim of measured
+RSS or throughput improvement, and does not resolve UDP-02 receiver ownership.
+
+Baseline and final verification passed 59 UDP route/session and four UDP log
+tests. Formatting, workspace all-target check/Clippy, agent-doc validation, SSA,
+metrics, Pingora source policy, Gateway API transform, unit-test layout and
+gateway no-tracing guards passed. Existing Clippy warnings remain. No blocked
+logger experiment, datagram wire test, full suite or benchmark was run.

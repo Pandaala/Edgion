@@ -663,6 +663,10 @@ async fn session_accounting_wraps_and_freezes_after_retirement() {
     EdgionUdpProxy::record_downstream_send_result(Ok(9), &session, proxy.listener_port, peer).await;
     assert_eq!(session.lifecycle.lock().last_activity, activity);
     let log = EdgionUdpProxy::session_log_entry(proxy.listener_port, peer, &session);
+    let retired = Arc::downgrade(&session);
+    drop(session);
+    assert!(retired.upgrade().is_none());
+    assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS);
     assert_eq!((log.packets_sent, log.packets_received), (0, 0));
     assert_eq!((log.bytes_sent, log.bytes_received), (2, 4));
 }

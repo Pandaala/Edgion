@@ -232,6 +232,7 @@ impl EdgionUdpProxy {
         }
 
         self.cancel_token.cancel();
+        drop(buf);
         while let Some(result) = children.join_next().await {
             if let Err(error) = result {
                 child_error.get_or_insert(error);
@@ -244,7 +245,9 @@ impl EdgionUdpProxy {
         let peers: Vec<_> = self.client_sessions.iter().map(|entry| *entry.key()).collect();
         for peer in peers {
             if let Some((_, session)) = self.client_sessions.remove(&peer) {
-                self.log_session(peer, &session).await;
+                let log_entry = Self::session_log_entry(self.listener_port, peer, &session);
+                drop(session);
+                log_udp(&log_entry).await;
             }
         }
         if let Some(error) = child_error {
@@ -674,11 +677,6 @@ impl EdgionUdpProxy {
         drop(lifecycle);
         occupied.remove();
         true
-    }
-
-    async fn log_session(&self, direct_peer_addr: std::net::SocketAddr, session: &ClientSession) {
-        let log_entry = Self::session_log_entry(self.listener_port, direct_peer_addr, session);
-        log_udp(&log_entry).await;
     }
 
     fn session_log_entry(

@@ -23,6 +23,11 @@ not a new resource cache or a dynamically configurable store.
 
 Normal shutdown joins cleanup and receivers before logging remaining sessions.
 At that point no task can change their counters or retire them concurrently.
+The stopped receive loop releases its packet buffer before waiting for children.
+Each remaining session is removed and projected into an owned log entry, then
+that session owner is dropped before awaiting logging. Other independent owners
+can still retain the session; the logger does not extend this shutdown owner's
+socket or permit lifetime.
 Session permits and sockets are released through the existing session owners.
 Traffic observability stays in the UDP access logger; no per-session tracing or
 additional metrics are introduced.
