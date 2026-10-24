@@ -16004,3 +16004,20 @@ workspace check/Clippy with existing warnings and doc validation. This replaces
 a broad endpoint-algorithm label with named evidence and explicit remaining RNG,
 publication/transport and concurrency boundaries, not whole-goal completion.
 No full suite, live transport or benchmark ran.
+
+## P2C bounded random-range dependency audit
+
+The [prepared-range task](lb-07-prepared-p2c-range-sampling.md) distinguishes
+rand 0.9.5 single sampling from stored Uniform sampling. P2C acquires one RNG
+handle per selection, not per pair; random_range does not construct a stored
+Uniform each draw. The default inspected feature graph lacks unbiased, and
+Canon single sampling differs from prepared Lemire mapping, including possible
+word-consumption and width-boundary differences. No automatic precompilation
+change or measured speedup is justified.
+
+The task keeps preparation, representation and statistical/sequence tradeoffs
+for user decision, preserving fixed two choices and live metric/health order.
+Generator/reseeding/OS entropy remain outside this bounded inspection. Fresh
+checks passed six P2C and eight compiled-selector tests, formatting, workspace
+check/Clippy with existing warnings and doc validation. No runtime change,
+prototype, benchmark, full suite or live transport ran.
