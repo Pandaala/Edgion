@@ -114,6 +114,7 @@ impl OpenidConnect {
                 }
             }
         };
+        drop(header);
         let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
 
         let mut validation = Validation::new(token_alg);
@@ -147,6 +148,7 @@ impl OpenidConnect {
         }
 
         let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(map_jwt_decode_error_typed)?;
+        drop(token_data.header);
         let claims = token_data.claims.into_value();
 
         if validate_scopes {

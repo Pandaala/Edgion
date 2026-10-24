@@ -68,3 +68,19 @@ response-projection tests remain part of targeted OIDC verification.
 
 - ARCH-035: generation-owned signing-policy preparation in `plugin.rs`,
   `jwt_common.rs` and `token_verify.rs`; regressions in their external unit tests.
+
+## Per-verification header owners
+
+The initial decoded Header remains available through both the first JWKS
+selection and the kid-miss forced refresh. Once a DecodingKey has been built,
+the verifier releases that header before awaiting discovery. The copied token
+algorithm and independently owned decoding key remain available for Validation
+and real decode. No JWKS or discovery snapshot lifetime changes here.
+
+After real decode succeeds, its unused TokenData header releases before moving
+claims into the returned Value. Partial movement of claims alone would leave
+that header until scope cleanup. Both header owners have ordinary owned fields
+with no custom destructor in jsonwebtoken 9.3.1. These earlier release points
+preserve raw-token verification, key rotation, issuer/audience/expiration and
+nonce/scope behavior. They establish no erasure, reduced allocation count or
+measured whole-request peak/throughput improvement.

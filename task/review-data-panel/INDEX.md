@@ -16272,3 +16272,24 @@ passed identical sets of 47 tests. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. Source/dependency
 ownership and compilation establish these release points; no deallocation-timing
 instrumentation, full suite, live authentication transport or benchmark ran.
+
+## Release consumed OIDC JWT header owners
+
+The internal OIDC JWT verifier now releases its initial decoded Header after
+key selection (including the existing kid-miss refresh) and before awaiting
+discovery. Token algorithm is already copied and the DecodingKey owns its key
+material independently. Successful real decode also releases its unused header
+before claims conversion, avoiding the former partial-move scope retention.
+
+JWKS/discovery shared snapshots, provider ordering, prepared signing policy,
+raw-token verification, issuer/audience/expiration checks, nonce/scopes and fixed
+errors retain their current behavior. The original signing-policy knowledge
+records this local owner boundary. No allocation-count, physical-erasure,
+future-size, measured overall peak-memory or throughput claim is made.
+
+Independent plan and final source review passed. Baseline and final OIDC runs
+each passed 159 tests with 16 existing ignores; all 175 identities/outcomes were
+preserved. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Source/dependency ownership and compilation
+establish release boundaries, not deallocation timing measurements. No full suite,
+ignored live-IdP tests, new network fixtures or performance benchmark ran.
