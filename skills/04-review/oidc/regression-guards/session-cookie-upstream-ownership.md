@@ -67,3 +67,19 @@ The existing authorization redirect regression decodes the encrypted state
 cookie for all four query shapes and checks original_url together with random
 lengths, state/nonce equality and the PKCE digest. This verifies the local
 construction contract, not a live IdP round trip or measured performance gain.
+
+## Callback-local temporary release
+
+handle_callback releases the raw state-cookie String once decoding returns its
+owned state/error result. The decoded state still survives through redirect
+target selection. Successful access-token verification is required as before,
+but its otherwise unused claims Value is released before session-payload
+construction and cache insertion. After cookie encoding returns an owned String
+or unit error, the local session payload releases before subsequent cookie/error
+response handling. Cache insertion has already completed with independent owners.
+
+These are local ownership boundaries, not changes to state/nonce/PKCE checks,
+verification, cache behavior, cookie encryption, size limits or redirect order.
+Session headers, cache entries, crypto buffers and returned ciphertext remain
+independent owners; drop does not establish erasure. No allocation-count, future
+size, measured peak-memory or throughput improvement is claimed.

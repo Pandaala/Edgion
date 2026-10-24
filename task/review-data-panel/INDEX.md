@@ -16293,3 +16293,24 @@ preserved. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Source/dependency ownership and compilation
 establish release boundaries, not deallocation timing measurements. No full suite,
 ignored live-IdP tests, new network fixtures or performance benchmark ran.
+
+## Release consumed OIDC callback temporaries
+
+The authorization callback releases raw state-cookie text after owned decoding,
+discards successful verification claims before constructing/caching the session,
+and releases the plaintext session payload after owned encoding. Each owner had
+no later consumer but formerly remained across subsequent work or response awaits.
+Decoded state still supplies PKCE, nonce and the final redirect target; cache and
+encoded cookie own their independent values.
+
+Validation, dependency/error handling, cache insertion, encryption, cookie bounds,
+redirect sanitation and response order remain unchanged. Current cookie ownership
+knowledge records these release points without an erasure, allocation-count,
+future-size, measured peak-memory or throughput claim.
+
+Independent plan and final source review passed. Baseline and final OIDC runs
+each passed 159 tests with 16 existing ignores; all 175 identities/outcomes were
+preserved. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Source ownership and compilation establish
+these release points; tests do not instrument deallocation timing. No full suite,
+ignored live-IdP tests, new network fixtures or performance benchmark ran.

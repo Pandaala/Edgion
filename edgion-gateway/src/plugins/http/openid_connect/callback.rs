@@ -219,6 +219,7 @@ impl OpenidConnect {
             Some(cipher) => Self::decode_signed_cookie_payload(&raw_state_cookie, cipher),
             None => Err(Self::credential_failure()),
         };
+        drop(raw_state_cookie);
         let state_cookie: AuthorizationStateCookie = match decoded_state {
             Ok(v) => v,
             Err(err) => {
@@ -288,13 +289,10 @@ impl OpenidConnect {
             }
         }
 
-        let _claims = match self.verify_token(session, &token_response.access_token).await {
-            Ok(v) => v,
-            Err(err) => {
-                plugin_log.push_err(err.log_tag());
-                return self.send_oidc_error(session, &err).await;
-            }
-        };
+        if let Err(err) = self.verify_token(session, &token_response.access_token).await {
+            plugin_log.push_err(err.log_tag());
+            return self.send_oidc_error(session, &err).await;
+        }
 
         let expires_at = token_response.expires_in.map(|ttl| now.saturating_add(ttl));
         let should_persist_id_token = self.should_persist_id_token(&discovery);
@@ -325,6 +323,7 @@ impl OpenidConnect {
                 Err(())
             }
         };
+        drop(session_cookie_payload);
         let session_cookie_value = match encoded_session {
             Ok(v) => v,
             Err(()) if self.session_cipher().is_none() => {
