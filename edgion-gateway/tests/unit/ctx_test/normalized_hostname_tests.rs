@@ -17,8 +17,30 @@ fn client_certificate_debug_omits_identity() {
 
 #[test]
 fn normalization_strips_only_unambiguous_ports() {
-    assert_eq!(NormalizedHostname::new("Example.COM:8443").as_str(), "example.com");
-    assert_eq!(NormalizedHostname::new("127.0.0.1:8080").as_str(), "127.0.0.1");
-    assert_eq!(NormalizedHostname::new("[2001:db8::1]:443").as_str(), "2001:db8::1");
-    assert_eq!(NormalizedHostname::new("2001:db8::1").as_str(), "2001:db8::1");
+    for (raw, expected) in [
+        ("Example.COM:8443", "example.com"),
+        ("127.0.0.1:8080", "127.0.0.1"),
+        ("[2001:db8::1]:443", "2001:db8::1"),
+        ("2001:db8::1", "2001:db8::1"),
+        ("", ""),
+        ("   ", ""),
+        (":", ""),
+        (":443", ""),
+        ("Example.COM", "example.com"),
+        ("Example.COM:", "example.com"),
+        ("Example.COM:bad", "example.com:bad"),
+        ("Example.COM:+443", "example.com:+443"),
+        ("Example.COM:443x", "example.com:443x"),
+        ("Example.COM::443", "example.com::443"),
+        ("::", "::"),
+        ("2001:DB8::1:443", "2001:db8::1:443"),
+        ("[2001:DB8::1]suffix", "2001:db8::1"),
+        ("[2001:DB8::1", "[2001:db8::1"),
+        ("[]:443", ""),
+        (" Example.COM.:8443 ", "example.com"),
+        ("Example.COM..", "example.com."),
+        ("éXAMPLE.COM:443", "éxample.com"),
+    ] {
+        assert_eq!(NormalizedHostname::new(raw).as_str(), expected, "raw: {raw:?}");
+    }
 }

@@ -927,9 +927,7 @@ impl NormalizedHostname {
                 // A registered name or IPv4 authority has at most one colon.
                 // Bare IPv6 has multiple colons and no syntactically distinct
                 // port suffix, so it must remain intact.
-                Some(pos) if h.matches(':').count() == 1 && h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => {
-                    &h[..pos]
-                }
+                Some(pos) if !h[..pos].contains(':') && h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
                 _ => h,
             }
         };

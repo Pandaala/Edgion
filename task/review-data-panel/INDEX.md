@@ -16673,3 +16673,36 @@ with identical original/extended/final test identities and outcomes. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. Independent final code review passed. No full suite, live policy
 reload exchange or performance benchmark ran.
+
+## Check only the prefix for an ambiguous hostname port
+
+NormalizedHostname::new already locates the final ASCII colon with rfind. Its
+unbracketed-port guard now checks whether the preceding slice contains another
+colon instead of counting colons across the entire string. These predicates are
+equivalent because rfind proves the suffix contains no colon; the new check can
+stop at the first preceding colon and does not rescan the port for colons.
+The suffix digit check, empty-suffix behavior, trim, bracket extraction, single
+trailing-dot removal and ASCII lowercasing are unchanged. Empty-host admission
+remains the downstream HTTP/gRPC caller's responsibility.
+
+The existing normalization regression now covers 22 literal input/output pairs,
+including multibyte text before a colon, IPv6, empty/malformed suffixes, bracket
+edge cases and whitespace/dots. It passed on original production code. These
+are existing normalization semantics, not permission to admit malformed wire
+authorities. No representation, matcher, allocation count or schema changed;
+no measured throughput gain is claimed.
+
+Independent plan review passed, including the verification exception for the
+existing [cache policy fixture](verification-01-cache-policy-fixture.md). The
+unchanged baseline request-filter selection passed 45 cases and failed that
+single case with backend policy ancestor limit; isolation reproduced it before
+production edits. Preserve this failure and compare final identities/outcomes;
+do not weaken admission or silently remove the test.
+
+Final verification passed two normalization-module, 23 RequestAccessPolicy and
+13 redirect tests. The complete request-filter selection again passed 45 tests
+and failed only the same deferred fixture with the same admission diagnostic;
+all baseline/final test identities and outcomes match. Formatting, workspace
+all-target check/Clippy and all seven repository guards passed with existing
+warnings. No full suite, live HTTP/gRPC exchange or benchmark ran. The known
+fixture failure remains unresolved and is not an all-green test result.
