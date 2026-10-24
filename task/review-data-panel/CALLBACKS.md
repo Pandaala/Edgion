@@ -11,7 +11,7 @@ inside ProxyHttp, excluding the file's separate Future::poll implementation.
 There are 52 source methods: 30 overrides and 22 inherited methods. Two inherited
 upstream-module methods are feature-gated, so 52 is not a compiled-method count.
 
-Source method sets revalidated at `eda87e58f`: both tables still exactly match
+Source method sets revalidated at `2d0b7166a`: both tables still exactly match
 the Gateway overrides and locked fork trait declarations (30 + 22). The two
 feature-gated declarations remain included. This refresh checks inventory
 consistency only; it does not rerun historical runtime tests or extend the
