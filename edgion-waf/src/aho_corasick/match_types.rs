@@ -1,4 +1,5 @@
 use super::{MatchError, PatternIdError, SpanError};
+use crate::bitset::set_bit_indices;
 
 /// Search-time anchoring mode.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,24 +243,7 @@ impl PatternSet {
 
     /// Iterate over present identifiers exactly once in source order.
     pub fn iter(&self) -> impl Iterator<Item = PatternId> + '_ {
-        let bits = u64::BITS as usize;
-        self.words
-            .iter()
-            .take(self.pattern_count.div_ceil(bits))
-            .enumerate()
-            .flat_map(move |(word_index, &word)| {
-                let mut remaining = word;
-                std::iter::from_fn(move || {
-                    if remaining == 0 {
-                        return None;
-                    }
-                    let bit = remaining.trailing_zeros() as usize;
-                    remaining &= remaining - 1;
-                    Some(word_index * bits + bit)
-                })
-            })
-            .take_while(|&index| index < self.pattern_count)
-            .filter_map(|index| PatternId::try_from_usize(index).ok())
+        set_bit_indices(&self.words, self.pattern_count).filter_map(|index| PatternId::try_from_usize(index).ok())
     }
 
     /// Return whether no pattern identifier is present.

@@ -15507,3 +15507,23 @@ hits, partial and repeated iteration, and clear/reuse with stable allocation.
 Existing native, matcher, cached/current-input and streaming transaction checks
 passed 129 tests at baseline and 130 after the change. Two matcher release
 witnesses remained ignored. No benchmark, full suite or live integration ran.
+
+## Share bounded set-bit iteration with stream result projection
+
+Raw request-body streaming consumes MatchResults::iter after each successful
+group scan. That outer iterator now uses the same bounded set-bit traversal as
+the native PatternSet instead of probing every logical ID. The index iterator
+lives in one private bitset module; each owner retains its own PatternId conversion
+and public iterator signature. There is no second implementation or new store.
+The word bound prevents index overflow and the logical-count bound excludes tail
+bits; missing words remain absent. Native and outer stream bitmaps remain cumulative,
+with unchanged member publication, early finalization, EOS, budgets and error order.
+Repeated mapping of cumulative hits is not removed by this change.
+
+The existing boundary test gained full/partial iteration checks against independent
+single-bit membership and passed before production edits. It covers sparse/dense
+bits, word boundaries and truncated/surplus storage without changing test identity.
+Baseline and final native, matcher, cached/current-input and raw-body stream checks
+passed the same 130 tests; two matcher release witnesses remained ignored. This
+reduces source-level result traversal without an allocation or throughput claim.
+No benchmark, full suite or live Gateway integration ran.

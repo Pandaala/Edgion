@@ -10,6 +10,7 @@ pub mod aho_corasick;
 pub mod matcher;
 pub mod seclang;
 
+mod bitset;
 mod bounded_sort;
 mod injection;
 #[allow(dead_code)]

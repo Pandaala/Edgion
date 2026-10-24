@@ -8,6 +8,7 @@ use crate::aho_corasick::{
     AhoCorasick, BuildError as AcBuildError, BuildLimits as AcBuildLimits, Builder as AcBuilder,
     MatchError as AcMatchError, MatchKind as AcMatchKind, PatternSet as AcPatternSet, StreamState as AcStreamState,
 };
+use crate::bitset::set_bit_indices;
 use regex_automata::nfa::thompson::pikevm::{Cache as PikeCache, PikeVM};
 use regex_automata::nfa::thompson::{self, WhichCaptures, NFA};
 use regex_automata::util::captures::Captures;
@@ -3121,9 +3122,7 @@ impl MatchResults<'_> {
 
     /// Iterate over every matching ID exactly once in source order.
     pub fn iter(&self) -> impl Iterator<Item = PatternId> + '_ {
-        (0..self.pattern_count)
-            .map(PatternId)
-            .filter(move |pattern_id| self.contains(*pattern_id))
+        set_bit_indices(self.matched_words, self.pattern_count).map(PatternId)
     }
 
     /// Return whether no pattern matched.

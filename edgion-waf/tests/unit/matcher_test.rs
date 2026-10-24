@@ -1824,6 +1824,15 @@ fn pattern_range_queries_match_individual_bits_for_all_boundaries() {
                     matched_words: &words[..stored_words],
                     pattern_count,
                 };
+                let expected_ids = (0..pattern_count)
+                    .map(PatternId)
+                    .filter(|&id| results.contains(id))
+                    .collect::<Vec<_>>();
+                assert_eq!(results.iter().collect::<Vec<_>>(), expected_ids);
+                assert_eq!(
+                    results.iter().take(2).collect::<Vec<_>>(),
+                    expected_ids.iter().copied().take(2).collect::<Vec<_>>()
+                );
                 for start in 0..=pattern_count {
                     for end in start..=pattern_count {
                         let expected = (start..end).any(|id| results.contains(PatternId(id)));
