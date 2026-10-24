@@ -1325,3 +1325,28 @@ do not prove complete parser, quota, engine, network or later-phase coverage.
 Formatting, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No full suite, live integration or benchmark ran. No runtime
 change or deferred-task closure is selected by this inventory.
+
+## Service endpoint selector dependency boundaries
+
+Revalidated at `815ab6312`. This names the inspected selection path without
+claiming complete discovery, transport or dependency implementation coverage.
+
+| Boundary | Current source evidence | Remaining decision or limit |
+| --- | --- | --- |
+| BackendRef selection | Route-owned BackendSelector uses a direct single slot or WeightedRoundRobin over original weighted slots. | Separate from Service endpoint strategy; authorization and resolution follow existing route rules. |
+| Native Service peer capture | upstream_peer reaches backends::try_get_peer and CapturedServiceSelection. One membership-matched runtime snapshot supplies the section and selection; HTTP/gRPC policy is captured separately. | Policy publication, transport interleavings and global shutdown are not proved by this inspection. |
+| RR endpoint selection | RrCore uses RoundRobinSelector's cold expanded index array, shared atomic cursor and bounded unique fallback. Candidates and final winner use the canonical address resolver. | [backend-01](backend-01-selected-slot-lookup.md) retains winner/slot projection choices. |
+| Nonempty CH key | ChCore uses the prepared ring; pinned Continuum hashes the key once, binary-searches and returns borrowed addresses while advancing a wrapping cursor. Edgion resolves original indices before visited checks. | [lb-05](lb-05-consistent-hash-visited-storage.md) covers visited storage; [lb-06](lb-06-ketama-candidate-index.md) covers earlier vnode projection. Empty keys use the already-built RR fallback. |
+| LeastConn/EWMA | P2C samples distinct candidates, reads live metrics, checks preferred then alternate eligibility, and falls back to a linear health-only scan. The direct estimator read/update was separately inspected. | RNG internals and full contention/performance validation remain open; [lb-01](lb-01-precomputed-ewma-decay.md) remains deferred. |
+| Eligibility and degrade | CapturedServiceSelection counts survivors with the quiet predicate, then either bypasses eligibility in degrade mode or performs live per-candidate checks with rejection recording. | [backend-02](backend-02-runtime-eligibility-lookup.md) remains deferred; no eligibility result is cached by this audit. |
+| Cold section construction | materialize_sections reuses aliases and materialize_section compiles all four selectors from ready backends. Numeric/Bucket staging release is recorded in INDEX. | Complete normalization/publication lifecycle and external Backend extension behavior remain separate. |
+| L4 Service consumers | TCP, UDP and TLS passthrough call select_service_endpoint with no endpoint-policy override and live degrade policy. Retained TLS Terminate code has the same call shape but product admission disables it. | This is not authorization to enable Terminate or extend endpoint policy to L4. |
+
+The architecture page now distinguishes Service RR from BackendRef weighting,
+corrects P2C ordering/fallback and removes the obsolete unsectioned projection
+and L4 helper names. No selector, health observation, policy or API changed.
+Fresh tests passed 41 selection, eight compiled-selector, 27 BackendRef-selector,
+12 Service-selector and 21 EWMA tests (109 distinct tests), plus formatting,
+workspace check/Clippy with existing warnings and agent-doc validation. Tests
+support the named behavior boundaries, not a completion audit of the entire goal.
+No full suite, live transport, benchmark or dependency implementation test ran.

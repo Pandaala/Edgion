@@ -6,7 +6,7 @@ description: Load balancing strategies — RoundRobin, EWMA, LeastConn, Consiste
 # Load balancing
 
 > The load balancing module is responsible for selecting a target instance from the backend list.
-> The default is weighted round-robin (WeightedRoundRobin); a non-default algorithm is configured
+> The default Service endpoint strategy is `RoundRobinSelector`; a non-default algorithm is configured
 > **per-destination** via the `EdgionBackendTrafficPolicy` CRD attached to the Service (not per-route).
 > Full external schema: [02-features/03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
 
@@ -14,10 +14,10 @@ description: Load balancing strategies — RoundRobin, EWMA, LeastConn, Consiste
 
 | Strategy | CRD `loadBalancer.type` | Selector-side `PolicyKind` | Description |
 |----------|--------------------------|------------------------------|-------------|
-| RoundRobin | `RoundRobin` (default; section may be omitted entirely) | `PolicyKind::RoundRobin` | Weighted round-robin, implemented via `WeightedRoundRobin<T>` |
+| RoundRobin | `RoundRobin` (default; section may be omitted entirely) | `PolicyKind::RoundRobin` | Weighted index-array round robin via `RrCore` and `RoundRobinSelector` |
 | EWMA | `Ewma` | `PolicyKind::Ewma` | Time-decayed Peak-EWMA latency score times outstanding load; prefers low-latency backends |
-| LeastConn | `LeastConn` | `PolicyKind::LeastConn` | Least connections, prefers the backend with the fewest active connections |
-| ConsistentHash | `ConsistentHash` (+ `consistentHash.hashOn`/`key`) | `PolicyKind::ConsistentHash` | Consistent hashing on a header / cookie / query-param value |
+| LeastConn | `LeastConn` | `PolicyKind::LeastConn` | P2C using active-connection counts, not a global minimum scan |
+| ConsistentHash | `ConsistentHash` (+ `consistentHash.hashOn`/`key`) | `PolicyKind::ConsistentHash` | Consistent hashing on a header / cookie / query-param value or normalized source IP |
 | WeightedSelector | — | — | A general-purpose weighted selector implemented by `BackendSelector<T>`, used for selection across multiple BackendRefs (weight-based, not an LB algorithm choice) |
 
 `PolicyKind` (`edgion-gateway/src/lb/compiled_selector.rs`) is the gateway's
@@ -48,18 +48,25 @@ one onto the other.
 
 ## EWMA and LeastConn selection algorithm
 
-EWMA and LeastConn use power-of-two choices (P2C): sample two eligible backends and select the
-lower-metric candidate. LeastConn compares atomic active-connection counts. EWMA compares the
+EWMA and LeastConn use power-of-two choices (P2C): sample two distinct candidates,
+read their metrics, then check eligibility of the lower-metric candidate followed
+by the other candidate if needed. Equal metrics prefer the first sampled candidate.
+LeastConn compares atomic active-connection counts. EWMA compares the
 time-decayed Peak-EWMA latency estimate times outstanding load
 (`latency estimate × (in-flight + 1)`). The estimator, sample-point, and useful-work
 classification live in `edgion-gateway/src/lb/ewma/score.rs` and
 `edgion-gateway/src/lb/sample.rs`; the math and invariants are in
 [12-algorithms/lb-peak-ewma.md](../../12-algorithms/lb-peak-ewma.md).
-Repeated bounded sampling applies health/activity filtering without scanning or heap-building
-across the entire backend set.
+The compiled selector permits up to 256 sampled pairs. If none passes eligibility,
+a final linear scan checks eligibility without reading metrics. Empty and singleton
+lists have direct paths. The sampler borrows candidates and clones only the winning
+Arc; it does not build a per-request eligible-backend collection.
 
-Ewma and LeastConn apply to HTTP / gRPC selection only. TCP / UDP / TLS routes always use
-RoundRobin (`select_roundrobin_backend_key`).
+Native HTTP/gRPC Service selection uses the captured endpoint policy. TCP, UDP and
+TLS passthrough Service paths call `select_service_endpoint` with `&None`, selecting
+RoundRobin, and use `ServiceDegradePolicy::Live`. The retained TLS termination
+implementation uses the same call shape, but TLSRoute Terminate remains disabled
+at product admission; this is not an additional supported traffic mode.
 
 ## BackendSelector
 
@@ -106,12 +113,14 @@ HTTPRoute rule
             ├── Capture the published Service projection and active membership
             │
             ├── Apply LB strategy to select a specific backend
-            │   ├── Default: RoundRobin (Pingora LoadBalancer)
+            │   ├── Default: RrCore -> RoundRobinSelector
             │   ├── ConsistentHash: hash by request feature
-            │   ├── LeastConn: least connections
-            │   └── EWMA: lowest Peak-EWMA score
+            │   ├── LeastConn: P2C connection counts
+            │   └── EWMA: P2C Peak-EWMA/load scores
             │
-            ├── Health check filtering (Pingora Backend health)
+            │   Candidate eligibility is checked inside selection, using the
+            │   captured Service runtime snapshot and live health/outlier state.
+            │   The degrade branch explicitly bypasses that candidate predicate.
             │
             └── Return HttpPeer (IP:Port + TLS configuration)
 ```
@@ -137,13 +146,14 @@ spec:
 `ParsedLBPolicy` (`edgion-resources/src/resources/lb_policy.rs`) has three
 non-default variants:
 - `ConsistentHash(ConsistentHashOn)` — specifies the hash source (`Header` /
-  `Cookie` / `Arg`, from `loadBalancer.consistentHash.hashOn`).
+  `Cookie` / `Arg` / `SourceIp`, from `loadBalancer.consistentHash.hashOn`).
 - `LeastConn`.
 - `Ewma`.
 
-Because policy is attached per-Service, two routes pointing at the same
-Service always share one algorithm — there is no per-route override and no
-union-of-policies semantics (the former route-fed `PolicyStore` with
+Native HTTP/gRPC requests targeting the same Service and capturing the same
+effective policy generation use the same endpoint algorithm. There is no per-route
+algorithm override or union-of-policies semantics (the former route-fed
+`PolicyStore` with
 ref-counting is gone). See
 [Behavior Changes](../../02-features/03-resources/20-edgion-backend-traffic-policy.md#behavior-changes-from-the-removed-mechanisms)
 in the resource schema doc.
@@ -151,9 +161,10 @@ in the resource schema doc.
 ## Eager Service selectors
 
 The Service/EndpointSlice Coordinator builds RoundRobin, ConsistentHash, LeastConn, and EWMA
-selectors eagerly for every valid canonical section and for the temporary legacy unsectioned
-projection. A semantic source no-op retains the complete projection Arc and does not publish a new
-generation. Startup has no route scan or preload step, and request selection never populates a
+selectors eagerly from the ready backends of each valid canonical section. Aliased
+section keys reuse the same materialized section; there is no legacy unsectioned
+selector projection. A semantic source no-op retains the complete projection Arc
+and does not publish a new generation. Startup has no route scan or preload step, and request selection never populates a
 selector cache.
 
 ## Directory layout
