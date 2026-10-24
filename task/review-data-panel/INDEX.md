@@ -16518,3 +16518,25 @@ cases (60 distinct identities). Formatting, workspace all-target check/Clippy an
 agent-doc validation passed with existing warnings. These shape/lifecycle tests
 do not verify a bulk candidate's distribution or reseed behavior. No new tests,
 prototype, full suite or workload benchmark ran.
+
+## OtherName decimal division over the remaining magnitude
+
+The canonical certificate extractor now retires leading zero magnitude bytes
+before each decimal long division. Sign detection and negative two's-complement
+conversion still precede this step. Retired bytes already contribute zero
+quotient and remainder, so decimal text and the final zeroed scratch are unchanged.
+The 64-byte admission cap, stack bounds, source-input immutability, final String
+allocation, BER rules and display/typed SAN ownership remain intact.
+
+Independent plan review passed. Existing reference comparisons cover all 256
+single-byte values, selected two-byte combinations and lengths through 64 bytes;
+signed decimal boundaries, allocation checks and real certificate projections
+remain the verification basis. No new implementation-shaped test is needed.
+This removes redundant arithmetic, with no additional allocation savings or
+measured throughput claim.
+
+Fresh focused runs passed 18 certificate-extractor and 14 mTLS callback tests,
+with identical baseline/final test identities and outcomes. Formatting, workspace
+all-target check/Clippy and all seven repository guards passed; Clippy retained
+existing warnings. Independent final code review passed. No full suite, live
+handshake probe or performance benchmark ran.

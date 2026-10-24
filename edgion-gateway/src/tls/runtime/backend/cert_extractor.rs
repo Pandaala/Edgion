@@ -271,12 +271,13 @@ fn signed_be_integer_to_decimal(bytes: &mut [u8]) -> String {
     magnitude_to_decimal(bytes, true)
 }
 
-fn magnitude_to_decimal(current: &mut [u8], negative: bool) -> String {
+fn magnitude_to_decimal(mut current: &mut [u8], negative: bool) -> String {
     // The guarded entry admits at most 64 bytes. Since 256 < 1000, three
     // decimal digits per byte plus one sign byte conservatively bounds output.
     let mut digits = [0u8; OTHER_NAME_INTEGER_MAX_BYTES * 3 + 1];
     let mut start = digits.len();
-    while current.iter().any(|&b| b != 0) {
+    while let Some(first_nonzero) = current.iter().position(|&b| b != 0) {
+        current = &mut current[first_nonzero..];
         let mut remainder = 0u16;
         for byte in current.iter_mut() {
             let value = remainder * 256 + u16::from(*byte);

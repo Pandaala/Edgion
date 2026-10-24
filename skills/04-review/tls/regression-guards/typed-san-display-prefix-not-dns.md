@@ -41,6 +41,13 @@ IDENTIFIER, NULL (empty string), and string types including BMP/Universal
 (embedded NULs are kept; do not truncate at `\0`). OCTET STRING, BIT STRING,
 RELATIVE-OID, nested extra tags, incomplete BER, and raw UTF-8 are skipped.
 
+INTEGER conversion copies the admitted input into bounded stack scratch and
+resolves its sign before decimal division. Each division retires leading zero
+magnitude bytes: they contribute neither quotient nor remainder. The original
+input stays unchanged, and the final decimal String is the only allocation.
+Signed conversion, the 64-byte limit and output formatting remain unchanged;
+skipping zero-prefix arithmetic is not a measured handshake throughput claim.
+
 ## Requested projection ownership (ARCH-042)
 
 `tls/runtime/backend/cert_extractor.rs` owns one private SAN enumeration with
