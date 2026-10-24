@@ -176,12 +176,15 @@ empty allocations. Existing adapter allocation and access-log projection tests
 cover their consumer boundaries; historical integration results are not fresh
 verification of this correction.
 
-The entry snapshot remains publicly mutable, and early RequestId/preflight gates
-still precede metadata capture. Reading before capture can initialize an empty
-cache permanently; the no-argument API does not solve that lifecycle boundary.
-Re-evaluate this decision if entry capture ordering, snapshot mutability, query
-view semantics or cache lifetime changes. Decoder token allocation (ARCH-048)
-is a separate concern.
+The entry snapshot remains publicly mutable. Any other or synthetic caller that
+reads cached_query before capture can initialize an empty cache permanently;
+the no-argument API does not solve that lifecycle boundary. However, canonical
+RequestId construction accepts only Header/TraceId/Ctx sources, and early
+attachment further excludes Ctx and Query conditions. Generic KeyGet support is
+not evidence that an admitted early RequestId rule initializes this query cache.
+Re-evaluate if source validation or construction paths, entry capture ordering,
+snapshot mutability, query view semantics or cache lifetime change. Decoder token
+allocation (ARCH-048) is a separate concern.
 
 ---
 

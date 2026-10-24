@@ -1384,3 +1384,40 @@ injection, allocation/latency benchmark, full suite or live transport test ran.
 Source references are rand src/rngs/thread.rs and reseeding.rs, rand_core
 src/block.rs and os.rs, and rand_chacha src/chacha.rs. Re-evaluate these conclusions
 when dependency versions/features or the P2C handle lifetime change.
+
+## RequestId admitted source adapter boundaries
+
+Revalidated at ced96f648. This inventory follows configuration validation before
+interpreting the generic adapter dispatch. RequestIdConfig::validation_error,
+RequestId::create and CompiledRequestIdRule::new restrict admitted sources to the
+following set; the latter two independently validate runtime construction.
+
+| Source | Direct adapter behavior and ownership | Early attachment |
+| --- | --- | --- |
+| None | No source read; target validation and configured generation remain canonical apply_rule work. | Allowed |
+| Header | single_header requires exactly one nonsensitive value and clones its HeaderValue. It does not substitute generic first-header KeyGet lookup. | Allowed |
+| TraceId | Read the canonical request-owned W3C ID, copy to String and move into HeaderValue. Suppressing x-trace-id does not remove this identity. | Allowed |
+| Ctx | Read the current context map, copy its value and move into HeaderValue. Later rules observe current state rather than an entry snapshot. | Rejected |
+
+The other nine KeyGet variants (RemoteIp, DirectPeerIp, Host, Cookie, Query, Path,
+RequestPath, Method and RemoteIpAndPath) are rejected as RequestId sources.
+They remain valid generic adapter cases for other consumers, not extra RequestId
+coverage. Public fields can support synthetic mutation; this reachability claim
+is scoped to canonical admitted production configurations.
+
+The early validator permits only Header/Method/TraceId key conditions and rejects
+other conditions plus body/dye wrappers. plugin_store passes its result into
+configure_request_id_scope; run_early_request_ids checks the invalid flag before
+dispatch. This is a Gateway gate as well as a schema/Controller rule.
+
+apply_request_ids eagerly reads target/source before apply_rule, including cases
+where the core subsequently preserves an ID or rejects a new slot. The default
+patch and every rule outcome reconcile managed headers, so later Header sources
+see earlier writes/removals. Moving out identity or snapshotting all sources
+would change this boundary. The [deferred source-evaluation task](trace-02-request-id-source-evaluation.md)
+now records the actual admitted set and withdraws its prior RequestId Query-cache
+premise. The generic pre-capture query-cache caveat is separate.
+
+This closes the direct source-adapter inventory, not all generic KeyGet consumers,
+query decoders, protocol header storage, RNG internals or policy publication.
+No runtime change or selected lazy-source implementation follows from this audit.

@@ -1,86 +1,73 @@
 # RequestId source evaluation timing
 
 Status: deferred optimization/API decision for user review. No runtime change.
-Source baseline: ad647a342.
+Revalidated baseline: `ced96f648`.
 
-## Evidence
+## Admitted sources and evidence
+
+RequestIdConfig::validation_error permits only no source, TraceId, Header and Ctx.
+RequestId::create validates the configuration, and CompiledRequestIdRule::new
+revalidates each rule. Header/Ctx names also pass their sensitive-source checks.
+The generic KeyGet enum and adapter implement other variants, but that does not
+make them reachable through canonical RequestId construction.
+
+Early attachment further limits sources to no source, Header and TraceId, and
+key conditions to Header/Method/TraceId. Other conditions and body/dye wrappers
+are rejected. plugin_store computes the invalid-early flag from this validator;
+run_early_request_ids checks it before dispatch. Ctx remains a normal-phase source.
 
 `plugins/runtime/session_adapter.rs::apply_request_ids` extracts an owned target
-header and configured source before calling canonical `RequestTraceId::apply_rule`.
-The core then returns Preserved for an established ID or LimitExceeded for a new
-ID beyond the slot cap, discarding both inputs. An accepted incoming target also
-wins without using the source. Target-invalid and suppression-marker cases must
-continue to consider the source under the existing rules.
+header and configured source before calling canonical RequestTraceId::apply_rule.
+The core returns Preserved for an established ID or LimitExceeded for a new ID
+beyond the slot cap, discarding both inputs. An accepted incoming target also
+wins without using the source. Invalid-target and suppression-marker cases still
+consider the source under the existing rules.
 
-Header sources use `single_header`, preserving duplicate-value and sensitivity
-rejection. Other sources use canonical `key_get`, construct an owned String and
-convert it to HeaderValue. Cookie lookup scans current Cookie fields; simple
-identity/path/context reads copy their strings. Query lookup additionally reaches
-`ctx.cached_query()`, whose OnceLock can initialize the frozen decoded query map.
-It stores an optional boxed map; absent/empty queries share the static empty map.
-No measured workload establishes how often discarded extraction is significant.
-
-There is a material timing boundary: early RequestId/preflight execution can
-precede entry metadata capture. The existing query ownership knowledge notes
-that reading before capture can freeze an empty cache. Skipping an otherwise
-discarded early Query source could therefore affect what a later query reader
-observes. Do not assume all source reads are observationally pure or silently
-fix/redefine capture ordering as part of a performance patch.
+Header sources use single_header, preserving duplicate-value and sensitivity
+rejection. TraceId reads canonical request identity; Ctx reads current context
+storage. These two sources copy into String and move it into HeaderValue. No
+measured workload establishes how often discarded extraction is significant.
 
 The adapter applies the default patch and reconciles headers, then reconciles
 again after every rule, including preserved/limited outcomes. Later rules can
-read headers produced or removed by earlier rules. The trace-ID state also owns
-the canonical TraceId source; moving it out temporarily to satisfy borrowing
-would change what that source observes.
+read headers produced or removed by earlier rules. Temporarily moving out the
+canonical identity to satisfy borrowing would alter the TraceId source.
 
-## Decision alternatives
+## Corrected historical premise
 
-- Keep eager extraction when bounded rule counts and ordinary sources make the
-  work cheaper than a more complicated state transition API.
-- Design a canonical decision-before-extraction operation that identifies which
-  inputs are needed, then completes the same rule transition. Keep that policy
-  with RequestTraceId rather than duplicating predicates in the adapter.
-- Evaluate a shared borrowed-source projection independently of evaluation
-  timing. Reuse existing KeyGet mechanisms; Header source cardinality/sensitivity
-  cannot be replaced by a generic first-header string lookup.
+The earlier audit at ad647a342 inferred RequestId reachability from generic
+KeyGet dispatch and treated early Query cache initialization as a blocker. Current
+constructor and early-attachment validation reject that source, so this is not
+a demonstrated side effect of admitted RequestId rules. The general frozen-query
+cache caveat remains valid for other or synthetic pre-capture callers; it must
+not be used as evidence against optimizing the current admitted source set.
+Re-evaluate if source validation expands or a new construction path bypasses it.
 
-Any lazy design must explicitly resolve the pre-capture query observation issue.
-A closure alone does not solve Rust ownership: the adapter's source reads can
-borrow the context that also contains the mutable canonical identity. Do not
-introduce unsafe aliases, temporary empty identity, a second state authority or
-a request-wide source snapshot. No interface or implementation is selected.
+## Decision alternatives and acceptance
 
-## Acceptance for later implementation
+Keep eager extraction if bounded rule counts make the work cheaper than a more
+complex transition API. Otherwise design canonical decision-before-extraction
+and completion operations, or evaluate borrowed projection independently. Keep
+selection policy with RequestTraceId rather than duplicating state predicates in
+the adapter. Header cardinality/sensitivity cannot become a generic first-header
+lookup. No interface or implementation is selected here.
 
-Preserve first-write value and forwarding/echo policy, suppression/non-resurrection
-from stale inbound values, target/source validation and fallback order, slot and
-total-byte bounds, absent markers, ApplyOutcome and aggregate capacity reporting.
-Keep generation and its random calls only on the same required fallback path.
-Preserve copied-value masking, including the canonical TraceId source exception.
+Preserve first-write values and forwarding/echo policy, suppression markers,
+validation/fallback order, slot and byte bounds, absent markers, ApplyOutcome,
+capacity reporting and copied-value masking. Generation/random calls must remain
+on the same required fallback path. Preserve default-patch and per-rule header
+reconciliation, live Ctx/Header reads and the canonical TraceId exception.
 
-Keep current Header duplicate/sensitivity checks, Cookie field order and invalid
-field behavior, source-specific empty handling, frozen decoded Query semantics,
-live header/context reads and raw versus normalized paths. Evaluate metadata
-capture timing explicitly; a change needs its own reviewed requirement. Preserve
-default-patch and per-rule reconciliation so later sources observe prior writes.
+Measure allocations, CPU and retained storage for established/absent/suppressed
+IDs, cap exhaustion, valid/invalid targets and repeated sources. Compare real
+adapter chains, duplicate/sensitive headers, source names matching earlier
+destinations, normal-phase Ctx changes and global/Gateway/route composition.
+Pure apply_rule tests do not establish adapter timing equivalence. Broader KeyGet
+or query-cache policy changes are outside this task.
 
-Compare allocations, query-map initialization, CPU and retained memory for
-existing/absent/suppressed IDs, cap exhaustion, valid/invalid targets, repeated
-source names and short/large query inputs. Tests should prove which source reads
-are skipped and compare outcomes/headers/log identity against the current state
-machine. Include real adapter rule chains, sensitive/duplicate headers, sources
-that name prior destinations, and reads before/after metadata capture and rewrites.
-Pure apply_rule tests alone do not verify adapter extraction timing.
+Any selected implementation requires a frozen scope, independent IMPL reviews
+and project checks. No lazy prototype, benchmark or new observability is included.
 
-Freeze an exact scope and use independent IMPL plan/final review before code
-changes. No new tracing, metrics, schema knobs or broad KeyGet rewrite is implied.
-
-## Original knowledge and verification
-
+Original knowledge:
 - [Request identity lifecycle](../../skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md)
-- [Frozen query source and capture boundary](../../skills/04-review/uri-normalization/mandatory-design/normalization-contract.md#frozen-query-cache-source)
-
-The preceding runtime batch at this baseline passed filtered runs of 29 trace-ID,
-15 RequestId and 17 early-request-filter cases; these are prior results and do
-not prove a lazy interface correct. This documentation audit changes no runtime
-or test. No lazy prototype, new extraction-spy test or benchmark was executed.
+- [Frozen query source boundary](../../skills/04-review/uri-normalization/mandatory-design/normalization-contract.md#frozen-query-cache-source)
