@@ -150,26 +150,30 @@ impl RequestFilter for OpenidConnect {
                                         )
                                         .await
                                     {
-                                        Ok(new_token) => match self.verify_token(session, &new_token).await {
-                                            Ok(claims) => {
-                                                self.maybe_set_session_cookie_header(session, &session_cookie).await;
-                                                let userinfo_json =
-                                                    self.fetch_userinfo_json(&new_token, plugin_log).await;
-                                                self.apply_upstream_headers(
-                                                    session,
-                                                    &new_token,
-                                                    session_cookie.id_token.as_deref(),
-                                                    userinfo_json.as_deref(),
-                                                    &claims,
-                                                );
-                                                plugin_log.push("token refresh on expiry");
-                                                self.strip_gateway_owned_cookies(session);
-                                                return PluginRunningResult::GoodNext;
+                                        Ok(new_token) => {
+                                            drop(token);
+                                            match self.verify_token(session, &new_token).await {
+                                                Ok(claims) => {
+                                                    self.maybe_set_session_cookie_header(session, &session_cookie)
+                                                        .await;
+                                                    let userinfo_json =
+                                                        self.fetch_userinfo_json(&new_token, plugin_log).await;
+                                                    self.apply_upstream_headers(
+                                                        session,
+                                                        &new_token,
+                                                        session_cookie.id_token.as_deref(),
+                                                        userinfo_json.as_deref(),
+                                                        &claims,
+                                                    );
+                                                    plugin_log.push("token refresh on expiry");
+                                                    self.strip_gateway_owned_cookies(session);
+                                                    return PluginRunningResult::GoodNext;
+                                                }
+                                                Err(err) => {
+                                                    plugin_log.push_err(err.response_log_tag_or("token verify fail"));
+                                                }
                                             }
-                                            Err(err) => {
-                                                plugin_log.push_err(err.response_log_tag_or("token verify fail"));
-                                            }
-                                        },
+                                        }
                                         Err(refresh_err) => {
                                             if Self::is_refresh_wait_timeout(&refresh_err) {
                                                 match self.verify_jwt_token_allow_expired(session, &token).await {
@@ -269,6 +273,7 @@ impl RequestFilter for OpenidConnect {
                 PluginRunningResult::GoodNext
             }
             Err(err) => {
+                drop(token);
                 plugin_log.push_err(err.log_tag());
                 let status = err.http_status();
                 let message = err.user_message();

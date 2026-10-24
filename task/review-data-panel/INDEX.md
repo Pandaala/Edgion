@@ -16314,3 +16314,25 @@ preserved. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. Source ownership and compilation establish
 these release points; tests do not instrument deallocation timing. No full suite,
 ignored live-IdP tests, new network fixtures or performance benchmark ran.
+
+## Release unused OIDC request token copies
+
+The final Bearer verification failure branch releases its owned token before
+logging, authentication delay and error delivery. In the expired-session refresh
+success branch, the old token releases before verification of the returned token.
+No later operation in that branch uses the old token, including when verification
+of the new token fails. The refresh-error branch retains its old token for the
+existing wait-timeout/expired-within-leeway fallback.
+
+Verification results own their data, and these String releases do not affect
+session headers, cookie fields, cache entries or independent provider values.
+Success publication, fallback eligibility, response/log order and unauthAction
+remain unchanged. The owner inventory records this local lifetime change without
+erasure, allocation-count, future-size, measured peak-memory or throughput claims.
+
+Independent plan and final source review passed. Baseline and final OIDC runs
+each passed 159 tests with 16 existing ignores; all 175 identities/outcomes were
+preserved. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. Source ownership and compilation establish
+release boundaries; tests do not instrument deallocation timing. No full suite,
+ignored live-IdP tests, new network fixtures or performance benchmark ran.
