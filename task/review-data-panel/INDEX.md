@@ -15385,3 +15385,16 @@ seven HTTP-attempt and 104 upstream-peer tests (172 total). Formatting and works
 all-target check/Clippy passed with existing unrelated warnings. No runtime change,
 prototype, full suite, live Redis exchange or performance benchmark ran.
 Agent-doc validation and independent plan/final reviews passed.
+
+## Attempt metric bucket storage
+
+The [bucket-storage task](usage-05-attempt-metric-bucket-storage.md) records the
+lazy Vec, scalar aggregation and first-seen order, alongside the AI-state-size
+tradeoff of inline/indexed alternatives. Bucket accounting precedes attempt-log
+truncation and preserves known totals even when request totals are unresolved;
+the log's eight-entry limit is not a replacement bucket bound. No representation
+was selected. Fresh unchanged-source verification passed 25 attempt-runtime,
+52 usage, 13 finalizer and 36 dispatch tests (126 total). Formatting and workspace
+all-target check/Clippy passed with existing unrelated warnings. No runtime change,
+prototype, full suite, live integration or performance benchmark ran.
+Agent-doc validation and independent plan/final reviews passed.
