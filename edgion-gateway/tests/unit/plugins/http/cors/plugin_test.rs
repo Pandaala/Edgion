@@ -535,3 +535,83 @@ fn preflight_header_transfer_preserves_wire_and_errors() {
         }
     }
 }
+
+#[tokio::test]
+async fn request_classification_preserves_text_header_presence_and_continue_policy() {
+    let origins: &[Option<&[u8]>] = &[
+        None,
+        Some(b"\xff"),
+        Some(b""),
+        Some(b"https://denied.example"),
+        Some(b"https://example.com"),
+    ];
+    let request_methods: &[Option<&[u8]>] = &[None, Some(b"\xff"), Some(b""), Some(b"POST")];
+    for &origin in origins {
+        for method in ["GET", "OPTIONS"] {
+            for &request_method in request_methods {
+                for preflight_continue in [false, true] {
+                    let mut config = create_cors_config();
+                    config.preflight_continue = preflight_continue;
+                    let cors = Cors::new(&config);
+                    let mut headers = http::HeaderMap::new();
+                    if let Some(origin) = origin {
+                        headers.insert("origin", http::HeaderValue::from_bytes(origin).unwrap());
+                    }
+                    if let Some(request_method) = request_method {
+                        headers.insert(
+                            "access-control-request-method",
+                            http::HeaderValue::from_bytes(request_method).unwrap(),
+                        );
+                    }
+                    let textual_origin = headers.get("origin").and_then(|value| value.to_str().ok());
+                    let allowed = textual_origin == Some("https://example.com");
+                    let preflight = textual_origin.is_some()
+                        && method == "OPTIONS"
+                        && headers
+                            .get("access-control-request-method")
+                            .is_some_and(|value| value.to_str().is_ok());
+                    let terminates = preflight && (!allowed || !preflight_continue);
+                    let mut session = MockPluginSession::new();
+                    session
+                        .expect_get_method()
+                        .times(usize::from(textual_origin.is_some()))
+                        .return_const(method.to_owned());
+                    session.expect_request_header_map().return_const(headers);
+                    session.expect_set_response_header().returning(|_, _| Ok(()));
+                    session.expect_append_response_header().returning(|_, _| Ok(()));
+                    session
+                        .expect_write_response_header()
+                        .times(usize::from(terminates))
+                        .returning(move |response, end| {
+                            assert_eq!(response.status.as_u16(), 204);
+                            assert!(end);
+                            assert_eq!(response.headers.contains_key("access-control-allow-origin"), allowed);
+                            Ok(())
+                        });
+                    session
+                        .expect_write_response_body()
+                        .times(usize::from(terminates))
+                        .returning(|body, end| {
+                            assert!(end);
+                            assert!(body.is_some_and(|body| body.is_empty()));
+                            Ok(())
+                        });
+                    let mut log = PluginLog::new("Cors");
+                    let result = cors.run_request(&mut session, &mut log).await;
+                    assert_eq!(
+                        result,
+                        if terminates {
+                            PluginRunningResult::ErrTerminateRequest
+                        } else {
+                            PluginRunningResult::GoodNext
+                        },
+                        "origin={origin:?}, method={method}, request_method={request_method:?}, continue={preflight_continue}",
+                    );
+                    assert_eq!(log.contains("cors preflight"), preflight);
+                    assert_eq!(log.contains("cors actual"), allowed && !preflight);
+                    assert_eq!(log.contains("origin match:allow"), allowed);
+                }
+            }
+        }
+    }
+}

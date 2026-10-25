@@ -55,13 +55,14 @@ impl Cors {
         Cors { config }
     }
 
-    /// Check if this is a CORS preflight request
-    fn is_preflight_request(&self, session: &mut dyn PluginSession) -> bool {
+    /// Classify preflight after request entry has found a textual Origin.
+    /// Callers must not mutate request headers before this check.
+    fn is_preflight_with_origin(&self, session: &mut dyn PluginSession) -> bool {
         if session.get_method() != "OPTIONS" {
             return false;
         }
 
-        session.header_str("origin").is_some() && session.header_str("access-control-request-method").is_some()
+        session.header_str("access-control-request-method").is_some()
     }
 
     /// Select the value to emit in the Access-Control-Allow-Origin header for an
@@ -246,7 +247,7 @@ impl RequestFilter for Cors {
             plugin_log.push("origin match:deny");
             // For preflight with non-matching origin, return 204 directly
             // to avoid forwarding a useless OPTIONS request to the backend.
-            if self.is_preflight_request(session) {
+            if self.is_preflight_with_origin(session) {
                 plugin_log.push("cors preflight");
                 if let Ok(resp) = ResponseHeader::build(204, None) {
                     let _ = session.write_response_header(Box::new(resp), true).await;
@@ -258,7 +259,7 @@ impl RequestFilter for Cors {
             return PluginRunningResult::GoodNext;
         };
 
-        if self.is_preflight_request(session) {
+        if self.is_preflight_with_origin(session) {
             plugin_log.push("cors preflight");
             if let Err(_e) = self.handle_preflight(session, &allowed_origin).await {
                 plugin_log.push("origin match:deny");

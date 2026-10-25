@@ -18770,3 +18770,26 @@ measurement test remains ignored. Formatting, workspace all-target check/Clippy,
 agent-doc validation and diff hygiene passed with existing unrelated warnings.
 These tests do not establish cross-dimension candidate behavior during reload.
 No live Redis, full workspace test suite, candidate probe or benchmark ran.
+
+## Reuse textual Origin presence for CORS preflight classification
+
+Cors request entry already returns on absent or non-text Origin before either
+preflight classification call. The private helper is now named
+is_preflight_with_origin and documents that premise; it retains the method check
+and textual Access-Control-Request-Method presence without repeating Origin lookup.
+No request-header mutation or await intervenes. Allowed-origin selection, denied
+preflight termination, log/write order and later timing-origin reads are unchanged.
+
+This removes one header-map lookup and text validation for OPTIONS requests
+reaching the helper, not an output allocation. Empty textual request-method
+values retain their existing presence semantics; this is not new method-token
+validation. Native CORS and the separate preparation/value-transfer tasks are
+unchanged. The owning CORS knowledge page now describes the current premise.
+
+Independent plan review passed. Baseline and final Gateway CORS runs passed the
+same 48 test identities, including an 80-combination classification matrix over
+Origin and request-method presence/text validity, GET/OPTIONS and preflightContinue.
+Resource CORS verification passed 41 cases. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed with existing
+unrelated warnings. No full workspace test suite, live integration or throughput
+benchmark ran.

@@ -72,9 +72,14 @@ The selector accepts a borrowed origin, borrows the static star for the standard
 wildcard, and owns an echoed origin.
 The request entry reads the canonical borrowed header accessor once for presence
 and passes that same `&str` into `get_validated_origin`, which checks allowance
-before copying. There is no intervening request mutation or await. Later
-preflight and timing-header reads retain their existing order and behavior. Denied, absent and non-text origins produce no source
-copy; a nonempty accepted echo has one owned output, while the selected star
+before copying. There is no intervening request mutation or await. Both private
+`is_preflight_with_origin` calls rely on that textual-Origin premise and check
+only OPTIONS plus textual Access-Control-Request-Method presence. They no longer
+repeat the Origin lookup. Empty textual values remain present; absent/non-text
+Origin still returns before classification. Denied preflight still terminates
+even when preflight_continue is set. Timing-header reads and response emission
+retain their existing order and behavior. Denied, absent and non-text origins
+produce no source copy; a nonempty accepted echo has one owned output, while the selected star
 needs no allocation. Both outputs survive subsequent session mutation and
 asynchronous preflight handling without borrowing the session.
 This updates the helper's ownership signature, not the allow/deny split or wire
