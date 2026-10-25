@@ -4,6 +4,34 @@ use super::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+// Current admission evidence, not approval of permanent container-item exemptions.
+#[test]
+fn test_runtime_string_limit_is_not_a_universal_input_bound() {
+    for condition in [
+        r#"len("abcd") == 4"#,
+        r#"len(split("abcd", "-")) == 1"#,
+        "len(range(100, 101)) == 1",
+    ] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "X-Out" && value == "1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        assert_eq!(
+            run_with_limits(
+                &format!(r#"if {condition} {{ req.set_header("X-Out", "1") }}"#),
+                session,
+                VmLimits {
+                    max_string_len: 1,
+                    ..VmLimits::default()
+                },
+            ),
+            good_next(),
+        );
+    }
+}
+
 #[test]
 fn test_digest_hex_output_and_exact_byte_limits() {
     for (call, expected) in [

@@ -9,16 +9,15 @@
 //!   - catch_unwind for fault isolation
 //!
 //! Note on the step budget: `max_steps` counts opcode dispatches, not CPU time.
-//! Regex opcodes (`Matches`, `RegexFind`, `RegexReplace`) and `CallBuiltin`
-//! may each perform O(input_len) work per single step — regex evaluation runs
-//! over strings up to `max_string_len` bytes, and builtins such as `json_get`,
-//! `split`, `url_encode`, and `base64` iterate their input under one call /
-//! step deduction. The realistic CPU upper bound is therefore approximately
-//! `max_steps * max_string_len` for regex-heavy scripts and
-//! `max_call_count * max_string_len` for builtin-heavy scripts, additionally
-//! bounded by each regex's `dfa_size_limit` (1 MiB) and per-builtin output
-//! caps. See `skills/01-architecture/02-gateway/dsl-engine-security-model.md`
-//! for the canonical breakdown of every cap and where it is enforced.
+//! Regex operations and synchronous builtins may scan or transform their input
+//! within one dispatch. Runtime output limits do not universally bound inputs:
+//! constants have separate validation limits, and container producers have their
+//! own admission rules. Regex DFA size limits bound memory, not elapsed CPU time.
+//! A cost analysis must trace the actual input, algorithm, temporary storage and
+//! applicable work budgets; multiplying dispatch counts by `max_string_len` is
+//! not a general execution bound. See
+//! `skills/01-architecture/02-gateway/dsl-engine-security-model.md` for the
+//! canonical cap inventory and enforcement points.
 
 use std::sync::Arc;
 

@@ -18538,8 +18538,28 @@ no runtime or test changed.
 
 Fresh utility coverage passed 111 tests; formatting, workspace all-target
 check/Clippy, agent-doc validation and diff checks passed with existing warnings.
-A separate knowledge follow-up remains: revalidate the universal input/CPU-bound
-wording in `skills/04-review/cpu-memory/intentional-design/dsl-step-budget-not-cpu-bound.md`
-and per-Value wording in `skills/04-review/dsl/intentional-design/string-len-bytes-vs-chars-contract.md`
-against constant loading and container elements. This inventory does not adopt
-those broader bounds or claim that it establishes a complete sandbox cost model.
+The input/CPU-bound knowledge follow-up is resolved by the correction below.
+This inventory does not establish a complete sandbox cost model.
+
+
+## Correct DSL budget knowledge scope
+
+The owning CPU-budget and byte-versus-scalar knowledge pages now withdraw their
+unproven universal CPU product and per-Value heap claims. The VM module comment
+matches this correction. Constants have separate validation limits; stack push
+does not universally check Str bytes, and Split/Range currently omit per-element
+string checks. Output validation also does not universally precede temporary
+conversion allocation. These are observed boundaries, not acceptance of missing
+guards or a newly derived CPU/heap bound.
+
+Dispatch counting and the byte/scalar distinction remain unchanged. The pages
+no longer automatically reject resource findings using the old product argument,
+or assume multibyte text is rare and StringTooLong always produces HTTP 500.
+Configured error-policy behavior remains authoritative. A focused current-state
+test demonstrates literal, Split and Range execution with max_string_len=1;
+its comment explicitly disclaims permanent policy approval.
+
+All 112 utility tests passed. Formatting, workspace all-target check/Clippy,
+seven repository guards and diff checks passed with existing warnings. No
+runtime logic, limits or user-facing API changed. No full-workspace suite,
+live integration or performance measurement ran.
