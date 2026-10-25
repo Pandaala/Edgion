@@ -16893,3 +16893,20 @@ original identities remain. Tests cover canonical serialized-key ordering,
 equal-key Arc identity, empty input and all-unit snapshot retention/release.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Borrow L4 full-rebuild bucket inputs
+
+The shared TCP/TLS/UDP full-rebuild bucketer now borrows the current DashMap
+entry's resource key and unit Arc, cloning only for owned listener-bucket
+entries. The existing iteration guard already covered extraction, warning and
+insertion. This removes one temporary key clone and Arc increment/decrement
+per cached route without extending lock lifetime or changing listener fanout,
+metadata-only warnings, clear/orphan ordering or snapshot ownership.
+
+Independent plan and final source reviews passed. Existing cached-unit identity,
+multi-listener sharing and stale/active clearing tests supply the relevant
+coverage; no duplicate tests were added. Fresh baseline and final runs passed
+29 TCP, 61 UDP and five TLS manager tests (95 distinct identities), with identical
+names and outcomes. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full suite, live traffic,
+allocation instrumentation or benchmark ran; the benefit is cold rebuild work.

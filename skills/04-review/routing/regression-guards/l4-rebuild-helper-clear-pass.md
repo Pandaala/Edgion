@@ -135,3 +135,18 @@ manager API surface, different rebuild input shape).
   this helper follows.
 - HTTP canonical clear-pass (the model we mirrored):
   `edgion-gateway/src/routes/http/routes_mgr.rs:375-381`.
+
+## Full-rebuild bucket ownership
+
+`bucket_routes_by_listener` borrows each resource key and unit Arc from the
+current DashMap entry, cloning them only when inserting an owned listener-bucket
+entry. The DashMap iteration guard already spans that entire iteration, so this
+removes one temporary key clone and Arc increment/decrement per cached route
+without extending the guard lifetime. Empty-listener routes retain the same
+metadata-only warning and are skipped without those temporary copies. Listener
+extraction, fanout, publication and the clear/orphan passes are unchanged.
+
+Existing TCP cached-unit identity and UDP multi-listener/schema-sharing tests
+cover the ownership boundary. This is cold rebuild work, not a measured
+throughput improvement. Re-evaluate if extraction callbacks gain Arc-count
+semantics or the iteration guard boundary changes.

@@ -184,9 +184,9 @@ fn bucket_routes_by_listener<R>(
     let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<R>>> = HashMap::new();
 
     for entry in route_cache.iter() {
-        let route_key = entry.key().clone();
-        let route = entry.value().clone();
-        let listeners = get_listeners(&route);
+        let route_key = entry.key();
+        let route = entry.value();
+        let listeners = get_listeners(route);
 
         if listeners.is_empty() {
             tracing::warn!(
