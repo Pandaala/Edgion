@@ -17617,3 +17617,20 @@ Final runs preserve those identities/outcomes and pass the new helper allocation
 test, for 89 total. Independent plan/amended-plan and source reviews passed.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or performance benchmark ran.
+
+## Probe TLS SAN list ownership transfer
+
+ProbeTransport::build_tls now transfers the SAN list from its consumed local
+validation configuration into the shared verified TLS builder after canonical
+resolution. This removes the second policy-list clone for nonempty SAN lists;
+the original policy and the independently resolved configuration remain owned
+as before. Absent/empty lists, element order, CA/hostname/SAN/mTLS checks, explicit
+defaults, error mapping, lazy initialization and endpoint client isolation are
+unchanged. The discarded local validation metadata has no custom destructor or
+secret material. No throughput or RSS improvement was measured.
+
+Independent plan and source reviews passed. Fresh baseline/final runs preserve
+all 24 AllEndpointStatus and 4 shared verified-TLS test identities and outcomes.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No tests were added or changed; no full suite, live
+transport integration or performance benchmark ran.

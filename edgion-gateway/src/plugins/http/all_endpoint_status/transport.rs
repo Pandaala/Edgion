@@ -109,7 +109,10 @@ impl ProbeTransport {
         .map_err(|_| "probe configuration unavailable")?;
         build_verified_outbound_tls(
             &resolved,
-            spec.validation.subject_alt_names.clone().unwrap_or_default(),
+            local
+                .validation
+                .and_then(|validation| validation.subject_alt_names)
+                .unwrap_or_default(),
             "AllEndpointStatus",
         )
         .map(Some)
