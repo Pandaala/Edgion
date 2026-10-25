@@ -17680,3 +17680,21 @@ Baseline/final runs preserve all 11 Common egress tests (including that regressi
 and 3 Gateway adapter tests. Formatting, workspace all-target check/Clippy and
 seven repository guards passed with existing warnings. No full suite, live DNS
 test, allocation instrumentation or performance benchmark ran.
+
+## Release the rendered HTTPDNS URL before response parsing
+
+Common resolve_http_dns_prepared drops its rendered URL String after a successful
+fetch returns the independently owned body, before parsing that body. This
+shortens overlap between the temporary URL owner and parser/result allocations.
+It does not remove the original allocation or claim measured RSS/throughput
+improvement or secure erasure. The fetcher and its independent transport owners
+remain unchanged.
+
+Rendering/fetch failures, cancellation during fetching, prepared response policy,
+parse errors, fallback selection and primary-error precedence remain unchanged.
+Independent plan and source reviews passed. Fresh baseline/final Common DNS runs
+preserve all 71 test identities and outcomes; no tests were added or changed.
+Existing tests separately assert rendering and exercise fake-fetcher parsing and
+fallback; FixedBodyFetcher does not assert the URL it receives. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live HTTPDNS transport test or memory benchmark ran.

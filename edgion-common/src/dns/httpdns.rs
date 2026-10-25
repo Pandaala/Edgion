@@ -245,6 +245,7 @@ pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
     let attempt = async {
         let url = render_url(cfg, domain)?;
         let body = fetcher.get(&url).await?;
+        drop(url);
         response.parse(&body)
     }
     .await;
