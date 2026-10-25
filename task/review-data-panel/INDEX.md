@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Semantic window fragment projection](sse-04-semantic-fragment-projection.md)
+
 - [HTTP/1 body-buffer handoff ownership](transport-01-h1-body-buffer-handoff.md)
 
 - [Owned context-write handoff](ctx-03-owned-context-write-handoff.md)
@@ -16910,3 +16912,21 @@ coverage; no duplicate tests were added. Fresh baseline and final runs passed
 names and outcomes. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. No full suite, live traffic,
 allocation instrumentation or benchmark ran; the benefit is cold rebuild work.
+
+## Semantic window fragment projection decision
+
+RawWindow::visit_bucket assembles every semantic fragment in admitted token
+scratch, even when its single range is contiguous. The existing SliceChain::range
+may allocate on fragmented input, so it is not a safe nonallocating probe.
+[sse-04](sse-04-semantic-fragment-projection.md) compares retaining assembly,
+borrowing contiguous bytes while keeping scratch admission, and a separately
+reviewed scratch/admission redesign. Failed-probe traversal and actual-capacity
+error precedence prevent an unconditional performance claim. No runtime change
+or duplicate incremental-statistics/envelope proposal was selected.
+
+Independent plan review passed. Fresh existing tests passed 94 SSE and 25 semantic
+response cases (119 distinct identities). These are current-behavior evidence,
+not acceptance of a new projection. No new tests, prototype, allocation probe,
+full suite, live transport or benchmark ran.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. Runtime sources and tests are unchanged.
