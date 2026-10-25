@@ -18680,3 +18680,33 @@ cases. Formatting, workspace all-target check/Clippy, agent-doc validation and
 diff hygiene passed, with existing unrelated warnings. These tests describe the
 current implementation; no proposed reuse branch, ownership probe, full workspace
 test suite, live integration or benchmark ran.
+
+## Compare body prefix and equality text by chunk slices
+
+TextOperationScanner StartsWith and Equals now compare the relevant byte slices
+instead of advancing their matched counter in a per-byte loop. StartsWith stops
+on a mismatch or completed pattern; Equals continues on an exact chunk match
+until EOF or later excess/mismatching text. No pattern ownership, preparation,
+lossy decoder, scan worker or storage representation changes are included.
+
+Each admitted push retains its Continue/Stop decision and final boolean. A failed
+comparison no longer advances matched over its matching prefix, but that terminal
+private count is unobservable: finish checks failed and LossyTextScanner never
+feeds the inner scanner after Stop. Storage still charges the complete fetched
+chunk before handling Stop, so scan accounting and budget granularity are unchanged.
+This uses standard slice equality with no new allocation or unsafe code; no
+throughput, vectorization or constant-time comparison claim is made.
+
+Independent plan review passed. Baseline and final text-operation runs passed the
+same 14 test identities, including explicit chunk decisions and all three-way
+raw-byte splits against standard lossy decoding for prefix/equality results.
+The broad request_body filter initially passed 193 and failed six Wasm cases in
+parallel during preparation/loading; one reported preparation capacity exhaustion.
+The identical filter passed all 199 cases serially. This matches the previously
+recorded preparation-capacity sensitivity and does not establish parallel test
+isolation or fix it. The Gateway DSL filter passed 532 cases.
+
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed. A new test type-complexity warning was corrected and its targeted
+tests/check/Clippy rerun; remaining warnings are outside this diff. No full
+workspace test suite, live integration or performance benchmark ran.

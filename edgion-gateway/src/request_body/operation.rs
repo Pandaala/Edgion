@@ -412,19 +412,13 @@ impl TextBodyScanner for TextOperationScanner {
                 matched,
                 failed,
             } => {
-                if pattern.is_empty() {
+                let remaining = &pattern[*matched..];
+                let compared = remaining.len().min(chunk.len());
+                if chunk.as_bytes()[..compared] != remaining[..compared] {
+                    *failed = true;
                     return Ok(ScanControl::Stop);
                 }
-                for &value in chunk.as_bytes() {
-                    if *matched == pattern.len() {
-                        return Ok(ScanControl::Stop);
-                    }
-                    if value != pattern[*matched] {
-                        *failed = true;
-                        return Ok(ScanControl::Stop);
-                    }
-                    *matched += 1;
-                }
+                *matched += compared;
                 if *matched == pattern.len() {
                     return Ok(ScanControl::Stop);
                 }
@@ -472,13 +466,12 @@ impl TextBodyScanner for TextOperationScanner {
                 matched,
                 failed,
             } => {
-                for &value in chunk.as_bytes() {
-                    if *matched >= pattern.len() || pattern[*matched] != value {
-                        *failed = true;
-                        return Ok(ScanControl::Stop);
-                    }
-                    *matched += 1;
+                let remaining = &pattern[*matched..];
+                if chunk.len() > remaining.len() || remaining[..chunk.len()] != *chunk.as_bytes() {
+                    *failed = true;
+                    return Ok(ScanControl::Stop);
                 }
+                *matched += chunk.len();
             }
         }
         Ok(ScanControl::Continue)

@@ -351,3 +351,109 @@ fn known_empty_operations_resolve_without_building_scanner_state() {
         );
     }
 }
+
+#[test]
+fn prefix_and_equality_keep_chunk_stop_decisions() {
+    use ScanControl::{Continue, Stop};
+
+    type Case<'a> = (&'a str, &'a [&'a str], &'a [ScanControl], bool, &'a [ScanControl], bool);
+    let cases: &[Case<'_>] = &[
+        ("", &[""], &[Stop], true, &[Continue], true),
+        ("", &["x"], &[Stop], true, &[Stop], false),
+        (
+            "abc",
+            &["", "a", "", "bc"],
+            &[Continue, Continue, Continue, Stop],
+            true,
+            &[Continue, Continue, Continue, Continue],
+            true,
+        ),
+        ("abc", &["a", "bcd"], &[Continue, Stop], true, &[Continue, Stop], false),
+        (
+            "abc",
+            &["a", "b"],
+            &[Continue, Continue],
+            false,
+            &[Continue, Continue],
+            false,
+        ),
+        ("abc", &["x"], &[Stop], false, &[Stop], false),
+        ("abc", &["a", "xc"], &[Continue, Stop], false, &[Continue, Stop], false),
+        ("abc", &["ab", "x"], &[Continue, Stop], false, &[Continue, Stop], false),
+        (
+            "aé€",
+            &["a", "é", "€"],
+            &[Continue, Continue, Stop],
+            true,
+            &[Continue, Continue, Continue],
+            true,
+        ),
+        ("aé€", &["aé", "π"], &[Continue, Stop], false, &[Continue, Stop], false),
+    ];
+    for &(pattern, chunks, prefix_controls, prefix_result, equal_controls, equal_result) in cases {
+        for (operation, controls, expected) in [
+            (
+                BodyTextOperation::StartsWith(pattern.to_owned()),
+                prefix_controls,
+                prefix_result,
+            ),
+            (
+                BodyTextOperation::Equals(pattern.to_owned()),
+                equal_controls,
+                equal_result,
+            ),
+        ] {
+            let mut scanner = TextOperationScanner::new(operation);
+            assert_eq!(chunks.len(), controls.len());
+            for (chunk, expected_control) in chunks.iter().zip(controls) {
+                assert_eq!(
+                    scanner.push(chunk).unwrap(),
+                    *expected_control,
+                    "pattern={pattern:?}, chunk={chunk:?}"
+                );
+            }
+            assert_eq!(scanner.finish().unwrap(), BodyTextResult::Bool(expected));
+        }
+    }
+}
+
+#[test]
+fn prefix_and_equality_match_lossy_text_at_every_three_chunk_split() {
+    for raw in [
+        b"".as_slice(),
+        b"abc",
+        b"abc trailing",
+        "aé€z".as_bytes(),
+        b"a\xffb\xe2\x82",
+        b"\xe2\x28\xa1",
+        b"\xf0\x90\x80",
+    ] {
+        let text = String::from_utf8_lossy(raw);
+        for pattern in [
+            "",
+            "a",
+            "abc",
+            "abx",
+            "x",
+            "aé",
+            "longer-than-input-pattern",
+            text.as_ref(),
+        ] {
+            for first in 0..=raw.len() {
+                for second in first..=raw.len() {
+                    let chunks = [&raw[..first], &raw[first..second], &raw[second..]];
+                    assert_eq!(
+                        scan_text_operation(BodyTextOperation::StartsWith(pattern.to_owned()), &chunks),
+                        BodyTextResult::Bool(text.starts_with(pattern)),
+                        "prefix={pattern:?}, raw={raw:?}, splits={first},{second}",
+                    );
+                    assert_eq!(
+                        scan_text_operation(BodyTextOperation::Equals(pattern.to_owned()), &chunks),
+                        BodyTextResult::Bool(text == pattern),
+                        "equal={pattern:?}, raw={raw:?}, splits={first},{second}",
+                    );
+                }
+            }
+        }
+    }
+}
