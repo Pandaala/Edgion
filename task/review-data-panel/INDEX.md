@@ -18281,3 +18281,22 @@ probes are already linear; no runtime defect or measured speedup is claimed.
 Fresh WAF tests passed 873 cases with six existing ignored; formatting and
 workspace all-target check/Clippy passed with existing warnings. No full-workspace
 suite, external XML comparison, live integration, prototype or benchmark ran.
+
+## Reuse string search for braced regex replacement references
+
+The shared bounded regex replacement parser now finds the first closing brace
+with the standard string search instead of a scalar byte iterator. The checked
+ASCII `${` prefix guarantees that byte offset two is a UTF-8 boundary; returned
+byte offsets, absent-brace handling and capture grammar remain unchanged. DSL
+reaches this parser for dynamic replacement templates; AI Guard still prepares
+its templates during rule compilation. Output admission, allocation policy and
+consumer error mapping are unchanged. This is search-primitive reuse, not a
+measured throughput or memory improvement.
+
+All 11 existing helper tests passed before and after the change with identical
+identities and outcomes, including differential interpolation grammar, UTF-8,
+zero-width matches and output limits. Fresh filtered runs also passed 25
+regex-replacement and 17 AI Guard request-rule tests. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No test body changed; no full-workspace suite, live integration or benchmark ran.
+Wider callback coverage and previously deferred ownership decisions remain open.

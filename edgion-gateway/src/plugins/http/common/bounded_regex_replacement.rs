@@ -133,7 +133,7 @@ fn capture_reference(replacement: &str) -> Option<(&str, usize)> {
         return None;
     }
     if bytes[1] == b'{' {
-        let close = bytes[2..].iter().position(|byte| *byte == b'}')? + 2;
+        let close = replacement[2..].find('}')? + 2;
         return Some((&replacement[2..close], close + 1));
     }
 
