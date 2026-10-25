@@ -1044,10 +1044,9 @@ impl<'a> SqliTokenizer<'a> {
         let next_char = self.input[pos + 1];
 
         // Check for $1,000.00 format
-        let money_chars = b"0123456789.,";
         let mut end_pos = pos + 1;
 
-        while end_pos < slen && money_chars.contains(&self.input[end_pos]) {
+        while end_pos < slen && (self.input[end_pos].is_ascii_digit() || matches!(self.input[end_pos], b'.' | b',')) {
             end_pos += 1;
         }
 
@@ -1068,10 +1067,9 @@ impl<'a> SqliTokenizer<'a> {
         }
 
         // Check for PostgreSQL $tag$ strings
-        let tag_chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         let mut tag_end = pos + 1;
 
-        while tag_end < slen && tag_chars.contains(&self.input[tag_end]) {
+        while tag_end < slen && self.input[tag_end].is_ascii_alphabetic() {
             tag_end += 1;
         }
 

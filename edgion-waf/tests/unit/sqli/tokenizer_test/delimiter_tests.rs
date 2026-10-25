@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn dollar_dispatch_preserves_all_byte_classifications() {
+    for byte in 0..=u8::MAX {
+        let input = [b'$', byte, b'$', b'x', b'$', byte, b'$'];
+        let (kind, start, content, cursor, quote) = match byte {
+            b'A'..=b'Z' | b'a'..=b'z' => (TokenType::String, 3, b"x".as_slice(), 7, b'$'),
+            b'0'..=b'9' | b',' => (TokenType::Number, 0, &input[..2], 2, CHAR_NULL),
+            b'.' => (TokenType::Bareword, 0, input.as_slice(), 7, CHAR_NULL),
+            b'$' => (TokenType::String, 2, b"$x".as_slice(), 6, b'$'),
+            _ => (TokenType::Bareword, 0, b"$".as_slice(), 1, CHAR_NULL),
+        };
+        let mut tokenizer = SqliTokenizer::new(&input, SqliFlags::FLAG_NONE);
+        let token = tokenizer.next_token().unwrap();
+        assert_eq!(token.token_type, kind, "byte {byte}");
+        assert_eq!(
+            (token.pos, token.len, token.count),
+            (start, content.len(), 0),
+            "byte {byte}"
+        );
+        let mut expected = [0; 32];
+        expected[..content.len()].copy_from_slice(content);
+        assert_eq!(token.val, expected, "byte {byte}");
+        assert_eq!((token.str_open, token.str_close), (quote, quote), "byte {byte}");
+        assert_eq!(tokenizer.pos, cursor, "byte {byte}");
+    }
+}
+
+#[test]
+fn money_sequences_and_nonletter_tag_suffixes_keep_dispatch_order() {
+    for (input, kind, content, cursor) in [
+        (b"$1,234.50!".as_slice(), TokenType::Number, b"$1,234.50".as_slice(), 9),
+        (b"$.,!".as_slice(), TokenType::Number, b"$.,".as_slice(), 3),
+        (b"$.!".as_slice(), TokenType::Bareword, b"$.".as_slice(), 2),
+        (b"$Ab9$x$Ab9$".as_slice(), TokenType::Bareword, b"$".as_slice(), 1),
+        (b"$Ab_x$".as_slice(), TokenType::Bareword, b"$".as_slice(), 1),
+        (b"$Ab\xff$x$".as_slice(), TokenType::Bareword, b"$".as_slice(), 1),
+    ] {
+        let mut tokenizer = SqliTokenizer::new(input, SqliFlags::FLAG_NONE);
+        let token = tokenizer.next_token().unwrap();
+        assert_eq!(token.token_type, kind, "{input:?}");
+        assert_eq!((token.pos, token.len, token.count), (0, content.len(), 0));
+        let mut expected = [0; 32];
+        expected[..content.len()].copy_from_slice(content);
+        assert_eq!(token.val, expected);
+        assert_eq!((token.str_open, token.str_close), (CHAR_NULL, CHAR_NULL));
+        assert_eq!(tokenizer.pos, cursor);
+    }
+}
+
+#[test]
 fn line_comments_keep_lf_only_boundary_and_dialect_statistics() {
     for (input, start, content, cursor, flags, stats) in [
         (

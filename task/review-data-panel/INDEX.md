@@ -18007,3 +18007,23 @@ formatting and workspace all-target check/Clippy passed with existing warnings.
 No alternative implementation, benchmark, full-workspace suite, fresh upstream
 comparison or live Gateway integration ran. The broader data-plane goal remains
 open.
+
+## Reuse ASCII predicates for SQL money and dollar tags
+
+parse_money now recognizes its numeric run with is_ascii_digit plus literal dot
+and comma, and its tag run with is_ascii_alphabetic. These exactly match the two
+former static slices; bounds, numeric precedence, the single-dot word fallback,
+plain dollar-string dispatch, tag fallback and cursors are unchanged. No table,
+allocation, dependency, logging or detector-budget change was introduced. The
+arbitrary delimiter classification decision in WAF-21 remains deferred.
+
+A baseline-first public-tokenizer regression covers all 256 byte values after
+the initial dollar, asserting full token arrays, kinds, positions, lengths,
+counts, quote metadata and cursors. Another covers mixed numeric punctuation,
+single-dot fallback and nonletter tag suffixes. Existing long-tag and ending
+search tests remain. Fresh baseline/final WAF library runs preserve all 873
+identities/outcomes: 867 passed and six existing ignored. Offline parser/folding/
+verdict fixtures ran. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full-workspace test suite,
+live Gateway integration, fresh external-checkout comparison or performance
+benchmark ran; no measured throughput improvement is claimed.
