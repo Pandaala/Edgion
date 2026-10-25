@@ -16772,3 +16772,27 @@ Original/extended/final decoder identities and baseline/final consumer identitie
 and outcomes match. Formatting, workspace all-target check/Clippy and all seven
 repository guards passed with existing warnings. Independent final source review
 passed. No full suite, live integration exchange or performance benchmark ran.
+
+## Reject invalid Route SNI lengths before case folding
+
+TLS passthrough extraction and TLSRoute selection both reach the canonical
+normalize_route_sni helper. It now checks the existing shared byte-length limit
+before its uppercase scan and possible lowercase String allocation. ASCII case
+folding cannot change byte length, and the canonical validator already rejects
+length first, so empty and overlength inputs retain InvalidLength. Valid input
+still follows the same normalization and validation path with one extra length
+gate. The separate validated-SNI handoff decision remains deferred.
+
+Existing input tests now cover 252/253-byte lower/uppercase single-label success,
+254-byte rejection, overlength malformed patterns, the 253/254-byte UTF-8 boundary,
+empty input and a long uppercase rejection. They passed against original production
+code before implementation. Independent plan review passed. This avoids work on
+rejected inputs, not a measured valid-traffic throughput improvement; no transport,
+route precedence, ownership, schema or logging policy changed.
+
+Final runs passed 22 canonical hostname, 16 ClientHello parser and 16 TLS table
+tests (54 distinct identities), with matching original/extended/final algorithm
+and baseline/final consumer outcomes. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings.
+Independent final source review passed. No full suite, live TLS exchange,
+allocation instrumentation or performance benchmark ran.

@@ -1,6 +1,6 @@
 //! Checked borrowed inputs for Route hostname lookup, not certificate selection.
 
-use super::{RadixHostnamePatternError, RadixHostnamePatternRef};
+use super::{RadixHostnamePatternError, RadixHostnamePatternRef, MAX_HOSTNAME_LEN};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
@@ -36,6 +36,9 @@ impl NormalizedRouteSni<'_> {
 
 /// Route-only SNI normalization. Missing SNI remains a transport policy.
 pub fn normalize_route_sni(sni: &str) -> Result<NormalizedRouteSni<'_>, RadixHostnamePatternError> {
+    if sni.is_empty() || sni.len() > MAX_HOSTNAME_LEN as usize {
+        return Err(RadixHostnamePatternError::InvalidLength);
+    }
     let normalized = if sni.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(sni.to_ascii_lowercase())
     } else {

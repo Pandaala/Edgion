@@ -24,6 +24,12 @@ are lowercase DNS names, including short names; bare `*`, IP literals, partial
 wildcards and malformed lists are rejected. HTTPRoute/GRPCRoute permit 0..16
 names; TLSRoute requires 1..16. Invalid entries reject the entire Route list.
 
+Route SNI normalization rejects empty or over-253-byte input before scanning for
+ASCII uppercase or allocating a lowercase copy. ASCII folding preserves byte
+length, so this retains the canonical validator's first InvalidLength result.
+In-range inputs still pass through the same case folding and checked-query
+validation; this does not remove repeated validation across transport owners.
+
 The immutable topology uses exactly sized flat node, packed child-entry and
 edge-byte pools. Edges are stored in query-forward order, so traversal compares
 one continuous borrowed query slice without constructing a reversed request.
