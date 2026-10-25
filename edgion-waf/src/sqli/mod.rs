@@ -11,6 +11,7 @@
 
 use core::ops::{BitOr, BitOrAssign, Deref};
 
+use memchr::memmem;
 use smallvec::SmallVec;
 
 pub const LIBINJECTION_SQLI_MAX_TOKENS: usize = 5;
@@ -1131,9 +1132,7 @@ impl<'a> SqliState<'a> {
     }
 
     fn contains_sp_password(&self) -> bool {
-        self.input
-            .windows(b"sp_password".len())
-            .any(|window| window == b"sp_password")
+        memmem::find(self.input, b"sp_password").is_some()
     }
 
     fn handle_two_token_whitelist(&self) -> bool {
@@ -1304,3 +1303,7 @@ mod tokenizer;
 
 // Import CHAR_NULL for internal use
 use tokenizer::CHAR_NULL;
+
+#[cfg(test)]
+#[path = "../../tests/unit/sqli/mod_test.rs"]
+mod tests;

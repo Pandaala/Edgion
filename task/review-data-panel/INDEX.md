@@ -17906,3 +17906,21 @@ ignored cases were not enabled. Formatting, workspace all-target check/Clippy an
 seven repository guards passed with existing warnings. No full-workspace suite,
 live Gateway integration, fresh upstream-checkout comparison or performance
 benchmark ran.
+
+## Reuse substring search for the SQLi password marker
+
+SqliState::contains_sp_password now uses the existing memchr memmem search
+instead of a scalar windows comparison. It still searches the entire borrowed
+raw input for the exact case-sensitive sp_password byte sequence. The caller's
+multi-token/trailing-comment fingerprint gate, whitelist branch order, detector
+caps/work, token storage and fingerprint capture remain unchanged. No dependency,
+cache, buffer or observability was added; no measured throughput gain is claimed.
+
+A baseline-first private regression covers empty/short/partial input, exact and
+repeated matches, prefix/suffix placement, case mismatches, matching after NUL and
+high bytes, interrupted literals, and absent/end matches at lengths 63/64/65/256.
+Fresh baseline/final WAF library runs preserve all 865 identities/outcomes:
+859 passed and six existing ignored. Offline parser/folding/verdict fixtures ran.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full-workspace test suite, fresh external-checkout
+comparison, live Gateway integration or performance benchmark ran.
