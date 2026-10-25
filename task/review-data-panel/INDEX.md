@@ -17634,3 +17634,22 @@ all 24 AllEndpointStatus and 4 shared verified-TLS test identities and outcomes.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No tests were added or changed; no full suite, live
 transport integration or performance benchmark ran.
+
+## Static outbound SAN rejection reason storage
+
+SanMismatchError stores Cow text, and the actual verifier borrows the canonical
+static rejection reason instead of allocating a String. Dynamic reasons retain
+owned storage; typed recovery borrows either variant with the error's lifetime.
+The typed-first bounded traversal, opaque fallback, exact Display/Debug marker,
+LDAP owned-error boundary and OIDC classification/metrics remain unchanged.
+This removes one reason-string allocation per SAN rejection, not certificate
+parsing or the error Arc allocation. Cow adds variant handling; no representation
+size, throughput or RSS improvement is claimed.
+
+Independent plan and source reviews passed. The existing real-verifier rejection
+test now checks its borrowed static reason and exact formatting; dynamic owned
+reason recovery still checks zero allocations and original-buffer identity.
+Fresh baseline/final runs retain all 52 test identities/outcomes: verifier 12,
+LDAP 28, OIDC dependency errors 8 and shared verified TLS 4. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live network test or performance benchmark ran.

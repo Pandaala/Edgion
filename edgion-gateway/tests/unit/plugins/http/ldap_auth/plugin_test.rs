@@ -665,7 +665,7 @@ fn ldap_rustls_config_verify_false_with_san_forces_secure_path() {
 fn ldap_error_with_san_mismatch_maps_to_tls_san_mismatch() {
     let rustls_err = rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
         std::sync::Arc::new(crate::tls::validation::SanMismatchError {
-            reason: "declared [ldap.example.com], actual [127.0.0.1]".to_string(),
+            reason: "declared [ldap.example.com], actual [127.0.0.1]".to_string().into(),
         }),
     )));
     let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls_err);

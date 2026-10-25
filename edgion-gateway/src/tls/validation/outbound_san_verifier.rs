@@ -98,7 +98,7 @@ const MAX_CHAIN_DEPTH: usize = 16;
 /// so a derived `Debug` would emit `SanMismatchError { reason: "..." }` and the
 /// `SAN_MISMATCH_PREFIX` marker would never appear in the rendered chain.
 pub struct SanMismatchError {
-    pub reason: String,
+    pub reason: Cow<'static, str>,
 }
 
 impl std::fmt::Display for SanMismatchError {
@@ -202,13 +202,13 @@ fn walk_chain(
 fn probe_typed<'a>(node: &'a (dyn std::error::Error + 'static)) -> Option<&'a str> {
     // 1. The typed error itself.
     if let Some(san) = node.downcast_ref::<SanMismatchError>() {
-        return Some(&san.reason);
+        return Some(san.reason.as_ref());
     }
 
     // 2. Still inside the rustls error that the verifier returned.
     if let Some(RustlsError::InvalidCertificate(CertificateError::Other(other))) = node.downcast_ref::<RustlsError>() {
         if let Some(san) = other.0.downcast_ref::<SanMismatchError>() {
-            return Some(&san.reason);
+            return Some(san.reason.as_ref());
         }
     }
 
@@ -283,7 +283,7 @@ impl ServerCertVerifier for OutboundSanVerifier {
         if !result.passed {
             return Err(RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
                 Arc::new(SanMismatchError {
-                    reason: result.reason.to_string(),
+                    reason: Cow::Borrowed(result.reason),
                 }),
             ))));
         }

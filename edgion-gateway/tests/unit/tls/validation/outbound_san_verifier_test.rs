@@ -107,7 +107,18 @@ fn inner_ok_non_matching_san_returns_err() {
     let result = verifier.verify_server_cert(&cert_der, &[], &make_server_name(), &[], make_now());
 
     assert!(result.is_err(), "expected Err, got Ok");
-    let err_str = format!("{:?}", result.unwrap_err());
+    let error = result.unwrap_err();
+    let RustlsError::InvalidCertificate(CertificateError::Other(other)) = &error else {
+        panic!("expected typed SAN mismatch, got {error:?}");
+    };
+    let mismatch = other.0.downcast_ref::<SanMismatchError>().unwrap();
+    assert!(matches!(
+        mismatch.reason,
+        Cow::Borrowed("no certificate SAN matched policy")
+    ));
+    assert_eq!(mismatch.to_string(), "SAN mismatch: no certificate SAN matched policy");
+    assert_eq!(format!("{mismatch:?}"), mismatch.to_string());
+    let err_str = format!("{error:?}");
     assert!(
         err_str.contains("SAN mismatch"),
         "error should contain 'SAN mismatch', got: {}",
@@ -135,7 +146,7 @@ fn empty_policy_delegates_to_inner_only() {
 
 fn san_rustls_error(reason: &str) -> RustlsError {
     RustlsError::InvalidCertificate(CertificateError::Other(OtherError(Arc::new(SanMismatchError {
-        reason: reason.to_string(),
+        reason: reason.to_string().into(),
     }))))
 }
 
@@ -158,7 +169,7 @@ fn typed_reason_recovery_borrows_without_allocating() {
     for wrapper in 0..3 {
         let reason = "certificate hostname SAN mismatch".to_owned();
         let original = reason.as_ptr();
-        let typed = SanMismatchError { reason };
+        let typed = SanMismatchError { reason: reason.into() };
         let error: Box<dyn std::error::Error> = match wrapper {
             0 => Box::new(typed),
             1 => Box::new(RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
@@ -182,7 +193,9 @@ fn typed_reason_recovery_borrows_without_allocating() {
 #[test]
 fn detector_matches_bare_typed_error() {
     let err = SanMismatchError {
-        reason: "declared [idp.example.com], actual [other.example.com]".to_string(),
+        reason: "declared [idp.example.com], actual [other.example.com]"
+            .to_string()
+            .into(),
     };
     assert_eq!(
         outbound_san_mismatch_reason(&err).as_deref(),
