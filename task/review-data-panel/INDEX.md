@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Encrypted health-probe preparation](health-01-encrypted-probe-preparation.md)
+
 - [Rendered outbound header storage](outbound-06-rendered-header-storage.md)
 
 - [Semantic window fragment projection](sse-04-semantic-fragment-projection.md)
@@ -17112,3 +17114,18 @@ the same nine manager test identities/outcomes; five test arguments were adapted
 to the borrowed signature without changing assertions. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Encrypted health-probe preparation decision
+
+The [deferred task](health-01-encrypted-probe-preparation.md) separates possible
+per-generation immutable TLS/name preparation from the current exchange-local
+client/channel contract. HTTPS and GRPCS still perform preparation per exchange;
+shared client pools would require a separate ownership decision. The common
+owned TLS-config API, validation timing, generation/endpoint isolation and
+already-shared rustls resumption storage need explicit review. No alternative
+is selected and no measured performance improvement is claimed.
+
+Fresh existing health-check tests passed 40 cases serially. No runtime/test
+change, prototype, live transport, full suite or benchmark is part of this task.
+Independent plan and final reviews passed. Formatting, workspace all-target
+check/Clippy and agent-doc validation passed with existing warnings.
