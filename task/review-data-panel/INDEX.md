@@ -18639,3 +18639,25 @@ once. Fresh Gateway DSL coverage passed 531 tests and the DSL leaf library
 passed all 181 tests. Formatting, workspace all-target check/Clippy, agent-doc
 validation and diff checks passed with existing warnings. These results support
 the recorded boundaries, not a full-workspace or live integration claim.
+
+## Encode Body digest results directly into VM strings
+
+DslBodyOps SHA-256, MD5 and HMAC-SHA256 now encode their fixed-size digest
+arrays into local 64/32/64-byte buffers and return Arc<str> directly. The three
+VM arms move that result into Value::Str. This removes the intermediate hex
+String and its subsequent copy into the Arc; the final Arc allocation remains.
+There is no measured throughput or process-memory claim.
+
+Output-limit preflight still precedes scanning. SHA-256 cache behavior,
+scan reservation/settlement, strict Body/key validation, HMAC scanner creation
+and pre-await key release, cancellation ownership and error mapping are unchanged.
+The buffers are initialized only after scanning completes and use the existing
+hex encoder, whose fixed output size and ASCII alphabet justify the assertions.
+
+Independent plan review passed. Baseline and final Body tests passed the same
+23 test identities, including new empty/text/binary golden vectors at exact
+output limits with memory and zero-threshold storage configurations. Existing
+under-limit, scan-budget, type and key-redaction cases passed. The full Gateway
+DSL filter passed 532 tests. Formatting, workspace all-target check/Clippy,
+seven repository guards and diff hygiene passed with existing unrelated lint
+warnings. No full workspace test suite, live integration or benchmark ran.

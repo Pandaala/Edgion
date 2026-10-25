@@ -840,14 +840,14 @@ impl Vm {
                     let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
                         .sha256()
                         .await?;
-                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
+                    state.push(Value::Str(digest), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyMd5 => {
                     expect_body(state.pop()?, "body.md5")?;
                     let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
                         .md5()
                         .await?;
-                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
+                    state.push(Value::Str(digest), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyHmacSha256 => {
                     let key = match state.pop()? {
@@ -864,7 +864,7 @@ impl Vm {
                     let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
                         .hmac_sha256(key)
                         .await?;
-                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
+                    state.push(Value::Str(digest), self.limits.max_stack_depth)?;
                 }
                 OpCode::JsonGet(path_idx) => {
                     let input = state.pop()?;

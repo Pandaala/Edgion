@@ -530,6 +530,69 @@ fn body_md5_and_hmac_each_consume_uncached_scan_budget() {
 }
 
 #[test]
+fn body_digest_vectors_accept_exact_output_limits() {
+    let cases: &[(&[u8], &str, &str)] = &[
+        (
+            b"",
+            r#"req.body.sha256()"#,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (b"", r#"req.body.md5()"#, "d41d8cd98f00b204e9800998ecf8427e"),
+        (
+            b"",
+            r#"req.body.hmac_sha256("secret")"#,
+            "f9e66e179b6747ae54108f82f8ade8b3c25d76fd30afde6c395822c530196169",
+        ),
+        (
+            b"abc",
+            r#"req.body.sha256()"#,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        (b"abc", r#"req.body.md5()"#, "900150983cd24fb0d6963f7d28e17f72"),
+        (
+            b"abc",
+            r#"req.body.hmac_sha256("secret")"#,
+            "9946dad4e00e913fc8be8e5d3f7e110a4a9e832f83fb09c345285d78638d8a0e",
+        ),
+        (
+            &[b'a', 0, 0xff, b'z'],
+            r#"req.body.sha256()"#,
+            "baf9342f98f4ff9b59662fa6afac189dfcda55079f9298c54819bbd2b43bf7b9",
+        ),
+        (
+            &[b'a', 0, 0xff, b'z'],
+            r#"req.body.md5()"#,
+            "1be512fdd3d66cd1acc59d4c45a9e7df",
+        ),
+        (
+            &[b'a', 0, 0xff, b'z'],
+            r#"req.body.hmac_sha256("secret")"#,
+            "20676f860da7de07e1311f2907682d64a4491ca78d7247f8df8dd158ec2666d1",
+        ),
+    ];
+    for &(body, expression, expected) in cases {
+        let source = format!("if {expression} != \"{expected}\" {{ return deny(400, \"digest mismatch\") }}");
+        for memory_limit in [body.len() + 1, 0] {
+            assert_eq!(
+                run_body_script_with_limits(
+                    &source,
+                    body,
+                    memory_limit,
+                    1,
+                    VmLimits {
+                        max_string_len: expected.len(),
+                        ..VmLimits::default()
+                    },
+                )
+                .unwrap(),
+                PluginRunningResult::GoodNext,
+                "{expression}, body {body:?}, memory limit {memory_limit}",
+            );
+        }
+    }
+}
+
+#[test]
 fn body_digest_fixed_output_limits_fail_before_scan_without_key_leak() {
     for (source, max_string_len, expected_len) in [
         ("req.body.sha256()", 63, 64),

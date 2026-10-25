@@ -200,7 +200,7 @@ impl<'a> DslBodyOps<'a> {
         Ok(self.settle(reserved, scan))
     }
 
-    pub(crate) async fn sha256(&mut self) -> Result<String, RuntimeError> {
+    pub(crate) async fn sha256(&mut self) -> Result<Arc<str>, RuntimeError> {
         self.check_string_len(64)?;
         let reserved = self.reserve()?;
         let scan = self
@@ -210,19 +210,31 @@ impl<'a> DslBodyOps<'a> {
             .sha256_scan(reserved)
             .await
             .map_err(map_body_error)?;
-        Ok(hex::encode(self.settle(reserved, scan)))
+        let digest = self.settle(reserved, scan);
+        let mut output = [0u8; 64];
+        hex::encode_to_slice(digest, &mut output).expect("32-byte digest encodes to exactly 64 hex bytes");
+        let encoded = std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+        Ok(Arc::from(encoded))
     }
 
-    pub(crate) async fn md5(&mut self) -> Result<String, RuntimeError> {
+    pub(crate) async fn md5(&mut self) -> Result<Arc<str>, RuntimeError> {
         self.check_string_len(32)?;
-        Ok(hex::encode(self.scan_with(async { Ok(Md5Scanner::new()) }).await?))
+        let digest = self.scan_with(async { Ok(Md5Scanner::new()) }).await?;
+        let mut output = [0u8; 32];
+        hex::encode_to_slice(digest, &mut output).expect("16-byte digest encodes to exactly 32 hex bytes");
+        let encoded = std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+        Ok(Arc::from(encoded))
     }
 
-    pub(crate) async fn hmac_sha256(&mut self, key: Arc<str>) -> Result<String, RuntimeError> {
+    pub(crate) async fn hmac_sha256(&mut self, key: Arc<str>) -> Result<Arc<str>, RuntimeError> {
         self.check_string_len(64)?;
         let scanner = HmacSha256Scanner::new(key.as_bytes()).map_err(map_body_error)?;
         drop(key);
-        Ok(hex::encode(self.scan_with(async { Ok(scanner) }).await?))
+        let digest = self.scan_with(async { Ok(scanner) }).await?;
+        let mut output = [0u8; 64];
+        hex::encode_to_slice(digest, &mut output).expect("32-byte digest encodes to exactly 64 hex bytes");
+        let encoded = std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+        Ok(Arc::from(encoded))
     }
 
     pub(crate) async fn clear(&mut self) -> Result<(), RuntimeError> {
