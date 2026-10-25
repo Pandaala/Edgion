@@ -1695,3 +1695,34 @@ existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed with existing
 warnings. No full-workspace suite, fresh upstream-checkout comparison, live
 Gateway integration or benchmark ran.
+
+## Native phrase scan and backend boundaries
+
+At source baseline b0eb720e3, followed WAF Matcher and CapturePhrase dispatch
+through matcher.rs into native contiguous-input search and backend methods.
+This extends the operator inventory with direct runtime evidence, not complete
+compiler, public iterator or stream coverage.
+
+| Boundary | Observed ownership and execution |
+| --- | --- |
+| PhraseGroup scan | Borrow input and reuse PatternSet; accelerated/reference scans map matching local IDs through the compiled pattern_ids array into the outer bitset. No per-hit payload copy occurs in this projection. |
+| CapturePhrase | Borrow input, choose accelerated/reference find, and return a small pattern/start/end descriptor. The compiled matcher uses case-insensitive LeftmostLongest semantics. |
+| Standard search | Check root output and minimum length, then advance folded bytes through the backend. Optional prefilter runs only at root; candidates are confirmed by transitions. Return the first output at the reached boundary. |
+| Leftmost search | Track the best root/runtime match and bounded lookahead. Candidate handling distinguishes possible starts from exact packed results. Output ordering, match-kind tie selection and completion checks remain in the shared search owner. |
+| Anchored search | Limit traversal by the maximum pattern length, accept only outputs whose start equals the requested start, and retain earliest/Standard versus leftmost selection. |
+| Pattern-set scan | Validate input and scratch shape before clearing. Insert root outputs and accumulated local IDs; anchored scans restrict range and output starts. Reference execution bypasses optional acceleration. Results remain in caller-owned bounded storage. |
+| Sparse backend | Binary-search transitions, follow failure links on misses and use an optional dense root table. OutputCursor visits state outputs and then output links. |
+| Contiguous backend | Select dense table or sorted sparse-transition slice, then follow failure links as needed. OutputCursor reads compiled flat outputs and output links. |
+| DFA backend | Map the byte to its prepared class and index the compiled transition row. OutputCursor retains the same flat-output/link shape; pattern lengths remain compiled metadata. |
+
+Backend and OutputIter borrow immutable owners; the cursor stores only state and
+output index. Auto selection is made during construction from DFA cell/memory
+policy and then root fanout, not reselected per byte. Repeated enum matches in
+source are a conditional [dispatch investigation](waf-23-phrase-backend-dispatch.md),
+not measured machine-code overhead. The separate DFA-layout/SIMD tasks remain
+conditional, and the dormant stream lane remains scoped by WAF-16.
+
+Fresh unchanged-production WAF tests passed 871 cases with six existing ignored.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. No runtime code changed; no full-workspace suite, live
+Gateway integration, code-generation experiment or benchmark ran.

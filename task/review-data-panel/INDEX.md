@@ -18170,3 +18170,16 @@ ran. No dependency, layout, budget or observability change was introduced.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. Broader callback coverage remains open.
+
+## Native phrase backend investigation
+
+Extended [callback coverage](CALLBACKS.md#native-phrase-scan-and-backend-boundaries)
+through borrowed phrase scans, candidate confirmation and Sparse/Contiguous/DFA
+transition/output methods. Added [WAF-23](waf-23-phrase-backend-dispatch.md) for
+conditional dispatch specialization: source-level repeated enum matching needs
+code-generation and workload evidence before any redesign. Existing DFA-layout
+and SIMD decisions remain separate. No runtime change or measured gain is claimed.
+
+Fresh WAF tests passed 871 cases with six existing ignored; formatting and
+workspace all-target check/Clippy passed with existing warnings. No full-workspace
+suite, live integration, code-generation experiment or benchmark ran.
