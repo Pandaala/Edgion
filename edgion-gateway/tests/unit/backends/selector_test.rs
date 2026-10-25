@@ -837,6 +837,48 @@ fn capture_fixture(service_key: &str, port: u16) -> Result<CapturedServiceSelect
 }
 
 #[test]
+fn projection_membership_rejection_preserves_retained_selection_and_recovers() {
+    use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK;
+
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let published = publish_service(
+        "selector-membership",
+        "mismatch-recovery",
+        vec![service_port("http", 80, IntOrString::Int(8080), None)],
+        vec![("http", 8080)],
+        "10.9.0.8",
+    );
+    let key = &published.service_key;
+    let (available, active) = load_active_projection(key).unwrap();
+    let retained = capture_fixture(key, 80).unwrap();
+    for membership_identity in [None, Some(available.membership_identity.wrapping_add(1))] {
+        available.runtime_cell.active.store(Arc::new(ServiceRuntimeSnapshot {
+            membership_identity,
+            entries: Arc::clone(&active.entries),
+            health_policy_present: active.health_policy_present,
+            outlier_policy_present: active.outlier_policy_present,
+            degrade_threshold: active.degrade_threshold,
+            degrade_selections: active.degrade_selections.clone(),
+        }));
+        assert!(load_active_projection(key).is_none());
+        assert!(matches!(
+            capture_fixture(key, 80),
+            Err(EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault)
+        ));
+        assert!(retained
+            .select(&None, ServiceDegradePolicy::Live, None, "", None)
+            .is_ok());
+    }
+    available.runtime_cell.active.store(Arc::clone(&active));
+    let (restored_available, restored_active) = load_active_projection(key).unwrap();
+    assert!(Arc::ptr_eq(&restored_available, &available));
+    assert!(Arc::ptr_eq(&restored_active, &active));
+    let restored = capture_fixture(key, 80).unwrap();
+    assert!(Arc::ptr_eq(&restored.available, &available));
+    assert!(Arc::ptr_eq(&restored.active, &active));
+}
+
+#[test]
 fn response_cache_actual_retained_discovery_stamp_survives_reload_and_recreation_changes_full_proof() {
     let namespace = "cache-discovery-proof";
     let name = "retained-selection";

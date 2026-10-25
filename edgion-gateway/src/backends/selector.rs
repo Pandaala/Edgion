@@ -50,9 +50,9 @@ pub fn service_section_key_from_port(port: Option<i32>) -> Result<ServiceSection
 fn load_active_projection(service_key: &str) -> Option<(Arc<AvailableServiceProjection>, Arc<ServiceRuntimeSnapshot>)> {
     let coordinator = get_service_discovery_coordinator();
     let generation = coordinator.load_generation();
-    let available = Arc::clone(generation.available(service_key)?);
+    let available = generation.available(service_key)?;
     let active = available.runtime_cell.active.load_full();
-    (active.membership_identity == Some(available.membership_identity)).then_some((available, active))
+    (active.membership_identity == Some(available.membership_identity)).then(|| (Arc::clone(available), active))
 }
 
 #[inline]
@@ -243,16 +243,14 @@ impl CapturedServiceSelection {
         target: &CompiledServiceTarget,
     ) -> Result<Self, EdgionErrorCode> {
         let generation = coordinator.load_generation();
-        let available = Arc::clone(
-            generation
-                .available(target.key())
-                .ok_or(EdgionErrorCode::BackendServiceNotFound)?,
-        );
+        let available = generation
+            .available(target.key())
+            .ok_or(EdgionErrorCode::BackendServiceNotFound)?;
         let active = available.runtime_cell.active.load_full();
         if active.membership_identity != Some(available.membership_identity) {
             return Err(endpoint_slice_not_found().empty);
         }
-        Self::from_projection(available, active, target.section())
+        Self::from_projection(Arc::clone(available), active, target.section())
     }
 
     fn from_projection(

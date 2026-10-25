@@ -16796,3 +16796,29 @@ and baseline/final consumer outcomes. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings.
 Independent final source review passed. No full suite, live TLS exchange,
 allocation instrumentation or performance benchmark ran.
+
+## Borrow Service projections through membership validation
+
+Both load_active_projection and CapturedServiceSelection::capture now borrow
+the available projection from their already-owned discovery generation until
+the active snapshot's membership identity matches. Only a successful check
+clones the projection Arc for returned ownership. The active snapshot is still
+loaded once as an owned Arc; missing-Service and mismatched-membership errors,
+section resolution, live health state and captured policy remain unchanged.
+This removes one projection clone/drop on a rejected mismatch, not a measured
+allocation or throughput improvement. Successful selection retains the same owners.
+
+A new regression passes on original production code and covers missing and
+unequal active membership, both capture entry points, exact capture error,
+continued use of an earlier captured selection, and restored Arc identities.
+It uses the existing global store test lock because default-degrade refreshes
+can update every Service, even with a unique fixture key. Cleanup remains under
+that lock. Existing reload/recreation tests are preserved. Independent plan
+review passed with that isolation requirement.
+
+Final runs passed 13 selector and 73 discovery tests (86 distinct identities).
+The original 12 selector tests are preserved, the new regression passed before
+the production edit, and extended/final selector plus baseline/final discovery
+identities and outcomes match. Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing warnings. Independent final source
+review passed. No full suite, live network exchange or performance benchmark ran.
