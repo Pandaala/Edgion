@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Discovery section traversal storage](discovery-01-section-traversal-storage.md)
+
 - [Encrypted health-probe preparation](health-01-encrypted-probe-preparation.md)
 
 - [Rendered outbound header storage](outbound-06-rendered-header-storage.md)
@@ -17216,3 +17218,17 @@ coordinator runs passed the same 43 identities/outcomes, including alias handlin
 distinct same-socket identities, retirement and exact epochs. No new tests were
 needed. Formatting, workspace all-target check/Clippy and seven repository guards
 passed with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Discovery section traversal storage decision
+
+The [deferred task](discovery-01-section-traversal-storage.md) records why replacing
+borrowed section vectors with lazy traversal is not automatically a peak-memory
+improvement: the dedup set would overlap growing backend/proof outputs. Count-only
+traversal has a different tradeoff and needs separate evaluation. Measurements,
+identity/order/proof preservation and explicit retention of the current design
+remain decision criteria; no alternative or runtime defect is selected.
+
+Fresh existing coordinator tests passed 43 cases serially. No runtime/test change,
+prototype, full suite, live transport or benchmark is included.
+Independent plan and final reviews passed. Formatting, workspace all-target
+check/Clippy and agent-doc validation passed with existing warnings.
