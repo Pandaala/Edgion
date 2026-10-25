@@ -773,3 +773,55 @@ fn css_hex_scan_preserves_digit_boundaries_and_output_limits() {
         }
     }
 }
+
+#[test]
+fn hex_escape_decoders_preserve_fallback_and_partial_output() {
+    use TransformationKind::{EscapeSeqDecode, JsDecode, UrlDecodeUni};
+    let cases: &[(TransformationKind, &[u8], &[u8])] = &[
+        (EscapeSeqDecode, br"\x41\X4a", b"AJ"),
+        (EscapeSeqDecode, br"\xZ1\x4Z", b"xZ1x4Z"),
+        (EscapeSeqDecode, br"\x4", b"x4"),
+        (EscapeSeqDecode, br"\x", b"x"),
+        (EscapeSeqDecode, br"\u0041", b"u0041"),
+        (EscapeSeqDecode, br"\777\477\n", b"\xff\x3f\n"),
+        (EscapeSeqDecode, b"\\", b"\\"),
+        (JsDecode, br"\x41\x4a\u0042\u00e9", b"AJB\xe9"),
+        (JsDecode, br"\X41\U0041", b"X41U0041"),
+        (JsDecode, br"\xZ1\x4Z", b"xZ1x4Z"),
+        (JsDecode, br"\uG041\u0G41\u00G1\u004G", b"uG041u0G41u00G1u004G"),
+        (JsDecode, br"\u004", b"u004"),
+        (JsDecode, br"\u\x4\x", b"ux4x"),
+        (JsDecode, br"\uff00\uff01\uff5e\uff5f", b"\0!~_"),
+        (JsDecode, br"\777\477\n", b"?7'7\n"),
+        (JsDecode, b"\\", b"\\"),
+        (UrlDecodeUni, b"%41%4a%u0042%U00e9+", b"AJB\xe9 "),
+        (UrlDecodeUni, b"%Z1%4Z", b"%Z1%4Z"),
+        (UrlDecodeUni, b"%uG041%u0G41%u00G1%u004G", b"%uG041%u0G41%u00G1%u004G"),
+        (UrlDecodeUni, b"%u004", b"%u004"),
+        (UrlDecodeUni, b"%u%4%", b"%u%4%"),
+        (UrlDecodeUni, b"%uff00%Uff01%uff5e%Uff5f", b"\0!~_"),
+        (UrlDecodeUni, b"%x41%+41", b"%x41% 41"),
+    ];
+    for &(kind, input, decoded) in cases {
+        // Keep a suffix to pin consumption, except for the dangling-backslash case.
+        let tail = if input == b"\\" { b"".as_slice() } else { b"!" };
+        let mut input_with_tail = input.to_vec();
+        input_with_tail.extend_from_slice(tail);
+        for prefix in [b"".as_slice(), b"P"] {
+            let mut expected = prefix.to_vec();
+            expected.extend_from_slice(decoded);
+            expected.extend_from_slice(tail);
+            for limit in prefix.len()..=expected.len() + 1 {
+                let mut output = prefix.to_vec();
+                let result = apply_one(kind, &input_with_tail, &mut output, limit);
+                let expected_result = if limit < expected.len() {
+                    Err(TransformError::OutputLimit { limit })
+                } else {
+                    Ok(())
+                };
+                assert_eq!(result, expected_result, "kind={kind:?}, input={input:?}, limit={limit}");
+                assert_eq!(output, expected[..expected.len().min(limit)]);
+            }
+        }
+    }
+}

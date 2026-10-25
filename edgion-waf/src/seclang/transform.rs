@@ -547,12 +547,11 @@ fn escape_sequence_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> R
         if let Some(value) = simple {
             push_byte(output, value, limit)?;
             index += 2;
-        } else if matches!(escaped, b'x' | b'X')
-            && index + 3 < input.len()
-            && hex(input[index + 2]).is_some()
-            && hex(input[index + 3]).is_some()
+        } else if let Some(value) = (matches!(escaped, b'x' | b'X') && index + 3 < input.len())
+            .then(|| decode_hex(&input[index + 2..index + 4]))
+            .flatten()
         {
-            push_byte(output, decode_hex_pair(input[index + 2], input[index + 3]), limit)?;
+            push_byte(output, value as u8, limit)?;
             index += 4;
         } else if matches!(escaped, b'0'..=b'7') {
             let mut length = 1_usize;
@@ -673,24 +672,20 @@ fn js_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), Tra
             index += 1;
             continue;
         }
-        if index + 5 < input.len()
-            && input[index + 1] == b'u'
-            && input[index + 2..index + 6].iter().all(|byte| hex(*byte).is_some())
+        if let Some(mut value) = (index + 5 < input.len() && input[index + 1] == b'u')
+            .then(|| decode_hex(&input[index + 2..index + 6]))
+            .flatten()
         {
-            let mut value = input[index + 2..index + 6].iter().fold(0_u16, |value, byte| {
-                (value << 4) | u16::from(hex(*byte).unwrap_or_default())
-            });
             if (0xff01..=0xff5e).contains(&value) {
                 value += 0x20;
             }
             push_byte(output, value as u8, limit)?;
             index += 6;
-        } else if index + 3 < input.len()
-            && input[index + 1] == b'x'
-            && hex(input[index + 2]).is_some()
-            && hex(input[index + 3]).is_some()
+        } else if let Some(value) = (index + 3 < input.len() && input[index + 1] == b'x')
+            .then(|| decode_hex(&input[index + 2..index + 4]))
+            .flatten()
         {
-            push_byte(output, decode_hex_pair(input[index + 2], input[index + 3]), limit)?;
+            push_byte(output, value as u8, limit)?;
             index += 4;
         } else if matches!(input[index + 1], b'0'..=b'7') {
             let mut length = 1_usize;
@@ -833,24 +828,23 @@ fn url_decode_uni(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<()
         if input[index] == b'+' {
             push_byte(output, b' ', limit)?;
             index += 1;
-        } else if input[index] == b'%'
-            && index + 5 < input.len()
-            && matches!(input[index + 1], b'u' | b'U')
-            && input[index + 2..index + 6].iter().all(|byte| hex(*byte).is_some())
+        } else if let Some(value) =
+            (input[index] == b'%' && index + 5 < input.len() && matches!(input[index + 1], b'u' | b'U'))
+                .then(|| decode_hex(&input[index + 2..index + 6]))
+                .flatten()
         {
-            let high = decode_hex_pair(input[index + 2], input[index + 3]);
-            let mut low = decode_hex_pair(input[index + 4], input[index + 5]);
+            let high = (value >> 8) as u8;
+            let mut low = value as u8;
             if high == 0xff && (1..0x5f).contains(&low) {
                 low = low.wrapping_add(0x20);
             }
             push_byte(output, low, limit)?;
             index += 6;
-        } else if input[index] == b'%'
-            && index + 2 < input.len()
-            && hex(input[index + 1]).is_some()
-            && hex(input[index + 2]).is_some()
+        } else if let Some(value) = (input[index] == b'%' && index + 2 < input.len())
+            .then(|| decode_hex(&input[index + 1..index + 3]))
+            .flatten()
         {
-            push_byte(output, decode_hex_pair(input[index + 1], input[index + 2]), limit)?;
+            push_byte(output, value as u8, limit)?;
             index += 3;
         } else {
             push_byte(output, input[index], limit)?;
@@ -939,8 +933,11 @@ fn hex(value: u8) -> Option<u8> {
     }
 }
 
-fn decode_hex_pair(high: u8, low: u8) -> u8 {
-    (hex(high).unwrap_or_default() << 4) | hex(low).unwrap_or_default()
+// Callers provide exactly two or four digits after checking the input bounds.
+fn decode_hex(digits: &[u8]) -> Option<u16> {
+    digits
+        .iter()
+        .try_fold(0_u16, |value, byte| Some((value << 4) | u16::from(hex(*byte)?)))
 }
 
 #[cfg(test)]

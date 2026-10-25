@@ -18183,3 +18183,25 @@ and SIMD decisions remain separate. No runtime change or measured gain is claime
 Fresh WAF tests passed 871 cases with six existing ignored; formatting and
 workspace all-target check/Clippy passed with existing warnings. No full-workspace
 suite, live integration, code-generation experiment or benchmark ran.
+
+## Decode fixed-width transformation hex fields once
+
+EscapeSeqDecode, JsDecode and UrlDecodeUni now share one fallible borrowed-slice
+hex decoder at their five two/four-digit sites. The original code validated each
+digit and decoded it again; the helper returns a value only after every digit
+passes. Existing prefix/length guards lazily construct the same slices. Marker
+case acceptance, invalid/truncated fallback, fullwidth boundaries, octal/simple
+escapes, byte consumption and output pushes are unchanged. The shared walker,
+identity eligibility, materialization, work charges and capacity admission remain
+unchanged. No allocation, dependency or logging was added; no speedup was measured.
+
+A baseline-first explicit-output regression covers valid mixed-case fields,
+invalid digits at every position, truncated/dangling markers, adjacent escapes,
+fullwidth boundaries and octal differences. Empty/prefilled outputs are checked
+under every cap through exact success, including retained bytes on failure.
+Fresh baseline/final WAF library runs
+preserve all 878 test identities/outcomes: 872 passed and six existing ignored.
+No full-workspace suite, live Gateway integration or benchmark ran.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. WAF-06 and other ownership decisions remain deferred.
