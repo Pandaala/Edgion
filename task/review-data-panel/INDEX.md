@@ -23,7 +23,7 @@ destination.
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
-| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
+| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. The [canonical certificate projection boundaries](CALLBACKS.md#canonical-certificate-projection-boundaries) reconcile full/display/typed extraction, OtherName conversion and all four caller groups. Backend-only inspection, minimal CN projection and prepared SAN policy remain deferred; native parser/verification internals and remaining matcher costs are outside that direct inventory. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
 ## Deferred decisions
@@ -18370,3 +18370,18 @@ while its decoder-consolidation decision stays deferred. Fresh Gateway filtered
 runs passed 38 split-named tests and eight URL-decode tests. Formatting, workspace
 all-target check/Clippy and agent-doc validation passed with existing warnings.
 No test body changed. No full-workspace suite, live integration or benchmark ran.
+
+## Canonical certificate extraction coverage reconciled
+
+The [certificate projection inventory](CALLBACKS.md#canonical-certificate-projection-boundaries)
+records all canonical extractor functions and four caller groups, including
+subject first-CN ordering, native versus OtherName NUL behavior, two-pass SAN
+ordering, parser ownership and INTEGER-only bounds. Existing projection and
+preparation decisions remain deferred; no duplicate finding or runtime edit
+was created. The top-level TLS row now points to this evidence instead of
+leaving canonical extraction under an undifferentiated remaining-work label.
+
+Fresh targeted tests passed 18 extractor, 14 mTLS callback and 20 HeaderCertAuth
+cases. Formatting, workspace all-target check/Clippy and agent-doc validation
+passed with existing warnings. This is direct source coverage, not proof of all
+TLS dependencies, live handshakes or completion of the data-plane goal.

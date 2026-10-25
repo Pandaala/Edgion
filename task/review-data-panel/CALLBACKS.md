@@ -1856,3 +1856,37 @@ Fresh unchanged-production WAF tests passed 873 cases with six existing ignored.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. No full-workspace suite, external XML comparison, live
 Gateway integration, prototype or benchmark ran. Broader coverage remains open.
+
+## Canonical certificate projection boundaries
+
+Revalidated at `9a56ee913` in `tls/runtime/backend/cert_extractor.rs` and its
+four production caller groups. This reconciles direct extraction coverage; it
+is not a complete native X.509/BER dependency audit or live-handshake proof.
+
+| Boundary | Current ownership and ordering |
+| --- | --- |
+| Handshake metadata | `tls_pingora::handshake_complete_callback` calls full extraction for exposed EdgionTls mTLS metadata or frontendValidation mTLS. The SSL entry point acquires an optional peer-certificate handle; missing certificate returns None. |
+| Leaf mTLS policy | `mtls_verify_callback` acquires the leaf handle once. Missing certificate rejects first; nonempty SAN policy uses typed projection. SAN failure builds full metadata for redacted diagnostics before returning. A nonempty CN policy builds full metadata after SAN success. Leaf-depth and terminal-audit gates remain owned by the callback. |
+| HeaderCertAuth | Header parsing and configured CA checks precede the same full certificate projection. Base64 DER and URL-encoded PEM remain separate input paths; extraction does not replace verification. |
+| Backend SAN hook | Nonempty prepared policy installs a hook calling display SAN extraction. Missing peer certificate produces an empty vector; canonical policy matching and the redacted panic boundary remain outside the extractor. The backend-independent rustls verifier has its own DER path, covered separately. |
+| Subject, CN and fingerprint | Traverse native subject entries once, retaining order and separators. Mark the first CN before UTF-8 conversion, so an invalid first CN is not replaced by a later one. Native string conversion retains its C-string NUL behavior. SHA-256 digest renders lowercase colon-separated bytes; digest failure returns the existing unknown text. |
+| Ordinary SAN projection | Enumerate native SAN entries, projecting DNS/IP/email/URI in existing order. Invalid IP byte lengths are skipped. Text borrows the native entry until synchronous projection; IP stays typed until formatting. Display and PresentedSan each own their returned values, without first building the other projection. |
+| OtherName pass | Serialize certificate DER, parse X509Certificate, and append supported OtherNames after ordinary SANs. Missing/failed DER or SAN parsing returns without deleting preceding ordinary output. The certificate parser's returned remainder is ignored; this is distinct from the stricter BER-value remainder checks. |
+| BER wrappers and strings | Require a complete outer BER object and context-specific constructed tag zero. Unwrap once and require Universal content; the Unknown-wrapper branch also rejects an inner parse remainder. Supported text borrows input through projection; boolean/NULL borrow static text. Numeric/OID/BMP/Universal conversions own output. Unsupported values are skipped. |
+| INTEGER and wide strings | INTEGER admits only nonempty payloads of at most 64 bytes, copies to bounded scratch, resolves signed two's complement, and emits decimal through bounded digit scratch. This is not a bound on all DER/string parsing. BMP uses big-endian UTF-16 units, accepting valid surrogate pairs; Universal uses four-byte scalar validation. Embedded NULs remain in these OtherName strings. |
+
+The borrowed OtherName OID is formatted during projection; its dependency Display
+may allocate internally. Borrowed text and parser/native owners do not escape
+extraction. Earlier subject, BMP, IP, OtherName text/OID and decimal-scratch
+optimizations are existing behavior, not changes delivered by this inventory.
+
+Existing decisions remain [backend SAN inspection](tls-05-backend-san-inspection.md),
+[minimal CN projection](tls-06-mtls-cn-projection.md), and
+[prepared SAN policy](tls-01-prepared-san-policy.md). Omitting the DER pass or
+sharing projections would need their ordering, failure, identity-type and
+lifetime decisions; no new implementation is selected here.
+
+Fresh targeted tests passed 18 extractor, 14 mTLS callback and 20 HeaderCertAuth
+cases. Formatting, workspace all-target check/Clippy and agent-doc validation
+passed with existing warnings. No runtime/test edit, full-workspace suite, live
+TLS integration or benchmark accompanied this inventory.
