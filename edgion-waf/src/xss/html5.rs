@@ -2,6 +2,7 @@
 #![allow(clippy::manual_find, clippy::manual_range_patterns, clippy::needless_return)]
 
 use core::fmt;
+use memchr::{memchr, memmem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Html5Flags {
@@ -162,12 +163,7 @@ impl<'a> Html5State<'a> {
             return None;
         }
 
-        for i in start..self.len {
-            if self.s[i] == byte {
-                return Some(i);
-            }
-        }
-        None
+        memchr(byte, &self.s[start..self.len]).map(|offset| start + offset)
     }
 
     fn find_comment_end(&self, start: usize) -> Option<(usize, usize)> {
@@ -220,12 +216,7 @@ impl<'a> Html5State<'a> {
             return None;
         }
 
-        for i in start..self.len - 2 {
-            if self.s[i] == b']' && self.s[i + 1] == b']' && self.s[i + 2] == b'>' {
-                return Some(i);
-            }
-        }
-        None
+        memmem::find(&self.s[start..self.len], b"]]>").map(|offset| start + offset)
     }
 
     fn is_whitespace(ch: u8) -> bool {

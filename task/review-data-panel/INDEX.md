@@ -17851,3 +17851,31 @@ reconciles all 12 compiled operand variants, predicate/capture sequencing, contr
 and SetVar effects, and the direct staged-state commit gate at `ec24c988a`.
 Deeper engine dependencies and existing representation decisions remain open;
 this is not a complete WAF or callback-chain audit.
+
+## Reuse byte-search primitives in the XSS HTML tokenizer
+
+Gateway DetectXss reaches Html5State through the bounded injection wrapper and
+its five ordered contexts. The tokenizer's private find_byte now uses existing
+memchr; find_cdata_end uses memmem for the first literal ]]> terminator. Existing
+start/short-input guards remain, and relative matches are converted to the same
+absolute offsets within the constructor-captured borrowed input slice.
+
+Data, quoted attributes, doctype and bogus/comment callers keep their token and
+cursor transitions. Comment termination still owns its NUL skipping and dash/!
+branches; only its underlying byte search changes. CDATA overlapping candidates
+and first-match behavior are retained. Input caps, logical work charges, detector
+contexts, tokens, error policy and allocation ownership are unchanged. This reuses
+the existing pinned dependency; no measured throughput or allocation gain is
+claimed. SQLi token representation and XSS URL decoding decisions remain deferred.
+
+Two literal search regressions passed against the original helpers before editing:
+empty/short inputs, absent/first/last/repeated matches, nonzero starts, NUL/high
+bytes, out-of-range starts and adjacent/overlapping CDATA markers. The usize::MAX
+start case applies only to find_byte; find_cdata_end retains its old arithmetic
+guard and production position domain. Fresh baseline/final WAF library runs
+preserve all 862 test identities/outcomes: 856 passed and six existing ignored.
+Existing offline parser/verdict fixtures ran, but external-checkout ignored
+fixtures were not enabled. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full-workspace suite, live
+Gateway integration, fresh upstream-checkout comparison or performance benchmark
+ran.
