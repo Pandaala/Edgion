@@ -166,6 +166,8 @@ destination.
 
 - [Local connection-gate lookup ownership](connection-rate-01-local-gate-lookup-ownership.md)
 
+- [Connection-rate Redis client snapshot scope](connection-rate-02-redis-client-snapshot.md)
+
 - [Prepared GeoIP geographic membership](geoip-02-geographic-membership-index.md)
 
 - [Redis fallback command ownership](redis-02-fallback-command-ownership.md)
@@ -18751,3 +18753,20 @@ TCP 29, UDP 61, TLS 85, compiled backend runtime 14, backend policy 10 and canon
 leaf hostname 22. Formatting, workspace all-target check/Clippy, agent-doc
 validation and diff hygiene passed with existing unrelated warnings. No full
 workspace test suite, live connection/hot-reload or performance benchmark ran.
+
+## Connection-rate Redis dimension snapshot decision
+
+Each reached Redis dimension resolves the current LinkSys client separately.
+When distributed listener and source-IP checks both execute, pinning one client
+could save one lookup/snapshot/handle acquisition, but changes generation and
+missing-client recovery visibility across the first await. A retained Arc does
+not prevent retirement or shutdown. The [connection-rate-02 task](connection-rate-02-redis-client-snapshot.md)
+records this separately from local-gate ownership and Fred pool-member selection.
+No runtime change or measured lookup/throughput gain is selected.
+
+Independent plan review passed. Fresh current-code tests passed 32 connection-rate,
+20 persistent-runner and 36 shared Redis-core cases; one existing connection-rate
+measurement test remains ignored. Formatting, workspace all-target check/Clippy,
+agent-doc validation and diff hygiene passed with existing unrelated warnings.
+These tests do not establish cross-dimension candidate behavior during reload.
+No live Redis, full workspace test suite, candidate probe or benchmark ran.
