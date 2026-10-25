@@ -17775,3 +17775,26 @@ identities/outcomes: 852 passed and six existing tests ignored. Existing tests
 cover arithmetic rollback and JSON execution; these are package library tests,
 not full-workspace or live Gateway integration results. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
+
+## Avoid duplicate WAF body-size digit validation
+
+The sole runtime parse_usize caller is publish_non_json_body, which reads the
+header-stage ArgsCombinedSize scalar before publishing body arguments. The helper
+now explicitly rejects a leading plus and leaves other syntax/overflow checks to
+the same standard usize parser. UTF-8 validation remains. Standard parsing accepts
+a leading plus, so retaining this local rejection preserves the existing unsigned
+decimal-only grammar, including rejection of negative zero.
+
+This removes the separate digit scan for valid counts without changing the
+GenerationInvariant error category, phase/control ordering, publication, body
+limits or budgets. It does not retain a second numeric field or change decimal
+storage. Signed parsing is unchanged from the preceding optimization. No measured
+throughput improvement is claimed.
+
+The new grammar test passed before the production edit and covers platform-sized
+maximum/overflow, leading zeroes, signs, malformed text and all 256 middle bytes.
+Fresh baseline/final WAF library selections preserve 859 identities/outcomes:
+853 passed and six existing ignored. Existing body-publication tests cover the
+caller. Formatting, workspace all-target check/Clippy and seven repository guards
+passed with existing warnings. No full-workspace suite, live Gateway integration
+or allocation/latency benchmark ran.

@@ -5336,7 +5336,8 @@ pub(super) fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
 
 fn parse_usize(value: &[u8]) -> Result<usize, RuntimeError> {
     let text = std::str::from_utf8(value).map_err(|_| RuntimeError::GenerationInvariant)?;
-    if text.is_empty() || text.bytes().any(|byte| !byte.is_ascii_digit()) {
+    // Unlike usize parsing, this internal decimal representation rejects signs.
+    if text.starts_with('+') {
         return Err(RuntimeError::GenerationInvariant);
     }
     text.parse().map_err(|_| RuntimeError::GenerationInvariant)

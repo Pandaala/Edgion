@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn unsigned_integer_grammar_preserves_boundaries_and_rejects_signs() {
+    let maximum = usize::MAX.to_string();
+    let padded = format!("{}1", "0".repeat(128));
+    for (input, expected) in [
+        ("0", 0),
+        ("00042", 42),
+        (maximum.as_str(), usize::MAX),
+        (padded.as_str(), 1),
+    ] {
+        assert_eq!(parse_usize(input.as_bytes()), Ok(expected), "{input:?}");
+    }
+    let overflow = format!("{maximum}0");
+    for input in [
+        "",
+        "+",
+        "-",
+        "+0",
+        "+42",
+        "+00042",
+        "-0",
+        "-1",
+        "++1",
+        "--1",
+        "1+",
+        "1-",
+        " 1",
+        "1 ",
+        "1\n",
+        "\t1",
+        "1_0",
+        "1.0",
+        "1e2",
+        "0x10",
+        "é",
+        overflow.as_str(),
+    ] {
+        assert_eq!(
+            parse_usize(input.as_bytes()),
+            Err(RuntimeError::GenerationInvariant),
+            "{input:?}"
+        );
+    }
+    for byte in u8::MIN..=u8::MAX {
+        let input = [b'1', byte, b'2'];
+        let expected = if byte.is_ascii_digit() {
+            Ok(102 + usize::from(byte - b'0') * 10)
+        } else {
+            Err(RuntimeError::GenerationInvariant)
+        };
+        assert_eq!(parse_usize(&input), expected, "middle byte {byte}");
+    }
+}
+
+#[test]
 fn signed_integer_grammar_preserves_boundaries_and_rejects_invalid_bytes() {
     for (input, expected) in [
         ("0", 0),
