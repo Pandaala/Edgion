@@ -600,6 +600,97 @@ fn upstream_authority_resolves_and_clears() {
 }
 
 #[test]
+fn upstream_authority_reuses_only_unchanged_successful_compilation() {
+    use crate::backends::policy::backend_traffic::authority::render_authority;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let target = service_target("authority-reuse", "svc");
+    let mut config = UpstreamAuthorityConfig {
+        pattern: "*.sandbox.internal".to_string(),
+        template: "${ctx:tenant}.sandbox.internal".to_string(),
+        health_check_host: None,
+    };
+    let make_policy = |config, lb| {
+        let mut p = policy("authority-reuse", "p1", "svc", None, Some(lb), None, false, false);
+        Arc::get_mut(&mut p).unwrap().spec.upstream_authority = config;
+        p
+    };
+    let publish = |p| {
+        store.full_set_policies(HashMap::from([("authority-reuse/p1".to_string(), p)]));
+        store.get_authority("authority-reuse/svc").unwrap()
+    };
+    let first = publish(make_policy(Some(config.clone()), LoadBalancerType::LeastConn));
+    let retained = store.snapshot();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_ctx_var()
+        .withf(|name| name == "tenant")
+        .return_const(Some("tenant-a".to_string()));
+
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([(
+            "authority-reuse/p1".to_string(),
+            make_policy(Some(config.clone()), LoadBalancerType::Ewma),
+        )]),
+        HashSet::new(),
+    );
+    let updated = store.snapshot();
+    assert!(updated.generation() > retained.generation());
+    assert!(!Arc::ptr_eq(
+        &retained.get_effective(&target).unwrap(),
+        &updated.get_effective(&target).unwrap()
+    ));
+    let second = store.get_authority("authority-reuse/svc").unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(
+        render_authority(&second, &session).unwrap(),
+        "tenant-a.sandbox.internal"
+    );
+
+    config.template = "new-${ctx:tenant}.sandbox.internal".to_string();
+    let third = publish(make_policy(Some(config.clone()), LoadBalancerType::Ewma));
+    assert!(!Arc::ptr_eq(&second, &third));
+    assert_eq!(
+        render_authority(&third, &session).unwrap(),
+        "new-tenant-a.sandbox.internal"
+    );
+
+    config.health_check_host = Some("health.sandbox.internal".to_string());
+    let fourth = publish(make_policy(Some(config.clone()), LoadBalancerType::Ewma));
+    assert!(!Arc::ptr_eq(&third, &fourth));
+    assert_eq!(fourth.health_check_host.as_deref(), Some("health.sandbox.internal"));
+    assert_eq!(
+        render_authority(&fourth, &session).unwrap(),
+        "new-tenant-a.sandbox.internal"
+    );
+
+    config.pattern = "*.other.internal".to_string();
+    config.template = "${ctx:tenant}.other.internal".to_string();
+    config.health_check_host = None;
+    let fifth = publish(make_policy(Some(config), LoadBalancerType::Ewma));
+    assert!(!Arc::ptr_eq(&fourth, &fifth));
+    assert_eq!(render_authority(&fifth, &session).unwrap(), "tenant-a.other.internal");
+
+    store.full_set_policies(HashMap::from([(
+        "authority-reuse/p1".to_string(),
+        make_policy(None, LoadBalancerType::Ewma),
+    )]));
+    assert!(store.get_authority("authority-reuse/svc").is_none());
+    let retained_policy = retained.get_effective(&target).unwrap();
+    let retained_authority = retained_policy.upstream_authority.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&first, retained_authority));
+    assert_eq!(
+        render_authority(retained_authority, &session).unwrap(),
+        "tenant-a.sandbox.internal"
+    );
+    store.full_set_policies(HashMap::new());
+}
+
+#[test]
 fn retry_budget_resolves_with_keep_if_unchanged() {
     use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
 

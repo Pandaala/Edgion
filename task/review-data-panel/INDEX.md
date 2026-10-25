@@ -17459,3 +17459,21 @@ newly allocated replay, same-owner replay, real changes, retained generations an
 health material/error replacement. No redundant new test was added. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live traffic or benchmark ran.
+
+## Reuse successfully compiled unchanged upstream authority
+
+Effective Service policy construction now reuses the previous successful compiled
+authority Arc when the complete authority config is equal. Changed or missing
+config follows the existing paths; an absent previous compiled result still
+compiles. The config-only compiler produces owned immutable template, suffix and
+health-host fields. This avoids repeated cold compilation and allocation on
+otherwise changed policy generations without introducing a cache or changing
+snapshot publication, request rendering, or background reconciliation.
+
+Independent plan and source reviews passed. Baseline store (39) and authority
+rendering (6) tests passed; final backend-traffic tests passed all 66, preserving
+those identities/outcomes and adding one lifecycle regression for unrelated LB
+updates, authority-field changes, removal and retained-snapshot rendering.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or benchmark ran; no measured
+throughput or total-memory improvement is claimed.

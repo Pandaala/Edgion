@@ -511,7 +511,9 @@ impl BackendTrafficPolicyStore {
         let (upstream_authority, upstream_authority_config) = if is_service {
             match policy.spec.upstream_authority.as_ref() {
                 Some(cfg) => (
-                    CompiledUpstreamAuthority::compile(cfg).ok().map(Arc::new),
+                    old.filter(|old| old.upstream_authority_config.as_ref() == Some(cfg))
+                        .and_then(|old| old.upstream_authority.clone())
+                        .or_else(|| CompiledUpstreamAuthority::compile(cfg).ok().map(Arc::new)),
                     Some(cfg.clone()),
                 ),
                 None => (None, None),
