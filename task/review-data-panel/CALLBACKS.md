@@ -1469,3 +1469,40 @@ and 11 upstream trailer-filter tests. Formatting, workspace all-target check/
 Clippy and agent-doc validation passed with existing warnings. These are current
 Gateway regressions, not fresh fork-suite, live flow-control, allocation or
 throughput results. No runtime, dependency or test fixture changed.
+
+## DNS query ownership and dependency boundaries
+
+Direct source revalidated at `558729857`. This follows native upstream selection,
+AI external endpoint selection and Common egress adapters into the shared DNS
+core; it does not close every DNS consumer or dependency lifecycle.
+
+| Boundary and source | Ownership and retained work |
+| --- | --- |
+| Gateway `routes/http/proxy_http/pg_upstream_peer.rs` to `backends/mod.rs` | Native ExternalName self-resolution uses the captured Service projection and resolver inputs. The EndpointSlice strategy is separate. `resolve_external_ips_with` bypasses resolver/cache for bare IP literals; otherwise it uses the configured cache switch and captured TTL. Native peer construction selects the first safe address, retaining the complete result for rejection diagnostics. |
+| Gateway `backends/mod.rs` resolver selection | Service, Gateway and EGC candidates are borrowed in precedence order. Routed external AI omits the Service layer. `httpdns_config_for_ref` still formats a lookup key and reads the live typed LinkSys table; candidates do not pin a provider generation before that lookup. |
+| Common `dns/resolver_select.rs` and `dns/mod.rs` | The first configured candidate wins. Only selected inline servers are cloned into the owned spec; an empty selected list or missing/wrong-provider HTTPDNS reference yields System rather than trying a lower layer. Existing failed HTTPDNS preparation retains its declared fallback. System/prepared HTTPDNS fingerprints borrow identity; Standard DNS constructs one owned output buffer. |
+| Gateway `backends/discovery/dns_cache.rs` and `backends/mod.rs::resolve_external_ips_with` | Lookup borrows service/hostname/fingerprint key components, while the LRU returns an owned cloned entry/address vector. A successful miss clones addresses into the cache and returns the original vector. Capacity, strict entry expiry and query identity remain separate from address representation; see [DNS result ownership](dns-01-address-result-ownership.md). |
+| Gateway `ai/http/attempt.rs::resolve_ai_endpoint` | Common DNS returns all addresses, the Gateway egress filter evaluates the vector, then the first surviving address becomes the endpoint. This does not call the native Service DNS cache. Early first-address projection remains [deferred](dns-02-ai-first-address-projection.md), including rejection-observation semantics. |
+| Common `dns/system.rs`, `standard.rs`, `hickory.rs` | System fast-paths bare literals, otherwise constructs host:0 and preserves first-seen IP order while deduplicating. Standard DNS parses servers and builds a resolver per query; accepted server order and duplicates survive parsing. [System input ownership](dns-05-system-query-input.md) and [resolver preparation](dns-03-standard-resolver-preparation.md) require separate decisions. An empty direct Standard list uses System; an empty explicit HTTPDNS DNS fallback rejects. |
+| Common `dns/httpdns.rs` and `http_fetcher.rs` | Queries borrow prepared response metadata and reuse the prepared client. URL rendering remains per query; the rendered owner is dropped after successful fetching, before parsing. The fetcher classifies normalized literals, sends that same parsed URL, strips URLs from SDK errors and enforces the byte cap while receiving. The returned String owns the receive buffer. Parsing preserves ordered deduplicated results under the 256-IP cap; full JSON projection remains [deferred](dns-04-json-response-projection.md). These are byte/result bounds, not a total heap or concurrent-query bound. |
+| Common `egress.rs` and Gateway `plugins/http/common/outbound/egress.rs` | Each shared Inner owns its policy/spec and a 16-entry memo. Zero TTL bypasses it; fresh hits clone addresses. Fresh DNS results are filtered/observed before memo storage, including empty negative results; DNS errors are not cached. Full-map replacement reuses a borrowed-key lookup; pruning and new-key clearing remain under the same write guard. [Shared address ownership](egress-01-cached-address-ownership.md) is still deferred. |
+
+For an attempted HTTPDNS render/fetch/parse failure, successful configured
+fallback wins; failed fallback preserves the primary error. A generation whose
+preparation already failed runs its configured fallback without an attempted
+primary fetch. Endpoint egress and the returned backend-address policy are
+separate boundaries. See the original [prepared-runtime contract](../../skills/04-review/link-sys/regression-guards/httpdns-prepared-runtime.md),
+[endpoint policy](../../skills/04-review/ssrf/regression-guards/httpdns-endpoint-egress.md)
+and [native cache identity](../../skills/04-review/backends/regression-guards/externalname-dns-cache-identity-and-lifecycle.md).
+
+Excluded from this bounded inventory: complete Controller and LinkSys publication/
+revocation, OS resolver internals, Hickory pool/cache/hosts lifetimes, reqwest
+networking internals, complete concurrency/cancellation analysis, and the separate
+Gateway `util::net::resolve_domain` path. No deferred design is selected here and
+no whole-callback, crate or goal completion is claimed.
+
+Fresh existing selections passed Common DNS 71, Common egress 11, Gateway
+DNS-cache 26 and Gateway egress adapter 3 tests. Workspace all-target check/Clippy,
+formatting and agent-doc validation passed with existing warnings. These are
+scoped regressions, not a new controlled DNS/HTTP transport experiment, full suite
+or performance measurement. Runtime code and test fixtures are unchanged.

@@ -17719,3 +17719,10 @@ retaining the borrowed-pointer assertions. Baseline/final runs preserve all 71
 Common DNS and 26 Gateway DNS-cache test identities/outcomes. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, controlled DNS transport fixture or benchmark ran.
+
+## DNS query boundary inventory
+
+The [DNS query ownership inventory](CALLBACKS.md#dns-query-ownership-and-dependency-boundaries)
+records native, AI and egress entry boundaries against `558729857`, links existing
+deferred choices, and identifies dependency/lifecycle coverage that remains open.
+It does not close the broader callback audit or select a deferred implementation.
