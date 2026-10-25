@@ -1069,9 +1069,9 @@ impl Vm {
             // `url_decode(s)` uses `application/x-www-form-urlencoded` semantics: `%XX` is
             // decoded AND a literal `+` is decoded to a space. This is NOT RFC 3986 path
             // decoding (in RFC 3986 a literal `+` in a path is a reserved character and must
-            // be preserved). The form-semantics choice intentionally mirrors
-            // `edgion_resources::uri_utils::url_decode` (see `src/types/uri_utils.rs`) so the DSL
-            // and the routing/consistent-hash layers agree on query-string decoding.
+            // be preserved). Ordinary plus handling and valid UTF-8 percent encodings match
+            // `edgion_resources::uri_utils::url_decode`, but malformed-token consumption,
+            // invalid UTF-8 fallback and output limits differ. Do not substitute decoders.
             //
             // Security note: callers must NOT pass `req.path()` here and then compare the
             // result against an ACL that contains a literal `+` — `%20` and `+` collapse to

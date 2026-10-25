@@ -1,121 +1,91 @@
 ---
 name: url-decode-form-semantics
-description: Use when reviewing DSL `url_decode` builtin findings; `url_decode(s)` intentionally uses application/x-www-form-urlencoded semantics (`+` → space, not RFC 3986). The name-vs-semantics gap is documented; renaming or splitting into `url_decode` (RFC 3986) + `form_decode` (form) is not accepted.
+description: DSL URL decoding uses form-style plus handling; preserve its byte scanner and limits without assuming equivalence to the resource query decoder.
 knowledge_type: intentional-design
 ---
 
-# DSL `url_decode` builtin uses form-encoding semantics intentionally — DESIGN-TRADEOFF
+# DSL URL decoding: form semantics and separate decoder boundaries
 
-## Conclusion
+## Scope and decision
 
-`BuiltinId::UrlDecode` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs:448-480`
-decodes both `%XX` AND literal `+` (`+` → space), implementing
-`application/x-www-form-urlencoded` semantics rather than RFC 3986 path decoding.
-The name-vs-semantics mismatch is **documented** (api-reference §`url_decode` carries
-an explicit security warning, plus an in-source doc-comment above the arm) and is
-**locked** as a design choice: the form semantics intentionally mirror
-`uri_utils::url_decode` (`edgion-resources/src/uri_utils.rs`) so the
-DSL, route matching, and consistent-hash arg-name comparison (`backends-F014`) all
-agree on the same decoded form. Re-introducing the asymmetry by renaming or
-splitting the builtin would create a cross-layer divergence.
+`BuiltinId::UrlDecode` in
+`edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` decodes two ASCII hex
+bytes after `%` and maps an ordinary literal `+` to space. This form-style
+behavior is deliberate; it is not RFC 3986 path decoding. Keep the documented
+path-ACL warning and do not introduce an unrequested rename or sibling builtin.
+Edgion is pre-release: historical deployed-script compatibility arguments do
+not override the current no-compatibility-burden rule. A requested product/API
+change still requires an explicit design decision.
 
-Fix suggestions of the form "rename to `form_decode` and introduce a new RFC 3986
-`url_decode`", "split into `url_decode` (RFC 3986) + `form_decode` (form)", or
-"add a `path_decode` sibling builtin" are **not accepted**.
+The resource query decoder shares ordinary plus handling and well-formed
+percent encodings of valid UTF-8, but the implementations are not interchangeable. The prior
+claim that they always produce identical decoded bytes was incorrect. The table
+below records current source behavior, not approval to broaden either contract.
 
-## Core Rationale
+## Current differences
 
-**1. Cross-layer consistency with route matching**
+| Input/boundary | DSL `UrlDecode` | Resources `uri_utils::url_decode` |
+|---|---|---|
+| `%+A` | `% A`: invalid hex leaves `%` literal, then processes `+` as space | LF: two-byte radix parsing accepts a leading plus |
+| `%%41` | `%A`: invalid first escape, then decodes `%41` | `%%41`: failed token consumes the next two Unicode scalars |
+| `%FF` | Replacement character U+FFFD | Latin-1 character U+00FF |
+| Invalid UTF-8 in a percent run | Lossy UTF-8 over the assembled output byte buffer | Entire contiguous percent-byte run falls back to bytewise Latin-1, including any valid prefix |
+| Output admission | Exact decoded UTF-8 byte limit before returning independent Arc text | Owned String with no DSL VM output-limit contract |
 
-`uri_utils::url_decode` (in `edgion-resources/src/uri_utils.rs`) is the canonical decoder used
-by HTTP route matching and is shared with `backends-F014` (consistent-hash arg-name
-percent-decoding). It uses form semantics (`+` → space). The DSL `url_decode` was
-intentionally written to behave the same so operators writing
-`url_decode(req.query("foo"))` get the same byte sequence the routing layer would
-produce. A DSL builtin that decoded the same input differently would be a
-debuggability hazard.
+DSL invalid escapes leave the percent byte literal; subsequent bytes still go
+through the scanner. Resources consumes up to two Unicode scalars after `%`,
+preserves the consumed token on failure (including a consumed plus), and flushes
+successful percent runs separately. Neither description licenses substituting
+an off-the-shelf decoder. The resource contract is maintained in the
+[canonical query token boundary](../../uri-normalization/mandatory-design/normalization-contract.md#canonical-query-percent-token-contract).
 
-**2. Operator-facing risk is bounded by documentation, not a rename**
+DSL's plain-input shortcut avoids decoding scratch only when neither `%` nor
+`+` occurs; it retains implicit argument coercion, output byte checking and
+independent Arc ownership. Marker-present decoding remains unchanged.
 
-The realistic misuse — `url_decode(req.path())` compared against an ACL containing
-a literal `+` — requires the operator to:
-- explicitly call `url_decode` on path data (the documented intent is query data),
-- compare the result against an allowlist whose literal entries contain `+`,
-- treat the result as authoritative for an authz decision.
+## Query provenance and round trips
 
-The api-reference §`url_decode` block now carries a labelled **Semantics** and
-**Security warning** paragraph telling operators not to do this; the in-source
-doc-comment above `BuiltinId::UrlDecode` mirrors the same warning for future
-maintainers. A rename or a new RFC 3986 builtin would not address an existing
-script that already calls `url_decode(req.path())` — only the documentation does.
+`ReqQuery` delegates to `PluginSession::get_query_param_ref`; the real adapter
+reads `EdgionHttpContext::cached_query`, populated by the resource query parser
+from the frozen entry query. Consequently `req.query("callback")` is already
+decoded. Applying `url_decode` again performs a second decoding operation; it
+is appropriate only when an explicit application contract requires another
+encoding layer. The API example uses explicitly encoded text instead.
 
-**3. Renaming is a breaking change for a Low-severity issue**
+For a literal plus, `url_encode("+")` yields `%2B`, and `url_decode("%2B")`
+yields `+`. The former claim that preserving this round trip requires dropping
+form semantics was incorrect. This statement assumes both calls pass their
+runtime limits; it does not assert that arbitrary malformed encodings round-trip.
 
-The issue is Severity Low and BadLogic-class. Renaming `url_decode` → `form_decode`
-breaks every operator-deployed DSL script that already calls it (a "rename" with
-deprecation alias is still a multi-release rollout for a niche risk). Adding a
-sibling `path_decode` builtin doubles the surface area of the encoding-related
-builtin set and forces a parallel decision at the routing layer
-(`uri_utils::url_decode` would need a sibling too, or the layers
-diverge again). The cost/benefit ratio does not justify either change at the
-current severity.
+The consistent-hash Arg selector uses the resource decoder for encoded names
+after its raw-name equality fast path; selected values stay raw. These consumer
+policies are distinct from DSL decoding and must not be unified accidentally.
 
-**4. Industry precedent is split, so the name itself is not authoritative**
+## Optimization and re-evaluation
 
-JavaScript `decodeURIComponent` does **not** decode `+`. Python `urllib.parse.unquote`
-does **not** decode `+`; `urllib.parse.unquote_plus` does. Java
-`URLDecoder.decode` **does** decode `+`. Ruby `CGI.unescape` **does** decode `+`.
-Go `url.QueryUnescape` does; `url.PathUnescape` does not. There is no industry
-consensus that the bare name `url_decode` implies RFC 3986; operators coming
-from Java/Ruby/Go-query backgrounds would expect the form behavior, and
-operators from JS/Python-unquote backgrounds would expect the RFC 3986 behavior.
-The right fix is documentation, not picking one side of the naming split.
+A shared decoder or prepared/reusable decoding interface must first resolve
+malformed-token policy, invalid UTF-8 policy, output limits, failure ordering and
+ownership. The [deferred consolidation task](../../../../task/review-data-panel/dsl-11-url-decoder-consolidation.md)
+records that decision. No runtime defect, selected replacement, new cache or
+measured performance benefit follows from this documentation correction.
 
-## Fix Suggestions Not Accepted
+Re-evaluate this page when either scanner, query-cache provenance, output-limit
+contract or explicitly requested API scope changes. A change to the resource
+decoder does not automatically authorize changing DSL semantics. Request-level
+tracing remains forbidden; decoding paths do not gain warnings or new metrics.
 
-- "Rename `url_decode` to `form_decode`" — breaking change for every deployed
-  DSL script; the rename does not protect existing scripts and the api-reference
-  warning already covers the misuse case.
-- "Add a sibling `path_decode(s)` (RFC 3986) builtin and keep `url_decode`" —
-  doubles the encoding-builtin surface for a Low-severity, narrow-trigger issue;
-  also forces a parallel decision at the routing layer (`uri_utils`
-  shared by route matching and consistent-hash arg-name path) to keep cross-layer
-  parity, expanding the change well beyond the DSL.
-- "Make `url_decode` round-trip-symmetric with `url_encode`" — `url_encode`
-  already encodes `+` as `%2B`, so `url_decode(url_encode(s)) == s` for any
-  input that does not itself contain a literal `+`. Making the round-trip
-  symmetric for literal-`+` inputs would require dropping form semantics, i.e.
-  the same rejected rename above.
-- "Emit a runtime warning when `url_decode` is called on a value that looks
-  like a path" — the DSL has no value-tagging for "this is a path" (`req.path()`
-  returns a `Str` like any other), and Iron rule 3 of
-  `skills/03-coding/01-log-safety.md` forbids `tracing::*` on the data-plane
-  hot path regardless of level.
+## Evidence and limits
 
-## Re-evaluation Triggers
+- Original F-021 finding: `tasks/plugins/plugins-http-dsl-F021-urldecode-plus-decodes-as-space.md`
+  (historical path; form-style plus handling was retained).
+- Gateway source: `plugins/http/dsl/lang/builtins.rs`,
+  `plugins/runtime/session_adapter.rs`, `ctx.rs`, `backends/selector.rs`.
+- Existing tests: Gateway DSL `utility_functions.rs` URL cases and Resources
+  `tests/unit/uri_utils_test.rs`, including malformed scalar consumption, radix
+  leading-plus acceptance and whole-run invalid UTF-8 fallback.
+- [Builtin error contract](../../../03-coding/dsl/builtin-error-semantics.md)
+  and [output limits](../regression-guards/builtin-output-string-limit.md).
 
-Re-open this decision only if:
-
-- A concrete production incident is reported in which a DSL script's
-  `url_decode(req.path())` allowlist bypass was exploited (Severity bumps to
-  High/Critical, justifying a breaking rename).
-- `uri_utils::url_decode` is itself rewritten to RFC 3986 semantics —
-  in that case the DSL must follow for cross-layer consistency, and this rule
-  is superseded.
-- A separate RFC 3986 path-decoding builtin is requested for a different
-  use case (e.g. operator-driven path normalization layer) — that would be a
-  feature request handled via the brainstorming workflow, not via this rule.
-
-## Reference Cases
-
-- `tasks/plugins/plugins-http-dsl-F021-urldecode-plus-decodes-as-space.md`
-  (F-021, 2026-05-26 — original finding, closed as 📝)
-- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs:448-480` —
-  `BuiltinId::UrlDecode` arm with the in-source design-rationale comment
-- `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
-  §`url_decode` — operator-facing semantics + security warning
-- `skills/04-review/backends/regression-guards/consistent-hash-arg-percent-encoded-name.md`
-  — sibling decision locking the same form semantics at the routing layer
-- `skills/03-coding/dsl/builtin-error-semantics.md` — `url_decode` row already
-  catalogues the "silent fallback" error shape (preserves literal `%XX` on
-  invalid hex)
+The table is source-traced evidence. Existing tests provide scoped regression
+coverage; this correction does not add an exhaustive cross-decoder differential
+suite or establish security equivalence across consumers.

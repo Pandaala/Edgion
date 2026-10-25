@@ -1254,9 +1254,9 @@ if value != nil {
 
 **Signature**: `url_decode(s)` → `Str`
 
-Decodes a URL-encoded string using `application/x-www-form-urlencoded` semantics: `%XX` sequences are restored to their corresponding characters, **and `+` is converted to a space**. Invalid `%XX` sequences are preserved as-is.
+Decodes a URL-encoded string using `application/x-www-form-urlencoded` semantics: `%XX` sequences are restored to their corresponding characters, **and `+` is converted to a space**. An invalid escape leaves `%` literal; subsequent bytes are still processed, including `+` becoming space. Invalid decoded UTF-8 uses replacement characters.
 
-> **Semantics**: this builtin matches form-body / query-string decoding, **not** RFC 3986 path decoding. In RFC 3986 a literal `+` in a path is a reserved character and must be preserved; this builtin treats it as a space. The behavior intentionally mirrors the gateway's shared `uri_utils::url_decode` helper used by route matching and consistent-hash arg-name comparison, so DSL and routing layer agree on the same decoded form for query data.
+> **Semantics**: this builtin matches form-body / query-string decoding, **not** RFC 3986 path decoding. In RFC 3986 a literal `+` in a path is a reserved character and must be preserved; this builtin treats it as a space. Ordinary plus handling and well-formed percent encodings of valid UTF-8 agree with query decoding, but malformed encodings can produce different results. Do not assume complete equivalence.
 >
 > **Security warning — do not use on URL paths for ACL / allowlist comparisons.** If you call `url_decode(req.path())` and compare the result against an allowlist that contains a literal `+`, an attacker can substitute `%20` (or vice versa) and the two distinct paths will compare equal. For path normalization in security contexts, compare against `req.path()` directly (already pingora-normalized) or use string operations (`starts_with`, `regex_match`) that do not collapse `+` and space. There is currently no RFC 3986 path-decoding builtin; the recommended path-ACL pattern is to write rules against the raw (already-normalized) path.
 
@@ -1265,13 +1265,14 @@ Decodes a URL-encoded string using `application/x-www-form-urlencoded` semantics
 
 **Return value**: Decoded string
 
-**Example** (query-string decoding — the intended use):
+`req.query(name)` already returns a decoded query value. Do not decode it again
+unless the application explicitly uses a second encoding layer.
+
+**Example** (explicitly encoded text):
 ```
-let raw = req.query("callback")
-if raw != nil {
-  let decoded = url_decode(raw)
-  req.set_header("X-Callback-Url", decoded)
-}
+let encoded = "https%3A%2F%2Fexample.com%2Fcallback%3Fvalue%3Da%2Bb"
+let decoded = url_decode(encoded)
+req.set_header("X-Callback-Url", decoded)
 ```
 
 ---

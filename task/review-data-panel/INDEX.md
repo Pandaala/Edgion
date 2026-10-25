@@ -18335,8 +18335,23 @@ passed 59 tests. Formatting, workspace all-target check/Clippy and seven reposit
 guards passed with existing warnings. No full-workspace suite, live integration
 or benchmark ran.
 
-Follow-up knowledge correction: the form-semantics page's claim of identical
-decoded bytes across DSL and resource decoders is broader than current code.
-They share plus-to-space handling but differ in invalid UTF-8 and malformed-token
-consumption. Reconcile that wording against both implementations separately;
-this batch does not unify their behavior or approve a semantic change.
+The subsequent [decoder-boundary correction](#url-decoder-contract-and-consolidation-boundary)
+resolves the discovered knowledge overstatement. This optimization did not unify
+the decoders or approve a semantic change.
+
+## URL decoder contract and consolidation boundary
+
+Corrected the owning [form-semantics knowledge](../../skills/04-review/dsl/intentional-design/url-decode-form-semantics.md):
+common plus handling does not imply identical malformed-token or invalid-UTF-8
+results. Corrected the literal-plus roundtrip claim and removed obsolete
+deployed-compatibility reasoning. Both API languages now use explicitly encoded
+text and explain that req.query already returns decoded values. The source
+comment points to the same bounded interpretation; no runtime expression changed.
+
+[DSL-11](dsl-11-url-decoder-consolidation.md) defers decoder consolidation until
+semantics, output limits, consumer provenance and ownership costs are reviewed.
+It is separate from DSL-01 argument ownership and URI-01 decoded-name comparison.
+Fresh existing tests passed eight Gateway URL cases and 14 Resources URI cases.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. Source tracing supports the difference table; no new
+cross-decoder differential suite, live integration or benchmark ran.

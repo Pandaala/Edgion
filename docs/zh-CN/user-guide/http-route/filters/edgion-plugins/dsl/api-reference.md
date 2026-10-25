@@ -1233,9 +1233,9 @@ if value != nil {
 
 **签名**：`url_decode(s)` → `Str`
 
-按 `application/x-www-form-urlencoded` 语义对 URL 编码字符串进行解码：`%XX` 序列被还原为对应字符，**`+` 被还原为空格**。不合法的 `%XX` 序列会被原样保留。
+按 `application/x-www-form-urlencoded` 语义对 URL 编码字符串进行解码：`%XX` 序列被还原为对应字符，**`+` 被还原为空格**。遇到不合法的转义时，`%` 按字面量保留，后续字节继续处理，包括将 `+` 转为空格。解码后不合法的 UTF-8 使用替换字符。
 
-> **语义说明**：本内建采用表单体 / 查询字符串解码语义，**不是** RFC 3986 路径解码。RFC 3986 中路径里的字面量 `+` 是保留字符，必须原样保留；本内建会把它当作空格。这一行为与路由匹配和一致性哈希参数名比较所使用的 `uri_utils::url_decode` 保持一致，使 DSL 与路由层在 query 数据上得到相同的解码结果。
+> **语义说明**：本内建采用表单体 / 查询字符串解码语义，**不是** RFC 3986 路径解码。RFC 3986 中路径里的字面量 `+` 是保留字符，必须原样保留；本内建会把它当作空格。普通加号和表示合法 UTF-8 的完整百分号编码的处理与查询参数解码一致，但不合法编码可能产生不同结果，不应假定两者完全等价。
 >
 > **安全告警 — 不要用于 URL 路径的 ACL / 白名单比较。** 如果你调用 `url_decode(req.path())` 并与含字面量 `+` 的白名单比较，攻击者可以用 `%20`（或反过来）替换，使两个不同的路径被判定相等。在安全场景中做路径归一化，应直接对 `req.path()`（已由 pingora 归一化）做比较，或使用不会把 `+` 与空格折叠的字符串操作（`starts_with`、`regex_match`）。当前 DSL 不提供 RFC 3986 路径解码内建；推荐的路径 ACL 模式是针对原始（已归一化）路径写规则。
 
@@ -1244,13 +1244,13 @@ if value != nil {
 
 **返回值**：解码后的字符串
 
-**示例**（查询字符串解码 — 推荐用途）：
+`req.query(name)` 返回的查询参数值已经解码。除非应用明确使用了第二层编码，否则不要再次解码。
+
+**示例**（明确经过编码的文本）：
 ```
-let raw = req.query("callback")
-if raw != nil {
-  let decoded = url_decode(raw)
-  req.set_header("X-Callback-Url", decoded)
-}
+let encoded = "https%3A%2F%2Fexample.com%2Fcallback%3Fvalue%3Da%2Bb"
+let decoded = url_decode(encoded)
+req.set_header("X-Callback-Url", decoded)
 ```
 
 ---
