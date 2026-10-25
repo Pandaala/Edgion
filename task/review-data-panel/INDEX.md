@@ -18446,3 +18446,23 @@ test identities/outcomes match before and after, and the P3 utility group passed
 44 tests. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. No full-workspace suite, live integration
 or benchmark ran.
+
+## Admit exact DSL Base64 output length before encoding
+
+`Base64Encode` now uses the existing base64::encoded_len helper with padding
+before allocating encoded output. Locked base64 0.22.1 STANDARD uses PAD and
+its encoder uses this same helper. Argument conversion still precedes admission;
+accepted inputs retain the same encoder and independent Arc result. Exact
+StringTooLong length and limit fields are unchanged. The usize::MAX fallback
+is defensive: real allocated String lengths cannot reach the helper's overflow
+range. Rejected output avoids encoding allocation; input conversion remains.
+
+Baseline-first tests cover empty/zero limit, all three padding residues,
+multibyte input, exact output limits and one-byte-under rejection, including
+both error fields and output spelling. Both Base64-encode test identities and
+outcomes match before and after; all 64 utility tests passed. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with
+existing warnings. This is source-level avoided work on rejected output, not
+measured throughput or memory improvement. No full-workspace suite, live
+integration or benchmark ran. Decoder error and lossy UTF-8 semantics were not
+changed by this exact encoding-size admission.

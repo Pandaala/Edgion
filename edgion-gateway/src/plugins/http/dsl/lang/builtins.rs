@@ -1010,8 +1010,12 @@ impl Vm {
             BuiltinId::Base64Encode => {
                 use base64::Engine;
                 let s = state.pop()?.runtime_string()?;
+                let len = base64::encoded_len(s.len(), true).unwrap_or(usize::MAX);
+                let limit = self.limits.max_string_len;
+                if len > limit {
+                    return Err(RuntimeError::StringTooLong { len, limit });
+                }
                 let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
-                check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::Base64Decode => {

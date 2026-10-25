@@ -331,6 +331,49 @@ fn test_md5_result_too_long() {
 }
 
 #[test]
+fn test_base64_encode_exact_padded_byte_limits() {
+    for (input, expected) in [
+        ("", ""),
+        ("a", "YQ=="),
+        ("ab", "YWI="),
+        ("abc", "YWJj"),
+        ("abcd", "YWJjZA=="),
+        ("éπ", "w6nPgA=="),
+    ] {
+        let source = format!(r#"let v = base64_encode("{input}")"#);
+        assert_sets_request_header(
+            &format!(r#"req.set_header("X-Out", base64_encode("{input}"))"#),
+            "X-Out",
+            expected,
+        );
+        assert_eq!(
+            run_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: expected.len(),
+                    ..VmLimits::default()
+                },
+            ),
+            good_next(),
+        );
+        if !expected.is_empty() {
+            let limit = expected.len() - 1;
+            let error = run_expect_runtime_err_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..VmLimits::default()
+                },
+            );
+            assert!(matches!(error, RuntimeError::StringTooLong { len, limit: actual_limit }
+                if len == expected.len() && actual_limit == limit));
+        }
+    }
+}
+
+#[test]
 fn test_base64_encode() {
     assert_sets_request_header(
         r#"req.set_header("X-Out", base64_encode("hello"))"#,
