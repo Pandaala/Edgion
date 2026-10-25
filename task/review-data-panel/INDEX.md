@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Rendered authority label storage](authority-01-rendered-label-storage.md)
+
 - [Discovery section traversal storage](discovery-01-section-traversal-storage.md)
 
 - [Encrypted health-probe preparation](health-01-encrypted-probe-preparation.md)
@@ -17516,3 +17518,18 @@ runs passed the same 17 identities/outcomes; final Gateway backend-traffic tests
 passed 66. Independent plan and source reviews passed. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Rendered authority label ownership decision
+
+The canonical bounded label renderer returns an owned String, but authority
+composition currently copies the validated label into a separately sized final
+String. Reusing the rendered or normalized owner can reduce copies while retaining
+spare capacity or requiring growth. Main request context, cache nomination and
+outbound URL rewriting have different result lifetimes. The
+[authority storage decision](authority-01-rendered-label-storage.md) records these
+tradeoffs without selecting an implementation or claiming a measured memory win.
+
+Fresh existing authority tests passed six cases. Independent plan review approved
+the deferred scope. Formatting, workspace all-target check/Clippy and agent-doc
+validation passed with existing warnings. No runtime/test change, prototype,
+full suite, live traffic, allocation probe or benchmark is included.
