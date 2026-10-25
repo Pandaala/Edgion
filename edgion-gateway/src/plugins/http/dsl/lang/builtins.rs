@@ -1223,8 +1223,12 @@ impl Vm {
             }
             BuiltinId::HexEncode => {
                 let s = state.pop()?.runtime_string()?;
+                let len = s.len().saturating_mul(2);
+                let limit = self.limits.max_string_len;
+                if len > limit {
+                    return Err(RuntimeError::StringTooLong { len, limit });
+                }
                 let encoded = hex::encode(s.as_bytes());
-                check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::HexDecode => {

@@ -18424,3 +18424,25 @@ utility group passed 63 tests. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No full-workspace
 suite, live integration or benchmark ran; source-level repeated conversion
 removal is not a measured throughput or allocation improvement.
+
+## Admit exact DSL hex output length before encoding
+
+`HexEncode` now computes twice the input UTF-8 byte length after the unchanged
+RuntimeString conversion and rejects an oversized output before calling
+hex::encode. Locked hex 0.4.3 guarantees exactly two lowercase ASCII bytes per
+input byte, so rejection retains the same exact StringTooLong length and limit.
+Saturating multiplication is defensive; a real String's length is bounded by
+isize::MAX, whose double fits usize. Accepted inputs use the existing encoder
+and independent Arc conversion without a redundant post-encoding length check.
+
+Rejected output no longer attempts encoding allocation before returning its
+typed limit error. Input conversion still owns its String; accepted output
+construction is unchanged. This is avoided work on known oversized results,
+not a measured process-memory or throughput improvement.
+
+Baseline-first coverage pins empty/zero-limit success, ASCII and multibyte
+exact/over byte limits, both error fields and lowercase output. Both hex-encode
+test identities/outcomes match before and after, and the P3 utility group passed
+44 tests. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. No full-workspace suite, live integration
+or benchmark ran.

@@ -186,6 +186,42 @@ fn test_hex_encode() {
 }
 
 #[test]
+fn test_hex_encode_exact_byte_limits_and_lowercase_output() {
+    for (input, expected) in [("", ""), ("AB", "4142"), ("éπ", "c3a9cf80")] {
+        let output_source = format!(r#"req.set_header("X-Hex", hex_encode("{input}"))"#);
+        assert_sets_request_header(&output_source, "X-Hex", expected);
+        let source = format!(r#"let result = hex_encode("{input}")"#);
+        assert_eq!(
+            run_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: expected.len(),
+                    ..Default::default()
+                },
+            ),
+            good_next()
+        );
+        if !expected.is_empty() {
+            let limit = expected.len() - 1;
+            let error = run_expect_runtime_err_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..Default::default()
+                },
+            );
+            assert!(matches!(
+                error,
+                RuntimeError::StringTooLong { len, limit: actual_limit }
+                    if len == expected.len() && actual_limit == limit
+            ));
+        }
+    }
+}
+
+#[test]
 fn test_hex_decode() {
     let source = r#"req.set_header("X-Dec", hex_decode("4142"))"#;
     let mut session = MockPluginSession::new();
