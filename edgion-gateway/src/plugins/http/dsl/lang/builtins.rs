@@ -1081,6 +1081,10 @@ impl Vm {
             // `skills/04-review/dsl/intentional-design/url-decode-form-semantics.md`.
             BuiltinId::UrlDecode => {
                 let s = state.pop()?.runtime_string()?;
+                if !s.contains(['%', '+']) {
+                    check_string_len(&s, self.limits.max_string_len)?;
+                    return Ok(Value::Str(Arc::from(s.as_str())));
+                }
                 let mut result = Vec::new();
                 let bytes = s.as_bytes();
                 let mut i = 0;

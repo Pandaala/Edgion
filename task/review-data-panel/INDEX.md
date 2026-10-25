@@ -18318,3 +18318,25 @@ tests passed on both the original and modified implementations with identical
 identities/outcomes. The broader P3 utility group passed 43 tests. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full-workspace suite, live integration or benchmark ran.
+
+## Skip DSL URL decoding scratch for plain text
+
+After the unchanged RuntimeString conversion, `UrlDecode` checks for percent or
+plus markers. Without either marker, the valid UTF-8 input is already the decoded
+text: check its byte length and construct the independent result Arc directly.
+This removes the temporary decoding Vec and copy for nonempty plain inputs.
+Marker-present inputs retain the original decoder and pay an additional prefix
+scan; no measured throughput improvement is claimed. RuntimeString ownership
+remains the separate DSL-01 decision.
+
+Baseline/final runs passed the same eight URL decode tests, including new empty,
+plain ASCII, multibyte and exact/over-byte-limit cases. The broader utility group
+passed 59 tests. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. No full-workspace suite, live integration
+or benchmark ran.
+
+Follow-up knowledge correction: the form-semantics page's claim of identical
+decoded bytes across DSL and resource decoders is broader than current code.
+They share plus-to-space handling but differ in invalid UTF-8 and malformed-token
+consumption. Reconcile that wording against both implementations separately;
+this batch does not unify their behavior or approve a semantic change.

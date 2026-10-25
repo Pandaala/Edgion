@@ -394,6 +394,39 @@ fn test_url_decode() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a%20b"))"#, "X-Out", "a b");
 }
 
+#[test]
+fn test_url_decode_plain_text_is_unchanged() {
+    for input in ["", "plain-text /?=&", "éπ"] {
+        let source = format!(r#"req.set_header("X-Out", url_decode("{input}"))"#);
+        assert_sets_request_header(&source, "X-Out", input);
+    }
+}
+
+#[test]
+fn test_url_decode_plain_text_preserves_utf8_byte_limit() {
+    let source = r#"let result = url_decode("éπ")"#;
+    assert_eq!(
+        run_with_limits(
+            source,
+            MockPluginSession::new(),
+            VmLimits {
+                max_string_len: 4,
+                ..Default::default()
+            },
+        ),
+        good_next()
+    );
+    let error = run_expect_runtime_err_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
 // `url_decode` uses application/x-www-form-urlencoded semantics: a literal `+` decodes to a
 // space. This is intentional and documented in api-reference.md §url_decode (Semantics +
 // Security warning) and in the BuiltinId::UrlDecode source comment. Mirrors the same
