@@ -22,9 +22,9 @@ destination.
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. AI usage/summary/quota observation boundaries inspected below; snapshot reuse is deferred. Quota worker handoff and scalar terminal arbitration inspected below. Direct quota sink/shared-core validation and cumulative Lua source are inspected below. Direct plugin-stage log collection, nested resource-log handoff and borrowed terminal serialization inspected below; stage-specific capacity policy is deferred. Terminal route-matrix recording and shared counter/histogram renewal gates inspected below. Retry-budget percentage conversion is prepared at construction below; epoch sampling, coherent snapshots and admission atomics are retained. The direct terminal cleanup inventory is reconciled in [CALLBACKS](CALLBACKS.md#terminal-logging-owner-inventory-reconciled); do not reopen those same handoffs without changed evidence. Direct ordinary/AI retry adapters and the bounded AI scheduler are reconciled in [CALLBACKS](CALLBACKS.md#retry-adapter-and-bounded-ai-scheduler-reconciliation). Direct AI admission/settlement ownership is reconciled in [CALLBACKS](CALLBACKS.md#ai-admission-and-settlement-ownership-reconciled). Concrete processor direct entries are reconciled in [CALLBACKS](CALLBACKS.md#concrete-response-processor-direct-entry-inventory); deeper processor dependencies and Redis transport internals remain separate. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Canonical ACL ordering and IP/CIDR lookup inspected below; geographic membership and MMDB decoding are deferred. Local-gate transition and lookup ownership inspected; lookup representation is deferred below. Remaining Redis dependencies and publication construction remain open. |
-| TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
+| TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Passthrough SNI parser container validation and borrowed-name-to-owned-context handoff inspected below. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. The [L4 selection inventory](CALLBACKS.md#l4-route-selection-and-backend-admission-boundaries) now names direct route selection and backend admission through the Service handoff, distinguishing enabled passthrough from retained termination code. Complete discovery/policy interleavings and transport dependencies remain open. |
 | TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. The [canonical certificate projection boundaries](CALLBACKS.md#canonical-certificate-projection-boundaries) reconcile full/display/typed extraction, OtherName conversion and all four caller groups. Backend-only inspection, minimal CN projection and prepared SAN policy remain deferred; native parser/verification internals and remaining matcher costs are outside that direct inventory. |
-| UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
+| UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. The [L4 selection inventory](CALLBACKS.md#l4-route-selection-and-backend-admission-boundaries) reconciles direct new-session route/backend admission and existing-session pinning. Complete publication/discovery interleavings and socket dependencies remain open. |
 
 ## Deferred decisions
 
@@ -18730,3 +18730,24 @@ passed 532 cases, including the existing unanchored-match, EOI and empty-regex
 cases. Formatting, workspace all-target check/Clippy, agent-doc validation and
 diff hygiene passed with existing unrelated warnings. No runtime edit, candidate
 benchmark, full workspace test suite or live integration ran.
+
+## Reconcile direct L4 route selection and backend admission
+
+The [L4 inventory](CALLBACKS.md#l4-route-selection-and-backend-admission-boundaries)
+now names cold unit/table preparation, selected-handle lifetimes, same-attachment
+TLS eligibility, stream admission, first-rule weighted slots and the terminal
+policy gate before Service discovery. It separates enabled TLS passthrough from
+retained TLS termination code and preserves UDP's existing-session pinning.
+The TLS query's effective-hostname checks already use a pure canonical predicate;
+no repeated hostname parsing or new prepared representation was established there.
+
+No additional runtime edit or deferred task was selected. Existing hostname,
+Listener specificity and peer-address decisions remain distinct. This closes the
+unnamed direct-selection gap in the two L4 coverage rows, not full publication,
+policy/discovery, relay or dependency coverage.
+
+Independent plan review passed. Fresh unchanged-code selections passed 221 cases:
+TCP 29, UDP 61, TLS 85, compiled backend runtime 14, backend policy 10 and canonical
+leaf hostname 22. Formatting, workspace all-target check/Clippy, agent-doc
+validation and diff hygiene passed with existing unrelated warnings. No full
+workspace test suite, live connection/hot-reload or performance benchmark ran.

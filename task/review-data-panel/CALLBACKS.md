@@ -1984,3 +1984,40 @@ copies and [DSL-14](dsl-14-value-shape-reuse.md) for repeated shape metadata.
 The [scalar utility inventory](#dsl-scalar-utility-direct-execution-boundaries)
 adds direct coverage for its named builtin subset. No new runtime optimization,
 complete DSL coverage, dependency coverage or performance result is claimed.
+
+## L4 route selection and backend admission boundaries
+
+Revalidated at `94cc60835`. This follows TCP connection and UDP new-session
+selection and TLS SNI selection through the Service discovery handoff. TLS
+passthrough is enabled; `routes/tls/proxy.rs` is retained termination code, not an
+enabled TLSRoute product path. Controller `listener_has_unsupported_tls_mode`
+rejects explicit TLS/Terminate with UnsupportedValue. Inspecting shared code does
+not relax that gate or establish live termination support.
+
+| Boundary | Current source evidence | Ownership and remaining limit |
+| --- | --- | --- |
+| TCP/UDP table construction | `tcp_route_table.rs` and `udp_route_table.rs::from_units` collect cached unit Arcs and place the minimum resource key first. Other entries remain for ownership/counts without a full sort. | Key construction and minimum selection are cold rebuild work. Units retain their route-owned backend selector across unrelated table rebuilds. |
+| TCP/UDP connection lookup | Both `select_route_unit` helpers load the manager table and clone only its first unit. No SNI or path matching runs. | The table guard ends at the helper return; the selected unit survives admission and transport work. Removing that selected Arc is not a temporary-string optimization. |
+| TLS accepted attachments | `TlsRouteUnit::from_route` validates names and pairs accepted schema indices with exact logical parent identities, preserving authored parent order. | Hostname lists remain in the immutable schema owner; there is no second runtime copy. Route schema and compiled backend generation cannot be independently replaced. |
+| TLS table construction | `TlsRouteTable::with_units` groups authored patterns by accepted intersections on the physical listener key, retains attachment indices and sorts candidates by timestamp/namespace/name. | Runners-up remain. Unchanged candidate groups and hostname topology can be reused; this is construction evidence, not a complete publication-interleaving proof. |
+| TLS query and candidates | `select_by` normalizes SNI once, visits canonical matching groups and tests effective names plus logical owner on the same attachment. An ineligible candidate can yield to a runner-up or broader Route group. | Lowercase SNI borrows; uppercase normalization owns its lowercase result. `radix_hostname_matches` is a pure comparison on validated patterns, not repeated parsing. Listener specificity/admission remains authoritative. |
+| TLS selected policy | `select_tls_route` uses the supplied publication's listener index and a separately loaded route table, then returns selected unit/owner and optional available scope. Both proxy implementations release the publication before plugin work. | Missing selected policy is terminal; it does not restart hostname iteration. The two snapshots are not claimed to be one atomic cross-store generation. |
+| Stream admission | TCP/UDP and TLS resolve the selected stream resource before awaiting its checks; whole publication/scope handles are released first. | Connection/request-owned identity and selected executable resources remain owned. Denial does not trigger route or backend fallback. |
+| L4 BackendRef selection | `CompiledL4Backends` prepares first-rule slots, targets and weights once; BackendSelector selects an index and returns a borrowed SelectedL4Backend from that sealed generation. | Denied and malformed slots retain their selected traffic share. Canonical Service namespace/name keys and port sections are prepared before the hot path. |
+| Authorization and policy | `SelectedL4Backend::service` checks denial before kind validity. `resolve_l4_policy_backend` admits live policy ancestors before invoking discovery through `with_service`. | A refusal invokes no resolver closure. Live policy admission is not a promise to pin the later endpoint/policy state atomically; preserve its existing ownership boundary. |
+| Discovery and retry | TCP/UDP call the canonical Service selector. The shared TLS attempt helper returns terminal on missing/denied/invalid selection and distinguishes unavailable resolution for its bounded retry loop. | Retrying an unavailable endpoint does not authorize satisfying a denied backend share with a sibling. Endpoint strategy internals have their [separate inventory](#service-endpoint-selector-dependency-boundaries). |
+| Existing UDP sessions | The fast path reuses the session's pinned upstream; route/plugin/backend selection belongs to new sessions. | Rechecking every packet or tearing down sessions after a route update would change the hot-reload contract. |
+
+No additional behavior-preserving edit was selected in this inspection. Existing
+[Listener specificity](routing-02-listener-specificity-index.md),
+[hostname content representation](routing-03-hostname-content-index.md) and
+[L4 peer address](l4-01-structured-peer-address.md) decisions remain unselected.
+Certificate/SAN matching is a separate mechanism from Route hostname matching.
+Remaining publication races, complete policy/discovery interleavings, relay and
+socket/dependency internals are not closed by this direct selection inventory.
+
+Fresh unchanged-code tests passed TCP 29, UDP 61, TLS 85, compiled-backend runtime
+14, backend policy 10 and canonical leaf hostname 22 cases. These 221 cases
+support the named source boundaries; they are not live connection, hot-reload or
+whole-repository verification. No new runtime code or performance benchmark was
+introduced.
