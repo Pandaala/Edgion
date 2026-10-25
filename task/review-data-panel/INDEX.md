@@ -17733,3 +17733,21 @@ The [URL template task](dns-06-url-template-preparation.md) records repeated
 configuration-stable selection/search work, possible generation-owned metadata,
 and its retained-memory tradeoff. Selection and measurement remain deferred;
 existing URL, domain-validation and fallback behavior is unchanged.
+
+## Defer peer SNI ownership until client identity succeeds
+
+Native create_tls_peer borrows the immutable policy hostname until the selected
+HttpPeer constructor needs an owned String. Selected prepared policy/Gateway
+identity errors now return before the nonempty SNI allocation/copy. Successful
+construction still owns the same SNI, and custom CA rejection still occurs after
+peer construction; no happy-path allocation or measured throughput benefit is
+claimed.
+
+Identity precedence, live Gateway fallback lookup, identity-before-CA error
+priority, plaintext selection, SAN hooks and pool isolation remain unchanged.
+No test or fixture changed. Fresh baseline/final serial peer_builder selections
+preserve all 23 test identities/outcomes, including identity error priority and
+Gateway replacement/recovery. Allocation placement is source evidence, not an
+allocation-instrumented test result. Formatting, workspace all-target check/
+Clippy and seven repository guards passed with existing warnings. No full suite,
+live TLS handshake or performance benchmark ran.

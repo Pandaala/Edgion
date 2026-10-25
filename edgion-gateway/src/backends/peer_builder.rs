@@ -125,7 +125,7 @@ pub(crate) fn create_tls_peer(
     gateway_key: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let policy = &effective.policy;
-    let sni = policy.spec.validation.hostname.clone();
+    let sni = policy.spec.validation.hostname.as_str();
 
     #[cfg(feature = "boringssl")]
     let policy_identity_present = policy.spec.resolved_client_certificate.is_some();
@@ -146,7 +146,7 @@ pub(crate) fn create_tls_peer(
                 .as_ref()
                 .ok_or(EdgionErrorCode::Unknown)?
                 .clone()?;
-            HttpPeer::new_mtls(addr, sni, cert_key)
+            HttpPeer::new_mtls(addr, sni.to_owned(), cert_key)
         }
         Some(ClientIdentitySource::Gateway) => {
             let cert_key = gateway_identity
@@ -155,15 +155,15 @@ pub(crate) fn create_tls_peer(
                 .prepared
                 .identity
                 .clone()?;
-            HttpPeer::new_mtls(addr, sni, cert_key)
+            HttpPeer::new_mtls(addr, sni.to_owned(), cert_key)
         }
-        None => HttpPeer::new(addr, true, sni),
+        None => HttpPeer::new(addr, true, sni.to_owned()),
     };
 
     #[cfg(not(feature = "boringssl"))]
     let mut peer = {
         let _ = gateway_key;
-        HttpPeer::new(addr, true, sni)
+        HttpPeer::new(addr, true, sni.to_owned())
     };
 
     #[cfg(feature = "boringssl")]
