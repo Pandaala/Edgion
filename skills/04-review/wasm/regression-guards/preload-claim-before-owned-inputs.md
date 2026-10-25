@@ -83,6 +83,24 @@ does not prevent a trap. The request stage retains its authorized polling origin
 and both fresh tick assertions. Local and Kubernetes fixtures follow this same
 ownership boundary; local execution does not establish Kubernetes acceptance.
 
+The BodyPlugins response-body probe also waits for its independent runtime.
+One successful HTTP warmup does not prove readiness: a cold body callback only
+schedules preload and preserves streaming, including during the 30-second load
+retry backoff. The probe consumes each nonempty HTTP 200 response and polls for
+a fresh increase in `edgion_wasm_body_pause_unsupported_total` under one 45-second
+deadline. Once ready, a separate request must increase the counter again.
+Warmup request, body-read and scrape errors fail immediately; no observed hook
+progress before the deadline is a failure. This changes test readiness only,
+not production preload, admission, retry or body-streaming semantics.
+
+Local verification on 2026-10-25 passed all 32 BodyPlugins cases both before
+and after Controller/Gateway reload. A response-stage-only fixture pointing to
+a temporarily absent artifact reproduced the old probe failure (31/32 passed).
+Restoring the artifact during the same runtime's negative-cache window let the
+updated suite pass after about 30 seconds; a second run on that Gateway passed
+immediately. This exercises delayed-load recovery, not a full integration sweep
+or live Kubernetes acceptance.
+
 Fresh local verification on 2026-10-16 passed both rounds of
 `run_integration.sh --no-prepare -r EdgionPlugins -i Wasm --with-reload`, ten
 cases per round. Startup logged preparation-capacity rejection; the first

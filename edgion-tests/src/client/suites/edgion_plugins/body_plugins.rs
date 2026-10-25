@@ -1637,22 +1637,59 @@ impl BodyPluginsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let warmup = ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", "wasm-body.example.com")
-                        .send()
-                        .await;
-                    if let Err(error) = warmup {
-                        return TestResult::failed(start.elapsed(), format!("Wasm warmup failed: {error}"));
-                    }
                     let metric = "edgion_wasm_body_pause_unsupported_total";
-                    let before = match ctx.metrics_client().fetch_raw_metrics().await {
+                    let baseline = match ctx.metrics_client().fetch_raw_metrics().await {
                         Ok(raw) => crate::metrics_helper::counter_value(&raw, metric, &[]),
                         Err(error) => {
                             return TestResult::failed(
                                 start.elapsed(),
                                 format!("Initial metrics scrape failed: {error}"),
+                            );
+                        }
+                    };
+                    // This stage owns a separate runtime. A cold body callback
+                    // only schedules asynchronous preload, which can also be in
+                    // the 30s retry backoff after startup preparation contention.
+                    // Observe actual hook progress before measuring one request.
+                    let ready = tokio::time::timeout(Duration::from_secs(45), async {
+                        loop {
+                            let response = ctx
+                                .http_client
+                                .get(&url)
+                                .header("host", "wasm-body.example.com")
+                                .send()
+                                .await
+                                .map_err(|error| format!("Wasm warmup failed: {error}"))?;
+                            if response.status().as_u16() != 200 {
+                                return Err(format!("Wasm warmup expected 200, got {}", response.status()));
+                            }
+                            let body = response
+                                .bytes()
+                                .await
+                                .map_err(|error| format!("Wasm warmup body read failed: {error}"))?;
+                            if body.is_empty() {
+                                return Err("Wasm warmup response body was empty".to_string());
+                            }
+                            let raw = ctx
+                                .metrics_client()
+                                .fetch_raw_metrics()
+                                .await
+                                .map_err(|error| format!("Warmup metrics scrape failed: {error}"))?;
+                            let current = crate::metrics_helper::counter_value(&raw, metric, &[]);
+                            if current > baseline {
+                                return Ok(current);
+                            }
+                            sleep(Duration::from_millis(200)).await;
+                        }
+                    })
+                    .await;
+                    let before = match ready {
+                        Ok(Ok(counter)) => counter,
+                        Ok(Err(error)) => return TestResult::failed(start.elapsed(), error),
+                        Err(_) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Wasm response-body hook did not become ready within 45s: baseline={baseline}"),
                             );
                         }
                     };
@@ -1707,6 +1744,7 @@ impl BodyPluginsTestSuite {
                 })
             },
         )
+        .with_timeout(Duration::from_secs(60))
     }
 }
 
