@@ -5331,14 +5331,6 @@ fn checked_runtime_append(current: usize, added: usize, limit: usize) -> Result<
 
 pub(super) fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
     let text = std::str::from_utf8(value).map_err(|_| RuntimeError::IntegerConversion)?;
-    if text.is_empty()
-        || text
-            .bytes()
-            .enumerate()
-            .any(|(index, byte)| !(byte.is_ascii_digit() || index == 0 && matches!(byte, b'+' | b'-')))
-    {
-        return Err(RuntimeError::IntegerConversion);
-    }
     text.parse().map_err(|_| RuntimeError::IntegerConversion)
 }
 

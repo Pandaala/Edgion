@@ -662,8 +662,8 @@ fn build_activation(
                     store.charge_work(candidate.len().min(key.len()))?;
                     if candidate.eq_ignore_ascii_case(key) {
                         let value = entry.value.observed_bytes(context.request)?;
-                        // UTF8 validation, syntax and integer parsing each walk
-                        // the seed at most once. Invalid seeds stay unknown.
+                        // Retain the conservative three-pass charge for seed
+                        // validation/parsing. Invalid seeds stay unknown.
                         store.charge_work(value.len().checked_mul(3).ok_or(StoreError::Arithmetic)?)?;
                         known = parse_i64(value)
                             .ok()

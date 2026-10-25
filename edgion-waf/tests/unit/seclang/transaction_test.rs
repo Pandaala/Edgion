@@ -1,5 +1,62 @@
 use super::*;
 
+#[test]
+fn signed_integer_grammar_preserves_boundaries_and_rejects_invalid_bytes() {
+    for (input, expected) in [
+        ("0", 0),
+        ("+0", 0),
+        ("-0", 0),
+        ("00042", 42),
+        ("+00042", 42),
+        ("-00042", -42),
+        ("9223372036854775807", i64::MAX),
+        ("+9223372036854775807", i64::MAX),
+        ("-9223372036854775808", i64::MIN),
+    ] {
+        assert_eq!(parse_i64(input.as_bytes()), Ok(expected), "{input:?}");
+    }
+    let padded = format!("{}1", "0".repeat(128));
+    assert_eq!(parse_i64(padded.as_bytes()), Ok(1));
+    for input in [
+        "",
+        "+",
+        "-",
+        "++1",
+        "--1",
+        "+-1",
+        "-+1",
+        "1+",
+        "1-",
+        " 1",
+        "1 ",
+        "1\n",
+        "\t1",
+        "1_0",
+        "1.0",
+        "1e2",
+        "0x10",
+        "é",
+        "9223372036854775808",
+        "+9223372036854775808",
+        "-9223372036854775809",
+    ] {
+        assert_eq!(
+            parse_i64(input.as_bytes()),
+            Err(RuntimeError::IntegerConversion),
+            "{input:?}"
+        );
+    }
+    for byte in u8::MIN..=u8::MAX {
+        let input = [b'1', byte, b'2'];
+        let expected = if byte.is_ascii_digit() {
+            Ok(102 + i64::from(byte - b'0') * 10)
+        } else {
+            Err(RuntimeError::IntegerConversion)
+        };
+        assert_eq!(parse_i64(&input), expected, "middle byte {byte}");
+    }
+}
+
 pub(super) fn matcher_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
     matcher_scratch_capacity(
         matcher_program_scratch_bytes(generation)?,

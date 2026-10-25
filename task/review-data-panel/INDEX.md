@@ -17751,3 +17751,27 @@ Gateway replacement/recovery. Allocation placement is source evidence, not an
 allocation-instrumented test result. Formatting, workspace all-target check/
 Clippy and seven repository guards passed with existing warnings. No full suite,
 live TLS handshake or performance benchmark ran.
+
+## Reuse standard signed-integer grammar validation in WAF
+
+The request/response WAF execution path reaches transaction parse_i64 through
+integer operators, dynamic SetVar arithmetic and JSON seed gates. That helper
+now retains UTF-8 validation and the existing standard i64 parser without first
+rechecking every byte for decimal digits and a leading sign. The parser already
+rejects empty/sign-only input, malformed signs, nondigits and overflow. This
+removes one explicit scan on valid integer inputs, not all parsing work; no
+throughput improvement was measured. The unsigned helper remains unchanged.
+
+All failures still map to IntegerConversion. Operator work and transactional
+staging are unchanged. The JSON collector retains its conservative three-times-
+length seed charge at the same point, so budget exhaustion behavior is preserved;
+only its explanatory comment changes. No new parser, unchecked conversion,
+unstable API or alternate execution path was added.
+
+A grammar regression passed against the original implementation before the
+change, covering signed limits, signs, leading zeroes, malformed text and all
+256 possible middle bytes. Baseline/final WAF library runs preserve all 858 test
+identities/outcomes: 852 passed and six existing tests ignored. Existing tests
+cover arithmetic rollback and JSON execution; these are package library tests,
+not full-workspace or live Gateway integration results. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
