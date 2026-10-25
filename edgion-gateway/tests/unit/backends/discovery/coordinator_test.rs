@@ -118,6 +118,44 @@ fn named_service(name: &str, uid: &str) -> Arc<Service> {
     Arc::new(value)
 }
 
+#[test]
+fn admin_service_key_sample_is_sorted_bounded_and_independently_owned() {
+    for count in [0, 1, STATS_KEY_LIMIT, STATS_KEY_LIMIT + 1, 75] {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let generation = Arc::new(ServiceSelectorGeneration {
+            services: (0..count)
+                .rev()
+                .map(|index| {
+                    (
+                        format!("default/service-{index:03}"),
+                        ServicePublishedState::Unavailable(ServiceUnavailableReason::MissingService),
+                    )
+                })
+                .collect(),
+            stats: ServiceSelectorGenerationStats {
+                unavailable_services: count,
+                ..Default::default()
+            },
+        });
+        let old_generation = Arc::downgrade(&generation);
+        coordinator.published.store(generation);
+        let snapshot = coordinator.stats();
+        let expected: Vec<_> = (0..count.min(STATS_KEY_LIMIT))
+            .map(|index| format!("default/service-{index:03}"))
+            .collect();
+        assert_eq!(snapshot.service_keys, expected);
+        assert_eq!(snapshot.service_keys_truncated, count > STATS_KEY_LIMIT);
+        assert_eq!(snapshot.generation.unavailable_services, count);
+
+        coordinator
+            .published
+            .store(Arc::new(ServiceSelectorGeneration::empty()));
+        assert!(old_generation.upgrade().is_none());
+        assert_eq!(snapshot.service_keys, expected);
+        assert!(coordinator.stats().service_keys.is_empty());
+    }
+}
+
 fn owned_slice(name: &str, uid: &str, service_name: &str, address: &str) -> Arc<EndpointSlice> {
     let mut value = (*slice(name, Some(uid), true)).clone();
     value.metadata.labels = Some(BTreeMap::from([(SERVICE_NAME.to_string(), service_name.to_string())]));

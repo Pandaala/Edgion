@@ -17232,3 +17232,20 @@ Fresh existing coordinator tests passed 43 cases serially. No runtime/test chang
 prototype, full suite, live transport or benchmark is included.
 Independent plan and final reviews passed. Formatting, workspace all-target
 check/Clippy and agent-doc validation passed with existing warnings.
+
+## Copy only retained administrative Service keys
+
+The administrative discovery snapshot now sorts borrowed keys, preserves its
+existing 32-key truncation/flag, and clones only retained keys into owned output.
+The same loaded generation and other observation order remain unchanged. For
+N above 32 this avoids copying discarded strings. Nonempty smaller inventories
+save no key copies and incur an additional vector allocation; independent value
+review accepted this administrative-path tradeoff. Sorting storage remains O(N),
+and no universal allocation, peak-memory, capacity or latency claim is made.
+
+Independent plan and final source reviews passed. A regression covers 0/1/32/33/75
+keys, exact ordered output/flag, old-generation release and retained snapshot
+ownership. All 43 original tests passed; the added test passed against original
+production, and extended/final serial runs passed the same 44 identities/outcomes.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or benchmark ran.

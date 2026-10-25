@@ -570,11 +570,11 @@ impl ServiceDiscoveryCoordinator {
             degrade_metric_service_keys,
             ..Default::default()
         };
-        let mut service_keys: Vec<_> = generation.services.keys().cloned().collect();
+        let mut service_keys: Vec<_> = generation.services.keys().collect();
         service_keys.sort_unstable();
         stats.service_keys_truncated = service_keys.len() > STATS_KEY_LIMIT;
         service_keys.truncate(STATS_KEY_LIMIT);
-        stats.service_keys = service_keys;
+        stats.service_keys = service_keys.into_iter().cloned().collect();
 
         for published in generation.services.values() {
             let ServicePublishedState::Available(service) = published else {
