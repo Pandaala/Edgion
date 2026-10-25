@@ -17249,3 +17249,18 @@ ownership. All 43 original tests passed; the added test passed against original
 production, and extended/final serial runs passed the same 44 identities/outcomes.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Derive unidentified source counts from their partition
+
+generation_stats now counts identified Services and EndpointSlices once each,
+then subtracts those counts from the matching immutable map lengths. Plain
+Option identities form exact Some/None partitions, so subtraction cannot
+underflow and preserves the former None-filter results. Two source scans are
+removed; all other counters, serialization and publication remain unchanged.
+No allocation or measured throughput improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+coordinator runs passed the same 44 test identities/outcomes; direct partition
+proof and existing epoch/statistics coverage required no redundant new test.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or benchmark ran.

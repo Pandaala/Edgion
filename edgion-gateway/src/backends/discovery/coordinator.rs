@@ -1968,29 +1968,23 @@ fn generation_stats(
     state: &CoordinatorState,
     services: &HashMap<String, ServicePublishedState>,
 ) -> ServiceSelectorGenerationStats {
+    let identified_service_sources = state
+        .services
+        .values()
+        .filter(|source| source.identity.is_some())
+        .count();
+    let identified_endpoint_slice_sources = state
+        .endpoint_slices
+        .values()
+        .filter(|source| source.identity.is_some())
+        .count();
     let mut stats = ServiceSelectorGenerationStats {
         service_sources: state.services.len(),
         endpoint_slice_sources: state.endpoint_slices.len(),
-        identified_service_sources: state
-            .services
-            .values()
-            .filter(|source| source.identity.is_some())
-            .count(),
-        identified_endpoint_slice_sources: state
-            .endpoint_slices
-            .values()
-            .filter(|source| source.identity.is_some())
-            .count(),
-        unidentified_service_sources: state
-            .services
-            .values()
-            .filter(|source| source.identity.is_none())
-            .count(),
-        unidentified_endpoint_slice_sources: state
-            .endpoint_slices
-            .values()
-            .filter(|source| source.identity.is_none())
-            .count(),
+        identified_service_sources,
+        identified_endpoint_slice_sources,
+        unidentified_service_sources: state.services.len() - identified_service_sources,
+        unidentified_endpoint_slice_sources: state.endpoint_slices.len() - identified_endpoint_slice_sources,
         ..Default::default()
     };
     for published in services.values() {
