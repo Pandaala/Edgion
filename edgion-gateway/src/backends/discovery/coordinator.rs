@@ -1716,7 +1716,7 @@ fn slot_proof(
 
 fn unique_resolved_sections(
     sections: &BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>,
-) -> Vec<Arc<ResolvedServiceSection>> {
+) -> Vec<&ResolvedServiceSection> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for outcome in sections.values() {
@@ -1724,7 +1724,7 @@ fn unique_resolved_sections(
             continue;
         };
         if seen.insert(Arc::as_ptr(section)) {
-            out.push(Arc::clone(section));
+            out.push(section.as_ref());
         }
     }
     out
@@ -1732,7 +1732,7 @@ fn unique_resolved_sections(
 
 fn unique_normalized_sections(
     sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>,
-) -> Vec<Arc<NormalizedServiceSection>> {
+) -> Vec<&NormalizedServiceSection> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for outcome in sections.values() {
@@ -1740,7 +1740,7 @@ fn unique_normalized_sections(
             continue;
         };
         if seen.insert(Arc::as_ptr(section)) {
-            out.push(Arc::clone(section));
+            out.push(section.as_ref());
         }
     }
     out

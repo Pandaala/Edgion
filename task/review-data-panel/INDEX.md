@@ -17201,3 +17201,18 @@ permitted UTF-8; final serial verification passed 43 cases. These lexical cases
 do not relax Kubernetes metadata admission. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No full
 suite, live traffic or benchmark ran.
+
+## Borrow deduplicated discovery sections
+
+The two private unique-section helpers now return borrowed section references.
+Their four consumers finish within the owning maps' lifetimes and still clone
+backend Arcs at retained-output boundaries. Pointer deduplication, BTreeMap order,
+invalid skipping, reuse-map precedence, proofs and epoch demand are unchanged.
+Only temporary section Arc increments/decrements disappear; HashSets, vectors
+and scans remain. No allocation elimination or throughput improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+coordinator runs passed the same 43 identities/outcomes, including alias handling,
+distinct same-socket identities, retirement and exact epochs. No new tests were
+needed. Formatting, workspace all-target check/Clippy and seven repository guards
+passed with existing warnings. No full suite, live traffic or benchmark ran.
