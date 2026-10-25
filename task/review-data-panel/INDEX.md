@@ -134,6 +134,8 @@ destination.
 
 - [Full-range request-body snapshot reuse](body-08-full-range-snapshot-reuse.md)
 
+- [DSL streaming regex dead-state work](dsl-15-regex-dead-state-work.md)
+
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
 - [Redis command frame encoding ownership](redis-04-command-frame-encoding.md)
 - [Redis script result conversion storage](redis-05-script-result-conversion.md)
@@ -18710,3 +18712,21 @@ Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed. A new test type-complexity warning was corrected and its targeted
 tests/check/Clippy rerun; remaining warnings are outside this diff. No full
 workspace test suite, live integration or performance benchmark ran.
+
+## DSL regex dead-state execution decision
+
+StreamingRegexScanner still advances the dense DFA byte by byte after a dead
+state. Both Str and Body Matches use it. The [dsl-15 task](dsl-15-regex-dead-state-work.md)
+separates suppressing redundant transitions while returning Continue from stopping
+Body traversal early. Early traversal stop changes later storage/scan-error
+visibility and refunds, so it is not an automatically equivalent optimization.
+The regex is already compiled per generation; no preparation cache is proposed.
+
+Independent plan review passed. A temporary probe against the existing pinned
+regex-automata 0.4.18 artifact confirmed that ^a on b enters a nonmatching dead
+state and every byte plus EOI preserves it. This tests the dependency example,
+not a candidate scanner or performance gain. Fresh unchanged Gateway DSL tests
+passed 532 cases, including the existing unanchored-match, EOI and empty-regex
+cases. Formatting, workspace all-target check/Clippy, agent-doc validation and
+diff hygiene passed with existing unrelated warnings. No runtime edit, candidate
+benchmark, full workspace test suite or live integration ran.
