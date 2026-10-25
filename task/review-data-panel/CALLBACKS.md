@@ -1935,3 +1935,52 @@ Remaining ownership and representation decisions are [DSL-01](dsl-01-string-cons
 [DSL-11](dsl-11-url-decoder-consolidation.md), [DSL-12](dsl-12-split-scan-reuse.md)
 and [DSL-13](dsl-13-time-format-preparation.md). No new runtime proposal or
 performance result is implied by consolidating the direct source inventory.
+
+## DSL VM opcode direct dispatch inventory
+
+Source baseline: `c0db721ca`. The 52 variants in `edgion-dsl/src/bytecode.rs`
+match the 52 direct arms in Gateway `plugins/http/dsl/lang/vm.rs::execute`.
+The table lists every variant once. It covers direct dispatch and inline work,
+not all delegated scanner, engine, transport or storage implementations.
+
+Execution charges tick_step before checking whether pc has reached the end;
+implicit GoodNext therefore also requires a remaining step. Fetch increments pc
+before dispatch, so relative jumps use that advanced position. Ordinary result
+push first checks stack depth, then inspects Map/List shape, then stores the
+value. It is not a universal string-byte check. These are observed execution
+boundaries; the separately validated bytecode contract remains required.
+
+| Opcodes | Direct work and delegated boundary |
+| --- | --- |
+| LoadConst, LoadNil, LoadTrue, LoadFalse, Pop, GetLocal, SetLocal | Constants use typed pool access and cached Arc text; non-value constants fail. Local reads inspect/charge then clone, with nil for a missing slot; writes move into an admitted slot or fail. Push and Pop retain their existing admission/underflow behavior. |
+| Add, Sub, Mul, Div, Neg | Integer arithmetic is checked, with explicit division-by-zero and signed-overflow handling. Add also performs typed string concatenation, exact byte admission, empty-operand Arc reuse and owned-prefix reuse. Mixed coercion remains canonical; no opcode cost is inferred from the byte cap. |
+| Equal, NotEqual | Body/Str in either orientation delegates to the canonical body text predicate. Other pairs inspect both shapes and precharge comparison before Value equality; NotEqual negates the result. This is not a blanket special case for all Body pairs. |
+| Less, Greater, LessEqual, GreaterEqual, Not | Ordering borrows matching Int/Int or Str/Str and otherwise errors; it does not enter the equality shape/comparison-charge path. Not applies canonical truthiness. The difference is recorded, not silently unified or accepted as a complete work model. |
+| StartsWith, EndsWith, Contains | Str/Str borrows both operands for string search; Body/Str constructs an owned text operation for DslBodyOps. Other pairs yield false. Body scanner ownership is distinct from scalar borrowing. |
+| Matches | Looks up the prepared streaming DFA before branching on the input. Str feeds and finishes a StreamingRegexScanner; Body delegates through the lossy body scanner; other types return false. This is not the regex::Regex cache used by find/replace. |
+| TextLen, TextIsEmpty | TextLen counts Str scalars or delegates Body char counting, then checked-converts to Int; unsupported types error. TextIsEmpty checks Str directly or delegates Body inspection, with false for other types. |
+| BodyByteLen, BodyRead, BodySha256, BodyMd5, BodyHmacSha256 | Validate operands in the existing pop order and delegate to DslBodyOps. Read checks nonnegative max bytes and offset before Body admission. HMAC requires an exact Str key. Length conversion and result push remain explicit; storage/scan limits belong to the delegated owner. |
+| JsonGet, JsonSelect | Use prepared path/selection entries. JsonGet scans owned Str or Body and maps missing to nil; JsonSelect requires Body, runs the shared selection scan and projects named captures into a Map. TooLong maps to limit-plus-one evidence. Scanner parsing, capture ownership and aggregate bounds retain their separate contracts. |
+| BodyClear, BodyAppend, BodyPrepend, BodyRemove, BodyReplace | Validate Body plus exact string or nonnegative range arguments, delegate mutation, then push nil. Replace rejects empty search after operand validation. These arms authorize no new body cache or response aggregation. |
+| RegexFind, RegexReplace | Find uses prepared regex::Regex only for Str, preserves full-span Arc ownership and checks result bytes; other types yield nil. Replace coerces replacement before testing input type, then uses the common bounded replacement helper. No-match retains the source Arc but still checks its byte length. Helper errors retain distinct runtime mapping. |
+| Jump, JumpIfFalse, LoopInit, LoopBack, LoopEnd | Jumps validate target bounds; conditional jumps pop canonical truthiness. LoopInit adds a counter, LoopBack increments/checks it before validating the target, and LoopEnd pops it. Compiler/validator loop structure remains a separate requirement. |
+| ListLen, IndexGet, MakeMap | ListLen returns count or zero. IndexGet moves a List element or selected Map value from the consumed container; Map extraction retains conservative inspection/copy charges. MakeMap checks size and stack suffix, preflights raw pairs, then drains into a Map and pushes it. Pre-dedup and final shape checks differ. |
+| CallBuiltin | Charges tick_call before selecting JSON, XML, HTTP, Redis, Body or synchronous dispatch, then admits the result. Specialized handler internals are not covered by this dispatch row. |
+| ReturnNext, ReturnDeny, ReturnTerminate, ReturnGrpcError | Next returns GoodNext. Deny validates final HTTP status with fallback 500 and owns a non-nil coerced body. Terminate returns an HTTP 502 result. gRPC validates codes 0 through 16 with fallback 13 and owns a non-nil coerced message. These are returned decisions; downstream writes belong to plugin/runtime handling. |
+
+The row counts are 7+5+2+5+3+1+2+5+2+5+2+5+3+1+4 = 52.
+Request and upstream-response plugin entries reach execute_safe, with the
+existing synchronous-to-async bridge on the response entry. BodyAccess errors
+receive the dedicated fixed 500, fixed diagnostic and failure outcome before
+ordinary error-policy handling. Other runtime errors and caught unwinding
+panics receive fixed classifications and configured Ignore/Deny/DenyWith
+handling. This boundary does not catch process aborts or prove preemption of
+long synchronous operations.
+
+Existing decisions include [DSL-01](dsl-01-string-consumer-ownership.md) for
+coercion/body pattern ownership, [DSL-05](dsl-05-json-select-capture-transfer.md)
+for capture transfer, [DSL-08](dsl-08-list-loop-source-ownership.md) for loop
+copies and [DSL-14](dsl-14-value-shape-reuse.md) for repeated shape metadata.
+The [scalar utility inventory](#dsl-scalar-utility-direct-execution-boundaries)
+adds direct coverage for its named builtin subset. No new runtime optimization,
+complete DSL coverage, dependency coverage or performance result is claimed.

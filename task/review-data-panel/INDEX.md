@@ -18622,3 +18622,20 @@ conversion-rejection test and one leaf Body coercion-rejection test passed.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full-workspace suite, live integration or performance
 benchmark ran.
+
+## DSL opcode dispatch inventory reconciliation
+
+[The direct VM opcode inventory](CALLBACKS.md#dsl-vm-opcode-direct-dispatch-inventory)
+now reconciles all 52 enum variants and execution arms. It records inline work,
+prepared-cache distinctions, delegated Body/JSON/regex/builtin owners, admission
+and terminal/error boundaries. In particular, implicit end charges a step,
+ordering comparisons do not share equality's value-work path, and BodyAccess
+fails closed before general error policy. The inventory closes a dispatch-level
+recording gap without claiming full engine/dependency coverage or changing any
+runtime behavior. Existing deferred decisions remain separate.
+
+The table was mechanically compared with the enum: all 52 names appear exactly
+once. Fresh Gateway DSL coverage passed 531 tests and the DSL leaf library
+passed all 181 tests. Formatting, workspace all-target check/Clippy, agent-doc
+validation and diff checks passed with existing warnings. These results support
+the recorded boundaries, not a full-workspace or live integration claim.
