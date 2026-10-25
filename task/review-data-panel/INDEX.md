@@ -16874,3 +16874,22 @@ runtime and 12 TLS route-unit cases (55 distinct identities), with identical
 test names and outcomes. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. Independent final source review
 passed. No full suite, live traffic or performance benchmark ran.
+
+## Prepare TCP/UDP first match without sorting losing candidates
+
+Both listener table builders now find the first minimum canonical resource key
+and swap that unit into position zero. Empty and singleton inputs skip key
+preparation. This retains the prior winner, including equal-key input identity,
+while replacing full sorting with linear key extraction/comparison. The private
+Vec still retains every unit and reports the same route count, preserving
+manager residue statistics and snapshot ownership. No measured throughput or
+retained-memory improvement is claimed. Independent plan and source review passed.
+
+Fresh original runs passed 27 TCP and 59 UDP cases. Two additional mirrored tests
+per protocol passed the original production implementation after correcting an
+invalid test namespace fixture, and final runs passed 29 TCP and 61 UDP cases
+(90 distinct identities). Extended/final names and outcomes match, and all
+original identities remain. Tests cover canonical serialized-key ordering,
+equal-key Arc identity, empty input and all-unit snapshot retention/release.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or benchmark ran.

@@ -56,7 +56,7 @@ fn test_empty_table() {
 fn test_match_route_is_deterministic() {
     // Two routes on the same listener (invariant violation). Insert in the
     // order "b/route" then "a/route"; match_route must return "a/route"
-    // regardless of HashMap iteration order, proving the build-time sort.
+    // regardless of HashMap iteration order, proving deterministic build-time selection.
     let unit_b = test_unit("b", "route", 9000);
     let unit_a = test_unit("a", "route", 9000);
 
@@ -81,4 +81,43 @@ fn test_from_routes() {
     let table = UdpRouteTable::from_units(&units);
     assert_eq!(table.route_count(), 2);
     assert!(table.match_route().is_some());
+}
+
+#[test]
+fn test_resource_key_order_and_snapshot_ownership() {
+    let units: HashMap<_, _> = [("a", "z"), ("a-b", "z"), ("b", "a")]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (namespace, name))| {
+            let route = Arc::new(create_test_udp_route(namespace, name, 9000));
+            (index.to_string(), Arc::new(UdpRouteUnit::from_route(route).unwrap()))
+        })
+        .collect();
+    let weak_units: Vec<_> = units.values().map(Arc::downgrade).collect();
+    let table = UdpRouteTable::from_units(&units);
+    assert_eq!(table.match_route().unwrap().key_name(), "a-b/z");
+    drop(units);
+    assert_eq!(table.route_count(), 3);
+    assert!(weak_units.iter().all(|unit| unit.upgrade().is_some()));
+    assert_eq!(table.match_route().unwrap().key_name(), "a-b/z");
+    drop(table);
+    assert!(weak_units.iter().all(|unit| unit.upgrade().is_none()));
+}
+
+#[test]
+fn test_equal_resource_keys_preserve_first_input_identity() {
+    let units: HashMap<_, _> = (0..8)
+        .map(|index| {
+            let route = Arc::new(create_test_udp_route("default", "same", 9000));
+            (index.to_string(), Arc::new(UdpRouteUnit::from_route(route).unwrap()))
+        })
+        .collect();
+    let first = units.values().next().unwrap();
+    let table = UdpRouteTable::from_units(&units);
+    assert!(Arc::ptr_eq(&table.match_route().unwrap(), first));
+    assert_eq!(table.route_count(), 8);
+
+    let empty = UdpRouteTable::from_units(&HashMap::new());
+    assert!(empty.match_route().is_none());
+    assert_eq!(empty.route_count(), 0);
 }

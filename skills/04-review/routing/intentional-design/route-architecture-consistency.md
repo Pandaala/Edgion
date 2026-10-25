@@ -211,7 +211,7 @@ snapshots still visible through retained listener handles.
 | 5 | ~~TCP stream-plugin fail-close logged via `tracing::warn!` on the per-connection hot path; TLS used `ctx.err_log`~~ | ~~P1~~ | ~~`routes/tcp/edgion_tcp.rs`~~ | **Resolved** (gateway-routes-01, 2026-05-24) — `check_stream_plugins` now returns `StreamPluginCheck::Deny(&'static str)`; reason flows into `TcpContext.deny_reason` → `TcpLogEntry`, matching the TLS access-log channel. See [../observability/tcp-stream-plugin-no-tracing.md](../../observability/mandatory-design/tcp-stream-plugin-no-tracing.md) |
 | 6 | ~~gRPC `GrpcMatchEngine::match_route` propagated `deep_match` `Err` via `?` at every priority tier, aborting the whole match and masking lower-priority buckets; HTTP's `try_route_deep_match` deliberately swallows the `Err` and continues~~ | ~~P3~~ | ~~`routes/grpc/match_engine.rs`~~ | **Resolved** (gateway-routes-06, 2026-05-24) — added private `try_route_deep_match_unit` helper (`Ok(None) \| Err(_) => None`); all 7 tier call sites now use it instead of `?`, mirroring `routes/http/match_engine/radix_route_match.rs::try_route_deep_match`. Only `parse_grpc_path` still propagates `Err`. Latent only (today `deep_match` never returns `Err` because `match_header` always returns `Ok`) |
 | 7 | Historical mixed-case wildcard finding (`gateway-routes-03`): the recorded store-lowercasing and case-insensitive suffix fix does not describe the current implementation | Not established for canonical inputs | `runtime/matching/route.rs`, `runtime/store/listener_gateway_info.rs` | **Current scope:** PGIS preserves listener hostname bytes; wildcard matching uses case-sensitive `ends_with`, while exact matching uses `eq_ignore_ascii_case`. Canonical Gateway hostname grammar is lowercase, and HTTP host / ClientHello SNI input paths normalize case. This is not a general matcher normalization guarantee: configured `fallback_sni` is returned verbatim. The historical mixed-case configuration example does not establish a defect for canonical inputs; re-evaluate if an accepted input path violates these assumptions, without treating the old resolution claim as current evidence. |
-| 8 | ~~The former schema-route table builders collected `HashMap::values()` in per-process random order while `match_route` returned `.first()`; an over-bound TCP/UDP listener could therefore select a different route across rebuilds or replicas~~ | ~~P3~~ | ~~`routes/tcp/tcp_route_table.rs`, `routes/udp/udp_route_table.rs`~~ | **Resolved** (gateway-routes-05, 2026-05-25) — the current `from_units` builders sort compiled units by resource key (`namespace/name`) before publication, so first-match is deterministic. Single-route listeners are unaffected; Controller conflict status remains the first line of defence |
+| 8 | ~~The former schema-route table builders collected `HashMap::values()` in per-process random order while `match_route` returned `.first()`; an over-bound TCP/UDP listener could therefore select a different route across rebuilds or replicas~~ | ~~P3~~ | ~~`routes/tcp/tcp_route_table.rs`, `routes/udp/udp_route_table.rs`~~ | **Resolved** (gateway-routes-05, 2026-05-25) — the current `from_units` builders place the minimum resource key (`namespace/name`) first before publication, so first-match is deterministic. Single-route listeners are unaffected; Controller conflict status remains the first line of defence |
 
 ---
 
@@ -242,3 +242,21 @@ same error-continuation contract; the seven-tier helper no longer exists.
 | Controller handler | `handlers/tcp_route.rs` | `handlers/udp_route.rs` | `handlers/tls_route.rs` | `handlers/http_route.rs` | `handlers/grpc_route.rs` |
 | Access log | `observe/logs/tcp_log.rs` | `observe/logs/udp_log.rs` | `observe/logs/tls_log.rs` | `observe/access_log/entry.rs` | (shared with HTTP) |
 | Runtime handler | — | — | — | `runtime/handler.rs` (cross-handler rebuild) | (same) |
+
+## TCP/UDP first-match preparation
+
+The TCP/UDP table builders retain every compiled unit Arc and its contribution
+to `route_count` and manager residue statistics. Only the first entry is exposed
+by matching; the remaining entries need no ordering. For multiple entries,
+`min_by_key` computes each canonical value-derived resource key once and swaps
+the first minimum into position zero. First-equal behavior matches the former
+stable sort, including direct inputs whose map keys differ from unit metadata.
+Empty and singleton tables skip key generation. Snapshot publication, selectors,
+all unit lifetimes and dynamic plugin lookup remain unchanged.
+
+This reduces cold construction comparisons/key generation to linear work; it
+makes no measured request-throughput or retained-memory claim. Re-evaluate if
+matching gains candidate iteration, table ordering becomes externally visible,
+or unit destruction acquires order-dependent effects. Mirrored table tests
+cover canonical serialized-key ordering, equal-key Arc identity, empty input,
+and retention/release of every unit after the source map is dropped.

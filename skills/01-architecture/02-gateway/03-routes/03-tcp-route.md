@@ -31,7 +31,7 @@ pub struct TcpRouteTable {
 }
 ```
 
-- **Build**: `from_units` Arc-clones cached compiled units into a Vec and sorts by resource key (`namespace/name`) for deterministic selection.
+- **Build**: `from_units` Arc-clones cached compiled units into a Vec and places the smallest resource key (`namespace/name`) first for deterministic selection; other entries remain retained without sorting.
 - **Match**: `match_route()` uses first-match semantics — clones the first unit's Arc.
 - TCP has no hostname dimension (unlike TLS's SNI matching), so no `Rfc6125HostnameMatcher` index is needed.
 - Per the Gateway API spec, each TCP listener is typically bound to at most one TCPRoute.

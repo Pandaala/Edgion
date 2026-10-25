@@ -31,15 +31,26 @@ impl UdpRouteTable {
     /// Arc-clones them into the snapshot — the per-route `backend_finder` (and
     /// its WRR cursor) is preserved across unrelated route-table rebuilds.
     ///
-    /// Sort by resource key (`namespace/name`) so `match_route`'s first-match
+    /// Place the minimum resource key (`namespace/name`) first so `match_route`'s first-match
     /// pick is deterministic across `HashMap` iteration order, process restarts,
     /// and pod replicas. Per Gateway API a UDP listener binds at most one route;
-    /// the sort only matters as a stable fallback when that invariant is violated
+    /// the selection only matters as a stable fallback when that invariant is violated
     /// (operator misconfig or a controller event race), mirroring the
     /// `AlphabeticalRoute` tiebreak.
     pub fn from_units(units: &HashMap<String, Arc<UdpRouteUnit>>) -> Self {
         let mut units: Vec<Arc<UdpRouteUnit>> = units.values().cloned().collect();
-        units.sort_by_key(|u| u.key_name());
+        // Only the first entry is matched; retain the rest for snapshot ownership
+        // and route counts without sorting them. Equal keys keep the first input.
+        if units.len() > 1 {
+            if let Some(index) = units
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, u)| u.key_name())
+                .map(|(i, _)| i)
+            {
+                units.swap(0, index);
+            }
+        }
         Self { routes: units }
     }
 
