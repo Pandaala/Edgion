@@ -17297,3 +17297,21 @@ state tests, including same-socket delete/recreate draining identity. No new
 ownership-only tests were added. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No full suite, live
 traffic or benchmark ran.
+
+## Avoid discarded Service key copies and redundant membership storage
+
+ServiceStore keys now filter available projections before cloning their owned
+keys. This avoids copying unavailable keys only to discard them, while preserving
+the captured generation and sorted owned output. Service full-set DNS cleanup
+queries the immutable input map directly instead of rebuilding its keys into a
+temporary HashSet. The old owned key snapshot still precedes publication; exact
+removed-key invalidation still follows publication with the same empty guard.
+Partial updates and DNS identity/lifecycle remain unchanged. Benefits are limited
+to cold-path scratch allocation and redundant key/hash work, not measured throughput.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+runs passed identical identities/outcomes for eight Service facade/handler and
+44 coordinator tests. Existing availability and DNS-removal coverage sufficed;
+no implementation-mirroring tests were added. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No full
+suite, live traffic or benchmark ran.

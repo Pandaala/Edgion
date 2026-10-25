@@ -25,10 +25,9 @@ impl ConfHandler<Service> for ServiceHandler {
         let old_keys: HashSet<String> = self.coordinator.load_generation().services.keys().cloned().collect();
         self.coordinator.replace_services(data);
 
-        let incoming_keys: HashSet<&String> = data.keys().collect();
         let removed_keys: HashSet<String> = old_keys
             .into_iter()
-            .filter(|old_key| !incoming_keys.contains(old_key))
+            .filter(|old_key| !data.contains_key(old_key))
             .collect();
         if !removed_keys.is_empty() {
             get_global_dns_cache().invalidate_services(&removed_keys);

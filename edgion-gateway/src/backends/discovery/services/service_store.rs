@@ -57,7 +57,8 @@ impl ServiceStore {
         let mut keys: Vec<String> = generation
             .services
             .iter()
-            .filter_map(|(key, state)| matches!(state, ServicePublishedState::Available(_)).then_some(key.clone()))
+            .filter(|(_, state)| matches!(state, ServicePublishedState::Available(_)))
+            .map(|(key, _)| key.clone())
             .collect();
         keys.sort();
         keys
