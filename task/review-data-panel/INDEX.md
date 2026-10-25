@@ -17497,3 +17497,22 @@ the same 16 identities/outcomes; final Gateway backend-traffic tests passed 66.
 Independent plan and source reviews passed. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No full
 suite, live traffic or benchmark ran.
+
+## Remove temporary authority suffix validation storage
+
+Authority pattern preparation now validates borrowed split labels in order and
+retains only the last label reference for the existing numeric-TLD exclusion.
+The temporary label Vec is gone. Health-host matching also uses the already
+lowercase suffix directly instead of allocating a second lowercase copy. Label
+errors still precede the numeric-final-label check; wildcard rules, canonical
+output, case handling, health-host admission and request rendering are unchanged.
+This is cold preparation supporting the Gateway authority chain; no broader
+Resources coverage or measured throughput improvement is claimed.
+
+The new exact-error regression passed on the original implementation and covers
+malformed earlier labels versus a numeric final label, empty middle/trailing
+labels, numeric nonfinal acceptance and lowercase output. Baseline/final Resources
+runs passed the same 17 identities/outcomes; final Gateway backend-traffic tests
+passed 66. Independent plan and source reviews passed. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.

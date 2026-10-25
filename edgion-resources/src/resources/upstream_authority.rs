@@ -55,9 +55,10 @@ pub fn pattern_suffix(pattern: &str) -> Result<String, String> {
     // dot-separated label must pass the same character/length/hyphen rules.
     // A trailing dot (or a doubled dot) surfaces here as a trailing/empty
     // label and is rejected the same way.
-    let labels: Vec<&str> = rest.split('.').collect();
-    for label in &labels {
+    let mut last_label = None;
+    for label in rest.split('.') {
         validate_label(label).map_err(|e| format!("pattern suffix label '{label}' is invalid: {e}"))?;
+        last_label = Some(label);
     }
     // The composed host is `<one rendered label>.<suffix>`. The rendered
     // label is validated to `[a-z0-9-]`, so it can itself be all-digits
@@ -73,7 +74,7 @@ pub fn pattern_suffix(pattern: &str) -> Result<String, String> {
     // (guaranteed here) can never parse as an IP address regardless of
     // what the other labels are, and it also rejects hex/octal/dword
     // forms outright (it only accepts dotted-quad decimal).
-    if let Some(last) = labels.last() {
+    if let Some(last) = last_label {
         if !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) {
             return Err(
                 "pattern's final label must not be all-numeric (would allow composing an IP address)".to_string(),
@@ -90,7 +91,6 @@ pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
         return false;
     };
     let host = host.to_ascii_lowercase();
-    let suffix = suffix.to_ascii_lowercase();
     let Some(label) = host.strip_suffix(&suffix) else {
         return false;
     };

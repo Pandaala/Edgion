@@ -68,6 +68,28 @@ fn pattern_suffix_rejects_an_all_numeric_final_label() {
 }
 
 #[test]
+fn pattern_suffix_preserves_label_error_order_and_final_label_policy() {
+    assert_eq!(
+        pattern_suffix("*.bad_.123").unwrap_err(),
+        "pattern suffix label 'bad_' is invalid: must contain only [a-z0-9-]"
+    );
+    for pattern in ["*.a..123", "*.a.123."] {
+        assert_eq!(
+            pattern_suffix(pattern).unwrap_err(),
+            "pattern suffix label '' is invalid: empty"
+        );
+    }
+    assert_eq!(
+        pattern_suffix("*.123.Sandbox.INTERNAL").unwrap(),
+        ".123.sandbox.internal"
+    );
+    assert_eq!(
+        pattern_suffix("*.a.123").unwrap_err(),
+        "pattern's final label must not be all-numeric (would allow composing an IP address)"
+    );
+}
+
+#[test]
 fn host_matches_pattern_accepts_exactly_one_label() {
     let p = "*.sandbox.internal";
     assert!(host_matches_pattern("a.sandbox.internal", p));
