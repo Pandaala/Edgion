@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn ctl_tag_lookup_preserves_duplicate_units_and_missing_ranges() {
+    let controls = concat!(
+        "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveByTag=aardvark,",
+        "ctl:ruleRemoveByTag=alpha,ctl:ruleRemoveByTag=bet,ctl:ruleRemoveByTag=beta,",
+        "ctl:ruleRemoveByTag=between,ctl:ruleRemoveByTag=omega,",
+        "ctl:ruleRemoveByTag=zeta,ctl:ruleRemoveByTag=Beta\"\n",
+    );
+    let populated = generation(&format!(
+        "{controls}{}",
+        concat!(
+            "SecRule REQUEST_URI \"@streq /\" \"id:2,phase:1,pass,tag:beta,tag:beta\"\n",
+            "SecRule REQUEST_URI \"@streq /\" \"id:3,phase:1,pass,tag:alpha\"\n",
+            "SecRule REQUEST_URI \"@streq /\" \"id:4,phase:1,pass,tag:omega\"\n",
+            "SecRule REQUEST_URI \"@streq /\" \"id:5,phase:1,pass,tag:beta\"\n",
+        )
+    ));
+    let empty = generation(controls);
+    for (query, expected) in [
+        ("aardvark", &[][..]),
+        ("alpha", &[2][..]),
+        ("bet", &[][..]),
+        ("beta", &[1, 1, 4][..]),
+        ("between", &[][..]),
+        ("omega", &[3][..]),
+        ("zeta", &[][..]),
+        ("Beta", &[][..]),
+    ] {
+        for (compiled, expected) in [(&populated, expected), (&empty, &[][..])] {
+            let tag = compiled
+                .actions
+                .iter()
+                .find_map(|action| match action.operand {
+                    super::super::CompiledActionOperand::Ctl(super::super::CompiledCtl::RuleRemoveByTag(tag))
+                        if generation_bytes(&compiled.bytes, tag).unwrap() == query.as_bytes() =>
+                    {
+                        Some(tag)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let actual = tagged_units(compiled, tag).unwrap();
+            assert_eq!(
+                actual.iter().map(|entry| entry.unit).collect::<Vec<_>>(),
+                expected,
+                "{query}"
+            );
+            assert!(actual
+                .iter()
+                .all(|entry| generation_bytes(&compiled.bytes, entry.tag).unwrap() == query.as_bytes()));
+        }
+    }
+}
+
+#[test]
 fn unsigned_integer_grammar_preserves_boundaries_and_rejects_signs() {
     let maximum = usize::MAX.to_string();
     let padded = format!("{}1", "0".repeat(128));

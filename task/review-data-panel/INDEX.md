@@ -17798,3 +17798,27 @@ Fresh baseline/final WAF library selections preserve 859 identities/outcomes:
 caller. Formatting, workspace all-target check/Clippy and seven repository guards
 passed with existing warnings. No full-workspace suite, live Gateway integration
 or allocation/latency benchmark ran.
+
+## Reuse the WAF tag-index lower bound
+
+The compiled tag index has one producer, which sorts references by raw tag bytes
+then unit and retains duplicates. Runtime tagged_units now searches for the upper
+bound only in the suffix beginning at its computed lower bound. The skipped
+prefix is strictly less than the query, and the suffix-relative end plus start
+cannot exceed the index length. Empty and absent groups return the same slice.
+
+Both ruleRemoveByTag and ruleRemoveTargetByTag keep original unit order and every
+duplicate visit. Their work charges, limits, staged effects and rollback are
+unchanged. This changes neither compiled storage nor lookup allocation; it narrows
+the second binary search domain when the lower bound is nonzero, without a
+universal or measured throughput claim. The earlier target-exclusion optimization
+left tagged_units unchanged; this batch addresses that separate helper.
+
+A regression built from real compiled control operands passed before the edit.
+It checks first/interior/last tags, duplicates within/across units, missing queries
+before/between/after groups, case/prefix differences and an empty index. Fresh
+baseline/final WAF library runs preserve all 860 identities/outcomes: 854 passed
+and six existing ignored. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full-workspace suite, live
+Gateway integration or performance benchmark ran. Prepared IP masks remain the
+separate deferred waf-03 decision.

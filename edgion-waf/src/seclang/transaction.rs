@@ -3019,9 +3019,10 @@ fn tagged_units(
     let start = refs.partition_point(|entry| {
         generation_bytes(&generation.bytes, entry.tag).expect("compiled tag reference has a valid range") < tag
     });
-    let end = refs.partition_point(|entry| {
-        generation_bytes(&generation.bytes, entry.tag).expect("compiled tag reference has a valid range") <= tag
-    });
+    let end = start
+        + refs[start..].partition_point(|entry| {
+            generation_bytes(&generation.bytes, entry.tag).expect("compiled tag reference has a valid range") <= tag
+        });
     Ok(&refs[start..end])
 }
 
