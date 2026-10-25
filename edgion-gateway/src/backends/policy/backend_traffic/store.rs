@@ -341,26 +341,17 @@ impl BackendTrafficPolicyStore {
             }
     }
 
-    fn retain_policy_arc(
-        previous: &EffectivePolicySnapshotData,
-        key: &str,
-        incoming: Arc<EdgionBackendTrafficPolicy>,
-    ) -> Arc<EdgionBackendTrafficPolicy> {
-        previous
-            .policies
-            .get(key)
-            .filter(|old| Self::policy_resource_equivalent(&old.policy, &incoming))
-            .map(|old| Arc::clone(&old.policy))
-            .unwrap_or(incoming)
-    }
-
     fn retain_or_prepare_policy(
         previous: &EffectivePolicySnapshotData,
         key: &str,
         incoming: Arc<EdgionBackendTrafficPolicy>,
     ) -> Arc<PreparedPolicy> {
-        let policy = Self::retain_policy_arc(previous, key, incoming);
-        if let Some(prepared) = previous.policies.get(key) {
+        let prepared = previous.policies.get(key);
+        let policy = prepared
+            .filter(|old| Self::policy_resource_equivalent(&old.policy, &incoming))
+            .map(|old| Arc::clone(&old.policy))
+            .unwrap_or(incoming);
+        if let Some(prepared) = prepared {
             if Arc::ptr_eq(&prepared.policy, &policy) {
                 return Arc::clone(prepared);
             }

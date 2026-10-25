@@ -17443,3 +17443,19 @@ a59c3da81 was preserved; it changed integration tests and unrelated knowledge,
 not this production source or its unit tests. Formatting, workspace all-target
 check/Clippy and seven repository guards passed against current HEAD with existing
 warnings. No new test, full suite, live traffic or benchmark ran.
+
+## Reuse the prepared-policy lookup during retention
+
+The sole raw-policy retention helper is now inline in its caller, which borrows
+the prepared owner once from the immutable previous map. Semantic comparison
+still precedes pointer comparison; the same eager fallback disposal and temporary
+raw-policy Arc remain. Prepared-owner reuse, preparation counters, eligibility and
+publication behavior are unchanged. One source-level map lookup disappears per
+incoming policy on both hits and misses; no allocation or throughput claim is made.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+policy-store runs passed the same 39 identities/outcomes, covering equivalent
+newly allocated replay, same-owner replay, real changes, retained generations and
+health material/error replacement. No redundant new test was added. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live traffic or benchmark ran.
