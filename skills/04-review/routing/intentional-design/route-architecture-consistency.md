@@ -64,7 +64,14 @@ types to ensure architectural alignment.
 | **`full_set`** | Clear → insert all → `rebuild_all_listener_managers` | Same as TCP | Same as TCP | Clear → insert all → `rebuild_all_listener_managers` | Clear → insert all → `rebuild_all_listener_managers` |
 | **`partial_update`** | Compute affected listeners → update cache → `rebuild_affected_listener_managers` | Same as TCP | Same as TCP | Compute affected listeners → update cache → `rebuild_affected_listener_managers` | Same as HTTP |
 | **`initialize_route`** | BackendSelector, stream plugins, annotations | BackendSelector | BackendSelector, proxy protocol, upstream TLS, stream plugins, retries | N/A (parsing in `build_domain_route_rules_from_routes`) | N/A (parsing in `parse_route_to_units`) |
-| **Post-rebuild publication** | No | No | No | Plugin admission + adaptive AI contributions | Plugin admission |
+| **Post-rebuild publication** | Plugin admission (after rebuild lock release) | Plugin admission (after rebuild lock release) | Plugin admission (after rebuild lock release) | Plugin admission + adaptive AI contributions | Plugin admission |
+
+The TCP/UDP/TLS `conf_handler_impl.rs` full/partial paths release their rebuild
+lock before `replace_stream_routes` / `update_stream_routes` publication. Full
+replacement includes successfully initialized units only. Partial publication
+removes all touched keys and adds their final surviving cached units, preserving
+remove/update/add precedence and withdrawing rejected generations. This ordering
+does not establish one atomic publication across listener tables and plugin admission.
 
 ### Stats
 

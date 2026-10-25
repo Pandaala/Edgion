@@ -17405,3 +17405,22 @@ persistence and 44 coordinator tests (79 total), including stale-builder rejecti
 No redundant new test was added. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No full suite, live
 traffic or benchmark ran.
+
+## L4 listener projection storage decision
+
+The [deferred task](routing-01-l4-listener-projection-storage.md) distinguishes
+TCP/UDP borrowed listener slices from TLS owned sorted/deduplicated projections.
+A uniform borrowed interface can shift copying into TLS or require extra retained
+metadata; full buckets, affected lookup and orphan collection need separate
+assessment. The partial-update mutation boundary remains outside initial scope.
+No replacement or runtime defect is selected and no prototype/benchmark is included.
+
+The routing consistency table also now reflects all six existing L4 handler
+publication paths: plugin inputs publish after rebuild-lock release, using
+successful/final surviving units. This corrects documentation, not runtime behavior,
+and makes no cross-store atomicity claim.
+
+Independent plan/amended-plan and final document reviews passed. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed with existing
+warnings. No new runtime tests, live traffic or benchmarks were run for this
+documentation-only record.
