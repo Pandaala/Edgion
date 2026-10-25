@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [System DNS query input ownership](dns-05-system-query-input.md)
+
 - [Outbound SAN fallback reason storage](tls-08-fallback-reason-storage.md)
 
 - [Endpoint probe method ownership and clone timing](endpoint-05-method-clone-timing.md)
