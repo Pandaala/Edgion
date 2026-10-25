@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Endpoint probe method ownership and clone timing](endpoint-05-method-clone-timing.md)
+
 - [Rendered authority label storage](authority-01-rendered-label-storage.md)
 
 - [Discovery section traversal storage](discovery-01-section-traversal-storage.md)
