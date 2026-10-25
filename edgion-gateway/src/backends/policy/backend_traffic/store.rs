@@ -661,11 +661,13 @@ impl BackendTrafficPolicyStore {
         }
         for target in &affected {
             if let Some(winner) = reverse_index.get(target).and_then(|list| list.first()) {
-                let old = previous.effective.get(target).map(|policy| policy.as_ref());
-                let candidate = Self::build_effective(target, &winner.key, &winner.policy, old);
+                let old = previous.effective.get(target);
+                let candidate = Self::build_effective(target, &winner.key, &winner.policy, old.map(Arc::as_ref));
                 let kept = match old {
-                    Some(old) if effective_snapshot_eq(Some(old), Some(&candidate)) => {
-                        previous.effective.get(target).cloned().unwrap_or(candidate)
+                    Some(old) if effective_snapshot_eq(Some(old.as_ref()), Some(&candidate)) => {
+                        let kept = Arc::clone(old);
+                        drop(candidate);
+                        kept
                     }
                     _ => candidate,
                 };

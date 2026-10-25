@@ -17424,3 +17424,22 @@ Independent plan/amended-plan and final document reviews passed. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed with existing
 warnings. No new runtime tests, live traffic or benchmarks were run for this
 documentation-only record.
+
+## Reuse the effective-policy lookup during equivalent publication
+
+Affected-target publication now keeps the old effective-policy Arc reference
+from its first immutable-map lookup. Equivalent candidates reuse that owner
+directly instead of looking it up again. Candidate construction still always
+runs; the reuse branch clones the old Arc and explicitly drops the rejected
+candidate before insertion, preserving the original ownership ordering. Equality,
+generation suppression, atomic snapshot publication and background reconciliation
+remain unchanged. The benefit is one avoided hash lookup per reused affected
+target; no allocation or measured throughput improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+policy-store runs passed the same 39 identities/outcomes, including equivalent
+publication, retained handles and old snapshots. The intervening external commit
+a59c3da81 was preserved; it changed integration tests and unrelated knowledge,
+not this production source or its unit tests. Formatting, workspace all-target
+check/Clippy and seven repository guards passed against current HEAD with existing
+warnings. No new test, full suite, live traffic or benchmark ran.
