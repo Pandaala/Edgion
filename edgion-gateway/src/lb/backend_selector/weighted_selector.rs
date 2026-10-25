@@ -181,25 +181,21 @@ impl<T> WeightedRoundRobin<T> {
         let mut sequence = Vec::with_capacity(total);
 
         for _ in 0..total {
-            // Step 1: Add effective_weight to current_weight for all items
+            // Update every score and select its maximum in the same pass.
+            // Strict comparison preserves first-index tie breaking.
+            let mut max_idx = 0;
+            let mut max_weight = i64::MIN;
             for (i, cw) in current_weights.iter_mut().enumerate() {
                 *cw += effective_weights[i];
-            }
-
-            // Step 2: Find the item with the highest current_weight
-            // When equal, prefer the first one (lower index)
-            let mut max_idx = 0;
-            let mut max_weight = current_weights[0];
-            for (i, &cw) in current_weights.iter().enumerate().skip(1) {
-                if cw > max_weight {
-                    max_weight = cw;
+                if *cw > max_weight {
+                    max_weight = *cw;
                     max_idx = i;
                 }
             }
 
             sequence.push(max_idx as u16);
 
-            // Step 3: Subtract total_weight from the selected item's current_weight
+            // Subtract only after every score has been updated.
             current_weights[max_idx] -= total_weight;
         }
 

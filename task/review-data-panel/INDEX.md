@@ -16853,3 +16853,24 @@ added afterward. Consumer baseline/final identities and outcomes match.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. Independent final source review passed. No full suite,
 live traffic, allocation instrumentation or performance benchmark ran.
+
+## Fuse nonuniform BackendRef smooth-sequence scans
+
+The nonuniform WeightedRoundRobin construction branch now updates each current
+weight and compares that updated value to the running maximum in one traversal.
+Strict greater-than comparison retains the first equal index, and subtraction
+still happens after every score update. Normalization bounds keep current scores
+well above the minimum-i64 sentinel. The unit-weight shortcut, two scratch arrays,
+sequence length, constructor errors and request-time atomic cursor remain unchanged.
+
+This removes a separate maximum-search traversal per construction round, without
+changing asymptotic complexity or claiming a measured throughput improvement.
+Existing exact-order cases cover nonuniform and mixed-zero weights, with large
+weight normalization and count/error guards retained. Independent plan review
+accepted that coverage; no duplicate implementation-shaped test was added.
+
+Fresh baseline and final runs each passed 29 BackendRef selector, 14 backend
+runtime and 12 TLS route-unit cases (55 distinct identities), with identical
+test names and outcomes. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. Independent final source review
+passed. No full suite, live traffic or performance benchmark ran.

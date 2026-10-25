@@ -31,8 +31,11 @@ unselected items have current weight k+1 and previously selected items have
 k+1-n; first-index tie breaking picks the next unselected index. This preserves
 the full sequence while reducing this case's construction from O(n squared) to
 O(n) and omitting both current/effective-weight scratch vectors. Mixed zeros and
-nonuniform normalized weights retain the original smooth algorithm and its
-O(item count times normalized weight sum) construction work.
+nonuniform normalized weights retain the smooth algorithm and its
+O(item count times normalized weight sum) construction work. Each round updates
+scores and tracks the maximum in one traversal, preserving strict first-index
+tie breaking; subtraction still occurs after every score update. This removes
+the separate maximum-search traversal without changing scratch storage.
 
 The published sequence, atomic cursor, wrapping behavior, per-pick remainder,
 item ownership and error mapping are unchanged. Construction is cold in the
