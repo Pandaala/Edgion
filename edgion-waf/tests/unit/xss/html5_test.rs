@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn percent_comments_preserve_borrowed_tokens_and_first_adjacent_ending() {
+    for (input, comment, cursor, tail) in [
+        (b"<%".as_slice(), b"".as_slice(), 2, b"".as_slice()),
+        (b"<%%>".as_slice(), b"".as_slice(), 4, b"".as_slice()),
+        (b"<%%>tail".as_slice(), b"".as_slice(), 4, b"tail".as_slice()),
+        (b"<%a%x%>tail".as_slice(), b"a%x".as_slice(), 7, b"tail".as_slice()),
+        (b"<%a%%>tail".as_slice(), b"a%".as_slice(), 6, b"tail".as_slice()),
+        (b"<%a%".as_slice(), b"a%".as_slice(), 4, b"".as_slice()),
+        (b"<%a>".as_slice(), b"a>".as_slice(), 4, b"".as_slice()),
+        (b"<%a%\0>".as_slice(), b"a%\0>".as_slice(), 6, b"".as_slice()),
+        (
+            b"<%\0\xff%>tail".as_slice(),
+            b"\0\xff".as_slice(),
+            6,
+            b"tail".as_slice(),
+        ),
+        (b"<%a%>%>".as_slice(), b"a".as_slice(), 5, b"%>".as_slice()),
+    ] {
+        let mut html = Html5State::new(input, Html5Flags::DataState);
+        assert!(html.next(), "{input:?}");
+        assert_eq!(html.token_type, TokenType::TagComment);
+        assert_eq!(html.token_start.as_ptr(), input[2..].as_ptr());
+        assert_eq!(html.token_start, &input[2..]);
+        assert_eq!(html.token_len, comment.len());
+        assert_eq!(&html.token_start[..html.token_len], comment);
+        assert_eq!(html.position(), cursor);
+        if !tail.is_empty() {
+            assert!(html.next());
+            assert_eq!(html.token_type, TokenType::DataText);
+            assert_eq!(html.token_len, tail.len());
+            assert_eq!(&html.token_start[..html.token_len], tail);
+            assert_eq!(html.position(), input.len());
+        }
+        assert!(!html.next());
+    }
+
+    let mut input = b"<%".to_vec();
+    input.extend_from_slice(&[b'%'; 128]);
+    input.extend_from_slice(b">tail");
+    let mut html = Html5State::new(&input, Html5Flags::DataState);
+    assert!(html.next());
+    assert_eq!(html.token_type, TokenType::TagComment);
+    assert_eq!(html.token_start.as_ptr(), input[2..].as_ptr());
+    assert_eq!(html.token_len, 127);
+    assert_eq!(&html.token_start[..html.token_len], &[b'%'; 127]);
+    assert_eq!(html.position(), 131);
+    assert!(html.next());
+    assert_eq!(html.token_type, TokenType::DataText);
+    assert_eq!(&html.token_start[..html.token_len], b"tail");
+    assert_eq!(html.position(), input.len());
+    assert!(!html.next());
+}
+
+#[test]
 fn byte_search_preserves_first_match_and_absolute_offsets() {
     let input = b"\0\xff<<'\"`%>>";
     let html = Html5State::new(input, Html5Flags::DataState);

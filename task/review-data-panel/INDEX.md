@@ -18079,3 +18079,23 @@ formatting and workspace all-target check/Clippy passed with existing warnings.
 This is evidence from source inspection, not exhaustive reference equivalence or a
 performance result. No full-workspace suite, fresh upstream comparison, live
 Gateway integration or benchmark ran. Broader callback coverage remains open.
+
+## Reuse substring search for XSS percent comments
+
+Html5State::state_bogus_comment2 now finds the first complete percent/greater-than
+ending with existing memmem instead of repeatedly finding a percent and checking
+its successor. It preserves the borrowed content suffix, separate token length,
+absolute ending cursor, next data state and one common unmatched EOF outcome.
+The sole production entry advances past the opening percent and bounds the
+suffix. Empty terminated and unterminated comments still emit one TagComment.
+No dependency, owned token, detector budget or observability was added.
+
+A baseline-first public-tokenizer regression checks borrowed pointers, suffixes,
+lengths, cursors and subsequent DataText/EOF for empty and unmatched comments,
+partial/separated endings, repeated/overlapping candidates, NUL/high bytes and
+a long run of percent bytes. Fresh baseline/final WAF library runs preserve all
+875 identities/outcomes: 869 passed and six existing ignored. Existing offline
+parser/folding/verdict fixtures ran. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full-workspace
+test suite, fresh external-checkout comparison, live Gateway integration or
+performance benchmark ran; no measured throughput benefit is claimed.

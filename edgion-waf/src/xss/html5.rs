@@ -680,35 +680,18 @@ impl<'a> Html5State<'a> {
 
     fn state_bogus_comment2(&mut self) -> bool {
         let start = self.pos;
-        let mut pos = self.pos;
 
-        loop {
-            if let Some(percent_pos) = self.find_byte(b'%', pos) {
-                if percent_pos + 1 >= self.len {
-                    // No '>' after '%', consume to EOF
-                    self.set_token(TokenType::TagComment, start, self.len - start);
-                    self.pos = self.len;
-                    self.state_fn = Self::state_eof;
-                    return true;
-                }
-
-                if self.s[percent_pos + 1] == b'>' {
-                    // Found "%>"
-                    self.set_token(TokenType::TagComment, start, percent_pos - start);
-                    self.pos = percent_pos + 2; // Skip "%>"
-                    self.state_fn = Self::state_data;
-                    return true;
-                }
-
-                pos = percent_pos + 1;
-            } else {
-                // No more '%' found, consume to EOF
-                self.set_token(TokenType::TagComment, start, self.len - start);
-                self.pos = self.len;
-                self.state_fn = Self::state_eof;
-                return true;
-            }
+        if let Some(offset) = memmem::find(&self.s[start..self.len], b"%>") {
+            let percent_pos = start + offset;
+            self.set_token(TokenType::TagComment, start, percent_pos - start);
+            self.pos = percent_pos + 2; // Skip "%>"
+            self.state_fn = Self::state_data;
+        } else {
+            self.set_token(TokenType::TagComment, start, self.len - start);
+            self.pos = self.len;
+            self.state_fn = Self::state_eof;
         }
+        true
     }
 
     fn state_comment(&mut self) -> bool {
