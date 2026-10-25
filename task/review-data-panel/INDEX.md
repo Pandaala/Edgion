@@ -16947,3 +16947,22 @@ new tests. Fresh baseline and final runs passed 94 SSE and 25 semantic response
 cases (119 distinct identities), with identical names and outcomes. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with
 existing warnings. No full suite, live transport or benchmark ran.
+
+## Borrow the selected mirror endpoint address
+
+RequestMirror::resolve_target now borrows the address from its owned selected
+backend through canonical safety validation and synchronous formatting. Both
+returned target/base-URL strings retain independent ownership. Endpoint selection,
+Inet-only/SSRF rejection, exact error text, scheme and URL/Host bytes are unchanged.
+This removes an enum clone; normal Inet cloning is a value copy, so no heap
+allocation or measured throughput improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh baseline and final
+RequestMirror selections passed 31 cases serially with identical names/outcomes.
+The optional peer-builder selection passed 22 and failed one pool-isolation
+hash equality in parallel, then passed all 23 unchanged serially. The new
+observation is recorded in [verification-03](verification-03-backend-tls-tests.md);
+its cause is unproven and no pre-change parallel reproduction was run. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No tests were added, changed or disabled; no full suite, live transport
+or benchmark ran.

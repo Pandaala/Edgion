@@ -238,8 +238,8 @@ impl RequestMirrorPlugin {
             "",
             None,
         ) {
-            let addr = endpoint.backend.inner().addr.clone();
-            if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
+            let addr = &endpoint.backend.inner().addr;
+            if validate_endpoint_backend_addr(addr, allow_loopback_upstream).is_err() {
                 return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
             }
             let target = format!("{}", addr);

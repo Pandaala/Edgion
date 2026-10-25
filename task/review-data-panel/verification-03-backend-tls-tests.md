@@ -34,3 +34,19 @@ Both passed in the serial run. The cause of their parallel failures remains
 unproven; investigate shared Gateway identity state and test isolation before
 changing expectations or production code. The new projection regression passed
 in both runs. No existing test was changed or disabled.
+
+## Additional focused peer-builder observation
+
+During the RequestMirror address-borrow batch based on `54458581f`, the focused
+`backends::peer_builder` filter passed 22 tests and failed
+`pool_isolation_composes_gateway_rotation_and_policy_precedence` at the repeated
+fallback reuse-hash equality in `tests/unit/backends/peer_builder_test/pool_tests.rs`.
+The same 23 tests passed unchanged with `-- --test-threads=1`. This is another
+parallel-failure/serial-success observation, not proof of a shared-state cause
+or a fix. The focused filter did not exercise the earlier DNS fixture above.
+
+The runtime diff only borrows the selected address in RequestMirror's synchronous
+`resolve_target`; no peer-builder, Gateway TLS store or test source changed.
+No pre-change parallel reproduction was run for this additional case. Preserve
+this limit when investigating the existing isolation question; serial success
+must not be reported as a clean parallel-suite result.
