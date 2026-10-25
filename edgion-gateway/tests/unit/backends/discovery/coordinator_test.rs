@@ -65,6 +65,53 @@ fn slice(name: &str, uid: Option<&str>, ready: bool) -> Arc<EndpointSlice> {
     })
 }
 
+#[test]
+fn slice_service_membership_matches_exact_serialized_key() {
+    // These are lexical key cases, not Kubernetes metadata admission fixtures.
+    for (namespace, label, name, expected) in [
+        (Some("team"), Some("svc"), Some("slice"), "team/svc"),
+        (Some("team"), None, Some("slice"), "team/slice"),
+        (None, Some("svc"), Some("slice"), "svc"),
+        (Some(""), Some("svc"), Some("slice"), "/svc"),
+        (Some("team"), Some(""), Some("slice"), "team/"),
+        (Some("team"), None, None, "team/"),
+        (None, None, None, ""),
+        (Some("team/a"), Some("b/c"), Some("ignored"), "team/a/b/c"),
+        (Some("café"), Some("svc"), None, "café/svc"),
+    ] {
+        let mut source = (*slice("unused", None, true)).clone();
+        source.metadata.namespace = namespace.map(str::to_owned);
+        source.metadata.name = name.map(str::to_owned);
+        source.metadata.labels = label.map(|value| BTreeMap::from([(SERVICE_NAME.to_string(), value.to_string())]));
+        let serialized = endpoint_slice_service_key(&source);
+        assert_eq!(serialized, expected);
+        assert!(endpoint_slice_matches_service(&source, expected));
+        for candidate in [
+            "",
+            "team/svc",
+            "team/svc/",
+            "teamsvc",
+            "teamx/svc",
+            "team//svc",
+            "/svc",
+            "svc",
+            "team/a/b/c",
+            "café/svc",
+        ] {
+            assert_eq!(
+                endpoint_slice_matches_service(&source, candidate),
+                serialized == candidate,
+                "namespace={namespace:?}, label={label:?}, name={name:?}, candidate={candidate:?}"
+            );
+        }
+        if label.is_none() {
+            source.metadata.labels = Some(BTreeMap::from([("unrelated".to_string(), "value".to_string())]));
+            assert_eq!(endpoint_slice_service_key(&source), expected);
+            assert!(endpoint_slice_matches_service(&source, expected));
+        }
+    }
+}
+
 fn named_service(name: &str, uid: &str) -> Arc<Service> {
     let mut value = (*service(Some(uid), IntOrString::String("web".to_string()))).clone();
     value.metadata.name = Some(name.to_string());

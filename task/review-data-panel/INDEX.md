@@ -17181,3 +17181,23 @@ coordinator runs passed the same 42 test identities/outcomes. The pure predicate
 reorder needs no new state, helper, API or implementation-shaped test. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live traffic or benchmark ran.
+
+## Compare EndpointSlice service membership without rendering keys
+
+Four cold discovery scans now compare borrowed namespace/service-name bytes
+instead of constructing a Service key only for equality. A shared borrowed
+name extractor keeps label-first/name-fallback semantics aligned with the owned
+formatter. Prefix stripping checks the exact slash and full remaining name;
+absent versus empty namespaces and present-empty labels retain their behavior.
+Owned keys for affected-set insertion and membership remain unchanged. This
+removes transient key construction, not the scans, sorting or normalization;
+no throughput or whole-path allocation claim is made.
+
+Independent plan and final source reviews passed. All 42 original coordinator
+tests passed before the change and remain passing afterward. One new lexical
+regression adds explicit expected keys and formatter-equivalence checks for
+missing/empty fields, unrelated labels, prefix boundaries, embedded slashes and
+permitted UTF-8; final serial verification passed 43 cases. These lexical cases
+do not relax Kubernetes metadata admission. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No full
+suite, live traffic or benchmark ran.

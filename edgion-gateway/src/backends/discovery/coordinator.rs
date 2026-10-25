@@ -1340,17 +1340,34 @@ fn semantic_digest_endpoint_slice(slice: &EndpointSlice) -> [u8; 32] {
     semantic_digest(&copy)
 }
 
-pub(super) fn endpoint_slice_service_key(slice: &EndpointSlice) -> String {
-    let service_name = slice
+fn endpoint_slice_service_name(slice: &EndpointSlice) -> &str {
+    slice
         .metadata
         .labels
         .as_ref()
         .and_then(|labels| labels.get(SERVICE_NAME))
         .map(String::as_str)
-        .unwrap_or_else(|| slice.metadata.name.as_deref().unwrap_or(""));
+        .unwrap_or_else(|| slice.metadata.name.as_deref().unwrap_or(""))
+}
+
+pub(super) fn endpoint_slice_service_key(slice: &EndpointSlice) -> String {
+    let service_name = endpoint_slice_service_name(slice);
     match slice.metadata.namespace.as_deref() {
         Some(namespace) => format!("{namespace}/{service_name}"),
         None => service_name.to_string(),
+    }
+}
+
+fn endpoint_slice_matches_service(slice: &EndpointSlice, service_key: &str) -> bool {
+    let service_name = endpoint_slice_service_name(slice);
+    match slice.metadata.namespace.as_deref() {
+        Some(namespace) => {
+            service_key
+                .strip_prefix(namespace)
+                .and_then(|suffix| suffix.strip_prefix('/'))
+                == Some(service_name)
+        }
+        None => service_key == service_name,
     }
 }
 
@@ -1366,7 +1383,7 @@ fn build_service_projection(
         let has_slices = state
             .endpoint_slices
             .values()
-            .any(|slice| endpoint_slice_service_key(&slice.resource) == service_key);
+            .any(|slice| endpoint_slice_matches_service(&slice.resource, service_key));
         return has_slices.then_some(ServicePublishedState::Unavailable(
             ServiceUnavailableReason::MissingService,
         ));
@@ -1380,7 +1397,7 @@ fn build_service_projection(
     let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
         .endpoint_slices
         .iter()
-        .filter(|(_, slice)| endpoint_slice_service_key(&slice.resource) == service_key)
+        .filter(|(_, slice)| endpoint_slice_matches_service(&slice.resource, service_key))
         .map(|(key, slice)| (key.as_str(), slice))
         .collect();
     slices.sort_by(|left, right| left.0.cmp(right.0));
@@ -1444,7 +1461,7 @@ fn service_sources_are_identified(service_key: &str, state: &CoordinatorState) -
         && state
             .endpoint_slices
             .values()
-            .all(|slice| endpoint_slice_service_key(&slice.resource) != service_key || slice.identity.is_some())
+            .all(|slice| !endpoint_slice_matches_service(&slice.resource, service_key) || slice.identity.is_some())
 }
 
 fn projection_epoch_requirement(
@@ -1461,7 +1478,7 @@ fn projection_epoch_requirement(
     let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
         .endpoint_slices
         .iter()
-        .filter(|(_, slice)| endpoint_slice_service_key(&slice.resource) == service_key)
+        .filter(|(_, slice)| endpoint_slice_matches_service(&slice.resource, service_key))
         .map(|(key, slice)| (key.as_str(), slice))
         .collect();
     slices.sort_by(|left, right| left.0.cmp(right.0));
