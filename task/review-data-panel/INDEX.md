@@ -17165,3 +17165,19 @@ merged origins, no-ops, raw generations, unavailable states and exact epochs.
 No new test or wider API was needed. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No full suite, live
 traffic or benchmark ran.
+
+## Skip source-key construction for identified EndpointSlices
+
+The EndpointSlice filters in source epoch preflight and assignment now test
+identity absence before constructing a Service key and querying the affected
+set. Both predicates are pure and select exactly the same records. Identified
+slices skip the temporary String and hash lookup; unidentified slices retain
+the existing work. Service filters, sorted assignment, exact reservation,
+exhaustion handling and publication remain unchanged. No throughput or whole-path
+allocation improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+coordinator runs passed the same 42 test identities/outcomes. The pure predicate
+reorder needs no new state, helper, API or implementation-shaped test. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live traffic or benchmark ran.

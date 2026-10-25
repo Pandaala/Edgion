@@ -1216,8 +1216,8 @@ fn source_epoch_requirement(state: &CoordinatorState, affected: &[String]) -> us
                 .endpoint_slices
                 .values()
                 .filter(|source| {
-                    affected.contains(endpoint_slice_service_key(&source.resource).as_str())
-                        && source.identity.is_none()
+                    source.identity.is_none()
+                        && affected.contains(endpoint_slice_service_key(&source.resource).as_str())
                 })
                 .count(),
         )
@@ -1244,7 +1244,7 @@ fn assign_source_epochs(state: &mut CoordinatorState, affected: &[String], epoch
         .endpoint_slices
         .iter()
         .filter(|(_, source)| {
-            affected.contains(endpoint_slice_service_key(&source.resource).as_str()) && source.identity.is_none()
+            source.identity.is_none() && affected.contains(endpoint_slice_service_key(&source.resource).as_str())
         })
         .map(|(key, _)| key.clone())
         .collect();
