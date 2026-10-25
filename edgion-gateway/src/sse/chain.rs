@@ -180,41 +180,42 @@ impl SliceChain {
         if len > logical_limit {
             return Err(ChainLimit::Logical);
         }
-        let incoming_handles = incoming.iter().filter(|bytes| !bytes.is_empty()).count();
         let layout = match &self.storage {
-            ChainStorage::Slices(current) if incoming_handles > MAX_SLICE_HANDLES.saturating_sub(current.len()) => {
-                ChainAppendLayout {
-                    kind: AppendKind::Coalesce,
-                    len,
-                    resident: logical_limit,
-                    handles: usize::from(len != 0),
-                    metadata: 0,
-                    additional_resident: logical_limit,
-                    additional_metadata: 0,
-                }
-            }
             ChainStorage::Slices(current) => {
-                let new_table = current.capacity() < MAX_SLICE_HANDLES && incoming_handles != 0;
-                ChainAppendLayout {
-                    kind: if new_table {
-                        AppendKind::NewTable
-                    } else {
-                        AppendKind::AppendSlices
-                    },
-                    len,
-                    resident: self
-                        .resident_capacity()
-                        .checked_add(incoming_len)
-                        .ok_or(ChainLimit::Resident)?,
-                    handles: current.len() + incoming_handles,
-                    metadata: if new_table {
-                        MAX_SLICE_HANDLES * size_of::<StoredSlice>()
-                    } else {
-                        self.slice_metadata_capacity()
-                    },
-                    additional_resident: incoming_len,
-                    additional_metadata: if new_table { MAX_SLICE_HANDLES } else { incoming_handles }
-                        * size_of::<StoredSlice>(),
+                let incoming_handles = incoming.iter().filter(|bytes| !bytes.is_empty()).count();
+                if incoming_handles > MAX_SLICE_HANDLES.saturating_sub(current.len()) {
+                    ChainAppendLayout {
+                        kind: AppendKind::Coalesce,
+                        len,
+                        resident: logical_limit,
+                        handles: usize::from(len != 0),
+                        metadata: 0,
+                        additional_resident: logical_limit,
+                        additional_metadata: 0,
+                    }
+                } else {
+                    let new_table = current.capacity() < MAX_SLICE_HANDLES && incoming_handles != 0;
+                    ChainAppendLayout {
+                        kind: if new_table {
+                            AppendKind::NewTable
+                        } else {
+                            AppendKind::AppendSlices
+                        },
+                        len,
+                        resident: self
+                            .resident_capacity()
+                            .checked_add(incoming_len)
+                            .ok_or(ChainLimit::Resident)?,
+                        handles: current.len() + incoming_handles,
+                        metadata: if new_table {
+                            MAX_SLICE_HANDLES * size_of::<StoredSlice>()
+                        } else {
+                            self.slice_metadata_capacity()
+                        },
+                        additional_resident: incoming_len,
+                        additional_metadata: if new_table { MAX_SLICE_HANDLES } else { incoming_handles }
+                            * size_of::<StoredSlice>(),
+                    }
                 }
             }
             ChainStorage::Coalesced(current) => {

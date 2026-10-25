@@ -16930,3 +16930,20 @@ not acceptance of a new projection. No new tests, prototype, allocation probe,
 full suite, live transport or benchmark ran.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. Runtime sources and tests are unchanged.
+
+## Skip handle counting for coalesced SSE append
+
+SliceChain::inspect_append now counts nonempty input handles only inside its
+sliced-storage branch. Already-coalesced storage uses the checked input byte
+sum and existing arena capacity, so its separate handle-count scan had no
+consumer. The sliced coalescing threshold and both layout alternatives remain
+identical. Logical-limit precedence, resident/metadata admission, empty inputs,
+prepared ownership and atomic commit are unchanged. This removes an unused
+source-level traversal, with no allocation or measured throughput claim.
+
+Independent plan and final source reviews passed. Existing coalescing, empty
+append, exact-capacity and rejection-atomicity regressions were reused without
+new tests. Fresh baseline and final runs passed 94 SSE and 25 semantic response
+cases (119 distinct identities), with identical names and outcomes. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with
+existing warnings. No full suite, live transport or benchmark ran.

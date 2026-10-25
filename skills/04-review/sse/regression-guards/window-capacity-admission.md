@@ -81,3 +81,17 @@ alternative token sources, or altered snapshot ownership.
 
 - `sse-window-strict-residency-and-continuity` — corrected and verified on
   2026-09-23; independent review: LGTM.
+
+## Coalesced append inspection
+
+`SliceChain::inspect_append` counts nonempty incoming handles only for sliced
+storage, where the count selects coalescing or slice-table admission. An already
+coalesced chain needs only the checked total input length and its existing arena
+capacity; it skips the unused handle-count traversal. Logical admission still
+precedes representation-specific checks, and every resident/metadata layout
+value and error boundary remains unchanged. This removes a source-level scan,
+not an allocation, and establishes no measured throughput improvement.
+
+Existing one-byte-stream, large-record/empty-append, exact handle-limit and
+coalesced-arena admission regressions cover this boundary. Re-evaluate if the
+coalesced layout gains a handle-dependent policy or representation.
