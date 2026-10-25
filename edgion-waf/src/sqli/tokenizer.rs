@@ -343,13 +343,9 @@ impl<'a> SqliTokenizer<'a> {
         let search_start = pos + offset;
         let search_len = len - pos - offset;
 
-        let mut qpos_idx = None;
-        for i in search_start..(search_start + search_len) {
-            if self.input[i] == quote_char {
-                qpos_idx = Some(i);
-                break;
-            }
-        }
+        let mut qpos_idx = self
+            .memchr(quote_char, &self.input[search_start..search_start + search_len])
+            .map(|offset| search_start + offset);
 
         // From libinjection_sqli.c:638-643: Set str_open based on offset
         // offset = 0 means "simulated quote", so str_open = CHAR_NULL
@@ -382,13 +378,9 @@ impl<'a> SqliTokenizer<'a> {
                 // libinjection_sqli.c:605-606: If odd number of backslashes, it's escaped
                 if backslash_count & 1 == 1 {
                     // libinjection_sqli.c:656-659: Continue search from qpos + 1
-                    qpos_idx = None;
-                    for i in (qpos + 1)..len {
-                        if self.input[i] == quote_char {
-                            qpos_idx = Some(i);
-                            break;
-                        }
-                    }
+                    qpos_idx = self
+                        .memchr(quote_char, &self.input[qpos + 1..len])
+                        .map(|offset| qpos + 1 + offset);
                     continue;
                 }
             }
@@ -398,13 +390,9 @@ impl<'a> SqliTokenizer<'a> {
             // Implements libinjection_sqli.c:610-612: ((cur + 1) < end) && *(cur + 1) == *cur
             if qpos + 1 < len && self.input[qpos + 1] == quote_char {
                 // libinjection_sqli.c:661-664: Continue search from qpos + 2
-                qpos_idx = None;
-                for i in (qpos + 2)..len {
-                    if self.input[i] == quote_char {
-                        qpos_idx = Some(i);
-                        break;
-                    }
-                }
+                qpos_idx = self
+                    .memchr(quote_char, &self.input[qpos + 2..len])
+                    .map(|offset| qpos + 2 + offset);
                 continue;
             }
 

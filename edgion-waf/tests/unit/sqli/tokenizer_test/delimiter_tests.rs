@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn simulated_quote_search_preserves_escape_order_and_cursor() {
+    for (quote, flags) in [
+        (b'\'', SqliFlags::FLAG_QUOTE_SINGLE | SqliFlags::FLAG_SQL_ANSI),
+        (b'"', SqliFlags::FLAG_QUOTE_DOUBLE | SqliFlags::FLAG_SQL_MYSQL),
+    ] {
+        let mut empty = SqliTokenizer::new(b"", flags);
+        assert!(empty.next_token().is_none());
+        assert_eq!(empty.pos, 0);
+
+        for (source, content_len, cursor, closed) in [
+            (b"abc".as_slice(), 3, 3, false),
+            (b"'".as_slice(), 0, 1, true),
+            (b"abc'".as_slice(), 3, 4, true),
+            (br"a\'b'!".as_slice(), 4, 5, true),
+            (br"a\\'!".as_slice(), 3, 4, true),
+            (b"a''b'!".as_slice(), 4, 5, true),
+            (b"'''!".as_slice(), 2, 3, true),
+            (br"a\'".as_slice(), 3, 3, false),
+            (b"a''".as_slice(), 3, 3, false),
+            (br"a\'b''c'!".as_slice(), 7, 8, true),
+            (b"\0\xff'!".as_slice(), 2, 3, true),
+        ] {
+            let input: Vec<_> = source
+                .iter()
+                .map(|&byte| if byte == b'\'' { quote } else { byte })
+                .collect();
+            let mut tokenizer = SqliTokenizer::new(&input, flags);
+            let token = tokenizer.next_token().unwrap();
+            assert_eq!(token.token_type, TokenType::String, "{input:?}");
+            assert_eq!((token.pos, token.len, token.count), (0, content_len, 0), "{input:?}");
+            let mut expected = [0; 32];
+            expected[..content_len].copy_from_slice(&input[..content_len]);
+            assert_eq!(token.val, expected, "{input:?}");
+            assert_eq!(token.str_open, CHAR_NULL);
+            assert_eq!(token.str_close, if closed { quote } else { CHAR_NULL }, "{input:?}");
+            assert_eq!(tokenizer.pos, cursor, "{input:?}");
+            if cursor < input.len() {
+                let next = tokenizer.next_token().unwrap();
+                assert_eq!((next.pos, next.len, next.val[0]), (cursor, 1, b'!'));
+                assert_eq!(tokenizer.pos, input.len());
+            }
+            assert!(tokenizer.next_token().is_none());
+        }
+    }
+}
+
+#[test]
+fn simulated_quote_search_keeps_full_cursor_and_truncated_token() {
+    for (quote, flags) in [
+        (b'\'', SqliFlags::FLAG_QUOTE_SINGLE),
+        (b'"', SqliFlags::FLAG_QUOTE_DOUBLE),
+    ] {
+        let mut input = vec![b'a'; 64];
+        input.push(quote);
+        let mut tokenizer = SqliTokenizer::new(&input, flags);
+        let token = tokenizer.next_token().unwrap();
+        assert_eq!(token.token_type, TokenType::String);
+        assert_eq!((token.pos, token.len, token.count), (0, 31, 0));
+        assert_eq!(&token.val[..31], &[b'a'; 31]);
+        assert_eq!(token.val[31], CHAR_NULL);
+        assert_eq!((token.str_open, token.str_close), (CHAR_NULL, quote));
+        assert_eq!(tokenizer.pos, 65);
+        assert!(tokenizer.next_token().is_none());
+    }
+}
+
+#[test]
 fn byte_search_returns_first_offset_within_supplied_slice() {
     let tokenizer = SqliTokenizer::new(b"unrelated", SqliFlags::FLAG_NONE);
     for (input, needle, expected) in [

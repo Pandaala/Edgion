@@ -17924,3 +17924,25 @@ Fresh baseline/final WAF library runs preserve all 865 identities/outcomes:
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full-workspace test suite, fresh external-checkout
 comparison, live Gateway integration or performance benchmark ran.
+
+## Reuse byte search in simulated SQL quote contexts
+
+SqliTokenizer::parse_first_token_with_quote_context now uses its existing memchr
+helper for the initial quote search and the two searches resumed after escapes.
+Each borrowed slice retains the original interval and adds its start to restore
+absolute positions. Backslash parity is still checked before doubled delimiters;
+resumption still starts at qpos + 1 or qpos + 2 respectively. Empty suffixes return
+no match. Token assignment/truncation, simulated opening-quote metadata, closing
+metadata, no-match handling and cursor advancement remain unchanged. No parser
+consolidation, buffer, dependency, logging or detector-budget change was made.
+
+Two baseline-first regressions cover single/double quote contexts, empty input,
+first/last/absent quotes, odd/even backslashes, doubled and mixed escapes, escaped
+final quotes and doubled pairs at EOF, NUL/high bytes and long token truncation.
+They assert token fields and cursor progression, including the following token.
+Fresh baseline/final WAF library runs preserve all 867 identities/outcomes:
+861 passed and six existing ignored. Existing offline parser/folding/verdict
+fixtures ran. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. No full-workspace test suite, live Gateway
+integration, fresh external-checkout comparison or performance benchmark ran.
+No measured throughput benefit is claimed.
