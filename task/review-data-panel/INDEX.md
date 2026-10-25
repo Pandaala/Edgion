@@ -17843,3 +17843,11 @@ or fixture changed. Fresh baseline/final WAF library runs preserve all 860 test
 identities/outcomes: 854 passed and six existing ignored. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full-workspace suite, live Gateway integration or performance benchmark ran.
+
+## WAF runtime dispatch inventory
+
+The [direct operator/action inventory](CALLBACKS.md#waf-direct-operator-and-action-execution-boundaries)
+reconciles all 12 compiled operand variants, predicate/capture sequencing, control
+and SetVar effects, and the direct staged-state commit gate at `ec24c988a`.
+Deeper engine dependencies and existing representation decisions remain open;
+this is not a complete WAF or callback-chain audit.

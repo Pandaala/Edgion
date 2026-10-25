@@ -1506,3 +1506,49 @@ DNS-cache 26 and Gateway egress adapter 3 tests. Workspace all-target check/Clip
 formatting and agent-doc validation passed with existing warnings. These are
 scoped regressions, not a new controlled DNS/HTTP transport experiment, full suite
 or performance measurement. Runtime code and test fixtures are unchanged.
+
+## WAF direct operator and action execution boundaries
+
+Source revalidated at `ec24c988a`. Gateway `plugins/http/waf/mod.rs` invokes the
+leaf transaction for request headers/body and response headers/windows. This
+inventory follows the direct runtime dispatch in
+`edgion-waf/src/seclang/transaction.rs`; cold syntax files named operator.rs and
+action.rs are not the runtime evaluator. The CompiledOperatorOperand enum in
+compiler.rs has 12 variants, all represented below.
+
+| Operand variants | Direct execution and ownership |
+| --- | --- |
+| String, Integer | Static template operands borrow validated generation bytes; dynamic templates expand owned output under the member limit. String relations use slice comparisons or memmem search. Static integer operands are compiled values; dynamic operands and selected inputs use the shared signed parser. Template-shape preparation remains [waf-20](waf-20-prepared-template-shape.md). |
+| IpNetworks | Parse one input IP, then search the compiled network slice in order. Same-family comparisons construct a prefix mask against the normalized base. Prepared masks remain [waf-03](waf-03-prepared-ip-network-masks.md). |
+| ByteSet, ValidateUrlEncoding, ValidateUtf8Encoding, Unconditional | Inspect the borrowed input with the compiled four-word byte set, percent/hex validation, UTF-8 validation, or constant success. URL validation skips plain byte runs through memchr. These branches do not build owned operand copies. |
+| DetectSqli, DetectXss | Call the bounded injection wrappers. SQLi returns an inline fingerprint; XSS returns a boolean. The enclosing stage admits detector input/work before calling them. This is not a complete SQL/HTML tokenizer or detector equivalence audit. |
+| Regex, Matcher, CapturePhrase | Use generation-owned compiled programs and request-owned execution scratch. Regex Boolean/Capture plans select separate scratch slots; initialization is lazy, not runtime program compilation. Matcher dispatch preserves accelerated/reference modes, selected pattern ranges and the existing stage cache. CapturePhrase returns a match descriptor from its selected search mode. See [scratch budgeting](waf-01-prepared-matcher-scratch-budget.md), [VM initialization](waf-15-regex-vm-cache-initialization.md) and [prefix reuse](waf-17-prefix-matcher-scan-reuse.md). |
+
+inspect_predicate_stage_with_hit_matcher checks detector admission and observer
+charges before evaluation, then applies negation before capture extraction.
+Only eligible positive capture operators extract values; negated success does
+not create those captures. Capture ownership is selected by the existing observer
+and builder, so direct dispatch is not proof of allocation-free matching. The
+existing [capture-hit decision](waf-09-profile-capture-hit-index.md) remains open.
+Transform/multiMatch output ownership remains a separate [decision](waf-07-multimatch-stage-ownership.md).
+
+| Action/state boundary | Direct execution and retained constraints |
+| --- | --- |
+| apply_member_actions | Counts SetVar actions before expansion. Delete can borrow static key bytes; Assign/Add/Subtract expand owned keys. Arithmetic reads the staged value, uses a compiled constant or expanded delta, checks conversion/overflow and writes formatted output. Earlier staged writes remain visible to later actions. [Write-key ownership](waf-19-tx-write-key-ownership.md) remains deferred. |
+| apply_ctl | ForceRequestBodyVariable changes staged policy; RequestBodyProcessor checks phase/body state before selecting the staged processor. RuleRemoveByTag and RuleRemoveTargetByTag visit the compiled tag index, charging each visit before insertion/deduplication. Sorted removed-unit and target-exclusion collections retain their limits and ordering. The suffix upper-bound optimization does not suppress duplicate visits. |
+| TxState lookup and write | Lookup is case-insensitive and resolves bytes through the canonical owned/shared MatchValue boundary. Replacement retains the stored key and replaces its value; a new SetVar key is retained in the staged transaction. General capture writes can also use shared handles, so this is not an all-owned-TX claim. Delete and set update payload/retained accounting through the existing helpers. |
+| validate_runtime_actions and finding_metadata | Msg/LogData expansion validates and meters macros without retaining expanded output. Finding metadata scans compiled member actions for severity and tag count; preparation remains [waf-02](waf-02-prepared-finding-metadata.md). Neither is a new hot-path tracing channel. |
+| commit_unit_match | Runtime action validation and aggregate retained-byte admission precede publication of staged TX and capture-key state. This records the direct commit gate, not every chain search, replay or rollback path. |
+
+Original contracts: [request-scoped controls](../../skills/04-review/waf/regression-guards/request-scoped-control-actions.md),
+[fused inspection ownership and accounting](../../skills/04-review/waf/regression-guards/fused-json-inspection.md)
+and [bounded injection operators](../../skills/04-review/waf/regression-guards/native-injection-operators-use-bounded-detection.md).
+Deeper regex VM, matcher/search, injection scanners and transformation internals,
+complete compiler/publication behavior and all branch/replay interactions remain
+outside this bounded inventory. Existing deferred choices are neither selected
+nor closed; whole-WAF, whole-callback and goal completion remain unproven.
+
+Fresh WAF library verification passed 854 tests with six existing ignored.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. Runtime code and fixtures are unchanged; no full-workspace
+suite, live Gateway integration or performance experiment ran.
