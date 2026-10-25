@@ -154,6 +154,39 @@ fn cache_hit_negative_expiry_and_bound() {
 }
 
 #[test]
+fn full_cache_replacement_refreshes_negative_entry_without_clearing_other_hosts() {
+    let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_secs(10));
+    let now = Instant::now();
+    let address = ip("93.184.216.34");
+    let hosts: Vec<_> = (0..EGRESS_CACHE_MAX_ENTRIES)
+        .map(|index| format!("host-{index}.example.com"))
+        .collect();
+    for host in &hosts {
+        resolver.store(host, vec![address], now);
+    }
+
+    let refreshed = now + Duration::from_secs(1);
+    resolver.store(&hosts[0], vec![], refreshed);
+    assert_eq!(resolver.cache_len(), EGRESS_CACHE_MAX_ENTRIES);
+    assert_eq!(resolver.cached(&hosts[0], refreshed), Some(vec![]));
+    for host in &hosts[1..] {
+        assert_eq!(resolver.cached(host, refreshed), Some(vec![address]));
+    }
+    // Read-only future samples verify that replacement owns a refreshed TTL.
+    assert_eq!(resolver.cached(&hosts[0], now + Duration::from_secs(10)), Some(vec![]));
+    assert_eq!(resolver.cached(&hosts[0], now + Duration::from_secs(11)), None);
+
+    // Every stored entry is still fresh at this insertion sample.
+    let next = now + Duration::from_secs(2);
+    resolver.store("new.example.com", vec![address], next);
+    assert_eq!(resolver.cache_len(), 1);
+    assert_eq!(resolver.cached("new.example.com", next), Some(vec![address]));
+    for host in &hosts {
+        assert_eq!(resolver.cached(host, next), None);
+    }
+}
+
+#[test]
 fn cache_freshness_is_strict_at_ttl_boundary_and_pruning_matches() {
     let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_millis(10));
     let inserted_at = Instant::now();

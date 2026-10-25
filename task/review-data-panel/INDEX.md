@@ -17655,3 +17655,26 @@ Fresh baseline/final runs retain all 52 test identities/outcomes: verifier 12,
 LDAP 28, OIDC dependency errors 8 and shared verified TLS 4. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live network test or performance benchmark ran.
+
+## Reuse full egress memo replacement lookup
+
+Common EgressResolver::Inner::store uses its existing full-map key check to
+replace the value through a borrowed-key get_mut result. A full-map replacement
+no longer allocates a temporary hostname or performs the second insertion lookup.
+This case mainly concerns overlapping DNS misses; ordinary fresh cache hits do
+not call store. Under-capacity insertion/replacement remains unchanged.
+
+Pruning still precedes the capacity decision under the same write lock. Existing
+keys and unrelated entries survive replacement; new keys still clear a full
+fresh map. Address vectors, negative results, timestamp refresh, zero-TTL bypass,
+policy filtering and observation remain unchanged. Shared address representation
+and miss coalescing remain outside this change. No throughput improvement was
+measured.
+
+Independent plan and code/test reviews passed. A new semantic regression passed
+before the production change and checks full negative replacement, other-host
+preservation, refreshed strict expiry and subsequent full-map new-host clearing.
+Baseline/final runs preserve all 11 Common egress tests (including that regression)
+and 3 Gateway adapter tests. Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing warnings. No full suite, live DNS
+test, allocation instrumentation or performance benchmark ran.

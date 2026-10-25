@@ -223,16 +223,18 @@ impl Inner {
     fn store(&self, host: &str, addrs: Vec<IpAddr>, now: Instant) {
         let mut guard = self.cache.write();
         guard.retain(|_, entry| entry.is_fresh(now, self.ttl));
-        if guard.len() >= EGRESS_CACHE_MAX_ENTRIES && !guard.contains_key(host) {
+        let entry = CacheEntry {
+            addrs,
+            inserted_at: now,
+        };
+        if guard.len() >= EGRESS_CACHE_MAX_ENTRIES {
+            if let Some(current) = guard.get_mut(host) {
+                *current = entry;
+                return;
+            }
             guard.clear();
         }
-        guard.insert(
-            host.to_string(),
-            CacheEntry {
-                addrs,
-                inserted_at: now,
-            },
-        );
+        guard.insert(host.to_string(), entry);
     }
 }
 
