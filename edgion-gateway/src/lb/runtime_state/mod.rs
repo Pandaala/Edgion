@@ -125,7 +125,7 @@ fn try_publish_sp_snapshot(
     {
         return None;
     }
-    let mut next = (*cell.sp.load_full()).clone();
+    let mut next = cell.sp.load().as_ref().clone();
     next.insert(
         section.clone(),
         Arc::new(SpAffinitySnapshot {

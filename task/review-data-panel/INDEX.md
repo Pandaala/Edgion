@@ -17384,3 +17384,24 @@ Independent plan and final document reviews passed. Formatting, workspace
 all-target check/Clippy and agent-doc validation passed with existing warnings.
 The unchanged source was covered by the immediately preceding 44 coordinator
 and eight Service tests; no additional test run was needed for this record.
+
+## Borrow the affinity publication map while copying it
+
+The affinity miss publisher now clones its next section map through a short
+ArcSwap load guard rather than promoting the outer snapshot to an owned Arc.
+The guard ends with the map-copy statement, before insertion and publication.
+The map allocation and inner snapshot Arc clones remain; active/generation
+snapshots stay owned. Locking, both generation/membership validations, returned
+entries ownership, scoped views and canonical token/address bounds are unchanged.
+
+Locked arc-swap 1.9.2 implements load_full via Guard::into_inner(load). This
+removes forced outer ownership promotion on the normal guarded path; fallback
+and writer-paid promotion can still perform reference-count work. No universal
+allocation-free or measured throughput claim is made.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+runs passed identical identities/outcomes for seven runtime-state, 28 session-
+persistence and 44 coordinator tests (79 total), including stale-builder rejection.
+No redundant new test was added. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full suite, live
+traffic or benchmark ran.
