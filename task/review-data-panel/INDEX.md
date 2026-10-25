@@ -17280,3 +17280,20 @@ runs passed identical identities/outcomes for 44 coordinator and four threshold
 tests. No redundant ownership-only tests were added. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Borrow retired backend addresses during lifecycle cleanup
+
+Both activation retirement branches now borrow the immutable address from the
+backend retained by the old active snapshot. Draining and exact removal consume
+the address synchronously to create their owned keys; draining still retains
+its backend Arc. Completion locks, freeze/revocation, connection checks, identity
+matching, gauge settlement and publication order are unchanged. This removes
+temporary address copies on the cold retirement path; it does not claim heap
+allocation savings or measured throughput improvement.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+runs passed identical identities/outcomes for 44 coordinator and seven runtime
+state tests, including same-socket delete/recreate draining identity. No new
+ownership-only tests were added. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full suite, live
+traffic or benchmark ran.

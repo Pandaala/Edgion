@@ -1084,11 +1084,11 @@ impl ServiceDiscoveryCoordinator {
                     let _completion = old.completion_lock.lock();
                     old.freeze_detached();
                     crate::backends::get_outlier_detection_store().remove_runtime_identity(old.identity.as_ref());
-                    let address = old.backend.inner().addr.clone();
+                    let address = &old.backend.inner().addr;
                     if old.backend.owned_conn() > 0 {
-                        crate::lb::runtime_state::begin_draining(service_key, &address, Arc::clone(&old.backend));
+                        crate::lb::runtime_state::begin_draining(service_key, address, Arc::clone(&old.backend));
                     } else {
-                        crate::lb::runtime_state::remove_backend_exact(service_key, &address, &old.backend);
+                        crate::lb::runtime_state::remove_backend_exact(service_key, address, &old.backend);
                     }
                     old.settle_detached_gauge();
                 }
@@ -1111,11 +1111,11 @@ impl ServiceDiscoveryCoordinator {
                     let _completion = old.completion_lock.lock();
                     old.freeze_detached();
                     crate::backends::get_outlier_detection_store().remove_runtime_identity(old.identity.as_ref());
-                    let address = old.backend.inner().addr.clone();
+                    let address = &old.backend.inner().addr;
                     if old.backend.owned_conn() > 0 {
-                        crate::lb::runtime_state::begin_draining(service_key, &address, Arc::clone(&old.backend));
+                        crate::lb::runtime_state::begin_draining(service_key, address, Arc::clone(&old.backend));
                     } else {
-                        crate::lb::runtime_state::remove_backend_exact(service_key, &address, &old.backend);
+                        crate::lb::runtime_state::remove_backend_exact(service_key, address, &old.backend);
                     }
                     old.settle_detached_gauge();
                 }
