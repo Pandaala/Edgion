@@ -17946,3 +17946,25 @@ fixtures ran. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. No full-workspace test suite, live Gateway
 integration, fresh external-checkout comparison or performance benchmark ran.
 No measured throughput benefit is claimed.
+
+## Reuse substring search for SQL dollar-string endings
+
+The SQL tokenizer's plain and tagged dollar-string parsers now use existing
+memmem::find over the borrowed content suffix. The tagged needle remains a
+borrowed slice of the original opening marker. The first complete byte match
+and case sensitivity are unchanged; relative search results are translated back
+to absolute positions. parse_money still owns the same alphabetic-tag grammar
+and dispatch. Matched/unmatched assignments, 31-byte token truncation, delimiter
+metadata, full cursors, detector budgets and ownership remain unchanged. No
+prepared finder, cache, dependency, heap buffer or observability was introduced.
+
+Two baseline-first regressions cover empty content, absent/partial endings,
+first/overlapping candidates, case-sensitive tags, embedded NUL/high bytes,
+nonzero input offsets, following tokens and a 64-letter tag near-match before
+its real terminator. Assertions include count, the full zero-padded token array
+and absolute cursor. Fresh baseline/final WAF library runs preserve all 869
+identities/outcomes: 863 passed and six existing ignored. Existing offline
+parser/folding/verdict fixtures ran. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full-workspace
+test suite, live Gateway integration, fresh external-checkout comparison or
+performance benchmark ran; no measured throughput improvement is claimed.

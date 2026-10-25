@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn dollar_strings_preserve_first_exact_end_marker_and_cursor() {
+    for (input, start, content, cursor, closed) in [
+        (b"$$".as_slice(), 2, b"".as_slice(), 2, false),
+        (b"$$$".as_slice(), 2, b"$".as_slice(), 3, false),
+        (b"$$$$!".as_slice(), 2, b"".as_slice(), 4, true),
+        (b"$$a$$!".as_slice(), 2, b"a".as_slice(), 5, true),
+        (b"$$a$".as_slice(), 2, b"a$".as_slice(), 4, false),
+        (b"$$a$$$$".as_slice(), 2, b"a".as_slice(), 5, true),
+        (b" $$x$$!".as_slice(), 3, b"x".as_slice(), 6, true),
+        (b"$x$".as_slice(), 3, b"".as_slice(), 3, false),
+        (b"$x$$x$!".as_slice(), 3, b"".as_slice(), 6, true),
+        (b"$Ab$x$ab$y$Ab$!".as_slice(), 4, b"x$ab$y".as_slice(), 14, true),
+        (b"$t$x$t".as_slice(), 3, b"x$t".as_slice(), 6, false),
+        (b"$t$\0\xff$t$!".as_slice(), 3, b"\0\xff".as_slice(), 8, true),
+        (b" $t$x$t$!".as_slice(), 4, b"x".as_slice(), 8, true),
+    ] {
+        let mut tokenizer = SqliTokenizer::new(input, SqliFlags::FLAG_NONE);
+        let token = tokenizer.next_token().unwrap();
+        assert_eq!(token.token_type, TokenType::String, "{input:?}");
+        assert_eq!(
+            (token.pos, token.len, token.count),
+            (start, content.len(), 0),
+            "{input:?}"
+        );
+        let mut expected = [0; 32];
+        expected[..content.len()].copy_from_slice(content);
+        assert_eq!(token.val, expected, "{input:?}");
+        assert_eq!(
+            (token.str_open, token.str_close),
+            (b'$', if closed { b'$' } else { CHAR_NULL })
+        );
+        assert_eq!(tokenizer.pos, cursor, "{input:?}");
+        if input.get(cursor) == Some(&b'!') {
+            let next = tokenizer.next_token().unwrap();
+            assert_eq!((next.pos, next.len, next.val[0]), (cursor, 1, b'!'));
+            assert!(tokenizer.next_token().is_none());
+        }
+    }
+}
+
+#[test]
+fn long_dollar_tag_near_match_preserves_truncation_and_full_cursor() {
+    let mut tag = vec![b'$'];
+    tag.extend_from_slice(&[b'a'; 64]);
+    tag.push(b'$');
+    let mut near_match = tag.clone();
+    near_match[64] = b'b';
+    let mut input = tag.clone();
+    input.extend_from_slice(&near_match);
+    input.extend_from_slice(&tag);
+    let mut tokenizer = SqliTokenizer::new(&input, SqliFlags::FLAG_NONE);
+    let token = tokenizer.next_token().unwrap();
+    assert_eq!(token.token_type, TokenType::String);
+    assert_eq!((token.pos, token.len, token.count), (66, 31, 0));
+    let mut expected = [b'a'; 32];
+    expected[0] = b'$';
+    expected[31] = CHAR_NULL;
+    assert_eq!(token.val, expected);
+    assert_eq!((token.str_open, token.str_close), (b'$', b'$'));
+    assert_eq!(tokenizer.pos, 198);
+    assert!(tokenizer.next_token().is_none());
+}
+
+#[test]
 fn simulated_quote_search_preserves_escape_order_and_cursor() {
     for (quote, flags) in [
         (b'\'', SqliFlags::FLAG_QUOTE_SINGLE | SqliFlags::FLAG_SQL_ANSI),

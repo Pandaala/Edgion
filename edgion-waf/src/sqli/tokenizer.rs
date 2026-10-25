@@ -1277,17 +1277,14 @@ impl<'a> SqliTokenizer<'a> {
         let content_start = pos + 2;
 
         // Find ending $$
-        let mut end_pos = content_start;
-        while end_pos + 1 < slen {
-            if self.input[end_pos] == b'$' && self.input[end_pos + 1] == b'$' {
-                let content = &self.input[content_start..end_pos];
-                self.current
-                    .assign(TYPE_STRING, content_start, end_pos - content_start, content);
-                self.current.str_open = b'$';
-                self.current.str_close = b'$';
-                return end_pos + 2;
-            }
-            end_pos += 1;
+        if let Some(offset) = memmem::find(&self.input[content_start..], b"$$") {
+            let end_pos = content_start + offset;
+            let content = &self.input[content_start..end_pos];
+            self.current
+                .assign(TYPE_STRING, content_start, end_pos - content_start, content);
+            self.current.str_open = b'$';
+            self.current.str_close = b'$';
+            return end_pos + 2;
         }
 
         // No closing $$ found
@@ -1306,17 +1303,14 @@ impl<'a> SqliTokenizer<'a> {
         let content_start = tag_end + 1;
 
         // Find matching end tag
-        let mut search_pos = content_start;
-        while search_pos + tag.len() <= slen {
-            if &self.input[search_pos..search_pos + tag.len()] == tag {
-                let content = &self.input[content_start..search_pos];
-                self.current
-                    .assign(TYPE_STRING, content_start, search_pos - content_start, content);
-                self.current.str_open = b'$';
-                self.current.str_close = b'$';
-                return search_pos + tag.len();
-            }
-            search_pos += 1;
+        if let Some(offset) = memmem::find(&self.input[content_start..], tag) {
+            let search_pos = content_start + offset;
+            let content = &self.input[content_start..search_pos];
+            self.current
+                .assign(TYPE_STRING, content_start, search_pos - content_start, content);
+            self.current.str_open = b'$';
+            self.current.str_close = b'$';
+            return search_pos + tag.len();
         }
 
         // No matching end tag
