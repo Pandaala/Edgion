@@ -18269,3 +18269,15 @@ whole-parser/replay correctness claim is made.
 Fresh WAF tests passed 873 cases with six existing ignored; formatting and
 workspace all-target check/Clippy passed with existing warnings. No full-workspace
 suite, external XML comparison, live integration or benchmark ran.
+
+## XML probe and lexical execution inventory
+
+Extended [callback coverage](CALLBACKS.md#xml-byte-admission-probes-and-lexical-states)
+through byte admission, borrowed probes, scalar states, emission and completion.
+Added [WAF-24](waf-24-xml-lookahead-batching.md) as a profiling-gated decision,
+retaining exact limit/work/error and delimiter/callback ordering. Current failed
+probes are already linear; no runtime defect or measured speedup is claimed.
+
+Fresh WAF tests passed 873 cases with six existing ignored; formatting and
+workspace all-target check/Clippy passed with existing warnings. No full-workspace
+suite, external XML comparison, live integration, prototype or benchmark ran.

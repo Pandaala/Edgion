@@ -1825,3 +1825,34 @@ formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. No runtime changes, full-workspace suite, external XML
 comparison, live Gateway integration or performance experiment accompanied this
 inventory. Complete state-machine, callback and goal coverage remain unproven.
+
+## XML byte admission, probes and lexical states
+
+At source baseline 230016d10, inspected data, lookahead, admit_byte, character,
+account_tag_byte, advance, emission and finish/feed control. This extends the
+name/scope inventory through direct lexical execution, without proving every
+parser interleaving or structured replay/transport behavior.
+
+| Boundary | Direct execution and ordering |
+| --- | --- |
+| lookahead and admit_byte | Lookahead checks source/raw-token distance limits then charges work before inspection, without advancing source/raw counters. Actual admission separately advances source and raw counts under their existing ordered checks, then charges work and validates characters. Failure can leave different partial usage depending on the checkpoint. |
+| Contiguous text/attribute probe | Probe only under the existing empty-token/CR/UTF-8 conditions. Stop on state-specific markers, with the stopper included in lookahead work. A successful terminated value borrows the input slice; text trims outer XML whitespace, while attributes do not. Emit and attribute_done can fail before delimiter admission. Failed probes are suppressed within the current chunk by probe_until. |
+| CDATA probe | Search with bounded lookahead for the closing bracket/bracket/greater-than sequence. CR prevents the direct borrowed route. On success, admit value and closing delimiter before decoded accounting and emission, including empty values; incomplete candidates fall back to scalar state processing. |
+| Scalar byte path | Admit and account the original byte before CR/CRLF normalization. A skipped LF after CR still receives admission/accounting. Incremental UTF-8 validation applies even to ignored markup. |
+| Beginning, Text and Open | Recognize the optional initial BOM; enforce root-external text restrictions, pending trimmed whitespace and forbidden literal CDATA close in normal text. Open selects end tag, declaration, PI or start tag. Recursive advance transitions process the already admitted byte without admitting it again. |
+| Tag and attribute states | StartName/Between/AttrName/Equals/Quote/Value/AfterValue/Slash and closing-name states retain whitespace, quoting and separator requirements. Scalar attribute completion temporarily moves token scratch while holding its heap charge, restores it after emission/declaration handling, and only then advances state on success. |
+| Declaration, Comment and CDATA states | Fixed declaration discriminators admit only comment or CDATA openings; unsupported declarations fail. Comment closing and CDATA pending bracket counts are explicit states. CDATA is untrimmed; buffered emission includes empty values. |
+| PI states | Validate the target as NCName. Reserved xml target handling is case/location sensitive; PI data requires separation unless the target closes immediately. Only XML declaration data is retained for declaration validation. Ignored PI/comment bytes still pass admission/character checks. |
+| Entity and emission | Entity state delegates to the incremental decoder recorded above. prepare_emit checks context and charges event/summary/work; emit or emit_token calls the sink afterward. emit_token clears scratch/trailing state even when its callback path fails; no atomic emission guarantee is inferred. |
+| finish and feed | Finish rejects incomplete UTF-8 before structural incompleteness, requires Text state, no open frames and exactly one root, then emits trailing token and marks completion. feed retains its first processing error. AlreadyComplete is returned separately after successful completion. |
+
+[WAF-24](waf-24-xml-lookahead-batching.md) defers possible probe batching pending
+measurement and an accounting design. Current processing already has bounded
+linear failed-probe behavior. No scalar check, callback, scratch lifetime or
+borrowing rule changed here. Original authority remains the
+[native XML guard](../../skills/04-review/waf/regression-guards/native-xml-inspection.md).
+
+Fresh unchanged-production WAF tests passed 873 cases with six existing ignored.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. No full-workspace suite, external XML comparison, live
+Gateway integration, prototype or benchmark ran. Broader coverage remains open.
