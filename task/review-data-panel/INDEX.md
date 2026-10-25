@@ -18563,3 +18563,23 @@ All 112 utility tests passed. Formatting, workspace all-target check/Clippy,
 seven repository guards and diff checks passed with existing warnings. No
 runtime logic, limits or user-facing API changed. No full-workspace suite,
 live integration or performance measurement ran.
+
+## Reuse admitted DSL string operands in empty concatenation
+
+The Str+Str Add branch now clones the nonempty operand's immutable Arc when
+the other operand is empty, after the unchanged combined-byte limit check.
+Both-empty reuses the right operand. Pop order, opcode charging, result push,
+mixed-type coercion and ordinary nonempty construction remain unchanged.
+Arc strings retain exactly their payload; this adds no larger backing view or
+new string representation. Aliased locals remain immutable.
+
+For nonempty-plus-empty input this removes the intermediate String and new
+result Arc payload construction/copy. Empty-plus-empty already had no String
+payload allocation. Arc clone/drop work remains, and nonempty pairs gain empty
+checks; no throughput or process-memory improvement has been measured.
+Baseline-first tests pin both orientations, both-empty/zero limit, ASCII/UTF-8,
+exact/over byte limits with both error fields, original aliases, later concat
+and nil/integer coercion. All 40 range/string test identities and outcomes match
+before and after; 112 utility tests passed. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No
+full-workspace suite, live integration or allocation/throughput benchmark ran.

@@ -139,6 +139,65 @@ fn test_split_empty_delim_multibyte_exceeds_limit() {
 
 // Str + Str — explicit baseline
 #[test]
+fn test_add_empty_strings_preserves_values_and_byte_limits() {
+    for (left, right, expected) in [
+        ("", "", ""),
+        ("", "abc", "abc"),
+        ("abc", "", "abc"),
+        ("", "éπ", "éπ"),
+        ("éπ", "", "éπ"),
+    ] {
+        let expression = format!(r#""{left}" + "{right}""#);
+        assert_sets_request_header(&format!(r#"req.set_header("X-Out", {expression})"#), "X-Out", expected);
+        assert_eq!(
+            run_with_limits(
+                &format!("let joined = {expression}"),
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: expected.len(),
+                    ..VmLimits::default()
+                },
+            ),
+            good_next(),
+        );
+        if !expected.is_empty() {
+            let limit = expected.len() - 1;
+            let error = run_expect_runtime_err_with_limits(
+                &format!("let joined = {expression}"),
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..VmLimits::default()
+                },
+            );
+            assert!(matches!(error, RuntimeError::StringTooLong { len, limit: actual_limit }
+                if len == expected.len() && actual_limit == limit));
+        }
+    }
+}
+
+#[test]
+fn test_add_empty_strings_preserves_aliases_and_mixed_coercion() {
+    assert_sets_request_header(
+        r#"let original = "éπ"
+let left = "" + original
+let right = original + ""
+let changed = left + "!"
+req.set_header("X-Out", original + "|" + left + "|" + right + "|" + changed)"#,
+        "X-Out",
+        "éπ|éπ|éπ|éπ!",
+    );
+    for (expression, expected) in [
+        (r#""" + nil"#, "nil"),
+        (r#"nil + """#, "nil"),
+        (r#""" + 42"#, "42"),
+        (r#"42 + """#, "42"),
+    ] {
+        assert_sets_request_header(&format!(r#"req.set_header("X-Out", {expression})"#), "X-Out", expected);
+    }
+}
+
+#[test]
 fn test_add_str_str() {
     assert_sets_request_header(r#"req.set_header("X-Out", "hello" + " world")"#, "X-Out", "hello world");
 }

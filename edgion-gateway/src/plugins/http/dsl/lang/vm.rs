@@ -483,10 +483,16 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            let mut result = String::with_capacity(new_len);
-                            result.push_str(a);
-                            result.push_str(b);
-                            Value::Str(result.into())
+                            if a.is_empty() {
+                                Value::Str(Arc::clone(b))
+                            } else if b.is_empty() {
+                                Value::Str(Arc::clone(a))
+                            } else {
+                                let mut result = String::with_capacity(new_len);
+                                result.push_str(a);
+                                result.push_str(b);
+                                Value::Str(result.into())
+                            }
                         }
                         (Value::Str(a), _) => {
                             let b_str = b.runtime_string()?;
