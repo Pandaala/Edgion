@@ -198,6 +198,48 @@ req.set_header("X-Out", original + "|" + left + "|" + right + "|" + changed)"#,
 }
 
 #[test]
+fn test_add_coerced_prefix_output_and_byte_limits() {
+    for (prefix, text) in [
+        ("42", "42"),
+        ("-42", "-42"),
+        ("true", "true"),
+        ("false", "false"),
+        ("nil", "nil"),
+        ("range(0, 2)", "[list]"),
+        (r#"{"a": 1}"#, "[map:1]"),
+    ] {
+        for suffix in ["", "!", "éπ"] {
+            let expression = format!(r#"({prefix}) + "{suffix}""#);
+            let expected = format!("{text}{suffix}");
+            assert_sets_request_header(&format!(r#"req.set_header("X-Out", {expression})"#), "X-Out", &expected);
+            let source = format!("let result = {expression}");
+            assert_eq!(
+                run_with_limits(
+                    &source,
+                    MockPluginSession::new(),
+                    VmLimits {
+                        max_string_len: expected.len(),
+                        ..VmLimits::default()
+                    },
+                ),
+                good_next(),
+            );
+            let limit = expected.len() - 1;
+            let error = run_expect_runtime_err_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..VmLimits::default()
+                },
+            );
+            assert!(matches!(error, RuntimeError::StringTooLong { len, limit: actual_limit }
+                if len == expected.len() && actual_limit == limit));
+        }
+    }
+}
+
+#[test]
 fn test_add_str_str() {
     assert_sets_request_header(r#"req.set_header("X-Out", "hello" + " world")"#, "X-Out", "hello world");
 }

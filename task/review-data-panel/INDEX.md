@@ -18600,3 +18600,25 @@ Fresh verification passed 18 leaf value-filtered tests and 17 Gateway sandbox
 filtered tests, plus formatting, workspace all-target check/Clippy, agent-doc
 validation and diff checks with existing warnings. This verifies retained
 admission behavior, not a metadata-reuse implementation or performance claim.
+
+## Reuse the coerced prefix in mixed DSL concatenation
+
+For non-Str plus Str, Add now reserves suffix space in the already-owned
+RuntimeString conversion result and appends directly. Conversion and the exact
+combined-byte limit check remain before reservation; opcode/pop/push behavior
+and final Arc representation are unchanged. Other Add branches are unchanged.
+This reuses an existing owner rather than redesigning DSL-01 coercion.
+
+The explicit second String builder and prefix append are removed. reserve_exact
+may still reallocate and copy, and final Arc conversion remains; no unconditional
+allocation-count, throughput or peak-memory reduction is claimed. The opposite
+mixed branch requires prepending and was not mechanically changed.
+
+Baseline-first fixtures cover positive/negative integers, booleans, nil, List
+and Map markers with empty, ASCII and UTF-8 suffixes, exact output limits and
+one-byte-under errors including both fields. All 41 range/string test identities
+and outcomes match before and after. The 112 utility tests, one Gateway XML
+conversion-rejection test and one leaf Body coercion-rejection test passed.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full-workspace suite, live integration or performance
+benchmark ran.

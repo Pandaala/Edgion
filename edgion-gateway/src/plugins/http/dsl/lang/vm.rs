@@ -509,7 +509,7 @@ impl Vm {
                             Value::Str(result.into())
                         }
                         (_, Value::Str(b)) => {
-                            let a_str = a.runtime_string()?;
+                            let mut a_str = a.runtime_string()?;
                             let new_len = a_str.len() + b.len();
                             if new_len > self.limits.max_string_len {
                                 return Err(RuntimeError::StringTooLong {
@@ -517,10 +517,9 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            let mut result = String::with_capacity(new_len);
-                            result.push_str(&a_str);
-                            result.push_str(b);
-                            Value::Str(result.into())
+                            a_str.reserve_exact(b.len());
+                            a_str.push_str(b);
+                            Value::Str(a_str.into())
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
