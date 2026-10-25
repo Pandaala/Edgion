@@ -1124,8 +1124,8 @@ impl<'a> SqliState<'a> {
         }
 
         match tlen {
-            2 => self.handle_two_token_whitelist(),
-            3 => self.handle_three_token_whitelist(),
+            2 => self.handle_two_token_whitelist(fingerprint_str),
+            3 => self.handle_three_token_whitelist(fingerprint_str),
             4 | 5 => true, // Nothing special for 4-5 tokens right now
             _ => true,
         }
@@ -1135,11 +1135,7 @@ impl<'a> SqliState<'a> {
         memmem::find(self.input, b"sp_password").is_some()
     }
 
-    fn handle_two_token_whitelist(&self) -> bool {
-        let fingerprint_str = core::str::from_utf8(&self.fingerprint)
-            .unwrap_or("")
-            .trim_end_matches('\0');
-
+    fn handle_two_token_whitelist(&self, fingerprint_str: &str) -> bool {
         if self.tokens.len() < 2 {
             return true;
         }
@@ -1235,11 +1231,7 @@ impl<'a> SqliState<'a> {
         true
     }
 
-    fn handle_three_token_whitelist(&self) -> bool {
-        let fingerprint_str = core::str::from_utf8(&self.fingerprint)
-            .unwrap_or("")
-            .trim_end_matches('\0');
-
+    fn handle_three_token_whitelist(&self, fingerprint_str: &str) -> bool {
         if self.tokens.len() < 3 {
             return true;
         }

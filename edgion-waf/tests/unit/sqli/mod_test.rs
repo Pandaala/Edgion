@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn whitelist_dispatch_preserves_fingerprint_view_and_statistics() {
+    for (fingerprint, token_count, expected) in [
+        (b"1U".as_slice(), 2, false),
+        (b"1U".as_slice(), 3, true),
+        (b"1U\0".as_slice(), 2, false),
+        (b"1&1".as_slice(), 3, false),
+        (b"1&1".as_slice(), 4, true),
+        (b"sos".as_slice(), 3, false),
+        (b"s&s".as_slice(), 3, false),
+        (b"\xffU".as_slice(), 2, true),
+        (b"1\0U".as_slice(), 2, true),
+        (b"".as_slice(), 0, true),
+    ] {
+        let mut state = SqliState::new(b"", SqliFlags::FLAG_NONE);
+        state.fingerprint[..fingerprint.len()].copy_from_slice(fingerprint);
+        state.tokens.resize(3, Token::new());
+        state.tokens[0].str_open = b'\'';
+        state.tokens[0].str_close = b'\'';
+        state.tokens[2].str_open = b'\'';
+        state.tokens[2].str_close = b'\'';
+        state.stats_tokens = token_count;
+        assert_eq!(
+            state.is_not_whitelist(),
+            expected,
+            "{fingerprint:?}, count {token_count}"
+        );
+    }
+}
+
+#[test]
 fn password_marker_search_is_case_sensitive_across_raw_input() {
     for (input, expected) in [
         (b"".as_slice(), false),

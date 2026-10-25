@@ -18043,3 +18043,24 @@ reference-table, dependency-internal or callback coverage. Fresh unchanged-sourc
 WAF tests passed 867 cases with six existing ignored; formatting and workspace
 all-target check/Clippy passed with existing warnings. No full-workspace suite,
 fresh upstream comparison, live Gateway integration or benchmark ran.
+
+## Reuse the SQL whitelist fingerprint view
+
+is_not_whitelist already validates the fixed fingerprint as UTF-8 (falling back
+to empty on error) and trims trailing NUL characters before dispatch. Its two
+private branch helpers now receive that borrowed view instead of repeating the
+same conversion. They have no other callers. All branch bodies, character-based
+Union inspection, token/statistics/quote checks and password-marker precedence
+remain unchanged. No owned string, retained view, dependency, logging or detector
+budget change was introduced. This removes source-level duplicate work, not a
+measured throughput or allocation claim.
+
+A baseline-first entrance regression covers two/three-token paths, differing
+statistics, closed quote patterns, invalid UTF-8, interior NUL, trailing NUL and
+empty fingerprints. Fresh baseline/final WAF library runs preserve all 874
+identities/outcomes: 868 passed and six existing ignored. Existing offline
+parser/folding/verdict fixtures ran. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full-workspace
+test suite, live Gateway integration, fresh external-checkout comparison or
+performance benchmark ran. This does not close WAF-14 or prove every folding
+and whitelist behavior equivalent to the external reference.
