@@ -18027,3 +18027,19 @@ verdict fixtures ran. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. No full-workspace test suite,
 live Gateway integration, fresh external-checkout comparison or performance
 benchmark ran; no measured throughput improvement is claimed.
+
+## SQL tokenizer direct-dispatch inventory
+
+Extended [callback coverage](CALLBACKS.md#sql-tokenizer-direct-dispatch-and-ownership-boundaries)
+through the default SQL tokenizer construction, character dispatch, lookup and
+inline token boundary. Recorded the separate quoted/comment/numeric/word/variable/
+dollar paths and their preserved metadata/cursor rules. The optional custom
+lookup hook is not installed by the production folding path. Inline token copies
+do not establish allocation-free transactions or captures; the two SmallVec
+owners remain under WAF-14 and delimiter-table preparation remains WAF-21.
+
+This is bounded direct-dispatch evidence, not complete folding/whitelist branch,
+reference-table, dependency-internal or callback coverage. Fresh unchanged-source
+WAF tests passed 867 cases with six existing ignored; formatting and workspace
+all-target check/Clippy passed with existing warnings. No full-workspace suite,
+fresh upstream comparison, live Gateway integration or benchmark ran.

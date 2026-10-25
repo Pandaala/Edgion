@@ -1552,3 +1552,52 @@ Fresh WAF library verification passed 854 tests with six existing ignored.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. Runtime code and fixtures are unchanged; no full-workspace
 suite, live Gateway integration or performance experiment ran.
+
+## SQL tokenizer direct dispatch and ownership boundaries
+
+Source revalidated at `b757137cb`. The preceding WAF operand inventory reaches
+DetectSqli after stage input/work admission. `injection::detect_sqli` constructs
+SqliState over borrowed input; detect conditionally fingerprints the original,
+MySQL and quote contexts (up to five in the default wrapper path). Each fold
+constructs SqliTokenizer::new with no custom lookup callback. reset clears the
+public token projection; fold_tokens separately clears/resizes its workspace.
+The wrapper returns an inline fingerprint and does not call fingerprint_string.
+
+SqliTokenizer retains a borrowed input slice, scalar state, an inline current
+Token and an optional borrowed lookup callback. Token contains scalar metadata
+and a 32-byte array. Its assignment retains at most 31 payload bytes while parser
+cursors can advance across the full input. Returned Token clones copy inline
+data, not heap-owned payloads. SqliState's two SmallVec owners and their final
+projection are a separate [storage decision](waf-14-sqli-token-storage.md); this
+does not establish allocation-free whole detection, transactions or captures.
+
+get_char_type indexes the pinned 256-entry CHAR_MAP. Default keyword lookup
+normalizes into a 29-byte stack buffer, accepting each Unicode uppercase result
+only when it is one ASCII scalar, then binary-searches the static table. The
+optional with_lookup_fn hook is not installed by the production fold path.
+This inspection does not verify arbitrary external callbacks or regenerate the
+pinned data.
+
+| Direct branch group | Inspected behavior and boundary |
+| --- | --- |
+| White, single-byte punctuation/operators, Other, Backslash | Advance scalar cursors and assign inline tokens; the special backslash-N pair becomes a Number. Whitespace dispatch is distinct from the explicit whitespace predicate used by other parser decisions. |
+| Two-character operators | Check the special three-byte operator first, then a valid-UTF-8 two-byte table lookup, then colon/single-character fallback. No owned lookup key is constructed. |
+| Hash, dash and slash comments | Preserve dialect-dependent dispatch and statistics, including the existing MySQL hash count. Line comments terminate only at LF. Block comments retain first closing-pair search, the pinned nested-search region and conditional-comment Evil classification. |
+| Ordinary and simulated quotes, E/U/N/Q prefixes | Preserve escape precedence, prefix fallback and quote metadata. Simulated opening quotes keep a separate parser path. Q/NQ endings use the encoded high-byte delimiter but still advance end_pos + 2 after a match. These branches are not consolidated. |
+| Binary/hex strings and numbers | Scan existing digit sets, retain closing-quote or word fallback, and preserve numeric prefix, decimal, exponent and suffix branches. No numeric value conversion or prepared numeric representation is introduced. |
+| Words, variables, bracket words and backticks | Borrow input ranges and copy only the bounded token payload. Dot/backtick prefix keyword probes stay bounded by current.len. Variable counts preserve leading @ markers, initially quoted names delegate, and word/variable delimiter sets remain distinct. Bracket words use their first closing bracket; backticks retain their function-or-bareword classification. |
+| Money and dollar strings | Numeric runs precede plain/tagged dollar dispatch, including the single-dot word fallback. Tags remain ASCII letters only. Closing searches use the first exact borrowed marker match; incomplete endings retain existing token metadata and full cursors. |
+
+Recent search/predicate batches are recorded in INDEX. Arbitrary delimiter-table
+preparation remains [WAF-21](waf-21-sqli-delimiter-classification.md). Neither that
+choice nor WAF-14 is selected or closed by this inventory. Full folding cascade
+and whitelist branch equivalence, generated-table/reference revalidation,
+dependency machine-code/performance analysis and complete detector/callback
+coverage remain outside this direct-dispatch inventory. This is no whole-WAF or
+goal completion claim.
+
+Fresh unchanged-production WAF library verification passed 867 tests with six
+existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed with existing
+warnings. No full-workspace suite, fresh upstream-checkout comparison, live
+Gateway integration or benchmark ran.
