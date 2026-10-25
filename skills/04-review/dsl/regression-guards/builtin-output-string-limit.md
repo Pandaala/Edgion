@@ -39,8 +39,10 @@ the separately configured runtime limit, so `trim("abcdef")` and
 The corrected branch checks the trimmed slice before choosing whether to retain
 the owned input or allocate the trimmed `Arc<str>`.
 
-The digest builtins previously had the same missing-output-check shape. They now
-route their fixed-size hexadecimal outputs through `checked_value_str`.
+The digest builtins previously had the same missing-output-check shape. SHA-256,
+MD5 and HMAC-SHA256 now encode their fixed-size hexadecimal outputs into stack
+buffers and use `check_string_len` before constructing the independent Arc result.
+Digest computation and argument conversion still precede the output check.
 
 ## Borrowed response-header reads
 

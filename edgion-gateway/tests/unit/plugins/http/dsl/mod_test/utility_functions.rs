@@ -5,6 +5,56 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 #[test]
+fn test_digest_hex_output_and_exact_byte_limits() {
+    for (call, expected) in [
+        (
+            r#"sha256("")"#,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (r#"md5("")"#, "d41d8cd98f00b204e9800998ecf8427e"),
+        (
+            r#"hmac_sha256("key", "")"#,
+            "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0",
+        ),
+        (
+            r#"sha256("éπ")"#,
+            "9770cf90d685f8cd8766143f252a21c5481d673542bfdce01c10362b239844f6",
+        ),
+        (r#"md5("éπ")"#, "1f332e1194ccc6fe8a5f3d67095ba994"),
+        (
+            r#"hmac_sha256("key", "éπ")"#,
+            "ae5fccd243a9125481e2d6809ada1641bf77145abd4cbde18450e2074fd1b79b",
+        ),
+    ] {
+        assert_sets_request_header(&format!(r#"req.set_header("X-Out", {call})"#), "X-Out", expected);
+        let source = format!("let digest = {call}");
+        assert_eq!(
+            run_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: expected.len(),
+                    ..VmLimits::default()
+                },
+            ),
+            good_next(),
+        );
+        for limit in [0, expected.len() - 1] {
+            let error = run_expect_runtime_err_with_limits(
+                &source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..VmLimits::default()
+                },
+            );
+            assert!(matches!(error, RuntimeError::StringTooLong { len, limit: actual_limit }
+                if len == expected.len() && actual_limit == limit));
+        }
+    }
+}
+
+#[test]
 fn test_sha256() {
     assert_sets_request_header(
         r#"req.set_header("X-Out", sha256("hello"))"#,

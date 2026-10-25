@@ -18466,3 +18466,22 @@ existing warnings. This is source-level avoided work on rejected output, not
 measured throughput or memory improvement. No full-workspace suite, live
 integration or benchmark ran. Decoder error and lossy UTF-8 semantics were not
 changed by this exact encoding-size admission.
+
+## Stack encoding for fixed DSL digest results
+
+SHA-256, MD5 and HMAC-SHA256 now encode their fixed 32/16/32-byte digests into
+64/32/64-byte stack buffers through the existing hex dependency. Its exact-size
+encoder emits lowercase ASCII; both fixed-length and UTF-8 expectations follow
+from these invariants. The canonical byte-limit check precedes independent Arc
+creation. Argument conversion, HMAC argument/error order and digest computation
+remain before the check; no crypto work is skipped or reordered.
+
+This removes the intermediate encoded String, not input conversion or final
+result allocation. No generic encoder, dependency, logging or body owner was
+added. The owning output-limit knowledge now describes the actual helper path.
+Baseline-first golden fixtures cover empty and multibyte input for all three
+builtins, exact output limits, zero and one-byte-under rejection with both error
+fields. All 109 utility test identities/outcomes match before and after,
+including existing HMAC verification. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No
+full-workspace suite, live integration or allocation/throughput benchmark ran.

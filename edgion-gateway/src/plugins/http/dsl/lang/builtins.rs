@@ -1119,13 +1119,23 @@ impl Vm {
                 use sha2::Digest;
                 let s = state.pop()?.runtime_string()?;
                 let hash = sha2::Sha256::digest(s.as_bytes());
-                checked_value_str(hex::encode(hash), self.limits.max_string_len)
+                let mut output = [0u8; 64];
+                hex::encode_to_slice(hash, &mut output).expect("32-byte digest encodes to exactly 64 hex bytes");
+                let encoded =
+                    std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+                check_string_len(encoded, self.limits.max_string_len)?;
+                Ok(Value::Str(Arc::from(encoded)))
             }
             BuiltinId::Md5 => {
                 use md5::Digest;
                 let s = state.pop()?.runtime_string()?;
                 let hash = md5::Md5::digest(s.as_bytes());
-                checked_value_str(hex::encode(hash), self.limits.max_string_len)
+                let mut output = [0u8; 32];
+                hex::encode_to_slice(hash, &mut output).expect("16-byte digest encodes to exactly 32 hex bytes");
+                let encoded =
+                    std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+                check_string_len(encoded, self.limits.max_string_len)?;
+                Ok(Value::Str(Arc::from(encoded)))
             }
             BuiltinId::Trim => {
                 let s = state.pop()?.runtime_string()?;
@@ -1216,8 +1226,13 @@ impl Vm {
                     message: format!("invalid key: {}", e),
                 })?;
                 mac.update(data.as_bytes());
-                let result = hex::encode(mac.finalize().into_bytes());
-                checked_value_str(result, self.limits.max_string_len)
+                let mut output = [0u8; 64];
+                hex::encode_to_slice(mac.finalize().into_bytes(), &mut output)
+                    .expect("32-byte digest encodes to exactly 64 hex bytes");
+                let encoded =
+                    std::str::from_utf8(&output).expect("hex encoding produces only ASCII digits and letters");
+                check_string_len(encoded, self.limits.max_string_len)?;
+                Ok(Value::Str(Arc::from(encoded)))
             }
             BuiltinId::Uuid => {
                 let mut buffer = uuid::Uuid::encode_buffer();
