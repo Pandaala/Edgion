@@ -17533,3 +17533,23 @@ Fresh existing authority tests passed six cases. Independent plan review approve
 the deferred scope. Formatting, workspace all-target check/Clippy and agent-doc
 validation passed with existing warnings. No runtime/test change, prototype,
 full suite, live traffic, allocation probe or benchmark is included.
+
+## Validate cache Connection nominations as complete tokens
+
+Response-cache exclusions retain their bounded structural grammar pass, then
+validate each canonical borrowed Connection token before deduplication. This
+replaces per-byte UTF-8 conversion and token-validator entry with at most 16
+whole-token validator calls. The same canonical charset predicate remains the
+owner. Locked http 1.5.0 HeaderValue::to_str first admits only visible ASCII and
+TAB, so the shared iterator's trimming cannot conceal other whitespace. Singleton
+header, 512-byte and 16-raw-option limits, empty/internal-whitespace rejection,
+first-occurrence membership, framing and allocation ownership remain unchanged.
+No measured throughput improvement is claimed.
+
+The new exhaustive representable-byte and Unicode/trim-boundary test passed on
+the original implementation. Baseline/final serial response-cache runs passed the
+same 44 identities/outcomes, including existing bounds, digest and zero-allocation
+checks. Independent plan and source reviews passed. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran; the separately recorded request-tail
+fixture issue remains outside this scoped verification.

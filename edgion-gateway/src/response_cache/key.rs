@@ -251,9 +251,7 @@ impl<'a> Exclusions<'a> {
                         trailing_space = false;
                     }
                     _ => {
-                        if trailing_space
-                            || !edgion_resources::gwapi_types::is_valid_header_token(std::str::from_utf8(&[byte]).ok()?)
-                        {
+                        if trailing_space {
                             return None;
                         }
                         token = true;
@@ -263,7 +261,12 @@ impl<'a> Exclusions<'a> {
             if !token {
                 return None;
             }
+            // to_str admits only visible ASCII and TAB, so trimming cannot hide
+            // invalid non-HTTP whitespace. Validate complete tokens before deduplication.
             for token in crate::plugins::http::common::http_client::connection_option_tokens(value) {
+                if !edgion_resources::gwapi_types::is_valid_header_token(token) {
+                    return None;
+                }
                 if exclusions.connection[..exclusions.connection_count]
                     .iter()
                     .any(|existing| existing.eq_ignore_ascii_case(token))

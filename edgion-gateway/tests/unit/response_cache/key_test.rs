@@ -114,6 +114,39 @@ fn response_cache_connection_and_testing_exclusions_remain_bounded() {
 }
 
 #[test]
+fn connection_exclusions_preserve_token_bytes_and_trim_boundaries() {
+    let trace = RequestTraceId::default();
+    let mut headers = HeaderMap::new();
+    for byte in 0u8..=255 {
+        let Ok(value) = http::HeaderValue::from_bytes(&[b'x', byte, b'y']) else {
+            continue;
+        };
+        headers.insert("connection", value);
+        let result = Exclusions::parse(&headers, &trace, false);
+        if byte == b',' {
+            let exclusions = result.unwrap();
+            assert_eq!(exclusions.connection_count, 2);
+            assert_eq!(&exclusions.connection[..2], &["x", "y"]);
+        } else if byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte) {
+            let exclusions = result.unwrap();
+            assert_eq!(exclusions.connection_count, 1);
+            assert_eq!(exclusions.connection[0].as_bytes(), &[b'x', byte, b'y']);
+        } else {
+            assert!(result.is_none(), "invalid token byte {byte}");
+        }
+    }
+    for value in ["é", "x€", "x y", "x\ty", "x, ", " ,x"] {
+        headers.insert("connection", http::HeaderValue::from_bytes(value.as_bytes()).unwrap());
+        assert!(Exclusions::parse(&headers, &trace, false).is_none(), "{value:?}");
+    }
+    headers.insert("connection", " \tX-Hop\t , \tx-hop ".parse().unwrap());
+    let exclusions = Exclusions::parse(&headers, &trace, false).unwrap();
+    assert_eq!(exclusions.connection_count, 1);
+    assert_eq!(exclusions.connection[0], "X-Hop");
+    assert!(exclusions.contains("x-hop"));
+}
+
+#[test]
 fn response_cache_key_material_and_header_count_refuse_without_allocating() {
     let mut builder = Builder::new();
     let bytes = vec![b'a'; MATERIAL_LIMIT - 8];
