@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Literal DSL time-format preparation](dsl-13-time-format-preparation.md)
+
 - [System DNS query input ownership](dns-05-system-query-input.md)
 
 - [Outbound SAN fallback reason storage](tls-08-fallback-reason-storage.md)
@@ -18509,3 +18511,17 @@ All seven time_format test identities/outcomes match before and after; 46 P3
 utility tests passed. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. No full-workspace suite, live
 integration or allocation/throughput benchmark ran.
+
+## Literal time-format preparation boundary
+
+Traced generic compiler argument emission, VM step/call/stack gates and pinned
+Chrono iterator formatting after the direct-writer optimization. Literal formats
+still parse on execution; owned prepared items could reuse that work but add
+metadata and require lazy-error and sandbox-budget preservation. Dynamic formats
+remain accepted. The new DSL-13 task records the decision and bounded acceptance;
+no runtime, bytecode, validation or cache representation changed. DSL-01 argument
+ownership and the completed Display-buffer removal remain separate.
+
+Fresh time_format coverage passed seven tests. Formatting, workspace all-target
+check/Clippy, agent-doc validation and diff checks passed with existing warnings.
+These verify the retained path and documentation, not a prepared-format design.
