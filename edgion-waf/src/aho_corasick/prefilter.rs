@@ -59,14 +59,9 @@ struct StartBytes {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RareNeed {
-    byte: u8,
-}
-
 #[derive(Debug)]
 struct RareBytes {
-    needs: Vec<RareNeed>,
+    bytes: Vec<u8>,
     max_offset: u16,
 }
 
@@ -174,11 +169,7 @@ impl StartBytes {
 
 impl RareBytes {
     fn find(&self, haystack: &[u8], at: usize, ascii_case_insensitive: bool) -> Candidate {
-        let mut selected = [0_u8; MAX_FILTER_BYTES];
-        for (target, need) in selected.iter_mut().zip(&self.needs) {
-            *target = need.byte;
-        }
-        if let Some(relative) = find_any_byte(&haystack[at..], &selected[..self.needs.len()], ascii_case_insensitive) {
+        if let Some(relative) = find_any_byte(&haystack[at..], &self.bytes, ascii_case_insensitive) {
             let position = at + relative;
             return Candidate::Possible {
                 start: position.saturating_sub(usize::from(self.max_offset)).max(at),
@@ -528,19 +519,17 @@ impl AccelerationBuilder {
     }
 
     fn build_rare(&self) -> Result<Acceleration, BuildError> {
-        let mut needs = Vec::new();
-        needs
+        let mut bytes = Vec::new();
+        bytes
             .try_reserve_exact(self.rare_count)
             .map_err(|_| BuildError::Allocation {
                 component: "rare-byte acceleration",
             })?;
-        needs.extend(
-            (u8::MIN..=u8::MAX).filter_map(|byte| self.rare_set[usize::from(byte)].then_some(RareNeed { byte })),
-        );
-        let memory_usage = needs.capacity().saturating_mul(size_of::<RareNeed>());
+        bytes.extend((u8::MIN..=u8::MAX).filter(|&byte| self.rare_set[usize::from(byte)]));
+        let memory_usage = bytes.capacity().saturating_mul(size_of::<u8>());
         let max_offset = self.rare_offsets.iter().copied().max().unwrap_or(0);
         Ok(Acceleration {
-            inner: AccelerationInner::Rare(RareBytes { needs, max_offset }),
+            inner: AccelerationInner::Rare(RareBytes { bytes, max_offset }),
             memory_usage,
         })
     }

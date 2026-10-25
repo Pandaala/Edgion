@@ -62,6 +62,48 @@ fn packed_verification_rejects_shared_prefix_collisions() {
 }
 
 #[test]
+fn rare_candidates_preserve_all_bytes_folding_and_rollback() {
+    fn check(patterns: &[&[u8]], needles: &[u8], rollback: usize, folded: bool) {
+        let mut builder = AccelerationBuilder::new(true, folded, MatchKind::Standard);
+        for (index, pattern) in patterns.iter().enumerate() {
+            builder.add(PatternId::try_from_usize(index).unwrap(), pattern).unwrap();
+        }
+        let acceleration = builder.build_rare().unwrap();
+        assert_eq!(acceleration.kind(), AccelerationKind::RareBytes);
+        let haystack: Vec<u8> = (u8::MIN..=u8::MAX).collect();
+        for end in [0, 1, 8, 32, 128, 256] {
+            for at in 0..=end {
+                let expected = if at == end {
+                    Candidate::Possible { start: at, scanned: 0 }
+                } else {
+                    haystack[at..end]
+                        .iter()
+                        .position(|byte| needles.contains(&if folded { byte.to_ascii_lowercase() } else { *byte }))
+                        .map_or(Candidate::None, |relative| Candidate::Possible {
+                            start: (at + relative).saturating_sub(rollback).max(at),
+                            scanned: relative + 1,
+                        })
+                };
+                assert_eq!(
+                    acceleration.find_candidate(&haystack[..end], at, folded, &mut SearchState::default()),
+                    expected,
+                    "at={at}, end={end}, folded={folded}, needles={needles:?}"
+                );
+            }
+        }
+    }
+
+    for folded in [false, true] {
+        for byte in u8::MIN..=u8::MAX {
+            let pattern = [byte];
+            let needle = if folded { byte.to_ascii_lowercase() } else { byte };
+            check(&[&pattern], &[needle], 0, folded);
+        }
+        check(&[b"a\0", b"ab\xFF", b"c!", b"abcd!"], &[0, b'!', 0xFF], 4, folded);
+    }
+}
+
+#[test]
 fn adaptivity_disables_dense_candidates_without_advancing_input() {
     let acceleration = build(&[b"aa", b"ab"], MatchKind::Standard, false);
     let mut state = SearchState::default();

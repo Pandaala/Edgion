@@ -18130,3 +18130,25 @@ the current path remains the baseline unless new evidence justifies reconsiderat
 Fresh unchanged-production WAF tests passed 869 cases with six existing ignored;
 formatting and workspace all-target check/Clippy passed with existing warnings.
 No prototype, benchmark, full-workspace suite or live Gateway integration ran.
+
+## Borrow compiled rare-byte prefilter needles
+
+The native WAF RareBytes prefilter now stores its selected bytes directly in
+Vec<u8> and borrows that slice during candidate search. The former one-byte
+RareNeed wrapper required projecting up to three bytes into a stack array on
+every call. Compilation retains the same ascending deduplicated byte order,
+fallible reservation, allocation error, global rollback offset and capacity-based
+heap accounting. Search, folding, filter selection and diagnostics are unchanged.
+This removes source-level repeated projection; no heap or throughput gain was
+measured, and no dependency, budget or observability change was introduced.
+
+A baseline-first scalar-oracle regression exercises every byte in both case modes,
+empty/end cursors, multiple search offsets and boundaries, three selected needles
+and duplicate-needle rollback. Baseline/final WAF library runs preserve all 876
+test identities/outcomes: 870 passed and six existing ignored. Existing native
+matcher, transaction and offline injection tests ran. No full-workspace test
+suite, live Gateway integration or performance benchmark ran.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Independent IMPL plan and final code review found no
+blocker; this scoped change does not establish complete callback coverage.
