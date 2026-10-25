@@ -17038,3 +17038,22 @@ orphan-handle and handler update/delete cases. No dedicated multi-reference
 orphan-retention test claim or redundant new test is made. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Borrow the initial ProxyRewrite regex-URI template
+
+The raw regex-URI capture loop starts with a borrowed configured replacement
+instead of copying it before the first substitution. Each present capture still
+runs the same str::replace in the same order and stores its owned result. With
+no present capture, the downstream resolver reads the same borrowed bytes.
+Escaping, numeric-prefix behavior, later resolver stages, query assembly and
+URI sinks are unchanged. No configuration capacity transfers to the result.
+This removes one initial nonempty template copy, not all substitution work;
+no throughput or whole-path allocation improvement is measured. The separate
+rewrite-01 grammar and compilation decision remains deferred.
+
+Independent plan and final source reviews passed. Fresh baseline and final runs
+passed the same 24 ProxyRewrite test identities/outcomes, including sequential
+capture-ten, unmatched-group and escaped named-dollar cases. Existing coverage
+was accepted without adding implementation-shaped tests. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.

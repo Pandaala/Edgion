@@ -251,7 +251,7 @@ impl ProxyRewrite {
                 // Replace capture groups $1-$9 directly (path-safe: no encoding of '/').
                 // Escape $ in each capture value so that resolve_variables below does not
                 // re-interpret the captured text as a variable reference.
-                let mut result = regex_uri.replacement.clone();
+                let mut result = Cow::Borrowed(regex_uri.replacement.as_str());
                 for (i, cap) in caps.iter().enumerate().skip(1) {
                     if let Some(m) = cap {
                         let mut marker = [0u8; 2 + usize::MAX.ilog10() as usize];
@@ -260,7 +260,7 @@ impl ProxyRewrite {
                         let remaining_len = remaining.len();
                         let written = marker.len() - remaining_len;
                         let marker = from_utf8(&marker[..written]).expect("dollar and decimal digits are valid ASCII");
-                        result = result.replace(marker, &Self::escape_dollar(Cow::Borrowed(m.as_str())));
+                        result = Cow::Owned(result.replace(marker, &Self::escape_dollar(Cow::Borrowed(m.as_str()))));
                     }
                 }
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
