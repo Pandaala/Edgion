@@ -17477,3 +17477,23 @@ updates, authority-field changes, removal and retained-snapshot rendering.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or benchmark ran; no measured
 throughput or total-memory improvement is claimed.
+
+## Validate authority templates without temporary normalization strings
+
+The canonical Resources authority compiler now compares the original template's
+byte tail case-insensitively against its validated ASCII suffix. Success proves
+the original-string cut is a UTF-8 boundary. Literal fragments use the equivalent
+ASCII alphanumeric/hyphen predicate directly. Both changes remove temporary
+lowercase Strings during cold compilation while preserving the original template,
+case-sensitive variables, dot-specific error precedence and trusted admission.
+Pattern validation, health-host matching and request rendering remain unchanged.
+This is supporting work for Gateway authority preparation, not broader Resources
+coverage or a measured request-throughput improvement.
+
+Two new regression tests passed before production changes: all ASCII literal
+bytes with exact rejection messages, mixed-case preservation, non-ASCII rejection,
+short templates and suffix cuts inside UTF-8. Baseline/final Resources runs passed
+the same 16 identities/outcomes; final Gateway backend-traffic tests passed 66.
+Independent plan and source reviews passed. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No full
+suite, live traffic or benchmark ran.

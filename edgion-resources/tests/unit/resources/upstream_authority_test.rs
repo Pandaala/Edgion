@@ -170,6 +170,67 @@ fn compile_accepts_matching_suffix_and_rejects_the_rest() {
 }
 
 #[test]
+fn compile_preserves_literal_ascii_grammar_and_errors() {
+    let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
+    for byte in 0u8..=127 {
+        let literal = format!("a{}z", char::from(byte));
+        let template = format!("{literal}${{ctx:Tenant}}.Sandbox.INTERNAL");
+        let result = CompiledUpstreamAuthority::compile(&cfg("*.sandbox.internal", &template, None));
+        if alphabet.contains(char::from(byte)) {
+            let compiled = result.unwrap();
+            assert_eq!(compiled.suffix, ".sandbox.internal");
+            assert!(matches!(&compiled.label_template.segments()[0],
+                TemplateSegment::Literal(value) if value == &literal));
+            assert!(matches!(&compiled.label_template.segments()[1],
+                TemplateSegment::Variable { var_name: Some(name), .. } if name == "Tenant"));
+        } else if byte == b'.' {
+            assert_eq!(
+                result.unwrap_err(),
+                "template's label slot must not contain a literal '.'"
+            );
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                format!(
+                    "template's label slot contains a literal fragment '{literal}' with a character \
+                 outside [a-z0-9-]; it can never pass validation at request time"
+                )
+            );
+        }
+    }
+    for literal in ["aéz", "a€z"] {
+        let template = format!("{literal}${{ctx:Tenant}}.sandbox.internal");
+        assert_eq!(
+            CompiledUpstreamAuthority::compile(&cfg("*.sandbox.internal", &template, None)).unwrap_err(),
+            format!(
+                "template's label slot contains a literal fragment '{literal}' with a character \
+                outside [a-z0-9-]; it can never pass validation at request time"
+            )
+        );
+    }
+}
+
+#[test]
+fn compile_suffix_errors_precede_label_validation_at_byte_boundaries() {
+    for template in ["", "a", "é", "éab", "a.b.wrong", "${ctx:Tenant}.aé"] {
+        assert_eq!(
+            CompiledUpstreamAuthority::compile(&cfg("*.aa", template, None)).unwrap_err(),
+            "template must end with the pattern suffix '.aa'",
+            "{template:?}"
+        );
+    }
+    assert_eq!(
+        CompiledUpstreamAuthority::compile(&cfg("*.aa", ".AA", None)).unwrap_err(),
+        "template must have a label slot before the pattern suffix"
+    );
+    assert_eq!(
+        CompiledUpstreamAuthority::compile(&cfg("*.aa", "é.AA", None)).unwrap_err(),
+        "template's label slot contains a literal fragment 'é' with a character \
+         outside [a-z0-9-]; it can never pass validation at request time"
+    );
+}
+
+#[test]
 fn compile_enforces_trusted_variables_without_secrets() {
     for expression in [
         "${header:X-Tenant}",

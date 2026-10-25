@@ -143,13 +143,14 @@ impl CompiledUpstreamAuthority {
         // DNS is case-insensitive, so the tail is matched case-insensitively — but the cut
         // is taken from the ORIGINAL template. Variable types are camelCase (`requestPath`,
         // `matchedHttpRoute`) and ctx/query/cookie/secretRef names are case-sensitive, so the
-        // template's interior must survive verbatim. `to_ascii_lowercase` is a 1:1 byte
-        // mapping, so the offset is valid in both strings, and `suffix` is ASCII by
-        // construction (`pattern_suffix` validates every label).
-        if !cfg.template.to_ascii_lowercase().ends_with(&suffix) {
+        // template's interior must survive verbatim. Compare the tail as bytes;
+        // a successful match to the validated ASCII suffix proves that the cut
+        // below is on a UTF-8 boundary in the original template.
+        let suffix_start = cfg.template.len().saturating_sub(suffix.len());
+        if !cfg.template.as_bytes()[suffix_start..].eq_ignore_ascii_case(suffix.as_bytes()) {
             return Err(format!("template must end with the pattern suffix '{suffix}'"));
         }
-        let label_src = &cfg.template[..cfg.template.len() - suffix.len()];
+        let label_src = &cfg.template[..suffix_start];
         if label_src.is_empty() {
             return Err("template must have a label slot before the pattern suffix".to_string());
         }
@@ -175,11 +176,7 @@ impl CompiledUpstreamAuthority {
                 if lit.contains('.') {
                     return Err("template's label slot must not contain a literal '.'".to_string());
                 }
-                if !lit
-                    .to_ascii_lowercase()
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                {
+                if !lit.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
                     return Err(format!(
                         "template's label slot contains a literal fragment '{lit}' with a character \
                          outside [a-z0-9-]; it can never pass validation at request time"
