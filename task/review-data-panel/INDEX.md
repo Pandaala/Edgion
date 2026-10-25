@@ -18385,3 +18385,24 @@ Fresh targeted tests passed 18 extractor, 14 mTLS callback and 20 HeaderCertAuth
 cases. Formatting, workspace all-target check/Clippy and agent-doc validation
 passed with existing warnings. This is direct source coverage, not proof of all
 TLS dependencies, live handshakes or completion of the data-plane goal.
+
+## Reuse percent-encoding byte lookup in DSL URL encoding
+
+`UrlEncode` now appends the existing percent-encoding dependency's static byte
+encoding instead of invoking the generic formatter for each escaped byte. Locked
+percent-encoding 2.3.2 returns uppercase three-byte ASCII slices from its static
+table; Gateway already directly depends on it. No local table, encoder API or
+dependency was added. The scalar loop, unreserved set, initial capacity, exact
+post-scalar limit check, argument conversion and final Arc ownership remain.
+
+Baseline-first tests cover empty/unreserved input, star versus tilde, reserved
+punctuation and multibyte encodings. A limit matrix preserves the complete-scalar
+error lengths for a mixed ASCII/two-byte/three-byte input and exact-limit success.
+All ten URL-encode-filtered test identities/outcomes match before and after; the
+broader utility group passed 61 tests. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings.
+
+This removes generic byte-formatting work, not a demonstrated allocation or
+throughput cost. Whole-result encoders elsewhere do not supply this DSL limit
+contract; no encoder policy or malformed-decoding behavior was unified. No
+full-workspace suite, live integration or benchmark ran.

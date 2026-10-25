@@ -1034,7 +1034,7 @@ impl Vm {
                 Ok(Value::Int(now))
             }
             BuiltinId::UrlEncode => {
-                use std::fmt::Write as _;
+                use percent_encoding::percent_encode_byte;
                 let s = state.pop()?.runtime_string()?;
                 let limit = self.limits.max_string_len;
                 // Build the encoded string incrementally and bail as soon as the running
@@ -1053,8 +1053,7 @@ impl Vm {
                     } else {
                         let mut buf = [0u8; 4];
                         for b in c.encode_utf8(&mut buf).as_bytes() {
-                            // write! into a String never fails
-                            let _ = write!(encoded, "%{:02X}", b);
+                            encoded.push_str(percent_encode_byte(*b));
                         }
                     }
                     if encoded.len() > limit {

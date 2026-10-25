@@ -353,6 +353,58 @@ fn test_url_encode() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "X-Out", "a%20b%2Bc");
 }
 
+#[test]
+fn test_url_encode_preserves_uppercase_octets_and_safe_characters() {
+    for (input, expected) in [
+        ("", ""),
+        ("Az09-_.~", "Az09-_.~"),
+        (" *+%/?=&", "%20%2A%2B%25%2F%3F%3D%26"),
+        ("éπ€", "%C3%A9%CF%80%E2%82%AC"),
+    ] {
+        let source = format!(r#"req.set_header("X-Out", url_encode("{input}"))"#);
+        assert_sets_request_header(&source, "X-Out", expected);
+    }
+}
+
+#[test]
+fn test_url_encode_checks_limits_after_complete_unicode_scalars() {
+    let source = r#"let result = url_encode("aé€z")"#;
+    for limit in 0..17 {
+        let expected_len = match limit {
+            0 => 1,
+            1..=6 => 7,
+            7..=15 => 16,
+            _ => 17,
+        };
+        let error = run_expect_runtime_err_with_limits(
+            source,
+            MockPluginSession::new(),
+            VmLimits {
+                max_string_len: limit,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            error,
+            RuntimeError::StringTooLong { len, limit: actual_limit }
+                if len == expected_len && actual_limit == limit
+        ));
+    }
+    for (source, limit) in [(source, 17), (r#"let result = url_encode("")"#, 0)] {
+        assert_eq!(
+            run_with_limits(
+                source,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: limit,
+                    ..Default::default()
+                },
+            ),
+            good_next()
+        );
+    }
+}
+
 // url_encode result exceeding max_string_len → runtime error.
 // Encoder builds incrementally and bails inside the per-char loop as soon as
 // `encoded.len() > max_string_len`, instead of `collect()`-then-check.
