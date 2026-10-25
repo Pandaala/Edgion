@@ -253,6 +253,72 @@ fn test_hex_decode_invalid() {
 }
 
 #[test]
+fn test_time_format_output_and_byte_boundaries() {
+    let long_literal = "x".repeat(256);
+    for (format, expected) in [
+        ("literal", "literal"),
+        ("%Y-%m-%d %H:%M:%S %z %Z", "1970-01-01 00:00:00 +0000 UTC"),
+        ("%%:%n%téπ", "%:\n\téπ"),
+        (long_literal.as_str(), long_literal.as_str()),
+    ] {
+        let call = format!(r#"time_format(0, "{format}")"#);
+        assert_sets_request_header(&format!(r#"req.set_header("X-Out", {call})"#), "X-Out", expected);
+        assert_eq!(
+            run_with_limits(
+                &call,
+                MockPluginSession::new(),
+                VmLimits {
+                    max_string_len: expected.len(),
+                    ..VmLimits::default()
+                },
+            ),
+            good_next(),
+        );
+        let limit = expected.len() - 1;
+        let error = run_expect_runtime_err_with_limits(
+            &call,
+            MockPluginSession::new(),
+            VmLimits {
+                max_string_len: limit,
+                ..VmLimits::default()
+            },
+        );
+        assert!(matches!(error, RuntimeError::StringTooLong { len, limit: actual_limit }
+            if len == expected.len() && actual_limit == limit));
+    }
+}
+
+#[test]
+fn test_time_format_failure_precedence_and_partial_output() {
+    let error = run_expect_runtime_err_with_limits(
+        r#"time_format(0, "prefix%Q")"#,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 0,
+            ..VmLimits::default()
+        },
+    );
+    assert!(matches!(error, RuntimeError::ApiError { function, message }
+        if function == "time_format" && message == "invalid format string: \"prefix%Q\""));
+    for timestamp in ["nil", "9223372036854775807"] {
+        assert_sets_request_header(
+            &format!(r#"if time_format({timestamp}, "%Q") == nil {{ req.set_header("X-Out", "nil") }}"#),
+            "X-Out",
+            "nil",
+        );
+    }
+    let long_format = "x".repeat(257);
+    for timestamp in ["nil", "true", "9223372036854775807"] {
+        let error = run_expect_runtime_err(
+            &format!(r#"time_format({timestamp}, "{long_format}")"#),
+            MockPluginSession::new(),
+        );
+        assert!(matches!(error, RuntimeError::ApiError { function, message }
+            if function == "time_format" && message == "format string too long: 257 (max 256)"));
+    }
+}
+
+#[test]
 fn test_time_format() {
     let source = r#"
         let ts = 1609459200

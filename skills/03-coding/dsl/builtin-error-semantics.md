@@ -107,7 +107,7 @@ When implementing a new builtin that can fail:
 1. **Does the script author have a way to validate input before calling?** If yes, lean toward `ApiError` (failure is genuinely exceptional). If no, lean toward silent fallback (failure is a normal data condition).
 2. **Is the failure deterministic from script-visible state?** Bad regex literal → compile error (handled). Bad runtime string → silent fallback. Host I/O failure → `ApiError`.
 3. **Will a chained `if x == nil` / `if x == false` idiom let the script handle it gracefully?** If yes, silent fallback. If no (e.g. `set_header` has no useful Value return), `ApiError`.
-4. **Will `Display::to_string()` ever be called on user data?** If yes, see [chrono-display-panic](../../04-review/dsl/regression-guards/chrono-display-panic.md) — use `write!` to surface fallible-formatter `Err` as `ApiError`, do not let it panic.
+4. **Will `Display::to_string()` ever be called on user data?** If yes, see [chrono-display-panic](../../04-review/dsl/regression-guards/chrono-display-panic.md) — use a fallible writer (`write!` for `Display`, or Chrono's direct `write_to`) to surface formatting `Err` as `ApiError`, do not let it panic.
 5. **Does it access opaque request-body storage?** Keep normal data outcomes
    (`nil` / `false`) script-visible, but map storage, scan-budget, byte-range,
    and transactional mutation failures to `BodyAccess`.

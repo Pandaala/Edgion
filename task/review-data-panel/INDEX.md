@@ -18485,3 +18485,27 @@ fields. All 109 utility test identities/outcomes match before and after,
 including existing HMAC verification. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No
 full-workspace suite, live integration or allocation/throughput benchmark ran.
+
+## Write DSL time formatting directly into its result
+
+`TimeFormat` now invokes Chrono's fallible DelayedFormat::write_to on its existing
+result String. Pinned Chrono 0.4.45's Display implementation first builds an
+internal String with the same writer and then calls Formatter::pad. The former
+unflagged display call applies no width or precision; direct writing preserves
+successful bytes while removing that internal result buffer and copy. Offset
+name formatting, input conversion, result String and final Arc remain.
+
+The 256-byte format gate, timestamp handling, output-byte check and exact
+ApiError mapping retain their order. Partial output on a formatting error stays
+local and is discarded. The owning knowledge and two rule references now state
+the fallible-writer requirement without prescribing the redundant Display path;
+the prohibition on formatter-induced panic remains unchanged.
+
+Baseline-first tests cover UTC fields, literals, escaped percent, whitespace,
+multibyte output, the 256-byte format boundary, exact/over output limits and
+invalid-format versus output-limit priority. Nil/out-of-range timestamps still
+skip format parsing; oversized formats still fail before timestamp validation.
+All seven time_format test identities/outcomes match before and after; 46 P3
+utility tests passed. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full-workspace suite, live
+integration or allocation/throughput benchmark ran.

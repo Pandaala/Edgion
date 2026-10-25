@@ -1284,11 +1284,10 @@ impl Vm {
                 let dt = chrono::DateTime::from_timestamp(timestamp, 0);
                 match dt {
                     Some(dt) => {
-                        // chrono's DelayedFormat::fmt returns Err for invalid specifiers (e.g. "%Q");
-                        // calling to_string() on it panics. Use write! to surface the Err safely.
-                        use std::fmt::Write;
+                        // Write directly into the result buffer while preserving format errors.
+                        // DelayedFormat::to_string() panics on invalid specifiers (e.g. "%Q").
                         let mut formatted = String::new();
-                        match write!(formatted, "{}", dt.format(&format)) {
+                        match dt.format(&format).write_to(&mut formatted) {
                             Ok(()) => {
                                 check_string_len(&formatted, self.limits.max_string_len)?;
                                 Ok(Value::Str(formatted.into()))

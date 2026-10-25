@@ -1,6 +1,6 @@
 ---
 name: chrono-display-panic
-description: Use when a reviewer flags `dt.format(fmt).to_string()` or any other `T: Display` → `to_string()` chain in a DSL builtin as fine; covers why this is a data-plane panic risk and the canonical `write!`-based remediation.
+description: Use when a reviewer flags `dt.format(fmt).to_string()` or any other `T: Display` → `to_string()` chain in a DSL builtin as fine; covers the data-plane panic risk and fallible formatting, including direct Chrono writes.
 knowledge_type: regression-guards
 ---
 
@@ -11,11 +11,13 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-In DSL builtins (data-plane code), do not call `.to_string()` on any `T: Display` whose `Display::fmt` is allowed to return `Err`. Use `write!(buf, "{}", x)` and surface the `fmt::Error` as `RuntimeError::ApiError`.
+In DSL builtins (data-plane code), do not call `.to_string()` on any `T: Display` whose `Display::fmt` is allowed to return `Err`. Use a fallible writer and surface `fmt::Error` as `RuntimeError::ApiError`. Generic
+`Display` values can use `write!(buf, "{}", x)`; Chrono values use
+`DelayedFormat::write_to` directly into the result buffer.
 
 Suggestions of the form "`.to_string()` is fine because chrono usually succeeds" or "wrap it in `catch_unwind`" are **not accepted**:
 - `.to_string()` panics any time `Display::fmt` returns `Err(fmt::Error)` (e.g. chrono `DelayedFormat::fmt` for an unknown `%`-specifier).
-- The current `execute_safe` boundary catches unwinding VM panics, but discards the payload and records only `vm panic`. The builtin must still use `write!` to preserve its `ApiError` contract and avoid unwinding; the boundary is fallback protection, not a substitute for fallible formatting.
+- The current `execute_safe` boundary catches unwinding VM panics, but discards the payload and records only `vm panic`. The builtin must still use fallible formatting to preserve its `ApiError` contract and avoid unwinding; the boundary is fallback protection, not a substitute for fallible formatting.
 
 ## Core Rationale
 
@@ -30,7 +32,7 @@ The default `Display`-derived `to_string()` calls `fmt(&mut Formatter)` and pani
 
 Any DSL builtin that lets user-supplied format strings reach `dt.format(fmt).to_string()` is therefore a data-plane panic vector.
 
-**2. Why `write!` is the fix, not `catch_unwind`**
+**2. Fallible writing preserves the typed error**
 
 The fix is structural, not defensive. Replace:
 
@@ -41,9 +43,8 @@ let formatted = dt.format(&format).to_string();      // panics on Err
 with:
 
 ```rust
-use std::fmt::Write;
 let mut formatted = String::new();
-match write!(formatted, "{}", dt.format(&format)) {  // Err is propagated, not panicked
+match dt.format(&format).write_to(&mut formatted) {  // Err is propagated, not panicked
     Ok(()) => { /* check_string_len, return Value::Str */ }
     Err(_) => Err(RuntimeError::ApiError {
         function: "time_format".into(),
@@ -52,7 +53,19 @@ match write!(formatted, "{}", dt.format(&format)) {  // Err is propagated, not p
 }
 ```
 
-`write!` calls `Display::fmt` directly with a `Formatter` that propagates the `Err` upward; no panic. The partial bytes written to `formatted` before the error are discarded on the `Err` arm.
+`write_to` returns formatting errors without panicking. Partial bytes written to
+`formatted` are discarded on the error arm. In pinned Chrono 0.4.45, the former
+unflagged `write!` path invokes `DelayedFormat::fmt`, which creates an intermediate
+String, calls `write_to`, then passes that string to `Formatter::pad`. With no
+width or precision flags, writing directly preserves the output while removing
+that intermediate result buffer and copy. DateTime offset formatting, input
+conversion and the final owned result remain; this is not allocation-free formatting.
+
+The format's 256-byte check still precedes timestamp validation. Nil or
+out-of-range timestamps return nil without parsing format items. Successful
+output is checked in UTF-8 bytes; an invalid format returns ApiError even if its
+partial prefix already exceeds the output limit. Tests cover these priorities,
+exact/over limits, UTC fields, escaped percent, whitespace and multibyte literals.
 
 **3. Why this matters for the data plane**
 
@@ -77,7 +90,7 @@ catches unwinding panics, not process aborts.
 
 ## Other suspect call sites
 
-The fix in `BuiltinId::TimeFormat` plugged the one known panic vector in `lang/builtins.rs`. Future builtins that introduce a `T: Display` value to convert into a `Value::Str` must use the same `write!` pattern when `T::Display::fmt` can fail. Worth checking at review time for any new builtin that touches:
+The fix in `BuiltinId::TimeFormat` plugged the one known panic vector in `lang/builtins.rs`. Future builtins that introduce a `T: Display` value to convert into a `Value::Str` must use a fallible writer when `T::Display::fmt` can fail; generic `Display` values may still use `write!`. Worth checking at review time for any new builtin that touches:
 
 - `chrono::DateTime::format(...)` or any `DelayedFormat`
 - Custom `Display` impls whose `fmt` body has fallible operations (file I/O, allocator hits, conditional writes)
