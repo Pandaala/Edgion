@@ -169,8 +169,11 @@ async fn denial_does_not_copy_framing_or_any_connection_nominated_field() {
             ..ForwardAuthDecision::default()
         });
         let mut headers = HeaderMap::new();
-        headers.append("connection", HeaderValue::from_static("X-First"));
-        headers.append("connection", HeaderValue::from_static("x-SECOND, Content-Type"));
+        headers.append("connection", HeaderValue::from_static(" , X-First, x-FIRST, , \t"));
+        headers.append(
+            "connection",
+            HeaderValue::from_static("x-SECOND, Content-Type, X-FIRST, x-second"),
+        );
         if opaque_connection {
             headers.append("connection", HeaderValue::from_bytes(b"\xff").unwrap());
         }
@@ -218,6 +221,10 @@ async fn denial_does_not_copy_framing_or_any_connection_nominated_field() {
             )
             .await,
             PluginRunningResult::ErrTerminateRequest,
+        );
+        assert_eq!(
+            log.render_for_test().contains("invalid auth Connection header"),
+            opaque_connection
         );
     }
 }

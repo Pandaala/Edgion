@@ -65,7 +65,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
-use crate::plugins::http::common::connection_listed_hop_by_hop;
+use crate::plugins::http::common::http_client::connection_option_tokens;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
 use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp, PreparedRouteAuth};
 use crate::plugins::runtime::log::la;
@@ -165,7 +165,15 @@ impl ForwardAuth {
         if let Some(headers) = forwarded_headers {
             for value in headers.get_all(http::header::CONNECTION) {
                 match value.to_str() {
-                    Ok(value) => nominated.extend(connection_listed_hop_by_hop(value)),
+                    Ok(value) => {
+                        let mut listed: Vec<&str> = Vec::new();
+                        for token in connection_option_tokens(value) {
+                            if !listed.iter().any(|name| name.eq_ignore_ascii_case(token)) {
+                                listed.push(token);
+                            }
+                        }
+                        nominated.extend(listed);
+                    }
                     Err(_) => invalid_connection = true,
                 }
             }

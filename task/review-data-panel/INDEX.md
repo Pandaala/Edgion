@@ -17570,3 +17570,23 @@ Fresh baseline/final Gateway real_ip-filtered runs passed the same 34 identities
 and outcomes. Independent plan and source reviews passed. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Borrow ForwardAuth denial Connection nominees
+
+The denial writer now borrows canonical Connection tokens from the auth response
+instead of allocating lowercase Strings for membership checks. Each received field
+still has its own temporary deduplicated vector, then extends the aggregate in
+field order; duplicates across fields remain unchanged. Canonical splitting and
+ASCII-insensitive membership preserve the original behavior and comparison scope.
+The source HeaderMap already belongs to the awaiting caller. Downstream header
+names/values keep their required ownership, and protected-header suppression,
+automatic Content-Type filtering, opaque-Connection diagnostics and body/write/
+shutdown ordering remain unchanged. Vectors still allocate; only token payload
+allocations and lowercase copies are removed, with no throughput claim.
+
+The existing denial test was expanded before production edits with mixed-case
+within-field/cross-field duplicates, empty options, whitespace and opaque-header
+logging assertions. Baseline/final serial runs passed the same 13 ForwardAuth and
+eight common HTTP helper test identities/outcomes. Independent plan and source
+reviews passed. Formatting, workspace all-target check/Clippy and seven repository
+guards passed with existing warnings. No full suite, live traffic or benchmark ran.
