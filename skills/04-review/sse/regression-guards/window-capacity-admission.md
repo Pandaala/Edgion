@@ -95,3 +95,15 @@ not an allocation, and establishes no measured throughput improvement.
 Existing one-byte-stream, large-record/empty-append, exact handle-limit and
 coalesced-arena admission regressions cover this boundary. Re-evaluate if the
 coalesced layout gains a handle-dependent policy or representation.
+
+## Raw-only bucket admission
+
+`BucketAppend::inspect` sums record slice lengths only when semantic fragments
+need range-end validation. Its sole caller, `try_retain`, has already admitted
+checked raw lengths through `SliceChain::inspect_append`. Empty-fragment input
+still runs every bucket growth, metadata and outer admission calculation; there
+is no early return or persistent cached length. This skips one unused source-level
+traversal for raw-only records without changing capacities or error precedence.
+Re-evaluate if record length gains a consumer outside semantic-range validation
+or a new caller bypasses checked raw admission. No measured performance claim
+or allocation reduction follows from this local change.

@@ -16984,3 +16984,20 @@ runtime or test changed, and no prototype, allocation probe, full suite, live
 transport or benchmark ran. Current tests establish existing behavior only.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings.
+
+## Skip unused raw-only semantic-range length scans
+
+BucketAppend::inspect now sums input slice lengths only when semantic fragments
+need range-end validation. Its sole caller already performs checked raw-byte
+admission before bucket inspection. Empty-fragment records still execute every
+bucket-growth, metadata and outer capacity check; there is no early return,
+length cache or relaxed admission. This removes one unused source-level scan,
+without an allocation or measured throughput claim.
+
+Independent plan and final source reviews passed. Existing raw-only, empty-append,
+coalescing, exact-capacity and atomic-rejection cases supply the regression
+coverage; no redundant tests were added. Fresh baseline and final runs passed
+94 SSE and 25 semantic response cases (119 distinct identities), with identical
+names and outcomes. Formatting, workspace all-target check/Clippy and seven
+repository guards passed with existing warnings. No full suite, live transport
+or benchmark ran.

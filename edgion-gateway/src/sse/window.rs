@@ -1105,7 +1105,12 @@ impl BucketAppend {
                 old_capacity: bucket.fragments.capacity(),
             };
         }
-        let record_len = record.raw_len();
+        // Raw-only records have no semantic ranges to validate.
+        let record_len = if record.fragments.is_empty() {
+            0
+        } else {
+            record.raw_len()
+        };
         for fragment in &record.fragments {
             plan.metadata = add(
                 plan.metadata,
