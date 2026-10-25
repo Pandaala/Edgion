@@ -1601,3 +1601,36 @@ existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed with existing
 warnings. No full-workspace suite, fresh upstream-checkout comparison, live
 Gateway integration or benchmark ran.
+
+## SQL folding, fingerprint and whitelist control boundaries
+
+Source revalidated at `fc80d5fb3`. This extends the tokenizer inventory through
+SqliState::fold_tokens, generate_fingerprint, blacklist dispatch and the direct
+whitelist branches. It records current source control and ownership, not a proof
+of equivalence to every historical C comment or all pinned-reference inputs.
+
+| Stage | Inspected behavior and optimization boundary |
+| --- | --- |
+| Initial consumption and lookahead | The eight-slot workspace is reset. Initial Comment, LeftParenthesis, SqlType and unary tokens are skipped; every fetched token increments stats_tokens. Exhaustion here publishes tokenizer comment statistics and returns zero. Five-token special reductions inspect four pattern shapes, sometimes carrying slot five into slot one before continuing. Later comment tokens update last_comment; a non-comment clears that trailing-comment candidate. |
+| Two-token folding | Ordered branches retain their distinct restart/backtrack behavior. Word merging uses a 32-byte stack array under a combined-length guard and the canonical lookup. Function/IN/LIKE reclassification, SQL type removal, collation, backslash, parentheses and brace branches are not interchangeable. LIKE/Collate fall through to three-token processing, not to later two-token arms. |
+| Token text inspection | value_as_str borrows valid UTF-8 or returns the literal `<binary>`; it is used by runtime folding despite its display-oriented comment. cstrcasecmp uppercases ASCII bytes on the compared side and retains its length/NUL behavior. Raw-byte substitutions must not accidentally change invalid-UTF-8 collation or classification outcomes. Token clones still copy inline metadata and arrays. |
+| Three-token folding | Numeric/operator/logic/variable reductions, casts, comma sequences, unary removal, dotted names and USER reclassification retain branch priority. Statistics increments are not uniform: the cast branch adds two. Comma/unary/value retreats pos by three, whereas comma/unary/function removes one; USER can fall through to advancing left. |
+| Early return and final projection | Empty bareword after LeftBrace becomes Evil and copies through left + 2 before returning, bypassing ordinary final comment-stat publication. Normal completion caps left at five, applies the empty-unclosed-backtick comment rule, copies non-None tokens, publishes tokenizer statistics and appends last_comment only when left permits it. Return count and projected vector length are distinct quantities. |
+| Fingerprint and blacklist | Token kinds fill the fixed eight-byte fingerprint with remaining bytes zeroed. Any Evil marker collapses it to X and replaces a nonempty finalized token vector with one Evil token. Blacklist lookup prefixes the short fingerprint with ASCII 0 in a six-byte stack buffer, then uses canonical keyword normalization/search. |
+| Whitelist dispatch | UTF-8 fallback and trailing-NUL trimming produce one borrowed view reused by the two/three-token helpers. A trailing-comment fingerprint can trigger the whole-input case-sensitive sp_password check before branch dispatch. True here means the fingerprint remains classified as SQLi; the blacklist check precedes this path in detection. |
+| Two-token whitelist | Union/statistics, hash comment, bareword/comment and number/comment cases retain their order before the remaining dash-comment/default branches. The numeric comment boundary reads input[token.len], not input[token.pos + token.len], and the actual whitespace comparison is unsigned <= 32. This records code rather than endorsing conflicting signed-byte prose. |
+| Three-token whitelist | String/logic patterns depend on quote metadata and stats_tokens. The later Keyword check uses length >= 5 and the uppercase INTO byte prefix, not exact full INTO OUTFILE/INTO DUMPFILE phrase comparison. No simplification of those predicates was made. |
+
+The repeated fingerprint-view conversion has been removed in its separate batch.
+No additional allocation-removal claim follows from inline clones or stack word
+merging. [WAF-14](waf-14-sqli-token-storage.md) retains the storage/projection choice;
+[WAF-21](waf-21-sqli-delimiter-classification.md) retains arbitrary delimiter-table
+preparation. This inventory selects neither alternative. Exhaustive reference
+comparison, optimized-code/performance analysis, all adversarial fold sequences
+and complete WAF/callback/goal coverage remain unproven.
+
+Fresh unchanged-production WAF library verification passed 868 tests with six
+existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed with existing
+warnings. No full-workspace suite, fresh upstream-checkout comparison, live
+Gateway integration or benchmark ran.

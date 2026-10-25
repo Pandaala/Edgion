@@ -18064,3 +18064,18 @@ and seven repository guards passed with existing warnings. No full-workspace
 test suite, live Gateway integration, fresh external-checkout comparison or
 performance benchmark ran. This does not close WAF-14 or prove every folding
 and whitelist behavior equivalent to the external reference.
+
+## SQL folding and whitelist control inventory
+
+Extended [callback coverage](CALLBACKS.md#sql-folding-fingerprint-and-whitelist-control-boundaries)
+through folding/lookahead, inline word merging, early/final projection,
+fingerprint normalization and ordered whitelist branches. Recorded nonuniform
+backtracking/statistics and actual runtime predicates rather than copying stale
+C-oriented comments. The prior borrowed-view optimization remains isolated;
+WAF-14 and WAF-21 are still deferred, and no new runtime change was made.
+
+Fresh unchanged-production WAF tests passed 868 cases with six existing ignored;
+formatting and workspace all-target check/Clippy passed with existing warnings.
+This is evidence from source inspection, not exhaustive reference equivalence or a
+performance result. No full-workspace suite, fresh upstream comparison, live
+Gateway integration or benchmark ran. Broader callback coverage remains open.
