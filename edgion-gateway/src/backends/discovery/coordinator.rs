@@ -1391,14 +1391,6 @@ fn build_service_projection(
     }
 
     let geometry = normalize_sections(&service_record, &slices);
-    let raw = Arc::new(LegacyRawProjection {
-        service: Arc::clone(&service_record.resource),
-        endpoint_slices: slices
-            .iter()
-            .map(|(_, slice)| Arc::clone(&slice.resource))
-            .collect::<Vec<_>>()
-            .into(),
-    });
     let content_fingerprint = service_content_fingerprint(&service_record, &slices, &geometry);
     if let Some(ServicePublishedState::Available(old)) = old {
         if old.content_fingerprint == content_fingerprint {
@@ -1416,6 +1408,14 @@ fn build_service_projection(
             ServiceUnavailableReason::InvalidEpoch,
         ));
     };
+    let raw = Arc::new(LegacyRawProjection {
+        service: Arc::clone(&service_record.resource),
+        endpoint_slices: slices
+            .iter()
+            .map(|(_, slice)| Arc::clone(&slice.resource))
+            .collect::<Vec<_>>()
+            .into(),
+    });
     Some(ServicePublishedState::Available(Arc::new(AvailableServiceProjection {
         dns_resolution_mode: super::DnsResolutionMode::parse(
             raw.service

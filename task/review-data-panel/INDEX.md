@@ -17129,3 +17129,21 @@ Fresh existing health-check tests passed 40 cases serially. No runtime/test
 change, prototype, live transport, full suite or benchmark is part of this task.
 Independent plan and final reviews passed. Formatting, workspace all-target
 check/Clippy and agent-doc validation passed with existing warnings.
+
+## Delay raw discovery projection until successful materialization
+
+build_service_projection now constructs its unchanged LegacyRawProjection only
+after fingerprint comparison, allocation admission and successful section
+materialization. Local source records already retain the resource owners across
+these steps. Successful publication keeps the same raw resource identities,
+sorted slice order, DNS inputs and generation lifetime. No-op reuse and failure
+returns avoid an unused raw wrapper, endpoint list and resource Arc clone/drop
+work. Both normalization passes, copied source records, sorting and fingerprint
+scans still run; this is not a measured throughput claim.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+coordinator runs passed the same 42 test identities/outcomes, including generation
+reuse, unavailable raw views, epoch exhaustion and final-only selector creation.
+No allocation counter or redundant new test was added. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.
