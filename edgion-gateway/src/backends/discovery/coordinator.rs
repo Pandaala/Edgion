@@ -1576,6 +1576,7 @@ fn normalize_section(
             _ => return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict),
         };
         let source_identity = slice.identity.as_ref().expect("identified slices are prevalidated");
+        let mut origin_slice_key = None;
         for endpoint in &slice.resource.endpoints {
             let ready = endpoint
                 .conditions
@@ -1591,7 +1592,7 @@ fn normalize_section(
                 }
                 let socket = SocketAddr::new(ip, port.get());
                 grouped.entry(socket).or_default().insert(EndpointOrigin {
-                    slice_key: Arc::from(slice_key.as_str()),
+                    slice_key: Arc::clone(origin_slice_key.get_or_insert_with(|| Arc::from(slice_key.as_str()))),
                     source_identity: source_identity.clone(),
                     address: ip,
                     serving_port: port,

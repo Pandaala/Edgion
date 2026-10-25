@@ -17075,3 +17075,23 @@ coordinator tests passed; the added regression passed on original production
 code, and the same 42 identities/outcomes passed after implementation, serially.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Share slice-key text within one discovery section normalization
+
+Endpoint origins now lazily share one Arc<str> key per contributing slice in a
+normalize_section invocation. Previously every valid address allocated the same
+key text independently. Allocation stays at origin construction after address
+and family validation; empty and noncontributing slices still allocate no key.
+Different sections and the preflight/publication passes remain independent.
+Derived value ordering/equality/hash and proof bytes are unchanged, and retained
+origins own the shared text after the local owner drops. No persistent cache or
+publication change is introduced.
+
+For N valid addresses in that scope, key allocations decrease from N to one.
+A single-address slice saves no allocation and incurs extra reference-count work;
+independent value review accepted this modest tradeoff. No throughput or total
+memory measurement is claimed. Independent plan and final source reviews passed.
+Fresh baseline/final serial coordinator runs passed the same 42 identities and
+outcomes; existing coverage was retained without redundant new tests. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live traffic or benchmark ran.
