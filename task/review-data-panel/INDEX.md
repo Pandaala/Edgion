@@ -17057,3 +17057,21 @@ capture-ten, unmatched-group and escaped named-dollar cases. Existing coverage
 was accepted without adding implementation-shaped tests. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Resolve one EndpointSlice port without a temporary match vector
+
+Cold Service-section normalization now returns a borrowed unique EndpointPort,
+no match, or the existing ambiguity error. It stops after the second matching
+port; the predicate has no side effects. The original name/protocol predicate
+and unnamed sole-port fallback are unchanged. Ambiguity still precedes numeric
+port and address validation. Both pure normalization passes retain their existing
+publication, identity and fingerprint contracts. This removes transient match
+vectors, without a measured throughput or whole-path allocation claim.
+
+Independent plan and final source reviews passed. A generation-level regression
+checks ambiguity ahead of missing/zero ports and malformed addresses through
+both number/name aliases, with unique invalid-port controls. All 41 original
+coordinator tests passed; the added regression passed on original production
+code, and the same 42 identities/outcomes passed after implementation, serially.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or benchmark ran.

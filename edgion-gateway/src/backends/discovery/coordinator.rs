@@ -1557,17 +1557,17 @@ fn normalize_section(
     let mut grouped: BTreeMap<SocketAddr, BTreeSet<EndpointOrigin>> = BTreeMap::new();
     for (slice_key, slice) in slices {
         let ports = slice.resource.ports.as_deref().unwrap_or(&[]);
-        let matching: Vec<&EndpointPort> = matching_endpoint_ports(ports, identity);
-        if matching.is_empty() {
-            // A sibling slice may omit this Service port name (shared-topology
-            // fixtures, or a rollout slice that has not advertised the port yet).
-            // Skip it; MissingEndpointPort is only for "no slice served this port".
-            continue;
-        }
-        if matching.len() != 1 {
-            return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AmbiguousEndpointPort);
-        }
-        let Some(port) = matching[0].port.and_then(checked_port) else {
+        let matching = match matching_endpoint_port(ports, identity) {
+            Ok(Some(port)) => port,
+            Ok(None) => {
+                // A sibling slice may omit this Service port name (shared-topology
+                // fixtures, or a rollout slice that has not advertised the port yet).
+                // Skip it; MissingEndpointPort is only for "no slice served this port".
+                continue;
+            }
+            Err(reason) => return NormalizedSectionOutcome::Invalid(reason),
+        };
+        let Some(port) = matching.port.and_then(checked_port) else {
             return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::InvalidServicePort);
         };
         let expected_v6 = match slice.resource.address_type.as_str() {
@@ -1619,20 +1619,23 @@ fn normalize_section(
     }))
 }
 
-fn matching_endpoint_ports<'a>(ports: &'a [EndpointPort], identity: &ServicePortIdentity) -> Vec<&'a EndpointPort> {
-    let named: Vec<&EndpointPort> = ports
-        .iter()
-        .filter(|port| endpoint_port_matches(port, identity))
-        .collect();
-    if !named.is_empty() || identity.name.is_some() || ports.len() != 1 {
-        return named;
+fn matching_endpoint_port<'a>(
+    ports: &'a [EndpointPort],
+    identity: &ServicePortIdentity,
+) -> Result<Option<&'a EndpointPort>, ServiceSectionInvalid> {
+    let mut matching = ports.iter().filter(|port| endpoint_port_matches(port, identity));
+    let first = matching.next();
+    if matching.next().is_some() {
+        return Err(ServiceSectionInvalid::AmbiguousEndpointPort);
+    }
+    if first.is_some() || identity.name.is_some() || ports.len() != 1 {
+        return Ok(first);
     }
     // An unnamed single-port Service may omit ServicePort.name. Accept the
     // unique EndpointPort when protocol matches, even if that port is named.
-    ports
+    Ok(ports
         .iter()
-        .filter(|port| port.protocol.as_deref().unwrap_or("TCP") == identity.protocol.as_ref())
-        .collect()
+        .find(|port| port.protocol.as_deref().unwrap_or("TCP") == identity.protocol.as_ref()))
 }
 
 fn endpoint_port_matches(port: &EndpointPort, identity: &ServicePortIdentity) -> bool {

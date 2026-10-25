@@ -516,6 +516,43 @@ fn named_target_port_distinct_from_service_port_name_resolves() {
 }
 
 #[test]
+fn endpoint_port_ambiguity_precedes_port_and_address_validation() {
+    for (first_port, duplicate, expected) in [
+        (None, true, ServiceSectionInvalid::AmbiguousEndpointPort),
+        (Some(0), true, ServiceSectionInvalid::AmbiguousEndpointPort),
+        (Some(8080), true, ServiceSectionInvalid::AmbiguousEndpointPort),
+        (None, false, ServiceSectionInvalid::InvalidServicePort),
+        (Some(0), false, ServiceSectionInvalid::InvalidServicePort),
+    ] {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        coordinator.replace_services(&HashMap::from([(
+            "default/backend".to_string(),
+            service(Some("service-uid"), IntOrString::Int(8080)),
+        )]));
+        let mut source = (*slice("backend-a", Some("slice-a"), true)).clone();
+        let mut ports = slice_ports(&[("http", 8080)]);
+        ports[0].port = first_port;
+        if duplicate {
+            ports.extend(slice_ports(&[("http", 8081)]));
+        }
+        source.ports = Some(ports);
+        source.endpoints[0].addresses = vec!["invalid-address".to_string()];
+        coordinator.replace_endpoint_slices(&HashMap::from([("default/backend-a".to_string(), Arc::new(source))]));
+        let generation = coordinator.load_generation();
+        let available = generation.available("default/backend").expect("available service");
+        for key in [
+            ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()),
+            ServiceSectionKey::Name(Arc::from("http")),
+        ] {
+            assert!(
+                matches!(available.resolve_section(&key), Err(ref reason) if reason == &expected),
+                "first_port={first_port:?}, duplicate={duplicate}, key={key:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn unnamed_single_service_port_matches_empty_or_unique_endpoint_port() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     let mut unnamed = (*service(Some("service-uid"), IntOrString::Int(8080))).clone();
