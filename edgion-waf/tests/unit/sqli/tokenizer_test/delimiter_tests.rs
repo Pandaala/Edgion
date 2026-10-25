@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn byte_search_returns_first_offset_within_supplied_slice() {
+    let tokenizer = SqliTokenizer::new(b"unrelated", SqliFlags::FLAG_NONE);
+    for (input, needle, expected) in [
+        (b"".as_slice(), 0, None),
+        (b"a".as_slice(), b'b', None),
+        (b"abca".as_slice(), b'a', Some(0)),
+        (b"abca".as_slice(), b'c', Some(2)),
+        (b"abc]".as_slice(), b']', Some(3)),
+        (b"\0\xff\0".as_slice(), 0, Some(0)),
+        (b"\0\xff\0".as_slice(), 0xff, Some(1)),
+        (&b"xx'a'"[2..], b'\'', Some(0)),
+        (&b"xx'a'"[3..], b'\'', Some(1)),
+    ] {
+        assert_eq!(tokenizer.memchr(needle, input), expected, "{input:?}, needle {needle}");
+    }
+}
+
+#[test]
+fn adjacent_byte_search_rejects_separated_bytes_and_preserves_first_match() {
+    let tokenizer = SqliTokenizer::new(b"unrelated", SqliFlags::FLAG_NONE);
+    for (input, first, second, expected) in [
+        (b"".as_slice(), b'*', b'/', None),
+        (b"*".as_slice(), b'*', b'/', None),
+        (b"*x/".as_slice(), b'*', b'/', None),
+        (b"*/".as_slice(), b'*', b'/', Some(0)),
+        (b"**/".as_slice(), b'*', b'/', Some(1)),
+        (b"x*/x*/".as_slice(), b'*', b'/', Some(1)),
+        (b"/**/".as_slice(), b'/', b'*', Some(0)),
+        (b"aaa".as_slice(), b'a', b'a', Some(0)),
+        (b"x\0\xff\0\xff".as_slice(), 0, 0xff, Some(1)),
+        (&b"xx*/tail"[2..], b'*', b'/', Some(0)),
+        (b"tail*".as_slice(), b'*', b'/', None),
+    ] {
+        assert_eq!(
+            tokenizer.memchr2(input, first, second),
+            expected,
+            "{input:?}, pair {first}/{second}"
+        );
+    }
+}
+
+#[test]
 fn qstring_delimiter_boundary_uses_unsigned_bytes() {
     for delimiter in [b'!', 0x7f] {
         let input = [b'q', b'\'', delimiter, b'x', delimiter, b'\''];

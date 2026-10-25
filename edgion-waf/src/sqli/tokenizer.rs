@@ -11,6 +11,7 @@
 // SQL tokenizer implementation matching libinjection C version
 
 use crate::sqli::{sqli_data, SqliFlags};
+use memchr::{memchr, memmem};
 
 // Token type constants matching C version
 const TYPE_NONE: u8 = 0;
@@ -636,12 +637,7 @@ impl<'a> SqliTokenizer<'a> {
             return None;
         }
 
-        for i in 0..haystack.len() - 1 {
-            if haystack[i] == c0 && haystack[i + 1] == c1 {
-                return Some(i);
-            }
-        }
-        None
+        memmem::find(haystack, &[c0, c1])
     }
 
     // Helper function equivalent to C is_mysql_comment
@@ -1238,7 +1234,7 @@ impl<'a> SqliTokenizer<'a> {
     }
 
     fn memchr(&self, needle: u8, haystack: &[u8]) -> Option<usize> {
-        haystack.iter().position(|&x| x == needle)
+        memchr(needle, haystack)
     }
 
     fn is_backslash_escaped(&self, pos: usize) -> bool {

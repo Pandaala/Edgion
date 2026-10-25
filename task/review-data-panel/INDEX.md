@@ -17879,3 +17879,30 @@ fixtures were not enabled. Formatting, workspace all-target check/Clippy and sev
 repository guards passed with existing warnings. No full-workspace suite, live
 Gateway integration, fresh upstream-checkout comparison or performance benchmark
 ran.
+
+## Reuse byte-search primitives in the SQLi tokenizer
+
+The bounded DetectSqli path reaches SqliTokenizer's private delimiter helpers.
+Its single-byte helper now uses existing memchr, and its adjacent-pair helper
+uses memmem with the two-byte needle. The latter deliberately does not use the
+library's memchr2, whose either-byte semantics differ from this helper's
+consecutive-byte contract. The existing short-input guard remains.
+
+Both helpers return the first offset within the supplied slice. String escape
+handling and bracket identifiers keep their caller-relative offset arithmetic.
+Comment closing and nested-comment searches retain their original regions,
+including the pinned reference's unusual nested-search boundary. Token contents,
+positions, statistics, dialect/context resets, detector caps/work and ownership
+are unchanged. No dependency or heap buffer was added, and no measured throughput
+or allocation benefit is claimed. The deferred SQLi token-storage decision remains
+separate.
+
+Two literal regressions passed before production changes, covering empty/short
+input, absent/first/last/repeated matches, subslices, NUL/high bytes, separated
+nonmatches, adjacent/repeated pairs and equal-byte overlap. Fresh baseline/final
+WAF library runs preserve all 864 identities/outcomes: 858 passed and six existing
+ignored. Existing offline parser/folding/verdict fixtures ran; external-checkout
+ignored cases were not enabled. Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing warnings. No full-workspace suite,
+live Gateway integration, fresh upstream-checkout comparison or performance
+benchmark ran.
