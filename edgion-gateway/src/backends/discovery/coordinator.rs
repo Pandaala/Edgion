@@ -1016,7 +1016,7 @@ impl ServiceDiscoveryCoordinator {
                 }
             }
             if differs {
-                changed.push(key.clone());
+                changed.push(key);
             }
         }
         assert!(
@@ -1042,7 +1042,7 @@ impl ServiceDiscoveryCoordinator {
         self.published.store(next.clone());
 
         for key in changed {
-            self.activate_service(&key, next.available(&key));
+            self.activate_service(key, next.available(key));
         }
     }
 
@@ -1223,34 +1223,27 @@ fn source_epoch_requirement(state: &CoordinatorState, affected: &[String]) -> us
 fn assign_source_epochs(state: &mut CoordinatorState, affected: &[String], epochs: impl Iterator<Item = u64>) {
     let affected: HashSet<&str> = affected.iter().map(String::as_str).collect();
     let mut epochs = epochs;
-    let mut service_keys: Vec<_> = state
+    let mut service_sources: Vec<_> = state
         .services
-        .iter()
+        .iter_mut()
         .filter(|(key, source)| affected.contains(key.as_str()) && source.identity.is_none())
-        .map(|(key, _)| key.clone())
         .collect();
-    service_keys.sort();
-    for key in service_keys {
-        let source = state.services.get_mut(&key).expect("staged service source exists");
+    service_sources.sort_by(|left, right| left.0.cmp(right.0));
+    for (_, source) in service_sources {
         let epoch = epochs
             .next()
             .expect("source epoch preflight reserved exact service count");
         source.identity = Some(source_identity(source.resource.metadata.uid.as_deref(), epoch));
     }
-    let mut slice_keys: Vec<_> = state
+    let mut slice_sources: Vec<_> = state
         .endpoint_slices
-        .iter()
+        .iter_mut()
         .filter(|(_, source)| {
             source.identity.is_none() && affected.contains(endpoint_slice_service_key(&source.resource).as_str())
         })
-        .map(|(key, _)| key.clone())
         .collect();
-    slice_keys.sort();
-    for key in slice_keys {
-        let source = state
-            .endpoint_slices
-            .get_mut(&key)
-            .expect("staged EndpointSlice source exists");
+    slice_sources.sort_by(|left, right| left.0.cmp(right.0));
+    for (_, source) in slice_sources {
         let epoch = epochs
             .next()
             .expect("source epoch preflight reserved exact EndpointSlice count");

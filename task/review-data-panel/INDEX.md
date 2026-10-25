@@ -17351,3 +17351,21 @@ tests, including partial-identity rejection with committed deletes and exact
 terminal-epoch success. Existing regressions required no mirror test. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live traffic, measured memory or throughput benchmark ran.
+
+## Borrow transaction-local source records and activation keys
+
+Source epoch assignment now collects mutable record references paired with their
+borrowed map keys, sorts them lexicographically and updates each record directly.
+It avoids cloning selected keys and looking them up again. Unique map entries
+remain structurally unchanged during these borrows; Services still precede
+EndpointSlices, with identical predicates, UID handling and epoch assertions.
+The changed-Service list also borrows keys from the transaction's sorted owner
+through publication and activation instead of copying each changed key.
+
+Vectors, sorting, staging and normalization remain. Independent plan and final
+source reviews passed. Fresh baseline/final serial runs passed identical
+identities/outcomes for 44 coordinator and eight Service tests, including exact
+epochs, failed reservation, no-op reuse, recreate/relabel and retirement. No
+redundant tests were added. Formatting, workspace all-target check/Clippy and
+seven repository guards passed with existing warnings. No full suite, live
+traffic or measured throughput/memory benchmark ran.
