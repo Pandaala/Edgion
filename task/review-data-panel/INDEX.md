@@ -17332,3 +17332,22 @@ tests, retaining alias, replacement/removal, no-op and epoch-failure coverage.
 No redundant new test was added. Formatting, workspace all-target check/Clippy
 and seven repository guards passed with existing warnings. No full suite, live
 traffic or benchmark ran.
+
+## Remove the redundant discovery failure-state copy
+
+The transaction no longer clones its post-input staged state into a second
+failure backup. Before reservation, source-demand calculation only reads staged
+state and identity preview writes only the independent preflight copy. Real
+staged identities change exclusively after successful reservation. On failure,
+the original staged value already contains the required deletes and unidentified
+replacements; setting exhausted remains sufficient. Both source maps, their keys
+and Arc handles avoid one redundant clone per transaction reaching this phase.
+
+Initial staging, independent preflight, both normalization passes, exact epoch
+reservation, no-op reuse and publication/activation ordering remain unchanged.
+Independent plan and final source reviews passed. Fresh baseline/final serial
+runs passed identical identities/outcomes for 44 coordinator and eight Service
+tests, including partial-identity rejection with committed deletes and exact
+terminal-epoch success. Existing regressions required no mirror test. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live traffic, measured memory or throughput benchmark ran.

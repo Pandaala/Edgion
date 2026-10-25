@@ -948,7 +948,6 @@ impl ServiceDiscoveryCoordinator {
         let mut sorted: Vec<String> = affected.into_iter().collect();
         sorted.sort();
 
-        let failure_state = staged.clone();
         let source_epochs = source_epoch_requirement(&staged, &sorted);
         // Preview the exact source identities in a throwaway staged state, then
         // run the same normalized projection builder used by publication. This
@@ -974,7 +973,6 @@ impl ServiceDiscoveryCoordinator {
                 reservation.epochs[..source_epochs].iter().copied(),
             );
         } else {
-            staged = failure_state;
             staged.exhausted = true;
         }
 
