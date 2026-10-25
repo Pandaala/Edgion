@@ -18152,3 +18152,21 @@ suite, live Gateway integration or performance benchmark ran.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. Independent IMPL plan and final code review found no
 blocker; this scoped change does not establish complete callback coverage.
+
+## Compare case-sensitive packed candidates as slices
+
+Packed::matches_at now selects case mode once: sensitive candidates use borrowed
+slice equality, while insensitive candidates retain candidate-only ASCII lowercase
+comparison against compiled bytes. Range checks, saturating offsets, fingerprints,
+selection order, storage and accounting are unchanged. This replaces the source-
+level conditional mapping on the sensitive path without a measured speedup claim.
+
+A baseline-first regression covers mixed-case/NUL/high-byte patterns, lengths
+2/3/8/16/64, all byte substitutions at first/middle/last positions, borrowed input
+offsets, truncation and invalid starts. Baseline/final WAF runs preserve all 877
+identities/outcomes: 871 passed and six existing ignored. Existing native search
+and transaction tests ran; no full-workspace suite, live integration or benchmark
+ran. No dependency, layout, budget or observability change was introduced.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Broader callback coverage remains open.

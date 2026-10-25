@@ -267,11 +267,15 @@ impl Packed {
         };
         let pattern_start = entry.start as usize;
         let pattern = &self.pattern_bytes[pattern_start..pattern_start + len];
-        candidate
-            .iter()
-            .copied()
-            .map(|byte| fold_ascii(byte, ascii_case_insensitive))
-            .eq(pattern.iter().copied())
+        if ascii_case_insensitive {
+            candidate
+                .iter()
+                .copied()
+                .map(|byte| byte.to_ascii_lowercase())
+                .eq(pattern.iter().copied())
+        } else {
+            candidate == pattern
+        }
     }
 }
 

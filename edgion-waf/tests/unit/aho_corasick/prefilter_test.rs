@@ -116,6 +116,42 @@ fn adaptivity_disables_dense_candidates_without_advancing_input() {
     assert_eq!(state.skipped_bytes, 0);
 }
 
+#[test]
+fn packed_candidate_comparison_preserves_byte_and_range_semantics() {
+    for folded in [false, true] {
+        for len in [2, 3, 8, 16, MAX_PACKED_PATTERN_LEN] {
+            let pattern: Vec<u8> = [b'A', b'b', 0, 0xFF].into_iter().cycle().take(len).collect();
+            let mut builder = AccelerationBuilder::new(true, folded, MatchKind::Standard);
+            builder.add(PatternId::try_from_usize(0).unwrap(), &pattern).unwrap();
+            let acceleration = builder.build_packed().unwrap();
+            let AccelerationInner::Packed(packed) = acceleration.inner else {
+                panic!("expected packed acceleration");
+            };
+            let entry = packed.entries[0];
+            let mut haystack = vec![b'!'; 5];
+            haystack.extend_from_slice(&pattern);
+            assert!(packed.matches_at(entry, &haystack, 5, folded));
+            assert!(!packed.matches_at(entry, &haystack[..haystack.len() - 1], 5, folded));
+            assert!(!packed.matches_at(entry, &haystack, haystack.len(), folded));
+            assert!(!packed.matches_at(entry, &haystack, usize::MAX, folded));
+            for position in [0, len / 2, len - 1] {
+                for byte in u8::MIN..=u8::MAX {
+                    haystack[5 + position] = byte;
+                    let expected = haystack[5..].iter().zip(&pattern).all(|(&actual, &source)| {
+                        if folded {
+                            actual.to_ascii_lowercase() == source.to_ascii_lowercase()
+                        } else {
+                            actual == source
+                        }
+                    });
+                    assert_eq!(packed.matches_at(entry, &haystack, 5, folded), expected);
+                }
+                haystack[5 + position] = pattern[position];
+            }
+        }
+    }
+}
+
 fn two_gram_patterns() -> Vec<Vec<u8>> {
     let rare = b"!#$%&'()*+,-./:;<>?@[]^_`{|}~";
     (0..17)
