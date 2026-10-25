@@ -189,7 +189,7 @@ mod resolve_probe_host_tests {
         );
         let _installed = InstalledPolicy::install(&policy_key, &service_key, policy);
 
-        let resolved = resolve_probe_host(&service_key, Some("configured-host".to_string()));
+        let resolved = resolve_probe_host(&service_key, Some("configured-host"));
         assert_eq!(resolved, Some("probe.sandbox.internal".to_string()));
     }
 
@@ -213,7 +213,7 @@ mod resolve_probe_host_tests {
         );
         let _installed = InstalledPolicy::install(&policy_key, &service_key, first);
         assert_eq!(
-            resolve_probe_host(&service_key, Some("configured-host".to_string())),
+            resolve_probe_host(&service_key, Some("configured-host")),
             Some("probe-old.sandbox.internal".to_string())
         );
 
@@ -231,7 +231,7 @@ mod resolve_probe_host_tests {
         update.insert(policy_key, second);
         get_backend_traffic_policy_store().partial_update_policies(HashMap::new(), update, HashSet::new());
         assert_eq!(
-            resolve_probe_host(&service_key, Some("configured-host".to_string())),
+            resolve_probe_host(&service_key, Some("configured-host")),
             Some("probe-new.sandbox.internal".to_string())
         );
     }
@@ -243,7 +243,7 @@ mod resolve_probe_host_tests {
         let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let service_key = "hcresolve-b/svc";
 
-        let resolved = resolve_probe_host(service_key, Some("configured-host".to_string()));
+        let resolved = resolve_probe_host(service_key, Some("configured-host"));
         assert_eq!(resolved, Some("configured-host".to_string()));
     }
 
@@ -269,7 +269,7 @@ mod resolve_probe_host_tests {
         );
         let _installed = InstalledPolicy::install(&policy_key, &service_key, policy);
 
-        let resolved = resolve_probe_host(&service_key, Some("configured-host".to_string()));
+        let resolved = resolve_probe_host(&service_key, Some("configured-host"));
         assert_eq!(resolved, Some("configured-host".to_string()));
     }
 }

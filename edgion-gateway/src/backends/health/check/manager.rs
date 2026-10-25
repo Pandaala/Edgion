@@ -128,15 +128,19 @@ impl HealthCheckManager {
 /// static `config_host`. Pure function over the process-global
 /// `BackendTrafficPolicyStore` so the precedence rule can be unit-tested
 /// without spawning a `health_check_loop` task.
-fn resolve_probe_host(service_key: &str, config_host: Option<String>) -> Option<String> {
+fn resolve_probe_host(service_key: &str, config_host: Option<&str>) -> Option<String> {
     let target =
         crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(service_key);
     get_backend_traffic_policy_store()
         .snapshot()
         .get_effective(&target)
-        .and_then(|policy| policy.upstream_authority.clone())
-        .and_then(|compiled| compiled.health_check_host.clone())
-        .or(config_host)
+        .and_then(|policy| {
+            policy
+                .upstream_authority
+                .as_ref()
+                .and_then(|compiled| compiled.health_check_host.clone())
+        })
+        .or_else(|| config_host.map(str::to_owned))
 }
 
 async fn health_check_loop(service_key: String, policy: Arc<super::config_store::ResolvedActiveHealthPolicy>) {
@@ -159,7 +163,7 @@ async fn health_check_loop(service_key: String, policy: Arc<super::config_store:
     // is immutable for this task's lifetime, and any policy change respawns a
     // fresh task via `BackendTrafficPolicyStore::reapply_service` ->
     // `HealthCheckManager::reconcile_service`.
-    let http_host = resolve_probe_host(&service_key, config.host.clone());
+    let http_host = resolve_probe_host(&service_key, config.host.as_deref());
     let grpc_service_name = config.grpc_service_name.clone().unwrap_or_default();
     let encrypted = matches!(config.r#type, HealthCheckType::Https | HealthCheckType::Grpcs)
         .then(|| EncryptedProbeTransport::build(policy.owner()));

@@ -17095,3 +17095,20 @@ Fresh baseline/final serial coordinator runs passed the same 42 identities and
 outcomes; existing coverage was retained without redundant new tests. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live traffic or benchmark ran.
+
+## Borrow health-probe Host inputs until selection
+
+Health-task setup now borrows the configured fallback Host and the compiled
+upstream-authority owner while selecting its Host. Only the chosen host becomes
+an owned String. Policy override, missing-policy/authority/host fallback and
+empty-value semantics are unchanged. The existing policy snapshot API still
+returns its owning Arc, so no borrowed host escapes a generation. Task restart
+and publication behavior remain unchanged.
+
+This removes the losing configured-host copy and a temporary authority Arc
+increment/decrement at task startup or restart, not on every probe. Independent
+plan and final source reviews passed. Fresh serial baseline/final runs passed
+the same nine manager test identities/outcomes; five test arguments were adapted
+to the borrowed signature without changing assertions. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.
