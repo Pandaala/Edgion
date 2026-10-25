@@ -17553,3 +17553,20 @@ checks. Independent plan and source reviews passed. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran; the separately recorded request-tail
 fixture issue remains outside this scoped verification.
+
+## Classify prepared RealIp log headers without lowercase storage
+
+RealIp construction now compares the configured header with its three fixed log
+categories using ASCII-insensitive equality rather than allocating a lowercase
+String for matching. The same static descriptors and custom fallback are prepared
+once after canonical policy validation and trust binding. Request execution,
+prepared HeaderName lookup, log order and sensitive masking remain unchanged.
+This removes a cold temporary allocation, not request-path allocation or a measured
+throughput cost.
+
+Existing mixed-case category, whitespace/custom fallback and subprocess-isolated
+runtime log tests already cover this mechanical change; no new test was added.
+Fresh baseline/final Gateway real_ip-filtered runs passed the same 34 identities
+and outcomes. Independent plan and source reviews passed. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.

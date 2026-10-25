@@ -65,11 +65,14 @@ pub struct RealIp {
 
 impl RealIp {
     fn header_log(real_ip_header: &str) -> &'static str {
-        match real_ip_header.to_ascii_lowercase().as_str() {
-            "x-forwarded-for" => "header xff",
-            "x-real-ip" => "header real-ip",
-            "forwarded" => "header forwarded",
-            _ => "header custom",
+        if real_ip_header.eq_ignore_ascii_case("x-forwarded-for") {
+            "header xff"
+        } else if real_ip_header.eq_ignore_ascii_case("x-real-ip") {
+            "header real-ip"
+        } else if real_ip_header.eq_ignore_ascii_case("forwarded") {
+            "header forwarded"
+        } else {
+            "header custom"
         }
     }
 
