@@ -132,6 +132,8 @@ destination.
 
 - [Normalized request-body segment ownership](body-07-normalized-segment-ownership.md)
 
+- [Full-range request-body snapshot reuse](body-08-full-range-snapshot-reuse.md)
+
 - [Redis command pool-member selection](redis-03-pool-member-selection.md)
 - [Redis command frame encoding ownership](redis-04-command-frame-encoding.md)
 - [Redis script result conversion storage](redis-05-script-result-conversion.md)
@@ -18661,3 +18663,20 @@ under-limit, scan-budget, type and key-redaction cases passed. The full Gateway
 DSL filter passed 532 tests. Formatting, workspace all-target check/Clippy,
 seven repository guards and diff hygiene passed with existing unrelated lint
 warnings. No full workspace test suite, live integration or benchmark ran.
+
+## Full-range body-read snapshot ownership decision
+
+Whole-range DSL text reads and cached-complete WAF prefix reads still reconstruct
+segment metadata through range_snapshot. Body payload backings are already shared.
+Reusing the original snapshot could avoid reconstruction, but changes retained
+metadata capacity and old-generation ownership across scan admission, worker
+execution and cancellation. The [body-08 task](body-08-full-range-snapshot-reuse.md)
+records that choice separately from mutation builder normalization and retirement.
+No runtime change or net memory/throughput improvement is claimed.
+
+Independent plan review passed after adding the WAF caller to the evidence.
+Fresh unchanged-code tests passed 62 storage, 23 DSL Body and three WAF-prefix
+cases. Formatting, workspace all-target check/Clippy, agent-doc validation and
+diff hygiene passed, with existing unrelated warnings. These tests describe the
+current implementation; no proposed reuse branch, ownership probe, full workspace
+test suite, live integration or benchmark ran.
