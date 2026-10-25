@@ -1,30 +1,71 @@
 ---
 name: weighted-round-robin-normalize-weights
-description: Use when reviewing WeightedRoundRobin::new O(sum-of-weights) allocation / unclamped BackendRef.weight OOM findings — new() now runs normalize_weights (GCD reduce + proportional scale to MAX_SMOOTH_SEQUENCE_LEN) before generate_smooth_sequence; reject the O(sum-of-weights) / unclamped-weight form.
+description: Review BackendRef WRR normalization, conservative sequence bounds, unit-weight sequence construction and historical unclamped-weight findings.
 status: fixed
 finding_id: lb-F005
 closed: 2026-05-24
 knowledge_type: regression-guards
 ---
 
-# WeightedRoundRobin::new O(sum-of-weights) Sequence Allocation / Unclamped Weight
+# WeightedRoundRobin normalization and sequence construction
 
-**Status / verdict**: fixed (lb-F005, 2026-05-24)
+## Current contract
 
-When reviewing findings of the form "`WeightedRoundRobin::new` builds an O(sum-of-weights) smooth sequence / `BackendRef.weight` is unclamped (up to `i32::MAX`) so two large weights allocate a multi-GB `Vec<u16>` → OOM-kill / the precomputed sequence is unbounded (lb-F005)": **fixed (lb-F005, 2026-05-24)**.
+`WeightedRoundRobin::new` in `lb/backend_selector/weighted_selector.rs` validates
+nonempty items, matching lengths, at most 65,535 items and a nonzero total before
+normalizing weights. `normalize_weights` first divides by the positive weights'
+GCD, preserving ratios exactly. If the reduced sum exceeds 10,000, proportional
+integer scaling with a minimum of one retains every positive share but only
+approximates its original ratio. Zero weights remain zero.
 
-`WeightedRoundRobin::new` (`backend_selector/weighted_selector.rs`) now runs `normalize_weights` before `generate_smooth_sequence`, so the precomputed `Box<[u16]>` sequence can no longer be O(sum of weights). `BackendRef.weight` is `Option<i32>` (up to `i32::MAX`) with no upstream clamp, and `selector.rs::create_state` converted it with `w as usize` + `w > 0` filter only; two backends near `i32::MAX` would allocate a ~4.29e9-entry `Vec<u16>` (~8.6 GB) on the first request after route (re)load → OOM-kill, reachable via a routine HTTPRoute/GRPCRoute RBAC edit. `normalize_weights` (1) reduces by GCD — lossless, `[N,N]`→`[1,1]`, `[100,200]`→`[1,2]` — then (2) if the total still exceeds `MAX_SMOOTH_SEQUENCE_LEN = 10_000`, scales every positive weight down proportionally with `.max(1)` so no backend drops out. Ratio (the only thing WRR fairness depends on) is preserved; resolution bounded to 1/10,000; worst-case sequence ~20 KB. Fixed at the constructor (origin) not `selector.rs:91` (symptom), so `with_equal_weights` (webhook targets) and all future callers inherit it; the `select()` hot path is untouched (normalization runs only at construction).
+The scaling target is not a strict sequence-length cap: the minimum-one rule
+can make the sum exceed 10,000. A conservative bound is 10,000 plus the positive
+item count, itself bounded by the constructor's item-count check. Thus the former
+universal approximately 20 KB sequence claim was too strong. The sequence stores
+u16 indices; total heap usage also includes items, weights and construction
+scratch. Normalization removes dependence on the unbounded original weight sum,
+not dependence on item count.
 
-Chose proportional scaling over switching to an Envoy-style EDF scheduler because EDF needs a mutable heap (lock per pick) and would abandon this module's deliberate lock-free O(1) design. Unit tests in `weighted_selector.rs`: `gcd_basic`, `normalize_*` (gcd reduction / huge-equal-collapse / coprime-scale-within-budget / zero-preserve), `new_bounds_sequence_for_coprime_huge_weights`, `new_huge_equal_weights_still_distribute_evenly`. Doc: `http-route/lb-algorithms.md` weight-as-ratio note.
+After normalization, all-unit weights emit exactly `0..n` directly. At step k,
+unselected items have current weight k+1 and previously selected items have
+k+1-n; first-index tie breaking picks the next unselected index. This preserves
+the full sequence while reducing this case's construction from O(n squared) to
+O(n) and omitting both current/effective-weight scratch vectors. Mixed zeros and
+nonuniform normalized weights retain the original smooth algorithm and its
+O(item count times normalized weight sum) construction work.
 
-Sibling: lb-F013 (`RoundRobinSelector` / `ConsistentHashRing` per-backend weight cap) — lb-F005 capped this `WeightedRoundRobin` constructor; lb-F013 covers the selector pair that lb-F005 did not extend to. Same "unbounded integer feeds an allocation/multiply" class as lb-F001 (EWMA integer).
+The published sequence, atomic cursor, wrapping behavior, per-pick remainder,
+item ownership and error mapping are unchanged. Construction is cold in the
+compiled BackendRef generation, not lazy on the first request. Current production
+construction is through `BackendSelector::create_state`; the historical webhook
+WRR caller no longer exists. `with_equal_weights` shares the same constructor.
+See [generation ownership](backend-ref-selector-generation-ownership.md) and
+[fallible construction](wrr-new-result-api.md).
 
-Re-reports of the O(sum-of-weights) allocation / unclamped weight form are not accepted; verify `WeightedRoundRobin::new` calls `normalize_weights` before re-reporting.
+## Historical correction and scope
 
-## Historical resolution evidence: lb-F005
+lb-F005 (2026-05-24) fixed expansion of original weights directly into a sequence.
+Two weights near i32::MAX could previously request billions of entries. GCD
+reduction and proportional scaling address that original-input expansion; they
+do not prove exact ratios after rounding or a universal 10,000-entry bound.
+The original choice retained immutable precomputation and lock-free selection
+rather than introducing a mutable scheduling heap. This remains distinct from
+RoundRobinSelector/ConsistentHashRing's separate per-backend weight handling.
 
-`WeightedRoundRobin::new` (`backend_selector/weighted_selector.rs`) now runs `normalize_weights` before `generate_smooth_sequence`, so the precomputed `Box<[u16]>` sequence can no longer be O(sum of weights). `BackendRef.weight` is `Option<i32>` (up to `i32::MAX`) with no upstream clamp, and `selector.rs::create_state` converted it with `w as usize` + `w > 0` filter only; two backends near `i32::MAX` would allocate a ~4.29e9-entry `Vec<u16>` (~8.6 GB) on the first request after route (re)load → OOM-kill, reachable via a routine HTTPRoute/GRPCRoute RBAC edit. `normalize_weights` (1) reduces by GCD — lossless, `[N,N]`→`[1,1]`, `[100,200]`→`[1,2]` — then (2) if the total still exceeds `MAX_SMOOTH_SEQUENCE_LEN = 10_000`, scales every positive weight down proportionally with `.max(1)` so no backend drops out. Ratio (the only thing WRR fairness depends on) is preserved; resolution bounded to 1/10,000; worst-case sequence ~20 KB. Fixed at the constructor (origin) not `selector.rs:91` (symptom), so `with_equal_weights` (webhook targets) and all future callers inherit it; the `select()` hot path is untouched (normalization runs only at construction). Chose proportional scaling over switching to an Envoy-style EDF scheduler because EDF needs a mutable heap (lock per pick) and would abandon this module's deliberate lock-free O(1) design. Unit tests in `weighted_selector.rs`: `gcd_basic`, `normalize_*` (gcd reduction / huge-equal-collapse / coprime-scale-within-budget / zero-preserve), `new_bounds_sequence_for_coprime_huge_weights`, `new_huge_equal_weights_still_distribute_evenly`. Doc: `http-route/lb-algorithms.md` weight-as-ratio note. Re-reports of the O(sum-of-weights) allocation / unclamped weight form are not accepted; verify `WeightedRoundRobin::new` calls `normalize_weights` before re-reporting.
+Revalidate the constructor and normalization before reporting the historical
+unclamped-weight defect. New count, arithmetic, normalization or failure-policy
+defects are not suppressed by that historical correction.
 
-## Resolution references
+## Verification and re-evaluation
 
-- `lb-F005` — 2026-05-24.
+Mounted tests under `edgion-gateway/tests/unit/lb/backend_selector/` cover GCD,
+zero preservation, large/coprime inputs, fallible construction and selection.
+The exact-order regression compares unit-weight cycles at several counts and
+original weight magnitudes, plus literal nonuniform and mixed-zero sequences;
+it passed against the original generator before the shortcut was added. A
+post-change 65,535-item test checks the cast boundary and complete cycle above
+the scaling target without running the old quadratic generator at that size.
+
+These establish output and boundary behavior, not measured throughput or total
+heap savings. Re-evaluate normalization, tie ordering, count limits and shared
+cursor ownership if the algorithm or constructor changes.

@@ -106,3 +106,38 @@ fn new_huge_equal_weights_still_distribute_evenly() {
     assert_eq!(a, 5);
     assert_eq!(b, 5);
 }
+
+#[test]
+fn normalized_unit_weights_preserve_exact_order_across_cycles() {
+    for count in [1, 2, 3, 17, 128] {
+        for weight in [1, 7, usize::MAX] {
+            let wrr = WeightedRoundRobin::new((0..count).collect(), vec![weight; count]).unwrap();
+            assert_eq!(wrr.sequence_len(), count);
+            for expected in (0..count).cycle().take(count * 3) {
+                assert_eq!(*wrr.select(), expected);
+            }
+        }
+    }
+    for (weights, expected) in [
+        (vec![3, 1, 2], vec![0, 2, 0, 1, 2, 0]),
+        (vec![1, 1, 2], vec![2, 0, 1, 2]),
+        (vec![0, 2, 0, 2], vec![1, 3]),
+    ] {
+        let wrr = WeightedRoundRobin::new((0..weights.len()).collect(), weights).unwrap();
+        assert_eq!(wrr.sequence.as_ref(), expected.as_slice());
+        for expected in expected.iter().cycle().take(expected.len() * 3) {
+            assert_eq!(*wrr.select(), usize::from(*expected));
+        }
+    }
+}
+
+#[test]
+fn unit_weight_sequence_accepts_maximum_item_count() {
+    let count = u16::MAX as usize;
+    let wrr = WeightedRoundRobin::with_equal_weights((0..count).collect()).unwrap();
+    assert_eq!(wrr.sequence_len(), count);
+    for expected in 0..count {
+        assert_eq!(wrr.select_index(), expected);
+    }
+    assert_eq!(wrr.select_index(), 0);
+}

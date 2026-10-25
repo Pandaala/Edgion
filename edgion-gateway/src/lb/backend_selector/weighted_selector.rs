@@ -5,12 +5,11 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Upper bound on the precomputed smooth-sequence length.
+/// Proportional scaling target for the precomputed smooth-sequence length.
 ///
-/// The sequence is a `Box<[u16]>` (~2 bytes per entry) whose length equals the
-/// sum of the (normalized) weights, so this caps both the persistent allocation
-/// (~20 KB worst case) and the O(n) construction cost. 10_000 gives a weight-ratio
-/// resolution of 1/10_000 (0.01%), far finer than any realistic backend split.
+/// Each positive weight retains at least one entry, so this is not a strict
+/// length cap. The normalized sum is at most this target plus the number of
+/// positive items; construction also bounds the item count to u16::MAX.
 const MAX_SMOOTH_SEQUENCE_LEN: usize = 10_000;
 
 /// Greatest common divisor (Euclid's algorithm). `gcd(x, 0) == x`.
@@ -24,7 +23,7 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 }
 
 /// Normalize weights so the precomputed smooth sequence stays bounded while
-/// preserving the traffic ratio. Smooth-WRR fairness depends only on the ratio
+/// retaining every positive share. Smooth-WRR fairness depends only on the ratio
 /// between weights, not their absolute magnitude — without this an unclamped
 /// `BackendRef.weight` (up to `i32::MAX`) would make `generate_smooth_sequence`
 /// allocate O(sum of weights) memory, an OOM/DoS vector.
@@ -32,9 +31,9 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 /// 1. Reduce by the greatest common divisor — lossless, collapses e.g. `[N, N]`
 ///    to `[1, 1]` and `[100, 200]` to `[1, 2]`, so common-factor weights cost
 ///    almost nothing regardless of magnitude.
-/// 2. If the total still exceeds `MAX_SMOOTH_SEQUENCE_LEN` (only reachable with
-///    adversarial coprime large weights), scale every positive weight down
+/// 2. If the total still exceeds `MAX_SMOOTH_SEQUENCE_LEN`, scale every positive weight down
 ///    proportionally, keeping at least 1 so no backend drops out of the rotation.
+///    Integer rounding and this floor approximate the original ratios.
 ///
 /// Zero weights are left as zero (callers filter them out before selection).
 fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
@@ -167,6 +166,11 @@ impl<T> WeightedRoundRobin<T> {
     /// For weights [3, 1, 2], generates sequence like [0, 2, 0, 1, 2, 0]
     /// instead of simple [0, 0, 0, 1, 2, 2].
     fn generate_smooth_sequence(weights: &[usize]) -> Vec<u16> {
+        if weights.iter().all(|&weight| weight == 1) {
+            // First-index tie breaking visits each item once in index order.
+            // The constructor has already checked the u16 item-count limit.
+            return (0..weights.len()).map(|index| index as u16).collect();
+        }
         let total: usize = weights.iter().sum();
         let total_weight = total as i64;
 

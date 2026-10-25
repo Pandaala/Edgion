@@ -16822,3 +16822,34 @@ the production edit, and extended/final selector plus baseline/final discovery
 identities and outcomes match. Formatting, workspace all-target check/Clippy and
 seven repository guards passed with existing warnings. Independent final source
 review passed. No full suite, live network exchange or performance benchmark ran.
+
+## Build normalized unit-weight BackendRef sequences directly
+
+CompiledL4Backends and HTTP/gRPC rule construction use the generation-owned
+BackendSelector. Its WeightedRoundRobin generator now emits indices 0..n when
+every normalized weight is one. In the original smooth algorithm, unselected
+items always outrank previously selected items during that cycle and ties choose
+the first index, proving the same exact sequence. This changes that construction
+case from quadratic to linear work and skips its two scratch arrays. The runtime
+atomic cursor, modulo, selection ownership and all constructor guards remain.
+
+Baseline-first exact-order tests cover several sizes and original equal-weight
+magnitudes, plus literal nonuniform/mixed-zero sequences. After implementation,
+a separate 65,535-item acceptance test exercises the complete index cycle and
+wrap; the old quadratic implementation was not run at that size. Independent
+plan review passed. No measured throughput or whole-constructor heap claim is made.
+
+Corrected the source and owning review page's strict 10,000-entry/approximately
+20 KB claim: minimum-one scaling can exceed that target, with a conservative
+bound of target plus positive item count. GCD preserves ratios exactly; integer
+scaling approximates them. The old weight-expansion fix remains valid, while
+construction now belongs to route compilation and the old webhook caller is
+historical. General nonuniform construction retains its existing cost.
+
+Final verification passed 29 BackendRef selector, 14 backend runtime and 12 TLS
+route-unit tests (55 distinct identities). The original 27 selector cases remain;
+the exact-order case passed before implementation and the count-limit case was
+added afterward. Consumer baseline/final identities and outcomes match.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Independent final source review passed. No full suite,
+live traffic, allocation instrumentation or performance benchmark ran.
