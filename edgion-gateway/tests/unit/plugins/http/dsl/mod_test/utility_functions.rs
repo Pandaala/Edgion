@@ -447,6 +447,50 @@ fn test_url_decode() {
 }
 
 #[test]
+fn test_url_decode_hex_digits_and_invalid_token_rescanning() {
+    for (input, expected) in [
+        ("%4a%4A", "JJ"),
+        ("%2b%2F%3d%25", "+/=%"),
+        ("%C3%A9%CF%80", "éπ"),
+        ("%%41", "%A"),
+        ("%+A", "% A"),
+        ("%G+", "%G "),
+        ("%é+", "%é "),
+        ("%", "%"),
+        ("%A", "%A"),
+        ("%+", "% "),
+    ] {
+        let source = format!(r#"req.set_header("X-Out", url_decode("{input}"))"#);
+        assert_sets_request_header(&source, "X-Out", expected);
+    }
+}
+
+#[test]
+fn test_url_decode_encoded_text_preserves_utf8_byte_limit() {
+    let source = r#"let result = url_decode("%C3%A9%CF%80")"#;
+    assert_eq!(
+        run_with_limits(
+            source,
+            MockPluginSession::new(),
+            VmLimits {
+                max_string_len: 4,
+                ..Default::default()
+            },
+        ),
+        good_next()
+    );
+    let error = run_expect_runtime_err_with_limits(
+        source,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
+#[test]
 fn test_url_decode_plain_text_is_unchanged() {
     for input in ["", "plain-text /?=&", "éπ"] {
         let source = format!(r#"req.set_header("X-Out", url_decode("{input}"))"#);

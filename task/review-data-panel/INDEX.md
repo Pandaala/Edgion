@@ -18406,3 +18406,21 @@ This removes generic byte-formatting work, not a demonstrated allocation or
 throughput cost. Whole-result encoders elsewhere do not supply this DSL limit
 contract; no encoder policy or malformed-decoding behavior was unified. No
 full-workspace suite, live integration or benchmark ran.
+
+## Decode DSL percent digits once
+
+`UrlDecode` now uses standard radix-16 digit conversion on each byte-derived
+character and combines the two admitted nibbles. This replaces the separate
+ASCII-hex checks, UTF-8 slice validation and string radix parse. Byte-derived
+characters accept the same ASCII digits; each admitted value is at most 15.
+The outer length gate, cursor increments, invalid-percent rescanning, plus
+handling, plain-input shortcut, lossy UTF-8 conversion and final byte limit are
+unchanged. No resource-decoder substitution or new helper was introduced.
+
+Baseline-first tests pin mixed-case hex, reserved characters, encoded UTF-8,
+malformed token rescanning and truncation, plus exact/over decoded-byte limits.
+All ten URL-decode test identities/outcomes match before and after. The broader
+utility group passed 63 tests. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full-workspace
+suite, live integration or benchmark ran; source-level repeated conversion
+removal is not a measured throughput or allocation improvement.

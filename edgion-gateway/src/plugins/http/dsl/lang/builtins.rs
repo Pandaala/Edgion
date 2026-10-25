@@ -1089,18 +1089,13 @@ impl Vm {
                 let mut i = 0;
                 while i < bytes.len() {
                     if bytes[i] == b'%' && i + 2 < bytes.len() {
-                        // Safe: only attempt hex parse on ASCII bytes
-                        let hi = bytes[i + 1];
-                        let lo = bytes[i + 2];
-                        if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
-                            // Both bytes are ASCII, safe to use from_str_radix on the str slice
-                            if let Ok(byte) =
-                                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
-                            {
-                                result.push(byte);
-                                i += 3;
-                                continue;
-                            }
+                        if let (Some(hi), Some(lo)) = (
+                            char::from(bytes[i + 1]).to_digit(16),
+                            char::from(bytes[i + 2]).to_digit(16),
+                        ) {
+                            result.push(((hi << 4) | lo) as u8);
+                            i += 3;
+                            continue;
                         }
                     } else if bytes[i] == b'+' {
                         // application/x-www-form-urlencoded: '+' → space (see arm-level
