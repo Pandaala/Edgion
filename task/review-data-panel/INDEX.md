@@ -18114,3 +18114,19 @@ formatting and workspace all-target check/Clippy passed with existing warnings.
 Direct source coverage does not establish exhaustive reference equivalence or
 complete callback coverage. No full-workspace suite, fresh upstream comparison,
 live Gateway integration or benchmark ran.
+
+## Regex detection and capture search reuse decision
+
+Added [WAF-22](waf-22-regex-capture-search-reuse.md) for direct capture predicates
+that perform early boolean detection and then conditional group extraction.
+These are different search modes; existing boolean scratch contains no reusable
+group result. Fusing them needs a decision about miss costs, the no-extraction-on-
+miss contract, checkpoint/admission order and validated result lifetime. Optional
+hit batches and prefix-only detection are separate paths. WAF-09 and WAF-15 remain
+open; no runtime change or performance benefit is claimed. The original guard
+records an all-miss regression from a rejected single-search prototype; retaining
+the current path remains the baseline unless new evidence justifies reconsideration.
+
+Fresh unchanged-production WAF tests passed 869 cases with six existing ignored;
+formatting and workspace all-target check/Clippy passed with existing warnings.
+No prototype, benchmark, full-workspace suite or live Gateway integration ran.
