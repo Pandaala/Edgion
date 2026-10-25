@@ -17822,3 +17822,24 @@ and six existing ignored. Formatting, workspace all-target check/Clippy and seve
 repository guards passed with existing warnings. No full-workspace suite, live
 Gateway integration or performance benchmark ran. Prepared IP masks remain the
 separate deferred waf-03 decision.
+
+## Reuse trimmed Cookie length in WAF request-head projection
+
+The WAF request constructor reaches projected_derived_bytes before materializing
+its immutable arena. Cookie projection now computes one trimmed value length and
+uses it for both nominal payload and physical arena counts. The binding remains
+after the existing name charges, with total then arena checked additions in their
+original order. Empty-name skipping, repeated headers/cookies, parsing and actual
+materialization remain unchanged.
+
+This removes a duplicate pure trim call in source. Compiler optimization may
+already eliminate the repeated traversal; no machine-code, CPU, allocation or
+throughput improvement is claimed. The logical/physical accounting distinction
+and admission precedence from ARCH-232 remain intact.
+
+Existing request-head alias tests include spaced Cookie values, empty names and
+values, repeated headers and a projected-versus-materialized arena check. No test
+or fixture changed. Fresh baseline/final WAF library runs preserve all 860 test
+identities/outcomes: 854 passed and six existing ignored. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full-workspace suite, live Gateway integration or performance benchmark ran.

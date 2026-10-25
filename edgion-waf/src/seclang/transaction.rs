@@ -6109,8 +6109,9 @@ fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<Req
                 }
                 total = checked_add(total, checked_mul(name.len(), 2)?)?;
                 arena = checked_add(arena, name.len())?;
-                total = checked_add(total, trim_ascii(value).len())?;
-                arena = checked_add(arena, trim_ascii(value).len())?;
+                let value_len = trim_ascii(value).len();
+                total = checked_add(total, value_len)?;
+                arena = checked_add(arena, value_len)?;
             }
         }
     }
