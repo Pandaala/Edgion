@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [DSL Value shape metadata reuse](dsl-14-value-shape-reuse.md)
+
 - [Literal DSL time-format preparation](dsl-13-time-format-preparation.md)
 
 - [System DNS query input ownership](dns-05-system-query-input.md)
@@ -18583,3 +18585,18 @@ and nil/integer coercion. All 40 range/string test identities and outcomes match
 before and after; 112 utility tests passed. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No
 full-workspace suite, live integration or allocation/throughput benchmark ran.
+
+## DSL Value shape reuse decision
+
+Traced GetLocal, equality, Map indexing and Map construction through canonical
+shape inspection and conservative work charges. Repeated walks are real, but
+removing them without preserving stage/prefix accounting changes sandbox
+behavior. DSL-14 records a bounded measurement/design decision, distinct from
+DSL-08 loop-source copies and DSL-01 coercion. It preserves the Value layout,
+opaque Body/XML semantics and Map move-with-charge boundary. No runtime or
+representation change was selected.
+
+Fresh verification passed 18 leaf value-filtered tests and 17 Gateway sandbox
+filtered tests, plus formatting, workspace all-target check/Clippy, agent-doc
+validation and diff checks with existing warnings. This verifies retained
+admission behavior, not a metadata-reuse implementation or performance claim.
