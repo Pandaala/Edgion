@@ -17001,3 +17001,22 @@ coverage; no redundant tests were added. Fresh baseline and final runs passed
 names and outcomes. Formatting, workspace all-target check/Clippy and seven
 repository guards passed with existing warnings. No full suite, live transport
 or benchmark ran.
+
+## Reuse HTTP/gRPC listener eligibility sets for retention
+
+The four full/affected HTTP/gRPC rebuild paths now consume owned active keys
+into their eligibility set, then move that set after its last eligibility check
+and consume declared keys into it for manager retention. This removes a second
+set construction and redundant ListenerKey String clones. The routing filter
+still sees eligible keys only; declarations join afterward. Membership-only
+consumers preserve routing, retained empty handles, stale/orphan cleanup,
+publication and lock boundaries. No measured throughput claim is made.
+
+Independent plan and final source reviews passed. Fresh baseline and final
+runs passed 39 HTTP route-matching cases serially and six gRPC manager cases
+(45 distinct identities), with identical names/outcomes. Existing rejected-handle
+fixtures contain no cached route, so their assertions establish retention;
+unchanged filter/union placement establishes the early-union exclusion by source
+review. No stronger test claim or new test is made. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, live traffic or benchmark ran.

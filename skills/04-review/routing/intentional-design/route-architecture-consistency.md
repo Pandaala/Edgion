@@ -260,3 +260,20 @@ matching gains candidate iteration, table ordering becomes externally visible,
 or unit destruction acquires order-dependent effects. Mirrored table tests
 cover canonical serialized-key ordering, equal-key Arc identity, empty input,
 and retention/release of every unit after the source map is dropped.
+
+## HTTP/gRPC listener-key ownership during rebuild
+
+Full and affected rebuilds first use the eligible-only key set for route
+filtering. After the final eligibility check, that set moves into the manager
+retention set and consumes the declared keys. This preserves the distinction
+between eligible routing and declared-but-rejected empty-handle retention.
+Do not extend with declarations before filtering. Pre-creation, publication,
+stale clearing and orphan handling keep their original order.
+
+The owned input keys move into these sets rather than being copied into two
+independent tables. Only membership is observed; hash iteration does not choose
+routes. This reduces cold key copying and set construction without a measured
+throughput claim. Re-evaluate if a later consumer still needs the eligible-only
+set or declarations, or iteration becomes observable. Existing manager tests
+cover retained handles and clearing; the early-union exclusion is additionally
+established by source review, not a cached-route rejection test claim.

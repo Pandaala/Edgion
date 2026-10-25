@@ -237,7 +237,7 @@ impl GlobalGrpcRouteManagers {
         }
 
         let mut listener_buckets = self.bucket_units_by_listener();
-        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        let eligible: HashSet<_> = active_listener_keys.into_iter().collect();
         listener_buckets.retain(|key, _| !declared.contains(key) || eligible.contains(key));
 
         let mut rebuilt_listeners = 0u32;
@@ -250,8 +250,8 @@ impl GlobalGrpcRouteManagers {
             rebuilt_listeners += 1;
         }
 
-        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
-        active_listeners.extend(declared.iter().cloned());
+        let mut active_listeners = eligible;
+        active_listeners.extend(declared);
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
@@ -300,7 +300,7 @@ impl GlobalGrpcRouteManagers {
         declared: HashSet<ListenerKey>,
     ) {
         let units_cache = self.route_units_cache.lock();
-        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        let eligible: HashSet<_> = active_listener_keys.into_iter().collect();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -322,8 +322,8 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
-        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
-        active_listeners.extend(declared.iter().cloned());
+        let mut active_listeners = eligible;
+        active_listeners.extend(declared);
         let mut removed_stale = 0usize;
         for (key, units) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);

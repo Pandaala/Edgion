@@ -429,7 +429,7 @@ impl GlobalHttpRouteManagers {
         }
 
         let mut listener_buckets = self.bucket_routes_by_listener();
-        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        let eligible: HashSet<_> = active_listener_keys.into_iter().collect();
         listener_buckets.retain(|key, _| !declared.contains(key) || eligible.contains(key));
 
         let mut rebuilt_listeners = 0u32;
@@ -446,8 +446,8 @@ impl GlobalHttpRouteManagers {
 
         // Remove stale listener entries: listeners that have no routes AND are not
         // registered in ListenerGatewayInfoStore (i.e. no Gateway listener for that key).
-        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
-        active_listeners.extend(declared.iter().cloned());
+        let mut active_listeners = eligible;
+        active_listeners.extend(declared);
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
@@ -511,7 +511,7 @@ impl GlobalHttpRouteManagers {
         changes: &HttpRouteChanges,
         declared: HashSet<ListenerKey>,
     ) {
-        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        let eligible: HashSet<_> = active_listener_keys.into_iter().collect();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -535,8 +535,8 @@ impl GlobalHttpRouteManagers {
             }
         }
 
-        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
-        active_listeners.extend(declared.iter().cloned());
+        let mut active_listeners = eligible;
+        active_listeners.extend(declared);
         let mut removed_stale = 0usize;
         for (key, routes) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
