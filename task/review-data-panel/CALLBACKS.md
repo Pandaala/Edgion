@@ -1789,3 +1789,39 @@ Fresh unchanged-production WAF tests passed 873 cases with six existing ignored.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. No runtime code changed; no full-workspace suite, live
 Gateway integration, external-reference comparison or benchmark ran.
+
+## XML names, namespace scope and entity boundaries
+
+At source baseline 2e19d4651, inspected xml_stream.rs name validation/storage,
+attribute identity and namespace operations, closing-tag restoration, incremental
+entity decoding and declaration validation. These serve active Full XML
+inspection. This is not a complete lexical state-machine or replay inventory.
+
+| Boundary | Direct behavior and ownership constraints |
+| --- | --- |
+| save_name and arena_copy | Charge name validation before copying into the live arena. Temporarily move name scratch while tracking held bytes/capacity, restore and clear it after the copy attempt, and refresh capacity even on failure. Arena copies admit structure and growth bounds before extension. |
+| validate_ncname and validate_qname | Validate UTF-8 and XML name character classes per colon-separated component. Stop on the first component error; only afterward reject excess colons. Existing tested Character-versus-Syntax precedence is retained, not a newly delivered optimization. |
+| attribute_name and attribute_done | Save the lexical name, check attribute count, recognize namespace declarations and enforce reserved prefix/URI restrictions. Namespace URI bytes are copied into the arena before binding publication. Attribute records retain spans and URI descriptors, not another payload owner. |
+| prefix_local and prefix_uri | Split at the first colon using existing memchr. Resolve implicit xml, reject xmlns, treat unprefixed ordinary attributes as empty-namespace, and reverse-scan live bindings with a charge before each comparison. Missing nonempty prefixes fail Syntax; elements can use the default namespace. |
+| close_start validation | Resolve the element first, sort/check lexical attribute duplicates, then resolve ordinary attribute namespaces. Reuse each charged QName split. Expanded sorting/checks run only when a prefixed ordinary attribute requires them. Late same-tag declarations remain visible. |
+| attr_compare and sort_attrs | Charged in-place heap sorting compares declaration class, URI bytes and local names for expanded identity, or lexical names otherwise. Comparisons/swaps preserve their work-failure points; there is no unbounded temporary attribute map. |
+| close_start lifetime | Empty elements reclaim arena/bindings to saved marks. Nonempty elements compact only new namespace bindings after the element name, truncate expired attribute identities, then reserve/push a frame. Attributes clear after completion; retained capacity is refreshed. |
+| close_end | Validate the closing QName and charge exact lexical comparison with the last open frame. Only a matching name pops the frame and restores arena/binding marks; namespace URI equivalence alone does not close an element. |
+| entity_byte | Track bounded named bytes or an incremental numeric value/count. Recognize only the five predefined names; numeric references require digits, checked arithmetic and XML-character validity at semicolon. Lowercase x selects hex. Decode into a four-byte local UTF-8 buffer, admit decoded bytes including pending text whitespace, then append through token_byte. Individual appends can still fail; this is not atomic output publication. |
+| validate_declaration | Require separated quoted fields with version 1.0 first; allow optional UTF-8 encoding and yes/no standalone in their accepted order. Preserve XML-only whitespace, quote search, case-sensitive field names and case-insensitive encoding value. This is not general encoding support. |
+
+The arena must outlive namespace/name use; synchronous value callback borrowing
+does not authorize borrowing transient input for persistent bindings. Attribute
+values are observed under lexical names in source order before start-tag identity
+validation; canonical structured publication still owns final outcome ordering.
+See the original [native XML contract](../../skills/04-review/waf/regression-guards/native-xml-inspection.md).
+[Namespace lookup reuse](waf-18-xml-prefix-lookup-reuse.md) remains deferred, with
+its charge/error ordering and scope-expiry obligations intact.
+
+Existing tests cover QName error precedence, declaration grammar, namespace
+shadowing/reserved bindings, duplicate identities, reclamation and chunk splits.
+Fresh unchanged-production WAF tests passed 873 cases with six existing ignored;
+formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. No runtime changes, full-workspace suite, external XML
+comparison, live Gateway integration or performance experiment accompanied this
+inventory. Complete state-machine, callback and goal coverage remain unproven.

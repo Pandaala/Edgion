@@ -18257,3 +18257,15 @@ and no full-workspace suite, live Gateway integration or benchmark ran.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. Wider data-plane coverage remains open.
+
+## XML name and entity boundary inventory
+
+Extended [callback coverage](CALLBACKS.md#xml-names-namespace-scope-and-entity-boundaries)
+through name arena storage, ordered namespace/attribute validation, scope restore,
+incremental entities and declarations. Retained prior QName/scan optimizations as
+existing boundaries and kept WAF-18 deferred. No new runtime optimization or
+whole-parser/replay correctness claim is made.
+
+Fresh WAF tests passed 873 cases with six existing ignored; formatting and
+workspace all-target check/Clippy passed with existing warnings. No full-workspace
+suite, external XML comparison, live integration or benchmark ran.
