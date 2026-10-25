@@ -755,11 +755,7 @@ fn is_header_name_byte(byte: u8) -> bool {
 }
 
 fn disposition_parameters(value: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
-    let Some(mut cursor) = value
-        .iter()
-        .position(|byte| *byte == b';')
-        .and_then(|index| index.checked_add(1))
-    else {
+    let Some(mut cursor) = memchr::memchr(b';', value).and_then(|index| index.checked_add(1)) else {
         return (None, None);
     };
     let mut field_name = None;

@@ -18239,3 +18239,21 @@ Fresh WAF tests passed 873 cases with six existing ignored; formatting and
 workspace all-target check/Clippy passed with existing warnings. No full-workspace
 suite, live Gateway integration, external-reference comparison or benchmark ran.
 This is bounded source coverage, not complete callback or replay verification.
+
+## Reuse byte search at multipart disposition entry
+
+The initial semicolon lookup in disposition_parameters now uses the existing
+memchr dependency. First-occurrence selection and checked cursor advancement
+are unchanged, including the prefix search's lack of quote interpretation.
+Later quoted/escaped parameter traversal, first-value handling, repeated-header
+replacement, publication copies and work limits retain their existing behavior.
+The multipart boundary strategy is unchanged; no allocation or measured gain
+is claimed.
+
+Existing grammar, quoted-semicolon and publication regressions cover this narrow
+primitive substitution. Fresh baseline/final WAF runs preserve all 879 test
+identities/outcomes: 873 passed and six existing ignored. No test body changed,
+and no full-workspace suite, live Gateway integration or benchmark ran.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. Wider data-plane coverage remains open.
