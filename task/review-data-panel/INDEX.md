@@ -17590,3 +17590,28 @@ logging assertions. Baseline/final serial runs passed the same 13 ForwardAuth an
 eight common HTTP helper test identities/outcomes. Independent plan and source
 reviews passed. Formatting, workspace all-target check/Clippy and seven repository
 guards passed with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Borrow already normalized Connection options
+
+The canonical normalized Connection-list helper now returns Cow tokens: options
+without ASCII uppercase borrow their trimmed source, while uppercase options own
+the same lowercase text as before. Deduplication, order and normalized contents
+remain unchanged. The combined matcher still compares dynamic entries exactly
+with the normalized candidate, including rejection of manually supplied
+noncanonical entries. Mirror and managed outbound callers infer the new type;
+AllEndpointStatus drops its old explicit String annotation. All three source
+owners already outlive list use, including locally awaited endpoint futures.
+
+This removes token allocation/copy for already normalized options; the Vec still
+allocates, uppercase inputs add a scan and retain normalization allocation, and
+Cow introduces variant handling. A focused equal-length two-token test confirms
+two fewer allocation calls for lowercase inputs; this is not a throughput or RSS
+benchmark. The owning knowledge page now identifies actual shared outbound callers
+and marks obsolete mode-specific API guidance as historical. First-field request
+Connection selection remains unchanged and separately documented.
+
+Fresh baseline runs passed 88 tests (helper 8, outbound 28, mirror 28, endpoint 24).
+Final runs preserve those identities/outcomes and pass the new helper allocation
+test, for 89 total. Independent plan/amended-plan and source reviews passed.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, live traffic or performance benchmark ran.

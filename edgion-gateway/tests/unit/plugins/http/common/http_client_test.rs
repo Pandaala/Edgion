@@ -71,12 +71,12 @@ fn test_is_hop_by_hop_or_listed_combines_static_and_dynamic() {
     assert!(!is_hop_by_hop_or_listed("Cookie", &listed));
     // The dynamic list contract is lowercase; preserve exact comparison for
     // manually supplied noncanonical lists.
-    assert!(!is_hop_by_hop_or_listed("X-Token", &["X-Token".to_string()]));
+    assert!(!is_hop_by_hop_or_listed("X-Token", &["X-Token".into()]));
 }
 
 #[test]
 fn hop_by_hop_static_and_empty_dynamic_checks_do_not_allocate() {
-    let listed = vec!["x-token".to_string()];
+    let listed = vec![Cow::Owned("x-token".to_string())];
     let (results, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
         (
             is_hop_by_hop_or_listed(std::hint::black_box("Connection"), &listed),
@@ -130,6 +130,19 @@ fn lowercase_dynamic_header_checks_do_not_allocate() {
         assert_eq!(stats.requested_bytes, 0);
     }
     assert!(is_hop_by_hop_or_listed("X-É", &listed));
-    assert!(!is_hop_by_hop_or_listed("x-É", &["x-é".to_string()]));
-    assert!(!is_hop_by_hop_or_listed("x-token", &["X-Token".to_string()]));
+    assert!(!is_hop_by_hop_or_listed("x-É", &["x-é".into()]));
+    assert!(!is_hop_by_hop_or_listed("x-token", &["X-Token".into()]));
+}
+
+#[test]
+fn lowercase_connection_options_avoid_token_allocations() {
+    let (lowercase, lower_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        connection_listed_hop_by_hop(std::hint::black_box("x-a, x-b"))
+    });
+    let (uppercase, upper_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        connection_listed_hop_by_hop(std::hint::black_box("X-A, X-B"))
+    });
+    assert_eq!(lowercase, uppercase);
+    assert_eq!(lowercase, ["x-a", "x-b"]);
+    assert_eq!(upper_stats.calls, lower_stats.calls + 2);
 }

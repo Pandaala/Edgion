@@ -52,28 +52,31 @@ removing the nominated fields before forwarding.
   - `HOP_BY_HOP_HEADERS` — canonical 8-entry set (doc-comment now cites
     RFC 9110 §7.6.1).
   - `is_hop_by_hop(name)` — unchanged signature; consults the static set only.
-  - `connection_listed_hop_by_hop(connection_value: &str) -> Vec<String>` —
+  - `connection_listed_hop_by_hop(connection_value: &str) -> Vec<Cow<'_, str>>` —
     parses the request's `Connection:` value into a deduplicated lowercase
-    token list. Empty tokens skipped; case-folded.
+    token list. Empty tokens are skipped. Already ASCII-lowercase tokens borrow
+    their source; tokens requiring case folding own their normalized text.
   - `connection_option_tokens` — canonical borrowed split/trim/nonempty
-    iterator used by the owned-list helper and consumers that do not need an
-    intermediate owned list. It preserves original case and repeated options.
+    iterator used by the normalized-list helper and consumers that do not need an
+    intermediate list. It preserves original case and repeated options.
   - `is_hop_by_hop_or_listed(name, dynamic_listed)` — combined check used at
-    every sub-request forwarding site.
+    the listed sub-request forwarding sites. Dynamic entries compare exactly
+    with the ASCII-lowercased candidate; manually supplied noncanonical entries
+    are not silently reinterpreted.
   - Unit tests `test_connection_listed_hop_by_hop_parses_tokens` and
     `test_is_hop_by_hop_or_listed_combines_static_and_dynamic` lock in token
     parsing and the combined filter.
 
 - Call sites that build sub-request `HeaderMap`s now derive
   `dynamic_listed` once per request and consult `is_hop_by_hop_or_listed`:
-  - `forward_auth/plugin.rs::forward_all_headers` (Mode 1 — forward all).
+  - `common/outbound/request.rs::CompiledRequest::collect_headers_in`
+    (`forward_all`, shared by managed outbound consumers including ForwardAuth
+    and LinkSys webhook).
   - `request_mirror/plugin.rs::build_headers`.
   - `all_endpoint_status/plugin.rs::fan_out_requests` (derived once before
     fan-out, borrowed by each locally awaited endpoint future). Also skips `Host` and inbound
     body headers (`Content-Length`, `Expect`) via `is_inbound_body_header`;
     `Transfer-Encoding` is already hop-by-hop.
-  - `link_sys/providers/webhook/resolver.rs::resolve_webhook_key`
-    (operator-named `forward_headers` whitelist).
 
 - `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs`
   - `sanitize_forwarded_response_headers` inspects every repeated response
@@ -98,39 +101,22 @@ removing the nominated fields before forwarding.
     compression eligibility after the field itself is removed; Pingora owns
     downstream framing.
 
-## What is intentionally left as-is
+## Explicit selection and historical API descriptions
 
-- `forward_auth` **Mode 2** (operator-specified `request_headers` whitelist)
-  still does not run any hop-by-hop filtering (neither static nor dynamic).
-  The operator has explicitly named the headers to forward; expanding the
-  dynamic-strip semantic into that mode would silently override operator
-  intent. Re-reports targeting Mode 2 should be filed as a separate finding
-  with operator-impact analysis.
-- Static `is_hop_by_hop(name)` is **kept as a `pub` re-export** for any
-  consumer that already understands the dynamic-vs-static distinction and
-  only wants the canonical check.
+The former ForwardAuth `request_headers` mode and webhook `forward_headers`
+filtering descriptions no longer identify the current forwarding implementations.
+Both consumers now use the shared compiled outbound request path. Its `forward_all`
+branch applies dynamic hop-by-hop filtering; explicit `origin` and `custom` fields
+are processed afterward, with schema-owned framing validation. This storage change
+does not alter those selection policies. The historical Mode 2 versus webhook
+comparison is not current guidance for either consumer.
 
-## Known inconsistency (not introduced by this fix)
-
-`webhook::resolver::resolve_webhook_key` and `forward_auth` Mode 2 are
-structurally similar — both forward only operator-listed header names — but
-they treat hop-by-hop differently:
-
-| Site | Static hop-by-hop filter | Dynamic Connection-listed filter |
-|---|---|---|
-| `forward_auth` Mode 2 (`request_headers`) | no | no |
-| `webhook::resolver` (`forward_headers`) | yes (already pre-fix) | yes (added by this fix) |
-
-The webhook resolver's static filter pre-dates this fix; this fix only
-extends it to the dynamic dimension to stay consistent with the static
-behavior already present there. Reconciling the two sites is out of scope
-for http1-03 and should be opened as a separate finding with explicit
-operator-impact analysis (changing Mode 2 in either direction is a
-behavior change for existing deployments).
+Static `is_hop_by_hop(name)` remains a public re-export for consumers that require
+only the canonical static check.
 
 ## Known plugin-sub-request gap: multiple `Connection:` header lines
 
-`session.header_value("connection")` and the equivalent
+`session.header_str("connection")` and the equivalent
 `original_headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("connection"))`
 in `all_endpoint_status::fan_out_requests` both return only the **first**
 occurrence of the header. RFC 9110 §5.3 explicitly allows list-based fields
@@ -141,13 +127,10 @@ dynamic stripping.
 
 This gap does not apply to the main response sanitizer, which reads every
 repeated field line. Closing it for the listed plugin sub-request callers
-requires changes beyond `connection_listed_hop_by_hop`
-itself: either iterate `request_headers()` and collect every `connection`
-entry, or extend the `PluginSession` trait with a
-`header_values(name) -> Vec<String>` accessor (single-value `header_value`
-is insufficient). The fix is intentionally deferred — multi-line
-`Connection:` is rare on the wire, and the current fix already closes the
-common-case attack surface (single `Connection: X-Custom`).
+requires their forwarding owners to collect all available field lines before
+filtering; changing token storage alone does not address it. No new owned accessor
+or broader forwarding behavior is selected by this optimization. The current
+first-field behavior remains a separate review boundary.
 
 ## Re-evaluation triggers
 
@@ -156,11 +139,11 @@ common-case attack surface (single `Connection: X-Custom`).
   `is_hop_by_hop_or_listed`, not the old `is_hop_by_hop`.
 - A real-world attack or operator report demonstrates exploitation via
   multi-line request `Connection:` headers in a plugin sub-request — escalate
-  the "Known plugin-sub-request gap" above into a follow-up finding and extend
-  the session trait with a `header_values` accessor.
-- The discrepancy between `forward_auth` Mode 2 and `webhook::resolver`
-  starts mattering operationally — reopen the "Known inconsistency" section
-  as a standalone design decision.
+  the "Known plugin-sub-request gap" above into a follow-up finding with an
+  exact forwarding-owner and repeated-field collection design.
+- Explicit `origin`/`custom` selection or framing validation changes — revalidate
+  the canonical compiled outbound request contract rather than applying the
+  historical mode-specific descriptions.
 
 ## Reference
 

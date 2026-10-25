@@ -28,6 +28,7 @@
 //!   internal client timeout because its detached send owns one outer combined deadline.
 
 use reqwest::Client;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -168,17 +169,22 @@ pub(crate) fn connection_option_tokens(connection_value: &str) -> impl Iterator<
 /// Parse the value of the request's `Connection:` header into a deduplicated
 /// list of lowercase connection-option names (RFC 9110 §7.6.1).
 ///
-/// Each comma-separated token is trimmed and lowercased; empty tokens are
+/// Each comma-separated token is trimmed and lowercased; lowercase tokens borrow
+/// their source, while tokens needing normalization own their text. Empty tokens are
 /// skipped. An intermediary MUST remove every header field whose name matches
 /// one of these tokens before forwarding the message.
 ///
 /// Callers that have no `Connection:` header should pass `""`, which returns
 /// an empty list.
-pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<Cow<'_, str>> {
+    let mut out: Vec<Cow<'_, str>> = Vec::new();
     for t in connection_option_tokens(connection_value) {
         if !out.iter().any(|s| s.eq_ignore_ascii_case(t)) {
-            out.push(t.to_ascii_lowercase());
+            out.push(if t.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                Cow::Owned(t.to_ascii_lowercase())
+            } else {
+                Cow::Borrowed(t)
+            });
         }
     }
     out
@@ -190,7 +196,7 @@ pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
 ///
 /// `dynamic_listed` should be the value returned by
 /// [`connection_listed_hop_by_hop`] for the originating request.
-pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
+pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[Cow<'_, str>]) -> bool {
     if is_hop_by_hop(name) {
         return true;
     }
@@ -198,11 +204,11 @@ pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
         return false;
     }
     let lower = if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
-        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+        Cow::Owned(name.to_ascii_lowercase())
     } else {
-        std::borrow::Cow::Borrowed(name)
+        Cow::Borrowed(name)
     };
-    dynamic_listed.iter().any(|s| s == lower.as_ref())
+    dynamic_listed.iter().any(|s| s.as_ref() == lower.as_ref())
 }
 
 #[cfg(test)]

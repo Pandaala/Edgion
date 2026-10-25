@@ -510,7 +510,7 @@ impl AllEndpointStatus {
 
         let path = self.config.path_override.as_deref().unwrap_or(original_path);
 
-        let dynamic_listed: Vec<String> = original_headers
+        let dynamic_listed = original_headers
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case("connection"))
             .map(|(_, v)| connection_listed_hop_by_hop(v))
