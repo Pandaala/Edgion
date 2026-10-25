@@ -249,7 +249,7 @@ fn test_time_format_invalid_specifier_returns_api_error() {
 }
 
 // ip_in_cidr with malformed CIDR returns false (not an error). Locks in the
-// parts.len() != 2 / parse-fail fall-through paths in BuiltinId::IpInCidr.
+// missing-separator / parse-fail fall-through paths in BuiltinId::IpInCidr.
 #[test]
 fn test_ip_in_cidr_invalid_cidr_returns_false() {
     let mut session = MockPluginSession::new();
@@ -266,6 +266,52 @@ fn test_ip_in_cidr_invalid_cidr_returns_false() {
     "#;
     let result = run(source, session);
     assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_ip_in_cidr_separator_and_prefix_boundaries() {
+    for (ip, cidr, expected) in [
+        ("10.1.2.3", "", false),
+        ("10.1.2.3", "10.0.0.0", false),
+        ("10.1.2.3", "/8", false),
+        ("10.1.2.3", "10.0.0.0/", false),
+        ("10.1.2.3", "10.0.0.0/8/", false),
+        ("10.1.2.3", "10.0.0.0//8", false),
+        ("10.1.2.3", "invalid/8", false),
+        ("10.1.2.3", "10.0.0.0/x", false),
+        ("10.1.2.3", "10.0.0.0/ 8", false),
+        ("10.1.2.3", "10.0.0.0/-1", false),
+        ("10.1.2.3", "10.0.0.0/256", false),
+        ("10.1.2.3", "10.0.0.0/33", false),
+        ("10.1.2.3", "10.0.0.0/+8", true),
+        ("10.1.2.3", "10.0.0.0/08", true),
+        ("10.1.2.3", "192.0.2.1/0", true),
+        ("10.1.2.3", "10.1.2.3/32", true),
+        ("10.1.2.3", "10.1.2.4/32", false),
+        ("10.1.2.3", "10.9.8.7/8", true),
+        ("2001:db8::1", "::/0", true),
+        ("2001:db8::1", "2001:db8::1/128", true),
+        ("2001:db8::1", "2001:db8::2/128", false),
+        ("2001:db8::1", "2001:db8::/129", false),
+        ("2001:db8::1", "2001:db8::/64/64", false),
+        ("10.1.2.3", "::/0", false),
+        ("::1", "0.0.0.0/0", false),
+    ] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(move |name, value| name == "X-Match" && value == if expected { "yes" } else { "no" })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let source = format!(
+            r#"if ip_in_cidr("{ip}", "{cidr}") {{
+                req.set_header("X-Match", "yes")
+            }} else {{
+                req.set_header("X-Match", "no")
+            }}"#
+        );
+        assert_eq!(run(&source, session), good_next(), "ip={ip}, cidr={cidr}");
+    }
 }
 
 #[test]

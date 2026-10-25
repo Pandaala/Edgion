@@ -1289,15 +1289,14 @@ impl Vm {
                     Err(_) => return Ok(Value::Bool(false)),
                 };
                 // Parse CIDR manually: "10.0.0.0/8"
-                let parts: Vec<&str> = cidr_str.splitn(2, '/').collect();
-                if parts.len() != 2 {
+                let Some((network, prefix)) = cidr_str.split_once('/') else {
                     return Ok(Value::Bool(false));
-                }
-                let network_ip: std::net::IpAddr = match parts[0].parse() {
+                };
+                let network_ip: std::net::IpAddr = match network.parse() {
                     Ok(ip) => ip,
                     Err(_) => return Ok(Value::Bool(false)),
                 };
-                let prefix_len: u8 = match parts[1].parse() {
+                let prefix_len: u8 = match prefix.parse() {
                     Ok(p) => p,
                     Err(_) => return Ok(Value::Bool(false)),
                 };

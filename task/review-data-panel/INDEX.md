@@ -18300,3 +18300,21 @@ regex-replacement and 17 AI Guard request-rule tests. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No test body changed; no full-workspace suite, live integration or benchmark ran.
 Wider callback coverage and previously deferred ownership decisions remain open.
+
+## Borrow DSL CIDR components without a temporary vector
+
+`IpInCidr` now uses `split_once('/')` to borrow the network and prefix instead
+of collecting `splitn(2, '/')` into a temporary vector. Additional slashes remain
+in the prefix and fail parsing; missing separators still return false. Argument
+conversion/pop order, IP-first validation, u8 prefix grammar, family matching
+and masks are unchanged. This removes the split container allocation, not the
+separate RuntimeString copies deferred in DSL-01. No matcher migration, constant
+precompilation, dispatch extraction or measured throughput gain is claimed.
+
+A new script-driven matrix pins empty/missing/extra separators, malformed parts,
+accepted signed-positive/zero-padded prefixes, rejected whitespace/overflow,
+IPv4/IPv6 zero/full/excess prefixes, host bits and family mismatch. All six CIDR
+tests passed on both the original and modified implementations with identical
+identities/outcomes. The broader P3 utility group passed 43 tests. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full-workspace suite, live integration or benchmark ran.
