@@ -17020,3 +17020,21 @@ unchanged filter/union placement establishes the early-union exclusion by source
 review. No stronger test claim or new test is made. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live traffic or benchmark ran.
+
+## Borrow gRPC listener slices during orphan-reference collection
+
+The affected-listener rebuild now inserts cloned keys directly from each cached
+route's borrowed listener slice. This removes the temporary per-route Vec while
+preserving the owned reference set, duplicate handling and empty-list behavior.
+The separate scan remains after affected-table publication and includes all
+references, without eligibility filtering. Orphan clearing and manager lifetimes
+are unchanged. DashMap's iterator already retains the shard guard while the old
+flattened Vec is consumed. Individual inserts avoid per-route bulk reservation
+for duplicate keys. No measured throughput improvement is claimed.
+
+Independent plan and final source reviews passed. Fresh baseline and final gRPC
+selections passed the same 75 test identities and outcomes, including existing
+orphan-handle and handler update/delete cases. No dedicated multi-reference
+orphan-retention test claim or redundant new test is made. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.

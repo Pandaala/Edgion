@@ -337,11 +337,12 @@ impl GlobalGrpcRouteManagers {
 
         // Sweep orphan entries left over from earlier rebuild_all calls — see the
         // matching comment in HTTP routes_mgr::rebuild_affected_listener_managers.
-        let route_referenced: HashSet<ListenerKey> = self
-            .route_cache
-            .iter()
-            .flat_map(|e| resolved_listeners_for_grpc_route(e.value()).to_vec())
-            .collect();
+        let mut route_referenced = HashSet::new();
+        for entry in self.route_cache.iter() {
+            for key in resolved_listeners_for_grpc_route(entry.value()) {
+                route_referenced.insert(key.clone());
+            }
+        }
         let orphans: Vec<ListenerKey> = self
             .by_listener
             .iter()
