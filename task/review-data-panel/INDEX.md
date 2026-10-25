@@ -17147,3 +17147,21 @@ reuse, unavailable raw views, epoch exhaustion and final-only selector creation.
 No allocation counter or redundant new test was added. Formatting, workspace
 all-target check/Clippy and seven repository guards passed with existing warnings.
 No full suite, live traffic or benchmark ran.
+
+## Borrow discovery source records during sorted normalization
+
+The preflight and publication helpers now sort borrowed slice-key/record pairs
+rather than cloning each selected key and LiveSourceRecord. Publication also
+borrows its Service record. The immutable staged state owns inputs for the
+entire call; returned geometry and raw projections keep their original owned
+origin keys, identities and resource Arcs. String/str comparison and fingerprint
+bytes are equivalent. This removes temporary selected-key copies and record
+Arc clone/drop work; vectors, sorting, normalization and retained output ownership
+remain. No throughput or whole-path allocation claim is made.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+coordinator runs passed the same 42 test identities/outcomes, covering aliases,
+merged origins, no-ops, raw generations, unavailable states and exact epochs.
+No new test or wider API was needed. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full suite, live
+traffic or benchmark ran.

@@ -1362,7 +1362,7 @@ fn build_service_projection(
     epochs: &mut impl Iterator<Item = u64>,
     runtime_cell: Option<Arc<ServiceRuntimeCell>>,
 ) -> Option<ServicePublishedState> {
-    let Some(service_record) = state.services.get(service_key).cloned() else {
+    let Some(service_record) = state.services.get(service_key) else {
         let has_slices = state
             .endpoint_slices
             .values()
@@ -1377,21 +1377,21 @@ fn build_service_projection(
         ));
     }
 
-    let mut slices: Vec<(String, LiveSourceRecord<EndpointSlice>)> = state
+    let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
         .endpoint_slices
         .iter()
         .filter(|(_, slice)| endpoint_slice_service_key(&slice.resource) == service_key)
-        .map(|(key, slice)| (key.clone(), slice.clone()))
+        .map(|(key, slice)| (key.as_str(), slice))
         .collect();
-    slices.sort_by(|left, right| left.0.cmp(&right.0));
+    slices.sort_by(|left, right| left.0.cmp(right.0));
     if slices.iter().any(|(_, slice)| slice.identity.is_none()) {
         return Some(ServicePublishedState::Unavailable(
             ServiceUnavailableReason::InvalidEpoch,
         ));
     }
 
-    let geometry = normalize_sections(&service_record, &slices);
-    let content_fingerprint = service_content_fingerprint(&service_record, &slices, &geometry);
+    let geometry = normalize_sections(service_record, &slices);
+    let content_fingerprint = service_content_fingerprint(service_record, &slices, &geometry);
     if let Some(ServicePublishedState::Available(old)) = old {
         if old.content_fingerprint == content_fingerprint {
             return Some(ServicePublishedState::Available(Arc::clone(old)));
@@ -1458,13 +1458,13 @@ fn projection_epoch_requirement(
     if service.identity.is_none() {
         return 0;
     }
-    let mut slices: Vec<(String, LiveSourceRecord<EndpointSlice>)> = state
+    let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
         .endpoint_slices
         .iter()
         .filter(|(_, slice)| endpoint_slice_service_key(&slice.resource) == service_key)
-        .map(|(key, slice)| (key.clone(), slice.clone()))
+        .map(|(key, slice)| (key.as_str(), slice))
         .collect();
-    slices.sort_by(|left, right| left.0.cmp(&right.0));
+    slices.sort_by(|left, right| left.0.cmp(right.0));
     if slices.iter().any(|(_, slice)| slice.identity.is_none()) {
         return 0;
     }
@@ -1478,7 +1478,7 @@ fn projection_epoch_requirement(
 
 fn normalize_sections(
     service: &LiveSourceRecord<Service>,
-    slices: &[(String, LiveSourceRecord<EndpointSlice>)],
+    slices: &[(&str, &LiveSourceRecord<EndpointSlice>)],
 ) -> BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>> {
     let mut aliases: BTreeMap<ServiceSectionKey, Vec<Arc<NormalizedSectionOutcome>>> = BTreeMap::new();
     let mut sections = HashMap::<ServicePortIdentity, Arc<NormalizedSectionOutcome>>::new();
@@ -1552,7 +1552,7 @@ fn normalize_service_port(port: &ServicePort) -> Option<ServicePortIdentity> {
 fn normalize_section(
     service: &LiveSourceRecord<Service>,
     identity: &ServicePortIdentity,
-    slices: &[(String, LiveSourceRecord<EndpointSlice>)],
+    slices: &[(&str, &LiveSourceRecord<EndpointSlice>)],
 ) -> NormalizedSectionOutcome {
     let mut grouped: BTreeMap<SocketAddr, BTreeSet<EndpointOrigin>> = BTreeMap::new();
     for (slice_key, slice) in slices {
@@ -1592,7 +1592,7 @@ fn normalize_section(
                 }
                 let socket = SocketAddr::new(ip, port.get());
                 grouped.entry(socket).or_default().insert(EndpointOrigin {
-                    slice_key: Arc::clone(origin_slice_key.get_or_insert_with(|| Arc::from(slice_key.as_str()))),
+                    slice_key: Arc::clone(origin_slice_key.get_or_insert_with(|| Arc::from(*slice_key))),
                     source_identity: source_identity.clone(),
                     address: ip,
                     serving_port: port,
@@ -1882,7 +1882,7 @@ fn materialize_sections(
 
 fn service_content_fingerprint(
     service: &LiveSourceRecord<Service>,
-    slices: &[(String, LiveSourceRecord<EndpointSlice>)],
+    slices: &[(&str, &LiveSourceRecord<EndpointSlice>)],
     sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
