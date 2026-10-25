@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Rendered outbound header storage](outbound-06-rendered-header-storage.md)
+
 - [Semantic window fragment projection](sse-04-semantic-fragment-projection.md)
 
 - [HTTP/1 body-buffer handoff ownership](transport-01-h1-body-buffer-handoff.md)
@@ -16966,3 +16968,19 @@ its cause is unproven and no pre-change parallel reproduction was run. Formattin
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No tests were added, changed or disabled; no full suite, live transport
 or benchmark ran.
+
+## Rendered outbound header ownership decision
+
+The shared outbound builder copies owned rendered strings into HeaderValue.
+Direct String transfer preserves validation and sensitivity but can keep the
+renderer's disproportionate hint capacity alive with network requests and clones.
+[outbound-06](outbound-06-rendered-header-storage.md) records compact copying,
+exact-capacity-only transfer and a separately reviewed general retention policy.
+No alternative or new template bound is selected. Independent plan review blocked
+unconditional transfer as a no-tradeoff optimization and approved this task.
+
+Fresh existing tests passed 28 request-builder and 46 outbound-call cases. No
+runtime or test changed, and no prototype, allocation probe, full suite, live
+transport or benchmark ran. Current tests establish existing behavior only.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings.
