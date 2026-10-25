@@ -604,10 +604,10 @@ impl<'a> SqliTokenizer<'a> {
         let slen = self.input.len();
 
         // Find end of line or end of string
-        let mut end_pos = pos;
-        while end_pos < slen && self.input[end_pos] != b'\n' {
-            end_pos += 1;
-        }
+        let end_pos = self
+            .memchr(b'\n', &self.input[pos..])
+            .map(|offset| pos + offset)
+            .unwrap_or(slen);
 
         let comment_slice = &self.input[pos..end_pos];
         self.current.assign(TYPE_COMMENT, pos, end_pos - pos, comment_slice);
@@ -1247,26 +1247,15 @@ impl<'a> SqliTokenizer<'a> {
     }
 
     fn find_qstring_end(&self, start: usize, end_delim: u8) -> Option<usize> {
-        let mut pos = start;
+        let suffix = self.input.get(start..)?;
         if end_delim < 128 {
-            while pos + 1 < self.input.len() {
-                if self.input[pos] == end_delim && self.input[pos + 1] == b'\'' {
-                    return Some(pos);
-                }
-                pos += 1;
-            }
+            memmem::find(suffix, &[end_delim, b'\'']).map(|offset| start + offset)
         } else {
             // Go converts the byte delimiter to a rune before searching for its UTF-8 encoding.
             let first = 0xc0 | (end_delim >> 6);
             let second = 0x80 | (end_delim & 0x3f);
-            while pos + 2 < self.input.len() {
-                if self.input[pos] == first && self.input[pos + 1] == second && self.input[pos + 2] == b'\'' {
-                    return Some(pos);
-                }
-                pos += 1;
-            }
+            memmem::find(suffix, &[first, second, b'\'']).map(|offset| start + offset)
         }
-        None
     }
 
     fn parse_dollar_string(&mut self) -> usize {

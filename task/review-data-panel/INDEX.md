@@ -17968,3 +17968,25 @@ parser/folding/verdict fixtures ran. Formatting, workspace all-target check/Clip
 and seven repository guards passed with existing warnings. No full-workspace
 test suite, live Gateway integration, fresh external-checkout comparison or
 performance benchmark ran; no measured throughput improvement is claimed.
+
+## Reuse byte searches for SQL line comments and Q-string endings
+
+The line-comment parser now locates its first LF through the existing memchr
+helper, retaining CR as comment content, excluding LF from the token and skipping
+exactly one LF. Dialect dispatch and hash/dash statistics remain in their callers.
+Q-string ending lookup uses memmem with the same two-byte ASCII or three-byte
+UTF-8-encoded high-byte needle. A checked borrowed suffix restores absolute match
+positions; the sole production caller already guarantees start <= input length.
+The helper safely rejects invalid starts. parse_qstring_core retains the pinned
+end_pos + 2 cursor even when the matched high-byte needle is three bytes long.
+No ownership, dependency, logging or detector-budget change was introduced.
+
+Two baseline-first regressions cover LF/CR/EOF, raw bytes, dialect statistics,
+nonzero offsets, comment truncation, first/partial/overlapping Q-string matches,
+encoded high bytes and empty suffixes. Existing Q/NQ high-byte cursor tests remain.
+Fresh baseline/final WAF library runs preserve all 871 identities/outcomes:
+865 passed and six existing ignored. Offline parser/folding/verdict fixtures ran.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full-workspace test suite, live Gateway integration,
+fresh external-checkout comparison or performance benchmark ran. No measured
+throughput benefit or complete scanner equivalence is claimed.

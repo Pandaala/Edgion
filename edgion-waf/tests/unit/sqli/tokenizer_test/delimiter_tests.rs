@@ -1,6 +1,130 @@
 use super::*;
 
 #[test]
+fn line_comments_keep_lf_only_boundary_and_dialect_statistics() {
+    for (input, start, content, cursor, flags, stats) in [
+        (
+            b"-- a\r\n!".as_slice(),
+            0,
+            b"-- a\r".as_slice(),
+            6,
+            SqliFlags::FLAG_SQL_ANSI,
+            (1, 0, 0),
+        ),
+        (
+            b"--x\n!".as_slice(),
+            0,
+            b"--x".as_slice(),
+            4,
+            SqliFlags::FLAG_SQL_ANSI,
+            (0, 1, 0),
+        ),
+        (
+            b"#a\r\n!".as_slice(),
+            0,
+            b"#a\r".as_slice(),
+            4,
+            SqliFlags::FLAG_SQL_MYSQL,
+            (0, 0, 2),
+        ),
+        (
+            b"-- \0\xff\n!".as_slice(),
+            0,
+            b"-- \0\xff".as_slice(),
+            6,
+            SqliFlags::FLAG_SQL_ANSI,
+            (1, 0, 0),
+        ),
+        (
+            b" -- a\n!".as_slice(),
+            1,
+            b"-- a".as_slice(),
+            6,
+            SqliFlags::FLAG_SQL_ANSI,
+            (1, 0, 0),
+        ),
+        (
+            b"-- a\r".as_slice(),
+            0,
+            b"-- a\r".as_slice(),
+            5,
+            SqliFlags::FLAG_SQL_ANSI,
+            (1, 0, 0),
+        ),
+        (
+            b"--\n".as_slice(),
+            0,
+            b"--".as_slice(),
+            3,
+            SqliFlags::FLAG_SQL_ANSI,
+            (1, 0, 0),
+        ),
+    ] {
+        let mut tokenizer = SqliTokenizer::new(input, flags);
+        let token = tokenizer.next_token().unwrap();
+        assert_eq!(token.token_type, TokenType::Comment);
+        assert_eq!((token.pos, token.len, token.count), (start, content.len(), 0));
+        let mut expected = [0; 32];
+        expected[..content.len()].copy_from_slice(content);
+        assert_eq!(token.val, expected);
+        assert_eq!((token.str_open, token.str_close), (CHAR_NULL, CHAR_NULL));
+        assert_eq!(tokenizer.pos, cursor);
+        assert_eq!(
+            (
+                tokenizer.stats_comment_ddw,
+                tokenizer.stats_comment_ddx,
+                tokenizer.stats_comment_hash
+            ),
+            stats
+        );
+        if cursor < input.len() {
+            let next = tokenizer.next_token().unwrap();
+            assert_eq!((next.pos, next.len, next.val[0]), (cursor, 1, b'!'));
+        }
+        assert!(tokenizer.next_token().is_none());
+    }
+
+    let mut input = b"-- ".to_vec();
+    input.extend_from_slice(&[b'a'; 64]);
+    input.push(b'\n');
+    let mut tokenizer = SqliTokenizer::new(&input, SqliFlags::FLAG_SQL_ANSI);
+    let token = tokenizer.next_token().unwrap();
+    assert_eq!((token.pos, token.len, token.count), (0, 31, 0));
+    let mut expected = [b'a'; 32];
+    expected[..3].copy_from_slice(b"-- ");
+    expected[31] = CHAR_NULL;
+    assert_eq!(token.val, expected);
+    assert_eq!(tokenizer.pos, 68);
+    assert!(tokenizer.next_token().is_none());
+}
+
+#[test]
+fn qstring_search_keeps_encoded_delimiter_and_absolute_first_match() {
+    for (input, start, delimiter, expected) in [
+        (b"".as_slice(), 0, b'!', None),
+        (b"!".as_slice(), 0, b'!', None),
+        (b"!!'".as_slice(), 0, b'!', Some(1)),
+        (b"xx!x!'tail!'".as_slice(), 2, b'!', Some(4)),
+        (b"!'".as_slice(), 1, b'!', None),
+        (b"!'".as_slice(), 2, b'!', None),
+        (b"!'".as_slice(), 3, b'!', None),
+        (b"\xff'\xc3\xbf'\xc3\xbf'".as_slice(), 0, 0xff, Some(2)),
+        (b"\xff'\xc3\xbf'\xc3\xbf'".as_slice(), 3, 0xff, Some(5)),
+        (b"\xc3\xbf".as_slice(), 0, 0xff, None),
+        (b"\xc3\xbfX'".as_slice(), 0, 0xff, None),
+        (b"\0\xc2\x80'".as_slice(), 0, 0x80, Some(1)),
+        (b"\xc2\x80'".as_slice(), 3, 0x80, None),
+    ] {
+        let tokenizer = SqliTokenizer::new(input, SqliFlags::FLAG_NONE);
+        assert_eq!(
+            tokenizer.find_qstring_end(start, delimiter),
+            expected,
+            "{input:?}, start {start}"
+        );
+    }
+}
+
+#[test]
 fn dollar_strings_preserve_first_exact_end_marker_and_cursor() {
     for (input, start, content, cursor, closed) in [
         (b"$$".as_slice(), 2, b"".as_slice(), 2, false),
