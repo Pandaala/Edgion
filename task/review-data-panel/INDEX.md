@@ -17990,3 +17990,20 @@ Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full-workspace test suite, live Gateway integration,
 fresh external-checkout comparison or performance benchmark ran. No measured
 throughput benefit or complete scanner equivalence is claimed.
+
+## SQLi delimiter classification decision
+
+Recorded [WAF-21](waf-21-sqli-delimiter-classification.md) for source-level repeated
+word/variable delimiter membership checks. Their static sets differ (36 versus
+31 unique bytes), so a shared implementation cannot merge their semantics.
+The task compares existing contains calls with compile-time bitsets or a static
+classification table, requiring optimized measurement before selection. No
+request allocation currently comes from the delimiter literals, and no runtime
+change or performance gain is claimed. Bounded dot/backtick prefix lookup and
+quoted-variable ownership remain explicit acceptance gates.
+
+Fresh unchanged-production WAF tests passed 865 cases with six existing ignored;
+formatting and workspace all-target check/Clippy passed with existing warnings.
+No alternative implementation, benchmark, full-workspace suite, fresh upstream
+comparison or live Gateway integration ran. The broader data-plane goal remains
+open.
