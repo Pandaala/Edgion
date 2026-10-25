@@ -1634,3 +1634,64 @@ existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
 workspace all-target check/Clippy and agent-doc validation passed with existing
 warnings. No full-workspace suite, fresh upstream-checkout comparison, live
 Gateway integration or benchmark ran.
+
+## XSS tokenizer, classification and decoder boundaries
+
+Source revalidated at `a52b345b6`. DetectXss reaches injection::detect_xss after
+stage input/work admission. The stateless detector visits DataState,
+ValueNoQuote, ValueSingleQuote, ValueDoubleQuote and ValueBackQuote in order,
+stopping on the first XSS verdict. ValueNoQuote initializes before_attribute_name,
+not the unquoted-value state. XSS returns a verdict without SQLi-style capture.
+
+Html5State borrows input and stores its fixed length, cursor, close-tag flag,
+function-pointer state and current token metadata. set_token stores a borrowed
+suffix plus a separate token_len; consumers slice that length, not the entire
+suffix. No owned HTML token or decoded URL is built. The 23 state methods,
+including EOF, are grouped below; this is direct source/state coverage, not
+exhaustive transition-sequence equivalence.
+
+| State group | Inspected behavior and preserved boundary |
+| --- | --- |
+| Data and EOF | Locate the next less-than byte or emit remaining DataText. Non-emitting transitions can delegate to the next state; EOF returns false. |
+| Tag open/name/end/close/self-close | Dispatch markup, slash, question-mark and percent forms; alphabetic/NUL handling remains state-specific. Tag names retain NUL bytes in borrowed spans. TagClose, TagNameClose and TagNameSelfclose are distinct outputs, with different delimiter advancement and is_close updates. |
+| Before/name/after attribute | h5_skip_white includes NUL while ordinary whitespace predicates do not. EOF is Option::None, distinct from every byte including 0xFF. Repeated slash handling uses the existing loop. Attribute-name scanning starts one byte after its initial byte and preserves delimiter-specific cursor/state behavior. |
+| Before/value/after attribute value | Single, double and backquote states skip the opening quote only when pos > 0, preserving context starts. Quoted scans use the first matching delimiter; unquoted scans retain whitespace/greater-than boundaries. The latter can defer the closing-character token to a separate state. |
+| Markup and doctype | Double dash selects comments, ASCII-insensitive DOCTYPE selects doctype, exact CDATA marker selects data, and other forms use bogus comments. Doctype tokens retain their source prefix and end at the first greater-than byte or EOF. |
+| Comments and CDATA | Ordinary comment ending recognizes dash, optional NUL run, dash-or-bang, then greater-than, retaining its returned closing length. Bogus comments use a greater-than boundary; percent comments use the first adjacent percent/greater-than pair. CDATA uses its first exact ending triple. Unmatched paths retain their existing emitted token and EOF behavior. |
+
+The detector clears attribute classification before every non-AttrValue token;
+AttrName then sets the classification for a following value. Black and Style
+attributes reject on that value, AttrUrl invokes URL prefix checks, AttrIndirect
+reclassifies the value and rejects only Black, and consumed values clear the
+classification. Doctype rejects immediately; tag names use blacklist lookup.
+Tag/attribute normalization skips NUL, uppercases ASCII into a 64-byte stack array
+and rejects excess non-NUL bytes. Tags retain their raw-length precheck and SVG/XSL
+prefix rules. Attribute lookup retains XMLNS/XLINK, ON-event and other static
+binary searches. These are bounded scratch operations, not heap normalization.
+
+Production comment checks are inline in is_xss: backtick, conditional/XML prefixes
+and exactly six-byte IMPORT/ENTITY comparisons. The unused is_dangerous_comment,
+limited comparison, peek and skip_whitespace helpers are not production hot-path
+coverage or optimization evidence.
+
+URL handling first trims raw bytes <= 32 or >= 127, then probes DATA, VIEW-SOURCE,
+VBSCRIPT and JAVA independently. Numeric entity decoding accepts decimal or hex
+with optional semicolons. Invalid numeric starts and values above 0x1000FF return
+ampersand with one byte consumed; named entities are not generally decoded.
+A nondigit ends a valid numeric run before that byte, while a semicolon is
+consumed. Empty input returns -1 with zero consumption. Prefix matching separately
+skips leading decoded values <= 32, always skips NUL/LF, then uppercases ASCII
+before casting to u8. These are prefix checks, not URL parsing or Unicode
+normalization. The repeated decoding tradeoff remains [WAF-13](waf-13-xss-url-prefix-decoding.md).
+
+No further runtime change or representation choice was made. The preserved input
+cap and work model are resource accounting, not instruction/wall-clock bounds.
+Full static-table/reference revalidation, adversarial state-sequence equivalence,
+dependency/performance analysis and complete WAF/callback/goal coverage remain
+outside this inventory.
+
+Fresh unchanged-production WAF library verification passed 869 tests with six
+existing ignored. Offline parser/folding/verdict fixtures ran. Formatting,
+workspace all-target check/Clippy and agent-doc validation passed with existing
+warnings. No full-workspace suite, fresh upstream-checkout comparison, live
+Gateway integration or benchmark ran.

@@ -18099,3 +18099,18 @@ parser/folding/verdict fixtures ran. Formatting, workspace all-target check/Clip
 and seven repository guards passed with existing warnings. No full-workspace
 test suite, fresh external-checkout comparison, live Gateway integration or
 performance benchmark ran; no measured throughput benefit is claimed.
+
+## XSS state and decoder inventory
+
+Extended [callback coverage](CALLBACKS.md#xss-tokenizer-classification-and-decoder-boundaries)
+through all 23 HTML tokenizer state bodies, borrowed suffix/length token output,
+ordered detection contexts, attribute classification and numeric entity decoding.
+Recorded NUL/EOF distinctions, context-specific quote starts, different close-tag
+outputs, stack normalization and exact consumed-byte rules. Unused helpers are
+excluded from hot-path claims; WAF-13 remains deferred and no runtime changed.
+
+Fresh unchanged-production WAF tests passed 869 cases with six existing ignored;
+formatting and workspace all-target check/Clippy passed with existing warnings.
+Direct source coverage does not establish exhaustive reference equivalence or
+complete callback coverage. No full-workspace suite, fresh upstream comparison,
+live Gateway integration or benchmark ran.
