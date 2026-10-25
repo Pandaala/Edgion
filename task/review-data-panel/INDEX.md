@@ -17726,3 +17726,10 @@ The [DNS query ownership inventory](CALLBACKS.md#dns-query-ownership-and-depende
 records native, AI and egress entry boundaries against `558729857`, links existing
 deferred choices, and identifies dependency/lifecycle coverage that remains open.
 It does not close the broader callback audit or select a deferred implementation.
+
+## HTTPDNS URL template preparation decision
+
+The [URL template task](dns-06-url-template-preparation.md) records repeated
+configuration-stable selection/search work, possible generation-owned metadata,
+and its retained-memory tradeoff. Selection and measurement remain deferred;
+existing URL, domain-validation and fallback behavior is unchanged.
