@@ -1890,3 +1890,48 @@ Fresh targeted tests passed 18 extractor, 14 mTLS callback and 20 HeaderCertAuth
 cases. Formatting, workspace all-target check/Clippy and agent-doc validation
 passed with existing warnings. No runtime/test edit, full-workspace suite, live
 TLS integration or benchmark accompanied this inventory.
+
+## DSL scalar utility direct execution boundaries
+
+Source baseline: `805ac19e3`. This inventory covers exactly 23 explicit utility
+arms in `plugins/http/dsl/lang/builtins.rs::call_builtin`, not the entire DSL.
+Both DslPlugin request and upstream-response entries reach execute_safe; the
+response entry retains its multi-thread Tokio synchronous bridge. Generic calls
+compile arguments in source order, then dispatch CallBuiltin. The VM charges
+an opcode step and builtin call before synchronous dispatch, then pushes the
+result with stack-depth admission and container-shape inspection where applicable.
+These counters do not meter each byte of work inside a builtin.
+
+RuntimeString delegates to Value::try_into_string: existing Arc text is copied,
+scalars are rendered, List/Map use their marker forms, and Body/Xml conversion
+fails. The output limit is not a universal input or temporary-allocation bound.
+Direct source inspection establishes the following behavior, not a new policy
+acceptance or exhaustive dependency audit.
+
+| Explicit arms | Direct work and retained boundary |
+| --- | --- |
+| Len | Counts Unicode scalars for Str, entries for List/Map, zero for nil; other values return TypeError. No temporary string conversion. |
+| Substr | Validates end then start, clamps negative indices to zero, and finds scalar-index byte boundaries in one pass. Checks selected bytes and retains the original Arc for a full span; partial output owns its Arc. Nil/reversed ranges yield empty text. |
+| ToStr, ToInt | ToStr preserves an existing Arc after the byte check; other values use RuntimeString and independent output ownership. ToInt parses Str as i64, retains Int, and returns nil otherwise, including failed parsing. |
+| ToUpper, ToLower, Trim | Case conversion uses standard Unicode conversion, allocates its result, then checks output bytes. Trim borrows the trimmed slice, checks it, and converts the existing input owner when unchanged or copies the trimmed slice into Arc. No ASCII-only policy substitution. |
+| Base64Encode, HexEncode | After coercion, exact padded-Base64 or doubled-byte length admits the existing encoder before output allocation. Accepted output becomes an independent Arc. Defensive overflow handling is not evidence of reachable oversized Rust strings. |
+| Base64Decode, HexDecode | Dependency decode failure returns nil. Successful bytes use lossy UTF-8, then final-byte validation and independent Arc creation. Decode and possible lossy replacement storage precede that check; encoded input length is not an exact decoded-text admission test. |
+| UrlEncode, UrlDecode | Encoding preserves the unreserved set and uppercase escapes, checking after a complete Unicode scalar; initial capacity is input length. Decoding has a marker-free shortcut, otherwise strict two-ASCII-hex decoding, literal invalid-percent rescanning, plus-to-space and whole-buffer lossy UTF-8. Neither route authorizes substitution of the resource decoder's malformed-input semantics. |
+| Sha256, Md5, HmacSha256 | Retain argument/coercion and crypto order. Fixed digest hex text uses stack buffers, canonical byte checking and independent Arc output. HMAC pops data before key. Crypto implementation internals are outside this inventory. |
+| Split | Counts full non-overlapping matches or Unicode scalars plus boundary elements, rejects exact ListTooLong before result construction, then reserves and splits into Arc elements. No per-element string-limit check; the two-pass scan decision remains deferred. |
+| Range | Validates end then start as Int or nil, checks subtraction, clamps count to nonnegative/min(max_list_len, 1000), and checks the end bound. A reused numeric String feeds independent Arc elements. No per-element string-limit check. |
+| Join | Converts delimiter before validating List input; checked arithmetic admits the exact combined byte length before allocation. Overflow reports usize::MAX. Copies items/separators into one reserved String and then independent Arc. |
+| IpInCidr | Converts CIDR then IP, parses IP first, borrows network/prefix with split_once, then parses network and u8 prefix. Malformed/mixed-family/out-of-range input returns false; same-family masks preserve zero/full-prefix behavior. This is the scalar DSL predicate, not a business ACL policy owner. |
+| TimeNow, Uuid | TimeNow reads SystemTime, returns epoch seconds and zero for pre-epoch error. UUID v4 uses stack text encoding followed by byte validation and Arc output. OS clock/RNG internals and their failure policies are not reviewed here. |
+| TimeFormat | Converts and gates the format at 256 bytes before timestamp handling; nil/out-of-range skips formatting. Direct fallible Chrono writing preserves ApiError before successful-output byte checking. Literal-format parsing still happens at execution. |
+
+The rows enumerate 23 arms (1+1+2+3+2+2+2+3+1+1+1+1+2+1). Logging,
+session access/mutation, JSON/XML/Body, Redis and outbound HTTP branches are not
+included. Regex search/replacement and other specialized opcodes retain their
+separate compiler/validator/runtime boundaries. This does not establish complete
+VM, standard-library, codec, crypto or plugin coverage.
+
+Remaining ownership and representation decisions are [DSL-01](dsl-01-string-consumer-ownership.md),
+[DSL-11](dsl-11-url-decoder-consolidation.md), [DSL-12](dsl-12-split-scan-reuse.md)
+and [DSL-13](dsl-13-time-format-preparation.md). No new runtime proposal or
+performance result is implied by consolidating the direct source inventory.

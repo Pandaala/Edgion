@@ -18525,3 +18525,21 @@ ownership and the completed Display-buffer removal remain separate.
 Fresh time_format coverage passed seven tests. Formatting, workspace all-target
 check/Clippy, agent-doc validation and diff checks passed with existing warnings.
 These verify the retained path and documentation, not a prepared-format design.
+
+## DSL scalar utility inventory reconciliation
+
+[The direct scalar utility inventory](CALLBACKS.md#dsl-scalar-utility-direct-execution-boundaries)
+now reconciles 23 explicit arms with compiler argument emission, request/response
+entry dispatch, RuntimeString ownership and VM admission. It distinguishes result
+limits from input/temporary allocation bounds and per-opcode budgets from
+synchronous byte work. Existing optimizations and DSL-01/11/12/13 decisions remain
+separate. This is direct utility coverage, not full DSL or dependency coverage;
+no runtime or test changed.
+
+Fresh utility coverage passed 111 tests; formatting, workspace all-target
+check/Clippy, agent-doc validation and diff checks passed with existing warnings.
+A separate knowledge follow-up remains: revalidate the universal input/CPU-bound
+wording in `skills/04-review/cpu-memory/intentional-design/dsl-step-budget-not-cpu-bound.md`
+and per-Value wording in `skills/04-review/dsl/intentional-design/string-len-bytes-vs-chars-contract.md`
+against constant loading and container elements. This inventory does not adopt
+those broader bounds or claim that it establishes a complete sandbox cost model.
