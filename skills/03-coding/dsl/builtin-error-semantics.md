@@ -45,12 +45,20 @@ design note before altering the observable contract.
 | `to_int(s)` | unparseable / empty / overflow | `nil` | `test_to_int_unparseable_returns_nil`, `_empty_string_returns_nil`, `_overflow_returns_nil` |
 | `base64_decode(s)` | non-base64 input | `nil` | `test_base64_decode_invalid_returns_nil` |
 | `hex_decode(s)` | non-hex input | `nil` | `test_hex_decode_invalid` |
-| `url_decode(s)` | `%XX` where `XX` is not hex | literal `%XX` preserved | `test_url_decode_invalid_percent_preserves_literal` |
-| `url_decode(s)` | trailing `%` or `%X` (length < 3 tail) | literal preserved | `test_url_decode_single_percent_preserves_literal`, `test_url_decode_percent_one_char_preserves_literal` |
+| `url_decode(s)` | `%` without two following ASCII hex bytes | `%` remains literal; subsequent bytes are processed normally | `test_url_decode_invalid_percent_preserves_literal` covers `%ZZ` |
+| `url_decode(s)` | trailing `%` or `%X` (length < 3 tail) | same scanner rule: `%` and `%Z` remain unchanged; `%+` becomes `% ` | `test_url_decode_single_percent_preserves_literal`, `test_url_decode_percent_one_char_preserves_literal` cover `%` and `%Z` |
 | `ip_in_cidr(ip, cidr)` | malformed `cidr` (no `/`, bad prefix, bad ip) | `false` | `test_ip_in_cidr_invalid_cidr_returns_false` |
 | `time_format(ts, fmt)` | timestamp out of chrono's range | `nil` | `test_time_format_out_of_range_timestamp_returns_nil` |
 
-**Design intent**: these builtins are used in pipelining patterns like `if to_int(req.header("X-Limit")) > 100 { deny }` or `let parts = split(url_decode(req.query("path")), "/")`. A surprise `ApiError` mid-pipeline would deny every malformed request even when the script's logic could have handled the fallback gracefully (e.g. compared `to_int(x)` to nil). The silent-fallback shape preserves operator-level error handling at the script level.
+**Design intent**: these builtins are used in pipelining patterns like `if to_int(req.header("X-Limit")) > 100 { deny }` or `let parts = split(url_decode("a%2Fb"), "/")`. A surprise `ApiError` mid-pipeline would deny every malformed request even when the script's logic could have handled the fallback gracefully (e.g. compared `to_int(x)` to nil). The silent-fallback shape preserves operator-level error handling at the script level.
+
+`req.query(name)` already returns a decoded value from the frozen query cache;
+another `url_decode` is a second decoding operation, not a required query-read
+step. The DSL and resource decoders share ordinary form-style plus handling but
+differ on malformed tokens and invalid UTF-8. See the
+[decoder boundary](../../04-review/dsl/intentional-design/url-decode-form-semantics.md).
+The URL table describes source-traced behavior; the named tests cover the listed
+fixtures rather than every malformed-token combination.
 
 ## `ApiError` contracts
 

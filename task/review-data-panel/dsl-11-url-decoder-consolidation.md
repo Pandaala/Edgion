@@ -60,11 +60,10 @@ semantics; neither task authorizes cross-decoder convergence.
 This task records source evidence and an unresolved design choice, not acceptance
 of a new decoder or exhaustive end-to-end verification.
 
-## Knowledge follow-up
+## Knowledge correction
 
-`skills/03-coding/dsl/builtin-error-semantics.md` still overstates preservation
-of every malformed `%XX` sequence and contains `url_decode(req.query("path"))`
-as a generic pipeline example. Correct those descriptions against the same
-scanner/cache evidence independently of any consolidation decision; they are
-not authority for changing either runtime. The owning form-semantics page and
-both public URL-decode API sections are corrected by this batch.
+The owning form-semantics page, both public URL-decode API sections and
+`skills/03-coding/dsl/builtin-error-semantics.md` now distinguish malformed-token
+scanning from literal preservation and avoid presenting already-decoded
+`req.query` values as raw input. That documentation follow-up is resolved;
+the consolidation decision above remains deferred and changes neither runtime.

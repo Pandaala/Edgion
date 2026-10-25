@@ -18355,3 +18355,18 @@ Fresh existing tests passed eight Gateway URL cases and 14 Resources URI cases.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. Source tracing supports the difference table; no new
 cross-decoder differential suite, live integration or benchmark ran.
+
+## DSL split scan-reuse decision and URL error-contract follow-up
+
+[DSL-12](dsl-12-split-scan-reuse.md) records the tradeoff between the current
+count-then-build split and bounded reuse of split boundaries. The result already
+reserves its admitted exact capacity. Full-count errors precede result allocation;
+a one-pass builder or early limit-plus-one rejection would change those boundaries.
+No runtime change, selected prototype or measured bottleneck is claimed.
+
+Corrected the related builtin error-contract page's malformed URL description
+and already-decoded-query example. DSL-11's documentation follow-up is resolved,
+while its decoder-consolidation decision stays deferred. Fresh Gateway filtered
+runs passed 38 split-named tests and eight URL-decode tests. Formatting, workspace
+all-target check/Clippy and agent-doc validation passed with existing warnings.
+No test body changed. No full-workspace suite, live integration or benchmark ran.
