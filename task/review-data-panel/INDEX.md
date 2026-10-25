@@ -17315,3 +17315,20 @@ runs passed identical identities/outcomes for eight Service facade/handler and
 no implementation-mirroring tests were added. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No full
 suite, live traffic or benchmark ran.
+
+## Build full-Service replacement affected keys directly
+
+Service replacement now inserts old and incoming keys directly into the existing
+affected set instead of constructing two temporary owned sets and copying their
+union. String equality yields the same union; overlapping keys still clone twice.
+The transaction sorts the result before epoch preflight, projection construction
+and activation. Old-record staging, identity reuse, no-op handling, exhaustion
+and removal behavior remain unchanged. This removes scratch sets and the union
+copy stage without claiming exact capacity or measured performance.
+
+Independent plan and final source reviews passed. Fresh baseline/final serial
+runs passed identical identities/outcomes for 44 coordinator and eight Service
+tests, retaining alias, replacement/removal, no-op and epoch-failure coverage.
+No redundant new test was added. Formatting, workspace all-target check/Clippy
+and seven repository guards passed with existing warnings. No full suite, live
+traffic or benchmark ran.

@@ -849,9 +849,9 @@ impl ServiceDiscoveryCoordinator {
 
     pub fn replace_services(&self, data: &HashMap<String, Arc<Service>>) {
         self.transact(|state, affected| {
-            let old_keys: HashSet<String> = state.services.keys().cloned().collect();
-            let new_keys: HashSet<String> = data.keys().cloned().collect();
-            affected.extend(old_keys.union(&new_keys).cloned());
+            for key in state.services.keys().chain(data.keys()) {
+                affected.insert(key.clone());
+            }
             let mut next = HashMap::with_capacity(data.len());
             for (key, service) in data {
                 next.insert(
