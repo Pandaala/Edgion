@@ -710,7 +710,7 @@ impl ServiceDiscoveryCoordinator {
         let Some(service) = generation.available(service_key) else {
             return;
         };
-        let cell = Arc::clone(&service.runtime_cell);
+        let cell = &service.runtime_cell;
         let active = cell.active.load_full();
         if active.membership_identity != Some(service.membership_identity) {
             return;
@@ -718,7 +718,7 @@ impl ServiceDiscoveryCoordinator {
         let degrade_threshold = resolve();
         Self::publish_policy_snapshot(
             service_key,
-            &cell,
+            cell,
             &active,
             active.health_policy_present,
             active.outlier_policy_present,
@@ -746,10 +746,9 @@ impl ServiceDiscoveryCoordinator {
     pub(crate) fn refresh_all_degrade_thresholds(&self) {
         let _coordinator_guard = self.state.lock();
         let generation = self.load_generation();
-        let keys: Vec<String> = generation.services.keys().cloned().collect();
-        for key in keys {
-            self.refresh_degrade_threshold_locked(&generation, &key, || {
-                crate::backends::degrade_threshold::resolve_degrade_threshold(&key)
+        for key in generation.services.keys() {
+            self.refresh_degrade_threshold_locked(&generation, key, || {
+                crate::backends::degrade_threshold::resolve_degrade_threshold(key)
             });
         }
     }

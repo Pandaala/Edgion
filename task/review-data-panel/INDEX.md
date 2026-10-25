@@ -17264,3 +17264,19 @@ coordinator runs passed the same 44 test identities/outcomes; direct partition
 proof and existing epoch/statistics coverage required no redundant new test.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, live traffic or benchmark ran.
+
+## Borrow degrade threshold refresh inputs
+
+Threshold refresh now borrows service keys from its captured immutable generation
+and the runtime cell from its available projection. It avoids the temporary key
+vector, String copies and cell Arc increment/decrement. The state lock, generation
+load, iteration order, membership-before-resolution check and owned active snapshot
+remain unchanged. Publication replaces the cell snapshot without mutating the
+generation map. Captured HTTP policy and live L4/mirror policy boundaries remain.
+This is refresh-path ownership cleanup, not a measured request throughput gain.
+
+Independent plan and final source reviews passed. Fresh serial baseline/final
+runs passed identical identities/outcomes for 44 coordinator and four threshold
+tests. No redundant ownership-only tests were added. Formatting, workspace
+all-target check/Clippy and seven repository guards passed with existing warnings.
+No full suite, live traffic or benchmark ran.
