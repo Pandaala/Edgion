@@ -825,3 +825,54 @@ fn hex_escape_decoders_preserve_fallback_and_partial_output() {
         }
     }
 }
+
+#[test]
+fn octal_escape_decoders_preserve_width_and_partial_output() {
+    use TransformationKind::{EscapeSeqDecode, JsDecode};
+    fn check(kind: TransformationKind, input: &[u8], decoded: &[u8]) {
+        for prefix in [b"".as_slice(), b"P"] {
+            let mut expected = prefix.to_vec();
+            expected.extend_from_slice(decoded);
+            for limit in prefix.len()..=expected.len() + 1 {
+                let mut output = prefix.to_vec();
+                let result = apply_one(kind, input, &mut output, limit);
+                assert_eq!(
+                    result,
+                    if limit < expected.len() {
+                        Err(TransformError::OutputLimit { limit })
+                    } else {
+                        Ok(())
+                    },
+                    "kind={kind:?}, input={input:?}, limit={limit}"
+                );
+                assert_eq!(output, expected[..expected.len().min(limit)]);
+            }
+        }
+    }
+    for kind in [EscapeSeqDecode, JsDecode] {
+        for first in 0_u8..8 {
+            for second in 0_u8..8 {
+                for third in 0_u8..8 {
+                    let input = [b'\\', b'0' + first, b'0' + second, b'0' + third, b'7', b'!'];
+                    if kind == JsDecode && first > 3 {
+                        check(kind, &input, &[first * 8 + second, b'0' + third, b'7', b'!']);
+                    } else {
+                        let value = u16::from(first) * 64 + u16::from(second) * 8 + u16::from(third);
+                        check(kind, &input, &[value as u8, b'7', b'!']);
+                    }
+                }
+            }
+        }
+        for (input, expected) in [
+            (br"\0".as_slice(), b"\0".as_slice()),
+            (br"\7", b"\x07"),
+            (br"\77", b"?"),
+            (br"\78!", b"\x078!"),
+            (br"\128!", b"\x0a8!"),
+            (br"\0z", b"\0z"),
+            (b"\\7\xff!", b"\x07\xff!"),
+        ] {
+            check(kind, input, expected);
+        }
+    }
+}

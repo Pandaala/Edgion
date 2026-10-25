@@ -18205,3 +18205,24 @@ No full-workspace suite, live Gateway integration or benchmark ran.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. WAF-06 and other ownership decisions remain deferred.
+
+## Decode octal transformation escapes in one pass
+
+EscapeSeqDecode and JsDecode now use one private bounded helper to accumulate
+the value and consumed digit count together. EscapeSeq keeps its three-digit
+modulo-256 behavior. JS chooses two digits for a leading 4..7, otherwise three,
+preserving the original rollback of a third octal digit. Invalid terminators,
+branch precedence, output pushes and byte advancement remain unchanged. No
+walker, materialization, work-charge or scratch-admission behavior changed.
+This removes the source-level second digit pass, without a measured speedup claim.
+
+A baseline-first regression covers all 512 three-octal combinations in both
+decoders with an additional unconsumed digit, plus short and invalid/high-byte
+terminators. Empty/prefilled output and every cap through exact success preserve
+error identity and partial output. Fresh baseline/final WAF runs have identical
+879 test identities/outcomes: 873 passed and six existing ignored. No dependency,
+logging or allocation was added; no full-workspace suite, live integration or
+benchmark ran.
+
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. The wider transformation and callback audit remains open.

@@ -554,14 +554,8 @@ fn escape_sequence_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> R
             push_byte(output, value as u8, limit)?;
             index += 4;
         } else if matches!(escaped, b'0'..=b'7') {
-            let mut length = 1_usize;
-            while length < 3 && index + 1 + length < input.len() && matches!(input[index + 1 + length], b'0'..=b'7') {
-                length += 1;
-            }
-            let value = input[index + 1..index + 1 + length]
-                .iter()
-                .fold(0_u16, |value, digit| (value << 3) | u16::from(*digit - b'0'));
-            push_byte(output, value as u8, limit)?;
+            let (value, length) = decode_octal(&input[index + 1..], 3);
+            push_byte(output, value, limit)?;
             index += 1 + length;
         } else {
             push_byte(output, escaped, limit)?;
@@ -688,17 +682,9 @@ fn js_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), Tra
             push_byte(output, value as u8, limit)?;
             index += 4;
         } else if matches!(input[index + 1], b'0'..=b'7') {
-            let mut length = 1_usize;
-            while length < 3 && index + 1 + length < input.len() && matches!(input[index + 1 + length], b'0'..=b'7') {
-                length += 1;
-            }
-            if length == 3 && input[index + 1] > b'3' {
-                length = 2;
-            }
-            let value = input[index + 1..index + 1 + length]
-                .iter()
-                .fold(0_u16, |value, digit| (value << 3) | u16::from(*digit - b'0'));
-            push_byte(output, value as u8, limit)?;
+            let max_digits = if input[index + 1] > b'3' { 2 } else { 3 };
+            let (value, length) = decode_octal(&input[index + 1..], max_digits);
+            push_byte(output, value, limit)?;
             index += 1 + length;
         } else {
             let value = match input[index + 1] {
@@ -931,6 +917,20 @@ fn hex(value: u8) -> Option<u8> {
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
     }
+}
+
+// Callers establish an octal first digit and a two- or three-digit bound.
+fn decode_octal(input: &[u8], max_digits: usize) -> (u8, usize) {
+    let mut value = 0_u16;
+    let mut length = 0;
+    for &digit in input.iter().take(max_digits) {
+        if !matches!(digit, b'0'..=b'7') {
+            break;
+        }
+        value = (value << 3) | u16::from(digit - b'0');
+        length += 1;
+    }
+    (value as u8, length)
 }
 
 // Callers provide exactly two or four digits after checking the input bounds.
