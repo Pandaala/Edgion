@@ -492,11 +492,27 @@ fn fingerprints_borrow_fixed_and_prepared_identity() {
     assert_eq!(value, prepared.address_fingerprint);
     assert_eq!(value.as_ptr(), prepared.address_fingerprint.as_ptr());
 
-    for servers in [vec![], vec!["192.0.2.53".into(), "[2001:db8::53]:53".into()]] {
+    let cases: &[(&[&str], &str)] = &[
+        (&[], "std:"),
+        (&[""], "std:"),
+        (&["", ""], "std:,"),
+        (&["192.0.2.53", "[2001:db8::53]:53"], "std:192.0.2.53,[2001:db8::53]:53"),
+        (
+            &["192.0.2.53:5353", "192.0.2.53:5353"],
+            "std:192.0.2.53:5353,192.0.2.53:5353",
+        ),
+        (&["", "192.0.2.53", ""], "std:,192.0.2.53,"),
+        (&["first,second", "third"], "std:first,second,third"),
+        (&["first", "second,third"], "std:first,second,third"),
+        (&["é", "π"], "std:é,π"),
+    ];
+    for (servers, literal) in cases {
+        let servers: Vec<String> = servers.iter().map(|server| (*server).to_string()).collect();
         let expected = format!("std:{}", servers.join(","));
         let spec = ResolverSpec::StandardDns { servers };
         let fingerprint = spec.fingerprint();
         assert!(matches!(fingerprint, Cow::Owned(_)));
+        assert_eq!(fingerprint, *literal);
         assert_eq!(fingerprint, expected);
     }
 }

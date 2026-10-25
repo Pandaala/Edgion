@@ -17698,3 +17698,24 @@ Existing tests separately assert rendering and exercise fake-fetcher parsing and
 fallback; FixedBodyFetcher does not assert the URL it receives. Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 warnings. No full suite, live HTTPDNS transport test or memory benchmark ran.
+
+## Construct the Standard DNS fingerprint in one output buffer
+
+ResolverSpec::fingerprint writes the unchanged std: prefix and comma-separated
+server bytes directly into one owned String. A saturating byte-length estimate
+reserves the final output; saturation is not allocation-failure recovery. This
+removes the intermediate joined buffer and its copy for nonempty joined payloads,
+not an allocation for every possible input. System and prepared HTTPDNS identities
+remain borrowed. No throughput, RSS or exact allocator-size benefit was measured.
+
+Server order, duplicates, empty items, authored bytes and the existing comma
+ambiguity remain unchanged. Cache keys, captured query identity, invalidation,
+TTL and resolver selection are unaffected. This does not precompute or share
+the owned Standard DNS fingerprint across generations.
+
+Independent plan and code/test reviews passed. The existing fingerprint test was
+expanded to nine literal-output/previous-format cases before production changes,
+retaining the borrowed-pointer assertions. Baseline/final runs preserve all 71
+Common DNS and 26 Gateway DNS-cache test identities/outcomes. Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+warnings. No full suite, controlled DNS transport fixture or benchmark ran.

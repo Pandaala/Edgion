@@ -229,7 +229,21 @@ impl ResolverSpec {
     pub fn fingerprint(&self) -> Cow<'_, str> {
         match self {
             ResolverSpec::System => Cow::Borrowed("system"),
-            ResolverSpec::StandardDns { servers } => Cow::Owned(format!("std:{}", servers.join(","))),
+            ResolverSpec::StandardDns { servers } => {
+                let capacity = servers.iter().fold(
+                    4usize.saturating_add(servers.len().saturating_sub(1)),
+                    |size, server| size.saturating_add(server.len()),
+                );
+                let mut fingerprint = String::with_capacity(capacity);
+                fingerprint.push_str("std:");
+                for (index, server) in servers.iter().enumerate() {
+                    if index > 0 {
+                        fingerprint.push(',');
+                    }
+                    fingerprint.push_str(server);
+                }
+                Cow::Owned(fingerprint)
+            }
             ResolverSpec::HttpDns(prepared) => Cow::Borrowed(&prepared.address_fingerprint),
         }
     }
