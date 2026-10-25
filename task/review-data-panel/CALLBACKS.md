@@ -1726,3 +1726,66 @@ Fresh unchanged-production WAF tests passed 871 cases with six existing ignored.
 Formatting, workspace all-target check/Clippy and agent-doc validation passed
 with existing warnings. No runtime code changed; no full-workspace suite, live
 Gateway integration, code-generation experiment or benchmark ran.
+
+## Native WAF transformation and output boundaries
+
+At source baseline 00a9aaf90, inspected the shared transform.rs walker, ordinary
+and multiMatch wrappers, all 20 apply_one variants and their direct helpers.
+Transaction and structured collector call sites establish reachability; this is
+not complete compiler, observer replay or Gateway transport coverage.
+
+The walker reports existing scratch admission/capacity and the Initial checkpoint
+before checking the initial output cap. Its multiMatch materializing wrapper
+separately prechecks that cap before reserving the outer stage vector. Each step
+reports StepInput, charges current bytes, and checks input work immediately only
+in ordinary mode. Both modes charge result bytes and enforce work before
+StepComplete; this ordering must not be flattened.
+
+Input/First/Second identify the borrowed input or one of two reusable Vec owners.
+Identity recognition covers None, lowercase without uppercase, and capped
+marker-free RemoveNulls/HtmlEntityDecode/UrlDecodeUni. Other steps admit growth
+including the old destination, clear/reserve output, report actual capacity and
+apply the transform. Identity still emits checkpoints and logical charges.
+Nonidentity lowercase is known changed; other outputs are compared with input.
+Ordinary mode advances to produced scratch even for byte-equal output, whereas
+multiMatch advances and emits a new ordinal only for changed output.
+
+The ordinary wrapper moves the selected final Vec or returns borrowed input.
+Ordinary multiMatch copies raw input and changed stages, finishes recipe validation,
+then its transaction caller evaluates those stages until a match. Structured
+collection instead borrows stage callbacks into its existing provisional machinery;
+observer failures stop the walk, while semantic predicate outcomes must not end
+later transformation validation. These are distinct ownership/error contracts.
+
+| Transformation group | Direct byte behavior and retained boundaries |
+| --- | --- |
+| None, Lowercase, RemoveNulls, RemoveWhitespace | None appends in apply_one but is an identity in the walker. Lowercase affects ASCII uppercase only. Filters retain byte order; whitespace removal uses Latin-space bytes including 0x85 and 0xa0. |
+| Base64Decode | Skip CR/LF, stop at the first other nonalphabet byte (including padding), decode complete quartets and residual two/three-digit groups. This is tolerant byte decoding, not strict whole-input validation. |
+| CmdLine | Remove quote/backslash/caret bytes, coalesce listed whitespace/comma/semicolon separators, lowercase ASCII, and remove a pending output space before slash/open-parenthesis. Earlier output-limit failures still precede later removal. |
+| CompressWhitespace | Collapse Latin-space runs into one ASCII space without trimming leading/trailing runs. Its byte class is broader than the ASCII-space helper used by CSS. |
+| CssDecode | Consume up to six hex digits, map the low byte with the existing fullwidth adjustment, then optionally consume one ASCII-space byte. Bare escaped LF is removed; a terminal backslash produces no byte. |
+| EscapeSeqDecode, JsDecode | Retain separate marker/simple/octal rules. Escape accepts x/X and up to three octal digits; JS accepts lowercase x/u and limits leading 4..7 octal runs to two consumed digits. Fixed hex fields validate/decode once; invalid sequences follow each decoder's original fallback. |
+| UrlDecodeUni | Plus becomes space; percent u/U four-digit forms have priority over ordinary two-digit hex. Preserve low-byte/fullwidth mapping and literal malformed-percent fallback. |
+| HtmlEntityDecode | Search the next semicolon or ampersand; only a semicolon-terminated recognized name/number decodes. Numeric parsing accepts decimal or x/X hex, skips leading zeros and checks overflow; invalid Unicode scalar values become the replacement character. |
+| HexEncode, Length, Sha1 | Emit lowercase hex, decimal byte length or the raw 20-byte digest respectively. Decimal assembly uses bounded stack digits. Projected output uses checked 2x, fixed 40 and fixed 20 bounds. |
+| NormalizePath, NormalizePathWin | Output doubles as the component stack; skip empty/dot components, reverse-scan and remove eligible preceding components, preserve unresolved relative parents and clamp absolute parents at root. Win additionally treats backslash as separator; retain trailing-separator rules. |
+| RemoveCommentsChar, ReplaceComments | Marker removal retains its ordered marker recognition. Replacement scans slash-star to the first star-slash or EOF and emits one space, preserving unterminated-comment behavior. Neither is a general language parser. |
+| Utf8ToUnicode | Copy ASCII and invalid/truncated UTF-8 bytes; valid scalar sequences emit percent-u followed by lowercase hex with at least four digits. No surrogate-pair conversion occurs. Projected output remains checked 6x input. |
+
+append checks arithmetic and the whole segment limit before extending; push_byte
+checks the current length against the limit before one byte. Their different
+partial-output effects remain observable in helper regressions. Production
+apply_one receives empty output with capped projected capacity already reserved.
+No second body cache or response aggregation is introduced by these local owners.
+
+[Marker-free decoder borrowing](waf-06-marker-free-decoder-borrowing.md),
+[multiMatch ownership](waf-07-multimatch-stage-ownership.md) and
+[final buffer transfer](waf-11-final-transform-buffer-transfer.md) remain deferred.
+The original [fused inspection contract](../../skills/04-review/waf/regression-guards/fused-json-inspection.md)
+owns provisional outcomes and aggregate admission; this inventory does not
+establish complete replay equivalence or an allocation-free transaction.
+
+Fresh unchanged-production WAF tests passed 873 cases with six existing ignored.
+Formatting, workspace all-target check/Clippy and agent-doc validation passed
+with existing warnings. No runtime code changed; no full-workspace suite, live
+Gateway integration, external-reference comparison or benchmark ran.

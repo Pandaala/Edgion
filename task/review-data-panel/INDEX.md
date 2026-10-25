@@ -18226,3 +18226,16 @@ benchmark ran.
 
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. The wider transformation and callback audit remains open.
+
+## Native transformation boundary inventory
+
+Extended [callback coverage](CALLBACKS.md#native-waf-transformation-and-output-boundaries)
+through the shared walker, wrapper ownership and all 20 direct transformation
+variants. Recorded input/output work-check ordering, two-buffer transitions,
+ordinary versus multiMatch publication, decoder-specific byte rules and distinct
+segment/byte output failures. WAF-06/07/11 remain deferred; runtime is unchanged.
+
+Fresh WAF tests passed 873 cases with six existing ignored; formatting and
+workspace all-target check/Clippy passed with existing warnings. No full-workspace
+suite, live Gateway integration, external-reference comparison or benchmark ran.
+This is bounded source coverage, not complete callback or replay verification.
