@@ -17369,3 +17369,18 @@ epochs, failed reservation, no-op reuse, recreate/relabel and retirement. No
 redundant tests were added. Formatting, workspace all-target check/Clippy and
 seven repository guards passed with existing warnings. No full suite, live
 traffic or measured throughput/memory benchmark ran.
+
+## Discovery semantic digest preparation decision
+
+The [deferred task](discovery-02-semantic-digest-preparation.md) records complete
+resource copying before metadata sanitization and serialized-Vec allocation in
+Service/EndpointSlice digest preparation. Borrowed projection and streamed hashing
+are separate decisions; exact field/byte/error semantics and dependency evolution
+need review. EndpointSlice reassociation remains outside this digest contract.
+No implementation or defect is selected, and retaining the current path is valid.
+No runtime/test change, prototype, benchmark or live experiment is included.
+
+Independent plan and final document reviews passed. Formatting, workspace
+all-target check/Clippy and agent-doc validation passed with existing warnings.
+The unchanged source was covered by the immediately preceding 44 coordinator
+and eight Service tests; no additional test run was needed for this record.
