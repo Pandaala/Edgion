@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Outbound SAN fallback reason storage](tls-08-fallback-reason-storage.md)
+
 - [Endpoint probe method ownership and clone timing](endpoint-05-method-clone-timing.md)
 
 - [Rendered authority label storage](authority-01-rendered-label-storage.md)
