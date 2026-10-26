@@ -19665,3 +19665,26 @@ after correcting that fixture, unchanged production and final production each
 passed 163 OIDC tests with 16 existing ignores (179 identical outcomes).
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing warnings. No full suite, ignored live-IdP test or benchmark ran.
+
+## Reject oversized OIDC Authorization values before formatting
+
+The optional Authorization projection checks the exact Bearer-prefix/token length
+and remaining aggregate header budget before allocating its formatted String.
+Equal limits still pass. The canonical sensitive-header setter retains unsafe
+value rejection, HeaderValue construction, write-failure handling and success-only
+budget accounting. Rejection skips only Authorization; claims context and compiled
+claim projection continue in their existing order. Prior failed writes still
+leave the full budget available.
+
+A ten-case regression exercises empty-token prefix limits, exact/one-below value
+and total caps, prior successful/failed access-token writes, sensitive flags and
+ordered context/projection continuation. It passed against unchanged production
+and the final implementation; both default OIDC runs passed 164 tests with 16
+existing ignores (180 identical outcomes). Source inspection establishes that
+length-rejected candidates no longer execute format; no allocation benchmark,
+whole-request memory or throughput improvement is claimed. Claims serialization
+and userinfo fetching are unchanged, and oidc-01 remains deferred.
+
+Independent plan and final source reviews passed. Formatting, workspace all-target
+check/Clippy and seven repository guards passed with existing warnings. No full suite,
+ignored live-IdP test or benchmark ran.

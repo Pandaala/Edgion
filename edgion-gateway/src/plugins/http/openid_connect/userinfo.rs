@@ -65,7 +65,18 @@ impl OpenidConnect {
             }
         }
 
-        if self.config.access_token_in_authorization_header {
+        if self.config.access_token_in_authorization_header
+            && access_token
+                .len()
+                .checked_add("Bearer ".len())
+                .is_some_and(|value_len| {
+                    value_len <= max_value
+                        && total_added
+                            .saturating_add("Authorization".len())
+                            .saturating_add(value_len)
+                            <= max_total
+                })
+        {
             let value = format!("Bearer {}", access_token);
             self.try_set_header_with_limits(session, "Authorization", &value, &mut total_added);
         }

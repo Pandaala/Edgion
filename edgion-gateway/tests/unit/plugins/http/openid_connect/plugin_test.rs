@@ -2782,6 +2782,70 @@ fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_
     plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}));
 }
 
+#[test]
+fn authorization_length_limits_preserve_publication_order_and_remaining_budget() {
+    // token, value cap, total cap, prior header, prior write fails, auth, projection
+    for (token, value_cap, total_cap, prior, prior_fails, auth, projection) in [
+        ("", 6, 20, false, false, false, true),
+        ("", 7, 20, false, false, true, false),
+        ("abc", 9, 23, false, false, false, true),
+        ("abc", 10, 23, false, false, true, false),
+        ("abc", 10, 22, false, false, false, true),
+        ("abc", 10, 40, true, false, true, false),
+        ("abc", 10, 39, true, false, false, true),
+        ("abc", 10, 46, true, false, true, true),
+        ("abc", 10, 23, true, true, true, false),
+        ("abc", 10, 22, true, true, false, true),
+    ] {
+        let mut cfg = base_config();
+        cfg.access_token_in_authorization_header = true;
+        cfg.set_access_token_header = prior;
+        cfg.store_claims_in_ctx = true;
+        cfg.claims_to_headers = Some(HashMap::from([("sub".to_string(), "X-Sub".to_string())]));
+        cfg.max_header_value_bytes = value_cap;
+        cfg.max_total_header_bytes = total_cap;
+        let plugin = OpenidConnect::new(&cfg, "default".to_string());
+        let mut session = MockPluginSession::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let header_events = events.clone();
+        session.expect_set_request_header_value().returning(move |name, value| {
+            assert!(value.is_sensitive());
+            header_events.lock().push(format!("{name}={}", value.to_str().unwrap()));
+            if name == "X-Access-Token" && prior_fails {
+                Err(std::io::Error::other("injected write failure").into())
+            } else {
+                Ok(())
+            }
+        });
+        let ctx_events = events.clone();
+        session
+            .expect_set_ctx_var()
+            .withf(|name, value| name == "oidc_claims" && value == "{\"sub\":\"u\"}")
+            .times(1)
+            .returning(move |_, _| {
+                ctx_events.lock().push("ctx".to_string());
+                Ok(())
+            });
+        plugin.apply_upstream_headers(&mut session, token, None, None, &json!({"sub": "u"}));
+        let mut expected = Vec::new();
+        if prior {
+            expected.push(format!("X-Access-Token={token}"));
+        }
+        if auth {
+            expected.push(format!("Authorization=Bearer {token}"));
+        }
+        expected.push("ctx".to_string());
+        if projection {
+            expected.push("x-sub=u".to_string());
+        }
+        assert_eq!(
+            *events.lock(),
+            expected,
+            "caps={value_cap}/{total_cap}, prior={prior}/{prior_fails}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
     let mut cfg = base_config();
