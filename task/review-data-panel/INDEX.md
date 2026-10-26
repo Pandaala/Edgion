@@ -19774,3 +19774,34 @@ excludes allocation, preflight/sizing and guest execution; it establishes neithe
 whole-host-call nor request throughput/memory improvement. No full suite, live
 integration, new runtime test or duplicate task was introduced. Independent plan
 and final source reviews, agent-doc validation and diff hygiene passed.
+
+
+## Share immutable Wasm configuration during legacy guest reads
+
+The legacy `proxy_get_configuration` accessor previously cloned the entire
+HostState plugin configuration Vec before invoking the guest allocator. The
+per-HostState owner now uses existing `Bytes`; its clone retains the same payload
+across guest reentry. Construction still accepts Vec and transfers its payload.
+ModuleEntry still copies configuration separately for each VM; VM configuration,
+modern buffer GET range copying, admission and guest-memory writes are unchanged.
+
+This removes a size-proportional temporary payload copy for legacy reads, not all
+callback allocations. Bytes needs ownership metadata/control storage during
+construction or first clone. Typical SDK use is initialization; no ordinary
+request frequency, throughput, latency, RSS or aggregate heap benefit is claimed.
+This is a distinct legacy accessor omission, not a repeat of wasm-02 map decoding.
+
+A new real Wasmtime guest covers empty, small and 64 KiB configurations, repeated
+reads, exact return status/pointer/size/payload, and allocator reentry that mutates
+request-body staging while configuration remains intact. The extended old-Vec
+baseline passed all 271 Gateway Wasm tests serially. Existing test identities and
+integration fixtures are preserved. See the original
+[buffer snapshot guard](../../skills/04-review/wasm/regression-guards/buffer-range-snapshot-before-guest-allocation.md)
+for the ownership distinction and its limits.
+
+Final verification passed the same 271 test identities. Formatting, workspace
+all-target check/Clippy and all seven repository guards passed; Clippy retained
+existing unrelated warnings. Independent plan and final source reviews passed.
+The first final compile exposed a Vec-to-Bytes test comparison mismatch, corrected
+by comparing slices without changing the expected value. No full suite or live
+integration ran, and no integration fixture changed.

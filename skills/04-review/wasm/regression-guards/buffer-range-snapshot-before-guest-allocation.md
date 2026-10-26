@@ -11,9 +11,17 @@ knowledge_type: regression-guards
 In `edgion-gateway/src/plugins/http/wasm/host_abi.rs`, `select_buffer` borrows
 recognized source storage without copying payload. `BufferSource::snapshot`
 validates the requested unsigned range, then owns only that range before
-`write_to_guest` calls the guest allocator. Vec-backed sources copy the selected
+`write_to_guest` calls the guest allocator. Borrowed sources (including plugin configuration) copy the selected
 bytes with fallible reservation; response chunks use a shared `Bytes::slice`.
 The returned `BufferSnapshot` has no borrow of HostState.
+
+The separate legacy `proxy_get_configuration` accessor clones the immutable
+per-HostState `Bytes` owner before guest allocation, avoiding a full temporary
+payload copy. Construction transfers the existing Vec into Bytes; ModuleEntry
+still creates separate configuration payloads per VM. Modern GET remains on the
+borrowed range-copy path. Bytes adds ownership metadata and may allocate control
+storage during construction or its first clone; this is not a zero-allocation callback or a measured
+request-throughput improvement. Guest-memory writes still copy the payload.
 
 GET and type-only SET classification use the same recognized-source selector.
 Rejected known configuration/callout SETs return BAD_ARGUMENT without copying

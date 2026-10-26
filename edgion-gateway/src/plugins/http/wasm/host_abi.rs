@@ -237,7 +237,7 @@ pub struct HostState {
     pending_table_growth: usize,
     pub frame: CallbackFrame,
     pub vm_config: Vec<u8>,
-    pub plugin_config: Vec<u8>,
+    pub plugin_config: Bytes,
     /// Metrics label of the owning module (set once per Store).
     pub metrics_label: String,
     last_callout_token: u32,
@@ -337,7 +337,7 @@ impl HostState {
     ) -> Self {
         HostState {
             vm_config,
-            plugin_config,
+            plugin_config: plugin_config.into(),
             metrics_label,
             shared_data,
             ..Default::default()
@@ -2241,6 +2241,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_GET_CONFIGURATION,
         |mut caller: Caller<'_, HostState>, ret_ptr: i32, ret_size: i32| -> i32 {
+            // Keep an independent owner across guest allocator reentry without copying the payload.
             let data = caller.data().plugin_config.clone();
             write_to_guest(&mut caller, &data, ret_ptr, ret_size)
         },

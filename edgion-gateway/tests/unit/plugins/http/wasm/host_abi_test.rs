@@ -695,7 +695,7 @@ fn response_buffer_selection_shares_chunk_backing_storage() {
 fn buffer_snapshots_cover_vec_sources_and_empty_callout() {
     let mut state = HostState::default();
     state.vm_config = b"vm-config".to_vec();
-    state.plugin_config = b"plugin-config".to_vec();
+    state.plugin_config = b"plugin-config".to_vec().into();
     state.frame.request_body = b"request".to_vec();
     state.frame.callout_response = Some(CalloutResponse {
         body: b"callout".to_vec(),
@@ -1054,7 +1054,7 @@ fn set_buffer_bytes_enforces_phase_and_buffer_type() {
     );
     for populated in [false, true] {
         store.data_mut().vm_config = if populated { b"vm".to_vec() } else { Vec::new() };
-        store.data_mut().plugin_config = if populated { b"plugin".to_vec() } else { Vec::new() };
+        store.data_mut().plugin_config = if populated { b"plugin".to_vec() } else { Vec::new() }.into();
         store.data_mut().frame.callout_response = populated.then(|| CalloutResponse {
             body: b"callout".to_vec(),
             ..Default::default()
@@ -1117,6 +1117,51 @@ fn guest_buffer(store: &mut Store<HostState>, instance: &Instance) -> Vec<u8> {
 }
 
 #[test]
+fn legacy_configuration_survives_guest_allocator_reentry() {
+    const GUEST: &str = r#"
+        (module
+          (import "env" "proxy_get_configuration"
+            (func $get (param i32 i32) (result i32)))
+          (import "env" "proxy_set_buffer_bytes"
+            (func $set (param i32 i32 i32 i32 i32) (result i32)))
+          (memory (export "memory") 2)
+          (data (i32.const 32) "XYZ")
+          (func (export "proxy_on_memory_allocate") (param $size i32) (result i32)
+            (i32.store (i32.const 16) (local.get $size))
+            (i32.store (i32.const 20)
+              (call $set (i32.const 0) (i32.const 1) (i32.const 3) (i32.const 32) (i32.const 3)))
+            (i32.const 4096))
+          (func (export "call") (result i32)
+            (call $get (i32.const 0) (i32.const 4))))
+        "#;
+    for config in [Vec::new(), b"plugin-config".to_vec(), vec![b'x'; 65536]] {
+        let (mut store, instance) = instantiate_guest(GUEST);
+        *store.data_mut() = HostState::new(
+            Vec::new(),
+            config.clone(),
+            "legacy-config-test".to_owned(),
+            Arc::new(SharedData::new("legacy-config-test".to_owned())),
+        );
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        store.data_mut().frame.request_body_limit = 16;
+        let get = instance.get_typed_func::<(), i32>(&mut store, "call").unwrap();
+        for _ in 0..2 {
+            store.data_mut().frame.request_body = b"abcdef".to_vec();
+            assert_eq!(get.call(&mut store, ()).unwrap(), STATUS_OK);
+            assert_eq!(guest_u32(&mut store, &instance, 0), 4096);
+            assert_eq!(guest_u32(&mut store, &instance, 4), config.len() as u32);
+            assert_eq!(guest_u32(&mut store, &instance, 16), config.len() as u32);
+            assert_eq!(guest_u32(&mut store, &instance, 20), STATUS_OK as u32);
+            assert_eq!(guest_buffer(&mut store, &instance), config);
+            assert_eq!(store.data().frame.request_body, b"aXYZef");
+            assert_eq!(&store.data().plugin_config[..], config.as_slice());
+        }
+    }
+}
+
+#[test]
 fn get_buffer_bytes_preserves_unsigned_ranges_and_status_precedence() {
     let (mut store, instance) = instantiate_guest(GET_BUFFER_BYTES_GUEST);
     let get = instance
@@ -1124,7 +1169,7 @@ fn get_buffer_bytes_preserves_unsigned_ranges_and_status_precedence() {
         .unwrap();
     let state = store.data_mut();
     state.vm_config = b"abcdef".to_vec();
-    state.plugin_config = b"abcdef".to_vec();
+    state.plugin_config = b"abcdef".to_vec().into();
     state.frame.request_body = b"abcdef".to_vec();
     state.frame.body_chunk = Bytes::from_static(b"abcdef");
     state.frame.callout_response = Some(CalloutResponse {

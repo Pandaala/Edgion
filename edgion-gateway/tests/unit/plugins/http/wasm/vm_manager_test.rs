@@ -652,7 +652,7 @@ async fn idle_store_releases_phase_payloads_without_resetting_persistent_state()
     let mut lease = entry.acquire(100).unwrap();
     let state = lease.state_mut();
     state.vm_config = b"vm".to_vec();
-    state.plugin_config = b"plugin".to_vec();
+    state.plugin_config = b"plugin".to_vec().into();
     state.tick_period_ms = 1234;
     state.frame.request_headers = vec![("authorization".into(), "test-credential".into())];
     state.frame.response_headers = vec![("set-cookie".into(), "test-cookie".into())];
@@ -679,7 +679,7 @@ async fn idle_store_releases_phase_payloads_without_resetting_persistent_state()
     assert!(!state.frame.continue_requested);
     assert!(state.frame.callout_allowlist.is_none());
     assert_eq!(state.vm_config, b"vm");
-    assert_eq!(state.plugin_config, b"plugin");
+    assert_eq!(&state.plugin_config[..], b"plugin");
     assert_eq!(state.tick_period_ms, 1234);
     assert!(Arc::ptr_eq(&state.shared_data, &shared));
 }
