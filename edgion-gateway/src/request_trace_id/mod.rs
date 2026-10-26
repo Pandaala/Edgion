@@ -263,16 +263,16 @@ impl RequestTraceId {
 
     pub fn reconcile_request(&self, headers: &mut impl ManagedHeaders) {
         if let Some(w3c) = &self.w3c {
-            headers.set_managed(HeaderName::from_static("traceparent"), w3c.traceparent.clone());
+            headers.set_managed(&HeaderName::from_static("traceparent"), w3c.traceparent.clone());
             if let Some(value) = &w3c.tracestate {
-                headers.set_managed(HeaderName::from_static("tracestate"), value.clone());
+                headers.set_managed(&HeaderName::from_static("tracestate"), value.clone());
             } else {
                 headers.remove_managed(&HeaderName::from_static("tracestate"));
             }
         }
         for id in &self.correlation_ids {
             if let Some(value) = id.value.as_ref().filter(|_| id.forward_upstream) {
-                headers.set_managed(id.key.clone(), value.clone());
+                headers.set_managed(&id.key, value.clone());
             } else {
                 headers.remove_managed(&id.key);
             }
@@ -282,7 +282,7 @@ impl RequestTraceId {
     pub fn reconcile_response(&self, headers: &mut impl ManagedHeaders) {
         for id in &self.correlation_ids {
             if let Some(value) = id.value.as_ref().filter(|_| id.echo_response) {
-                headers.set_managed(id.key.clone(), value.clone());
+                headers.set_managed(&id.key, value.clone());
             } else {
                 headers.remove_managed(&id.key);
             }
@@ -292,12 +292,12 @@ impl RequestTraceId {
 
 /// Header mutations preserve Pingora's HTTP/1 case map as well as its value map.
 pub trait ManagedHeaders {
-    fn set_managed(&mut self, name: HeaderName, value: HeaderValue);
+    fn set_managed(&mut self, name: &HeaderName, value: HeaderValue);
     fn remove_managed(&mut self, name: &HeaderName);
 }
 
 impl ManagedHeaders for HeaderMap {
-    fn set_managed(&mut self, name: HeaderName, value: HeaderValue) {
+    fn set_managed(&mut self, name: &HeaderName, value: HeaderValue) {
         self.insert(name, value);
     }
     fn remove_managed(&mut self, name: &HeaderName) {
@@ -308,7 +308,7 @@ impl ManagedHeaders for HeaderMap {
 macro_rules! pingora_managed_headers {
     ($header:ty) => {
         impl ManagedHeaders for $header {
-            fn set_managed(&mut self, name: HeaderName, value: HeaderValue) {
+            fn set_managed(&mut self, name: &HeaderName, value: HeaderValue) {
                 // Both typed inputs are prevalidated; Pingora only fails conversion here.
                 let _ = self.insert_header(name, value);
             }

@@ -357,3 +357,60 @@ fn random_hex_runtime_bounds_and_prefix_are_preserved() {
         assert!(suffix.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
     }
 }
+
+#[test]
+fn pingora_reconciliation_preserves_wire_values_removals_and_repeated_application() {
+    let mut state = state();
+    state.apply_rule(
+        &rule(serde_json::json!({"header":"X-Order-ID"})),
+        Some(HeaderValue::from_static("client-id")),
+        None,
+    );
+    state.apply_rule(
+        &rule(serde_json::json!({"header":"x-hidden", "forwardUpstream":false, "echoResponse":false})),
+        Some(HeaderValue::from_static("hidden-id")),
+        None,
+    );
+    let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    for name in ["X-Order-ID", "x-trace-id", "x-hidden"] {
+        for value in ["stale-one", "stale-two"] {
+            request.append_header(name, value).unwrap();
+            response.append_header(name, value).unwrap();
+        }
+    }
+    request.insert_header("traceparent", "stale").unwrap();
+    request.insert_header("tracestate", "vendor=stale").unwrap();
+    let mut previous = None;
+    for _ in 0..2 {
+        state.reconcile_request(&mut request);
+        state.reconcile_response(&mut response);
+        for headers in [&request.headers, &response.headers] {
+            assert_eq!(headers.get_all("x-order-id").iter().count(), 1);
+            assert_eq!(headers["x-order-id"], "client-id");
+            assert_eq!(headers.get_all("x-trace-id").iter().count(), 1);
+            assert_eq!(headers["x-trace-id"], "4bf92f3577b34da6a3ce929d0e0e4736");
+            assert!(!headers.contains_key("x-hidden"));
+        }
+        assert_eq!(request.headers["traceparent"], PARENT);
+        assert!(!request.headers.contains_key("tracestate"));
+        assert!(!response.headers.contains_key("traceparent"));
+        assert!(!response.headers.contains_key("tracestate"));
+        let mut request_wire = Vec::new();
+        let mut response_wire = Vec::new();
+        request.header_to_h1_wire(&mut request_wire);
+        response.header_to_h1_wire(&mut response_wire);
+        for wire in [&request_wire, &response_wire] {
+            let text = std::str::from_utf8(wire).unwrap();
+            assert!(text.contains("x-order-id: client-id\r\n"));
+            assert!(text.contains("x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736\r\n"));
+            assert!(!text.contains("stale"));
+            assert!(!text.contains("x-hidden"));
+        }
+        let wire = (request_wire, response_wire);
+        if let Some(previous) = previous.as_ref() {
+            assert_eq!(&wire, previous);
+        }
+        previous = Some(wire);
+    }
+}

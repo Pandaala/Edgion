@@ -133,7 +133,7 @@ fn finalize_forwarded_headers(
         let _ = upstream_request.insert_header("X-Forwarded-For", peer);
     }
 
-    let _ = upstream_request.insert_header(remote_ip_header.clone(), &ctx.request_info.remote_ip);
+    let _ = upstream_request.insert_header(remote_ip_header, &ctx.request_info.remote_ip);
 }
 
 fn sync_body_framing_headers(upstream_request: &mut RequestHeader, ctx: &mut EdgionHttpContext) -> Result<(), ()> {

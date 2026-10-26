@@ -18926,3 +18926,29 @@ the equivalent pinned conversion. No full workspace test suite, live integration
 or benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Borrow managed correlation and forwarded-identity header names
+
+ManagedHeaders::set_managed now accepts a borrowed HeaderName. Request/response
+reconciliation borrows correlation keys; the two W3C static-name calls use the
+same interface. All repository implementations and calls are updated. The plain
+HeaderMap implementation uses its canonical borrowed insertion: it obtains an
+owned key when adding an entry and need not clone the caller's key just to replace
+an existing value. Pingora request/response adapters use the pinned fork's same
+titled-name conversion for owned and borrowed names. Final RemoteIp publication
+also passes its already borrowed configuration name directly.
+
+Value clones, header order, duplicate replacement, removal, W3C restoration,
+response suppression and final proxy-identity precedence are unchanged. This
+removes temporary name-handle clones in the Pingora paths, not its case-map
+conversion, payload copy or normalized parsing. No shared name cache, extra
+observability, lifecycle change or measured allocation/throughput claim is added.
+
+Independent plan review passed. A new real-Pingora request/response test checks
+stale duplicate replacement, suppression, request W3C restoration, no automatic
+response W3C echo, exact custom/default HTTP/1 lines and repeated reconciliation
+idempotence. Original/final core runs passed the same 30 test identities;
+15 upstream-request-hook and 100 real-adapter tests passed. No full workspace test
+suite, live integration or benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.
