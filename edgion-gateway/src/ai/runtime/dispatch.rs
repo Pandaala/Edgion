@@ -563,14 +563,7 @@ fn prepare_ready_attempt(
         quota: None,
         quota_status: plan.quota_status,
     };
-    let needs_processor = plan.conversion.is_some()
-        || plan.usage_observation == AiUsageObservation::Provider
-        || ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed);
-    let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = if needs_processor {
-        Vec::with_capacity(1)
-    } else {
-        Vec::new()
-    };
+    let mut response_processors = AiResponseProcessors::new();
     if plan.conversion == Some(AiConversion::ChatToAnthropic) {
         let created = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -856,8 +849,10 @@ fn apply_backend_request_headers(
     Ok(())
 }
 
+type AiResponseProcessors = smallvec::SmallVec<[Box<dyn StreamingResponseProcessor>; 1]>;
+
 struct AiAttemptResponseProcessor {
-    processors: Vec<Box<dyn StreamingResponseProcessor>>,
+    processors: AiResponseProcessors,
     usage: Arc<AiUsageShared>,
     eos: Arc<AtomicBool>,
 }

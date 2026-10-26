@@ -19053,3 +19053,36 @@ Original/final connector runs passed the same seven test identities and outcomes
 36 dispatch tests also passed. Formatting, workspace all-target check/Clippy,
 seven repository guards and diff hygiene passed with existing unrelated warnings.
 No full workspace test suite, live integration or benchmark ran.
+
+## Inline the AI attempt's first response processor
+
+The AI attempt wrapper now stores its children in the existing SmallVec dependency
+with one inline slot. Child installation predicates/order, typed-event forwarding,
+raw encoding observation, terminal short-circuiting, EOS, cleanup and drop ownership
+are unchanged. Multiple children still spill to a heap buffer; the preparation
+boundary does not itself prove conversion and native Messages can never overlap,
+so the collection was not reduced to an Option. The capacity-only needs_processor
+predicate is removed. No new response cache, body aggregation or processor owner
+is introduced.
+
+Independent plan review approved the local storage substitution. A baseline-first
+0/1/2-child test checks header/body-length/event order, typed pre-trailer evidence,
+EOS, finalize/release/preempt and drop. Existing multi-child termination and real
+converter header-replacement tests remain. Original/final dispatch runs passed the
+same 37 identities plus one new allocation test (38 final tests).
+
+The isolated allocation test prepares child Boxes outside measurement. On this
+build (smallvec 1.16.3 with union), both collection layouts are 24 bytes and both
+wrapper layouts are 40 bytes. For zero children the test models the previous Vec::new path: both containers
+allocate nothing. A previously reserved but empty Vec is not part of that measured
+zero-child case. For one child the previous Vec requests one 16-byte allocation while the
+inline collection requests none. For two children the previous capacity-one Vec
+makes two allocation/reallocation calls totaling 80 requested bytes, versus one
+32-byte spill allocation. These are local container measurements, not live retained
+heap or throughput results. The child Boxes, usage/EOS Arcs and wrapper Box remain;
+other feature/target layouts must be measured independently. The existing branch
+selection between inline and spilled storage creates no per-event allocation.
+Another 25 attempt-runtime tests passed. Formatting, workspace all-target
+check/Clippy, seven repository guards and diff hygiene passed with existing
+unrelated warnings. No full workspace test suite, live integration or throughput
+benchmark ran.

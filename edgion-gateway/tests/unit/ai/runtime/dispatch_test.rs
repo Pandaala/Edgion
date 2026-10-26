@@ -937,7 +937,7 @@ fn ambiguous_failure_replays_only_when_explicitly_requested() {
 
 #[tokio::test]
 async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
-    // AiAttemptResponseProcessor wraps its own Vec of sub-processors and
+    // AiAttemptResponseProcessor wraps its own collection of sub-processors and
     // is itself a chain: an inner terminate must stop it exactly like the
     // outer driver stops the top-level chain, or a sub-processor after
     // the terminating one would silently keep running.
@@ -978,7 +978,12 @@ async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
 
     let ran = Arc::new(Mutex::new(false));
     let mut composite = AiAttemptResponseProcessor {
-        processors: vec![Box::new(Terminator), Box::new(MarkRan { ran: ran.clone() })],
+        processors: [
+            Box::new(Terminator) as Box<dyn StreamingResponseProcessor>,
+            Box::new(MarkRan { ran: ran.clone() }),
+        ]
+        .into_iter()
+        .collect(),
         usage: Arc::new(AiUsageShared::default()),
         eos: Arc::new(AtomicBool::new(false)),
     };
@@ -1014,7 +1019,9 @@ async fn raw_encoding_survives_anthropic_header_replacement_and_fixed_error_body
         false,
     );
     let mut composite = AiAttemptResponseProcessor {
-        processors: vec![Box::new(converter)],
+        processors: [Box::new(converter) as Box<dyn StreamingResponseProcessor>]
+            .into_iter()
+            .collect(),
         usage: usage.clone(),
         eos: Arc::new(AtomicBool::new(false)),
     };
@@ -1704,4 +1711,173 @@ fn policy_ancestor_refusal_is_terminal_before_initial_and_retry_credentials() {
     assert_eq!(plan.scheduler.dispatch_count(), 0);
     plan.candidates[0].policy_ancestor_admitted = true;
     assert!(select_target(&mut plan, 0).is_ok());
+}
+
+#[tokio::test]
+async fn composite_processor_cardinality_preserves_lifecycle_order_and_drop() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseEvent;
+    use crate::response::terminal::ResponseTerminalCause;
+    use parking_lot::Mutex;
+
+    struct Probe {
+        index: usize,
+        events: Arc<Mutex<Vec<(usize, &'static str)>>>,
+    }
+    impl Probe {
+        fn record(&self, event: &'static str) {
+            self.events.lock().push((self.index, event));
+        }
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            self.record("drop");
+        }
+    }
+    #[async_trait]
+    impl StreamingResponseProcessor for Probe {
+        fn on_response_header(&mut self, _: &mut ResponseHeader) {
+            self.record("header");
+        }
+        fn changes_body_length(&self) -> bool {
+            self.record("length");
+            self.index == 1
+        }
+        fn finalize_incomplete(&mut self, outcome: &'static str, reason: &'static str) {
+            assert_eq!((outcome, reason), ("aborted", "fixture"));
+            self.record("finalize");
+        }
+        fn release_inflight(&mut self) {
+            self.record("release");
+        }
+        fn on_terminal_preempted(&mut self, winner: ResponseTerminalCause) {
+            assert_eq!(winner, ResponseTerminalCause::QuotaExceeded);
+            self.record("preempt");
+        }
+        async fn on_event(
+            &mut self,
+            _: &mut Option<Bytes>,
+            event: StreamingResponseEvent,
+            _: crate::ctx::ResponseStreamKind,
+            _: &mut ResponseBodySink,
+            _: &mut dyn ResponseStreamSession,
+        ) {
+            assert_eq!(event, StreamingResponseEvent::TerminalBeforeTrailers);
+            self.record("event");
+        }
+        async fn on_chunk(
+            &mut self,
+            _: &mut Option<Bytes>,
+            _: bool,
+            _: crate::ctx::ResponseStreamKind,
+            _: &mut ResponseBodySink,
+            _: &mut dyn ResponseStreamSession,
+        ) {
+            panic!("the composite must forward the typed event");
+        }
+    }
+    for count in 0..=2 {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let eos = Arc::new(AtomicBool::new(false));
+        let mut composite = AiAttemptResponseProcessor {
+            processors: (0..count)
+                .map(|index| {
+                    Box::new(Probe {
+                        index,
+                        events: events.clone(),
+                    }) as Box<dyn StreamingResponseProcessor>
+                })
+                .collect(),
+            usage: Arc::new(AiUsageShared::default()),
+            eos: eos.clone(),
+        };
+        composite.on_response_header(&mut ResponseHeader::build(200, None).unwrap());
+        assert_eq!(composite.changes_body_length(), count == 2);
+        let mut chunk = Some(Bytes::from_static(b"unchanged"));
+        let mut sink = ResponseBodySink::new();
+        let mut session = MockPluginSession::new();
+        composite
+            .on_event(
+                &mut chunk,
+                StreamingResponseEvent::TerminalBeforeTrailers,
+                crate::ctx::ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        assert_eq!(chunk.as_deref(), Some(b"unchanged".as_slice()));
+        assert!(!sink.is_terminated());
+        assert!(eos.load(std::sync::atomic::Ordering::Acquire));
+        composite.finalize_incomplete("aborted", "fixture");
+        composite.release_inflight();
+        composite.on_terminal_preempted(ResponseTerminalCause::QuotaExceeded);
+        drop(composite);
+        let expected: Vec<_> = ["header", "length", "event", "finalize", "release", "preempt", "drop"]
+            .into_iter()
+            .flat_map(|event| (0..count).map(move |index| (index, event)))
+            .collect();
+        assert_eq!(*events.lock(), expected);
+    }
+}
+
+#[test]
+fn composite_processor_storage_inlines_one_child_without_buffer_allocation() {
+    use crate::test_allocation_counter::count_allocation_stats;
+    use std::mem::size_of;
+
+    struct PreviousWrapper {
+        _processors: Vec<Box<dyn StreamingResponseProcessor>>,
+        _usage: Arc<AiUsageShared>,
+        _eos: Arc<AtomicBool>,
+    }
+    println!(
+        "collection bytes: Vec={}, inline={}; wrapper bytes: previous={}, current={}",
+        size_of::<Vec<Box<dyn StreamingResponseProcessor>>>(),
+        size_of::<AiResponseProcessors>(),
+        size_of::<PreviousWrapper>(),
+        size_of::<AiAttemptResponseProcessor>(),
+    );
+    for count in 0..=2 {
+        // Child boxes are prepared outside measurement: this test isolates the
+        // pointer container, not processors, usage/EOS owners or the wrapper Box.
+        let children = || {
+            (0..count)
+                .map(|_| Box::new(SemanticSseSource::new()) as Box<dyn StreamingResponseProcessor>)
+                .collect::<Vec<_>>()
+        };
+        let previous_children = children();
+        let (previous, previous_stats) = count_allocation_stats(|| {
+            let mut processors = if count == 0 { Vec::new() } else { Vec::with_capacity(1) };
+            for child in previous_children {
+                processors.push(child);
+            }
+            processors
+        });
+        let current_children = children();
+        let (current, current_stats) = count_allocation_stats(|| {
+            let mut processors = AiResponseProcessors::new();
+            for child in current_children {
+                processors.push(child);
+            }
+            processors
+        });
+        assert_eq!(previous.len(), count);
+        assert_eq!(current.len(), count);
+        assert_eq!(current.spilled(), count > 1);
+        if count <= 1 {
+            assert_eq!(current_stats.calls, 0);
+            assert_eq!(current_stats.requested_bytes, 0);
+            assert_eq!(previous_stats.calls, count);
+            assert_eq!(
+                previous_stats.requested_bytes,
+                count * size_of::<Box<dyn StreamingResponseProcessor>>()
+            );
+        } else {
+            assert!(current_stats.calls > 0);
+        }
+        println!(
+            "children={count}: previous={previous_stats:?}, current={current_stats:?}; capacity previous={}, current={}",
+            previous.capacity(), current.capacity(),
+        );
+    }
 }
