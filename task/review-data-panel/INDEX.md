@@ -19405,3 +19405,21 @@ allocation or throughput benchmark was run.
 Final verification passed the same 19 request-converter and 39 dispatch tests
 (58 total), formatting, workspace all-target check/Clippy and seven repository
 guards with existing unrelated warnings. No full suite or live integration ran.
+
+## AI request parsing and conversion coverage reconciled
+
+The [current parsing inventory](CALLBACKS.md#ai-request-parsing-and-conversion-ownership-refresh)
+connects request-plugin dispatch and body-generation fences to Chat single-parse
+preparation, native Responses/Messages metadata, borrowed model/kind decoding,
+local rewrites, per-attempt conversion and local model-list serialization.
+It distinguishes original protocol validation contracts, owned metadata and
+synchronous borrowed fields from deferred converter representation choices.
+Earlier direct-entry inventories remain historical; this does not close the
+complete callback graph or live dependency/body-capture behavior.
+
+Fresh unchanged-source verification passed 114 tests across the named shared
+request, OpenAI, Messages, JSON span, proxy, request-converter and dispatch scopes.
+No runtime edit, duplicate task, new test, full suite or performance benchmark
+was introduced by this reconciliation.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.

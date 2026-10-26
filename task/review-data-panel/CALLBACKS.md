@@ -2058,3 +2058,46 @@ verification in earlier sections remains historical evidence. No full workspace
 test suite or performance benchmark ran.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## AI request parsing and conversion ownership refresh
+
+Revalidated at `7248b9bce`. This section reconciles the named request preparation
+and conversion boundaries after recent local optimizations. It extends the older
+direct-entry inventory; it does not close the complete callback dependency graph.
+Source paths below are relative to `edgion-gateway/src/`.
+
+| Entry or owner | Current parsing and lifetime boundary |
+| --- | --- |
+| `routes/http/proxy_http/pg_request_filter` -> plugin runtime -> `ai/http/proxy::AiProxy` | Ordered request-plugin dispatch invokes AiProxy through the existing RequestFilter interface. Its global-store wrapper supplies per-invocation entropy. Route/backend capture and admission remain separate from protocol parsing. |
+| AiProxy body capture | Reads through the existing request-body interface, checks capture generation changes and any settled guard generation, then canonicalizes captured bytes. Configured quota admission can await; the final generation check still precedes plan publication. This is not an atomic transaction covering every body consumer. |
+| `protocols/openai/request::prepare` | One top-level Fields parse supplies owned Chat metadata and optional usage injection. Metadata errors precede injection. Non-streaming requests skip injection work; streaming options still receive their own nested parse when needed. No borrowed parsed state crosses an await or survives a body replacement. |
+| `protocols/openai/request::responses_metadata` | Selectively captures model, streaming, output bound and continuation facts from validated native UTF-8/JSON. The canonical Responses body remains unchanged; this path adds no Chat usage injection or conversation tree. |
+| `protocols/anthropic/request::metadata` | Selective native fields and bounded nested capability inspection determine binding/composite flags. Plain kind discriminators borrow raw text; escaped kinds remain owned. Existing item/depth bounds and error wrapping remain. Native Messages is distinct from Chat conversion. |
+| `protocols/request::decode_model` and native rewrite helpers | The shared decoder returns borrowed plain or owned escaped model text under the original encoded/decoded bounds. All metadata owners explicitly obtain a String. Comparison-only rewrites can borrow, while changed-model patching retains the canonical span/patch helpers and original unrelated bytes. |
+| Logical model routing and quota downgrade | Local rewriting parses the current private canonical body; changed bytes update the mutation flag and, when already enabled, input-character accounting. Re-resolving candidates and logical quota identity remains separate from provider-model ownership. |
+| `runtime/dispatch::prepare_ready_attempt` native branches | Matching provider/logical model names retain the plan's existing Bytes. Other selected names invoke the appropriate native rewrite on the current plan body. The shortcut does not mean every retry or rewrite avoids parsing. Body-generation publication and provider headers retain their later boundaries. |
+| `conversion/chat_to_anthropic/request::prepare_anthropic_request` | Each selected conversion preparation receives a fresh owned input Value from dispatch. Validation keys borrow it; completed output arrays/argument objects move into parents. Remaining source-to-output copies are the [request-tree ownership decision](conversion-01-request-tree-ownership.md). Usage-option validation now reads its sole required key once. |
+| AiProxy local model listing | GET model listing resolves visibility independently from POST preparation. The encoder serializes typed model entries with moved IDs, retaining the collection and final byte buffer. It is a local response, not upstream response aggregation or a reusable model-list cache. |
+
+Native Chat's selective stream/output-bound interpretation is intentionally
+separate from explicit conversion's strict compatibility checks. Non-true Chat
+stream values are not a new validation error, and non-u64 output fields are not
+silently made strict by the parsing refactor. Native Responses and Messages keep
+their own required/nullable field contracts. Shared UTF-8 admission does not
+replace each protocol's syntax, duplication or capability checks.
+
+Converter BoundedWriter enforces serialized output bytes while writing. It does
+not establish an input/output DOM heap bound or inherit the unary response
+converter's memory reservation. No cross-attempt parse cache, new body owner,
+response aggregation or parser-wide allocation guarantee is introduced.
+Candidate provider-model ownership remains [deferred](routing-09-candidate-provider-model-ownership.md);
+header baseline rebuilding remains [separate](retry-03-ai-request-baseline-rebuild.md).
+
+Fresh unchanged-source verification passed six shared request, nine OpenAI request,
+ten Messages request, five JSON span, 26 proxy, 19 request-converter and 39 dispatch
+tests (114 total). These check the named parsing/preparation contracts and existing
+local fixtures. They do not newly verify live providers, Redis/DNS/TLS execution,
+body-capture internals or all publication/cancellation interleavings. No new runtime
+edit, test, prototype, full suite or performance benchmark was introduced here.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
