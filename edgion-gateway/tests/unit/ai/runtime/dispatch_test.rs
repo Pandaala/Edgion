@@ -1371,7 +1371,7 @@ async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
                 ctx.restore_ai_attempt_plan(saved);
             } else {
                 let breaker = LogicalBackendCircuitBreaker::new(1);
-                let _occupied = breaker.try_acquire().unwrap();
+                let _occupied = Arc::clone(&breaker).try_acquire().unwrap();
                 if transition == "skip_credential" {
                     first
                         .selected

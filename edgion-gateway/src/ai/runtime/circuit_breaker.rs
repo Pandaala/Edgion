@@ -20,15 +20,13 @@ impl LogicalBackendCircuitBreaker {
         self.max
     }
 
-    pub fn try_acquire(self: &Arc<Self>) -> Option<LogicalBackendCircuitBreakerPermit> {
+    pub fn try_acquire(self: Arc<Self>) -> Option<LogicalBackendCircuitBreakerPermit> {
         self.in_flight
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.max).then_some(current.saturating_add(1))
             })
             .ok()
-            .map(|_| LogicalBackendCircuitBreakerPermit {
-                state: Arc::clone(self),
-            })
+            .map(|_| LogicalBackendCircuitBreakerPermit { state: self })
     }
 
     #[cfg(test)]

@@ -277,7 +277,7 @@ impl AiAttemptRuntimeState {
         if self.active.is_some() || self.accounting_overflow {
             return AiAttemptAdmission::DependencyDenied;
         }
-        let circuit_breaker = match input.circuit_breaker.as_ref() {
+        let circuit_breaker = match input.circuit_breaker.take() {
             Some(state) => match state.try_acquire() {
                 Some(permit) => Some(permit),
                 None => return AiAttemptAdmission::SkipBackend,

@@ -883,3 +883,43 @@ fn attempt_log_size_counts_wire_bytes_without_allocating() {
     assert_eq!(totals.len(), 1);
     assert_eq!((totals[0].input_tokens, totals[0].output_tokens), (4, 2));
 }
+
+#[tokio::test]
+async fn admission_breaker_permit_releases_on_rejection_drop_and_predispatch_finish() {
+    use crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker;
+
+    for case in 0..4 {
+        let breaker = LogicalBackendCircuitBreaker::new(1);
+        let mut input = admission_input(
+            (case != 0).then(closed_outlier_handle),
+            (case == 1).then_some(AiCredentialLimits {
+                requests_per_minute: Some(1),
+                tokens_per_minute: None,
+            }),
+            OnRedisFailure::Deny,
+        );
+        input.circuit_breaker = Some(Arc::clone(&breaker));
+        let mut state = AiAttemptRuntimeState::default();
+        match state.admit(input).await {
+            AiAttemptAdmission::Skip => assert_eq!(case, 0),
+            AiAttemptAdmission::DependencyDenied => assert_eq!(case, 1),
+            AiAttemptAdmission::Ready(runtime) => {
+                assert!(case >= 2);
+                assert!(Arc::clone(&breaker).try_acquire().is_none());
+                if case == 2 {
+                    drop(runtime);
+                } else {
+                    state.install(runtime);
+                    state.finish_predispatch();
+                }
+            }
+            AiAttemptAdmission::SkipBackend => panic!("the initially empty breaker must admit"),
+        }
+        assert_eq!(Arc::strong_count(&breaker), 1);
+        let permit = Arc::clone(&breaker)
+            .try_acquire()
+            .expect("the prior permit must be released");
+        drop(permit);
+        assert_eq!(Arc::strong_count(&breaker), 1);
+    }
+}

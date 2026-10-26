@@ -19122,3 +19122,31 @@ Final verification preserves those identities and adds the differential case:
 all-target check/Clippy, seven repository guards and diff hygiene passed with
 existing unrelated warnings. No full workspace test suite, live integration or
 benchmark ran.
+
+## Transfer the admission breaker owner into its permit
+
+LogicalBackendCircuitBreaker::try_acquire now consumes its Arc and moves that
+owner into the successful permit. AiAttemptRuntimeState::admit takes the existing
+optional input owner instead of borrowing it and cloning again. The selected
+policy generation is still cloned by prepared admission projection; that retained
+source ownership remains necessary. Tests that retain a breaker explicitly clone
+before acquiring rather than adding a second production API.
+
+This removes one Arc increment/decrement on successful acquisition. It introduces
+no allocation or measured throughput claim. The exact fetch_update, atomic
+orderings, limit arithmetic and permit Drop are unchanged. Active/overflow,
+breaker, outlier and Redis gate precedence remains intact. Rejections release the
+local permit; successful runtime, predispatch teardown and cancelled admission
+retain existing RAII ownership. The unrelated optional reservation-input decision
+remains open and is not implemented by this transfer.
+
+Independent plan review passed. A baseline-first actual admission test verifies
+release after missing outlier, missing Redis dependency, dropping an uninstalled
+runtime and predispatch finish. Breaker tests additionally cover exact-generation
+sole ownership, zero-capacity denial and the u32 maximum boundary. Existing
+aggregate-cap and dispatch skip/retry tests retain their assertions.
+Final verification passed three breaker, 26 runtime and 39 dispatch tests
+(68 total); runtime baseline and final retain the same 26 identities/outcomes.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated warnings. No full workspace test suite,
+live Redis/cancellation experiment or throughput benchmark ran.
