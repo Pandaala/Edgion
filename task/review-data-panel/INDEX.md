@@ -19370,3 +19370,20 @@ guards with existing unrelated warnings. The unit-test layout guard initially
 rejected adapter bodies in src; moving them to the mirrored test module resolved
 that finding without changing test identities. No full suite or live-provider
 integration test ran.
+
+## Chat-to-Anthropic request-tree ownership decision
+
+The [request-tree ownership task](conversion-01-request-tree-ownership.md) records
+remaining source-to-output text/schema copies in per-candidate conversion.
+Existing borrowed validation keys and moved completed output trees are already
+optimized. Consuming the input or introducing borrowed output views requires an
+explicit validation/lifetime/serialization design; no representation is selected.
+The serialized byte cap and separate unary response reservation do not establish
+a request-converter heap bound. Cross-attempt caches remain outside this task.
+
+Fresh unchanged-source verification passed 19 request-converter and 39 dispatch
+tests (58 total). No runtime edit, prototype, benchmark, full suite or live-provider
+test was introduced. This evidence checks the current contract, not a proposed
+ownership redesign or measured performance gain.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
