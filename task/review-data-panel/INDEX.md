@@ -19002,3 +19002,35 @@ passed. No runtime change, candidate implementation, full workspace test suite,
 live integration or measured performance improvement is claimed.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Borrow the effective deferred native Anthropic version
+
+Native Anthropic observation previously built a scratch RequestHeader and applied
+all deferred credentials only to read anthropic-version. Deferred mutations already
+own typed HeaderNames/HeaderValues and replace equivalent targets on upsert.
+A canonical case-insensitive value_for accessor now borrows the winning value;
+the connector compares its raw bytes with the certified version directly.
+
+RemoteIp collision and user-profile rejection retain precedence. Missing/live
+version behavior, duplicate-live rejection, deferred-over-live selection and
+unsupported-version observation policy are unchanged. The query neither injects
+headers nor checks expiry early. Values, sensitivity and deadlines remain in the
+canonical list; actual upstream materialization and Connection/expiry checks
+remain at their existing boundary.
+
+Independent investigation found no reachable parsing error for the previous
+scratch application of already-valid typed names/values in pinned Pingora. Its
+incidental allocation/capacity panic is not a required policy. The change removes
+that scratch construction and unrelated-entry application; it does not claim
+mathematical equivalence for allocation failure/oversized maps or measured heap/
+throughput gains. No disputed representation decision or new task was needed.
+
+Independent plan review passed. Original/final provider runs passed the same six
+identities, including repeated upsert, duplicate live versions, supported/future/
+opaque/empty deferred values, unrelated sensitive expired state and unchanged
+request headers. Four credential-owner tests include pointer/sensitivity checks
+for borrowed lookup, replacement and removal. Another 36 AI dispatch and 16 upstream
+hook tests passed. The owning native Messages knowledge documents observation-only
+projection. No full workspace test suite, live integration or benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.

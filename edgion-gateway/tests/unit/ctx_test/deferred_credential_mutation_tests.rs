@@ -65,3 +65,31 @@ fn preflight_rejects_any_expired_deferred_credential() {
     );
     assert!(!mutations.all_unexpired(now));
 }
+
+#[test]
+fn borrowed_value_lookup_preserves_identity_sensitivity_and_winning_upsert() {
+    let mut mutations = DeferredCredentialMutations::default();
+    let mut raw = HeaderValue::from_bytes(b"\xffprivate").unwrap();
+    raw.set_sensitive(true);
+    let original = Arc::new(raw);
+    mutations.upsert(HeaderName::from_static("x-provider-token"), original.clone(), None);
+    let borrowed = mutations.value_for("X-Provider-Token").unwrap();
+    assert!(std::ptr::eq(borrowed, original.as_ref()));
+    assert!(borrowed.is_sensitive());
+    assert_eq!(borrowed.as_bytes(), b"\xffprivate");
+    assert!(mutations.value_for("missing").is_none());
+
+    let replacement = value("replacement");
+    mutations.upsert(
+        HeaderName::from_bytes(b"X-Provider-Token").unwrap(),
+        replacement.clone(),
+        None,
+    );
+    assert!(std::ptr::eq(
+        mutations.value_for("x-provider-token").unwrap(),
+        replacement.as_ref()
+    ));
+    mutations.remove("X-Provider-Token");
+    assert!(mutations.value_for("x-provider-token").is_none());
+    assert!(original.is_sensitive());
+}

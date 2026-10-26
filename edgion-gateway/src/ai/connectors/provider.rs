@@ -119,14 +119,8 @@ fn validate_native_headers(adapter: &impl PluginSession) -> Result<bool, AiDispa
     {
         return Err(AiDispatchError::Client(AiProxyError::UnsupportedParameter));
     }
-    if let Some(mutations) = deferred.filter(|m| m.contains_target("anthropic-version")) {
-        // Materialize only the bounded deferred set, not a copy of live headers.
-        let mut request = pingora_http::RequestHeader::build("POST", b"/", None)
-            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
-        mutations
-            .apply(&mut request)
-            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
-        return Ok(version_supported(&request.headers));
+    if let Some(version) = deferred.and_then(|m| m.value_for("anthropic-version")) {
+        return Ok(version.as_bytes() == ANTHROPIC_VERSION.as_bytes());
     }
     Ok(!adapter.request_header_map().contains_key("anthropic-version")
         || version_supported(adapter.request_header_map()))

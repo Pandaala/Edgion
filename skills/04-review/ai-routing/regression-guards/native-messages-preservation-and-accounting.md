@@ -27,6 +27,13 @@ are resolved before observation admission. Only version 2023-06-01 is certified;
 optional unsupported-version observation remains sticky unknown and required
 accounting rejects before provider dispatch.
 
+Deferred version observation borrows the winning HeaderValue from the canonical
+mutation list, whose upsert replaces equivalent normalized names. It compares raw
+bytes without constructing or applying a scratch request. This is observation
+only: values, sensitivity and deadlines remain owned by the list, and actual
+materialization plus expiry/Connection checks retain their existing boundaries.
+Live duplicate-version handling and missing-version defaults are unchanged.
+
 State-bound container/file/thinking history requires one raw backend slot and one
 declared credential with an unchanged provider model and no model routes,
 downgrade or retry. Inspect file references inside tool_result content under

@@ -1950,6 +1950,13 @@ impl DeferredCredentialMutations {
             .retain(|entry| !entry.name.as_str().eq_ignore_ascii_case(name));
     }
 
+    pub(crate) fn value_for(&self, name: &str) -> Option<&http::HeaderValue> {
+        self.entries
+            .iter()
+            .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+            .map(|entry| entry.value.as_ref())
+    }
+
     pub(crate) fn contains_target(&self, name: &str) -> bool {
         self.entries
             .iter()

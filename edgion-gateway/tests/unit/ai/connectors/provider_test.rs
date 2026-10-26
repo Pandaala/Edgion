@@ -293,3 +293,59 @@ async fn native_profile_and_final_remote_ip_collisions_fail_before_materializati
         );
     }
 }
+
+#[tokio::test]
+async fn native_version_projection_preserves_winning_deferred_value_without_mutation() {
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    for raw in [b"2023-06-01".as_slice(), b"future", b"\xff", b""] {
+        let mut session = native_session().await;
+        for _ in 0..2 {
+            session
+                .req_header_mut()
+                .append_header("anthropic-version", ANTHROPIC_VERSION)
+                .unwrap();
+        }
+        let mut ctx = EdgionHttpContext::new();
+        assert!(!validate_native_headers(&PingoraSessionAdapter::new(&mut session, &mut ctx)).unwrap());
+        let mut unrelated = http::HeaderValue::from_static("fixture-private");
+        unrelated.set_sensitive(true);
+        let expired = Instant::now() - Duration::from_secs(1);
+        ctx.upsert_deferred_credential_mutation(
+            http::HeaderName::from_static("x-unrelated"),
+            Arc::new(unrelated),
+            Some(expired),
+        );
+        ctx.upsert_deferred_credential_mutation(
+            http::HeaderName::from_static("anthropic-version"),
+            Arc::new(http::HeaderValue::from_static("previous")),
+            None,
+        );
+        let mut winning = http::HeaderValue::from_bytes(raw).unwrap();
+        winning.set_sensitive(true);
+        ctx.upsert_deferred_credential_mutation(
+            http::HeaderName::from_bytes(b"AnThRoPiC-Version").unwrap(),
+            Arc::new(winning),
+            None,
+        );
+        let before = session.req_header().headers.clone();
+        for _ in 0..2 {
+            assert_eq!(
+                validate_native_headers(&PingoraSessionAdapter::new(&mut session, &mut ctx)).unwrap(),
+                raw == ANTHROPIC_VERSION.as_bytes()
+            );
+            assert_eq!(session.req_header().headers, before);
+        }
+        assert!(!ctx.deferred_credentials_all_unexpired(Instant::now()));
+        let mut attempt = session.req_header().clone();
+        ctx.apply_deferred_credentials(&mut attempt).unwrap();
+        assert_eq!(attempt.headers.get_all("anthropic-version").iter().count(), 1);
+        assert_eq!(attempt.headers["anthropic-version"].as_bytes(), raw);
+        assert!(attempt.headers["anthropic-version"].is_sensitive());
+        assert_eq!(attempt.headers["x-unrelated"], "fixture-private");
+        assert!(attempt.headers["x-unrelated"].is_sensitive());
+    }
+}
