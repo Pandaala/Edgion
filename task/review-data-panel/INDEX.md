@@ -19423,3 +19423,23 @@ No runtime edit, duplicate task, new test, full suite or performance benchmark
 was introduced by this reconciliation.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Dispatch converted streaming events without duplicate classification
+
+AnthropicResponseProcessor now sends the validated event type directly to its
+existing match. The removed private classifier had one caller and repeated the
+same eight strings; unknown types already reach the match's successful no-op
+fallback. Terminal-state, semantic-data, JSON object/type and event-name equality
+checks remain before dispatch. Known handlers and unknown-event behavior are
+unchanged, including genuine provider-error redaction and stream sealing.
+
+The unchanged baseline passed 32 response-converter tests. Existing unknown/ping,
+known/unknown name-mismatch, genuine error, text/tool lifecycle, exact-wire and
+bounded-output regressions remain intact; no implementation-mirroring test was
+added. This removes redundant source classification, without claiming generated
+machine-code savings, allocation reduction or measured throughput improvement.
+Canonical event-envelope ownership remains the separate sse-03 decision.
+Final verification passed the same 32 response-converter tests plus 39 dispatch
+and 14 canonical SSE tests (85 total), formatting, workspace all-target check/Clippy
+and seven repository guards with existing unrelated warnings. No full suite or
+live-provider integration ran.

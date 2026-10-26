@@ -463,9 +463,6 @@ impl AnthropicResponseProcessor {
         if !event.event_is(type_) {
             return Err(());
         }
-        if !is_known_event_type(type_) {
-            return Ok(());
-        }
         match type_ {
             "ping" => Ok(()),
             "error" => Err(()),
@@ -1257,20 +1254,6 @@ fn map_stop_reason(reason: &str) -> Option<&'static str> {
         "refusal" => Some("content_filter"),
         _ => None,
     }
-}
-
-fn is_known_event_type(type_: &str) -> bool {
-    matches!(
-        type_,
-        "ping"
-            | "error"
-            | "message_start"
-            | "content_block_start"
-            | "content_block_delta"
-            | "content_block_stop"
-            | "message_delta"
-            | "message_stop"
-    )
 }
 
 fn append_capped(output: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<(), ()> {
