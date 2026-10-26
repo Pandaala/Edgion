@@ -34,6 +34,33 @@ downstream after each completed write. These facts do not establish missing
 upstream flushing on the inspected built-in path, and do not cover custom or
 injected transports. Do not conflate write-buffer policy with this read candidate.
 
+## Setup readers constrain the sizing choice
+
+Additional source inspection at `5a8be15ae` follows inbound PROXY processing,
+which runs after listener buffer installation. Disabled mode returns immediately;
+conditional trust rejects an unidentified peer, skips untrusted peers, and probes
+only trusted peers. Required mode parses directly without that optional probe.
+The optional probe reads at most 12 bytes through `try_peek` and restores the
+bytes read on success, EOF or a returned I/O error. A short EOF is treated as no
+header while preserving its bytes. This describes returned outcomes, not future
+cancellation safety.
+
+`read_proxy_header` reads the first 12 bytes exactly. Its v1 branch then issues
+one-byte `read_exact` calls until LF and validates the final CRLF. The full
+header is capped at 107 bytes, so at most 95 additional one-byte reads occur.
+A zero-capacity listener read buffer removes read-ahead for this small-read
+consumer; relay-sized buffering can still batch those reads. Do not infer the
+number of kernel syscalls from read_exact calls or polls: readiness, segmentation
+and already available data affect the actual result. This is a reason to measure
+setup separately, not proof that a zero-capacity policy always regresses.
+
+The probe's `rewind` copies at most 12 bytes into owned storage. Generic partial
+reads of rewind storage copy the unconsumed suffix, but the parser's next
+12-byte read drains this probe prefix whole. This inspected producer does not
+establish a bulk-body or unbounded repeated-copy problem. Other peek callers and
+custom rewind users need separate evidence before changing the dependency's
+storage representation.
+
 ## Choices and acceptance
 
 Retain defaults until workload evidence selects a narrower listener policy, or
@@ -51,7 +78,9 @@ partial writes, directional fairness, read-based accounting, immediate EOF,
 idle progress/deadlines and cancellation cleanup. Do not alter retained TLSRoute
 termination code or HTTP/HTTPS listeners as incidental supporting work.
 
-Measure small request/reply, bulk one-way and simultaneous two-way traffic,
+Measure required and conditional-trust PROXY v1/v2, trusted no-header and short
+EOF inputs, untrusted/disabled bypass, and fragmented setup alongside small
+request/reply, bulk one-way and simultaneous two-way traffic,
 segmented input, slow/stalled peers and long-lived mostly idle connections.
 Record allocations/capacities, copy volume, read/syscall counts, CPU, throughput,
 latency and resident memory separately. Exercise PP2 and TLS passthrough setup
@@ -69,3 +98,9 @@ Fresh unchanged-code verification passed 135 Gateway tests: 21 shared relay,
 29 TCP and 85 TLS. Formatting and workspace all-target check/Clippy passed with
 existing unrelated warnings. No candidate, benchmark, live integration, full
 suite or fixture edit accompanies this decision.
+
+The setup-reader follow-up passed 48 unchanged Gateway PROXY-policy/helper and
+shared-relay tests, formatting and workspace all-target check/Clippy. These
+Gateway tests are not fresh execution of the fork parser/rewind tests and do not
+prove transport-equivalent buffer tuning. Independent plan and final source
+reviews passed, together with agent-doc validation and diff hygiene.

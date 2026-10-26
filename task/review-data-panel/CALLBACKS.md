@@ -2238,3 +2238,23 @@ BufStream's inner stream can discard buffered bytes. Fresh unchanged-code tests
 passed 135 shared-relay/TCP/TLS cases; formatting and workspace check/Clippy passed.
 No live transport, benchmark, candidate behavior or complete dependency coverage
 is established by those checks.
+
+
+### PROXY setup read granularity and bounded probe replay
+
+At `5a8be15ae`, the same pinned fork's optional trusted probe reads at most 12
+bytes and rewinds the bytes read on success or returned EOF/I/O error. Disabled
+and untrusted paths bypass probing; required mode parses directly. Returned
+short EOF becomes no-header with preserved bytes, not a cancellation guarantee.
+The parser consumes a 12-byte prefix, then v1 reads single bytes until LF and
+validates CRLF within its 107-byte total cap (at most 95 additional byte reads).
+Zero-capacity read buffering can therefore trade away setup read batching even
+though relay reads are 8 KiB. Poll counts, application reads and kernel syscalls
+must be measured separately.
+
+Generic partial rewind reads copy the retained suffix, but the PROXY parser
+consumes this probe's prefix whole. No large-payload copy claim or dependency
+representation change follows. This extends [relay-02](relay-02-listener-read-buffer-sizing.md#setup-readers-constrain-the-sizing-choice)
+with setup-specific acceptance cases rather than creating a second finding.
+Fresh 48 Gateway PROXY-policy/helper and relay tests passed; they do not execute
+the fork's parser/rewind tests or verify candidate transport behavior.
