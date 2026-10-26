@@ -18952,3 +18952,30 @@ idempotence. Original/final core runs passed the same 30 test identities;
 suite, live integration or benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Skip Connection token scans when deferred targets are empty
+
+The final dual-view credential guard now computes whether its borrowed mutation
+list has targets once. It still validates every reached Connection field with
+HeaderValue::to_str before conditionally scanning tokens. Empty lists can occur
+when other plugin auxiliary features are used or the last credential is removed.
+No target means token splitting/trimming and empty-list membership checks cannot
+reject anything; the existing text-validation failures remain observable.
+
+This is not an early return around Connection validation or the upstream hook.
+Populated lists retain the same canonical tokenizer, order and first-failure
+behavior. Expiry sampling, deferred insertion, diagnostics and pre-dispatch
+failure ownership are unchanged. The source benefit is less token processing
+for empty lists, not a measured allocation or throughput improvement; nonempty
+fields gain the bounded boolean guard. CredentialInjector's separate inspection
+interface proposal remains deferred.
+
+Independent plan review passed. A 42-case helper matrix covers absent/populated/
+removed-last target states, both views, repeated fields, nomination and invalid
+text before/after valid fields. Baseline/final upstream-request-filter runs passed
+the same 16 test identities; three credential-owner and 100 real-adapter tests
+also passed. The owning security knowledge documents the preserved empty-list
+text-validation boundary. No full workspace test suite, live integration or
+benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.

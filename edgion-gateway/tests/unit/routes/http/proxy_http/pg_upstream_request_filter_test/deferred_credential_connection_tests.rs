@@ -346,3 +346,53 @@ async fn full_hook_keeps_forwarded_identity_authoritative_over_request_ids_on_ev
         .ai_state()
         .is_none_or(|state| !state.attempt_runtime.ever_dispatched()));
 }
+
+#[test]
+fn connection_guard_preserves_empty_target_and_invalid_text_behavior() {
+    type Case<'a> = (&'a [&'a [u8]], bool, bool);
+    let cases: &[Case<'_>] = &[
+        (&[], true, true),
+        (&[b" , keep-alive, , "], true, true),
+        (&[b"X-Provider-Token"], true, false),
+        (&[b"X-Other", b"x-provider-token"], true, false),
+        (&[b"\xff"], false, false),
+        (&[b"X-Other", b"\xff"], false, false),
+        (&[b"\xff", b"X-Other"], false, false),
+    ];
+    for target_state in 0..3 {
+        let mut targets = if target_state == 0 {
+            DeferredCredentialMutations::default()
+        } else {
+            mutations()
+        };
+        if target_state == 2 {
+            targets.remove("X-Provider-Token");
+        }
+        for session_view in [false, true] {
+            for &(lines, empty_allowed, populated_allowed) in cases {
+                let mut session_request = RequestHeader::build("GET", b"/", None).unwrap();
+                let mut attempt = RequestHeader::build("GET", b"/", None).unwrap();
+                let header = if session_view {
+                    &mut session_request
+                } else {
+                    &mut attempt
+                };
+                for line in lines {
+                    header
+                        .append_header("connection", HeaderValue::from_bytes(line).unwrap())
+                        .unwrap();
+                }
+                assert_eq!(
+                    validate_deferred_credential_connection(&session_request, &attempt, &targets).is_ok(),
+                    if target_state == 1 {
+                        populated_allowed
+                    } else {
+                        empty_allowed
+                    },
+                    "state={target_state}, session_view={session_view}, lines={lines:?}"
+                );
+                assert_eq!(targets.contains_target("x-provider-token"), target_state == 1);
+            }
+        }
+    }
+}

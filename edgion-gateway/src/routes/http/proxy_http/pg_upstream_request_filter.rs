@@ -100,10 +100,11 @@ fn validate_deferred_credential_connection(
     upstream_request: &RequestHeader,
     mutations: &DeferredCredentialMutations,
 ) -> Result<(), ()> {
+    let has_targets = !mutations.is_empty();
     for request in [session_request, upstream_request] {
         for value in request.headers.get_all(http::header::CONNECTION) {
             let value = value.to_str().map_err(|_| ())?;
-            if connection_option_tokens(value).any(|name| mutations.contains_target(name)) {
+            if has_targets && connection_option_tokens(value).any(|name| mutations.contains_target(name)) {
                 return Err(());
             }
         }

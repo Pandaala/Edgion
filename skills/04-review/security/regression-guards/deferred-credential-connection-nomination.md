@@ -30,6 +30,13 @@ valid UTF-8. Inspect all field lines and all comma-separated tokens. Unrelated
 options, including the ordinary WebSocket `Connection: Upgrade` handshake,
 remain valid when they do not nominate a credential target.
 
+An allocated plugin auxiliary state can contain no deferred targets, including
+when the last target was removed. The hook still validates every Connection
+value in both views with `HeaderValue::to_str()` in that state; this predicate is
+stricter than generic UTF-8 validity. Only token splitting/trimming and empty-list
+membership queries are skipped. This preserves existing rejection behavior and
+does not bypass the hook, expiry checks or attempt-local materialization.
+
 ## Failure ownership
 
 Nomination and non-UTF-8 rejection records the request diagnostic

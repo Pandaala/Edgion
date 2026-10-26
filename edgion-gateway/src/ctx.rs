@@ -1923,6 +1923,10 @@ impl fmt::Debug for DeferredCredentialMutations {
 }
 
 impl DeferredCredentialMutations {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(crate) fn upsert(
         &mut self,
         name: http::HeaderName,
