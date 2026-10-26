@@ -2217,3 +2217,24 @@ this behavior-sensitive opportunity separately from encoding and member selectio
 No actual retained lifetime, remote outcome or memory/performance regression was
 measured. The fresh 117 passing tests and one existing ignore cover current local
 rate-limit/provider behavior, not live cancellation or reconnect interleavings.
+
+
+## L4 listener and upstream transport-buffer boundaries
+
+Revalidated at `7151f9d3f`, extending the earlier selection/relay inventory into
+pinned Pingora `1aaa45cc70430bc782990bc20ddee3fef36d6b99` and Tokio 1.53.1.
+
+| Boundary | Current source evidence | Limit |
+| --- | --- | --- |
+| TCP and TLS passthrough listener construction | Gateway `tcp_listeners` uses Pingora add_tcp variants, which preserve ListenerConfig's default L4 buffer settings. | No Gateway read-buffer override; this candidate does not include HTTP/HTTPS or retained termination code. |
+| Accepted stream initialization | The raw constructor starts at zero capacities; listener handshake installs 64 KiB read / 1460-byte write buffers before PROXY protocol and optional TLS. | User-space reserved capacity, not resident or complete connection memory. |
+| Relay reads | Each direction supplies an 8192-byte buffer. Tokio bypasses read buffering only for an empty internal buffer and a caller capacity at least that buffer's size. | Listener reads normally copy through the larger read buffer; read-ahead can reduce underlying calls. |
+| Upstream transport | Built-in TCP connector retains zero-capacity stream buffers; TCP_NODELAY is an independent socket setting. | No missing-flush conclusion for this path; custom transports remain uninspected. |
+| Downstream writes | Relay retains partial-write cursors and flushes each completed downstream write before the next read in that direction. | Read-buffer tuning does not authorize changing write buffering, flush ordering or fairness. |
+
+[relay-02](relay-02-listener-read-buffer-sizing.md) defers workload-dependent
+read-buffer sizing. Midstream buffer replacement is excluded because extracting
+BufStream's inner stream can discard buffered bytes. Fresh unchanged-code tests
+passed 135 shared-relay/TCP/TLS cases; formatting and workspace check/Clippy passed.
+No live transport, benchmark, candidate behavior or complete dependency coverage
+is established by those checks.

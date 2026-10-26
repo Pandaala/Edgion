@@ -264,6 +264,7 @@ destination.
 - [Plugin execution state layout baseline failure](verification-04-plugin-state-layout.md)
 
 - [Shared relay idle-reset coalescing](relay-01-idle-reset-coalescing.md)
+- [L4 listener read-buffer sizing](relay-02-listener-read-buffer-sizing.md)
 
 - [ASCII character-count fast path](usage-01-ascii-character-count.md)
 
@@ -19805,3 +19806,22 @@ existing unrelated warnings. Independent plan and final source reviews passed.
 The first final compile exposed a Vec-to-Bytes test comparison mismatch, corrected
 by comparing slices without changing the expected value. No full suite or live
 integration ran, and no integration fixture changed.
+
+
+## Inspect L4 listener transport read buffering
+
+The [transport-buffer inventory](CALLBACKS.md#l4-listener-and-upstream-transport-buffer-boundaries)
+extends the existing direct relay audit into pinned Pingora/Tokio storage. It
+separates accepted listener defaults (64 KiB read / 1460-byte write), built-in
+upstream zero-capacity buffers and the relay's two 8 KiB buffers. Read-buffer
+copy reduction is workload-dependent because read-ahead also batches reads.
+The new relay-02 task defers sizing selection; no runtime/default change or
+throughput/RSS benefit is claimed. This is separate from timer-reset coalescing
+and temporary ClientHello storage.
+
+Fresh unchanged-code verification passed 135 shared-relay/TCP/TLS cases.
+Formatting and workspace all-target check/Clippy passed with existing warnings.
+No integration fixture changed; no new tests, live transport or full suite ran.
+
+Independent plan and final source reviews passed; agent-doc validation and diff
+hygiene passed. Runtime and dependency sources remain unchanged.
