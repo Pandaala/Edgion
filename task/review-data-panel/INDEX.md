@@ -19309,3 +19309,30 @@ Messages request, five JSON span and 23 AI proxy tests (53 total). Formatting,
 workspace all-target check/Clippy and seven repository guards passed with existing
 unrelated warnings. No full suite, live-provider test or alternate-feature build
 ran.
+
+## Skip Chat usage-injection parsing for known non-streaming requests
+
+Canonical Chat preparation now invokes usage injection only when both the option
+is enabled and the already parsed metadata marks the request as streaming.
+Metadata and injection use the same fields parser and exact raw `stream == true`
+predicate. On non-streaming input the old injection helper reparsed the same
+immutable body, then returned None before inspecting stream_options. The new
+gate removes that second UTF-8/syntax/selected-field scan. Streaming injection
+and the standalone helper retain their original validation and patch behavior.
+
+The initial metadata pass still owns root/syntax/UTF-8 checks, selected-key
+duplicates, model validity and output-bound precedence. No cached parse state,
+new body representation, relaxed admission or change to logical model ownership
+is introduced. This is source-level removal of a redundant parse, without an
+allocation, throughput or whole-request latency measurement.
+
+A frozen ungated reference checks 128 combinations of injection enablement,
+missing/false/null/numeric/string/array/true/duplicate stream fields, and absent,
+invalid, empty, enabled, disabled, mistyped or duplicate include_usage options.
+It compares errors, exact body bytes, model/stream/output metadata and mutation
+state; unchanged bodies retain their original pointer. Existing UTF-8, invalid
+model and sliced-Bytes regressions remain. All 24 proxy tests passed with the new
+regression before the production edit.
+Final verification passed the same 24 proxy tests and nine OpenAI request tests
+(33 total), formatting, workspace all-target check/Clippy and seven repository
+guards with existing unrelated warnings. No full suite or live integration ran.

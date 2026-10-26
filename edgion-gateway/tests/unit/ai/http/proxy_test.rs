@@ -967,3 +967,63 @@ fn canonical_messages_preserves_sliced_native_multibyte_bytes() {
     assert_eq!(canonical.body.len(), witness.len());
     assert_eq!(canonical.body, witness);
 }
+
+#[test]
+fn canonical_chat_usage_gate_preserves_ungated_preparation() {
+    for stream in [
+        "",
+        r#", "stream":false"#,
+        r#", "stream":null"#,
+        r#", "stream":0"#,
+        r#", "stream":"true""#,
+        r#", "stream":[]"#,
+        r#", "stream":true"#,
+        r#", "stream":true,"stream":false"#,
+    ] {
+        for options in [
+            "",
+            r#", "stream_options":null"#,
+            r#", "stream_options":[]"#,
+            r#", "stream_options":{}"#,
+            r#", "stream_options":{"include_usage":true}"#,
+            r#", "stream_options":{"include_usage":false,"custom":7}"#,
+            r#", "stream_options":{"include_usage":"true"}"#,
+            r#", "stream_options":{"include_usage":true,"include_usage":false}"#,
+        ] {
+            let body = Bytes::from(format!(
+                r#" {{ "model":"model","max_tokens":3{stream}{options},"opaque":{{"text":"é€"}} }} "#
+            ));
+            for enabled in [false, true] {
+                // The reference deliberately retains the original unconditional second parse.
+                let previous = (|| {
+                    let metadata = request::metadata(&body)?;
+                    let changed = if enabled { request::inject_usage(&body)? } else { None };
+                    let mutated = changed.is_some();
+                    Ok::<_, AiProxyError>((
+                        changed.unwrap_or_else(|| body.clone()),
+                        metadata.model,
+                        metadata.streaming,
+                        metadata.output_bound,
+                        mutated,
+                    ))
+                })();
+                let current = canonical_openai_request(body.clone(), enabled).map(|prepared| {
+                    if !prepared.mutated {
+                        assert_eq!(prepared.body.as_ptr(), body.as_ptr());
+                    }
+                    (
+                        prepared.body,
+                        prepared.logical_model,
+                        prepared.requested_streaming,
+                        prepared.output_bound,
+                        prepared.mutated,
+                    )
+                });
+                assert_eq!(
+                    current, previous,
+                    "stream={stream}, options={options}, enabled={enabled}"
+                );
+            }
+        }
+    }
+}
