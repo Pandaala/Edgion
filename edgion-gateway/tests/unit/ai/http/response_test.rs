@@ -318,3 +318,34 @@ async fn native_off_keeps_encoded_response_without_usage_diagnostics() {
         crate::ai::accounting::usage::GenAiAttemptUsageSource::NotObserved
     );
 }
+
+#[test]
+fn absolute_reset_hints_skip_discarded_duration_error_allocations() {
+    use crate::test_allocation_counter::count_allocation_stats;
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    for (value, expected) in [
+        ("2023-11-14T22:13:50Z", Duration::from_secs(30)),
+        ("2023-11-14T23:13:50+01:00", Duration::from_secs(30)),
+        ("2023-11-14T22:13:50.250Z", Duration::from_millis(30_250)),
+    ] {
+        for name in super::OPENAI_RESET_HEADERS {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_str(value).unwrap());
+            // These fixtures are nonnumeric timestamps. This is the original
+            // duration-then-RFC3339 fallback; both conversion owners are shared.
+            let (previous, previous_stats) = count_allocation_stats(|| {
+                edgion_resources::duration::parse_duration(value)
+                    .ok()
+                    .or_else(|| edgion_common::time::parse_rfc3339_deadline(value, now))
+            });
+            let (actual, actual_stats) =
+                count_allocation_stats(|| provider_reset_hint(&headers, AiProviderLabel::OpenAi, now));
+            assert_eq!(previous, Some(expected));
+            assert_eq!(actual, previous);
+            assert_eq!(previous_stats.calls, 1);
+            assert_eq!(previous_stats.requested_bytes, value.len());
+            assert_eq!(actual_stats.calls, 0);
+            assert_eq!(actual_stats.requested_bytes, 0);
+        }
+    }
+}

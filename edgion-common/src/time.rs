@@ -57,8 +57,12 @@ pub fn parse_rate_limit_reset(value: &str, now: SystemTime) -> Option<Duration> 
         let reset = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(epoch_seconds))?;
         return Some(reset.duration_since(now).unwrap_or(Duration::ZERO));
     }
-    if let Ok(duration) = edgion_resources::duration::parse_duration(value) {
-        return Some(duration);
+    // A date separator cannot occur in a GEP-2257 duration. Skip its owned
+    // error for date-shaped hints; the RFC3339 parser still validates them.
+    if value.as_bytes().get(4) != Some(&b'-') {
+        if let Ok(duration) = edgion_resources::duration::parse_duration(value) {
+            return Some(duration);
+        }
     }
     let timestamp = chrono::DateTime::parse_from_rfc3339(value).ok()?;
     let seconds = u64::try_from(timestamp.timestamp()).ok()?;

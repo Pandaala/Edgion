@@ -19165,3 +19165,37 @@ state, attempt runtime and dispatch. No new representation, live exchange or
 throughput improvement is claimed.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Skip impossible duration parsing for absolute reset timestamps
+
+The shared parse_rate_limit_reset helper now bypasses its duration attempt when
+the trimmed input has a hyphen at byte four. GEP-2257 durations contain only
+ASCII digits and h/m/s unit bytes, so such an input cannot succeed as a duration.
+This is a negative discriminator, not a timestamp validator: the existing Chrono
+RFC3339 parser still decides validity. Epoch parsing remains first; whitespace,
+short/UTF-8 input safety, past-time zero, pre-epoch rejection and overflow behavior
+are unchanged. Inputs without that separator retain the previous parser order.
+Re-evaluate the discriminator if the canonical duration grammar changes.
+
+The Gateway raw-response path reaches this shared helper through provider reset
+hints after Retry-After fallback. The owning Common parser changes; no duplicate
+Gateway grammar, error API, cache or header behavior is introduced. Independent
+plan review approved this exact supporting cross-crate scope.
+
+A baseline-first common test compares the full original parser chain across
+valid/invalid duration forms, segment limits, epoch bounds, RFC3339 offsets and
+fractional seconds, past/pre-epoch values, whitespace, short/multibyte inputs and
+ASCII boundary bytes. A Gateway allocation test exercises both OpenAI reset-header
+names with UTC, offset and fractional timestamps, preparing headers before counting.
+It compares the original duration-then-timestamp fallback to provider_reset_hint
+and requires equal parsed values. Existing unused-fallback and cooldown tests
+remain unchanged. No throughput or full-hook allocation claim is made.
+The measured timestamp fixtures each eliminate one allocation of the input byte
+length; the current reset-header helper allocates zero in those fixtures. Other
+malformed inputs can still allocate duration errors, and cooldown normalization
+can allocate its output header. Final verification passed seven shared-time,
+17 duration, seven response, 17 credential and 26 runtime tests (74 total).
+The original/final shared-time runs have identical identities and outcomes.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated warnings. No full workspace test suite,
+live provider exchange or throughput benchmark ran.

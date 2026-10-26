@@ -66,3 +66,69 @@ fn rfc3339_deadline_is_strict_and_maps_past_to_zero() {
     assert_eq!(parse_rfc3339_deadline("30s", now), None);
     assert_eq!(parse_rfc3339_deadline("1700000030", now), None);
 }
+
+#[test]
+fn reset_timestamp_routing_matches_original_parser_chain() {
+    fn original(value: &str, now: SystemTime) -> Option<Duration> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        if let Ok(seconds) = value.parse::<u64>() {
+            let reset = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))?;
+            return Some(reset.duration_since(now).unwrap_or(Duration::ZERO));
+        }
+        if let Ok(duration) = edgion_resources::duration::parse_duration(value) {
+            return Some(duration);
+        }
+        let timestamp = chrono::DateTime::parse_from_rfc3339(value).ok()?;
+        let seconds = u64::try_from(timestamp.timestamp()).ok()?;
+        let reset = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(seconds))?
+            .checked_add(Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos())))?;
+        Some(reset.duration_since(now).unwrap_or(Duration::ZERO))
+    }
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let mut cases: Vec<String> = [
+        "",
+        "0",
+        "1700000030",
+        "18446744073709551615",
+        "18446744073709551616",
+        "1h30m250ms",
+        "0h0m0s0ms",
+        "1s1s1s1s1s",
+        "100000s",
+        "1.5s",
+        "-1s",
+        "2023-11-14T22:13:50Z",
+        "2023-11-14T22:13:50.123456789Z",
+        "2023-11-14T23:13:50+01:00",
+        "2023-11-14T21:13:50-01:00",
+        "2023-11-14t22:13:50z",
+        "2023-11-14T22:13:19Z",
+        "1969-12-31T23:59:59Z",
+        "2023-99-14T22:13:50Z",
+        "2023-",
+        "1234-5s",
+        "éé-1s",
+        "later",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    for unit in ["h", "m", "s", "ms"] {
+        for number in ["0", "1", "99999", "100000"] {
+            cases.push(format!("{number}{unit}"));
+        }
+    }
+    for byte in 0..=127u8 {
+        cases.push(format!("1234{}1s", char::from(byte)));
+        cases.push(format!("2023-11-14T22:13:50{}", char::from(byte)));
+    }
+    for value in cases {
+        for input in [value.clone(), format!(" \t{value}\r\n")] {
+            assert_eq!(parse_rate_limit_reset(&input, now), original(&input, now), "{input:?}");
+        }
+    }
+}
