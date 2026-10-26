@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared fixed-header name ownership](response-05-prepared-fixed-header-names.md)
+
 - [DSL Value shape metadata reuse](dsl-14-value-shape-reuse.md)
 
 - [Literal DSL time-format preparation](dsl-13-time-format-preparation.md)
@@ -18845,3 +18847,31 @@ suite or benchmark ran. The existing response-mutation knowledge page now
 states the private-helper boundary and independent queue guards.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+
+## Prepared fixed-header name ownership boundary
+
+PreparedHeader already shares fixed values, but its native modifier and
+ResponseRewrite consumers pass names through borrowed session interfaces that
+materialize Strings for request/bound-response writes or pending operations.
+The [deferred name-owner task](response-05-prepared-fixed-header-names.md) records
+case-preserving shared ownership, session/queue interfaces and retained-memory
+tradeoffs. Pingora accepts public Bytes; its internal CaseHeaderName is not
+externally nameable, and typed normalized names can change original spelling.
+Prepared ownership would not itself remove Pingora normalized-name parsing.
+
+The task preserves request sealed-RPC and deferred-credential behavior,
+response protection, consumer-specific duplicate/order rules and queue replay
+versus drain. It is distinct from borrowed queue execution, denial headers and
+sticky issuance. No runtime optimization or measured gain is selected.
+Independent plan review passed. Fresh current-code tests passed 65 native filter,
+10 ResponseRewrite and 100 real-adapter cases. No full workspace test suite,
+live integration, candidate implementation or benchmark ran.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed; existing unrelated Clippy warnings remain.
+The same plan's direct AI backend consumer is included, with its pre-mutation
+configuration rejection and error mapping. The original header-modifier knowledge
+now distinguishes shared original-case bytes from eliminating Pingora's internal
+parse; its historical typed-name scope no longer implies a mandatory fork change.
+All 36 AI dispatch baseline tests passed; agent-doc validation and diff hygiene
+passed again after that knowledge correction.

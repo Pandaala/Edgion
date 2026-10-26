@@ -86,10 +86,15 @@ execution. Both are insufficient.
 Header values are prepared once, but configured header names intentionally remain
 strings. Preserving their authored spelling matters on HTTP/1, while Pingora's
 case-preserving insertion API converts even typed names back through its internal
-name parser. Changing that boundary would require a wider `PluginSession` and
-Pingora-fork API change for smaller gains. This correction therefore claims
-zero allocation and zero payload copy only for cloning each prepared value, not
-for the complete header-map insertion path.
+name parser. Eliminating that normalized-name parse is a different change from
+sharing original-case name bytes. The pinned fork already accepts public `Bytes`
+for the latter; its internal `CaseHeaderName` is not externally nameable. Whether
+a shared owner belongs in `PreparedHeader`, `PluginSession` and queued operations
+requires a representation and lifetime decision, but a fork API change is not
+established as necessary for removing name payload copies. No net memory or
+throughput gain has been measured. The value correction claims zero allocation
+and zero payload copy only for cloning each prepared value, not for complete
+header-map insertion.
 Request framing remains separate. Response modifiers additionally use the
 [shared response mutation policy](response-header-mutation-policy.md); request
 modifiers retain their existing validation. The historical validation-only
@@ -175,6 +180,8 @@ delegation, static errors, execution ordering, and publication/recovery.
   validation-only correction verified on 2026-09-11 after user scope approval.
 - `prepare-gateway-api-header-modifier-runtime`: AI first-equivalent execution
   was corrected first. The follow-up then moved retained values into the shared
-  runtime plan as prevalidated `HeaderValue`s. Typed name preparation was rejected
-  as a wider Pingora-boundary change that would not eliminate its internal parse;
-  original name spelling and existing transport semantics remain unchanged.
+  runtime plan as prevalidated `HeaderValue`s. That scoped correction deferred
+  typed name preparation; it did not eliminate Pingora's internal parse. This
+  historical boundary does not rule out a separate original-case shared-byte
+  owner through the existing public conversion. Original name spelling and
+  existing transport semantics remain unchanged.
