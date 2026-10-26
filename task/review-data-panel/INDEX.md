@@ -19577,3 +19577,37 @@ OIDC and shared helpers are unchanged. No full suite or live authentication
 transport test ran.
 Formatting, workspace all-target check/Clippy and diff hygiene passed with
 existing unrelated warnings.
+
+## Reuse the OIDC Auto classification header
+
+OIDC Auto mode now moves its successfully decoded classification Header into a
+private verification core instead of decoding it again on JWT branch entry.
+The use_jwks gate still suppresses parsing when disabled. Other access-token,
+allow-expired and ID-token wrappers parse through the same header helper before
+entering that core with their existing scope, audience and expiration options.
+The existing classifier test identity is retained while asserting the parsed
+header result instead of a discarded boolean.
+
+Algorithm-policy checks, JWKS selection/forced refresh, header release before
+discovery, original-token cryptographic decode and authenticated claims processing
+remain unchanged. Malformed headers select introspection; InvalidFormat from
+verification retains the existing fallback and combined-error behavior. Other
+authentication failures cannot fall back. No token cache, public verifier API,
+shared JWT/OIDC owner or network-test seam was added.
+
+The new actual-Auto regression passed before implementation with 160 OIDC tests
+and 16 existing ignores. Successful cached introspection is available for every
+case: valid JWT still uses JWT claims, opaque and signed non-object payloads use
+the permitted fallback, while signature/algorithm/issuer/audience/expiry/scope
+failures remain errors. Disabling JWKS uses cached introspection for all cases;
+scripted provider hit counts verify that bypass and early algorithm rejection.
+This removes one Auto header parse without claiming measured allocation or
+throughput improvement.
+
+Final OIDC verification passed the same 160 tests with 16 existing ignores.
+A test-only boolean adapter keeps the frozen ignored local-IdP fixture unchanged;
+production exposes only the parsed-header helper. Seven repository guards passed,
+including a fresh unit-layout check after the adapter change. No full suite,
+ignored local-IdP test or live network integration ran.
+Formatting, workspace all-target check/Clippy and diff hygiene passed with
+existing unrelated warnings.

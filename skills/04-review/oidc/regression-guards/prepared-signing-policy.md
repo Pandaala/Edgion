@@ -11,8 +11,8 @@ knowledge_type: regression-guards
 `OpenidConnect::try_new` prepares the expected and allowed signing algorithms
 once through `jwt_common::resolve_algorithm_policy`. The private immutable
 `signing_policy` owns either the prepared algorithms or a data-free Copy
-`AuthFailure::InvalidAlgorithm`. JWT verification borrows this outcome after
-`decode_header`, checks the token algorithm, then accesses the provider.
+`AuthFailure::InvalidAlgorithm`. JWT verification borrows this outcome after header parsing (reusing Auto
+classification when available), checks the token algorithm, then accesses the provider.
 
 Preparation must not turn a runtime algorithm rejection into constructor
 failure. In particular, resource validation accepts `tokenSigningAlg: HS256`
@@ -84,3 +84,26 @@ with no custom destructor in jsonwebtoken 9.3.1. These earlier release points
 preserve raw-token verification, key rotation, issuer/audience/expiration and
 nonce/scope behavior. They establish no erasure, reduced allocation count or
 measured whole-request peak/throughput improvement.
+
+## Auto classification reuses its decoded header
+
+Auto mode decodes a header only when use_jwks is enabled. A successful parsed
+Header moves directly into the private verification core; it is not parsed again
+between classification and algorithm/JWKS selection. Other access-token,
+allow-expired and ID-token wrappers retain their existing verification parameters
+and obtain the same parsed header through decode_jwt_header before entering the
+core. No cached token/header or new public verifier interface is introduced.
+
+Malformed headers still select introspection directly. Valid headers with invalid
+payload format still reach the existing InvalidFormat fallback; fallback failure
+retains the original JWT error with the same bounded introspection diagnostic.
+Signature, algorithm, issuer, audience, expiry and scope failures do not authorize
+fallback. The real cryptographic decode still consumes the original token, and
+the initial header still releases after key selection before discovery.
+
+The Auto routing regression provides a successful cached introspection result
+for each input, then verifies that authentication failures stay rejected. It
+also covers valid JWT selection, opaque/non-object-payload fallback and disabled
+JWKS, with scripted provider hit counts. This is local behavior evidence, not
+network or throughput measurement. Re-evaluate if classification, fallback rules,
+verification wrapper parameters or parsed-header ownership changes.

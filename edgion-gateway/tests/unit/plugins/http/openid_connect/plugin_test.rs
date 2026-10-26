@@ -34,6 +34,11 @@ fn actual_oidc(config: &OpenidConnectConfig, namespace: String) -> Result<Openid
 }
 
 impl OpenidConnect {
+    // Keep the frozen ignored local-IdP fixtures on their existing test helper.
+    pub(super) fn looks_like_jwt(token: &str) -> bool {
+        Self::decode_jwt_header(token).is_some()
+    }
+
     pub(super) fn new(config: &OpenidConnectConfig, namespace: String) -> Self {
         actual_oidc(config, namespace).expect("test OIDC configuration must build")
     }
@@ -2001,8 +2006,8 @@ fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
 fn test_looks_like_jwt() {
     let jwtish = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.e30.signature";
     let opaque = "opaque-token-value";
-    assert!(OpenidConnect::looks_like_jwt(jwtish));
-    assert!(!OpenidConnect::looks_like_jwt(opaque));
+    assert!(OpenidConnect::decode_jwt_header(jwtish).is_some());
+    assert!(OpenidConnect::decode_jwt_header(opaque).is_none());
 }
 
 #[test]
@@ -3493,6 +3498,111 @@ fn signing_policy_token(audience: &str, nonce: &str) -> String {
         &jsonwebtoken::EncodingKey::from_secret(b"signing-policy-test-secret"),
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn auto_header_routing_preserves_jwt_failures_and_introspection_choice() {
+    use super::super::error::{AuthFailure, OidcVerifyError};
+    use super::super::jwks_provider::{ScriptedHttp, JWKS_PATH};
+
+    let claims = json!({
+        "iss": ScriptedHttp::origin(), "sub": "jwt-user", "aud": "client",
+        "scope": "read", "exp": OpenidConnect::now_unix_secs() + 3600
+    });
+    let sign = |claims: &serde_json::Value, algorithm, secret: &[u8]| {
+        let mut header = Header::new(algorithm);
+        header.kid = Some("policy-key".to_string());
+        jsonwebtoken::encode(&header, claims, &jsonwebtoken::EncodingKey::from_secret(secret)).unwrap()
+    };
+    let secret = b"signing-policy-test-secret";
+    let mut cases = vec![
+        (sign(&claims, Algorithm::HS256, secret), Ok("jwt-user")),
+        ("opaque-token".to_string(), Ok("introspection-user")),
+        (sign(&json!([]), Algorithm::HS256, secret), Ok("introspection-user")),
+        (
+            sign(&claims, Algorithm::HS384, secret),
+            Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm)),
+        ),
+        (
+            sign(&claims, Algorithm::HS256, b"wrong-signing-secret"),
+            Err(OidcVerifyError::Auth(AuthFailure::InvalidSignature)),
+        ),
+    ];
+    for (field, value, error) in [
+        (
+            "iss",
+            json!("https://wrong.example"),
+            OidcVerifyError::Auth(AuthFailure::InvalidIssuer),
+        ),
+        (
+            "aud",
+            json!("wrong-audience"),
+            OidcVerifyError::Auth(AuthFailure::InvalidAudience),
+        ),
+        ("exp", json!(1), OidcVerifyError::Expired),
+        (
+            "scope",
+            json!("write"),
+            OidcVerifyError::Auth(AuthFailure::InsufficientScope),
+        ),
+    ] {
+        let mut invalid = claims.clone();
+        invalid[field] = value;
+        cases.push((sign(&invalid, Algorithm::HS256, secret), Err(error)));
+    }
+    for use_jwks in [false, true] {
+        for (token, expected) in &cases {
+            let mut config = base_config();
+            config.verification_mode = VerificationMode::Auto;
+            config.use_jwks = use_jwks;
+            config.token_signing_alg = Some("HS256".to_string());
+            config.allowed_signing_algs = Some(vec!["HS256".to_string()]);
+            config.audiences = Some(vec!["client".to_string()]);
+            config.required_scopes = Some(vec!["read".to_string()]);
+            config.clock_skew_seconds = 0;
+            config.introspection_cache_ttl = 60;
+            let plugin = OpenidConnect::new(&config, "default".to_string());
+            let script = signing_policy_script();
+            plugin.jwks_provider.install_scripted_http(script.clone());
+            plugin
+                .jwks_provider
+                .seed_discovery(DiscoveryDocument {
+                    issuer: ScriptedHttp::origin().to_string(),
+                    jwks_uri: ScriptedHttp::jwks_url(),
+                    authorization_endpoint: None,
+                    token_endpoint: None,
+                    introspection_endpoint: Some("http://oidc.test/introspect".to_string()),
+                    userinfo_endpoint: None,
+                    end_session_endpoint: None,
+                    revocation_endpoint: None,
+                })
+                .await;
+            let mut cached = claims.clone();
+            cached["sub"] = json!("introspection-user");
+            cached["active"] = json!(true);
+            plugin.cache_introspection_claims(token, &cached).await;
+            let result = plugin
+                .verify_token(&mut MockPluginSession::new(), token)
+                .await
+                .map(|value| value["sub"].as_str().unwrap().to_string());
+            assert_eq!(
+                result,
+                if use_jwks {
+                    expected.map(str::to_owned)
+                } else {
+                    Ok("introspection-user".to_string())
+                }
+            );
+            if !use_jwks
+                || token == "opaque-token"
+                || *expected == Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))
+            {
+                assert_eq!(script.hits(JWKS_PATH), 0);
+            } else {
+                assert_eq!(script.hits(JWKS_PATH), 1);
+            }
+        }
+    }
 }
 
 #[tokio::test]

@@ -79,7 +79,20 @@ impl OpenidConnect {
         audience_override: Option<&[String]>,
         validate_exp: bool,
     ) -> VerifyResult<Value> {
-        let header = decode_header(token).map_err(|_| OidcVerifyError::InvalidFormat)?;
+        let header = Self::decode_jwt_header(token).ok_or(OidcVerifyError::InvalidFormat)?;
+        self.verify_jwt_token_with_header(session, token, header, validate_scopes, audience_override, validate_exp)
+            .await
+    }
+
+    async fn verify_jwt_token_with_header(
+        &self,
+        session: &mut dyn PluginSession,
+        token: &str,
+        header: jsonwebtoken::Header,
+        validate_scopes: bool,
+        audience_override: Option<&[String]>,
+        validate_exp: bool,
+    ) -> VerifyResult<Value> {
         let token_alg = header.alg;
 
         let policy = self
@@ -193,8 +206,12 @@ impl OpenidConnect {
             VerificationMode::JwksOnly => self.verify_jwt_token(session, token).await,
             VerificationMode::IntrospectionOnly => self.verify_token_via_introspection(session, token).await,
             VerificationMode::Auto => {
-                if self.config.use_jwks && Self::looks_like_jwt(token) {
-                    match self.verify_jwt_token(session, token).await {
+                let header = self.config.use_jwks.then(|| Self::decode_jwt_header(token)).flatten();
+                if let Some(header) = header {
+                    match self
+                        .verify_jwt_token_with_header(session, token, header, true, None, true)
+                        .await
+                    {
                         Ok(claims) => Ok(claims),
                         Err(jwt_error) if Self::should_auto_fallback_to_introspection(&jwt_error) => {
                             match self.verify_token_via_introspection(session, token).await {

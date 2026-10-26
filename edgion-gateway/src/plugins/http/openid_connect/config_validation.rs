@@ -109,8 +109,8 @@ impl OpenidConnect {
         Ok(())
     }
 
-    pub(super) fn looks_like_jwt(token: &str) -> bool {
-        decode_header(token).is_ok()
+    pub(super) fn decode_jwt_header(token: &str) -> Option<jsonwebtoken::Header> {
+        decode_header(token).ok()
     }
 
     pub(super) fn now_unix_secs() -> u64 {
