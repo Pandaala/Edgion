@@ -157,7 +157,7 @@ fn inspect_block(
 pub(crate) fn metadata(body: &[u8]) -> Result<MessagesMetadata, AiProxyError> {
     let fields = fields(body)?;
     let mut result = MessagesMetadata {
-        model: decode_model(fields.model)?,
+        model: decode_model(fields.model)?.into_owned(),
         streaming: fields
             .stream
             .filter(|v| v.get() != "null")

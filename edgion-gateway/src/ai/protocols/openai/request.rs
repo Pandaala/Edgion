@@ -4,6 +4,7 @@ use crate::ai::protocols::request::{decode_model, native_json_utf8, patch, raw_f
 use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::borrow::Cow;
 
 use super::error::AiProxyError;
 
@@ -42,7 +43,7 @@ fn fields(body: &[u8]) -> Result<Fields<'_>, AiProxyError> {
     serde_json::from_str(text).map_err(|_| AiProxyError::MalformedBody)
 }
 
-fn model(fields: &Fields<'_>) -> Result<String, AiProxyError> {
+fn model<'a>(fields: &Fields<'a>) -> Result<Cow<'a, str>, AiProxyError> {
     decode_model(fields.model)
 }
 
@@ -62,7 +63,7 @@ fn output_bound(fields: &Fields<'_>) -> Result<Option<u64>, AiProxyError> {
 pub(crate) fn metadata(body: &[u8]) -> Result<ChatMetadata, AiProxyError> {
     let fields = fields(body)?;
     Ok(ChatMetadata {
-        model: model(&fields)?,
+        model: model(&fields)?.into_owned(),
         streaming: fields.stream.is_some_and(|raw| raw.get() == "true"),
         output_bound: output_bound(&fields)?,
     })
@@ -158,7 +159,7 @@ pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiPro
         return Err(AiProxyError::MalformedBody);
     }
     let fields: ResponsesFields<'_> = serde_json::from_str(text).map_err(|_| AiProxyError::MalformedBody)?;
-    let model = decode_model(fields.model)?;
+    let model = decode_model(fields.model)?.into_owned();
     if optional_bool(fields.background)? {
         return Err(AiProxyError::UnsupportedParameter);
     }

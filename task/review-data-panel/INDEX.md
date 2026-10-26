@@ -19280,3 +19280,32 @@ Fresh final verification passed ten native request, five shared JSON span and 23
 AI proxy tests (38 total), formatting, workspace all-target check/Clippy and seven
 repository guards with existing unrelated warnings. No full suite, alternate
 feature build or live-provider test ran.
+
+## Borrow decoded model names during native rewrite comparison
+
+The shared native model decoder now returns a Cow through the existing canonical
+borrowed JSON string decoder. Chat and Messages rewrite comparisons borrow plain
+model text instead of allocating a temporary String. Escaped names remain owned.
+Chat, Responses and Messages metadata explicitly convert the result into their
+existing owned String at the same ownership boundary; no borrowed value is
+retained in request plans or response processors.
+
+Validation order is unchanged: missing field, non-string type, encoded-size cap,
+JSON decoding, then nonempty/decoded UTF-8 byte cap. Replacement serialization,
+span calculation and body patching remain unchanged. This does not cache parsed
+request metadata, avoid complete native UTF-8/syntax checks, or alter canonical
+BodyStorage generations.
+
+Four shared tests passed before the production edit, including a frozen old
+decoder oracle at encoded/decoded limits, multibyte names, oversized nonstrings,
+and invalid surrogates where RawValue admits them. Both native rewrite adapters
+preserve escaped equality and exact unrelated bytes during a changed-model edit.
+The final allocation regressions check original-pointer borrowing for plain names
+and actual unchanged-model Chat/Messages calls on one prebuilt fixture. These
+measure only the named decoder/call cases; they do not establish zero allocation
+for arbitrary request documents or a throughput improvement.
+Fresh final verification passed six shared request, nine OpenAI request, ten
+Messages request, five JSON span and 23 AI proxy tests (53 total). Formatting,
+workspace all-target check/Clippy and seven repository guards passed with existing
+unrelated warnings. No full suite, live-provider test or alternate-feature build
+ran.

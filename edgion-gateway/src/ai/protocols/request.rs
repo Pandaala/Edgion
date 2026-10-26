@@ -1,10 +1,12 @@
 //! Bounded model metadata and byte-span mutation shared by native APIs.
 
+use crate::ai::protocols::json_span::decode_json_string_borrowed;
 use crate::ai::AiProxyError;
 use bytes::{Bytes, BytesMut};
 use edgion_resources::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// Validate the complete native body without copying it before selective parsing.
@@ -17,16 +19,16 @@ pub(crate) fn raw_field<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Op
     <&RawValue>::deserialize(deserializer).map(Some)
 }
 
-pub(crate) fn decode_model(raw: Option<&RawValue>) -> Result<String, AiProxyError> {
+pub(crate) fn decode_model(raw: Option<&RawValue>) -> Result<Cow<'_, str>, AiProxyError> {
     let raw = raw.ok_or(AiProxyError::ModelNotFound)?;
     if !raw.get().starts_with('"') {
         return Err(AiProxyError::MalformedBody);
     }
-    // Bound decoding allocation before materializing the one metadata string.
+    // Bound escaped decoding before borrowing or materializing the metadata string.
     if raw.get().len() > AI_MODEL_NAME_MAX_BYTES * 6 + 2 {
         return Err(AiProxyError::ModelNotFound);
     }
-    let model: String = serde_json::from_str(raw.get()).map_err(|_| AiProxyError::MalformedBody)?;
+    let model = decode_json_string_borrowed(raw.get().as_bytes()).ok_or(AiProxyError::MalformedBody)?;
     if model.is_empty() || model.len() > AI_MODEL_NAME_MAX_BYTES {
         return Err(AiProxyError::ModelNotFound);
     }
