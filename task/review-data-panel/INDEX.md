@@ -18875,3 +18875,30 @@ now distinguishes shared original-case bytes from eliminating Pingora's internal
 parse; its historical typed-name scope no longer implies a mandatory fork change.
 All 36 AI dispatch baseline tests passed; agent-doc validation and diff hygiene
 passed again after that knowledge correction.
+
+## Avoid duplicate request-append sealed-RPC checks
+
+String request append previously checked the live transcoding plan, parsed the
+value and called typed append, which repeated the same guard. Both entries now
+retain their own guard and share a private post-validation append writer. Only
+those two entries call it. Set/remove/deferred-header APIs remain unchanged.
+
+Protected malformed strings still reject before value parsing and record sticky
+OwnerConflict. Ordinary malformed values still fail before name insertion;
+failed writes preserve existing fields. The writer retains append semantics,
+owned opaque/sensitive typed values and deferred-credential invalidation only
+after successful insertion. There is no new policy predicate or cache.
+
+This removes a second optional-plan check for successful string appends and a
+second protected-name scan when a transcoding plan is active. It does not remove
+header-name copying, value parsing or map insertion, and no throughput gain is
+claimed. The append knowledge page now names the private writer and guard order.
+
+Independent plan review passed. Baseline/final transport tests passed the same
+11 identities, including a new 18-combination ordinary/sealed append matrix with
+protected, ordinary and invalid names plus valid/CR/LF values. Full Gateway
+transcoder tests passed 30 (including those 11); real-adapter tests passed 100,
+covering typed sensitivity, repeated fields and deferred credential ownership.
+No live integration, full workspace test suite or benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.

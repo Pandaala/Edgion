@@ -508,6 +508,22 @@ pub(crate) fn build_response_local_reply(
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
+    /// The caller has applied the live sealed-RPC header guard before parsing or writing.
+    fn append_validated_request_header_value(
+        &mut self,
+        name: &str,
+        value: http::HeaderValue,
+    ) -> PluginSessionResult<()> {
+        // Append as a new header field line (preserves every existing field line
+        // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
+        self.inner
+            .req_header_mut()
+            .append_header(name.to_string(), value)
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.ctx.remove_deferred_credential_mutation(name);
+        Ok(())
+    }
+
     /// The caller must validate the name with the canonical response mutation policy.
     fn set_validated_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
@@ -1436,7 +1452,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             }
         }
         let value = http::HeaderValue::from_str(value).map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.append_request_header_value(name, value)
+        self.append_validated_request_header_value(name, value)
     }
 
     fn append_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
@@ -1446,14 +1462,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 return Err("sealed RPC header".into());
             }
         }
-        // Append as a new header field line (preserves every existing field line
-        // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
-        self.inner
-            .req_header_mut()
-            .append_header(name.to_string(), value)
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.ctx.remove_deferred_credential_mutation(name);
-        Ok(())
+        self.append_validated_request_header_value(name, value)
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {

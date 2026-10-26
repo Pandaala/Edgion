@@ -406,3 +406,57 @@ fn unary_head_template_limits_preserve_boundaries_and_publication() {
         check(header, bytes <= 8192);
     }
 }
+
+#[tokio::test]
+async fn string_request_append_preserves_sealed_policy_and_parse_order() {
+    use crate::plugins::runtime::session_adapter::{record_outcome_tests::test_session, PingoraSessionAdapter};
+    use crate::plugins::runtime::traits::PluginSession;
+
+    for sealed in [false, true] {
+        for name in ["CoNtEnT-TyPe", "x-ordinary", "invalid name"] {
+            for value in ["next", "bad\rvalue", "bad\nvalue"] {
+                let mut session = test_session().await;
+                let mut ctx = if sealed {
+                    context()
+                } else {
+                    EdgionHttpContext::default()
+                };
+                session.req_header_mut().append_header("content-type", "first").unwrap();
+                session.req_header_mut().append_header("x-ordinary", "first").unwrap();
+                let before = session.req_header().headers.clone();
+                let result = PingoraSessionAdapter::new(&mut session, &mut ctx).append_request_header(name, value);
+                let blocked = sealed && name == "CoNtEnT-TyPe";
+                if blocked {
+                    assert_eq!(result.unwrap_err().to_string(), "sealed RPC header");
+                } else if value != "next" {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        http::HeaderValue::from_str(value).unwrap_err().to_string()
+                    );
+                } else if name == "invalid name" {
+                    assert!(result.is_err());
+                } else {
+                    result.unwrap();
+                    let values: Vec<_> = session.req_header().headers.get_all(name).iter().collect();
+                    assert_eq!(values.len(), 2);
+                    assert_eq!(values[0], "first");
+                    assert_eq!(values[1], "next");
+                }
+                if blocked || value != "next" || name == "invalid name" {
+                    assert_eq!(session.req_header().headers, before);
+                }
+                if let Some(plan) = &ctx.grpc_transcoding {
+                    assert_eq!(plan.conflict.load(Ordering::Acquire), blocked);
+                    assert_eq!(
+                        plan.outcome.lock().kind,
+                        if blocked {
+                            Outcome::OwnerConflict
+                        } else {
+                            Outcome::Pending
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
