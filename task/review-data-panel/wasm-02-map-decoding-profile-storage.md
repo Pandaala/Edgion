@@ -32,6 +32,50 @@ remains deferred; aggregate reuse, borrowed decoding and the earlier upstream
 scalar-length reuse do not implement it. Historical test receipts for those
 changes do not verify a future metadata representation.
 
+## Narrow emitter experiment at bc9227fb7
+
+The emission helper push_utf8_lossy revalidates the valid prefix reported by a
+failed from_utf8 call before appending it. A blanket replacement with the standard
+byte-slice utf8_chunks iterator was evaluated separately from per-pair profile
+storage. It appends each chunk.valid(), then one replacement character whenever
+chunk.invalid() is nonempty. This adds no profile storage, but a removed explicit
+prefix scan does not establish a faster emitter.
+
+A standalone probe extracted the original helper unchanged and compiled both
+emitters with rustc 1.96.1 (31fca3adb), `-O`, aarch64-apple-darwin. Each candidate
+received its own output String preallocated to three times input length, cleared
+before every call. Inputs and mutable outputs passed through black_box; output
+length was also black-boxed. Six timing rounds alternated candidate order. For
+each implementation the sorted elapsed sample at index 3 was selected; the table
+is the ratio of those two upper-middle samples, not a median of paired ratios.
+
+| Input shape | N=32 | N=1024 | N=65536 |
+| --- | ---: | ---: | ---: |
+| N ASCII `a` bytes | 2.503 | 10.205 | 9.547 |
+| N ASCII `a` bytes plus one `0xff` | 1.500 | 5.443 | 5.866 |
+| N `0xff` bytes | 0.766 | 0.744 | 0.757 |
+
+Ratios are chunks elapsed / current elapsed; greater than one is slower. Each
+round runs floor(16,777,216 / N) iterations, processing exactly 16 MiB for ASCII
+and all-invalid shapes and slightly more for the N+1-byte invalid-tail shape.
+The probe also compared both outputs with String::from_utf8_lossy for all 256
+single-byte inputs and the nine timed fixtures; single-byte tests append to a
+nonempty prefix. This is not exhaustive Unicode-equivalence coverage.
+
+Retain the current emitter under this evidence: the candidate improved the
+all-invalid fixture but substantially regressed ASCII and invalid-tail fixtures.
+These are exploratory timings on one machine without CPU isolation, not a
+universal rejection of chunk-based alternatives or an identified microarchitectural
+cause. Profiling/sizing, allocation, guest execution and complete host-call costs
+were outside the timed region. No allocation reduction, request throughput,
+peak-memory or RSS conclusion follows. The per-pair profile decision below stays
+deferred; this experiment neither implements nor rejects that representation.
+
+Fresh unchanged-production host_abi tests passed 47. Formatting and workspace
+all-target check/Clippy passed with existing warnings. No full suite or live
+Wasm/HTTP integration ran. The probe lived outside the repository and introduced
+no production or persistent test artifact.
+
 ## Decision alternatives
 
 - Retain the allocation-free profiling pass. Measure its cost against decoding,

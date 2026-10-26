@@ -19756,3 +19756,21 @@ workspace all-target check/Clippy passed with existing warnings. No live Redis,
 fault injection, new runtime test, full suite or benchmark ran. Independent plan
 and final source reviews passed; agent-doc validation and diff hygiene passed.
 Runtime and dependency sources remain unchanged.
+
+## Measure the Wasm lossy UTF-8 emitter alternative
+
+New isolated evidence extends existing wasm-02 instead of creating another
+finding or repeating its source audit. A standalone current-helper versus
+utf8_chunks probe preserves output on 256 single-byte inputs and nine fixtures,
+but the blanket replacement is slower for ASCII and invalid-tail inputs on the
+current machine. It is faster for all-invalid inputs. The [existing task](wasm-02-map-decoding-profile-storage.md#narrow-emitter-experiment-at-bc9227fb7)
+records the target/toolchain, exact loop and sampling method, ratios and limits.
+No production change is selected; a smaller source-level scan count did not
+justify replacing the current emitter. Per-pair profile storage remains deferred.
+
+Fresh unchanged-source host_abi verification passed 47 tests. Formatting and
+workspace all-target check/Clippy passed with existing warnings. The experiment
+excludes allocation, preflight/sizing and guest execution; it establishes neither
+whole-host-call nor request throughput/memory improvement. No full suite, live
+integration, new runtime test or duplicate task was introduced. Independent plan
+and final source reviews, agent-doc validation and diff hygiene passed.
