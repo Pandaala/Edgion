@@ -349,3 +349,55 @@ async fn native_version_projection_preserves_winning_deferred_value_without_muta
         assert!(attempt.headers["x-unrelated"].is_sensitive());
     }
 }
+
+#[tokio::test]
+async fn native_live_version_cardinality_and_raw_bytes_preserve_observation_policy() {
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    use std::sync::Arc;
+
+    let cases: &[(&[&[u8]], bool)] = &[
+        (&[], true),
+        (&[b"2023-06-01"], true),
+        (&[b"future"], false),
+        (&[b""], false),
+        (&[b"\xff"], false),
+        (&[b"2023-06-01", b"2023-06-01"], false),
+        (&[b"2023-06-01", b"future"], false),
+        (&[b"future", b"2023-06-01"], false),
+        (&[b"2023-06-01", b"2023-06-01", b"2023-06-01"], false),
+    ];
+    for unrelated_deferred in [false, true] {
+        for &(raw_values, supported) in cases {
+            let mut session = native_session().await;
+            for raw in raw_values {
+                let mut value = http::HeaderValue::from_bytes(raw).unwrap();
+                value.set_sensitive(true);
+                session
+                    .req_header_mut()
+                    .append_header("anthropic-version", value)
+                    .unwrap();
+            }
+            let mut ctx = EdgionHttpContext::new();
+            if unrelated_deferred {
+                ctx.upsert_deferred_credential_mutation(
+                    http::HeaderName::from_static("x-unrelated"),
+                    Arc::new(http::HeaderValue::from_static("fixture")),
+                    None,
+                );
+            }
+            let before = session.req_header().headers.clone();
+            assert_eq!(
+                validate_native_headers(&PingoraSessionAdapter::new(&mut session, &mut ctx)).unwrap(),
+                supported
+            );
+            assert_eq!(session.req_header().headers, before);
+            assert!(session
+                .req_header()
+                .headers
+                .get_all("anthropic-version")
+                .iter()
+                .all(|v| v.is_sensitive()));
+        }
+    }
+}

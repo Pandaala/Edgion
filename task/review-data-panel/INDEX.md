@@ -19034,3 +19034,22 @@ hook tests passed. The owning native Messages knowledge documents observation-on
 projection. No full workspace test suite, live integration or benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Observe live native version with one header lookup
+
+The native Anthropic connector now determines missing-version defaults and exact
+single-value support from one get_all iterator. Previously a present live version
+was looked up once by contains_key and again by the support helper. Missing remains
+supported through the existing default; only one raw 2023-06-01 value is certified.
+Duplicate, future, empty and opaque values remain unsupported. Deferred winners,
+profile/RemoteIp rejection precedence and subsequent header preparation are unchanged.
+No cache, mutation, credential copy or new ownership is introduced. The source-level
+benefit is one removed lookup for a present live version, not measured latency.
+
+Independent plan review passed. A baseline-first real in-memory Pingora adapter
+matrix covers nine live-value cases with and without unrelated deferred state,
+including explicit sensitive-flag preservation and unchanged header maps.
+Original/final connector runs passed the same seven test identities and outcomes;
+36 dispatch tests also passed. Formatting, workspace all-target check/Clippy,
+seven repository guards and diff hygiene passed with existing unrelated warnings.
+No full workspace test suite, live integration or benchmark ran.

@@ -122,16 +122,15 @@ fn validate_native_headers(adapter: &impl PluginSession) -> Result<bool, AiDispa
     if let Some(version) = deferred.and_then(|m| m.value_for("anthropic-version")) {
         return Ok(version.as_bytes() == ANTHROPIC_VERSION.as_bytes());
     }
-    Ok(!adapter.request_header_map().contains_key("anthropic-version")
-        || version_supported(adapter.request_header_map()))
+    Ok(live_version_supported(adapter.request_header_map()))
 }
 
-fn version_supported(headers: &http::HeaderMap) -> bool {
+fn live_version_supported(headers: &http::HeaderMap) -> bool {
     let mut values = headers.get_all("anthropic-version").iter();
-    values
-        .next()
-        .is_some_and(|v| v.as_bytes() == ANTHROPIC_VERSION.as_bytes())
-        && values.next().is_none()
+    match values.next() {
+        None => true,
+        Some(value) => value.as_bytes() == ANTHROPIC_VERSION.as_bytes() && values.next().is_none(),
+    }
 }
 
 fn provider_uri(
