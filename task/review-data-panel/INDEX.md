@@ -19459,3 +19459,21 @@ matched by sse::tests and 25 semantic-response tests (107 total). No new test,
 prototype, benchmark, full suite or live-provider test was introduced.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Translated Retry-After storage decision deferred
+
+The [Retry-After storage task](response-07-retry-after-storage.md) records a
+validated move prototype and the shared-backing evidence that prevented its
+adoption. Wire/metadata equivalence and pointer reuse passed, but the actual
+Pingora HTTP/1 parser slices header values from a shared receive allocation.
+Moving a short value could extend that allocation's lifetime; the session also
+owns it, so the incremental retention depends on downstream/session lifetimes.
+No net memory gain or regression was measured. The prototype and added tests
+were withdrawn; both Rust files exactly match the starting HEAD.
+
+Fresh final unchanged-source verification passed 32 response-converter, 39 dispatch
+and 14 canonical SSE tests (85 total). These are separate from the withdrawn
+prototype's 33-test baseline and 87-test experimental result. No runtime edit,
+new test, full suite, live-provider test or performance benchmark is delivered.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
