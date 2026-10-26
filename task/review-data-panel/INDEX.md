@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [SSE degradation remainder ownership](sse-05-degradation-remainder-ownership.md)
+
 - [Prefix-aware h2c connection probing](transport-02-h2c-preface-probing.md)
 
 - [Redis caller cancellation and command ownership](redis-09-cancelled-command-ownership.md)
@@ -19946,3 +19948,21 @@ dependency, test or integration-fixture changes were made.
 
 Independent plan and final source/evidence reviews passed. Agent-doc validation
 and diff hygiene passed; this experiment does not complete transitive coverage.
+
+
+## Inspect SSE degradation remainder ownership
+
+The [degradation remainder decision](sse-05-degradation-remainder-ownership.md)
+traces the first-failure copy from decoder-owned input to Opaque publication.
+Observer-only consumers discard it; canonical guard batches can retain it.
+Sharing the suffix could save copying but retain source backing longer, so no
+runtime change is selected. This is a transition cost, not a copy on every
+subsequent degraded chunk, and differs from the existing batch fallback task.
+
+Fresh unchanged-code tests passed 273 SSE/usage/Anthropic/conversion/semantic
+response/canonical SSE cases. Formatting and workspace all-target check/Clippy
+passed with existing warnings. No fixture change or performance claim accompanies
+this source-level ownership evidence. Independent plan review passed.
+
+Independent final source review passed. Agent-doc validation and diff hygiene
+passed; the ownership choice remains deferred for user decision.
