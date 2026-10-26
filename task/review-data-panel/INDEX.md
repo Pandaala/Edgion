@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [AI request-baseline rebuilding](retry-03-ai-request-baseline-rebuild.md)
+
 - [Prepared fixed-header name ownership](response-05-prepared-fixed-header-names.md)
 
 - [DSL Value shape metadata reuse](dsl-14-value-shape-reuse.md)
@@ -18978,4 +18980,25 @@ also passed. The owning security knowledge documents the preserved empty-list
 text-validation boundary. No full workspace test suite, live integration or
 benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.
+
+
+## AI request-baseline rebuilding boundary
+
+AI candidate preparation restores complete live and deferred header state from
+a capture-once post-rule baseline. Restoration precedes target selection and
+normalized-path refresh; capture follows body preparation and precedes backend
+modifiers/provider preparation. This isolation cannot be removed as a redundant
+clone. The [deferred investigation](retry-03-ai-request-baseline-rebuild.md)
+records capacity reuse/mutation-tracking alternatives and the option to retain
+full rebuilding, with wire fidelity, credential lifetime and retention gates.
+
+Pinned RequestHeader Clone includes owned request parts, original name case,
+raw target and end-stream state; clone_from has no specialized reuse path. The
+baseline owns no body copy, and cloned containers do not establish deep copying
+of every payload. Ordinary endpoint retries are outside this decision.
+Independent plan review passed. Fresh nine AI context and 36 AI dispatch tests
+passed. No runtime change, candidate implementation, full workspace test suite,
+live integration or measured performance improvement is claimed.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated Clippy warnings.
