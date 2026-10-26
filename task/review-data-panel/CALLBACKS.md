@@ -2316,3 +2316,47 @@ including the existing keepalive policy/wire tests. Formatting and workspace
 all-target check/Clippy passed with existing warnings. These tests do not drive
 every fork persistence branch, prove all error/cancellation interleavings, or
 establish whole-request allocation/throughput properties.
+
+
+## Generic KeyGet direct consumer reconciliation
+
+Revalidated at `ec03fcb1a`. This is the current production caller inventory for
+`PluginSession::key_get` and `session_adapter::key_value`, not an inference from
+RequestId's admitted sources. Ordinary collection `get_key_value` calls are not
+KeyGet consumers. Historical open-consumer notes in INDEX predate this inventory.
+
+The canonical owned adapter covers twelve variants. The borrowed accessor handles
+eleven directly and delegates only RemoteIpAndPath to the owned getter. Header,
+Cookie, Ctx, current Path, Method and IP reads retain their execution-time
+semantics; RequestPath reads the frozen entry path, TraceId/Host use captured
+identity and Query borrows the lazy frozen entry-query cache. Lazy initialization may still allocate. No predicate result
+or new source snapshot is cached. RemoteIpAndPath constructs one owned composite
+when the resolved IP is nonempty; KeyExist checks just that presence directly.
+
+| Direct consumer | Current ownership and policy boundary |
+| --- | --- |
+| DynamicInternalUpstream | Owned getter input supports regex capture, direct/configured target resolution and later jump publication. Input restructuring remains [routing-01](routing-01-dynamic-internal-input-ownership.md), distinct from the prepared rule index. |
+| RESTToGraphQL | Moves an owned getter String into an owned JSON Value; body-derived values borrow the parsed body. Header-source multiplicity/text/length checks precede extraction. Existing binding transfer and unchanged-value bounds reuse remain in place. |
+| Shared rate-limit resolution | Zero keys yield the global empty bucket; one key moves the owned getter result; multiple keys collect ordered borrowed/owned values and copy into one final framed String. Local limit, Redis named quotas and AI quota use this helper. Missing and present-empty semantics remain distinct. |
+| RequestId adapter | Header uses strict single_header directly. The generic non-header branch calls key_get; ordinary runtime rules admit TraceId and Ctx, while early attachment permits only TraceId among non-header sources. None has no source read. See the separate admitted-source inventory above. |
+| key_value fallback | Only RemoteIpAndPath currently reaches key_get. Adding a KeyGet variant requires rechecking this dispatch and all caller eligibility rules. |
+| DynamicExternalUpstream | Borrowed/owned source supports extraction and configured domain lookup; callers retain fallback/reject policies and publish owned jump state. |
+| DirectEndpoint | Borrowed/owned source feeds endpoint parsing and admission before owned target publication. Source reads are not cached across execution. |
+| CtxSet | Value/template/from precedence is unchanged; from uses key_value with a borrowed default. Transformation and final context publication retain their own owned output. |
+| KeyAuth | Only Header/Query/Cookie/Ctx are eligible. First nonempty selection remains independent of validation; an invalid selected credential cannot fall through to a later source. The read borrow ends before mutation/hiding or failure awaits. |
+| RegionRoute | Its separate first-nonempty loop accepts configured source variants and hashes the selected value. It shares reads, not KeyAuth's eligibility policy. |
+| Condition evaluator | KeyMatch, SecretMatch, keyed Probability and ordinary KeyExist use key_value synchronously. RemoteIpAndPath existence avoids composite construction; matching/hashing still require its value. Per-chunk evaluation retains live reads and emits no per-chunk PluginLog. |
+
+The shared reads do not make all policies interchangeable. Original references
+are the response-condition live-input borrowing guard, KeyAuth's separate
+source-selection policy, the rate-limit shared extraction/composition guards and
+the plugin development guide's entry/current identity contract. Existing routing
+ownership decisions remain deferred. No new optimization or deferred task is
+selected from these already covered caller boundaries.
+
+Fresh unchanged-code verification passed a 420-test union selection over the
+session adapter, condition evaluator, common helpers and the listed routing,
+context, authentication and REST consumers. Formatting and workspace all-target
+check/Clippy passed with existing warnings. This run does not execute every
+rate-limit or AI quota consumer, establish dependency-internal coverage, measure
+performance, or prove overall campaign completion. No new tests or fixtures changed.
