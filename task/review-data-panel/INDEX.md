@@ -19213,3 +19213,18 @@ whole-callee coverage. Independent plan review passed. Fresh verification passed
 No runtime code, new optimization task or performance claim was added.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Fixed AI local-error body ownership decision
+
+[Fixed AI error bodies](response-06-ai-fixed-error-body-ownership.md) records the
+remaining fixed-envelope serialization in both client dialects. Consumers can
+accept borrowed/static bodies; String-to-Bytes already moves storage and is not
+an extra copy. The unresolved choice is a single-source compile-time body
+representation versus the current typed serializer. An ErrResponse-side cache is
+explicitly outside the repository contract, and existing quota SSE caching does
+not authorize it. Dynamic refusals and sequence-bearing Responses errors remain
+separate. Independent value review approved this deferred decision; runtime code
+is unchanged. Fresh baseline verification passed 22 error/context/HTTP-attempt tests.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings. No new rendering implementation,
+full workspace test suite, live exchange or performance measurement was added.
