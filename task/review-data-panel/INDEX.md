@@ -19825,3 +19825,32 @@ No integration fixture changed; no new tests, live transport or full suite ran.
 
 Independent plan and final source reviews passed; agent-doc validation and diff
 hygiene passed. Runtime and dependency sources remain unchanged.
+
+
+## Reuse REST binding bounds for unchanged values
+
+The Gateway REST adapter's shared Resources binder previously profiled an input,
+then profiled its unchanged moved/cloned Value again before type validation.
+Native body and unconverted text now reuse their initial check. JSON conversion
+still checks the newly parsed Value before the existing type check, preserving
+the independent per-array cap and all errors. The initial check remains before
+cloning or conversion. No API, schema, ownership, publication or profiler
+representation changes accompany this scoped supporting Resources edit.
+
+Both checks use only immutable Value data and local counters/worklists. Removing
+the duplicate pass skips one profile traversal and, for container roots, one
+array-cap traversal. This is not an allocation-free binding, benchmark result or
+measured throughput/RSS claim. Earlier owned-input transfer and borrowed variable
+names remain intact; this closes a separate duplicate-validation omission.
+
+The extended baseline passed ten Resources binder tests and ten Gateway adapter
+tests. The new explicit outcome matrix checks owned/borrowed input, native and
+converted arrays at 32/33 elements, nested arrays, native depth 32/33, nodes
+4096/4097, text bounds, malformed JSON and bounds-before-type precedence.
+Existing ownership and final-envelope regressions remain unchanged.
+
+Final runs passed the same ten Resources and ten Gateway test identities.
+Formatting, workspace all-target check/Clippy, all seven repository guards and
+agent-doc/diff checks passed with existing unrelated warnings. Independent plan
+and final source reviews passed. No live integration, full suite, performance
+benchmark or integration fixture change was included.

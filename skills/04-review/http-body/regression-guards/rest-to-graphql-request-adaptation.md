@@ -73,7 +73,7 @@ not establish a successful live run.
 
 ## Scalar-bound traversal ownership
 
-The shared binding validator always profiles input/output values and enforces
+The shared binding validator profiles each input and every converted output, and enforces
 node, depth and text-byte limits first. A scalar root then skips the separate
 array-length traversal: it cannot contain an array, so allocating that worklist
 would perform no useful check. Array/object roots still traverse every nested
@@ -98,3 +98,22 @@ Tests compare owned and borrowed inputs across types and caps, check the moved
 text allocation identity, and verify native body input remains independent of
 the bound result. Input acquisition, parsing, final variable ownership and output
 serialization still allocate; no whole-binding allocation-free claim follows.
+
+
+## Reuse bounds for unchanged binding values
+
+After the initial bounds check, moving an owned Value or cloning a borrowed Value
+preserves its complete structure and contents. The binder therefore reuses that
+check for native body values and unconverted text. JSON text conversion still
+checks the parsed value before final type validation: a short encoded string can
+produce an array exceeding the adapter's 32-element limit. Input bounds still
+precede conversion and cloning, and bounds errors still precede type errors.
+The profiler and array traversal use only local counters and immutable values;
+no shared work budget or externally visible accounting is skipped.
+
+The boundary regression covers owned and borrowed inputs, native and converted
+arrays at 32/33 elements, nested arrays, depth 32/33, nodes 4096/4097, text caps,
+malformed JSON and bounds-before-type precedence. This removes a duplicate
+profile and (for container roots) duplicate array-cap traversal only for unchanged
+values. Ownership, serialization, parsing and type checks remain; no throughput
+or total allocation reduction is measured.

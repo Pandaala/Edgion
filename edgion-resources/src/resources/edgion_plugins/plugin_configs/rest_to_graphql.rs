@@ -184,16 +184,18 @@ impl CompiledRestToGraphql {
                 || binding.ty.nulls.len() > 1
                 || matches!(binding.ty.name.as_str(), "Int" | "Float" | "Boolean")
             {
-                parse_json_instance_with_limits(text.as_bytes(), 32, 4096)
+                let parsed = parse_json_instance_with_limits(text.as_bytes(), 32, 4096)
                     .map_err(|_| GraphqlError::Invalid)?
-                    .into_value()
+                    .into_value();
+                // Conversion creates a new value; unchanged inputs already passed these bounds.
+                check_value_bounds(&parsed)?;
+                parsed
             } else {
                 value.into_owned()
             }
         } else {
             value.into_owned()
         };
-        check_value_bounds(&value)?;
         check_type(&binding.ty, &value, 0)?;
         Ok(Some(value))
     }

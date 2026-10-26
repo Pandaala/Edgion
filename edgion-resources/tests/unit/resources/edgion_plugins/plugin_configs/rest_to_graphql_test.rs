@@ -240,3 +240,72 @@ fn owned_text_binding_moves_storage_and_body_binding_keeps_original() {
     output.as_object_mut().unwrap().clear();
     assert_eq!(body, json!({"input":{"field":"preserved"}}));
 }
+
+#[test]
+fn binding_bounds_preserve_conversion_and_error_precedence() {
+    let compiled = config(json!({
+        "query":"query($body:CustomInput,$parsed:CustomInput,$text:ID,$integer:Int){read(body:$body,parsed:$parsed,text:$text,integer:$integer)}",
+        "variables":[
+            {"name":"body","bodyPointer":"/body"},
+            {"name":"parsed","from":{"type":"ctx","name":"parsed"},"format":"json"},
+            {"name":"text","from":{"type":"ctx","name":"text"}},
+            {"name":"integer","bodyPointer":"/integer"}
+        ]
+    })).compile().unwrap();
+    let mut cases = Vec::new();
+    for size in [32, 33] {
+        for value in [json!(vec![1; size]), json!({"nested":vec![1; size]})] {
+            let expected = if size == 32 {
+                Ok(Some(value.clone()))
+            } else {
+                Err(GraphqlError::TooLarge)
+            };
+            cases.push((0, value.clone(), expected.clone()));
+            cases.push((1, Value::String(serde_json::to_string(&value).unwrap()), expected));
+        }
+    }
+    for depth in [32, 33] {
+        let mut value = json!(0);
+        for _ in 1..depth {
+            value = json!({"a":value});
+        }
+        let expected = if depth == 32 {
+            Ok(Some(value.clone()))
+        } else {
+            Err(GraphqlError::TooLarge)
+        };
+        cases.push((0, value, expected));
+    }
+    let mut nodes = serde_json::Map::new();
+    for index in 0..128 {
+        nodes.insert(format!("k{index}"), json!(vec![0; 31]));
+    }
+    let over_nodes = Value::Object(nodes);
+    let mut exact_nodes = over_nodes.clone();
+    exact_nodes["k0"].as_array_mut().unwrap().pop();
+    cases.push((0, exact_nodes.clone(), Ok(Some(exact_nodes))));
+    cases.push((0, over_nodes, Err(GraphqlError::TooLarge)));
+    for size in [REST_GRAPHQL_MAX_VALUE_BYTES, REST_GRAPHQL_MAX_VALUE_BYTES + 1] {
+        let value = Value::String("x".repeat(size));
+        let expected = if size == REST_GRAPHQL_MAX_VALUE_BYTES {
+            Ok(Some(value.clone()))
+        } else {
+            Err(GraphqlError::TooLarge)
+        };
+        cases.push((2, value.clone(), expected));
+        cases.push((
+            3,
+            value,
+            Err(if size == REST_GRAPHQL_MAX_VALUE_BYTES {
+                GraphqlError::Invalid
+            } else {
+                GraphqlError::TooLarge
+            }),
+        ));
+    }
+    cases.push((1, json!("{broken"), Err(GraphqlError::Invalid)));
+    for (index, value, expected) in cases {
+        assert_eq!(compiled.bind(index, Some(Cow::Borrowed(&value))), expected);
+        assert_eq!(compiled.bind(index, Some(Cow::Owned(value))), expected);
+    }
+}
