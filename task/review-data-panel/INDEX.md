@@ -19640,3 +19640,28 @@ memory improvement is claimed. Final verification passed 162 OIDC tests with
 (171 passed total), plus seven repository guards. No full suite or live IdP ran.
 Formatting, workspace all-target check/Clippy and diff hygiene passed with
 existing unrelated warnings.
+
+## Borrow the refreshed OIDC token on expired-session recovery
+
+Refresh helpers now update the session cookie and return unit. Every successful
+provider or recent-result path already installs the exact refreshed access token
+in that cookie. The expired-token success branch releases its old selected token
+and borrows the updated field through verification, persistence, userinfo and
+header publication, removing its separate String copy. Cache-miss and preemptive
+branches still clone into their request-owned token; those copies only move to
+the caller. The combined ownership choice remains oidc-08.
+
+Session-reference mutation, result-cache insertion, lock scope, timeout/stale
+fallback, token rotation, persistence and diagnostics remain unchanged. No cache,
+credential-forwarding policy or observability is added. The claim is one removed
+source-level token copy on expired-refresh success, not measured throughput or
+whole-request peak-memory savings.
+
+Independent plan and final source reviews passed. A new network-free request regression verifies
+expired claims, a distinct refreshed token, exact sensitive access-token header,
+one Set-Cookie, expiry-refresh log and Gateway-cookie stripping. Its initial
+baseline fixture lacked the required issuer and failed before the target branch;
+after correcting that fixture, unchanged production and final production each
+passed 163 OIDC tests with 16 existing ignores (179 identical outcomes).
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing warnings. No full suite, ignored live-IdP test or benchmark ran.

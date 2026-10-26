@@ -1639,6 +1639,84 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     assert!(cookies.lock().is_none());
 }
 
+#[tokio::test]
+async fn test_run_request_expired_refresh_publishes_updated_session_token() {
+    let mut cfg = base_config();
+    cfg.bearer_only = false;
+    cfg.unauth_action = UnauthAction::Deny;
+    cfg.verification_mode = VerificationMode::IntrospectionOnly;
+    cfg.introspection_cache_ttl = 60;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.clock_skew_seconds = 0;
+    cfg.access_token_expires_leeway = 0;
+    cfg.set_access_token_header = true;
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+    let now = OpenidConnect::now_unix_secs();
+    // Bypass normal expiry clipping to exercise verification's expired verdict.
+    plugin.introspection_cache.insert(
+        OpenidConnect::introspection_cache_key("old-token"),
+        IntrospectionCacheEntry {
+            claims: json!({"active": true, "iss": "https://idp.example.com", "exp": now - 120}),
+        },
+        Duration::from_secs(60),
+    );
+    plugin
+        .cache_introspection_claims(
+            "new-token",
+            &json!({"active": true, "iss": "https://idp.example.com", "exp": now + 3600}),
+        )
+        .await;
+    let mut payload = OidcSessionCookie {
+        session_ref: "expiry-session".to_string(),
+        access_token: "old-token".to_string(),
+        created_at: now,
+        // Keep preemptive refresh out of this verification-expiry scenario.
+        expires_at: Some(now + 3600),
+        id_token: None,
+        refresh_token: Some("refresh-token".to_string()),
+    };
+    let encoded = OpenidConnect::encode_signed_cookie_payload(&payload, plugin.session_cipher().unwrap()).unwrap();
+    payload.access_token = "new-token".to_string();
+    plugin
+        .put_refresh_result(&OpenidConnect::refresh_lock_key(&encoded), payload)
+        .await;
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_string());
+    session.expect_get_query_param().returning(|_| None);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Access-Token" && value == "new-token" && value.is_sensitive())
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded}"));
+    session
+        .expect_append_response_header()
+        .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(plugin_log_entries(&log), vec!["token refresh on expiry"]);
+    assert!(cookies.lock().is_none());
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
     let mut cfg = base_config();
@@ -2516,7 +2594,7 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
     let result = plugin
         .try_refresh_session_token_singleflight(lock_key, &mut cookie)
         .await;
-    assert_eq!(result, Ok("cached-token".to_string()));
+    assert_eq!(result, Ok(()));
     assert_eq!(cookie.access_token, "cached-token");
     assert_eq!(cookie.id_token.as_deref(), Some("id-token"));
 }

@@ -23,10 +23,11 @@ refresh. Moving a token out of the cookie also changes what persistence and
 refresh-result caching observe unless the owner is restored correctly.
 
 This is not evidence that every copy is necessary. A narrower refresh API that
-returns unit could let the expired-refresh success branch borrow the updated
-cookie token. It can be investigated independently under IMPL without deciding
-the combined representation. Merely returning unit and cloning at the other
-callers relocates their copies rather than removing them.
+returns unit now lets the expired-refresh success branch borrow the updated
+cookie token. This independent optimization does not decide the combined
+representation: the cache-miss and preemptive callers still clone the updated
+token, relocating their copies rather than removing them. The evidence above
+describes the inspected baseline before this narrower change.
 
 Keep the current combined representation if measured savings do not justify
 the branch and ownership complexity. No replacement has been implemented or
@@ -62,4 +63,6 @@ Existing coverage includes cache resolution and both singleflight wait-timeout
 outcomes. The local-IdP failed-preemptive-refresh fixture remains ignored and was
 not run; the full ownership-transition matrix above is future acceptance work.
 Formatting and workspace all-target check/Clippy passed with existing warnings.
-No runtime implementation, full suite, live IdP test or benchmark is delivered.
+That documentation batch delivered no runtime implementation, full suite, live
+IdP test or benchmark. The later narrow refresh-result optimization is recorded
+in INDEX; the combined representation remains deferred.

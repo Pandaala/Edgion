@@ -350,10 +350,7 @@ impl OpenidConnect {
         self.config.set_id_token_header || discovery.end_session_endpoint.as_deref().is_some_and(|v| !v.is_empty())
     }
 
-    pub(super) async fn try_refresh_session_token(
-        &self,
-        session_cookie: &mut OidcSessionCookie,
-    ) -> VerifyResult<String> {
+    pub(super) async fn try_refresh_session_token(&self, session_cookie: &mut OidcSessionCookie) -> VerifyResult<()> {
         if session_cookie.session_ref.is_empty() {
             session_cookie.session_ref = Self::generate_session_ref();
         }
@@ -377,7 +374,7 @@ impl OpenidConnect {
         if token_response.refresh_token.is_some() {
             session_cookie.refresh_token = token_response.refresh_token;
         }
-        Ok(session_cookie.access_token.clone())
+        Ok(())
     }
 
     pub(super) async fn try_get_recent_refresh_result(&self, lock_key: &str) -> Option<OidcSessionCookie> {
@@ -393,25 +390,25 @@ impl OpenidConnect {
         &self,
         lock_key: &str,
         session_cookie: &mut OidcSessionCookie,
-    ) -> VerifyResult<String> {
+    ) -> VerifyResult<()> {
         let flight = self.refresh_singleflight.get_or_create(lock_key);
         let wait_timeout = Duration::from_secs(self.config.timeout);
         let Ok(_guard) = tokio::time::timeout(wait_timeout, flight.lock().lock()).await else {
             if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
                 *session_cookie = cached_payload;
-                return Ok(session_cookie.access_token.clone());
+                return Ok(());
             }
             return Err(OidcVerifyError::RefreshSingleflightTimeout);
         };
 
         if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
             *session_cookie = cached_payload;
-            return Ok(session_cookie.access_token.clone());
+            return Ok(());
         }
 
-        let token = self.try_refresh_session_token(session_cookie).await?;
+        self.try_refresh_session_token(session_cookie).await?;
         self.put_refresh_result(lock_key, session_cookie.clone()).await;
-        Ok(token)
+        Ok(())
     }
 }
 

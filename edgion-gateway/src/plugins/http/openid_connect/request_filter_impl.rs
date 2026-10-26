@@ -87,8 +87,8 @@ impl RequestFilter for OpenidConnect {
                             )
                             .await
                         {
-                            Ok(new_token) => {
-                                token = new_token;
+                            Ok(()) => {
+                                token = session_cookie.access_token.clone();
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh miss");
                             }
@@ -107,8 +107,8 @@ impl RequestFilter for OpenidConnect {
                             )
                             .await
                         {
-                            Ok(new_token) => {
-                                token = new_token;
+                            Ok(()) => {
+                                token = session_cookie.access_token.clone();
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh preemptive");
                             }
@@ -150,17 +150,18 @@ impl RequestFilter for OpenidConnect {
                                         )
                                         .await
                                     {
-                                        Ok(new_token) => {
+                                        Ok(()) => {
                                             drop(token);
-                                            match self.verify_token(session, &new_token).await {
+                                            let new_token = session_cookie.access_token.as_str();
+                                            match self.verify_token(session, new_token).await {
                                                 Ok(claims) => {
                                                     self.maybe_set_session_cookie_header(session, &session_cookie)
                                                         .await;
                                                     let userinfo_json =
-                                                        self.fetch_userinfo_json(&new_token, plugin_log).await;
+                                                        self.fetch_userinfo_json(new_token, plugin_log).await;
                                                     self.apply_upstream_headers(
                                                         session,
-                                                        &new_token,
+                                                        new_token,
                                                         session_cookie.id_token.as_deref(),
                                                         userinfo_json.as_deref(),
                                                         &claims,
