@@ -248,6 +248,9 @@ impl OpenidConnect {
         let key = Self::introspection_cache_key(token);
         let ttl =
             Self::bounded_introspection_cache_ttl(claims, self.config.introspection_cache_ttl, Self::now_unix_secs());
+        if ttl.is_zero() {
+            return;
+        }
         self.introspection_cache
             .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
         // Non-retention is a normal cache miss; the current request still uses

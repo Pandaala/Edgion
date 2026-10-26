@@ -19611,3 +19611,30 @@ including a fresh unit-layout check after the adapter change. No full suite,
 ignored local-IdP test or live network integration ran.
 Formatting, workspace all-target check/Clippy and diff hygiene passed with
 existing unrelated warnings.
+
+## Skip discarded zero-TTL introspection claims copies
+
+OIDC introspection cache insertion now returns when its already-resolved TTL is
+zero, before cloning claims. The canonical TinyUfoTtlCache rejects that TTL before
+weight calculation, locking or mutation; the caller previously ignored that
+outcome after constructing the discarded entry. Existing disabled/inactive gates,
+key hashing before wall-clock sampling, TTL calculation and nonzero insertion
+remain in place. Zero TTL neither inserts a new value nor replaces a live value
+under the same token key. Claim and scope validation still precede insertion,
+and the current request still receives the authoritative introspection result.
+
+The unchanged implementation passed 161 OIDC tests with 16 existing ignores,
+including the new absent-key/live-same-key regression. A focused allocation oracle
+compares the old helper body with the actual method using prebuilt nested active
+claims with exp zero. Fixture construction and cache reads are outside measurement;
+both local futures must complete immediately. Key hashing remains, and no shared
+claims representation, cache-key reuse, cache policy or async API was introduced.
+The separate oidc-05 claims-ownership decision remains deferred.
+
+The measured zero-TTL helper uses fewer allocation calls and requested bytes
+than the old body; token-key construction still allocates, and no throughput or whole-request
+memory improvement is claimed. Final verification passed 162 OIDC tests with
+16 existing ignores and nine canonical TinyUFO tests with one existing ignore
+(171 passed total), plus seven repository guards. No full suite or live IdP ran.
+Formatting, workspace all-target check/Clippy and diff hygiene passed with
+existing unrelated warnings.

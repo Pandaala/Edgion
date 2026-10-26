@@ -2288,6 +2288,63 @@ async fn test_introspection_cache_put_and_get() {
 }
 
 #[tokio::test]
+async fn zero_ttl_introspection_result_neither_inserts_nor_replaces_live_claims() {
+    let mut config = base_config();
+    config.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&config, "default".to_string());
+    let expired = json!({"active": true, "exp": 0, "sub": "expired"});
+    plugin.cache_introspection_claims("same-token", &expired).await;
+    assert!(plugin.get_cached_introspection_claims("same-token").await.is_none());
+
+    let live = json!({"active": true, "sub": "live"});
+    plugin.cache_introspection_claims("same-token", &live).await;
+    plugin.cache_introspection_claims("same-token", &expired).await;
+    assert_eq!(plugin.get_cached_introspection_claims("same-token").await, Some(live));
+}
+
+#[test]
+fn zero_ttl_introspection_skips_the_discarded_claims_copy() {
+    use futures::FutureExt;
+
+    async fn previous_insert(plugin: &OpenidConnect, token: &str, claims: &serde_json::Value) {
+        if plugin.config.introspection_cache_ttl == 0 || claims.get("active") != Some(&serde_json::Value::Bool(true)) {
+            return;
+        }
+        let key = OpenidConnect::introspection_cache_key(token);
+        let ttl = OpenidConnect::bounded_introspection_cache_ttl(
+            claims,
+            plugin.config.introspection_cache_ttl,
+            OpenidConnect::now_unix_secs(),
+        );
+        plugin
+            .introspection_cache
+            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
+    }
+
+    let mut config = base_config();
+    config.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&config, "default".to_string());
+    let claims = json!({
+        "active": true, "exp": 0,
+        "details": (0..64).map(|index| json!({"name": format!("claim-{index}"), "value": "payload".repeat(32)})).collect::<Vec<_>>()
+    });
+    let (old_done, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        previous_insert(&plugin, "expired-token", &claims).now_or_never()
+    });
+    let (new_done, new_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        plugin
+            .cache_introspection_claims("expired-token", &claims)
+            .now_or_never()
+    });
+    assert_eq!(old_done, Some(()));
+    assert_eq!(new_done, Some(()));
+    assert!(new_stats.calls < old_stats.calls);
+    assert!(new_stats.requested_bytes < old_stats.requested_bytes);
+    let key = OpenidConnect::introspection_cache_key("expired-token");
+    assert!(plugin.introspection_cache.get(&key).0.is_none());
+}
+
+#[tokio::test]
 async fn inactive_introspection_result_is_never_cached() {
     let mut cfg = base_config();
     cfg.introspection_cache_ttl = 60;
