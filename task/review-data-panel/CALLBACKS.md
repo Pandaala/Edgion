@@ -2192,3 +2192,28 @@ unchanged. This inspection does not authorize generic Redis values, new provider
 APIs, retry changes, extra logs or a new cache. Ordinary command dispatch reaches
 the existing request_response path; router, wire codec, reconnect and live backend
 behavior retain their separate open boundaries.
+
+## Redis caller timeout and dependency command lifetime
+
+Inspected at `6f743246b`: HTTP RateLimitRedis and Stream ConnectionRateLimit's
+outer timeout reaches the shared executor, then Fred 10.1.0 request_response.
+This extends the earlier direct timeout and encoding inventories into command
+ownership; it does not establish complete reconnect or transport coverage.
+
+The basic waiter submits an owned Command with a response oneshot and shared
+timed_out flag. Its own polled error path sets that flag; the tracing branch
+has the corresponding post-result update. External future cancellation does
+not execute these continuations. Neither inspected waiter has a drop guard
+that propagates cancellation. Fred's timeout helper itself uses Tokio timeout.
+
+The router checks timed_out before preparing/writing a command, and the retry
+buffer checks it before resubmission. The connection retains response-bearing
+commands before awaiting a transport write. Cancellation after the checks,
+partial transmission and response ordering are distinct states. One configured
+command attempt does not prove command cancellation or rollback.
+
+The [cancellation ownership task](redis-09-cancelled-command-ownership.md) records
+this behavior-sensitive opportunity separately from encoding and member selection.
+No actual retained lifetime, remote outcome or memory/performance regression was
+measured. The fresh 117 passing tests and one existing ignore cover current local
+rate-limit/provider behavior, not live cancellation or reconnect interleavings.

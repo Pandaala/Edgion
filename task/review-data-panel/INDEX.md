@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Redis caller cancellation and command ownership](redis-09-cancelled-command-ownership.md)
+
 - [AI request-baseline rebuilding](retry-03-ai-request-baseline-rebuild.md)
 
 - [Prepared fixed-header name ownership](response-05-prepared-fixed-header-names.md)
@@ -19738,3 +19740,19 @@ passed with existing warnings. No live Redis, full suite, new tests or benchmark
 ran. Independent plan and final source reviews passed; agent-doc validation and
 diff hygiene passed. Transport and dependency execution remain outside this
 scoped source inventory.
+
+## Inspect Redis caller cancellation versus command retention
+
+The [timeout/command inventory](CALLBACKS.md#redis-caller-timeout-and-dependency-command-lifetime)
+now distinguishes outer plugin cancellation, Fred's polled timeout/error flag,
+pre-write/retry checks and in-flight ownership. Existing encoding and pool-member
+proposals do not authorize changing this lifetime. The new redis-09 task defers
+cancellation signaling because skipping queued writes can change execution;
+no leak, retention bound, remote outcome or measured optimization is claimed.
+
+Fresh unchanged-source runs passed 24 HTTP limiter, 31 Stream limiter and 62
+Redis-provider tests (117 total), with one existing Stream ignore. Formatting,
+workspace all-target check/Clippy passed with existing warnings. No live Redis,
+fault injection, new runtime test, full suite or benchmark ran. Independent plan
+and final source reviews passed; agent-doc validation and diff hygiene passed.
+Runtime and dependency sources remain unchanged.
