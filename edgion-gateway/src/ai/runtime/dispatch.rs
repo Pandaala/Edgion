@@ -661,25 +661,16 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
     Ok(())
 }
 
-fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<SelectedTarget, AiDispatchError> {
-    let mut route_candidates = Vec::new();
-    loop {
-        let service_step = match plan.scheduler.next_step() {
-            NextStep::PickBackend(step) => Some(step),
-            NextStep::PickCredential(step) => {
-                let candidate_index = usize::from(step.backend);
-                match select_credential(plan, candidate_index, entropy) {
-                    Err(AiDispatchError::Unavailable) => continue,
-                    result => return result,
-                }
-            }
-            NextStep::Stop(_) => return Err(AiDispatchError::Unavailable),
-            _ => return Err(AiDispatchError::InvalidConfiguration),
-        };
-        let service_step = service_step.expect("PickBackend branch supplies state");
-        route_candidates.clear();
-        route_candidates.reserve_exact(plan.candidates.len());
-        route_candidates.extend(plan.candidates.iter().enumerate().map(|(index, candidate)| {
+// The scratch buffer belongs to one select_target call. Candidate structure is
+// fixed during that synchronous call; exclusions and telemetry remain live.
+fn refresh_route_candidates(
+    candidates: &[crate::ai::AiPlanCandidate],
+    excluded_backends: u16,
+    route_candidates: &mut Vec<RouteCandidate>,
+) {
+    if route_candidates.is_empty() {
+        route_candidates.reserve_exact(candidates.len());
+        route_candidates.extend(candidates.iter().map(|candidate| {
             let dispatchable_credential = candidate.backend.as_ref().is_some_and(|backend| {
                 backend
                     .credential_pool
@@ -713,16 +704,40 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
                     valid_ref: true,
                     model_compatible: candidate.model.is_some(),
                     runtime_available: dispatchable_credential,
-                    untried: service_step.excluded_backends & (1u16 << index) == 0,
+                    untried: false,
                 },
-                adaptive: candidate
-                    .adaptive
-                    .as_ref()
-                    .map(|state| state.snapshot())
-                    .unwrap_or_default(),
+                adaptive: Default::default(),
                 cost,
             }
         }));
+    }
+    for (index, (projected, candidate)) in route_candidates.iter_mut().zip(candidates).enumerate() {
+        projected.eligibility.untried = excluded_backends & (1u16 << index) == 0;
+        projected.adaptive = candidate
+            .adaptive
+            .as_ref()
+            .map(|state| state.snapshot())
+            .unwrap_or_default();
+    }
+}
+
+fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<SelectedTarget, AiDispatchError> {
+    let mut route_candidates = Vec::new();
+    loop {
+        let service_step = match plan.scheduler.next_step() {
+            NextStep::PickBackend(step) => Some(step),
+            NextStep::PickCredential(step) => {
+                let candidate_index = usize::from(step.backend);
+                match select_credential(plan, candidate_index, entropy) {
+                    Err(AiDispatchError::Unavailable) => continue,
+                    result => return result,
+                }
+            }
+            NextStep::Stop(_) => return Err(AiDispatchError::Unavailable),
+            _ => return Err(AiDispatchError::InvalidConfiguration),
+        };
+        let service_step = service_step.expect("PickBackend branch supplies state");
+        refresh_route_candidates(&plan.candidates, service_step.excluded_backends, &mut route_candidates);
         let selected = match pick(
             PickerInput {
                 candidates: &route_candidates,

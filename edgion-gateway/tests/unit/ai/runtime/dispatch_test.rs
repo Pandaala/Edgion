@@ -1881,3 +1881,155 @@ fn composite_processor_storage_inlines_one_child_without_buffer_allocation() {
         );
     }
 }
+
+#[test]
+fn route_projection_reuse_matches_fresh_reconstruction_and_live_telemetry() {
+    use crate::ai::{AdaptiveTelemetryKey, AdaptiveTelemetryStore};
+    use edgion_resources::resources::edgion_backend::AiModelPricing;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+
+    // Frozen pre-optimization projection is the independent differential oracle.
+    fn fresh(candidates: &[AiPlanCandidate], excluded_backends: u16) -> Vec<RouteCandidate> {
+        let mut route_candidates = Vec::new();
+        route_candidates.reserve_exact(candidates.len());
+        route_candidates.extend(candidates.iter().enumerate().map(|(index, candidate)| {
+            let dispatchable_credential = candidate.backend.as_ref().is_some_and(|backend| {
+                backend
+                    .credential_pool
+                    .credentials
+                    .iter()
+                    .enumerate()
+                    .any(|(credential_index, credential)| {
+                        credential.weight > 0
+                            && candidate
+                                .credential_outliers
+                                .get(credential_index)
+                                .is_some_and(Option::is_some)
+                    })
+            });
+            let cost = candidate.model.as_ref().and_then(|model| {
+                model.pricing.map(|pricing| CostSnapshot {
+                    input_price_micro_usd_per_million: pricing.input.get(),
+                    output_price_micro_usd_per_million: pricing.output.get(),
+                    service_max_output_tokens: candidate
+                        .backend
+                        .as_ref()
+                        .and_then(|backend| backend.max_output_tokens)
+                        .map(u64::from),
+                })
+            });
+            RouteCandidate {
+                slot: u8::try_from(candidate.slot).unwrap_or(u8::MAX),
+                order: candidate.order,
+                weight: candidate.weight,
+                eligibility: CandidateEligibility {
+                    valid_ref: true,
+                    model_compatible: candidate.model.is_some(),
+                    runtime_available: dispatchable_credential,
+                    untried: excluded_backends & (1u16 << index) == 0,
+                },
+                adaptive: candidate
+                    .adaptive
+                    .as_ref()
+                    .map(|state| state.snapshot())
+                    .unwrap_or_default(),
+                cost,
+            }
+        }));
+        route_candidates
+    }
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "fixture-key".into(),
+        limits: None,
+    }]);
+    let store = AdaptiveTelemetryStore::new();
+    let key = AdaptiveTelemetryKey::new(
+        "route".into(),
+        "rule".into(),
+        PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "default".into(),
+            name: "provider".into(),
+        },
+        "logical".into(),
+    )
+    .unwrap();
+    store.reconcile_keys(&HashSet::from([key.clone()]));
+    let state = store.get(&key).unwrap();
+    let pricing = AiModelPricing {
+        input_per_million_usd: "1.25".into(),
+        output_per_million_usd: "2.5".into(),
+        cache_read_input_per_million_usd: None,
+        cache_write_input_per_million_usd: None,
+    }
+    .parsed()
+    .unwrap();
+    plan.candidates = (0..6)
+        .map(|index| {
+            let mut candidate = selectable_plan(vec![RuntimeAiCredential {
+                name: "primary".into(),
+                weight: 1,
+                credential: "fixture-key".into(),
+                limits: None,
+            }])
+            .candidates
+            .pop()
+            .unwrap();
+            candidate.model.as_mut().unwrap().pricing = Some(pricing);
+            candidate.adaptive = (index == 0).then(|| state.clone());
+            candidate.slot = index;
+            candidate.order = index as u8;
+            match index {
+                1 => candidate.model = None,
+                2 => candidate.backend = None,
+                3 => {
+                    Arc::get_mut(candidate.backend.as_mut().unwrap())
+                        .unwrap()
+                        .credential_pool
+                        .credentials[0]
+                        .weight = 0
+                }
+                4 => candidate.credential_outliers.clear(),
+                5 => {
+                    candidate.slot = usize::MAX;
+                    candidate.weight = -1;
+                    Arc::get_mut(candidate.backend.as_mut().unwrap())
+                        .unwrap()
+                        .max_output_tokens = None;
+                }
+                _ => {}
+            }
+            candidate
+        })
+        .collect();
+    let mut reused = Vec::new();
+    for (iteration, excluded) in [0, 1, 0, u16::MAX].into_iter().enumerate() {
+        if iteration > 0 {
+            let before = state.snapshot();
+            let second = 100 + iteration as u64;
+            state.tick(second);
+            state.record_charged_tokens(second, 7);
+            state.record_success_ttft(second, 1_000);
+            state.tick(second + 1);
+            assert_ne!(state.snapshot(), before);
+        }
+        refresh_route_candidates(&plan.candidates, excluded, &mut reused);
+        assert_eq!(reused, fresh(&plan.candidates, excluded));
+        assert_eq!(reused[0].adaptive, state.snapshot());
+        assert_eq!(reused[0].eligibility.untried, excluded & 1 == 0);
+        assert!(reused[0].eligibility.runtime_available);
+        assert!(!reused[1].eligibility.model_compatible);
+        for index in [2, 3, 4] {
+            assert!(!reused[index].eligibility.runtime_available);
+        }
+        assert_eq!(reused[5].slot, u8::MAX);
+        assert_eq!(reused[5].weight, -1);
+        assert_eq!(reused[0].cost.unwrap().service_max_output_tokens, Some(256));
+        assert_eq!(reused[5].cost.unwrap().service_max_output_tokens, None);
+    }
+    let mut empty = Vec::new();
+    refresh_route_candidates(&[], u16::MAX, &mut empty);
+    assert_eq!(empty, fresh(&[], u16::MAX));
+}

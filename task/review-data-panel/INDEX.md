@@ -19086,3 +19086,39 @@ Another 25 attempt-runtime tests passed. Formatting, workspace all-target
 check/Clippy, seven repository guards and diff hygiene passed with existing
 unrelated warnings. No full workspace test suite, live integration or throughput
 benchmark ran.
+
+## Reuse static AI candidate projections within one selection call
+
+The synchronous select_target loop now initializes static RouteCandidate fields
+once in its existing exact-capacity local Vec. Later backend scans update only
+round exclusions and live adaptive snapshots, in declaration order. The immutable
+candidate backend/model, credential weights and captured outlier-handle membership
+do not change within this call; credential availability here tests handle presence,
+not current health. Cost projection and repeated membership scans can therefore be
+reused without retaining a cache in the request plan or changing admission policy.
+
+Every new select_target call starts empty, including after model resolution or
+quota downgrade outside this boundary. Direct credential selection and stopped
+states retain lazy zero-allocation behavior. Picker validation, original slot
+conversion, scheduler transitions and the existing within-call buffer capacity
+remain unchanged. Adaptive reads occur on every scan; the first scan performs
+static construction before those ordered reads, not a simultaneous telemetry
+snapshot. No static fact is promoted into a live health/admission decision.
+
+Independent investigation selected this bounded local change instead of requiring
+an unnecessary publication/cache redesign. The implementation introduces no inline
+stack buffer, new plan field or cross-call retained projection. Source-level work
+removed is repeated static reconstruction on multi-scan calls; no throughput or
+additional allocation reduction is claimed.
+
+The differential test compares complete vectors with the previous fresh-build
+projection across exclusions and round reset, missing models/backends, zero-weight
+credentials, missing handles, prices/output limits and original slot conversion.
+It publishes changed adaptive data synchronously and asserts the update is observed.
+The existing real scheduler allocation/round regression remains unchanged.
+Fresh baseline passed 38 dispatch, 13 picker, 11 scheduler and 22 proxy tests.
+Final verification preserves those identities and adds the differential case:
+39 dispatch plus the same 46 surrounding tests pass. Formatting, workspace
+all-target check/Clippy, seven repository guards and diff hygiene passed with
+existing unrelated warnings. No full workspace test suite, live integration or
+benchmark ran.
