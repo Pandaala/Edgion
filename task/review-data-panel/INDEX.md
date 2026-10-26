@@ -19547,3 +19547,33 @@ change, new test, duplicate deferred task, full suite or performance benchmark
 was introduced.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Reuse the JWT routing decode header
+
+JwtAuth now uses the Header already returned by its insecure routing decode for
+the issuer-group algorithm equality check. The removed standalone decode_header
+used the same token splitting and Header::from_encoded path in locked
+jsonwebtoken 9.3.1. The peek policy disables signature checks, so its pre-header
+key/algorithm branches are inactive. A malformed header still fails before
+payload parsing, with the same Malformed result and fixed diagnostic.
+
+Issuer routing, algorithm binding, configured payload key selection and scoped
+real verification retain their order. Peek claims and header are still released
+before real verification; only verified claims become the result. The mandatory
+issuer-binding knowledge records dependency/policy re-evaluation triggers, and
+the separate success/failure logging page corrects its stale signature-error
+literal to the existing Deny invalid signature. Runtime log strings are unchanged.
+
+The new regression passed on the original implementation with all 48 JWT tests.
+It compares old/new routing prefixes and characterizes missing/extra segments,
+malformed header/base64/JSON, absent/unknown/duplicate algorithms, malformed or
+non-object payloads, empty-signature rejection and failure precedence/redaction.
+Existing algorithm-confusion, issuer scoping, cached-key, token-source and
+request-stage tests remain intact. One duplicate header parse is removed; the
+routing and real-verification stages remain distinct. No allocation, peak-memory
+or throughput benchmark was run.
+Final verification passed the same 48 JWT tests and seven repository guards.
+OIDC and shared helpers are unchanged. No full suite or live authentication
+transport test ran.
+Formatting, workspace all-target check/Clippy and diff hygiene passed with
+existing unrelated warnings.

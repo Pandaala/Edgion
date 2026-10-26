@@ -23,7 +23,7 @@ Reject patches that:
 ## Invariant 2 — Algorithm-confusion defense (header.alg vs group.algorithm)
 
 After routing, before key selection, the code must assert
-`decode_header(token).alg == to_jwt_algorithm(group.algorithm)`. Without
+`peek.header.alg == to_jwt_algorithm(group.algorithm)`. Without
 this, an attacker submits `alg=HS256` token claiming an RS-issuer's iss,
 routes to the RS group, and the HMAC verification treats the public key
 as a symmetric secret (classic JWT alg-confusion).
@@ -75,18 +75,28 @@ includes an issuer sentinel in claims. Re-evaluate the accessor if construction
 sites or mutable claims access expand. A claims lookup replaces the issuer copy;
 no throughput improvement is measured.
 
-## Unverified routing scratch release
+## Unverified routing header reuse and scratch release
 
-After insecure decode, verify_jwt explicitly releases that TokenData's unused
-header before moving out its claims. Moving only claims would leave the other
-field owned until the original local's scope ends. Once issuer routing, algorithm
-equality and scoped key selection succeed, it releases the peek claims and the
-separate initial decode_header result before invoking real decode. The chosen
+The insecure routing decode supplies both Header and claims. verify_jwt reuses
+that header for the algorithm equality check instead of calling decode_header
+separately. In locked jsonwebtoken 9.3.1, both paths split the token identically
+and use Header::from_encoded; the configured peek disables signature validation,
+so its earlier signature-key/algorithm checks are inactive. Header or payload
+parse failure still returns Malformed with the same fixed diagnostic. A successful
+peek does not authenticate either field.
+
+Once issuer routing, algorithm equality and scoped key selection succeed, the
+peek claims and header are explicitly dropped before real decode. The selected
 group/key references borrow the immutable store, not the lookup strings.
+Previously the extra initial header was retained while the peek's unused header
+was dropped; reusing the peek result removes that duplicate header parse while
+retaining the established routing-scratch release boundary.
 
-Both decode calls and all validation/error ordering remain unchanged. Signature
-verification still consumes the original token with the selected group's key
-and validation policy; unverified claims never become the authenticated result.
-The plain owned parser fields have no custom cleanup behavior. This reduces
-source-level overlap between routing scratch and real decode, not allocation
-count or a measured whole-request peak/throughput; drop is not erasure.
+The insecure routing and real cryptographic decode stages remain distinct.
+Signature verification consumes the original token with the selected group's key
+and validation policy; only verified claims become the authenticated result.
+The malformed-input/precedence regression compares the old prefix with the
+current prefix and exercises issuer-before-algorithm and algorithm-before-key
+failures, empty-signature rejection and fixed failure-log redaction. Re-evaluate
+this equivalence if the dependency or peek validation policy changes. No parser
+bypass, physical-erasure or measured throughput claim follows from this change.

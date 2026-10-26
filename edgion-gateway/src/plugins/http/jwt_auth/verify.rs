@@ -1,6 +1,6 @@
 //! JWT verification: iss-routed, algorithm-confusion-defended.
 
-use jsonwebtoken::{decode, decode_header};
+use jsonwebtoken::decode;
 use serde_json::Value;
 use std::fmt;
 
@@ -54,18 +54,13 @@ pub(super) fn verify_jwt<'a>(
     config: &JwtAuthConfig,
     plugin_log: &mut PluginLog,
 ) -> Result<VerifyOk<'a>, VerifyDeny> {
-    // 1. Decode header -- gives us the token's claimed alg.
-    let Ok(header) = decode_header(token) else {
-        plugin_log.push("Deny malformed token");
-        return Err(VerifyDeny::Malformed);
-    };
-
-    // 2. Peek at payload (insecure decode) to read iss.
+    // 1. Peek at the header and payload without signature verification to route by iss.
     let Ok(peek) = decode::<Value>(token, store.peek_decoding_key(), store.peek_validation()) else {
         plugin_log.push("Deny malformed token");
         return Err(VerifyDeny::Malformed);
     };
-    drop(peek.header);
+    // 2. Reuse the header parsed by the peek for the algorithm-binding check below.
+    let header = peek.header;
     let peek = peek.claims;
 
     // 3. Extract iss (REQUIRED, must be non-empty string).

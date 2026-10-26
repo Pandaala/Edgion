@@ -41,6 +41,120 @@ fn make_token(alg: Algorithm, kid: &str, iss: &str, secret_bytes: &[u8]) -> Stri
 }
 
 #[test]
+fn routing_decode_preserves_malformed_and_security_failure_precedence() {
+    use base64::Engine;
+    let encode_part = |raw: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+    let secret = b"hs256-secret-at-least-32-bytes-long-padding";
+    let store = JwtIssuerGroupStore::new(
+        HashMap::from([(
+            "https://a.example".to_string(),
+            make_hs_group("partner-a", "k1", secret),
+        )]),
+        false,
+        0,
+    );
+    let config = config_default_keyclaim();
+    let valid_header = encode_part(r#"{"alg":"HS256"}"#);
+    let payload = encode_part(r#"{"iss":"https://a.example","key":"k1","exp":4102444800}"#);
+    let mut cases = vec![
+        (String::new(), VerifyDeny::Malformed, "Deny malformed token"),
+        (valid_header.clone(), VerifyDeny::Malformed, "Deny malformed token"),
+        (
+            format!("{valid_header}.{payload}"),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ),
+        (
+            format!("extra.{valid_header}.{payload}.signature"),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ),
+        (
+            format!("!.{payload}.signature"),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ),
+        (
+            format!("{valid_header}.!.signature"),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ),
+        (
+            format!("{valid_header}.{payload}."),
+            VerifyDeny::SignatureFail,
+            "Deny invalid signature",
+        ),
+    ];
+    for raw in [
+        "{",
+        "[]",
+        "{}",
+        r#"{"alg":"none"}"#,
+        r#"{"alg":1}"#,
+        r#"{"alg":"HS256","alg":"HS384"}"#,
+    ] {
+        cases.push((
+            format!("{}.{payload}.signature", encode_part(raw)),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ));
+    }
+    for raw in ["{", "[]", "null"] {
+        cases.push((
+            format!("{valid_header}.{}.signature", encode_part(raw)),
+            VerifyDeny::Malformed,
+            "Deny malformed token",
+        ));
+    }
+    for (raw, expected, tag) in [
+        (r#"{"key":"k1"}"#, VerifyDeny::MissingIss, "Deny missing iss"),
+        (
+            r#"{"iss":"https://unknown.example","key":"missing"}"#,
+            VerifyDeny::UnknownIss,
+            "Deny unknown iss",
+        ),
+        (
+            r#"{"iss":"https://a.example","key":"missing"}"#,
+            VerifyDeny::BadAlgorithm,
+            "Deny bad algorithm",
+        ),
+    ] {
+        cases.push((
+            format!("{}.{}.signature", encode_part(r#"{"alg":"HS384"}"#), encode_part(raw)),
+            expected,
+            tag,
+        ));
+    }
+    for (token, expected, tag) in cases {
+        // Freeze the old prefix as a dependency-upgrade equivalence oracle.
+        let old_prefix = jsonwebtoken::decode_header(&token).and_then(|header| {
+            decode::<Value>(&token, store.peek_decoding_key(), store.peek_validation())
+                .map(|peek| (header.alg, peek.claims))
+        });
+        let new_prefix = decode::<Value>(&token, store.peek_decoding_key(), store.peek_validation())
+            .map(|peek| (peek.header.alg, peek.claims));
+        assert_eq!(old_prefix.is_ok(), new_prefix.is_ok());
+        if let (Ok(old), Ok(new)) = (old_prefix, new_prefix) {
+            assert_eq!(old, new);
+        }
+        let mut log = PluginLog::new("JwtAuth");
+        let actual = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+        assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&expected));
+        assert!(log.contains(tag));
+        let rendered = log.render_for_test();
+        for secret_value in [
+            "partner-a",
+            "https://a.example",
+            "https://unknown.example",
+            "k1",
+            "HS384",
+        ] {
+            assert!(!rendered.contains(secret_value));
+        }
+    }
+}
+
+#[test]
 fn verify_hits_correct_group_by_iss() {
     let secret = b"hs256-secret-at-least-32-bytes-long-padding";
     let group_a = make_hs_group("partner-a", "k1", secret);

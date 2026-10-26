@@ -24,7 +24,7 @@ domain, e.g. `https://partner-a.example`.
 - `Deny bad algorithm` — header.alg vs group.algorithm mismatch (no alg!)
 - `Deny missing key` — kid not in routed group's credentials (no kid!)
 - `Deny invalid credentials` — credential PEM/secret malformed
-- `Deny bad signature` — real verification failed
+- `Deny invalid signature` — real verification failed
 - `Deny exp` / `Deny nbf` / `Deny bad aud` — claim validation failures
 - `Deny exp too far` — maximumExpiration post-check
 - (request_stage) `Anon=<name>` — anonymous bypass (no group concept)
