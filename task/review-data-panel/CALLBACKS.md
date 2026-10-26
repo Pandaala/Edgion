@@ -2258,3 +2258,24 @@ representation change follows. This extends [relay-02](relay-02-listener-read-bu
 with setup-specific acceptance cases rather than creating a second finding.
 Fresh 48 Gateway PROXY-policy/helper and relay tests passed; they do not execute
 the fork's parser/rewind tests or verify candidate transport behavior.
+
+
+## Initial HTTP protocol detection before request callbacks
+
+At `f6fcde124`, normal plaintext HTTP with HTTP/2 enabled reaches the pinned
+fork's `HttpServerApp` application-entry h2c probe. TLS streams suppress that
+probe and use ALPN; custom mode and unsupported Peek retain separate branches.
+The concrete L4 probe reads and rewinds a complete 24-byte preface before byte
+comparison, or restores the consumed prefix on returned EOF/I/O error. The
+application returns None for such errors. Early mismatch does not short-circuit
+the read loop. Ordinary HTTP/1 keepalive runs inside the selected H1 loop and
+does not repeat this setup probe.
+
+The listener's 60-second io.handshake timeout ends before application dispatch;
+HTTP/1 keepalive and H2 session policies also do not own this pre-selection wait.
+The short-H1 pending example and cancellation limits are recorded as source
+inference in [transport-02](transport-02-h2c-preface-probing.md). Prefix-aware
+fallback is deferred because earlier H1 admission changes timing/error behavior,
+not just copying. No fork mutation, full-path timeout guarantee or measured
+performance gain follows. Eight current Gateway H2/listener-builder tests passed;
+these are not execution proof for a changed probe or live byte delivery.

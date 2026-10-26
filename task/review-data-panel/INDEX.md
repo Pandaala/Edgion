@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prefix-aware h2c connection probing](transport-02-h2c-preface-probing.md)
+
 - [Redis caller cancellation and command ownership](redis-09-cancelled-command-ownership.md)
 
 - [AI request-baseline rebuilding](retry-03-ai-request-baseline-rebuild.md)
@@ -19854,3 +19856,23 @@ Formatting, workspace all-target check/Clippy, all seven repository guards and
 agent-doc/diff checks passed with existing unrelated warnings. Independent plan
 and final source reviews passed. No live integration, full suite, performance
 benchmark or integration fixture change was included.
+
+
+## Inspect initial HTTP protocol detection
+
+The [application-entry inventory](CALLBACKS.md#initial-http-protocol-detection-before-request-callbacks)
+extends callback coverage into the actual h2c selection wait. Complete-preface
+probing can continue waiting after an early mismatch; short non-H2 input makes
+that boundary concrete. Its startup reachability, TLS bypass, returned-error
+closure, unsupported-Peek behavior and separate timeout owners are now recorded.
+Normal H1 reuse does not repeat the probe. Transport-02 defers prefix-aware
+fallback because it changes admission timing; the bounded 24-byte replay is not
+presented as a large-payload allocation problem.
+
+Fresh unchanged-code verification passed eight Gateway downstream-H2 and
+listener-builder tests. Formatting and workspace all-target check/Clippy passed
+with existing warnings. No runtime/dependency/fixture change, fork test execution,
+live integration or benchmark was performed.
+
+Independent plan and final source reviews passed, as did agent-doc validation
+and diff hygiene. The protocol-selection decision remains deferred.
