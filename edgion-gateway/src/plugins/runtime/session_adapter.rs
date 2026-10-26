@@ -508,6 +508,37 @@ pub(crate) fn build_response_local_reply(
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
+    /// The caller must validate the name with the canonical response mutation policy.
+    fn set_validated_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            resp.insert_header(name.to_string(), value)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+        } else {
+            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                name: name.to_string(),
+                value,
+            });
+        }
+        Ok(())
+    }
+    /// The caller must validate the name with the canonical response mutation policy.
+    fn append_validated_response_header_value(
+        &mut self,
+        name: &str,
+        value: http::HeaderValue,
+    ) -> PluginSessionResult<()> {
+        if let Some(resp) = &mut self.response_header {
+            resp.append_header(name.to_string(), value)
+                .map_err(|e| Box::new(e) as PluginSessionError)?;
+        } else {
+            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
+                name: name.to_string(),
+                value,
+            });
+        }
+        Ok(())
+    }
+
     fn nominate_response_cache_in(
         &mut self,
         policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
@@ -1259,21 +1290,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             Err(_) if self.response_header.is_none() => return Ok(()),
             Err(error) => return Err(Box::new(error)),
         };
-        self.set_response_header_value(name, value)
+        self.set_validated_response_header_value(name, value)
     }
 
     fn set_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         validate_response_header_mutation(name)?;
-        if let Some(resp) = &mut self.response_header {
-            resp.insert_header(name.to_string(), value)
-                .map_err(|e| Box::new(e) as PluginSessionError)?;
-        } else {
-            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
-                name: name.to_string(),
-                value,
-            });
-        }
-        Ok(())
+        self.set_validated_response_header_value(name, value)
     }
 
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
@@ -1283,21 +1305,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             Err(_) if self.response_header.is_none() => return Ok(()),
             Err(error) => return Err(Box::new(error)),
         };
-        self.append_response_header_value(name, value)
+        self.append_validated_response_header_value(name, value)
     }
 
     fn append_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         validate_response_header_mutation(name)?;
-        if let Some(resp) = &mut self.response_header {
-            resp.append_header(name.to_string(), value)
-                .map_err(|e| Box::new(e) as PluginSessionError)?;
-        } else {
-            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
-                name: name.to_string(),
-                value,
-            });
-        }
-        Ok(())
+        self.append_validated_response_header_value(name, value)
     }
 
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {

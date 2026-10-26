@@ -18818,3 +18818,30 @@ Resource CORS verification passed 41 cases. No full workspace test suite, live
 integration or throughput benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed; Clippy retains existing unrelated warnings.
+
+## Avoid duplicate response-writer policy validation
+
+The real session adapter's string set/append entry points previously checked the
+canonical protected-name policy, parsed HeaderValue, then called typed entry
+points that repeated the same policy scan. Each entry now validates once and
+calls a private post-validation writer. Only those four guarded entries call
+the private helpers. Queue admission and PendingHeaderOp application retain
+their independent protection; no public bypass or new policy implementation is
+introduced.
+
+Protection still precedes string value parsing. Protected fields with malformed
+values return the canonical policy error in bound and queued modes. Ordinary
+malformed values still error when bound and silently disappear when queued.
+Name ownership/case, opaque typed values and sensitivity, set/append ordering,
+normal queue replay and destructive local-reply drain are unchanged. The source
+change removes one policy scan per successful string write, not name allocation
+or HeaderValue parsing. No measured throughput improvement is claimed.
+
+Independent plan review passed. Expanded error-priority assertions passed on
+both original and final implementations with the same 100 real-adapter test
+identities. Another 26 response-filter and 6 resource response-policy tests
+passed. These are in-process checks; no live integration, full workspace test
+suite or benchmark ran. The existing response-mutation knowledge page now
+states the private-helper boundary and independent queue guards.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.

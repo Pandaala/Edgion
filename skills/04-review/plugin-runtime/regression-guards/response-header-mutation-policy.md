@@ -117,6 +117,11 @@ during construction, so the first request clone does not allocate value bytes.
 Schema validation remains authoritative and still runs before preparation.
 Session typed writers retain protected-header checks, queued/direct behavior
 and header-name ownership.
+String and typed set/append entry points each validate the name once, then use
+private post-validation writers. String entries still check protection before
+parsing values, retaining bound-response errors and queued malformed-value no-ops.
+The private writers only receive calls from those guarded entry points; queue
+admission and application keep their independent canonical protection checks.
 
 Native modifiers keep their first-equivalent deduplication. ResponseRewrite
 instead retains every configured duplicate and its rename/add/set/remove order.

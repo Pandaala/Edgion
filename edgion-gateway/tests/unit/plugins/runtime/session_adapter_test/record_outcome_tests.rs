@@ -697,6 +697,34 @@ async fn invalid_string_response_values_keep_live_error_and_queued_noop_behavior
         assert!(adapter.append_response_header("x-invalid", "bad\nvalue").is_err());
     }
     assert_eq!(response.headers["x-invalid"], "original");
+
+    for bound in [false, true] {
+        response.insert_header("Content-Length", "42").unwrap();
+        {
+            let mut adapter = if bound {
+                PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response)
+            } else {
+                PingoraSessionAdapter::new(&mut session, &mut ctx)
+            };
+            for name in ["Content-Length", "TRANSFER-Encoding", "Proxy-Connection", ":status"] {
+                for value in ["valid", "bad\rvalue", "bad\nvalue"] {
+                    for error in [
+                        adapter.set_response_header(name, value).unwrap_err(),
+                        adapter.append_response_header(name, value).unwrap_err(),
+                    ] {
+                        assert_eq!(
+                            error.to_string(),
+                            "response header mutation targets a protected protocol field"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(!ctx.has_pending_response_header_ops());
+        assert_eq!(response.headers["content-length"], "42");
+        assert_eq!(response.headers["x-invalid"], "original");
+        assert_eq!(response.headers.len(), 2);
+    }
 }
 
 #[tokio::test]
