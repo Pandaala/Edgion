@@ -2101,3 +2101,49 @@ body-capture internals or all publication/cancellation interleavings. No new run
 edit, test, prototype, full suite or performance benchmark was introduced here.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Bounded unary conversion ownership refresh
+
+Inspected at `8123a3e60`. This extends the earlier direct response-head and
+processor-entry inventories with the inner unary parsing, serialization and
+reservation owners. It concerns explicitly selected non-streaming
+Chat-to-Anthropic conversion, not native AI observation or general response storage.
+
+| Boundary | Current source and ownership |
+| --- | --- |
+| Startup and admission | `ai/config.rs` resolves limits and constructs one OnceLock runtime with a process-wide UnaryBudget. `runtime/dispatch.rs` retires the prior prepared processor/context owner before acquiring a nonblocking reservation for selected unary conversion; conflicts, missing runtime and admission failure remain local failures. |
+| Attempt publication | Dispatch shares UnaryHead with the translator and moves the prepared context owner at commit. These are independent ownership branches, not duplicate copies of the response body. |
+| Final response metadata | `head.rs` independently revalidates final-onion eligibility and resolves absolute Hold deadlines. `pg_response_filter.rs` compacts final headers after reconciliation; the upstream-trailer hook compacts after processor trailer dispatch. Fresh name/value byte reconstruction detaches original backing and capacity. Existing head-plan precedence and deadline details remain in the earlier inventory. |
+| Receive and preflight | `process_non_streaming` requires its unary owner, checks expiry, appends under the input cap and waits for EOS. `translate_unary` runs canonical selective preflight with source, token, decoded, event, depth, retained, work, key, number and node bounds before creating the Value DOM. Parser scratch ends before DOM construction; the two passes have different responsibilities. |
+| Validation and accounting | The converter validates message identity, role, every supported block, stop reason and usage before output publication. Checked input/cache/output totals reject overflow. Valid provider usage is published before later serialization failure and retained through cleanup, as required by the original accounting knowledge. |
+| Text ownership | `append_unary_text` borrows the first nonempty validated fragment, ignores empty fragments after the cap check and promotes through canonical bounded appends only when concatenation is required. The DOM already remains alive through synchronous serialization. Empty text with tools produces null; empty text without tools remains an empty string. |
+| Tool arguments and final output | IDs and names borrow the DOM. Each tool input is serialized under the remaining aggregate argument cap into a LimitedWriter; String::from_utf8 consumes that Vec without another byte copy. The final borrowed Serialize view embeds that JSON as a string and writes under the final output cap. JSON-as-string is a wire requirement; this specific intermediate String is not proven unavoidable. The response writer has no unread overflow flag, while the request writer retains its separately used flag. |
+| Output lease | Successful conversion wraps the output Vec with an Arc reservation in `budget::OutputOwner` and releases the held head. Bytes clones and slices share output ownership. Dropping the processor's local owner does not release the slot while context or output owners remain. |
+| Terminal cleanup | The translator's release/finalize hooks discard input, drop its unary owner and seal processing. `ai/http/mod.rs::finalize` invokes driver or builder cleanup and clears the context owner before accounting finalization. This source sequence does not establish that every suspended callback or transport task has completed. |
+
+The retained-output budget test explicitly exercises both release orders and
+Bytes clones/slices. Limits tests retain conservative reservation formulas;
+response tests retain exact conversion, malformed/duplicate input, usage after
+output failure, adversarial allocation and concurrent output-owner probes.
+Those probes are not process-RSS bounds, allocator proofs or live transport tests.
+
+[Retry-After storage](response-07-retry-after-storage.md) remains deferred because
+moving a short header may preserve a larger shared receive allocation. Header
+compaction is deliberately a different ownership boundary. The
+[stream-event input](conversion-02-stream-event-input.md),
+[stream output envelope](sse-03-canonical-event-envelope.md) and
+[request tree](conversion-01-request-tree-ownership.md) decisions remain separate.
+No additional optimization is selected by this inventory. Canonical parser,
+serde/allocator internals, complete fork Hold/transport interleavings and live
+cancellation/delivery behavior retain their existing review boundaries.
+
+Fresh unchanged-source verification passed 34 response-converter, three limits,
+one budget, seven unary-head, 39 dispatch and eight proxy response-head tests:
+92 total. No runtime edit, new test, full suite, live-provider test or performance
+benchmark was introduced by this reconciliation.
+
+The current contract is documented in
+`skills/01-architecture/02-gateway/00-overview.md` and
+`skills/04-review/ai-quota/regression-guards/anthropic-usage-observation-is-estimation-only.md`;
+provider-header scope remains governed by
+`skills/04-review/security/regression-guards/anthropic-translated-responses-rebuild-headers.md`.

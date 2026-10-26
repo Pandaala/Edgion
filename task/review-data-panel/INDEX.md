@@ -19530,3 +19530,20 @@ Existing adversarial and concurrent reservation probes remain intact. No full
 suite or live-provider integration ran.
 Formatting, workspace all-target check/Clippy and diff hygiene passed with only
 existing unrelated warnings.
+
+## Bounded unary conversion ownership reconciled
+
+The [unary ownership inventory](CALLBACKS.md#bounded-unary-conversion-ownership-refresh)
+now connects startup/admission, final metadata, bounded preflight, DOM validation,
+borrowed text and output views, tool-argument encoding, output leases and local
+cleanup. It distinguishes wire-required JSON-as-string from the current argument
+buffer, fresh header compaction from shared backing, and processor cleanup from
+independent context/output reservation ownership. Earlier direct-entry coverage
+is extended without claiming complete transport or cancellation coverage.
+
+Fresh unchanged-source verification passed 92 tests across response conversion,
+limits, budget, unary head, dispatch and proxy response-head scopes. No runtime
+change, new test, duplicate deferred task, full suite or performance benchmark
+was introduced.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
