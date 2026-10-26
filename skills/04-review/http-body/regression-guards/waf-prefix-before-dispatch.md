@@ -237,3 +237,20 @@ per-request bounds, not process RSS/disk quotas. The process-wide byte ledger
 remains deferred. No new trailer forwarding contract or Kubernetes cluster test
 is established by the local shared topology; existing trailer/discard and
 protocol-specific replay contracts remain unchanged.
+
+
+## Dormant streaming projection decision
+
+User-directed value review at `895a8efd1` closed waf-16 without implementation.
+Current production WafPlugin activates prefix/full evaluation, not
+start_request_body_stream or enable_request_body_streaming. The default-false
+context flag gates run_waf_body_stream before execution. Optimizing cumulative
+hit projection in the dormant leaf raw-stream API therefore saves no current
+Gateway traffic work and would add scratch/delta state and layered error rules.
+
+Retain the current cumulative native API. Historical iterator/projection tests
+remain evidence only for that API, not production reachability. Reopen only with
+a separately authorized demonstrated production consumer, then reassess hit/chunk
+cost and preserve bounded admission, cumulative semantics and the pre-dispatch
+security boundary. Closing this proposal authorizes neither API removal nor
+post-dispatch WAF reactivation. Active prefix/backend scan proposals are separate.

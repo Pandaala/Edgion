@@ -23,7 +23,7 @@ an explicit outcome of this goal, not an unapproved implementation obligation.
 | `early_request_filter` | Direct early policy, request identity and preflight dispatch are inspected. [Admitted RequestId sources](CALLBACKS.md#requestid-admitted-source-adapter-boundaries) and [generic KeyGet consumers](CALLBACKS.md#generic-keyget-direct-consumer-reconciliation) separate construction eligibility from shared reads. | [RequestId source evaluation](trace-02-request-id-source-evaluation.md) and [random-byte batching](trace-03-random-byte-batching.md) are deferred. Current source reads preserve frozen versus live identity; OS/RNG internals are not a newly discovered owned-stage omission. |
 | `request_filter` | The [request-stage inventories](CALLBACKS.md#request-stage-orchestration-direct-entry-inventory) reconcile all 60 explicit entries, continuing through routing, metadata, auth, body, admission, OIDC, embedded engines, AI and transcoding. Subsequent records cover shared helpers and owned-input transfers. | [Conditional dispatch](request-01-conditional-wrapper-dispatch.md), [JWT condition representation](condition-01-jwt-claim-evaluation.md), [DynamicInternal input ownership](routing-01-dynamic-internal-input-ownership.md) and other named plugin decisions remain tasks. Existing OIDC/KeyGet work is not reopened by historical generic open-work wording. |
 | Upstream selection, connect, upstream request | Selection, retries, authority/credential staging, connect metadata and transport counters have source records. [Service selectors](CALLBACKS.md#service-endpoint-selector-dependency-boundaries), [AI admission](CALLBACKS.md#ai-admission-and-settlement-ownership-reconciled) and [L4 admission](CALLBACKS.md#l4-route-selection-and-backend-admission-boundaries) identify the common owners. | [Eligibility lookup](backend-02-runtime-eligibility-lookup.md), [P2C preparation](lb-07-prepared-p2c-range-sampling.md), [AI baseline rebuilding](retry-03-ai-request-baseline-rebuild.md) and named authority/TLS/credential decisions remain tasks. Inspection is not proof of every publication/shutdown interleaving. |
-| Request body, trailers and relay | Action/tee/trailer, storage/spill/replay, mirror budget and ExtProc exchange ownership are inspected. WAF [operators/actions](CALLBACKS.md#waf-direct-operator-and-action-execution-boundaries), tokenizer, transformation, XML and structured-input records supersede earlier broad open-WAF descriptions. | [ExtProc storage](body-02-extproc-protobuf-body-storage.md), [snapshot retirement](body-03-mutation-snapshot-retirement.md), [dispatch metadata](body-05-sse-dispatch-metadata.md) and named WAF parser decisions remain tasks. [Raw WAF streaming](waf-16-streaming-hit-projection.md) is dormant, not active-path implementation backlog. |
+| Request body, trailers and relay | Action/tee/trailer, storage/spill/replay, mirror budget and ExtProc exchange ownership are inspected. WAF [operators/actions](CALLBACKS.md#waf-direct-operator-and-action-execution-boundaries), tokenizer, transformation, XML and structured-input records supersede earlier broad open-WAF descriptions. | [ExtProc storage](body-02-extproc-protobuf-body-storage.md), [snapshot retirement](body-03-mutation-snapshot-retirement.md), [dispatch metadata](body-05-sse-dispatch-metadata.md) and named WAF parser decisions remain tasks. [Raw WAF streaming](../../skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md#dormant-streaming-projection-decision) is dormant, not active-path implementation backlog. |
 | Response headers, hold/commit, body and trailers | Hold/commit, driver/cancellation, trailers and the [nine processors](CALLBACKS.md#concrete-response-processor-direct-entry-inventory), [four read-only body entries](CALLBACKS.md#read-only-response-body-filter-direct-entry-inventory), [nine synchronous headers](CALLBACKS.md#synchronous-response-header-filter-direct-entry-inventory) and [seven async headers](CALLBACKS.md#asynchronous-response-header-companion-direct-entry-inventory) are reconciled. Later records cover AI conversion, SSE and transcoder ownership. | [Read-only chain preparation](body-01-prebuild-readonly-dispatch.md), [SSE degradation ownership](sse-05-degradation-remainder-ownership.md), [H1 chunk headers](transport-03-h1-chunk-size-header-storage.md) and named Wasm/body/header decisions remain deferred. No exhaustive codec/Wasmtime verification or full transport-interleaving proof is claimed. |
 | Errors, retries, logging and connection reuse | Terminal log owners, error rendering, retries and cleanup are reconciled in [terminal logging](CALLBACKS.md#terminal-logging-owner-inventory-reconciled), [retry adapters](CALLBACKS.md#retry-adapter-and-bounded-ai-scheduler-reconciliation), [Redis command lifetime](CALLBACKS.md#redis-caller-timeout-and-dependency-command-lifetime) and [H1 reuse](CALLBACKS.md#http1-connection-context-and-persistent-setting-transfer). | [Backoff cancellation](retry-01-backoff-cancellation-scope.md), [stage-log capacity](log-06-stage-log-capacity-policy.md), [Redis cancellation ownership](redis-09-cancelled-command-ownership.md) and named observability decisions remain tasks. Owned state required across awaits is not automatically an avoidable clone. |
 | Redirect HTTP | All seven redirect overrides were matched to current source. [Hostname normalization](#redirect-hostname-normalization), [Location transfer](#redirect-listener-location-ownership-transfer) and shared client policy cover admission, redirect output, logging and reuse. | No new unresolved direct redirect candidate was identified. Raw authority/query-bearing Location remains distinct from normalized admission and query-free log projection. |
@@ -40,7 +40,7 @@ an explicit outcome of this goal, not an unapproved implementation obligation.
 | Find borrowing, preparation and related optimizations | The implementation records below identify concrete copies, repeated scans, preparation boundaries and rejected alternatives. Current source/diff spot checks agree; source-work reductions are distinguished from measured performance. |
 | Implement behavior-preserving selections through IMPL | Per-batch records contain independent plan/final review, invariants and targeted checks. These are historical execution receipts, not a claim that this reconciliation re-ran every historical review or test. No selected implementation is recorded as awaiting completion in the current reconciliation. |
 | Commit each batch; do not push | Local Git history contains separate implementation/documentation batches. The coordinator's execution record reports no push; local Git alone cannot prove that negative historical claim. No push is part of this reconciliation. |
-| Record disputed choices for later user decision | All 275 current task files are linked from INDEX or CALLBACKS; all 220 links in the top deferred list resolve. Remaining tasks are referenced by topical records. Counts validate discoverability only; task evidence and acceptance boundaries establish their disposition. One WAF streaming task explicitly concerns a dormant API. |
+| Record disputed choices for later user decision | At goal completion, all 275 task files were linked from INDEX or CALLBACKS and all 220 top deferred links resolved; these historical counts precede later user-directed task closures. Remaining tasks are referenced by topical records. Counts validate discoverability only; task evidence and acceptance boundaries establish their disposition. The dormant WAF streaming proposal was subsequently declined; its decision is retained in the owning knowledge page. |
 
 This audit distinguishes current source coverage, records-backed implementation
 process and unexecuted verification. Full integration, universal throughput/RSS
@@ -77,8 +77,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 - [Literal DSL time-format preparation](dsl-13-time-format-preparation.md)
 
 - [System DNS query input ownership](dns-05-system-query-input.md)
-
-- [Outbound SAN fallback reason storage](tls-08-fallback-reason-storage.md)
 
 - [Endpoint probe method ownership and clone timing](endpoint-05-method-clone-timing.md)
 
@@ -14353,9 +14351,10 @@ Traced fixed terminal record construction through JSON length admission and
 capacity-charged output ownership. A standalone extraction of the current formatter
 shows excess Vec capacity for nonzero status records on this build. Preparing
 finite record bytes could remove formatting but still needs owned, credited output
-and may change near-budget acceptance. [grpc-12](grpc-12-stream-terminal-storage.md)
-records the small per-failed-stream benefit, keep-current alternative, probe limits
-and required acceptance. No runtime implementation is selected.
+and may change near-budget acceptance. [grpc-12](../../skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md#terminal-record-storage-decision)
+now records the decision to decline the small terminal-only storage optimization.
+The historical probe and acceptance concerns above remain valid; no runtime
+implementation was made.
 
 Fresh unchanged-code baseline passed 31 Gateway and 35 Resources transcoder tests,
 formatting, workspace check/Clippy and agent-doc validation with existing unrelated
@@ -15617,10 +15616,10 @@ No benchmark, full suite or live Gateway integration ran.
 
 ## Streaming phrase hit projection
 
-The [streaming-hit task](waf-16-streaming-hit-projection.md) records repeated
+The [closed streaming-hit decision](../../skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md#dormant-streaming-projection-decision) records repeated
 local-to-global and global-to-member projection of cumulative hits on later chunks.
-Its current scope is a conditional dormant-API investigation, not an active Gateway
-performance finding or permission to reactivate post-dispatch WAF inspection.
+User-directed value review declined this dormant-API optimization: it has no
+current Gateway traffic benefit and grants no post-dispatch reactivation permission.
 Set-bit iteration already skips absent IDs; it does not suppress historical hits.
 Per-chunk scratch and first-hit deltas are different alternatives, each requiring
 measurement and preserved layered error/publication boundaries. Native cumulative
@@ -15645,7 +15644,7 @@ passed through unchanged for a separately borrowed prefix. Any reuse requires
 explicit input/profile identity, bounded ownership and scratch-writer invalidation,
 while retaining every reached rule's transformations, checks, work charges and
 lazy execution order. No runtime design or measured benefit is selected; WAF-16's
-dormant stream investigation remains separate. No source or test body changed.
+dormant stream proposal was declined independently. No source or test body changed.
 
 ## Keep WAF transformation reservation in the walker
 
@@ -19503,9 +19502,9 @@ prototype, benchmark, full suite or live-provider test was introduced.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
 
-## Translated Retry-After storage decision deferred
+## Translated Retry-After storage decision declined
 
-The [Retry-After storage task](response-07-retry-after-storage.md) records a
+The [declined Retry-After storage decision](../../skills/04-review/security/regression-guards/anthropic-translated-responses-rebuild-headers.md#retry-after-ownership-decision) records a
 validated move prototype and the shared-backing evidence that prevented its
 adoption. Wire/metadata equivalence and pointer reuse passed, but the actual
 Pingora HTTP/1 parser slices header values from a shared receive allocation.

@@ -59,7 +59,7 @@ This is distinct from the conditional
 [DFA state-layout task](../../tasks/todo/waf-dfa-state-layout.md), which concerns
 row-index arithmetic, and [SIMD search](../../tasks/todo/waf-native-simd-search.md).
 It does not activate either task. The dormant Gateway raw stream lane remains
-outside the performance premise; see [WAF-16](waf-16-streaming-hit-projection.md).
+outside the performance premise; see [WAF-16](../../skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md#dormant-streaming-projection-decision).
 Freeze the exact supporting-file allowlist and obtain independent IMPL plan/final
 review before implementation. Add no body cache, response aggregation, request
 tracing, payload logs or profiling metrics.

@@ -32,3 +32,21 @@ test that proves provider input cannot control an invalid value.
 ## Resolution references
 
 - `gw-19` — 2026-08-09.
+
+
+## Retry-After ownership decision
+
+User-directed value review at `895a8efd1` declined response-07's standalone
+HeaderValue-transfer optimization. Keep the validated text snapshot before the
+provider-header reset. Only original 429 responses take it; unary values are
+limited to 64 raw bytes, while streaming has no equivalent 64-byte bound. This
+is not a claim that every accepted value is short or that 429 traffic is rare.
+
+The pinned HTTP/1 parser slices values from a shared receive allocation. Moving
+one field can retain that larger owner; byte/pointer parity alone does not prove
+better memory use. The withdrawn prototype's verification remains historical in
+the data-plane review INDEX. There is no correctness fix here, and evaluating
+transport lifetimes is disproportionate to the currently evidenced copy saving.
+Reopen only with measured translated-429 copy cost and real backing-lifetime
+results, including long accepted streaming values. Preserve first-value policy,
+validation, sensitivity metadata and the empty-base security contract.

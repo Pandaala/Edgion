@@ -2132,8 +2132,8 @@ response tests retain exact conversion, malformed/duplicate input, usage after
 output failure, adversarial allocation and concurrent output-owner probes.
 Those probes are not process-RSS bounds, allocator proofs or live transport tests.
 
-[Retry-After storage](response-07-retry-after-storage.md) remains deferred because
-moving a short header may preserve a larger shared receive allocation. Header
+[Retry-After storage](../../skills/04-review/security/regression-guards/anthropic-translated-responses-rebuild-headers.md#retry-after-ownership-decision) was declined after value review: moving one header may preserve a larger shared
+receive allocation without a demonstrated net benefit. Header
 compaction is deliberately a different ownership boundary. The
 [stream-event input](conversion-02-stream-event-input.md),
 [stream output envelope](sse-03-canonical-event-envelope.md) and

@@ -319,3 +319,21 @@ does not establish a full CI/supply-chain PASS or resolve those advisories.
 
 Re-evaluate when adding body consumers, changing replacement dispatch, introducing
 WKT/container dependencies, changing memory caps, or expanding template syntax.
+
+
+## Terminal record storage decision
+
+User-directed value review at `895a8efd1` declined grpc-12's standalone prepared
+terminal-record optimization. `response.rs::terminal` runs once per finished
+stream; nonzero statuses format a short fixed record. Historical local probes
+observed capacities of 146/164 bytes for NDJSON/SSE errors versus lengths of
+74-75/83-84 bytes. These are build-specific Vec observations, not heap or CPU
+measurements, and the original probe provenance remains in the review INDEX.
+
+Keep current construction: output still requires the reservation-bearing owner,
+and changing capacity can change near-credit-boundary admission. A finite table
+or another formatter is not justified by this small terminal-only saving today.
+This declines a storage optimization, not an observed correctness defect.
+Reopen with terminal-heavy short-stream profiles or a demonstrated practical
+credit-boundary problem; preserve output lifetime, fixed wire bytes, status
+validation and the independently reviewed capacity contract.

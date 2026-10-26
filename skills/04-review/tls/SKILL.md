@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Outbound SAN fallback reason ownership](intentional-design/outbound-san-fallback-reason-ownership.md)
+
 - [EdgionTls last-known-good follows the resource key](intentional-design/last-known-good-follows-resource-key.md)
 - [Relist recompiles every generation — accepted](intentional-design/relist-recompiles-every-generation.md)
 - [Gateway TLS collision candidate ownership](intentional-design/gateway-tls-candidate-ownership.md)
