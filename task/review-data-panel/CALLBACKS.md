@@ -2147,3 +2147,24 @@ The current contract is documented in
 `skills/04-review/ai-quota/regression-guards/anthropic-usage-observation-is-estimation-only.md`;
 provider-header scope remains governed by
 `skills/04-review/security/regression-guards/anthropic-translated-responses-rebuild-headers.md`.
+
+## DSL Redis deletion command argument boundary
+
+Extended from the request-stage DSL dispatch boundary at `d40513f36`. This is
+ordinary DEL/HDEL preparation, separate from the previously inspected Lua script
+executor and its key arrays. Paths below are relative to `edgion-gateway/src/`;
+dependency observations use locked Fred 10.1.0.
+
+| Boundary | Inspected work and retained owner |
+| --- | --- |
+| `plugins/http/dsl/lang/builtins.rs`, RedisDel / RedisHDel | Pop owned runtime strings, resolve the current Redis client through the existing alias map/store, release the alias and borrow key/field text into the command await. The client Arc and runtime strings remain caller-owned. Successful counts become `count > 0`; dependency errors retain the fixed public result and sensitive diagnostic contract. |
+| `link_sys/providers/redis/ops.rs`, del / hdel | Construct Fred MultipleKeys directly from the borrowed slice, retaining order, duplicates and empty strings. The final Key payloads still own copied bytes. No intermediate Vec of borrowed references remains. The public slice signatures, typed pool commands, u64 result and error adapters are unchanged. |
+| Fred `types/multiple.rs` and `types/args.rs` | FromIterator and the former Vec conversion both invoke Key::from(&str), which owns a copy of each byte sequence. Preparation happens in the provider async body's poll; no await separates it from polling Fred. HDEL now prepares fields before Fred copies the hash key, so allocation order is not claimed identical. |
+| Fred `commands/interfaces/{keys,hashes}.rs` and `commands/impls/{keys,hashes}.rs` | DEL retains its empty-key check and ordered Value argument construction. HDEL retains hash-key-first command arguments and its distinct empty-field handling. Both retain typed command kinds, request_response dispatch and frame-to-result conversion. No custom_raw substitution, new batching or retry behavior is introduced. |
+
+This boundary does not prove full Redis routing, wire encoding, reconnect or
+cancellation correctness. Pool-member selection remains the separate redis-03
+decision; live Redis and transport internals are outside this batch. Existing
+[DSL error ownership](../../skills/04-review/dsl/regression-guards/redis-error-results-bounded-and-redacted.md)
+and [Redis configuration](../../skills/04-review/link-sys/regression-guards/redis-configuration-contract.md)
+remain authoritative. No cache, observability or credential policy is added.

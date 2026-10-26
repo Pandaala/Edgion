@@ -19688,3 +19688,30 @@ and userinfo fetching are unchanged, and oidc-01 remains deferred.
 Independent plan and final source reviews passed. Formatting, workspace all-target
 check/Clippy and seven repository guards passed with existing warnings. No full suite,
 ignored live-IdP test or benchmark ran.
+
+## Construct ordinary Redis deletion arguments without a reference Vec
+
+DEL/HDEL now share a private slice-to-MultipleKeys helper using Fred's existing
+FromIterator. The prior intermediate Vec<&str> is removed; final ordered keys
+still own their bytes through the same Key::from(&str) implementation. Duplicate,
+empty and UTF-8 strings remain untouched. The [ordinary deletion boundary](CALLBACKS.md#dsl-redis-deletion-command-argument-boundary)
+records the newly inspected DSL-to-provider-to-Fred handoff separately from the
+earlier Lua script-key audit. Typed commands, empty-argument behavior, result and
+error projection, routing and transport remain unchanged.
+
+A six-shape regression compares old and actual new preparation, including input
+release before byte assertions. After passing the same ownership cases with the
+old conversion, the final allocation oracle verifies one fewer allocation and
+N * size_of::<&str>() fewer requested bytes for nonempty input on the current
+target/toolchain; empty input adds no allocation. Per-key payload copies and
+Fred's final command containers remain. No full-command allocation, async-frame,
+peak-memory or throughput claim follows.
+
+Original Redis-operation tests passed 15; the extended old-conversion baseline
+and final runs passed the same 16 test identities. The additional Redis/DSL union
+selection passed 683 before the added test and 684 afterward; this selection
+includes the provider tests and is not an additional disjoint count. No live
+Redis, reconnect/Cluster experiment, full suite or integration fixture ran.
+
+Independent plan and final source reviews passed. Formatting, workspace all-target
+check/Clippy, seven repository guards and agent-doc/diff checks passed with existing warnings.

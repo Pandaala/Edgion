@@ -250,3 +250,37 @@ fn bounded_get_server_error_frames_are_private_dependency_failures() {
         assert_eq!(error.details(), "Redis GET returned a command error");
     }
 }
+
+#[test]
+fn deletion_arguments_preserve_order_and_own_their_bytes() {
+    for names in [
+        vec![],
+        vec![String::new()],
+        vec!["single".to_string()],
+        vec!["repeat".to_string(), "repeat".to_string()],
+        vec!["é".to_string(), String::new(), "π".to_string()],
+        vec!["long".repeat(4096), "tail".to_string()],
+    ] {
+        let (old, new, old_stats, new_stats) = {
+            let input = names.clone();
+            let refs: Vec<&str> = input.iter().map(String::as_str).collect();
+            let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                MultipleKeys::from(std::hint::black_box(refs.as_slice()).to_vec())
+            });
+            let (new, new_stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| redis_keys(std::hint::black_box(&refs)));
+            (old, new, old_stats, new_stats)
+        };
+        assert_eq!(new, old);
+        assert_eq!(new_stats.calls + usize::from(!names.is_empty()), old_stats.calls);
+        assert_eq!(
+            new_stats.requested_bytes + names.len() * std::mem::size_of::<&str>(),
+            old_stats.requested_bytes
+        );
+        let keys = new.inner();
+        assert_eq!(keys.len(), names.len());
+        for (key, name) in keys.iter().zip(&names) {
+            assert_eq!(key.as_bytes(), name.as_bytes());
+        }
+    }
+}

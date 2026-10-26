@@ -10,10 +10,14 @@ use std::time::Duration;
 use anyhow::Result;
 use fred::clients::Pool;
 use fred::interfaces::{ClientLike, HashesInterface, KeysInterface, ListInterface, LuaInterface};
-use fred::types::{ClusterHash, CustomCommand, Resp3Frame, Value as RedisValue};
+use fred::types::{ClusterHash, CustomCommand, MultipleKeys, Resp3Frame, Value as RedisValue};
 
 use super::client::RedisLinkClient;
 use crate::link_sys::LinkSysHealth;
+
+fn redis_keys(keys: &[&str]) -> MultipleKeys {
+    keys.iter().copied().collect()
+}
 
 /// A raw GET result admitted before owned text conversion. Fred has already
 /// aggregated the reply; this is not a network-frame memory cap.
@@ -113,7 +117,7 @@ impl RedisLinkClient {
     pub async fn del(&self, keys: &[&str]) -> Result<u64> {
         let count: u64 = self
             .pool()
-            .del(keys.to_vec())
+            .del(redis_keys(keys))
             .await
             .map_err(|e| anyhow::anyhow!("Redis DEL: {:?}", e))?;
         Ok(count)
@@ -199,7 +203,7 @@ impl RedisLinkClient {
     pub async fn hdel(&self, key: &str, fields: &[&str]) -> Result<u64> {
         let count: u64 = self
             .pool()
-            .hdel(key, fields.to_vec())
+            .hdel(key, redis_keys(fields))
             .await
             .map_err(|e| anyhow::anyhow!("Redis HDEL {} {:?}: {:?}", key, fields, e))?;
         Ok(count)
