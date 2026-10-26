@@ -200,6 +200,8 @@ destination.
 
 - [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
 
+- [OIDC session token ownership across refresh](oidc-08-session-token-ownership.md)
+
 - [Incremental semantic window statistics](sse-01-incremental-window-statistics.md)
 
 - [Guardrail decision snapshot encoding](guardrail-02-decision-snapshot-encoding.md)
