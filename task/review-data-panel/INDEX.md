@@ -19987,3 +19987,35 @@ remain separate; no runtime or integration-fixture changes were made.
 
 Independent final source review passed. Agent-doc validation and diff hygiene
 passed; external writer implementation and dependency adoption remain deferred.
+
+
+## Skip repeated Connection nomination validation
+
+The response sanitizer now compares a borrowed nomination to retained HeaderNames
+before its explicit tchar scan. Retained names already passed both validation
+steps; an ASCII-case-insensitive duplicate cannot introduce an invalid byte.
+Repeated nominations therefore skip one redundant byte scan. Nonduplicates still
+validate before HeaderName construction, preserving the no-allocation rejection
+of long invalid tokens in locked http 1.5.0. Removing prevalidation entirely would
+lose that property because its long custom-name parser allocates before rejection.
+
+All repeated fields still validate before mutation. Non-text failure, invalid
+ASCII skipping, case normalization, valid siblings, 101 bypass, static removals
+and Transfer-Encoding tracking are unchanged. Invalid nonduplicates now traverse
+the retained-name list before rejection. This is a scoped predicate reorder,
+not a universal CPU, allocation or throughput improvement.
+
+The new baseline regression combines a long interior-space token with repeated
+mixed-case valid names and compares resulting headers and allocation calls/bytes
+to the valid-only fixture. All 45 response-filter, content-type and trailer-filter
+tests passed on the old implementation before the reorder. Existing duplicate
+allocation and all-field atomicity tests remain intact. Independent plan review
+passed; no integration fixture or dependency changed.
+
+Final verification passed the same 45 test identities, formatting, workspace
+all-target check/Clippy, seven repository guards and agent-doc/diff checks.
+Existing unrelated Clippy warnings remain. No benchmark, full suite or live
+integration ran; the regression measures allocation parity, not a speedup.
+
+Independent final code and knowledge review passed. The change preserves the
+existing sanitizer ownership and validation-before-mutation boundary.

@@ -47,13 +47,13 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
             ));
         };
         for option in connection_option_tokens(value) {
-            if !option.bytes().all(is_connection_option_tchar) {
-                continue;
-            }
             if dynamic_names
                 .iter()
                 .any(|name| name.as_str().eq_ignore_ascii_case(option))
             {
+                continue;
+            }
+            if !option.bytes().all(is_connection_option_tchar) {
                 continue;
             }
             let Ok(name) = HeaderName::from_bytes(option.as_bytes()) else {

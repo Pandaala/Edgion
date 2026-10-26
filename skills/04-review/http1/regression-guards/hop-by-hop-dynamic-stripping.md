@@ -85,6 +85,13 @@ removing the nominated fields before forwarding.
     borrowed options case-insensitively before allocating retained `HeaderName`
     values; `HeaderName` normalizes their case. The retained list is removed
     only after all fields have been inspected.
+  - Duplicate lookup precedes token validation: a case-insensitive match to an
+    already validated name cannot introduce an invalid token byte. Repeated
+    nominations therefore skip the redundant `tchar` scan. New names still
+    undergo explicit prevalidation: locked http 1.5.0 allocates its long custom
+    name buffer before detecting invalid bytes. The long-invalid-name regression
+    preserves allocation parity and valid sibling removal. Invalid nonduplicates
+    now traverse retained names before rejection; no universal speedup is claimed.
   - The first non-text `Connection` value fails closed without inspecting the
     remaining suffix. No header mutation has happened, so the operation never
     leaves a partially sanitized map. Successful mutation still requires all

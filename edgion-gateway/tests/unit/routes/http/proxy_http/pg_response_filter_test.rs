@@ -268,6 +268,34 @@ fn response_sanitizer_repeated_options_do_not_add_allocations() {
 }
 
 #[test]
+fn response_sanitizer_long_invalid_options_do_not_add_allocations() {
+    let mut valid = response(Some("128"));
+    valid.append_header("connection", "X-First, X-Second").unwrap();
+    valid.insert_header("x-first", "removed").unwrap();
+    valid.insert_header("x-second", "removed").unwrap();
+    let mut invalid = valid.clone();
+    let long_invalid = format!("{} bad", "x".repeat(128));
+    invalid
+        .append_header("connection", format!("x-FIRST, {long_invalid}, X-SECOND"))
+        .unwrap();
+
+    let (valid_result, valid_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        sanitize_forwarded_response_headers(std::hint::black_box(&mut valid))
+    });
+    let (invalid_result, invalid_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        sanitize_forwarded_response_headers(std::hint::black_box(&mut invalid))
+    });
+
+    assert!(!valid_result.unwrap());
+    assert!(!invalid_result.unwrap());
+    assert_eq!(invalid.headers, valid.headers);
+    assert!(!invalid.headers.contains_key("connection"));
+    assert!(!invalid.headers.contains_key("x-first"));
+    assert!(!invalid.headers.contains_key("x-second"));
+    assert_eq!(invalid_stats, valid_stats);
+}
+
+#[test]
 fn response_sanitizer_ignores_invalid_ascii_option_and_keeps_valid_siblings() {
     let mut response = response(None);
     response
