@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [HTTP/1 chunk-size header storage](transport-03-h1-chunk-size-header-storage.md)
+
 - [SSE degradation remainder ownership](sse-05-degradation-remainder-ownership.md)
 
 - [Prefix-aware h2c connection probing](transport-02-h2c-preface-probing.md)
@@ -19966,3 +19968,22 @@ this source-level ownership evidence. Independent plan review passed.
 
 Independent final source review passed. Agent-doc validation and diff hygiene
 passed; the ownership choice remains deferred for user decision.
+
+
+## Inspect HTTP/1 chunk-size header ownership
+
+The [chunk-size storage task](transport-03-h1-chunk-size-header-storage.md)
+traces downstream response dispatch into the shared fork BodyWriter. Both legacy
+and poll chunked writers format a heap-backed length line; payloads are already
+chained. Multi-task buffering means writer invocations do not map one-to-one to
+Gateway callbacks. Inline storage remains a fork-scoped decision requiring
+lifetime/cursor, partial-write, flush and state-size verification in both request
+and response directions. No dependency edit or measured benefit is claimed.
+
+Fresh unchanged Gateway verification passed 82 request/response/callback tests.
+Formatting and workspace all-target check/Clippy passed with existing warnings.
+Independent plan review passed. Existing reader-handoff and compression decisions
+remain separate; no runtime or integration-fixture changes were made.
+
+Independent final source review passed. Agent-doc validation and diff hygiene
+passed; external writer implementation and dependency adoption remain deferred.
