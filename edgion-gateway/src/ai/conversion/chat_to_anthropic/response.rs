@@ -1119,7 +1119,6 @@ fn translate_unary(
 struct LimitedWriter {
     bytes: Vec<u8>,
     limit: usize,
-    overflowed: bool,
 }
 
 impl LimitedWriter {
@@ -1127,25 +1126,22 @@ impl LimitedWriter {
         Self {
             bytes: Vec::new(),
             limit,
-            overflowed: false,
         }
     }
 }
 
 impl Write for LimitedWriter {
     fn write(&mut self, input: &[u8]) -> io::Result<usize> {
-        let new_len = self.bytes.len().checked_add(input.len()).ok_or_else(|| {
-            self.overflowed = true;
-            io::Error::other("bounded response output overflow")
-        })?;
+        let new_len = self
+            .bytes
+            .len()
+            .checked_add(input.len())
+            .ok_or_else(|| io::Error::other("bounded response output overflow"))?;
         if new_len > self.limit {
-            self.overflowed = true;
             return Err(io::Error::other("bounded response output overflow"));
         }
-        append(&mut self.bytes, input, self.limit).map_err(|_| {
-            self.overflowed = true;
-            io::Error::other("cannot grow bounded response output")
-        })?;
+        append(&mut self.bytes, input, self.limit)
+            .map_err(|_| io::Error::other("cannot grow bounded response output"))?;
         Ok(input.len())
     }
 

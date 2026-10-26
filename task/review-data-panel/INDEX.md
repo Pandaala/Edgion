@@ -19477,3 +19477,24 @@ prototype's 33-test baseline and 87-test experimental result. No runtime edit,
 new test, full suite, live-provider test or performance benchmark is delivered.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Remove unused unary response writer overflow state
+
+The private response LimitedWriter no longer stores an overflowed flag. Its two
+serialization callers consume only the Result and map any failure to
+OutputTooLarge; no source or test reads the removed flag. Checked length addition,
+pre-append byte-cap validation, canonical limits::append growth, exact IO errors
+and usage-publication/cleanup order remain unchanged. The separate request
+BoundedWriter keeps its flag because its caller uses it to distinguish errors.
+
+The unchanged baseline passed 32 response-converter tests, including bounded
+output failure with preserved validated usage, malformed/arithmetic rejection,
+wire conversion and capacity probes. No implementation-mirroring test was added.
+This removes misleading dead bookkeeping; no machine-code, allocation or
+throughput improvement is claimed.
+
+Final verification passed 32 response-converter, three unary-limit, 39 dispatch
+and 14 canonical SSE tests (88 total). Seven repository guards passed. No full
+suite or live-provider integration ran.
+Formatting, workspace all-target check/Clippy and diff hygiene passed with
+existing unrelated warnings.
