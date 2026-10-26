@@ -903,12 +903,7 @@ fn reject_quota_exhausted(
 }
 
 fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<CanonicalOpenAiRequest, AiProxyError> {
-    let metadata = request::metadata(&body)?;
-    let changed = if inject_usage_tracking && metadata.streaming {
-        request::inject_usage(&body)?
-    } else {
-        None
-    };
+    let (metadata, changed) = request::prepare(&body, inject_usage_tracking)?;
     let mutated = changed.is_some();
     Ok(CanonicalOpenAiRequest {
         body: changed.unwrap_or(body),

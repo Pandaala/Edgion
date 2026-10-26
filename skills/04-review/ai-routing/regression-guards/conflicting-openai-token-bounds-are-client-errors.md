@@ -17,8 +17,9 @@ OpenAI-compatible JSON 400 envelope so SDKs can parse it and server-error SLOs
 remain accurate.
 
 All consumers of the request output bound continue to use
-`openai::request::metadata`; Task 05 validates the conflict during selective request metadata capture, before selection
-or dispatch. The plan stores one resolved bound used by CostWeighted and credential reservation.
+`openai::request::prepare` and its private `metadata_from_fields` helper; the
+test-only `metadata` adapter delegates to that same helper. Conflict validation
+runs during selective request metadata capture, before selection or dispatch. The plan stores one resolved bound used by CostWeighted and credential reservation.
 
 ## Resolution references
 

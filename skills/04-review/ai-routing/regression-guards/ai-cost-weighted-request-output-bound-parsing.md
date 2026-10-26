@@ -12,7 +12,8 @@ knowledge_type: regression-guards
 ## Conclusion
 
 The OpenAI scheduler and credential-accounting consumers of the *client-declared*
-output-token bound resolve it through `openai::request::metadata`
+output-token bound resolve it through `openai::request::prepare` and its
+private `metadata_from_fields` helper
 (`edgion-gateway/src/ai/protocols/openai/request.rs`), which prefers `max_completion_tokens` and
 falls back to the deprecated `max_tokens`. `request_max_tokens` previously read
 only `max_tokens`, so a body from a current OpenAI SDK looked bound-less to
@@ -89,7 +90,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/review-ai-work/gw-01-costweighted-ignores-max-completion-tokens.md` (AI dispatch review, 2026-08-04)
-- `edgion-gateway/src/ai/protocols/openai/request.rs` — production `metadata` parser; `edgion-gateway/src/ai/runtime/dispatch.rs` delegates private test helpers to the same parser. Regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
+- `edgion-gateway/src/ai/protocols/openai/request.rs` — production `prepare` entry and shared `metadata_from_fields` parser; `edgion-gateway/src/ai/runtime/dispatch.rs` delegates private test helpers through the test-only `metadata` adapter to the same parser. Regression tests `request_max_tokens_prefers_max_completion_tokens` and `cost_weighted_accepts_max_completion_tokens_only_body_without_service_max`
 - `edgion-gateway/src/ai/routing/candidate.rs` — `pick_cost_weighted` output-bound resolution
 - `docs/en/ai-gateway/routing.md` / `docs/zh-CN/ai-gateway/routing.md` — operator-facing statement of where the bound comes from
 

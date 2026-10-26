@@ -19336,3 +19336,37 @@ regression before the production edit.
 Final verification passed the same 24 proxy tests and nine OpenAI request tests
 (33 total), formatting, workspace all-target check/Clippy and seven repository
 guards with existing unrelated warnings. No full suite or live integration ran.
+
+## Prepare Chat metadata and usage injection from one parse
+
+The production Chat protocol entry is now `openai::request::prepare`. It parses
+one immutable Bytes body, validates metadata through `metadata_from_fields`,
+then optionally injects usage from those same private borrowed fields. Enabled
+streaming requests no longer repeat the full-body UTF-8/selective JSON parse.
+The prior non-streaming injection gate remains inside this preparation owner.
+Nested stream_options decoding still runs when required; no blanket single-pass
+or allocation-free claim is made.
+
+No parsed state crosses an await or survives a body change. Metadata remains
+owned, patches retain the existing byte-span helper, and the caller publishes the
+same body/mutation state. Old metadata/injection entry points now exist only as
+test adapters to the shared helpers. Their bodies live in the mirrored unit-test
+module, with test-gated re-exports preserving existing caller paths. They preserve
+isolated parser tests and the ungated two-parse differential reference without
+retaining production compatibility APIs. The two output-bound knowledge pages now identify the current
+production entry and preserve their historical evidence.
+
+Baseline verification passed 26 proxy tests before implementation, including the
+128-case differential matrix, explicit ModelNotFound-before-malformed-options
+cases for missing/empty/oversized models, and usage replacement on sliced Bytes.
+The differential reference shares the extracted helpers, so explicit expected
+error and byte-preservation regressions remain independent guards for ordering
+and span behavior. The improvement is removal of one redundant whole-body parse;
+no throughput, allocation or retained-memory benchmark was run.
+Final verification after the independently approved adapter-layout correction
+passed 26 proxy, nine OpenAI request, six shared request and 39 dispatch tests
+(80 total), formatting, workspace all-target check/Clippy and seven repository
+guards with existing unrelated warnings. The unit-test layout guard initially
+rejected adapter bodies in src; moving them to the mirrored test module resolved
+that finding without changing test identities. No full suite or live-provider
+integration test ran.

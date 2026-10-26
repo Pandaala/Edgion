@@ -1027,3 +1027,33 @@ fn canonical_chat_usage_gate_preserves_ungated_preparation() {
         }
     }
 }
+
+#[test]
+fn canonical_chat_preparation_preserves_metadata_error_precedence() {
+    for model in [
+        String::new(),
+        r#""model":"","#.to_owned(),
+        format!(r#""model":"{}","#, "x".repeat(AI_MODEL_NAME_MAX_BYTES + 1)),
+    ] {
+        let body = Bytes::from(format!(r#"{{{model}"stream":true,"stream_options":null}}"#));
+        assert!(matches!(
+            canonical_openai_request(body, true),
+            Err(AiProxyError::ModelNotFound)
+        ));
+    }
+}
+
+#[test]
+fn canonical_streaming_usage_patch_uses_sliced_body_offsets() {
+    let padded = Bytes::from_static(
+        br#"xx {"model":"m","stream":true,"stream_options":{"include_usage":false},"opaque":[1,2]} yy"#,
+    );
+    let body = padded.slice(2..padded.len() - 2);
+    let prepared = canonical_openai_request(body, true).unwrap();
+    assert!(prepared.requested_streaming);
+    assert!(prepared.mutated);
+    assert_eq!(
+        prepared.body.as_ref(),
+        br#" {"model":"m","stream":true,"stream_options":{"include_usage":true},"opaque":[1,2]} "#
+    );
+}

@@ -60,13 +60,27 @@ fn output_bound(fields: &Fields<'_>) -> Result<Option<u64>, AiProxyError> {
     Ok(completion.or(tokens))
 }
 
-pub(crate) fn metadata(body: &[u8]) -> Result<ChatMetadata, AiProxyError> {
-    let fields = fields(body)?;
+fn metadata_from_fields(fields: &Fields<'_>) -> Result<ChatMetadata, AiProxyError> {
     Ok(ChatMetadata {
-        model: model(&fields)?.into_owned(),
+        model: model(fields)?.into_owned(),
         streaming: fields.stream.is_some_and(|raw| raw.get() == "true"),
-        output_bound: output_bound(&fields)?,
+        output_bound: output_bound(fields)?,
     })
+}
+
+/// Capture metadata and optionally inject usage from one immutable body parse.
+pub(crate) fn prepare(
+    body: &Bytes,
+    inject_usage_tracking: bool,
+) -> Result<(ChatMetadata, Option<Bytes>), AiProxyError> {
+    let fields = fields(body)?;
+    let metadata = metadata_from_fields(&fields)?;
+    let changed = if inject_usage_tracking && metadata.streaming {
+        inject_usage_from_fields(body, &fields)?
+    } else {
+        None
+    };
+    Ok((metadata, changed))
 }
 
 /// None means the original Bytes and BodyStorage generation can be retained.
@@ -80,8 +94,7 @@ pub(crate) fn rewrite_model(body: &Bytes, selected_model: &str) -> Result<Option
     patch(body, span(body, raw)?, &replacement).map(Some)
 }
 
-pub(crate) fn inject_usage(body: &Bytes) -> Result<Option<Bytes>, AiProxyError> {
-    let fields = fields(body)?;
+fn inject_usage_from_fields(body: &Bytes, fields: &Fields<'_>) -> Result<Option<Bytes>, AiProxyError> {
     if fields.stream.is_none_or(|raw| raw.get() != "true") {
         return Ok(None);
     }
@@ -189,3 +202,6 @@ pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiPro
 #[cfg(test)]
 #[path = "../../../../tests/unit/ai/protocols/openai/request_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::{inject_usage, metadata};

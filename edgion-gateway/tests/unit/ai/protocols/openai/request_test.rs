@@ -187,3 +187,11 @@ fn chat_metadata_and_mutations_reject_invalid_utf8_in_ignored_strings() {
         }
     }
 }
+
+pub(crate) fn metadata(body: &[u8]) -> Result<ChatMetadata, AiProxyError> {
+    metadata_from_fields(&fields(body)?)
+}
+
+pub(crate) fn inject_usage(body: &Bytes) -> Result<Option<Bytes>, AiProxyError> {
+    inject_usage_from_fields(body, &fields(body)?)
+}
