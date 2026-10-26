@@ -19715,3 +19715,26 @@ Redis, reconnect/Cluster experiment, full suite or integration fixture ran.
 
 Independent plan and final source reviews passed. Formatting, workspace all-target
 check/Clippy, seven repository guards and agent-doc/diff checks passed with existing warnings.
+
+## Extend ordinary Redis command ownership coverage
+
+The [ordinary command inventory](CALLBACKS.md#ordinary-redis-command-ownership-and-current-consumers)
+now distinguishes write-input conversion, scalar operations, typed read results,
+existing bounded-response decisions and management helper call sites. This extends
+the deletion-command boundary rather than repeating the Lua script-key or alias
+release audits. SET's post-lookup TTL validation, EXPIRE/INCRBY's pre-lookup numeric
+validation, HSET's true-on-success result and TTL sentinels are recorded explicitly.
+
+Write-input ownership is added to the existing dsl-01 consumer task, avoiding a
+duplicate finding. Borrowing the original DSL Value and transferring an existing
+String into Fred are distinct choices. Values-only transfer can be considered
+without requiring key/field migration; existing failure context does not make all
+copies mandatory. No runtime representation, public API, error or logging change
+is selected, and no allocation or throughput benefit is measured.
+
+Fresh provider verification passed 16 tests; the Redis/DSL union passed 684,
+including those provider tests. Formatting, workspace all-target check/Clippy
+passed with existing warnings. No live Redis, full suite, new tests or benchmark
+ran. Independent plan and final source reviews passed; agent-doc validation and
+diff hygiene passed. Transport and dependency execution remain outside this
+scoped source inventory.

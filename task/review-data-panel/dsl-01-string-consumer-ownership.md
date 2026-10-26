@@ -84,6 +84,44 @@ Additional original sources: `request_body/operation.rs`,
 `edgion-dsl/src/compiler/expr.rs`, and the body-scan budget/ownership contract in
 `skills/01-architecture/02-gateway/dsl-engine-security-model.md`.
 
+### Redis write-command consumer follow-up
+
+Source inspection at `a7b8a76e4` follows SET/SET_PX/HSET from
+`plugins/http/dsl/lang/builtins.rs` into
+`link_sys/providers/redis/ops.rs` in the Gateway. RuntimeString first produces
+owned Strings; provider slice interfaces then retain those caller inputs while
+Fred 10.1.0 builds owned command data. Key::from(&str) copies bytes, and borrowed
+Value strings use bytes_utils::Str construction. HSET additionally builds Fred's
+single-entry Map before command arguments. The prior alias-release optimization
+and DEL/HDEL reference-vector removal do not eliminate these payload copies.
+
+The two boundaries are distinct: borrowing the original DSL Value instead of
+coercing it into String, and consuming an already-owned String into Fred. Fred's
+From<String> conversions can transfer storage into Key or Value::String, but
+selecting a provider input interface requires review of all callers, retained
+owners and failure context. Existing provider error adapters use key/field after
+await. A values-only consuming seam may be evaluated independently; it need not
+wait for key/field migration, and existing diagnostics do not prove every copy
+necessary. Do not create another coercion match or bypass the LinkSys provider.
+
+Keep runtime pop/coercion order and live-client lookup. SET resolves the client
+before rejecting an invalid TTL type; absent/nil/nonpositive integer TTL uses
+no expiration, positive integer TTL selects PX. EXPIRE/INCRBY validate numeric
+arguments before lookup. Preserve exact command flags, key/field/value bytes,
+empty and permitted UTF-8 strings, and fixed script-visible dependency failures
+with bounded sensitive diagnostics. HSET success remains true even when its
+added-field count is zero. Admin callers share the provider interface; changing
+it must not silently remove their required result/error context.
+
+Before implementation, compare short/long, empty and spare-capacity inputs,
+scalar coercions, missing/not-ready clients, invalid TTL precedence, provider
+failure and cancellation. Measure temporary copies and final retained command
+storage separately, including shared/sole DSL owners. Existing byte ownership
+and type conversion establish candidate mechanisms, not measured net savings.
+Keep the bounded GET validation and HGETALL conversion choices in redis-06 and
+redis-07; they are separate response-side decisions. No runtime change or new
+benchmark accompanies this follow-up.
+
 ### Existing decision scope
 
 Choose a bounded consumer group for measurement/design, or retain its current

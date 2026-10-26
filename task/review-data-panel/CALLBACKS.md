@@ -2168,3 +2168,27 @@ decision; live Redis and transport internals are outside this batch. Existing
 [DSL error ownership](../../skills/04-review/dsl/regression-guards/redis-error-results-bounded-and-redacted.md)
 and [Redis configuration](../../skills/04-review/link-sys/regression-guards/redis-configuration-contract.md)
 remain authoritative. No cache, observability or credential policy is added.
+
+## Ordinary Redis command ownership and current consumers
+
+Inspected at `a7b8a76e4`, extending the preceding deletion boundary to other
+ordinary DSL commands. This does not reopen the Lua executor, alias-release or
+bounded-result decisions. Gateway owners are `plugins/http/dsl/lang/builtins.rs`
+and `link_sys/providers/redis/ops.rs`; dependency sources are Fred 10.1.0's typed
+interfaces, command implementations and Key/Value/Map conversions.
+
+| Consumer group | Direct ownership and behavior |
+| --- | --- |
+| SET / SET_PX / HSET | RuntimeString produces owned arguments; the provider borrows them while Fred owns command Key/Value data. HSET's tuple becomes a one-entry Map before argument construction. SET client resolution precedes TTL-type rejection; positive integers use PX, while absent/nil/nonpositive integers omit expiration. HSET returns DSL true on any successful count. Input-interface choices extend existing dsl-01 rather than creating another task. |
+| EXISTS / TTL / EXPIRE / INCR / INCRBY / HEXISTS | Retain typed provider/Fred operations and scalar results. EXISTS maps count > 0; TTL preserves negative sentinel integers; EXPIRE/INCRBY reject noninteger inputs before resolving the client. Keys and fields cross the await through existing owned caller strings and Fred's command data. No eager client capture or numeric formatting rewrite is selected. |
+| GET / HGET | Fred returns Option<String>; absent values become nil, and successful text passes the existing UTF-8-boundary truncation before DSL Arc publication. These limits apply after dependency response aggregation. No claim of a network-frame memory bound follows. |
+| Bounded GET / HGETALL | Existing raw-frame admission remains unchanged. GET validates bounded text before DSL publication; redis-06 owns duplicate validation. HGETALL counts original entries/bytes before owned-map conversion; redis-07 owns conversion/order tradeoffs. Do not replace either with the unbounded convenience method. |
+| Management helpers | Current Gateway call sites in api/mod.rs use RPUSH/LPOP/LLEN, unbounded HGETALL, distributed lock and active health status. Redis try_lock has no production caller identified in this inspection; the similarly named API call is Etcd. These observations do not make public methods globally unreachable or prove a callback performance benefit from changing them. The periodic Redis health probe observes connection states, separately from the active PING helper. |
+
+The [DSL consumer task](dsl-01-string-consumer-ownership.md#redis-write-command-consumer-follow-up)
+records write-input ownership options while keeping values-only transfer separable
+from key/field migration. Scalar coercion and fixed public error contracts remain
+unchanged. This inspection does not authorize generic Redis values, new provider
+APIs, retry changes, extra logs or a new cache. Ordinary command dispatch reaches
+the existing request_response path; router, wire codec, reconnect and live backend
+behavior retain their separate open boundaries.
