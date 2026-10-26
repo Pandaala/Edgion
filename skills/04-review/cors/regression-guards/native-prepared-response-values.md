@@ -30,7 +30,12 @@ insertion, and makes no end-to-end throughput claim.
 
 The request callback borrows the first Origin value when textual directly from the
 live request map. Missing or non-text first values remain absent, even if a later
-duplicate is valid. Matching and response preparation use shared session
+duplicate is valid. Both private `is_preflight_with_origin` calls reuse that
+textual-Origin premise with no intervening request-header mutation or await.
+Classification still checks OPTIONS before textual Access-Control-Request-Method
+presence; empty text remains present and non-text remains absent. This removes
+one redundant Origin lookup for OPTIONS requests reaching classification.
+Matching and response preparation use shared session
 references; an owned local ResponseHeader is finished before asynchronous
 session writes begin. The upstream-response callback still owns its Origin
 while mutating session response headers. Reflection values retain ownership.

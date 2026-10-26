@@ -413,7 +413,12 @@ async fn request_origin_is_borrowed_until_local_response_is_built() {
         vec![b"https://app.example".as_slice(), b"https://denied.example".as_slice()],
     ] {
         for method in ["GET", "OPTIONS"] {
-            for requested_method in [None, Some(""), Some("POST")] {
+            for requested_method in [
+                None,
+                Some(b"\xff".as_slice()),
+                Some(b"".as_slice()),
+                Some(b"POST".as_slice()),
+            ] {
                 let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
                     allow_origins: Some(vec!["https://app.example".into()]),
                     allow_credentials: Some(true),
@@ -430,17 +435,24 @@ async fn request_origin_is_borrowed_until_local_response_is_built() {
                 if let Some(value) = requested_method {
                     map.insert(
                         "access-control-request-method",
-                        http::HeaderValue::from_str(value).unwrap(),
+                        http::HeaderValue::from_bytes(value).unwrap(),
                     );
                 }
                 let first = map.get("origin").and_then(|value| value.to_str().ok());
                 let present = first.is_some();
                 let allowed = first == Some("https://app.example");
-                let preflight = present && method == "OPTIONS" && requested_method.is_some();
+                let preflight = present
+                    && method == "OPTIONS"
+                    && map
+                        .get("access-control-request-method")
+                        .is_some_and(|value| value.to_str().is_ok());
                 let mut session = MockPluginSession::new();
                 session.expect_request_header_map().return_const(map);
                 session.expect_header_value().never();
-                session.expect_get_method().return_const(method.to_owned());
+                session
+                    .expect_get_method()
+                    .times(usize::from(present))
+                    .return_const(method.to_owned());
                 let mut sequence = mockall::Sequence::new();
                 session
                     .expect_write_response_header()

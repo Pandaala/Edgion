@@ -18793,3 +18793,28 @@ Resource CORS verification passed 41 cases. Formatting, workspace all-target
 check/Clippy, seven repository guards and diff hygiene passed with existing
 unrelated warnings. No full workspace test suite, live integration or throughput
 benchmark ran.
+
+## Reuse textual Origin presence for native CORS preflight classification
+
+GapiCorsFilter request entry already requires a textual first Origin before both
+preflight checks. The private is_preflight_with_origin helper now documents this
+premise and checks only OPTIONS plus textual Access-Control-Request-Method
+presence. Pure origin matching and log writes do not mutate request headers or
+await. Missing/non-text first Origin, empty textual values, duplicate first-value
+selection, denied preflight termination and response/write order are preserved.
+The upstream-response stage still reads its live Origin independently.
+
+This removes one redundant Origin header-map lookup and text validation per
+OPTIONS request reaching classification. It adds no cache and makes no allocation
+or measured throughput claim. Existing native origin preparation and session
+header-transfer decisions remain deferred. The owning native prepared-values
+knowledge page now describes the classifier's premise.
+
+Independent plan review passed. The existing request callback matrix now covers
+64 combinations, including non-text Access-Control-Request-Method and duplicate
+Origin ordering, with exact method-call counts and terminal response assertions.
+Baseline and final Gateway CORS runs passed the same 48 test identities;
+Resource CORS verification passed 41 cases. No full workspace test suite, live
+integration or throughput benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed; Clippy retains existing unrelated warnings.
