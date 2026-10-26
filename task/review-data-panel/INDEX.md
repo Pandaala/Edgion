@@ -19150,3 +19150,18 @@ Final verification passed three breaker, 26 runtime and 39 dispatch tests
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated warnings. No full workspace test suite,
 live Redis/cancellation experiment or throughput benchmark ran.
+
+## Credential half-open probe ownership decision
+
+[Credential probe ownership](outlier-02-credential-probe-owner.md) records the
+half-open-only duplicate state Arc. The credential handle still owns policy and
+cooldown access while the probe owns generation-bound completion/cancellation.
+A direct transfer cannot remove either responsibility. Independent value review
+favors retaining the current representation until measured need justifies a
+canonical lease/interface design. This is separate from Service completion-token
+ownership and the completed logical-breaker transfer. No runtime code changed.
+Fresh baseline verification passed 90 tests across credential outlier, passive
+state, attempt runtime and dispatch. No new representation, live exchange or
+throughput improvement is claimed.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated Clippy warnings.
