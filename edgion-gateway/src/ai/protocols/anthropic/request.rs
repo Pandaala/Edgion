@@ -1,10 +1,12 @@
 //! Borrowed routing metadata and bounded native capability inspection.
+use crate::ai::protocols::json_span::decode_json_string_borrowed;
 use crate::ai::protocols::request::{decode_model, native_json_utf8, patch, raw_field, span};
 use crate::ai::AiProxyError;
 use bytes::Bytes;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
+use std::borrow::Cow;
 
 #[derive(Deserialize)]
 struct Fields<'a> {
@@ -63,13 +65,13 @@ fn fields(body: &[u8]) -> Result<Fields<'_>, AiProxyError> {
 fn item(raw: &RawValue) -> Result<Item<'_>, AiProxyError> {
     serde_json::from_str(raw.get()).map_err(|_| AiProxyError::MalformedBody)
 }
-fn kind(raw: Option<&RawValue>) -> Result<Option<String>, AiProxyError> {
+fn kind(raw: Option<&RawValue>) -> Result<Option<Cow<'_, str>>, AiProxyError> {
     raw.filter(|v| v.get() != "null")
         .map(|v| {
             if v.get().len() > 386 {
                 return Err(AiProxyError::UnsupportedParameter);
             }
-            serde_json::from_str(v.get()).map_err(|_| AiProxyError::MalformedBody)
+            decode_json_string_borrowed(v.get().as_bytes()).ok_or(AiProxyError::MalformedBody)
         })
         .transpose()
 }

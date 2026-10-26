@@ -19253,3 +19253,30 @@ bytes in every case, with input construction/cloning outside the counters. This
 is not a throughput, peak-memory or whole-request allocation measurement.
 Formatting, workspace all-target check/Clippy and seven repository guards passed
 with existing unrelated warnings. No full suite or live integration test ran.
+
+## Borrow native Messages kind discriminators
+
+The private native Messages `kind` projection now reuses the canonical borrowed
+JSON string decoder. Unescaped type/fallback discriminators borrow their original
+RawValue text; escaped strings still decode into owned values. All consumers are
+local equality or prefix checks. Model ownership, body bytes, selective parsing,
+nested traversal and existing error wrapping remain unchanged.
+
+Null filtering and the 386-byte encoded limit still run before decoding. A frozen
+old-decoder oracle verifies missing/null values, wrong JSON types, plain and
+escaped strings, permitted multibyte text, encoded-size boundaries, oversized
+non-string values and invalid surrogate tokens where RawValue admits them.
+Nested escaped tool-result/file and tool-addition/advisor fixtures preserve both
+binding and composite detection. Nine tests passed against the old implementation
+before the production edit; an initial test-only Result comparison compile error
+was corrected before that successful baseline.
+
+The allocation regression verifies source-pointer identity and zero decoder
+allocations for four nonempty unescaped discriminators whose old String decoder
+allocated. Escaped text remains owned with equal decoded content. These counters
+exclude fixture construction and do not measure complete metadata parsing,
+request throughput or retained heap. No new parser, cache, log or metric is added.
+Fresh final verification passed ten native request, five shared JSON span and 23
+AI proxy tests (38 total), formatting, workspace all-target check/Clippy and seven
+repository guards with existing unrelated warnings. No full suite, alternate
+feature build or live-provider test ran.

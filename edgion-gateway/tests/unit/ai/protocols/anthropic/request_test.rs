@@ -113,3 +113,90 @@ fn messages_fields_borrow_original_multibyte_native_spans() {
         r#" {"model":"alias","max_tokens":1,"extension":{"text":"é€"}} "#.as_bytes()
     );
 }
+
+fn previous_kind(raw: Option<&RawValue>) -> Result<Option<String>, AiProxyError> {
+    raw.filter(|v| v.get() != "null")
+        .map(|v| {
+            if v.get().len() > 386 {
+                return Err(AiProxyError::UnsupportedParameter);
+            }
+            serde_json::from_str(v.get()).map_err(|_| AiProxyError::MalformedBody)
+        })
+        .transpose()
+}
+
+#[test]
+fn native_kind_decoding_preserves_values_limits_and_error_precedence() {
+    assert_eq!(kind(None).unwrap().as_deref(), previous_kind(None).unwrap().as_deref());
+    let mut tokens = [
+        "null",
+        "true",
+        "0",
+        "[]",
+        "{}",
+        r#""""#,
+        r#""text""#,
+        r#""thinking""#,
+        r#""advisor_unknown""#,
+        r#""café €""#,
+        r#""t\u0065xt""#,
+        r#""quote\"slash\\line\n""#,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    for length in [383, 384, 385] {
+        tokens.push(format!("\"{}\"", "a".repeat(length)));
+    }
+    for length in [63, 64, 65] {
+        tokens.push(format!("\"{}\"", r"\u0061".repeat(length)));
+    }
+    tokens.push(format!("[{}0]", "0,".repeat(200)));
+    tokens.push(format!(r#"{{"extension":"{}"}}"#, "a".repeat(400)));
+    // RawValue may retain invalid decoded surrogate values for later inspection.
+    for token in [r#""\uD800""#, r#""\uDC00""#] {
+        if serde_json::from_str::<&RawValue>(token).is_ok() {
+            tokens.push(token.to_owned());
+        }
+    }
+    for token in tokens {
+        let raw: &RawValue = serde_json::from_str(&token).unwrap();
+        let expected = previous_kind(Some(raw));
+        let actual = kind(Some(raw));
+        assert_eq!(
+            actual.as_ref().map(|v| v.as_deref()),
+            expected.as_ref().map(|v| v.as_deref()),
+            "{token}"
+        );
+    }
+}
+
+#[test]
+fn escaped_native_kinds_preserve_nested_binding_and_composite_detection() {
+    let body = br#"{"model":"m","max_tokens":1,"messages":[{"content":[{"type":"tool_\u0072esult","content":[{"type":"document","source":{"type":"\u0066ile"}}]},{"type":"tool_\u0061ddition","tool":{"type":"tool_\u0064efinition","definition":{"type":"\u0061dvisor_20260301"}}}]}]}"#;
+    let result = metadata(body).unwrap();
+    assert!(result.binding);
+    assert!(result.composite);
+}
+
+#[test]
+fn native_plain_kinds_borrow_without_decoding_allocations() {
+    use crate::test_allocation_counter::count_allocation_stats;
+
+    for text in ["text", "thinking", "advisor_20260301", "café €"] {
+        let token = format!("\"{text}\"");
+        let raw: &RawValue = serde_json::from_str(&token).unwrap();
+        let (previous, previous_stats) = count_allocation_stats(|| previous_kind(Some(raw)).unwrap().unwrap());
+        let (current, current_stats) = count_allocation_stats(|| kind(Some(raw)).unwrap().unwrap());
+        assert_eq!(current, previous);
+        assert!(matches!(current, Cow::Borrowed(_)));
+        assert_eq!(current.as_ptr(), raw.get().as_bytes()[1..].as_ptr());
+        assert!(previous_stats.calls > 0);
+        assert_eq!(current_stats.calls, 0);
+        assert_eq!(current_stats.requested_bytes, 0);
+    }
+    let raw: &RawValue = serde_json::from_str(r#""t\u0065xt""#).unwrap();
+    let current = kind(Some(raw)).unwrap().unwrap();
+    assert_eq!(current, "text");
+    assert!(matches!(current, Cow::Owned(_)));
+}
