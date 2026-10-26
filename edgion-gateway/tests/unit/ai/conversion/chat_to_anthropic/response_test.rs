@@ -1034,6 +1034,106 @@ fn unary_document() -> Vec<u8> {
     serde_json::to_vec(&json!({"id":"msg_1","type":"message","role":"assistant","model":"provider","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":11}})).unwrap()
 }
 #[test]
+fn unary_text_partitioning_preserves_exact_wire_and_tool_content() {
+    for fragments in [vec![], vec![""], vec!["", "é\n\"text", ""], vec!["one", "", "two", "π"]] {
+        for with_tool in [false, true] {
+            let tool = json!({"type":"tool_use","id":"tool_1","name":"lookup","input":{"x":1}});
+            let mut blocks = Vec::new();
+            for (index, fragment) in fragments.iter().enumerate() {
+                blocks.push(json!({"type":"text","text":fragment}));
+                if with_tool && index == 0 {
+                    blocks.push(tool.clone());
+                }
+            }
+            if with_tool && fragments.is_empty() {
+                blocks.push(tool.clone());
+            }
+            let mut document: Value = serde_json::from_slice(&unary_document()).unwrap();
+            document["content"] = Value::Array(blocks);
+            let input = serde_json::to_vec(&document).unwrap();
+            let actual = translate_unary(&input, "canonical", 1, unary_limits(), None).unwrap();
+            let joined = fragments.concat();
+            let mut collapsed = vec![json!({"type":"text","text":joined})];
+            if with_tool {
+                collapsed.push(tool);
+            }
+            document["content"] = Value::Array(collapsed);
+            let expected = translate_unary(
+                &serde_json::to_vec(&document).unwrap(),
+                "canonical",
+                1,
+                unary_limits(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+            let value: Value = serde_json::from_slice(&actual.0).unwrap();
+            let content = &value["choices"][0]["message"]["content"];
+            if joined.is_empty() && with_tool {
+                assert!(content.is_null());
+            } else {
+                assert_eq!(content.as_str(), Some(joined.as_str()));
+            }
+        }
+    }
+}
+
+#[test]
+fn unary_text_borrowing_matches_bounded_copy_and_avoids_single_fragment_allocation() {
+    let cases: &[&[&[u8]]] = &[
+        &[],
+        &[b""],
+        &[b"abc"],
+        &[b"", b"abc", b""],
+        &[b"a", b"bc", b"", b"def"],
+        &["é".as_bytes(), "π".as_bytes()],
+    ];
+    for fragments in cases {
+        for limit in 0..=8 {
+            let mut expected = Vec::new();
+            let mut actual = Cow::Borrowed(&[][..]);
+            for fragment in *fragments {
+                let before = actual.to_vec();
+                let previous = append(&mut expected, fragment, limit);
+                let result = append_unary_text(&mut actual, fragment, limit);
+                assert_eq!(result, previous);
+                assert_eq!(actual.as_ref(), expected.as_slice());
+                if result.is_err() {
+                    assert_eq!(actual.as_ref(), before.as_slice());
+                    break;
+                }
+            }
+        }
+        let (previous, previous_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut text = Vec::new();
+            for fragment in *fragments {
+                append(&mut text, fragment, 8).unwrap();
+            }
+            text
+        });
+        let (actual, actual_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut text = Cow::Borrowed(&[][..]);
+            for fragment in *fragments {
+                append_unary_text(&mut text, fragment, 8).unwrap();
+            }
+            text
+        });
+        assert_eq!(actual.as_ref(), previous.as_slice());
+        assert!(actual_stats.calls <= previous_stats.calls);
+        assert!(actual_stats.requested_bytes <= previous_stats.requested_bytes);
+        let nonempty: Vec<_> = fragments.iter().filter(|fragment| !fragment.is_empty()).collect();
+        if nonempty.len() <= 1 {
+            assert!(matches!(actual, Cow::Borrowed(_)));
+            assert_eq!(actual_stats.calls, 0);
+        }
+        if let [fragment] = nonempty.as_slice() {
+            assert_eq!(actual.as_ptr(), fragment.as_ptr());
+            assert!(previous_stats.calls > 0);
+        }
+    }
+}
+
+#[test]
 fn unary_preflight_counts_unknown_duplicate_and_empty_container_nodes() {
     let mut limits = unary_limits();
     limits.nodes = 3;

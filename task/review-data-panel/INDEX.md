@@ -19498,3 +19498,35 @@ and 14 canonical SSE tests (88 total). Seven repository guards passed. No full
 suite or live-provider integration ran.
 Formatting, workspace all-target check/Clippy and diff hygiene passed with
 existing unrelated warnings.
+
+## Borrow unary response text until concatenation is needed
+
+The unary Chat-to-Anthropic response converter now borrows its first nonempty
+text fragment from the validated input Value. Empty fragments retain that view;
+a second nonempty fragment promotes it to an owned buffer through the existing
+bounded append helper. Subsequent growth uses the same canonical helper. The
+private append_unary_text checks combined length before any state change, and
+publishes a promoted buffer only after both appends succeed.
+
+The input DOM already lives through synchronous output serialization; the borrow
+adds no retained owner or lifetime across callbacks. Final UTF-8 validation,
+text/tool order, empty versus null content, validated usage publication, argument
+serialization and output caps remain unchanged. Reservation formulas and
+admission stay conservative and unchanged. The separate streaming converter is
+not modified.
+
+A full-wire partitioning regression passed before implementation with the
+33-test baseline, covering empty/single/multiple text, interleaved tools, escapes
+and permitted multibyte text. A focused old-append oracle now compares accumulated
+bytes, exact/over-cap errors and unchanged state after rejection. Pointer and
+isolated allocation checks prove that zero/one nonempty fragment stays borrowed
+and allocates no aggregation buffer; multi-fragment fixtures allocate no more
+calls or requested bytes than the old strategy. Input DOM and final output
+allocations remain; no end-to-end throughput or process-memory gain is claimed.
+
+Final verification passed 34 response-converter, three unary-limit, one budget,
+seven unary-head and 39 dispatch tests (84 total), plus seven repository guards.
+Existing adversarial and concurrent reservation probes remain intact. No full
+suite or live-provider integration ran.
+Formatting, workspace all-target check/Clippy and diff hygiene passed with only
+existing unrelated warnings.

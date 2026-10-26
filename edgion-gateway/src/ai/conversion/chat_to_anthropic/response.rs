@@ -1,5 +1,6 @@
 //! Bounded Anthropic Messages to OpenAI Chat Completions response translation.
 
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -1040,13 +1041,13 @@ fn translate_unary(
         shared.observe_reported_usage(input_tokens, usage.output, usage.cache_read, usage.cache_creation);
         shared.mark_json_complete();
     }
-    let mut text = Vec::new();
+    let mut text = Cow::Borrowed(&[][..]);
     let mut tools = Vec::new();
     let mut arguments_bytes = 0usize;
     for block in blocks {
         let block = block.as_object().ok_or(invalid)?;
         if required_string(block, "type").map_err(|_| invalid)? == "text" {
-            append(
+            append_unary_text(
                 &mut text,
                 required_string(block, "text").map_err(|_| invalid)?.as_bytes(),
                 limits.input,
@@ -1079,11 +1080,11 @@ fn translate_unary(
             });
         }
     }
-    let text = String::from_utf8(text).map_err(|_| invalid)?;
+    let text = std::str::from_utf8(text.as_ref()).map_err(|_| invalid)?;
     let content = if text.is_empty() && !tools.is_empty() {
         None
     } else {
-        Some(text.as_str())
+        Some(text)
     };
     let response = UnaryCompletion {
         id,
@@ -1114,6 +1115,27 @@ fn translate_unary(
         usage.cache_read,
         usage.cache_creation,
     ))
+}
+
+fn append_unary_text<'a>(text: &mut Cow<'a, [u8]>, fragment: &'a [u8], limit: usize) -> Result<(), ()> {
+    text.len()
+        .checked_add(fragment.len())
+        .filter(|len| *len <= limit)
+        .ok_or(())?;
+    if fragment.is_empty() {
+        return Ok(());
+    }
+    match text {
+        Cow::Borrowed([]) => *text = Cow::Borrowed(fragment),
+        Cow::Borrowed(current) => {
+            let mut joined = Vec::new();
+            append(&mut joined, current, limit)?;
+            append(&mut joined, fragment, limit)?;
+            *text = Cow::Owned(joined);
+        }
+        Cow::Owned(current) => append(current, fragment, limit)?,
+    }
+    Ok(())
 }
 
 struct LimitedWriter {
