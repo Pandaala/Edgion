@@ -19876,3 +19876,27 @@ live integration or benchmark was performed.
 
 Independent plan and final source reviews passed, as did agent-doc validation
 and diff hygiene. The protocol-selection decision remains deferred.
+
+
+## Reconcile callback sets and HTTP/1 reuse ownership
+
+Current source still matches the 30 override and 22 inherited callback inventory;
+RequestFilter enumeration remains 60 implementations in 59 files. This refresh
+prevents treating already covered entry points as new work, without promoting
+entry coverage to a transitive completion claim.
+
+The [HTTP/1 transfer inventory](CALLBACKS.md#http1-connection-context-and-persistent-setting-transfer)
+traces three terminal persistence sites, by-value settings/stream handoff, next
+request admission and first-request budget initialization. The boxed unit marker
+has no payload heap allocation and preserves connection-wide request counting;
+removing it is not a valid copy optimization. Optional pipelined bytes are moved,
+with ordinary Gateway opt-in absent. No runtime change or new deferred task was
+selected. Deeper parser, injected-session and cancellation behavior remain scoped
+separately rather than inferred from the marker transfer.
+
+Fresh unchanged-code early-policy and timeout verification passed 21 tests.
+Formatting and workspace all-target check/Clippy passed with existing warnings.
+No new tests, live integration, full suite or allocation/throughput benchmark ran.
+
+Independent plan and final source reviews passed. Agent-doc validation and diff
+hygiene passed; this inventory does not mark the overall campaign complete.

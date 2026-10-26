@@ -17,6 +17,11 @@ feature-gated declarations remain included. This refresh checks inventory
 consistency only; it does not rerun historical runtime tests or extend the
 reachability and downstream coverage claims below.
 
+Source sets rechecked at `477b5fe30`: the override and inherited tables still
+match the source exactly (30 and 22, no missing or stale methods). RequestFilter
+source enumeration still finds 60 explicit implementations in 59 files; this
+count refresh does not extend their previously scoped implementation coverage.
+
 ## Edgion overrides
 
 Paths below are relative to `routes/http/proxy_http/`. Each row records current
@@ -2279,3 +2284,35 @@ fallback is deferred because earlier H1 admission changes timing/error behavior,
 not just copying. No fork mutation, full-path timeout guarantee or measured
 performance gain follows. Eight current Gateway H2/listener-builder tests passed;
 these are not execution proof for a changed probe or live byte delivery.
+
+
+## HTTP/1 connection-context and persistent-setting transfer
+
+Revalidated at `477b5fe30` against pinned Pingora `1aaa45c`. This follows the two
+previously inventoried Gateway connection callbacks into framework ownership,
+not a change to the [total-request counting policy](../../skills/04-review/http1/regression-guards/downstream-keepalive-request-limit-counting.md).
+
+| Boundary | Current ownership and ordering |
+| --- | --- |
+| Gateway persistence | `persist_connection_context` returns a boxed unit only when downstream_keepalive_initialized is true. The unit is zero-sized and requires no payload heap allocation; it is not a copied request context. |
+| Ordinary finish | After logging and any proxy-failure notification, an allowed reuse snapshots scalar settings and takes the optional marker. Downstream finish must still return a reusable stream before those owners transfer. |
+| Request-filter short circuit | A completed local response logs and cleans up subrequests before snapshotting settings and finishing the downstream session. It uses the same settings/stream ownership wrapper. |
+| Reusable error completion | The error path reapplies forced-close state after mutable logging and requires both the response's reuse decision and ApplicationControlled reuse before capturing settings. The marker does not override closure. |
+| Framework reuse | ReusedHttpStream consumes the reusable transport/prefix and settings by value. The H1 application loop constructs the next session, applies settings, saturating-decrements an optional remaining-reuse count, and moves user context and optional BytesMut prefix into it. It does not re-enter h2c selection. |
+| Next request | HttpProxy takes connection user context before boxing the session and reading the next request. It creates a fresh Gateway context after successful request construction. Unsupported H1 Transfer-Encoding rejects before on_connection_reuse; otherwise the marker sets the new context's initialization flag before request processing. |
+| Gateway early policy | Read/write/keepalive timeouts apply from the request snapshot, preserving transport-disabled reuse and process shutdown. The total-request limit is converted with checked_sub(1) only for the first H1 request, so later EGC updates cannot refill an established connection budget. |
+
+The pinned H1 session defaults pipelining to false; no Gateway production caller
+of set_pipelining_enabled was found. The generic framework nevertheless moves
+optional prefix bytes rather than cloning them. This does not rule out injected
+sessions with pipelining state, prove parser-prefix delivery, or authorize changing
+that setting. The unit marker is semantic state; removing it would allow policy
+reinitialization on reuse. Other session/context construction and async dispatch
+allocations remain outside this narrow negative-allocation observation.
+
+No behavior-preserving optimization was selected, and no duplicate deferred task
+was created. Fresh Gateway early-request-policy and timeout tests passed 21 cases,
+including the existing keepalive policy/wire tests. Formatting and workspace
+all-target check/Clippy passed with existing warnings. These tests do not drive
+every fork persistence branch, prove all error/cancellation interleavings, or
+establish whole-request allocation/throughput properties.
