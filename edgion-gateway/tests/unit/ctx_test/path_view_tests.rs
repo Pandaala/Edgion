@@ -4,7 +4,7 @@ use pingora_http::RequestHeader;
 fn make_ctx(entry_path: &str, entry_query: Option<&str>) -> EdgionHttpContext {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.entry_raw_path = entry_path.to_string();
-    ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
+    ctx.request_query.capture(entry_query.map(str::to_string)).unwrap();
     let path_cfg = edgion_resources::path_normalization::PathNormalizationConfig::default();
     ctx.request_info.normalized_current_path =
         match edgion_resources::path_normalization::normalize_path(entry_path, &path_cfg) {
@@ -38,6 +38,9 @@ fn refresh_after_rewrite() {
     let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
     let path_cfg = edgion_resources::path_normalization::PathNormalizationConfig::default();
     ctx.refresh_normalized_path(&req, &path_cfg);
+    ctx.request_query
+        .replace_raw(req.uri.query().map(str::to_owned))
+        .unwrap();
     assert_eq!(ctx.path(), "/api/new");
     assert_eq!(ctx.request_path(), "/api/old");
 }
@@ -48,10 +51,10 @@ fn composed_uri_preserves_bytes_without_buffer_growth() {
     let long_expected = "/large?".to_owned() + &long_query;
     let cases = [
         ("", None, ""),
-        ("", Some(""), ""),
+        ("", Some(""), "?"),
         ("", Some("x=1"), "?x=1"),
         ("/api", None, "/api"),
-        ("/api", Some(""), "/api"),
+        ("/api", Some(""), "/api?"),
         ("/api/resource", Some("token=abc&x=1"), "/api/resource?token=abc&x=1"),
         ("/%61dmin", Some("x=%26&x=+"), "/%61dmin?x=%26&x=+"),
         ("/café", Some("unit=€"), "/café?unit=€"),
@@ -73,7 +76,21 @@ fn full_uri_views_keep_current_and_entry_sources_distinct() {
     let req = RequestHeader::build("GET", b"/api/%6eew?current=+", None).unwrap();
     let path_cfg = edgion_resources::path_normalization::PathNormalizationConfig::default();
     ctx.refresh_normalized_path(&req, &path_cfg);
-    assert_eq!(ctx.uri(&req), "/api/new?current=+");
+    ctx.request_query
+        .replace_raw(req.uri.query().map(str::to_owned))
+        .unwrap();
+    assert_eq!(ctx.uri(), "/api/new?current=+");
     assert_eq!(ctx.request_uri(), "/%61dmin?entry=%26");
     assert_eq!(ctx.request_path(), "/%61dmin");
+}
+
+#[test]
+fn failed_target_projection_preserves_dirty_owner_and_transport() {
+    let mut ctx = make_ctx("*", Some("token=secret"));
+    let mut header = RequestHeader::build("OPTIONS", b"*", None).unwrap();
+    ctx.request_query.remove_current_names(&["token"]).unwrap();
+    assert!(ctx.ensure_target_synced(&mut header).is_err());
+    assert_eq!(header.raw_path(), b"*");
+    assert_eq!(ctx.query(), None);
+    assert!(ctx.request_query.projection_is_dirty());
 }

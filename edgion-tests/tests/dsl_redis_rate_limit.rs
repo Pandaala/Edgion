@@ -64,7 +64,7 @@ impl PluginSession for ResultSession {
         panic!("unexpected AI access in Redis ResultSession")
     }
 
-    fn request_uri(&self) -> &http::Uri {
+    fn request_uri_authority(&self) -> Option<&http::uri::Authority> {
         panic!("unexpected session operation")
     }
     fn request_header_map(&self) -> &http::HeaderMap {
@@ -184,6 +184,9 @@ impl PluginSession for ResultSession {
         panic!("unexpected session operation")
     }
     fn remove_request_header(&mut self, _name: &str) -> PluginSessionResult<()> {
+        panic!("unexpected session operation")
+    }
+    fn remove_request_query_param(&mut self, _name: &str) -> PluginSessionResult<bool> {
         panic!("unexpected session operation")
     }
     fn set_request_query(&mut self, _query: &str) -> PluginSessionResult<()> {

@@ -2077,7 +2077,7 @@ async fn arch156_radix_candidates_preserve_parent_and_nonpath_branch_pairing() {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.normalized_current_path = path.into();
         ctx.request_info.hostname = NormalizedHostname::new("example.com");
-        ctx.request_info.entry_raw_query = Some(query.into());
+        ctx.request_query.capture(Some(query.into())).unwrap();
         let selected = engine.match_route(&mut session, &ctx, index).unwrap();
         assert_eq!(
             selected.route_unit.matched_info.rule_id, expected_rule,

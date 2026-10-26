@@ -11,26 +11,23 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-The `ConsistentHashOn::Arg(arg_name)` branch of `extract_hash_key`
-(`edgion-gateway/src/backends/selector.rs`) now matches a query parameter when its
-name equals `arg_name` **byte-for-byte** OR — only when the raw name contains `%`
-or `+` — when `uri_utils::url_decode(name) == *arg_name`. So a client
-sending `?session%20id=abc` (or `?session+id=abc`) now matches an `arg_name` of
-`session id`. The matched **value** is still extracted raw (not decoded) — decoding
-it would change the hash key of every existing deployment.
+The `ConsistentHashOn::Arg(arg_name)` branch of `extract_hash_key` delegates to
+`RequestQuery::current_hash_arg_raw`, preserving first-match current-query policy:
+only pairs containing `=` qualify, raw-name equality OR canonical decoded-name
+equality matches, and the returned value is borrowed raw bytes. The first matching
+empty value terminates lookup and retains empty-key fallback; bare flags do not
+qualify. Never replace this with frozen last-wins entry lookup.
 
-The fast path keeps the data-plane hot path allocation-free in the common case
-(real arg names are plain identifiers — `user_id`, `sid` — that match raw); the
-`url_decode` allocation only happens for a param whose name actually carries a
-`%`/`+` and does not already match raw.
+The Query owner caches tokens and encoded-name decoding on demand. Raw equality
+short-circuits decoding; plain names borrow original spans. Repeated reads and
+structured auth deletions share the same backing and decoded cells. Genuine raw
+replacement creates a new backing. This resolves uri-01 through reuse without a
+second decoder, comparison-only parser, or copied raw LB value.
 
-Re-reports of the form "consistent-hash `extract_hash_key` Arg branch uses
-`split('&')` / `split_once('=')` and compares the raw param name to `arg_name`
-without percent-decoding", "`?session%20id=` / `?foo+bar=` fails to match a
-spaced arg name", or "the hash key is silently empty and the request falls back
-to round-robin" are **not accepted** — verify the current Arg branch carries the
-`name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name`
-guard before re-reporting.
+First use can allocate token storage even for plain names. The former standalone
+scan was zero-allocation for plain names, so shared ownership is not a universal
+allocation or CPU improvement. Measure first/last/missing keys, long unused tails,
+repeated reads and combined edit/read paths before making performance claims.
 
 ## What was wrong (before the fix)
 
@@ -51,9 +48,8 @@ percent/plus-encoded, so the mismatch only surfaces for an exotic arg-name confi
 
 `uri_utils::url_decode` (lives in `edgion-resources/src/uri_utils.rs`; same helper
 backing route-matching `parse_query_string`) is already exhaustively unit-tested
-in `uri_utils.rs` (`%20`→space, `+`→space, invalid `%XX` preserved literally,
-multibyte UTF-8). The new branch is a thin wrapper over it, gated so the decode
-runs only when needed. Backward compatible: a plain-identifier arg name still
+in `edgion-resources/tests/unit/uri_utils_test.rs` (`%20`→space, `+`→space, invalid `%XX` preserved literally,
+multibyte UTF-8). The owner invokes it only for encoded components when decoding is needed. Backward compatible: a plain-identifier arg name still
 matches raw via the `name == arg_name` fast path (including the case where an
 operator previously worked around the bug by configuring the *encoded* form as
 the arg name — that still matches raw and short-circuits before any decode).
@@ -62,8 +58,8 @@ the arg name — that still matches raw and short-circuits before any decode).
 
 - "Decode every param name unconditionally" — adds a per-request, per-param heap
   allocation on the data-plane hot path for an almost-never-triggered case; the
-  `name.contains(['%', '+'])` guard makes the common path allocation-free and
-  byte-for-byte equivalent to the old behavior.
+  marker guard keeps plain-name decoding allocation-free. Token initialization
+  is a separate cost, and the complete first-use lookup can allocate.
 - "Also percent-decode the param **value** for the hash key" — out of scope and a
   behavior change: it would alter the hash key (and therefore backend assignment)
   of every existing consistent-hash-by-arg deployment, not just the encoded-name
@@ -74,15 +70,14 @@ the arg name — that still matches raw and short-circuits before any decode).
 
 ## Re-evaluation Triggers
 
-Re-open only if:
-
-- `extract_hash_key`'s signature is refactored to receive the already-decoded
-  query (e.g. via `ctx.cached_query()`), at which point the inline fast-path
-  decode here becomes redundant and should be removed.
+Re-evaluate when Query ownership, entry/current source selection, token lifetime,
+canonical decoding, duplicate policy or raw value borrowing changes. Verify the
+distinct current/entry, first/last and raw/decoded policies; shared ownership must
+not collapse them.
 
 ## Reference Cases
 
 - backends-F014 (review finding, fixed 2026-05-24)
-- `uri_utils::url_decode` unit tests (`edgion-resources/src/uri_utils.rs`)
+- `uri_utils::url_decode` unit tests (`edgion-resources/tests/unit/uri_utils_test.rs`)
 - Existing integration scenario `HTTPRoute_default_lb-ch-arg.yaml` (`arg.user_id`,
   plain-identifier no-regression path)

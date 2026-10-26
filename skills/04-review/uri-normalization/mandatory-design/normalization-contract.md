@@ -110,16 +110,18 @@ nor sets `uri_finalized`; the path forwarding decision still runs normally.
 
 **All rewrite plugins** must change paths via the trait method `session.set_upstream_uri()`; bare calls are not allowed.
 
-Query-only credential stripping uses `session_adapter::set_request_query`.
-For HTTP/1 raw targets it replaces the query through `RequestHeader::set_raw_path`,
-preserving the current request-target form and path bytes, including
-absolute-form. When the URI already carries scheme or authority (HTTP/2 or a
-URI rewrite), it replaces only `path_and_query` and preserves those URI parts.
-Neither path finalizes the forwarding choice. Rebuilding every target from
-`uri.path()` would turn HTTP/1 absolute-form into origin-form and discard
-HTTP/2 authority. The consumer regression tests are
-`stripping_query_credential_preserves_absolute_request_target` and
-`stripping_query_credential_preserves_h2_authority_without_host`.
+Query-only credential stripping uses the session's structured Query removal
+operation. It updates the canonical request owner without eagerly updating the
+Pingora header or finalizing the path. Current readers use the owner; only a
+concrete-header demand projects the changed Query. The common upstream-peer
+barrier runs after all request/backend/provider edits and before transcoder
+validation and Pingora's outgoing clone. A failed projection fails locally and
+must never forward the old credential-bearing target. Error summaries omit the
+target so pre-barrier failures cannot expose stale Query bytes.
+
+Projection preserves HTTP/1 absolute-form through raw-target classification and
+HTTP/2 scheme/authority through typed URI parts. The corresponding adapter tests
+must validate both the logical view and the eventual concrete target.
 The same target-preserving helper covers normalized path forwarding and
 path-only URI rewrites. HTTP/1 absolute-form stores its scheme and authority
 only in Pingora's `raw_path()`, so these writes use Pingora's canonical
@@ -152,39 +154,29 @@ the assertion, not a fresh live Gateway or Kubernetes forwarding run.
 ## Frozen query cache source
 
 The canonical [URI dual-view contract](../../../01-architecture/02-gateway/uri-normalization/SKILL.md)
-requires decoded single-key query reads to use the frozen entry snapshot, while
-whole-string query reads remain live and raw. `EdgionHttpContext::cached_query()`
-owns source selection from `request_info.entry_raw_query`; routing, plugin
-`get_query_param` and access-log query projection share that no-argument accessor.
-Selecting the live rewritten query for this cache would make all later key reads
-observe the wrong generation. Access-log masking remains independently required.
+requires ordinary decoded single-key reads to use the frozen entry snapshot,
+while whole-string current reads use the logical Query owner. The owner captures
+entry bytes once; `ctx.entry_query_param(name)` selects that source internally.
+Routing, plugin extraction and access-log projections share its lazy canonical
+decoding and last-decoded-name-wins semantics. Access-log masking remains required.
 
-ARCH-004 identified the former caller-selected `raw_query` parameter: all three
-production callers passed the correct snapshot, but a future reader could seed
-the permanent cache from a rewritten URI or arbitrary `None`. Removing the
-parameter places that existing invariant with the context that already owns
-both source and cache. Keep lazy canonical percent/plus decoding, init-once
-borrowed-map identity, optional boxed nonempty maps and the allocation-free static
-empty view. This correction establishes no throughput or memory improvement.
+ARCH-004 removed caller-selected cache sources. The later lazy Query owner replaces
+the entry-only HashMap and public `entry_raw_query` field, preserving this source
+contract while also owning current tokens and edits. Early reads return missing
+without caching that absence before capture. Plain components borrow raw spans;
+encoded components retain canonical decoder results once per backing. Current LB
+and auth policies differ from entry lookup and must remain separate consumers of
+the same token owner. Specialized DSL/WAF/strict protocol parsers retain their own
+semantics; this owner does not replace them.
 
-Source evidence is `edgion-gateway/src/ctx.rs::cached_query` and its consumers in
-`routes/http/match_unit.rs`, `plugins/runtime/session_adapter.rs` and
-`observe/access_log/log_ext.rs`. Focused regressions in
-`edgion-gateway/tests/unit/ctx_test/cached_query_tests.rs` cover live rewrites before
-and after initialization, decoding, lazy initialization, stable identity and
-empty allocations. Existing adapter allocation and access-log projection tests
-cover their consumer boundaries; historical integration results are not fresh
-verification of this correction.
+AI baseline state cannot escape its Query owner. Restore uses a new checked epoch
+and preserves entry identity and reusable caches. A concrete header clone alone
+is not a complete baseline once logical Query edits can be pending.
 
-The entry snapshot remains publicly mutable. Any other or synthetic caller that
-reads cached_query before capture can initialize an empty cache permanently;
-the no-argument API does not solve that lifecycle boundary. However, canonical
-RequestId construction accepts only Header/TraceId/Ctx sources, and early
-attachment further excludes Ctx and Query conditions. Generic KeyGet support is
-not evidence that an admitted early RequestId rule initializes this query cache.
-Re-evaluate if source validation or construction paths, entry capture ordering,
-snapshot mutability, query view semantics or cache lifetime change. Decoder token
-allocation (ARCH-048) is a separate concern.
+Historical HashMap identity/allocation checks are not guarantees of this new
+representation. Verify the current core, adapter, forwarding and AI tests and
+measure the active implementation before making performance claims. Re-evaluate
+on changes to entry capture, target mutation, snapshot lifetime, or decoder policy.
 
 ---
 

@@ -44,6 +44,7 @@ async fn entry_method_accessor_remains_borrowed_and_distinct_from_current_identi
     for (entry, current) in [("GET", "POST"), ("POST", "GET"), ("REPORT", "PATCH")] {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
+        ctx.request_query.capture(None).unwrap();
         ctx.request_info.method = Some(http::Method::from_bytes(entry.as_bytes()).unwrap());
         ctx.request_info.entry_raw_path = "/dye-test".into();
         ctx.request_info.normalized_current_path = "/dye-test".into();

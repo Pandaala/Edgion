@@ -30,11 +30,10 @@ mod json_capture;
 fn request_header_views<'input>(
     headers: &'input http::HeaderMap,
     protocol: &str,
-    uri: Option<&'input http::Uri>,
+    authority: Option<&'input http::uri::Authority>,
 ) -> Vec<RequestHeader<'input>> {
     let authority = if protocol == "HTTP/2.0" && !headers.contains_key(http::header::HOST) {
-        uri.and_then(|uri| uri.authority())
-            .map(|authority| authority.as_str().as_bytes())
+        authority.map(|authority| authority.as_str().as_bytes())
     } else {
         None
     };
@@ -406,7 +405,9 @@ impl RequestFilter for WafPlugin {
         // (`Transaction` stores an owned `RequestState`), before any `&mut
         // session` use.
         let protocol = session.get_http_protocol();
-        let request_uri = (protocol == "HTTP/2.0").then(|| session.request_uri());
+        let request_uri = (protocol == "HTTP/2.0")
+            .then(|| session.request_uri_authority())
+            .flatten();
         let headers = request_header_views(session.request_header_map(), protocol, request_uri);
         let uri = session.get_uri();
         let raw_uri = session.get_request_uri();

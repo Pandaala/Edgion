@@ -873,7 +873,7 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
     publish(&coordinator, Arc::new(source), None);
     let policy=Arc::new(serde_json::from_value::<edgion_resources::BackendTLSPolicy>(json!({
         "metadata":{"name":"tls","namespace":"default"},
-        "spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"tls.example.test"},"useSystemCa":true}
+        "spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"tls.example.test"},"useSystemCa":true,"preparedAncestorAdmission":{"mode":"unrestricted"}}
     })).unwrap());
     let tls = BackendTlsPolicyLookup::effective_from_policy(policy);
     let chosen = selected(None, 443, tls);
@@ -1111,7 +1111,7 @@ async fn ordinary_selection_borrows_request_inputs_after_sticky_check() {
                 let borrowed = ctx.request_info.remote_ip.as_str();
                 assert_eq!(borrowed.as_ptr(), original);
                 assert_eq!(
-                    selector::extract_hash_key(&session, &policy, borrowed, ctx.query(session.req_header())),
+                    selector::extract_hash_key(&session, &policy, borrowed, Some(&ctx.request_query)),
                     remote_ip.as_bytes()
                 );
                 captured.select(
@@ -1119,7 +1119,7 @@ async fn ordinary_selection_borrows_request_inputs_after_sticky_check() {
                     ServiceDegradePolicy::CapturedOverride(None),
                     Some(&session),
                     borrowed,
-                    ctx.query(session.req_header()),
+                    Some(&ctx.request_query),
                 )
             })
             .unwrap();

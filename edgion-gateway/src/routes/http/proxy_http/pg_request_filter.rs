@@ -473,6 +473,10 @@ pub async fn request_filter(
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
+    if ctx.grpc_transcoding.is_some() {
+        ctx.ensure_target_synced(session.req_header_mut())
+            .map_err(|_| crate::plugins::http::grpc_json_transcoder::failure())?;
+    }
     crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
     ctx.request_info.in_request_body_stage = false;
 
@@ -602,7 +606,9 @@ async fn build_request_metadata(
     // Publish the bounded XFF snapshot after Pingora's protocol-level Host validation.
     ctx.request_info.x_forwarded_for = xff_snapshot.value;
 
-    if let Some(status) = request_metadata_validation_error(ctx, raw_path, raw_query, path_norm_cfg, xff_too_long) {
+    if let Some(status) = request_metadata_validation_error(ctx, raw_path, raw_query, path_norm_cfg, xff_too_long)
+        .map_err(|_| super::pg_upstream_request_filter::local_pre_dispatch_failure())?
+    {
         ctx.record_error(status);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
@@ -764,21 +770,21 @@ fn apply_path_normalization_entry(
     raw_path: &str,
     raw_query: Option<String>,
     cfg: &PathNormalizationConfig,
-) -> Option<EdgionErrorCode> {
+) -> Result<Option<EdgionErrorCode>, crate::request_query::QueryError> {
+    ctx.request_query.capture(raw_query)?;
     ctx.request_info.entry_raw_path = raw_path.to_string();
-    ctx.request_info.entry_raw_query = raw_query;
 
     if cfg.reject_escaped_slashes && contains_escaped_slash(raw_path) {
-        return Some(EdgionErrorCode::PathEscapedSlashRejected);
+        return Ok(Some(EdgionErrorCode::PathEscapedSlashRejected));
     }
 
     if cfg.reject_invalid_percent_encoding && has_invalid_percent_encoding(raw_path) {
-        return Some(EdgionErrorCode::PathInvalidPercentEncoding);
+        return Ok(Some(EdgionErrorCode::PathInvalidPercentEncoding));
     }
 
     ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
 
-    None
+    Ok(None)
 }
 
 /// Apply request-entry validation in wire-visible precedence order.
@@ -793,14 +799,14 @@ fn request_metadata_validation_error(
     raw_query: Option<String>,
     path_norm_cfg: &PathNormalizationConfig,
     xff_too_long: bool,
-) -> Option<EdgionErrorCode> {
-    if let Some(status) = apply_path_normalization_entry(ctx, raw_path, raw_query, path_norm_cfg) {
-        return Some(status);
+) -> Result<Option<EdgionErrorCode>, crate::request_query::QueryError> {
+    if let Some(status) = apply_path_normalization_entry(ctx, raw_path, raw_query, path_norm_cfg)? {
+        return Ok(Some(status));
     }
     if ctx.request_info.hostname.is_empty() {
-        return Some(EdgionErrorCode::HostMissing);
+        return Ok(Some(EdgionErrorCode::HostMissing));
     }
-    xff_too_long.then_some(EdgionErrorCode::XffHeaderTooLong)
+    Ok(xff_too_long.then_some(EdgionErrorCode::XffHeaderTooLong))
 }
 
 #[cfg(test)]

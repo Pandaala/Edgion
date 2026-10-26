@@ -82,7 +82,7 @@ pub async fn upstream_request_filter(
 /// hook. The static detail is intentionally free of credential and topology
 /// information; request diagnostics carry the actionable classification.
 #[inline]
-fn local_pre_dispatch_failure() -> Box<pingora_core::Error> {
+pub(super) fn local_pre_dispatch_failure() -> Box<pingora_core::Error> {
     let mut error = pingora_core::Error::explain(
         pingora_core::ErrorType::HTTPStatus(500),
         "upstream request preparation failed",

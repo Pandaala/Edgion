@@ -1044,3 +1044,26 @@ fn decoded_origin_integrity_does_not_recompute_or_replace_stored_freshness() {
         assert!(entry.freshness.remaining(Instant::now()).is_none());
     }
 }
+
+#[test]
+fn request_target_key_uses_logical_query_before_transport_barrier() {
+    let mut ctx = crate::EdgionHttpContext::new();
+    ctx.request_info.normalized_current_path = "/cache".into();
+    ctx.request_query.capture(Some("token=secret&keep=1".into())).unwrap();
+    let stale = pingora_http::RequestHeader::build("GET", b"/cache?token=secret&keep=1", None).unwrap();
+    ctx.request_query.remove_current_names(&["token"]).unwrap();
+    let key = |header: &pingora_http::RequestHeader, context: &crate::EdgionHttpContext| {
+        let mut builder = super::super::key::Builder::new();
+        frame_request_target(&mut builder, header, context).unwrap();
+        builder.finish()
+    };
+    let mut clean = crate::EdgionHttpContext::new();
+    clean.request_info.normalized_current_path = "/cache".into();
+    clean.request_query.capture(Some("keep=1".into())).unwrap();
+    let clean_header = pingora_http::RequestHeader::build("GET", b"/cache?keep=1", None).unwrap();
+    assert_eq!(key(&stale, &ctx), key(&clean_header, &clean));
+    clean.request_query.replace_raw(Some("keep=2".into())).unwrap();
+    assert_ne!(key(&stale, &ctx), key(&clean_header, &clean));
+    assert_eq!(stale.uri.query(), Some("token=secret&keep=1"));
+    assert!(ctx.request_query.projection_is_dirty());
+}

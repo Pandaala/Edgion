@@ -69,7 +69,7 @@ fn session(method: Method, query: Option<&str>) -> MockPluginSession {
         Method::POST => "POST",
         _ => panic!("unsupported test method"),
     }));
-    ctx.request_info.entry_raw_query = query.map(str::to_owned);
+    ctx.request_query.capture(query.map(str::to_owned)).unwrap();
     ctx.request_info.body_declared = Some(false);
     ctx.request_info.in_request_body_stage = true;
     session.expect_ctx().return_const(ctx);

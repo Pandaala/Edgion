@@ -82,6 +82,7 @@ pub mod link_sys;
 pub mod observe;
 pub mod plugins;
 pub mod request_body;
+pub(crate) mod request_query;
 mod response;
 mod response_cache;
 pub mod routes;

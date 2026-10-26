@@ -15,6 +15,11 @@ async fn borrowed_path_params_preserve_capture_and_empty_cache() {
     ctx.capture_matched_path_params(&matched);
     let stored = ctx.cached_path_params().unwrap().get("uid").unwrap().as_ptr();
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let (value, allocations) =
             crate::test_allocation_counter::count_allocations(|| adapter.get_path_param_ref("uid"));
@@ -45,6 +50,12 @@ async fn borrowed_path_params_preserve_capture_and_empty_cache() {
 
     let mut empty_value = EdgionHttpContext::default();
     empty_value.cache_path_params(std::collections::HashMap::from([("empty".to_string(), String::new())]));
+    if !empty_value.request_query.is_captured() {
+        empty_value
+            .request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut empty_value);
     assert_eq!(adapter.get_path_param_ref("empty"), Some(""));
     assert_eq!(adapter.get_path_param("empty"), Some(String::new()));
@@ -62,6 +73,11 @@ async fn wire_http_protocol_labels_preserve_versions_without_allocating() {
         (http::Version::HTTP_3, "HTTP/3.0"),
     ] {
         session.req_header_mut().set_version(version);
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let view: &dyn PluginSession = &adapter;
         let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| view.get_http_protocol());
@@ -79,6 +95,11 @@ async fn borrowed_protocol_metadata_preserves_sources_and_fallbacks() {
             ctx.request_info.is_grpc_request = is_grpc;
             ctx.request_info.discover_protocol = explicit;
             let expected = explicit.unwrap_or(if is_grpc { "grpc" } else { "http" });
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let (actual, allocations) =
                 crate::test_allocation_counter::count_allocations(|| adapter.discover_protocol());
@@ -93,6 +114,11 @@ async fn borrowed_protocol_metadata_preserves_sources_and_fallbacks() {
         ctx.request_info.set_grpc_method(service.to_owned(), method.to_owned());
         let service_ptr = ctx.request_info.grpc_service().unwrap().as_ptr();
         let method_ptr = ctx.request_info.grpc_method().unwrap().as_ptr();
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let ((actual_service, actual_method), allocations) =
             crate::test_allocation_counter::count_allocations(|| (adapter.grpc_service(), adapter.grpc_method()));
@@ -145,6 +171,11 @@ async fn dsl_body_aliases_follow_mutations_while_transfer_reader_stays_frozen() 
         ctx.request_body_config.max_body_size_bytes = 64;
 
         let mut frozen = {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             assert_eq!(adapter.ensure_request_body(None).await.unwrap(), 3);
             let reader = adapter.request_body_snapshot_reader(false).await.unwrap();
@@ -182,6 +213,11 @@ async fn dsl_body_response_stage_reads_cache_but_refuses_every_mutation() {
         ctx.request_info.in_request_body_stage = true;
         ctx.request_body_config.memory_buffer_bytes = memory_limit;
         {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             adapter.ensure_request_body(None).await.unwrap();
         }
@@ -196,6 +232,11 @@ async fn dsl_body_response_stage_reads_cache_but_refuses_every_mutation() {
             // Bypass stage-specific config rejection to exercise the host
             // boundary even for a directly constructed VM.
             let mutation_vm = dsl_body_test_vm(source);
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             assert_eq!(
                 read_vm
@@ -235,6 +276,11 @@ async fn dsl_body_late_read_never_captures_and_proven_empty_needs_no_cache() {
         ctx.request_info.body_declared = declared;
         ctx.request_info.in_request_body_stage = false;
         let result = {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             vm.execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
                 .await
@@ -298,6 +344,11 @@ async fn graphql_bodyless_get_inspection_freezes_future_replay_owner() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.body_declared = Some(false);
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.set_request_query("query=%7Bping%7D").unwrap();
     assert!(
@@ -333,7 +384,7 @@ async fn response_condition_source_allocation_inventory() {
     ctx.request_info.hostname = NormalizedHostname::new("example.com");
     ctx.request_info.entry_raw_path = "/alpha".to_string();
     ctx.request_info.normalized_current_path = "/alpha".to_string();
-    ctx.request_info.entry_raw_query = Some("x=one".to_string());
+    ctx.request_query.capture(Some("x=one".to_string())).unwrap();
     ctx.set_ctx_var("demo".to_string(), "value".to_string());
     ctx.set_ctx_var("jwt_claims".to_string(), r#"{"roles":["admin","dev"]}"#.to_string());
     ctx.request_info.install_tls_info(
@@ -353,7 +404,12 @@ async fn response_condition_source_allocation_inventory() {
     );
     // Prime the once-per-request query parse so this measures only the
     // per-chunk value extraction cost.
-    ctx.cached_query();
+    ctx.entry_query_param("x");
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     let cases = [
         ("traceId", KeyGet::TraceId),
@@ -419,6 +475,11 @@ async fn plugin_session_grpc_classification_includes_grpc_route_match() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.is_grpc_request = false;
     ctx.is_grpc_route_matched = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(PluginSession::is_grpc_request(&adapter));
     assert!(adapter.is_grpc_request());
@@ -430,6 +491,11 @@ async fn template_copies_preserve_sensitive_header_and_cookie_sources() {
     use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     // The same typed setter used by JWE/auth plugin header producers.
     for (name, value) in [
@@ -481,6 +547,11 @@ async fn typed_request_header_preserves_sensitivity_and_replaces_deferred_creden
         .append_header(name.clone(), "second-line")
         .unwrap();
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let mut value = http::HeaderValue::from_static("current-identity");
         value.set_sensitive(true);
@@ -507,6 +578,11 @@ async fn typed_request_append_preserves_opaque_duplicates_and_invalidates_deferr
     let mut value = http::HeaderValue::from_bytes(b"\xffidentity").unwrap();
     value.set_sensitive(true);
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(adapter
             .append_request_header_value("invalid name", value.clone())
@@ -516,6 +592,11 @@ async fn typed_request_append_preserves_opaque_duplicates_and_invalidates_deferr
     ctx.apply_deferred_credentials(&mut upstream).unwrap();
     assert_eq!(upstream.headers[&name], "deferred");
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.append_request_header_value(name.as_str(), value).unwrap();
     }
@@ -638,6 +719,11 @@ async fn typed_response_values_preserve_bytes_sensitivity_and_pending_replay() {
     let mut value = http::HeaderValue::from_bytes(b"\xffprivate").unwrap();
     value.set_sensitive(true);
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.set_response_header_value("x-private", value.clone()).unwrap();
         adapter
@@ -684,6 +770,11 @@ async fn invalid_string_response_values_keep_live_error_and_queued_noop_behavior
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(adapter.set_response_header("x-invalid", "bad\rvalue").is_ok());
         assert!(adapter.append_response_header("x-invalid", "bad\nvalue").is_ok());
@@ -784,6 +875,11 @@ async fn response_trailer_capability_tracks_actual_h1_framing() {
     let (mut session, _client) = test_session_with_client().await;
     let mut ctx = EdgionHttpContext::default();
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(
             !adapter.downstream_response_trailers_representable(),
@@ -799,6 +895,11 @@ async fn response_trailer_capability_tracks_actual_h1_framing() {
         .write_response_header(Box::new(response), false)
         .await
         .expect("commit chunked H1.1 response");
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(
         adapter.downstream_response_trailers_representable(),
@@ -821,6 +922,11 @@ async fn h1_new_response_trailer_name_requires_committed_declaration() {
         .await
         .expect("commit chunked H1.1 response");
     let mut ctx = EdgionHttpContext::default();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-declared")));
     assert!(adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-second")));
@@ -837,6 +943,11 @@ async fn response_trailer_capability_rejects_h1_0() {
         .await
         .expect("commit close-delimited H1.0 response");
     let mut ctx = EdgionHttpContext::default();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
     assert!(!adapter.downstream_response_trailers_representable());
@@ -882,6 +993,11 @@ async fn waf_prefix_reuses_storage_and_preserves_the_unread_remainder() {
         // policy would spill at a lower threshold.
         ctx.request_body_config.memory_buffer_bytes = 2;
         {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let (prefix, complete) = adapter.read_request_body_prefix(limit).await.unwrap();
             assert_eq!(prefix.as_ref(), &original[..len.min(limit)]);
@@ -915,6 +1031,11 @@ async fn waf_prefix_reuses_an_existing_complete_body_and_freezes_mutation() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.ensure_request_body(None).await.unwrap();
     adapter
@@ -944,6 +1065,11 @@ async fn waf_prefix_rejects_a_declared_body_above_the_physical_cap_before_readin
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = true;
     ctx.request_body_config.max_body_size_bytes = 4;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(matches!(
         adapter.read_request_body_prefix(64).await,
@@ -993,6 +1119,12 @@ async fn record_outcome_failure_appends_prefixed_value_to_queue() {
         "rate_limit_redis",
     )));
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
+
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.record_outcome(DyeOutcome::FailOpen, "redis-unreachable");
 
@@ -1008,6 +1140,11 @@ async fn set_remote_ip_canonicalizes_and_invalidates_cached_geo() {
     assert!(ctx.request_info.resolved_geo().0.is_some());
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.set_remote_ip("::ffff:203.0.113.9").unwrap();
     }
@@ -1023,6 +1160,12 @@ async fn record_outcome_success_sets_recorded_value_verbatim() {
     // Omitted `on` defaults to [Success]; omitted `value` renders the
     // recorded value (no operator template, no provenance prefix).
     ctx.install_current_dye_plan(Some(compile_plan("response:\n  - name: X-O\n", "canary")));
+
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.record_outcome(DyeOutcome::Success, "app-v1");
@@ -1102,6 +1245,11 @@ async fn h1_session_installs_request_body_stream_handler() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(adapter.request_headers_end_stream().is_some());
     assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
@@ -1125,6 +1273,11 @@ async fn streamed_handler_install_refuses_after_body_policy_freeze() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = false;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
     assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
@@ -1137,6 +1290,11 @@ async fn mirror_body_tap_install_refuses_after_body_policy_freeze() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = false;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
     assert!(!adapter.set_mirror_state(MirrorState::Abandoned));
@@ -1156,11 +1314,22 @@ async fn backend_mirror_permission_is_first_attempt_only_and_adapter_local() {
     // with all boundary values; real first-attempt wiring is covered by
     // the RequestMirrorReferenceGrant integration scenario.
     for (attempt, allowed) in [(None, false), (Some(0), false), (Some(1), true), (Some(2), false)] {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.backend_mirror_allowed = backend_mirror_allowed_for_attempt(attempt);
         assert_eq!(adapter.set_mirror_state(MirrorState::Abandoned), allowed);
         assert_eq!(adapter.ctx.has_mirror_state(), allowed);
         adapter.ctx.retire_request_mirror();
+    }
+
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
     }
 
     let mut ordinary = PingoraSessionAdapter::new(&mut session, &mut ctx);
@@ -1172,6 +1341,11 @@ async fn backend_mirror_permission_keeps_other_body_capabilities_frozen() {
     let mut session = test_session_with_body(b"body").await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.body_declared = Some(true);
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.backend_mirror_allowed = backend_mirror_allowed_for_attempt(Some(1));
 
@@ -1216,6 +1390,11 @@ async fn observer_install_requires_request_stage_and_runtime_identity() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     let make_factory = || {
         Box::new(|| Ok(Box::new(NoopObserver) as Box<dyn crate::request_body::observer::RequestBodyObserver>))
@@ -1273,6 +1452,11 @@ async fn observer_registration_refuses_unsupported_stage_and_h1_transports() {
         }
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.in_request_body_stage = !matches!(case, Refusal::Stage);
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let previous = adapter
             .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
@@ -1298,6 +1482,11 @@ async fn observer_registration_refuses_unsupported_stage_and_h1_transports() {
 async fn plugin_entry_identity_nested_restore_is_exact() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
     let before_outer = adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new(
@@ -1337,6 +1526,11 @@ async fn record_outcome_no_plan_is_noop() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     // No plan installed at all.
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.record_outcome(DyeOutcome::FailOpen, "cause");
     assert!(pending_ops(&ctx).is_empty());
@@ -1349,6 +1543,11 @@ async fn record_outcome_no_matching_rule_is_noop() {
     // Plan installed, but the only rule declares `on: [success]` while
     // the recorded outcome is a failure -- no rule matches.
     ctx.install_current_dye_plan(Some(compile_plan("response:\n  - name: X-O\n", "canary")));
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.record_outcome(DyeOutcome::FailOpen, "cause");
     assert!(pending_ops(&ctx).is_empty());
@@ -1362,6 +1561,12 @@ async fn record_outcome_template_value_renders_and_sanitizes() {
         "response:\n  - name: X-O\n    on: [fail-open]\n    value: 'v ${ctx:id}'\n",
         "canary",
     )));
+
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     // Control bytes on a rendered value can only arrive through a
@@ -1428,6 +1633,11 @@ async fn self_written_response_drains_queue_with_framing_protected() {
     resp.insert_header("content-length", "5").unwrap();
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter
             .write_response_header(Box::new(resp), false)
@@ -1458,6 +1668,11 @@ async fn direct_writer_cannot_claim_an_informational_response() {
     let resp = ResponseHeader::build(103, None).expect("103 is a valid informational header");
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter
             .write_response_header(Box::new(resp), true)
@@ -1477,6 +1692,12 @@ async fn direct_writer_reports_a_duplicate_claim_without_writing() {
     assert!(ctx.claim_final_response(204));
     let resp = ResponseHeader::build(403, None).unwrap();
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
+
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter
         .write_response_header(Box::new(resp), true)
@@ -1493,6 +1714,12 @@ async fn grpc_writer_rejects_an_informational_local_reply() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.is_grpc_request = true;
     let resp = ResponseHeader::build(101, None).unwrap();
+
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter
@@ -1551,6 +1778,11 @@ async fn grpc_reroute_still_drains_via_trailers_path() {
     let resp = ResponseHeader::build(404, None).unwrap();
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter
             .write_response_header(Box::new(resp), false)
@@ -1577,6 +1809,11 @@ async fn declares_body_accessor_forwards_ctx_snapshot() {
     let mut ctx = EdgionHttpContext::default();
 
     ctx.request_info.body_declared = Some(true);
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.declares_body(), Some(true));
 }
@@ -1588,6 +1825,11 @@ async fn opaque_body_metadata_marks_transport_proven_empty_without_capture() {
     ctx.request_info.body_declared = Some(false);
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(adapter.request_body_available_len(true), Ok(0));
         assert_eq!(adapter.request_body_available_len(false), Ok(0));
@@ -1618,6 +1860,12 @@ async fn runtime_disabled_capture_reports_unimplemented() {
     ctx.request_info.in_request_body_stage = true;
     ctx.request_body_config.enabled = false;
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
+
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::Unimplemented));
     assert!(!ctx.request_body.has_cached_body());
@@ -1645,6 +1893,11 @@ async fn replace_request_body_spans_refuses_once_past_request_stage() {
     ctx.request_info.in_request_body_stage = false;
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let result = adapter
             .replace_request_body_spans(0, &[(0..1, bytes::Bytes::from_static(b"x"))])
@@ -1661,6 +1914,11 @@ async fn read_request_body_refuses_once_past_request_stage() {
     ctx.request_info.in_request_body_stage = false;
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let result = adapter.read_request_body(None).await;
         assert!(matches!(result, Err(BodyReadError::NotBuffered)));
@@ -1678,6 +1936,11 @@ async fn read_request_body_bodyless_past_request_stage_is_empty() {
     ctx.request_info.in_request_body_stage = false;
 
     let (body, digest) = {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let body = adapter.read_request_body(None).await.expect("bodyless late read");
         let digest = adapter.request_body_sha256().await.expect("bodyless digest");
@@ -1698,6 +1961,11 @@ async fn bodyless_request_body_mutations_install_replay_owner() {
     ctx.request_info.in_request_body_stage = true;
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.request_body_append(Bytes::from_static(b"abc")).await.unwrap();
         adapter.request_body_prepend(Bytes::from_static(b"[")).await.unwrap();
@@ -1728,6 +1996,11 @@ async fn auth_body_read_observes_committed_rewrite() {
         ctx.request_info.in_request_body_stage = true;
         ctx.request_body_config.memory_buffer_bytes = memory_limit;
         ctx.request_body_config.max_body_size_bytes = 64;
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter.read_request_body(None).await.unwrap(),
@@ -1754,11 +2027,21 @@ async fn read_request_body_reuses_existing_cache_past_request_stage() {
     ctx.request_info.in_request_body_stage = true;
 
     let first = {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.read_request_body(None).await.expect("request-stage capture")
     };
     ctx.request_info.in_request_body_stage = false;
     let second = {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.read_request_body(None).await.expect("late cached read")
     };
@@ -1778,11 +2061,21 @@ async fn overwrite_request_body_refuses_existing_cache_past_request_stage() {
     ctx.request_info.in_request_body_stage = true;
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.read_request_body(None).await.expect("request-stage capture");
     }
     ctx.request_info.in_request_body_stage = false;
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let result = adapter
             .overwrite_request_body(Bytes::from_static(b"late mutation"))
@@ -1807,6 +2100,12 @@ async fn read_request_body_refuses_during_backend_ref_plugin_stage() {
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = false;
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
+
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::NotBuffered));
     assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
@@ -1820,6 +2119,12 @@ async fn read_request_body_global_cap_is_hard_failure() {
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = true;
     ctx.request_body_config.max_body_size_bytes = 4;
+
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(
@@ -1852,6 +2157,11 @@ async fn chunked_physical_cap_rejects_without_waiting_for_eof() {
     ctx.request_info.in_request_body_stage = true;
     ctx.request_body_config.max_body_size_bytes = 4;
     let result = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.read_request_body(None).await
     })
@@ -1875,6 +2185,11 @@ async fn ensure_request_body_hashes_disk_without_materializing() {
     ctx.request_info.in_request_body_stage = true;
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter
@@ -1912,6 +2227,11 @@ async fn request_body_snapshot_reader_streams_disk_without_materializing() {
     ctx.request_info.in_request_body_stage = true;
 
     let mut reader = {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter
             .ensure_request_body(None)
@@ -1943,6 +2263,11 @@ async fn request_body_buffer_gate_preserves_disk_spill_without_materializing() {
 
     {
         let gate = BodyGatedRequestFilter::new(RequestBodyBufferPlugin::create(), BodyRequirement::fail_close());
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let mut log = PluginLog::new("RequestBodyBuffer");
         assert_eq!(
@@ -1958,6 +2283,11 @@ async fn request_body_buffer_gate_preserves_disk_spill_without_materializing() {
     );
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter
@@ -2003,6 +2333,11 @@ async fn read_request_body_answers_expect_continue_before_drain() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(
         adapter.read_request_body(None).await.expect("expect body must buffer"),
@@ -2027,6 +2362,11 @@ async fn expect_continue_declared_over_physical_cap_rejects_without_interim() {
     ctx.request_info.body_declared = Some(true);
     ctx.request_info.in_request_body_stage = true;
     ctx.request_body_config.max_body_size_bytes = 4;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(
         adapter.read_request_body(None).await,
@@ -2075,6 +2415,11 @@ async fn read_response_body_refuses_without_bound_response_header() {
     let mut ctx = EdgionHttpContext::default();
 
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let result = adapter.read_response_body(None).await;
         assert!(matches!(result, Err(BodyReadError::NotBuffered)));
@@ -2245,7 +2590,7 @@ async fn read_response_body_ignores_head_snapshot_when_method_rewritten_away() {
 /// headers. `apply_response_local_reply` keys on the request method and
 /// (previously) on request headers, neither of which the fixed
 /// `GET /dye-test` request can vary.
-async fn test_session_raw(request: &str) -> Session {
+pub(super) async fn test_session_raw(request: &str) -> Session {
     let (mut client, server) = tokio::io::duplex(4096);
     let stream: pingora_core::protocols::Stream = Box::new(server);
     let mut session = Session::new_h1(stream);
@@ -2541,6 +2886,11 @@ async fn streamed_handler_and_complete_capture_are_incompatible_in_both_orders()
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.body_declared = Some(true);
         ctx.request_info.in_request_body_stage = true;
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         if capture_first {
             assert_eq!(adapter.ensure_request_body(None).await.unwrap(), 3);
@@ -2578,6 +2928,11 @@ async fn streamed_handler_prevents_bodyless_mutation_owner_creation() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.body_declared = Some(false);
     ctx.request_info.in_request_body_stage = true;
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
     assert!(matches!(
@@ -2594,6 +2949,11 @@ async fn streamed_handler_refuses_uncached_transport_preread() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
     assert!(!ctx.request_body.has_cached_body());
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
     assert!(!ctx.request_body_handlers_selected());
@@ -2608,6 +2968,11 @@ async fn waf_capability_preserves_election_stage_and_freeze_before_native_reject
     ctx.request_info.body_declared = Some(true);
     let owner = Arc::new(());
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter.waf().claim_phase(&owner, WafPhase::Request),
@@ -2626,6 +2991,11 @@ async fn waf_capability_preserves_election_stage_and_freeze_before_native_reject
     ))));
     ctx.request_body_config.max_body_size_bytes = 32;
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter.waf().install_body_limit(&owner, 4),
@@ -2636,6 +3006,11 @@ async fn waf_capability_preserves_election_stage_and_freeze_before_native_reject
     ctx.request_info.in_request_body_stage = true;
     // Capture and mutate through the canonical adapter first so this valid
     // snapshot below the cap can distinguish a later mutation freeze.
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.ensure_request_body(None).await, Ok(8));
     assert_eq!(adapter.overwrite_request_body(Bytes::from_static(b"ok")).await, Ok(()));
@@ -2693,6 +3068,11 @@ async fn waf_capability_rejected_install_keeps_resident_transaction() {
         0,
         WafLogMode::On,
     ))));
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(adapter.waf().install_transaction(&owner, transaction(403)));
     assert!(!adapter.waf().install_transaction(&owner, transaction(409)));
@@ -2757,6 +3137,11 @@ async fn terminal_grpc_adapter_paths_preserve_order_trace_and_status() {
             ctx.queue_pending_response_header_op(op);
         }
         {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             if exact {
                 adapter.send_grpc_error_direct(8, None).await.unwrap();
@@ -2800,6 +3185,11 @@ async fn terminal_grpc_adapter_failure_keeps_outcome_and_duplicate_queue() {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
         {
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let result = if exact {
                 adapter.send_grpc_error_direct(8, None).await
@@ -2883,6 +3273,11 @@ async fn borrowed_mtls_conditions_ignore_unrelated_san_allocation_cost() {
                 run: Some(ConditionSet::all_of(vec![Condition::MtlsMatch(condition)])),
             })
         });
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(adapter.client_cert_info().unwrap() as *const ClientCertInfo, stored);
         let (owned, clone_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
@@ -2943,9 +3338,16 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
         test_session_raw("GET /entry?x=hello+world&empty=&encoded=foo%26bar HTTP/1.1\r\nHost: example.com\r\n\r\n")
             .await;
     let mut ctx = EdgionHttpContext::default();
-    ctx.request_info.entry_raw_query = Some("x=hello+world&empty=&encoded=foo%26bar".to_string());
+    ctx.request_query
+        .capture(Some("x=hello+world&empty=&encoded=foo%26bar".to_string()))
+        .unwrap();
     session.req_header_mut().set_uri("/before?x=rewritten".parse().unwrap());
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(adapter.get_query_param_ref("x"), Some("hello world"));
         assert_eq!(adapter.get_query_param_ref("empty"), Some(""));
@@ -2954,7 +3356,7 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
         assert_eq!(adapter.get_query_param("empty"), Some(String::new()));
         assert_eq!(adapter.get_query_param("missing"), None);
     }
-    let stored = ctx.cached_query().get("x").unwrap().as_ptr();
+    let stored = ctx.entry_query_param("x").unwrap().as_ptr();
     let key = KeyGet::Query { name: "x".to_string() };
     let mut condition = KeyMatchCondition {
         key: key.clone(),
@@ -2970,7 +3372,12 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
         skip: None,
         run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(condition)])),
     });
-    session.req_header_mut().set_uri("/after?x=changed".parse().unwrap());
+    ctx.request_query.replace_raw(Some("x=changed".into())).unwrap();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.request_query(), Some("x=changed"));
     assert_eq!(adapter.get_query_param_ref("x").unwrap().as_ptr(), stored);
@@ -3011,6 +3418,11 @@ async fn borrowed_context_conditions_observe_replacement_and_removal_without_cop
         skip: None,
         run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(condition)])),
     });
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.get_ctx_var_ref("mode").unwrap().as_ptr(), stored);
     let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.key_get(&key));
@@ -3040,6 +3452,11 @@ async fn borrowed_jwt_source_keeps_live_missing_only_oidc_fallback() {
     use crate::plugins::runtime::conditions::extract_jwt_claim_values;
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.set_ctx_var("oidc_claims", r#"{"sub":"oidc"}"#).unwrap();
     for (jwt, expected) in [
@@ -3074,6 +3491,11 @@ async fn borrowed_identity_conditions_use_captured_values_without_copies() {
     ).await;
     let mut ctx = EdgionHttpContext::default();
     {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(adapter.get_request_id_ref().is_none());
         assert!(adapter.get_request_hostname().is_none());
@@ -3099,6 +3521,11 @@ async fn borrowed_identity_conditions_use_captured_values_without_copies() {
         .req_header_mut()
         .insert_header("traceparent", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00")
         .unwrap();
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.get_request_id_ref().unwrap().as_ptr(), trace_ptr);
     assert_eq!(adapter.get_request_hostname().unwrap().as_ptr(), host_ptr);
@@ -3152,6 +3579,11 @@ async fn composite_key_existence_avoids_value_construction() {
         ctx.request_info.remote_ip = remote_ip.to_string();
         for path in &paths {
             ctx.request_info.normalized_current_path = path.clone();
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let exists = adapter.key_get(&KeyGet::RemoteIpAndPath).is_some();
             assert_eq!(exists, !remote_ip.is_empty());
@@ -3185,6 +3617,11 @@ async fn composite_key_value_allocates_exact_output_once() {
         for path in &paths {
             ctx.request_info.normalized_current_path = path.clone();
             let expected = (!remote_ip.is_empty()).then(|| format!("{remote_ip}:{path}"));
+            if !ctx.request_query.is_captured() {
+                ctx.request_query
+                    .capture(session.req_header().uri.query().map(str::to_owned))
+                    .unwrap();
+            }
             let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let (value, stats) =
                 crate::test_allocation_counter::count_allocation_stats(|| adapter.key_get(&KeyGet::RemoteIpAndPath));
@@ -3199,7 +3636,7 @@ async fn composite_key_value_allocates_exact_output_once() {
 async fn current_raw_query_borrows_live_uri_without_copying() {
     let mut session = test_session_raw("GET /entry?frozen=yes HTTP/1.1\r\nHost: example.com\r\n\r\n").await;
     let mut ctx = EdgionHttpContext::default();
-    ctx.request_info.entry_raw_query = Some("frozen=yes".to_string());
+    ctx.request_query.capture(Some("frozen=yes".to_string())).unwrap();
     for (uri, expected) in [
         (
             "/first?q=hello+world&x=a%26b&x=&flag",
@@ -3210,7 +3647,15 @@ async fn current_raw_query_borrows_live_uri_without_copying() {
         ("/last?changed=yes", Some("changed=yes")),
     ] {
         session.req_header_mut().set_uri(uri.parse().unwrap());
-        let source_ptr = session.req_header().uri.query().map(str::as_ptr);
+        ctx.request_query
+            .replace_raw(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+        let source_ptr = ctx.query().map(str::as_ptr);
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let (borrowed, calls) = crate::test_allocation_counter::count_allocations(|| adapter.request_query());
         assert_eq!(borrowed, expected);
@@ -3231,6 +3676,11 @@ async fn dye_value_borrows_clean_success_without_borrowing_adapter() {
     let template_plan = compile_plan("response:\n  - name: X-O\n    value: 'fixed'\n", "canary");
     let raw = String::from("selected-value");
     let value = {
+        if !ctx.request_query.is_captured() {
+            ctx.request_query
+                .capture(session.req_header().uri.query().map(str::to_owned))
+                .unwrap();
+        }
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         let value = adapter.dye_rule_value(&plan.response[0], "canary", DyeOutcome::Success, &raw);
         assert!(matches!(value, Cow::Borrowed(_)));

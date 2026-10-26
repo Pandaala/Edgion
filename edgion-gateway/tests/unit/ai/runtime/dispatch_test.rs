@@ -327,6 +327,7 @@ async fn header_modifier_ai_backend_matches_native_first_equivalent_operations()
                 session.req_header_mut().append_header(name, "client-b").unwrap();
             }
             let mut ctx = EdgionHttpContext::new();
+            ctx.request_query.capture(None).unwrap();
             if ai {
                 apply_backend_request_headers(&mut session, &mut ctx, backend).unwrap();
             } else {
@@ -373,6 +374,7 @@ async fn header_modifier_ai_backend_rejects_invalid_duplicate_and_recovers() {
         let current = crate::routes::http::match_unit::compile_http_fixture(&rule_for(duplicate), "default").unwrap();
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::new();
+        ctx.request_query.capture(None).unwrap();
         let result = apply_backend_request_headers(&mut session, &mut ctx, &current.backends[0]);
         if duplicate.contains('\r') {
             assert_eq!(result, Err(AiDispatchError::InvalidConfiguration));
@@ -408,6 +410,7 @@ async fn header_modifier_invalid_ai_backend_is_rejected_before_header_mutation()
     let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, "default").unwrap();
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     assert!(matches!(
         apply_backend_request_headers(&mut session, &mut ctx, &runtime.backends[0]),
         Err(AiDispatchError::InvalidConfiguration)
@@ -424,6 +427,7 @@ async fn dispatch_rejects_denied_backend_before_request_mutation() {
         limits: None,
     };
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.route_unit = Some(denied_route_unit());
     let mut plan = selectable_plan(vec![credential]);
     plan.candidates[0].logical = compiled_ai_logical(Some(RefDenied {
@@ -454,6 +458,7 @@ async fn dispatch_uses_candidate_handle_after_route_snapshot_changes() {
         limits: None,
     };
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     use pingora_core::protocols::http::RequestBodyBuffer;
     let (mut storage, view) = crate::request_body::BodyStorage::new(64 * 1024, 1024 * 1024);
     storage.finish().await.unwrap();
@@ -486,6 +491,7 @@ async fn prepare_first_attempt_rechecks_request_deadline_before_plan_mutation() 
         limits: None,
     };
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.route_unit = Some(request_deadline_route_unit(Duration::from_millis(1)));
     ctx.start_time = Instant::now() - Duration::from_secs(1);
     let mut plan = selectable_plan(vec![credential]);
@@ -514,6 +520,7 @@ async fn prepare_first_attempt_rechecks_grpc_deadline_before_plan_mutation() {
         limits: None,
     };
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.request_info
         .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
     let mut plan = selectable_plan(vec![credential]);
@@ -636,6 +643,7 @@ fn cost_weighted_accepts_max_completion_tokens_only_body_without_service_max() {
 #[test]
 fn dispatch_mark_is_idempotent() {
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
     mark_ai_dispatch_started(&mut ctx).unwrap();
     mark_ai_dispatch_started(&mut ctx).unwrap();
@@ -648,6 +656,7 @@ fn dispatch_mark_is_idempotent() {
 #[test]
 fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
     let mut denied = EdgionHttpContext::new();
+    denied.request_query.capture(None).unwrap();
     denied.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
     denied.ensure_ai_state().effective_policy = Some(retry_policy(0).0);
     mark_ai_dispatch_started(&mut denied).unwrap();
@@ -664,6 +673,7 @@ fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
     );
 
     let mut sampled_once = EdgionHttpContext::new();
+    sampled_once.request_query.capture(None).unwrap();
     sampled_once.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
     let (policy, budget) = retry_policy(51);
     sampled_once.ensure_ai_state().effective_policy = Some(policy);
@@ -679,6 +689,7 @@ fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
 #[test]
 fn rejected_plan_never_crosses_dispatch_boundary() {
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.restore_ai_attempt_plan(AiAttemptPlan::Rejected(crate::ai::AiPlanError::InvalidBackend));
     assert_eq!(mark_ai_dispatch_started(&mut ctx), Err(AiDispatchError::Rejected));
 }
@@ -887,6 +898,7 @@ fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
     plan.scheduler.select_backend(0).unwrap();
     plan.scheduler.select_credential(u16::MAX, 0).unwrap();
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     plan.body_generation = ctx.request_body.generation();
     ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
 
@@ -906,6 +918,7 @@ fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
 #[test]
 fn ambiguous_failure_replays_only_when_explicitly_requested() {
     let mut denied_ctx = EdgionHttpContext::new();
+    denied_ctx.request_query.capture(None).unwrap();
     denied_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
     mark_ai_dispatch_started(&mut denied_ctx).unwrap();
     assert_eq!(
@@ -922,6 +935,7 @@ fn ambiguous_failure_replays_only_when_explicitly_requested() {
     assert_eq!(denied.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
 
     let mut allowed_ctx = EdgionHttpContext::new();
+    allowed_ctx.request_query.capture(None).unwrap();
     allowed_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
     mark_ai_dispatch_started(&mut allowed_ctx).unwrap();
     assert_eq!(
@@ -1076,6 +1090,7 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
             plan.request_body =
                 Bytes::from_static(br#"{"model":"logical","messages":[{"role":"user","content":"hello"}]}"#);
             let mut ctx = EdgionHttpContext::new();
+            ctx.request_query.capture(None).unwrap();
             let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
             storage.finish().await.unwrap();
             ctx.request_body.install(view);
@@ -1127,6 +1142,7 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
         .provider = AiProvider::Anthropic;
     plan.conversion = Some(AiConversion::ChatToAnthropic);
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan));
     let mut session = test_session().await;
     assert!(matches!(
@@ -1136,6 +1152,7 @@ async fn unary_admission_arbitrates_only_active_owners_before_dispatch() {
     assert!(ctx.selected_backend.is_none());
     drop(reservations);
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.finish().await.unwrap();
     ctx.request_body.install(view);
@@ -1160,6 +1177,7 @@ async fn native_off_preserves_bytes_generation_encoding_and_rejects_later_mutati
     use pingora_core::protocols::http::RequestBodyBuffer;
     let body = Bytes::from_static(br#" { "model" : "logical", "extensions" : 123456789012345678901234567890 } "#);
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.write(&body).await.unwrap();
     storage.finish().await.unwrap();
@@ -1235,6 +1253,7 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
     use pingora_core::protocols::http::RequestBodyBuffer;
     let body = Bytes::from_static(br#" { "model" : "logical", "extensions" : 123456789012345678901234567890 } "#);
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.write(&body).await.unwrap();
     storage.finish().await.unwrap();
@@ -1333,6 +1352,7 @@ async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
             let body = Bytes::from_static(br#"{"model":"logical","max_tokens":10,"messages":[]}"#);
             plan.request_body = body.clone();
             let mut ctx = EdgionHttpContext::new();
+            ctx.request_query.capture(None).unwrap();
             let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
             storage.write(&body).await.unwrap();
             storage.finish().await.unwrap();
@@ -1448,6 +1468,7 @@ async fn native_responses_dispatch_strips_client_and_backend_principal_selectors
             .insert_header("OPENAI-PROJECT", "proj-client-selector")
             .unwrap();
         let mut ctx = EdgionHttpContext::new();
+        ctx.request_query.capture(None).unwrap();
         for (header, value) in [
             ("authorization", "Bearer deferred-selector-key"),
             ("openai-organization", "org-deferred-selector"),
@@ -1563,6 +1584,7 @@ async fn prepared_admission_projects_selected_credential_and_retained_generation
     let adaptive = store.get(&key).unwrap();
     plan.candidates[0].adaptive = Some(Arc::clone(&adaptive));
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.write(&plan.request_body).await.unwrap();
     storage.finish().await.unwrap();
@@ -1634,6 +1656,7 @@ async fn prepared_admission_preserves_token_bound_precedence_and_saturation() {
             .unwrap()
             .max_output_tokens = backend_bound;
         let mut ctx = EdgionHttpContext::new();
+        ctx.request_query.capture(None).unwrap();
         let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
         storage.write(&plan.request_body).await.unwrap();
         storage.finish().await.unwrap();
@@ -1666,6 +1689,7 @@ async fn prepared_admission_rejects_invalid_selection_and_committed_context() {
         }),
     }]);
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
     let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
     storage.write(&plan.request_body).await.unwrap();
     storage.finish().await.unwrap();

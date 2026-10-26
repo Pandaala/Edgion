@@ -1,6 +1,5 @@
 use super::*;
 use edgion_resources::resources::http_route::HTTPPathMatch;
-use pingora_http::RequestHeader;
 
 fn matched_path(match_type: &str, value: &str) -> HTTPRouteMatch {
     HTTPRouteMatch {
@@ -17,17 +16,17 @@ fn matched_path(match_type: &str, value: &str) -> HTTPRouteMatch {
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn parsed_request_caches_have_compact_inline_layout() {
-    assert_eq!(std::mem::size_of::<ParsedRequestCaches>(), 32);
+    assert_eq!(std::mem::size_of::<ParsedRequestCaches>(), 16);
 }
 
 #[test]
 fn empty_parsed_views_initialize_without_allocating() {
     let ctx = EdgionHttpContext::new();
     let mut empty_query_ctx = EdgionHttpContext::new();
-    empty_query_ctx.request_info.entry_raw_query = Some(String::new());
+    empty_query_ctx.request_query.capture(Some(String::new())).unwrap();
     let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
-        assert!(ctx.cached_query().is_empty());
-        assert!(empty_query_ctx.cached_query().is_empty());
+        assert!(ctx.entry_query_param("missing").is_none());
+        assert!(empty_query_ctx.entry_query_param("missing").is_none());
         assert!(ctx.cache_path_params(HashMap::new()).is_empty());
     });
 
@@ -61,48 +60,38 @@ fn regular_expression_paths_do_not_create_named_captures() {
 #[test]
 fn cached_query_initializes_lazily_and_caches() {
     let mut ctx = EdgionHttpContext::new();
-    ctx.request_info.entry_raw_query = Some("name=hello%20world&plus=hello+world&n=1".to_string());
-    assert!(ctx.parsed_request_caches.query.get().is_none());
-
-    let first = ctx.cached_query() as *const _;
-    assert!(ctx.parsed_request_caches.query.get().is_some());
-    // Synthetic contexts can still mutate the snapshot; an initialized cache
-    // retains its values and borrowed-map identity.
-    ctx.request_info.entry_raw_query = Some("name=changed&n=2".to_string());
-    let second = ctx.cached_query() as *const _;
-    assert_eq!(first, second, "cached_query must be init-once per request");
-
-    let map = ctx.cached_query();
-    assert_eq!(map.get("name").map(String::as_str), Some("hello world"));
-    assert_eq!(map.get("plus").map(String::as_str), Some("hello world"));
-    assert_eq!(map.get("n").map(String::as_str), Some("1"));
+    ctx.request_query
+        .capture(Some("name=hello%20world&plus=hello+world&n=1".into()))
+        .unwrap();
+    let first = ctx.entry_query_param("name").unwrap().as_ptr();
+    assert!(ctx.request_query.capture(Some("name=changed".into())).is_err());
+    assert_eq!(ctx.entry_query_param("name"), Some("hello world"));
+    assert_eq!(ctx.entry_query_param("name").unwrap().as_ptr(), first);
+    assert_eq!(ctx.entry_query_param("plus"), Some("hello world"));
+    assert_eq!(ctx.entry_query_param("n"), Some("1"));
 }
 
 #[test]
 fn cached_query_handles_none_raw() {
     let mut ctx = EdgionHttpContext::new();
-    let first = ctx.cached_query() as *const _;
-    assert!(ctx.cached_query().is_empty(), "Absent entry query yields empty cache");
-    ctx.request_info.entry_raw_query = Some("a=1".to_string());
-    let map = ctx.cached_query();
-    assert!(map.is_empty(), "OnceLock already initialized to empty");
-    assert_eq!(first, map as *const _);
+    assert_eq!(ctx.entry_query_param("a"), None);
+    ctx.request_query.capture(Some("a=1".into())).unwrap();
+    assert_eq!(ctx.entry_query_param("a"), Some("1"));
 }
 
 #[test]
 fn cached_query_uses_entry_snapshot_across_live_rewrites() {
     let mut ctx = EdgionHttpContext::new();
-    ctx.request_info.entry_raw_query = Some("name=client%20value".to_string());
-    let mut req = RequestHeader::build("GET", b"/entry?name=client%20value", None).unwrap();
-
-    // A rewrite before the first decoded read must not choose the cache source.
-    req.set_uri("/backend?name=rewritten+value".parse().unwrap());
-    assert_eq!(ctx.query(&req), Some("name=rewritten+value"));
-    assert_eq!(ctx.cached_query().get("name").map(String::as_str), Some("client value"));
-    let first = ctx.cached_query() as *const _;
-
-    req.set_uri("/other?name=later%20value".parse().unwrap());
-    assert_eq!(ctx.query(&req), Some("name=later%20value"));
-    assert_eq!(ctx.cached_query().get("name").map(String::as_str), Some("client value"));
-    assert_eq!(first, ctx.cached_query() as *const _);
+    ctx.request_query.capture(Some("name=client%20value".into())).unwrap();
+    ctx.request_query
+        .replace_raw(Some("name=rewritten+value".into()))
+        .unwrap();
+    assert_eq!(ctx.query(), Some("name=rewritten+value"));
+    assert_eq!(ctx.entry_query_param("name"), Some("client value"));
+    let first = ctx.entry_query_param("name").unwrap().as_ptr();
+    ctx.request_query
+        .replace_raw(Some("name=later%20value".into()))
+        .unwrap();
+    assert_eq!(ctx.query(), Some("name=later%20value"));
+    assert_eq!(ctx.entry_query_param("name").unwrap().as_ptr(), first);
 }

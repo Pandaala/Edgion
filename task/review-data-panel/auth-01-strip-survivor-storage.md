@@ -1,16 +1,18 @@
-# Query and Cookie stripping survivor storage
+# Cookie stripping survivor storage
 
-Status: deferred representation and CPU/allocation decision for the user.
-Source baseline: `ff0551111`.
+Status: Cookie representation and CPU/allocation decision remains deferred.
+Source baseline: `ff0551111` (historical Cookie evidence).
 
-## Evidence
+## Scope
 
-`edgion-gateway/src/plugins/http/common/auth_common.rs` retains borrowed survivors
-in Vec<&str> before joining them into an owned output. `strip_query_param` collects
-nonempty unmatched pairs even when no credential is ultimately removed; that
-no-match path drops the vector without writing a replacement. Plain parameter
-names already avoid decoding storage, while names with percent/plus markers use
-the canonical decoder. The input query itself is borrowed from the live URI.
+The Query portion of auth-01 is implemented by the request-scoped lazy Query owner:
+structured deletion preserves raw survivors, caches canonical decoded names, and
+publishes concrete targets at reviewed transport boundaries. See
+[verification](../../tasks/pending/lazy-query-management-verification.md) for
+functional results and measured CPU/memory tradeoffs. This is not a claim that
+all Query workloads improved. Cookie storage is unchanged and remains open here.
+
+## Cookie evidence
 
 `plan_cookie_strip` consumes an arbitrary iterator of borrowed Cookie lines once,
 trims and classifies pairs, then joins survivors with semicolon-space separators.
@@ -32,68 +34,43 @@ whole-callback zero allocation or measured throughput.
 ## Decision alternatives
 
 - Keep borrowed survivor vectors and exact joining until measurements justify
-  changing this representation.
-- Materialize a query replacement only after finding the first removable pair.
-  Evaluate the no-match benefit independently of the Cookie path. Preserve empty
-  pair filtering on matched queries without rewriting unmatched queries, and
-  avoid unnecessarily decoding the already inspected prefix again.
-- Append survivors directly to a String. Compare growth reallocations, copies and
-  final retained capacity against the removed pointer vector. Reserving an input
-  upper bound may avoid growth but leave excess capacity when credentials are
-  stripped. Cookie bounds must include inserted separators across header lines:
-  summing line lengths alone is insufficient for separate valueless pairs.
-- Count output bytes first and fill an exactly sized output in another pass.
-  Account for repeated parsing, key decoding and membership checks. The current
-  Cookie helper accepts an Iterator without a Clone/rewind requirement; a second
-  pass needs an explicitly reviewed source interface or retained decisions, not
-  an assumption that every caller's iterator can restart.
-- Use bounded inline survivor storage with a heap fallback if measurements justify
-  the stack footprint and threshold. Do not impose a new input limit to make the
-  implementation convenient, or replace borrowed slices with owned pair copies.
+  changing the representation.
+- Append survivors directly to a String, measuring growth, copies and retained
+  capacity. Input-length reservation must include inserted separators across
+  separate header lines; summed input lengths alone are insufficient.
+- Count output bytes and fill an exact-size output in a second pass. The current
+  helper accepts an arbitrary Iterator without Clone/rewind, so a second pass
+  requires a reviewed source interface or retained decisions.
+- Evaluate bounded inline survivor storage with a heap fallback against stack
+  footprint; do not impose new input limits or copy each surviving payload.
 
-Shrinking a buffer is not a free correction: it may reallocate/copy, and must be
-included in cost measurements. Excess capacity refers to retained allocation
-size, not a claim that the new output contains removed credential bytes. Do not
-introduce unsafe views, extend borrows across request mutation, or build a global
-scratch pool. Query and Cookie matching have different semantics; sharing an
-output-storage technique must not unify their matching rules accidentally.
+Shrinking may reallocate/copy and must be measured. Excess capacity is retained
+allocation size, not evidence that output contains removed credentials. Do not
+introduce unsafe views, extended mutation borrows, or global scratch pools.
+Query and Cookie matching semantics must remain distinct.
 
 ## Acceptance for a selected implementation
 
-Preserve the live-query/frozen-extraction boundary, percent-decoded query names,
-plain-name fast path, malformed-token behavior, duplicate removal and exact raw
-surviving query bytes. Unmatched query syntax remains byte-identical with no
-setter call; matched queries retain their established empty-pair removal.
+Inspect every Cookie line, preserve UTF-8 filtering, whitespace trimming, raw-name
+matching and first-equals splitting, and remove all selected names atomically.
+Preserve Absent/RemoveHeader/Replace distinctions for empty lines, no survivors,
+no matches and empty names lists. Merge multiple lines into one replacement.
+Preserve header validation, sensitivity, protected headers, deferred cleanup and
+ignored setter errors. End immutable request borrows before mutation.
 
-For Cookies, inspect every line, retain the existing UTF-8 filtering, whitespace
-trimming, raw name matching and first-equals split, and remove every selected
-name in one logical operation. Preserve Absent/RemoveHeader/Replace distinctions,
-including empty lines, no survivors, no matches and an empty names list. Continue
-merging multiple lines into one replacement rather than dropping unrelated fields.
+Retain the existing owned-conversion allocation/pointer regression or independently
+review a measured whole-path tradeoff before changing it. Compare absent, empty,
+multiple-line, few/many-pair, long-value and high-removal inputs. Measure CPU,
+allocation calls, requested/retained bytes and stack footprint including conversion
+and mutation, with fixtures outside the measured closures. A selected design needs
+its own plan, independent reviews and verification. No new observability is needed.
 
-End immutable request borrows before mutation. Preserve header validation,
-sensitivity marking, protected-header handling, deferred cleanup and ignored
-setter errors. Query updates must leave path forwarding and HTTP/2 authority to
-their existing owners. Keep the existing Cookie owned-conversion allocation and
-pointer regression, or independently review a measured whole-path tradeoff before
-changing that performance contract; do not silently lose it while deleting a Vec.
+## Original knowledge and historical baseline
 
-Compare matched/unmatched queries, absent/empty/multiple Cookie lines, few/many
-short pairs, long values, high removal ratios and percent-heavy names. Measure
-allocation calls, requested and retained bytes, stack footprint and CPU separately,
-including output conversion and mutation as well as planning. Fixtures belong
-outside measured closures; no production observability or secret-bearing logs
-are needed. A selected design requires its own IMPL plan, review and verification.
-
-## Original knowledge and baseline
-
-- `skills/04-review/key-auth/regression-guards/strip-query-param-no-match-preserves-query.md`
 - `skills/04-review/key-auth/regression-guards/hide-credentials-query-cookie-strip.md`
 - `skills/04-review/jwt-auth/regression-guards/hide-credentials-query-cookie-strip.md`
-- `skills/04-review/uri-normalization/mandatory-design/normalization-contract.md`
 
-Fresh baseline verification passed 32 shared-auth, 14 KeyAuth, 47 JwtAuth and four
-OIDC cookie-strip tests (97 total), formatting check, workspace check and Clippy
-with existing unrelated warnings. These validate the current implementation;
-no alternative representation or throughput result has been measured. This task
-makes no runtime change.
+Historical verification passed 32 shared-auth, 14 KeyAuth, 47 JwtAuth and four
+OIDC cookie-strip tests (97 total), formatting, workspace check and Clippy with
+unrelated warnings. This is historical evidence, not measurement of a proposed
+Cookie representation. No Cookie alternative has been selected or implemented.

@@ -44,7 +44,8 @@ fn path_reject_freezes_entry_raw_uri_for_access_log() {
         ..Default::default()
     };
 
-    let status = apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg);
+    let status =
+        apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg).unwrap();
 
     assert_eq!(status, Some(EdgionErrorCode::PathEscapedSlashRejected));
     assert_eq!(ctx.request_path(), "/admin%2Fsecret");
@@ -56,7 +57,7 @@ fn path_normalization_entry_refreshes_normalized_current_path() {
     let mut ctx = EdgionHttpContext::new();
     let cfg = PathNormalizationConfig::default();
 
-    let status = apply_path_normalization_entry(&mut ctx, "/admin//../secret", None, &cfg);
+    let status = apply_path_normalization_entry(&mut ctx, "/admin//../secret", None, &cfg).unwrap();
 
     assert_eq!(status, None);
     assert_eq!(ctx.request_path(), "/admin//../secret");
@@ -268,4 +269,22 @@ fn body_composition_covers_route_refs_and_unselected_backends() {
         std::iter::empty()
     ));
     assert!(!EdgionHttpContext::default().waf_partial_capture_allowed);
+}
+
+#[test]
+fn duplicate_entry_capture_rejects_before_replacing_audit_snapshot() {
+    let mut ctx = EdgionHttpContext::new();
+    let config = PathNormalizationConfig::default();
+    assert_eq!(
+        apply_path_normalization_entry(&mut ctx, "/original", Some("a=1".into()), &config).unwrap(),
+        None
+    );
+    assert_eq!(
+        apply_path_normalization_entry(&mut ctx, "/replacement", Some("b=2".into()), &config),
+        Err(crate::request_query::QueryError::AlreadyCaptured)
+    );
+    assert_eq!(ctx.request_path(), "/original");
+    assert_eq!(ctx.entry_query(), Some("a=1"));
+    let error = super::super::pg_upstream_request_filter::local_pre_dispatch_failure();
+    assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
 }

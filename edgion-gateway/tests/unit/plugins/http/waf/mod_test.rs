@@ -187,9 +187,13 @@ async fn request_line_keeps_raw_entry_target_after_uri_rewrite() {
             .return_const("/%61dmin?entry=%26".to_string());
         session.expect_get_http_protocol().return_const(protocol);
         session
-            .expect_request_uri()
+            .expect_request_uri_authority()
             .times(usize::from(protocol == "HTTP/2.0"))
-            .return_const("https://example.test/rewritten?current=+".parse::<http::Uri>().unwrap());
+            .returning(|| {
+                static AUTHORITY: std::sync::LazyLock<http::uri::Authority> =
+                    std::sync::LazyLock::new(|| "example.test".parse().unwrap());
+                Some(&AUTHORITY)
+            });
         session.expect_remote_ip().return_const("192.0.2.1".to_string());
         session.expect_get_request_id_ref().returning(|| Some("request-1"));
         session.expect_ensure_request_body().never();
@@ -1230,7 +1234,7 @@ fn h2_authority_host_projection_preserves_exact_borrowed_bytes_and_semantics() {
         let uri: http::Uri = format!("https://{authority}/echo").parse().unwrap();
         let mut map = http::HeaderMap::new();
         map.insert("x-test", http::HeaderValue::from_static("safe"));
-        let views = request_header_views(&map, "HTTP/2.0", Some(&uri));
+        let views = request_header_views(&map, "HTTP/2.0", uri.authority());
         assert_eq!(views.len(), 2);
         let host = views.iter().find(|h| h.name() == b"host").unwrap();
         assert_eq!(host.value(), authority.as_bytes());
@@ -1281,7 +1285,7 @@ fn host_projection_never_replaces_explicit_empty_invalid_or_duplicate_hosts() {
         for value in &values {
             map.append(http::header::HOST, http::HeaderValue::from_bytes(value).unwrap());
         }
-        let views = request_header_views(&map, "HTTP/2.0", Some(&uri));
+        let views = request_header_views(&map, "HTTP/2.0", uri.authority());
         assert_eq!(views.iter().map(|h| h.value()).collect::<Vec<_>>(), values);
         assert_eq!(views.len(), map.len());
     }
@@ -1298,12 +1302,12 @@ fn h1_and_missing_h2_authority_do_not_manufacture_host() {
         ("HTTP/2.0", Some(&relative)),
         ("HTTP/2.0", None),
     ] {
-        assert!(request_header_views(&map, protocol, uri).is_empty());
+        assert!(request_header_views(&map, protocol, uri.and_then(http::Uri::authority)).is_empty());
     }
     let mut empty = http::HeaderMap::new();
     empty.insert(http::header::HOST, http::HeaderValue::from_static(""));
     assert_eq!(
-        request_header_views(&empty, "HTTP/1.1", Some(&absolute))[0].value(),
+        request_header_views(&empty, "HTTP/1.1", absolute.authority())[0].value(),
         b""
     );
 }

@@ -93,24 +93,32 @@ impl EdgionHttpContext {
         Some((state.client_stream_dialect?, state.final_response_eligibility?))
     }
 
-    pub(crate) fn capture_ai_request_baseline(&mut self, request: &pingora_http::RequestHeader) {
+    pub(crate) fn capture_ai_request_baseline(
+        &mut self,
+        request: &pingora_http::RequestHeader,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
+            let header = self.snapshot_current_request(request)?;
+            self.request_query.capture_baseline()?;
             let deferred = self.deferred_credential_mutations().cloned();
-            self.ensure_ai_state().request_baseline = Some(AiRequestBaseline {
-                header: request.clone(),
-                deferred,
-            });
+            self.ensure_ai_state().request_baseline = Some(AiRequestBaseline { header, deferred });
         }
+        Ok(())
     }
 
-    pub(crate) fn restore_ai_request_baseline(&mut self, request: &mut pingora_http::RequestHeader) -> bool {
+    pub(crate) fn restore_ai_request_baseline(
+        &mut self,
+        request: &mut pingora_http::RequestHeader,
+    ) -> Result<bool, crate::request_query::QueryError> {
         let Some(baseline) = self.ai_state().and_then(|state| state.request_baseline.as_ref()) else {
-            return false;
+            return Ok(false);
         };
-        *request = baseline.header.clone();
+        let header = baseline.header.clone();
         let deferred = baseline.deferred.clone();
+        self.request_query.restore_baseline()?;
+        *request = header;
         self.restore_deferred_credential_mutations(deferred);
-        true
+        Ok(true)
     }
 
     pub(crate) fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {

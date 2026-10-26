@@ -45,21 +45,15 @@ security feature.
 
 **2. Stripping must not override the path-forwarding decision.**
 
-- Query: split the live query (`session.request_query()`) on `&`, drop the pair
-  whose percent-decoded key matches `name` (mirrors `get_query_param`'s
-  decoded-key extraction), then write only the query back via the dedicated
-  `PluginSession::set_request_query` (empty string = remove query). Surviving
-  pairs keep their original encoding (no decode/re-encode round-trip).
-  - **Why a new `set_request_query` method instead of `set_upstream_uri`:**
-    `set_upstream_uri` sets `ctx.uri_finalized = true` and rebuilds from the
-    *normalized* path (`ctx.path()`). `finalize_request_uri`
-    (`pg_upstream_peer.rs`) short-circuits on `uri_finalized`, so calling
-    `set_upstream_uri` from KeyAuth would silently force the normalized path
-    onto routes configured for raw-path forwarding (`edgion.io/forward-raw-path`
-    / global `forward_normalized_path=false` / external-jump `preserve_raw_path`).
-    `set_request_query` mutates only the query and leaves `uri_finalized` false,
-    so the upstream-peer stage still makes the raw-vs-normalized decision (it
-    re-reads the live, now-stripped query via `ctx.query()`).
+- Query: delegate to the canonical session structured-removal operation. It
+  removes all decoded-equivalent names from the logical current query, preserving
+  surviving raw encoding and leaving frozen extraction unchanged. It does not
+  finalize path or eagerly write Pingora. Current readers consume the owner;
+  final forwarding projects Query after backend/provider edits while preserving
+  the selected raw/normalized path and native HTTP/1 or HTTP/2 authority. Failed
+  projection must not send the old credential-bearing target. No-match removal
+  preserves original syntax and does not render. This is the Query portion of
+  auth-01; Cookie survivor-storage evaluation remains independent.
 - Cookie: collect *every* `Cookie` header line via `session.request_headers()`
   (HTTP/2 may split cookies across multiple fields), drop pairs whose raw
   trimmed key matches `name` (mirrors `get_cookie`'s raw-key, first-`=` match),

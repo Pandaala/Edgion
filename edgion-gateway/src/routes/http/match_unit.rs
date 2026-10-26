@@ -18,7 +18,6 @@ use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Pre-computed match specificity for Gateway API precedence ordering.
@@ -576,18 +575,18 @@ impl HttpRouteRuleUnit {
     /// Match query parameter.
     /// `compiled_regex`: pre-compiled regex for this query matcher (if RegularExpression).
     pub(crate) fn match_query_param(
-        query_params: &HashMap<String, String>,
+        param_value: Option<&str>,
         query_param_match: &edgion_resources::HTTPQueryParamMatch,
         compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
-        let Some(param_value) = query_params.get(&query_param_match.name) else {
+        let Some(param_value) = param_value else {
             return Ok(false);
         };
 
         let match_type = query_param_match.match_type.as_deref().unwrap_or("Exact");
 
         match match_type {
-            "Exact" => Ok(param_value == &query_param_match.value),
+            "Exact" => Ok(param_value == query_param_match.value),
             "RegularExpression" => match compiled_regex {
                 Some(re) => Ok(re.is_match(param_value)),
                 None => Ok(false),
@@ -647,15 +646,15 @@ impl HttpRouteRuleUnit {
         }
 
         // 3. Check Query Parameters — lazy parse: only when this route has query matchers.
-        // ctx.cached_query() ensures the query string is parsed at most once per request
+        // The Query owner parses and caches the frozen entry view on demand
         // across all route candidates, sharing the result with PluginSession::get_query_param.
         // The context owns the frozen entry query shared by all readers.
         if has_query_matchers {
             if let Some(query_param_matches) = &match_item.query_params {
-                let query_params = ctx.cached_query();
                 for (idx, query_param_match) in query_param_matches.iter().enumerate() {
                     let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
-                    if !Self::match_query_param(query_params, query_param_match, pre)? {
+                    if !Self::match_query_param(ctx.entry_query_param(&query_param_match.name), query_param_match, pre)?
+                    {
                         return Ok(None);
                     }
                 }

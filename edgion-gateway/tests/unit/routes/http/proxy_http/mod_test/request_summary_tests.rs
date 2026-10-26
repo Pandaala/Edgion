@@ -42,3 +42,15 @@ fn trace_summary_preserves_bytes_and_reuses_available_capacity() {
         }
     }
 }
+
+#[test]
+fn diagnostic_summary_is_safe_before_headers_and_after_deferred_secret_removal() {
+    let mut ctx = crate::EdgionHttpContext::new();
+    assert_eq!(super::request_diagnostic_summary(&ctx), "request -");
+    ctx.request_info.method = Some(http::Method::GET);
+    ctx.request_info.entry_raw_path = "/private/path".into();
+    ctx.request_query.capture(Some("token=secret&keep=1".into())).unwrap();
+    ctx.request_query.remove_current_names(&["token"]).unwrap();
+    assert_eq!(super::request_diagnostic_summary(&ctx), "request GET");
+    assert!(ctx.request_query.projection_is_dirty());
+}

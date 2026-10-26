@@ -460,3 +460,27 @@ async fn string_request_append_preserves_sealed_policy_and_parse_order() {
         }
     }
 }
+
+#[tokio::test]
+async fn query_strip_only_rejects_a_real_sealed_mutation() {
+    use crate::plugins::runtime::session_adapter::{record_outcome_tests::test_session, PingoraSessionAdapter};
+    use crate::plugins::runtime::traits::PluginSession;
+    for present in [false, true] {
+        let mut session = test_session().await;
+        let mut ctx = context();
+        ctx.request_query
+            .capture(present.then(|| "api%5Fkey=secret".into()))
+            .unwrap();
+        let result = PingoraSessionAdapter::new(&mut session, &mut ctx).remove_request_query_param("api_key");
+        if present {
+            assert!(result.is_err());
+        } else {
+            assert!(!result.unwrap());
+        }
+        assert_eq!(
+            ctx.grpc_transcoding.as_ref().unwrap().conflict.load(Ordering::Acquire),
+            present
+        );
+        assert!(!ctx.request_query.projection_is_dirty());
+    }
+}

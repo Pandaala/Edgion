@@ -4,7 +4,6 @@ use crate::plugins::runtime::PluginSessionHeaderExt;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use edgion_resources::resources::edgion_plugins::ClaimHeaderProjectionPlan;
-use edgion_resources::uri_utils::url_decode;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -64,32 +63,7 @@ fn set_sensitive_request_header_value(
 /// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
 /// each helper matches the extractor it undoes.
 pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
-    let Some(query) = session.request_query() else {
-        return;
-    };
-    let mut removed = false;
-    let remaining: Vec<&str> = query
-        .split('&')
-        .filter(|pair| {
-            if pair.is_empty() {
-                return false;
-            }
-            let raw_key = pair.split('=').next().unwrap_or("");
-            let keep = if raw_key.contains(['%', '+']) {
-                url_decode(raw_key) != name
-            } else {
-                raw_key != name
-            };
-            removed |= !keep;
-            keep
-        })
-        .collect();
-
-    if !removed {
-        return;
-    }
-    let new_query = remaining.join("&");
-    let _ = session.set_request_query(&new_query);
+    let _ = session.remove_request_query_param(name);
 }
 
 /// Remove a named cookie from every forwarded `Cookie` header line.

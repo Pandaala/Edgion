@@ -1101,8 +1101,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &self.inner.req_header().headers
     }
 
-    fn request_uri(&self) -> &http::Uri {
-        &self.inner.req_header().uri
+    fn request_uri_authority(&self) -> Option<&http::uri::Authority> {
+        self.inner.req_header().uri.authority()
     }
 
     fn header_value(&self, name: &str) -> Option<String> {
@@ -1138,10 +1138,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn get_query_param_ref<'s>(&'s self, name: &str) -> Option<&'s str> {
         // Decoded values (percent-decoded, '+' → ' ') shared with the route
-        // matcher via EdgionHttpContext::cached_query. Parsed at most once
+        // matcher via EdgionHttpContext::entry_query_param. Parsed at most once
         // per request regardless of how many plugins call this method.
         // The context owns the frozen entry query, independent of live rewrites.
-        self.ctx.cached_query().get(name).map(String::as_str)
+        self.ctx.entry_query_param(name)
     }
 
     fn get_query_param(&self, name: &str) -> Option<String> {
@@ -1161,7 +1161,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_uri(&self) -> String {
-        self.ctx.uri(self.inner.req_header())
+        self.ctx.uri()
     }
 
     fn get_request_uri(&self) -> String {
@@ -1169,11 +1169,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_query(&self) -> Option<String> {
-        self.inner.req_header().uri.query().map(|s| s.to_string())
+        self.ctx.request_query.current_raw().map(str::to_owned)
     }
 
     fn request_query(&self) -> Option<&str> {
-        self.inner.req_header().uri.query()
+        self.ctx.request_query.current_raw()
     }
 
     fn get_method(&self) -> &str {
@@ -1502,41 +1502,30 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             plan.reject_mutation();
             return Err("sealed RPC query".into());
         }
-        // Keep the raw request-target form (including an absolute-form scheme
-        // and authority) while replacing only its query. Path normalization is
-        // query-agnostic, and the upstream-peer stage still chooses the final
-        // raw or normalized path because this does not set `uri_finalized`.
-        let uri = &self.inner.req_header().uri;
-        if uri.scheme().is_some() || uri.authority().is_some() {
-            // HTTP/2 carries :scheme and :authority in the Uri. A raw-target
-            // update would replace them with a path-only Uri.
-            let path_and_query = if query.is_empty() {
-                uri.path().to_string()
-            } else {
-                format!("{}?{}", uri.path(), query)
-            };
-            let replacement = path_and_query
-                .parse::<Uri>()
-                .map_err(|e| Box::new(e) as PluginSessionError)?;
-            let updated = crate::ctx::retain_uri_authority_for_path_only(uri, replacement)
-                .map_err(|e| Box::new(e) as PluginSessionError)?;
-            self.inner.req_header_mut().set_uri(updated);
-            return Ok(());
-        }
-
-        let current = self.inner.req_header().raw_path();
-        let path_end = current.iter().position(|byte| *byte == b'?').unwrap_or(current.len());
-        let mut target = Vec::with_capacity(path_end + usize::from(!query.is_empty()) + query.len());
-        target.extend_from_slice(&current[..path_end]);
-        if !query.is_empty() {
-            target.push(b'?');
-            target.extend_from_slice(query.as_bytes());
-        }
-        self.inner
-            .req_header_mut()
-            .set_raw_path(&target)
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        let raw = (!query.is_empty()).then_some(query);
+        let mut candidate = self.inner.req_header().clone();
+        crate::ctx::overlay_request_query(&mut candidate, raw)?;
+        self.ctx
+            .request_query
+            .replace_raw(candidate.uri.query().map(str::to_owned))?;
         Ok(())
+    }
+
+    fn remove_request_query_param(&mut self, name: &str) -> PluginSessionResult<bool> {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            if self.ctx.request_query.current_param(name).is_none() {
+                return Ok(false);
+            }
+            plan.reject_mutation();
+            return Err("sealed RPC query".into());
+        }
+        if !self.inner.req_header().uri.path().starts_with('/') {
+            return Err("query requires origin-form path".into());
+        }
+        self.ctx
+            .request_query
+            .remove_current_names(&[name])
+            .map_err(|error| Box::new(error) as PluginSessionError)
     }
 
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
@@ -1545,7 +1534,18 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return Err("sealed RPC request".into());
         }
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
-        crate::ctx::set_path_only_request_target(self.inner.req_header_mut(), parsed_uri)?;
+        let mut candidate = self.inner.req_header().clone();
+        crate::ctx::set_path_only_request_target(&mut candidate, parsed_uri)?;
+        self.ctx.request_query.check_next_revision()?;
+        if !self
+            .ctx
+            .request_query
+            .replace_raw(candidate.uri.query().map(str::to_owned))?
+        {
+            self.ctx.request_query.invalidate_projection()?;
+        }
+        *self.inner.req_header_mut() = candidate;
+        self.ctx.request_query.mark_synced();
         let cfg = edgion_resources::path_normalization::get_path_normalization_config();
         self.ctx.refresh_normalized_path(self.inner.req_header(), cfg);
         self.ctx.uri_finalized = true;
@@ -1553,6 +1553,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_upstream_host(&mut self, host: &str) -> PluginSessionResult<()> {
+        let was_dirty = self.ctx.request_query.projection_is_dirty();
+        self.ctx.request_query.check_next_revision()?;
+        let host_value = http::HeaderValue::from_str(host).map_err(|e| Box::new(e) as PluginSessionError)?;
         let authority = host
             .parse::<http::uri::Authority>()
             .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1565,10 +1568,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         };
         self.inner
             .req_header_mut()
-            .insert_header("Host", host.to_string())
+            .insert_header("Host", host_value)
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         if let Some(uri) = updated_uri {
             self.inner.req_header_mut().set_uri(uri);
+        }
+        self.ctx.request_query.invalidate_projection()?;
+        if !was_dirty {
+            self.ctx.request_query.mark_synced();
         }
         Ok(())
     }
@@ -1760,6 +1767,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return false;
         }
         if !self.grpc_transcoding_allowed() || !self.ctx.grpc_response_owner_compatible(plan.streaming()) {
+            return false;
+        }
+        if self.ctx.ensure_target_synced(self.inner.req_header_mut()).is_err() {
             return false;
         }
         plan.generation = self.ctx.request_body.generation();

@@ -11,8 +11,8 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`auth_common::strip_query_param` now calls `set_request_query` only when it
-actually removes at least one matching parameter. If the live query no longer
+`auth_common::strip_query_param` delegates structured removal to the session
+Query owner; it changes the logical query only when a matching parameter exists. If the live query no longer
 contains the credential key, the request target remains byte-identical.
 
 ## Core Rationale
@@ -58,34 +58,26 @@ query representation.
 
 - `change-fix-07` — 2026-08-02.
 
-## Borrow the live query while planning replacement
+## Shared lazy Query owner
 
-The shared helper borrows the current raw query through `request_query` instead
-of cloning it through `get_query`. The real adapter reads the same live URI for
-both accessors. Surviving slices are joined into an owned replacement before the
-mutable setter runs, so no borrow crosses mutation. Frozen entry extraction,
-percent-decoded key matching, matched empty-pair removal and ignored setter errors
-retain their existing behavior.
+The session structured-removal operation now owns the split/decode/selection work.
+The auth helper no longer creates a survivor vector and immediately joins it into
+a setter input. Current raw reads use the same owner, while extraction continues
+to use frozen entry values. A no-match operation keeps the original raw syntax and
+revision; a match removes all decoded-equivalent names, including bare flags, and
+drops empty separators only as part of the changed selection.
 
-The helper regression matrix forbids the owned accessor and covers absent/empty
-queries, unmatched separators, encoded/duplicate keys, raw surviving bytes and
-setter failures. Real-adapter regressions preserve absolute request targets and
-HTTP/2 authority; the live-query accessor regression checks pointer identity,
-zero read allocations and parity with the owned getter across URI changes.
-The whole-query copy is removed. Encoded-key decoding, the temporary slice Vec
-and the joined replacement still allocate; no whole-helper zero-allocation or
-throughput claim follows.
+Surviving raw ranges and decoded cells stay in the backing document. Consecutive
+removals do not create a history chain or eagerly render; raw demand renders the
+current selection once. Protected transcoder requests reject mutation before
+publication. Auth retains its existing ignored-setter-error policy for rejected
+operations. The eventual concrete-header barrier preserves target form and fails
+locally rather than forwarding stale credentials.
 
-## Plain parameter-name comparison
-
-Names without `%` or `+` compare directly because the canonical decoder preserves
-all their UTF-8 scalars unchanged. Names containing either marker still pass
-through `url_decode`, even when their raw spelling equals the configured name.
-This preserves plus-to-space conversion, percent tokens, malformed-token handling
-and invalid UTF-8 run fallback. No second decoding implementation is introduced.
-
-The shared helper matrix covers literal configured marker names, encoded plus,
-malformed tokens and permitted non-ASCII names. A short/long unmatched plain-name
-allocation comparison verifies that name length no longer creates temporary
-key-sized storage. Session-mock and survivor-vector work remains in that measurement;
-it is not a zero-allocation or throughput claim for the whole helper.
+Names without `%` or `+` compare as borrowed raw spans. Encoded names always use
+canonical decoding, even if their raw spelling equals the configured auth name;
+LB's raw-equality exemption is deliberately different. Reuse addresses auth-01's
+Query survivor work and uri-01's repeated encoded-name work, not Cookie storage or
+a promise of zero first-use allocation. Verify shared-auth wiring and real-adapter
+semantics alongside owner tests; mock setter calls alone no longer prove transport
+publication. Performance costs are separately measured and disclosed.

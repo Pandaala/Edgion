@@ -529,6 +529,16 @@ pub(crate) struct RequestState {
     _lease: Lease,
 }
 
+fn frame_request_target(
+    key: &mut super::key::Builder,
+    header: &pingora_http::RequestHeader,
+    ctx: &crate::EdgionHttpContext,
+) -> Option<()> {
+    key.frame(header.method.as_str().as_bytes())?;
+    key.frame(ctx.path().as_bytes())?;
+    key.frame(ctx.query().unwrap_or("").as_bytes())
+}
+
 impl RequestState {
     pub(super) async fn bind(
         &mut self,
@@ -659,9 +669,7 @@ impl RequestState {
             return None;
         }
         let header = session.req_header();
-        key.frame(header.method.as_str().as_bytes())?;
-        key.frame(ctx.path().as_bytes())?;
-        key.frame(ctx.query(header).unwrap_or("").as_bytes())?;
+        frame_request_target(&mut key, header, ctx)?;
         let mut hosts = header.headers.get_all("host").iter();
         let host = hosts.next();
         if hosts.next().is_some() {

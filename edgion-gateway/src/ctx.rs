@@ -18,7 +18,6 @@ use bytes::Bytes;
 use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::response_header_policy::is_protected_response_header;
-use edgion_resources::uri_utils;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
@@ -37,18 +36,13 @@ const MAX_WAF_ACCESS_LOG_FINDINGS: usize = 16;
 
 pub(crate) type AttachedExtProcMap = HashMap<String, Arc<crate::plugins::http::ext_proc::AttachedExtProc>>;
 
-/// Lazily decoded request parameters shared by routing, plugins, templates,
-/// and access-log projections.
-///
-/// Each view keeps its own init-once gate because query matching is a routing
-/// hot path while path captures are plugin-only. Empty results use `None` as a
-/// sentinel and allocate nothing; non-empty maps box only their 48-byte map
-/// header in addition to the buckets they inherently own.
+/// Lazy frozen route-match path parameters shared by plugin consumers.
+/// Empty results use `None` without an allocation; nonempty maps box their
+/// map header in addition to their buckets. Query state has its own owner.
 #[derive(Default)]
 #[allow(clippy::box_collection)]
 struct ParsedRequestCaches {
     path: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,
-    query: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,
 }
 
 static EMPTY_PARSED_REQUEST_PARAMS: std::sync::LazyLock<HashMap<String, String>> =
@@ -1037,13 +1031,6 @@ pub struct RequestInfo {
     /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
     #[serde(skip)]
     pub entry_raw_path: String,
-
-    /// Snapshot of req_header().uri.query() at request entry. Frozen for the request lifetime.
-    /// Source for `request_uri()` view.
-    /// Not serialized into access_log directly; surfaced via the optional
-    /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
-    #[serde(skip)]
-    pub entry_raw_query: Option<String>,
 
     /// Cache of normalized current path. Populated at entry from entry_raw_path,
     /// refreshed by session_adapter::set_upstream_uri after rewrite.
@@ -2194,11 +2181,9 @@ pub struct EdgionHttpContext {
     /// is the only place the upstream `Host` header can be written.
     pub upstream_authority: Option<String>,
 
-    /// Compact path/query caches. The two cells preserve immutable query access
-    /// required by route matching without a shared outer pointer check. Path
-    /// values are frozen from the normalized route-match view before plugins;
-    /// query values always use the frozen entry snapshot.
+    /// Frozen normalized route-match path parameters, initialized only on demand.
     parsed_request_caches: ParsedRequestCaches,
+    pub(crate) request_query: crate::request_query::RequestQuery,
 
     /// Unified upstream-jump slot. The 72-byte target is boxed because only
     /// explicit jump plugins activate it; ordinary routing retains one nullable
@@ -2207,18 +2192,10 @@ pub struct EdgionHttpContext {
     strict_jump: bool,
     jump_conflict: bool,
 
-    /// True when `req_header.uri` is already in its upstream-forwarded final form;
-    /// further writes are forbidden.
-    ///
-    /// Set in exactly two locations (matching the §9 Rule 2 lint allowlist):
-    ///   1. `session_adapter::set_upstream_uri` — set after rewrite-class plugin writes
-    ///   2. `pg_upstream_peer::upstream_peer_http` single-point decision block —
-    ///      set after the default-normalized vs raw decision is finalized
-    ///
-    /// Set at most once per request lifecycle. Covers:
-    ///   - rewrite plugin "final form" semantics
-    ///   - single-point decision idempotency (retries don't re-decide)
-    ///   - mirror / fan-out consumers see consistent `req_header.uri`
+    /// The raw-versus-normalized forwarding path has been chosen or explicitly
+    /// rewritten. This does not freeze Query: logical edits can remain dirty
+    /// afterward, and the independent target synchronization barrier still runs.
+    /// Mirrors and other detached readers use owner-derived target projections.
     pub uri_finalized: bool,
     /// Independent upstream RPC owner; the downstream request remains REST.
     pub(crate) grpc_transcoding: Option<Arc<crate::plugins::http::grpc_json_transcoder::GrpcTranscodingPlan>>,
@@ -3324,6 +3301,7 @@ impl EdgionHttpContext {
             hash_key: None,
             upstream_authority: None,
             parsed_request_caches: ParsedRequestCaches::default(),
+            request_query: crate::request_query::RequestQuery::default(),
             jump: None,
             strict_jump: false,
             jump_conflict: false,
@@ -3501,29 +3479,17 @@ impl EdgionHttpContext {
             .finalize_status(session_status.or(selected_status).unwrap_or(0));
     }
 
-    /// Get (and lazily build) the per-request decoded query parameter map.
-    ///
-    /// The context's entry-time query snapshot is consulted only on first
-    /// access. Every reader sees the same client-sent query regardless of
-    /// whether an earlier plugin rewrote the live URI. Subsequent calls return
-    /// the already-cached map.
-    ///
-    /// Decoding follows `edgion_resources::uri_utils::parse_query_string` —
-    /// `%XX` percent-decoded and `+` translated to space, matching what the
-    /// route matcher sees in `queryParams`.
-    pub fn cached_query(&self) -> &HashMap<String, String> {
-        self.parsed_request_caches
-            .query
-            .get_or_init(|| {
-                self.request_info
-                    .entry_raw_query
-                    .as_deref()
-                    .map(uri_utils::parse_query_string)
-                    .filter(|params| !params.is_empty())
-                    .map(Box::new)
-            })
-            .as_deref()
-            .unwrap_or(&EMPTY_PARSED_REQUEST_PARAMS)
+    /// Borrow the last decoded-name match from the frozen entry Query.
+    /// Token and decoded projections initialize on demand and remain reusable
+    /// across current-query rewrites. Values follow the canonical percent/plus
+    /// decoder, matching route query-parameter semantics.
+    pub fn entry_query_param(&self, name: &str) -> Option<&str> {
+        self.request_query.entry_param(name)
+    }
+
+    /// Borrow the original raw Query, preserving absent versus explicitly empty.
+    pub fn entry_query(&self) -> Option<&str> {
+        self.request_query.entry_raw()
     }
 
     /// Return the path-parameter cache when it has already been initialized.
@@ -3909,21 +3875,42 @@ impl EdgionHttpContext {
     }
 
     /// Current query string (passthrough; never normalized).
-    pub fn query<'a>(&self, req_header: &'a pingora_http::RequestHeader) -> Option<&'a str> {
-        req_header.uri.query()
+    pub fn query(&self) -> Option<&str> {
+        self.request_query.current_raw()
     }
 
     /// Current normalized full URI (current path + current query).
-    pub fn uri(&self, req_header: &pingora_http::RequestHeader) -> String {
-        compose_uri(self.path(), self.query(req_header))
+    pub fn uri(&self) -> String {
+        compose_uri(self.path(), self.query())
     }
 
     /// Entry-time raw full URI (entry raw path + entry raw query). Frozen.
     pub fn request_uri(&self) -> String {
-        compose_uri(
-            &self.request_info.entry_raw_path,
-            self.request_info.entry_raw_query.as_deref(),
-        )
+        compose_uri(&self.request_info.entry_raw_path, self.entry_query())
+    }
+
+    /// Export a concrete header without changing the main transport sync state.
+    pub(crate) fn snapshot_current_request(
+        &self,
+        request: &pingora_http::RequestHeader,
+    ) -> Result<pingora_http::RequestHeader, Box<dyn std::error::Error + Send + Sync>> {
+        let mut candidate = request.clone();
+        if self.request_query.projection_is_dirty() {
+            overlay_request_query(&mut candidate, self.request_query.current_raw())?;
+        }
+        Ok(candidate)
+    }
+
+    pub(crate) fn ensure_target_synced(
+        &mut self,
+        request: &mut pingora_http::RequestHeader,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.request_query.projection_is_dirty() {
+            let candidate = self.snapshot_current_request(request)?;
+            *request = candidate;
+            self.request_query.mark_synced();
+        }
+        Ok(())
     }
 
     /// Refresh `normalized_current_path` from current `req_header.uri.path()`.
@@ -3980,7 +3967,7 @@ pub(crate) fn pick_effective_sp<T>(http_sp: Option<T>, grpc_sp: Option<T>) -> Op
 
 fn compose_uri(path: &str, query: Option<&str>) -> String {
     match query {
-        Some(q) if !q.is_empty() => {
+        Some(q) => {
             let mut uri = String::with_capacity(path.len().saturating_add(1).saturating_add(q.len()));
             uri.push_str(path);
             uri.push('?');
@@ -4006,6 +3993,39 @@ pub(crate) fn retain_uri_authority_for_path_only(
     let mut parts = current.clone().into_parts();
     parts.path_and_query = replacement.into_parts().path_and_query;
     http::Uri::from_parts(parts)
+}
+
+/// Validate and install a query projection while retaining native target form.
+pub(crate) fn overlay_request_query(
+    request: &mut pingora_http::RequestHeader,
+    query: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let path = request.uri.path();
+    if !path.starts_with('/') {
+        return Err(std::io::Error::other("query requires origin-form path").into());
+    }
+    if request.uri.scheme().is_some() || request.uri.authority().is_some() {
+        let mut target = path.to_owned();
+        if let Some(query) = query {
+            target.push('?');
+            target.push_str(query);
+        }
+        return set_path_only_request_target(request, target.parse()?);
+    }
+    let current = request.raw_path();
+    let path_end = current.iter().position(|byte| *byte == b'?').unwrap_or(current.len());
+    let size = path_end
+        .checked_add(query.map_or(0, str::len))
+        .and_then(|size| size.checked_add(usize::from(query.is_some())))
+        .ok_or_else(|| std::io::Error::other("request target size overflow"))?;
+    let mut target = Vec::with_capacity(size);
+    target.extend_from_slice(&current[..path_end]);
+    if let Some(query) = query {
+        target.push(b'?');
+        target.extend_from_slice(query.as_bytes());
+    }
+    request.set_raw_path(&target)?;
+    Ok(())
 }
 
 /// Replace a path-only target while keeping an HTTP/1 absolute-form target's

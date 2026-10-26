@@ -234,7 +234,7 @@ async fn source_resolution_borrows_existing_values() {
         .unwrap();
     assert!(session.read_request().await.unwrap());
     let mut ctx = EdgionHttpContext::new();
-    ctx.request_info.entry_raw_query = Some("name=entry%20value".into());
+    ctx.request_query.capture(Some("name=entry%20value".into())).unwrap();
     ctx.set_ctx_var("name".into(), "context-value".into());
     let cases = [
         (
@@ -247,11 +247,7 @@ async fn source_resolution_borrows_existing_values() {
             "name",
             crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, "name").unwrap(),
         ),
-        (
-            LogExtSource::Query,
-            "name",
-            ctx.cached_query().get("name").unwrap().as_str(),
-        ),
+        (LogExtSource::Query, "name", ctx.entry_query_param("name").unwrap()),
         (LogExtSource::Ctx, "name", ctx.get_ctx_var("name").unwrap()),
     ];
     for (from, name, expected) in cases {
@@ -267,7 +263,7 @@ async fn source_resolution_borrows_existing_values() {
         assert_eq!(value.as_ptr(), expected.as_ptr());
         assert_eq!(stats.calls, 0);
     }
-    assert_eq!(ctx.cached_query()["name"], "entry value");
+    assert_eq!(ctx.entry_query_param("name").unwrap(), "entry value");
 }
 
 #[test]

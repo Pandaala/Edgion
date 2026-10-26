@@ -190,6 +190,11 @@ async fn finalize_request_uri_writes_normalized_path_with_original_query_then_la
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.normalized_current_path = "/admin".to_string();
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     finalize_request_uri(&mut session, &mut ctx).unwrap();
 
     assert_eq!(session.req_header().uri, "/admin?scope=read");
@@ -207,6 +212,11 @@ async fn finalize_request_uri_keeps_h2_authority_without_host() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.normalized_current_path = "/admin".to_string();
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     finalize_request_uri(&mut session, &mut ctx).unwrap();
 
     let header = session.req_header();
@@ -221,6 +231,11 @@ async fn finalize_request_uri_keeps_absolute_form_authority_and_query() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.normalized_current_path = "/admin".to_string();
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     finalize_request_uri(&mut session, &mut ctx).unwrap();
 
     let header = session.req_header();
@@ -238,6 +253,11 @@ async fn finalize_request_uri_leaves_an_already_finalized_uri_untouched() {
     ctx.request_info.normalized_current_path = "/different".to_string();
     ctx.uri_finalized = true;
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     finalize_request_uri(&mut session, &mut ctx).unwrap();
 
     assert_eq!(session.req_header().uri, original);
@@ -251,6 +271,11 @@ async fn finalize_request_uri_latches_when_the_computed_uri_is_already_equal() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.normalized_current_path = "/admin".to_string();
 
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+    }
     finalize_request_uri(&mut session, &mut ctx).unwrap();
 
     assert_eq!(session.req_header().uri, original);
@@ -2638,4 +2663,42 @@ fn policy_ancestor_absence_is_pinned_before_first_attempt_and_retries() {
         assert!(Arc::ptr_eq(&captured, &captured_policy(&fresh)));
     }
     store.full_set_policies(std::collections::HashMap::new());
+}
+
+#[tokio::test]
+async fn normalized_target_preserves_explicit_empty_query_in_every_native_form() {
+    for target_form in ["origin", "absolute", "h2"] {
+        let incoming = if target_form == "absolute" {
+            "http://test/a//b?"
+        } else {
+            "/a//b?"
+        };
+        let (mut session, _client) = live_h1_session(incoming).await;
+        if target_form == "h2" {
+            session.req_header_mut().set_uri("https://test/a//b?".parse().unwrap());
+            session.req_header_mut().set_version(http::Version::HTTP_2);
+            session.req_header_mut().remove_header("Host");
+        }
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+        ctx.request_info.entry_raw_path = "/a//b".into();
+        ctx.request_info.normalized_current_path = "/a/b".into();
+        assert_eq!(ctx.query(), Some(""));
+        assert_eq!(ctx.uri(), "/a/b?");
+        assert_eq!(ctx.request_uri(), "/a//b?");
+        finalize_request_uri(&mut session, &mut ctx).unwrap();
+        assert_eq!(session.req_header().uri.query(), Some(""), "{target_form}");
+        assert!(!ctx.request_query.projection_is_dirty());
+        ctx.ensure_target_synced(session.req_header_mut()).unwrap();
+        assert_eq!(session.req_header().uri.query(), ctx.query());
+        if target_form == "absolute" {
+            assert_eq!(session.req_header().raw_path(), b"http://test/a/b?");
+        } else if target_form == "h2" {
+            assert_eq!(session.req_header().uri.to_string(), "https://test/a/b?");
+        } else {
+            assert_eq!(session.req_header().raw_path(), b"/a/b?");
+        }
+    }
 }

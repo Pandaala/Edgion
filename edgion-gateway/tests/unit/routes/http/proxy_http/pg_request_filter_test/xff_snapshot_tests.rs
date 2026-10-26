@@ -241,7 +241,8 @@ fn production_validation_seam_prioritizes_path_over_pending_xff_rejection() {
             ..Default::default()
         },
         snapshot.too_long,
-    );
+    )
+    .unwrap();
     assert_eq!(error, Some(EdgionErrorCode::PathEscapedSlashRejected));
 }
 

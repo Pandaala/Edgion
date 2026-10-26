@@ -122,10 +122,12 @@ pub trait PluginSession: Send + Sync {
     /// and are invisible to both.
     fn request_header_map(&self) -> &http::HeaderMap;
 
-    /// Borrow the live typed request URI, including native HTTP/2 authority.
-    /// This is the same URI owned by the transport; no parsing or normalization.
-    /// Unlike get_request_uri(), it is not the frozen origin-form entry string.
-    fn request_uri(&self) -> &http::Uri;
+    /// Borrow only the current native URI authority, including HTTP/2 authority.
+    /// This does not read or render Query and is absent for origin-form targets
+    /// whose authority is carried only in the Host header.
+    // Mockall needs an explicit lifetime for an optional borrowed return value.
+    #[allow(clippy::needless_lifetimes)]
+    fn request_uri_authority<'s>(&'s self) -> Option<&'s http::uri::Authority>;
 
     /// Get a request header value by name, as an owned `String`.
     ///
@@ -410,6 +412,8 @@ pub trait PluginSession: Send + Sync {
     /// upstream-peer stage. Used by credential-hiding to strip a query
     /// parameter without overriding that path decision.
     fn set_request_query(&mut self, query: &str) -> PluginSessionResult<()>;
+
+    fn remove_request_query_param(&mut self, name: &str) -> PluginSessionResult<bool>;
 
     /// Set the upstream URI (for proxy rewrite)
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()>;

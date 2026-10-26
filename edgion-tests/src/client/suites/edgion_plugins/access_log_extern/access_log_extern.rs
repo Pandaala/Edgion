@@ -415,9 +415,9 @@ impl AccessLogExternTestSuite {
     // ==================== 5b. query_source_reads_entry_not_rewritten_uri ====================
     //
     // `from: query` must resolve against the entry-time raw query
-    // (`ctx.request_info.entry_raw_query`), never a post-rewrite re-parse of the
+    // (`ctx.entry_query()`), never a post-rewrite re-parse of the
     // live session query — see `resolve_field`'s `LogExtSource::Query` arm and
-    // `ctx.cached_query`'s doc comment. ProxyRewrite injects a brand-new query
+    // `ctx.entry_query_param`'s doc comment. ProxyRewrite injects a brand-new query
     // param (`rewritten_only`) that the client never sent; it appears only in
     // the upstream-bound URI. If the source were ever changed to re-parse the
     // post-rewrite query, this field would incorrectly appear.

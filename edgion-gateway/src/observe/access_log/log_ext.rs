@@ -279,7 +279,7 @@ fn resolve_field<'a>(
         // Entry-time raw query, NOT the rewritten URI — same init-once cache the
         // plugins and the `${query:...}` template already share, so the parse is
         // paid at most once per request.
-        LogExtSource::Query => ctx.cached_query().get(&field.name).map(String::as_str),
+        LogExtSource::Query => ctx.entry_query_param(&field.name),
         LogExtSource::Cookie => {
             crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, &field.name)
         }

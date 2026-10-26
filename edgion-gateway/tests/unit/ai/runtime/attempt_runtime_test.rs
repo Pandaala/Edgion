@@ -923,3 +923,24 @@ async fn admission_breaker_permit_releases_on_rejection_drop_and_predispatch_fin
         assert_eq!(Arc::strong_count(&breaker), 1);
     }
 }
+
+#[tokio::test]
+async fn failed_query_projection_releases_undispatched_ai_reservation_at_logging_finalize() {
+    let mut ctx = crate::EdgionHttpContext::new();
+    let mut active = attempt(5, 0, false);
+    active.dispatched = false;
+    ctx.ensure_ai_state().attempt_runtime.install(active);
+    ctx.request_query.capture(Some("token=secret".into())).unwrap();
+    ctx.request_query.remove_current_names(&["token"]).unwrap();
+    let mut header = pingora_http::RequestHeader::build("OPTIONS", b"*", None).unwrap();
+    assert!(ctx.ensure_target_synced(&mut header).is_err());
+    assert!(ctx.request_query.projection_is_dirty());
+    for _ in 0..2 {
+        crate::ai::http::finalize(&mut ctx).await;
+        let state = &ctx.ai_state().unwrap().attempt_runtime;
+        assert_eq!(state.settlement_decisions_for_test(), [SettlementOperation::Release]);
+        assert!(state.active.is_none());
+        assert!(state.attempts().is_empty());
+        assert!(!state.ever_dispatched());
+    }
+}

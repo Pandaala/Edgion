@@ -214,6 +214,11 @@ path = "tests/benches/waf_header_ingestion.rs"
 harness = false
 
 [[bench]]
+name = "request_query"
+path = "tests/benches/request_query.rs"
+harness = false
+
+[[bench]]
 name = "waf_body_snapshot"
 path = "tests/benches/waf_body_snapshot.rs"
 harness = false

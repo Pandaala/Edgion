@@ -67,6 +67,14 @@ fn retry_budget_allows_next_attempt(completed_attempts: u32, retry_attempts: u32
     completed_attempts <= retry_attempts
 }
 
+fn request_diagnostic_summary(ctx: &EdgionHttpContext) -> String {
+    let summary = format!(
+        "request {}",
+        ctx.request_info.request_method().map_or("-", http::Method::as_str)
+    );
+    append_request_trace_summary(summary, ctx.request_info.trace_id.standard_trace_id())
+}
+
 fn append_request_trace_summary(mut summary: String, trace_id: Option<&str>) -> String {
     if let Some(trace_id) = trace_id {
         const SEPARATOR: &str = ", trace-id: ";
@@ -390,13 +398,10 @@ impl ProxyHttp for EdgionHttpProxy {
         ctx.local_reply_written()
     }
 
-    fn request_summary(&self, session: &Session, ctx: &Self::CTX) -> String {
-        // Default summary plus the request's trace id (always present: client
-        // header or generated at entry), so a "Fail to proxy" error-log line
-        // can be joined with its access-log entry instead of a heuristic
-        // timestamp+path match.
-        let summary = session.as_ref().request_summary();
-        append_request_trace_summary(summary, ctx.request_info.trace_id.standard_trace_id())
+    fn request_summary(&self, _session: &Session, ctx: &Self::CTX) -> String {
+        // Error diagnostics must not read an unsynchronized credential-bearing
+        // transport target, and may run before a request header exists.
+        request_diagnostic_summary(ctx)
     }
 
     async fn connected_to_upstream(

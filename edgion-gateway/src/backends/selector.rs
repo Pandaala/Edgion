@@ -4,8 +4,8 @@ use crate::backends::discovery::{
 };
 use crate::backends::CompiledServiceTarget;
 use crate::lb::{compiled_selector, LbBackend, PolicyKind};
+use crate::request_query::RequestQuery;
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
-use edgion_resources::uri_utils;
 use edgion_resources::EdgionErrorCode;
 use k8s_openapi::api::core::v1::Service;
 use pingora_proxy::Session;
@@ -118,7 +118,7 @@ pub(crate) fn extract_hash_key<'a>(
     session: &'a Session,
     lb_policy: &Option<ParsedLBPolicy>,
     remote_ip: &'a str,
-    query: Option<&'a str>,
+    query: Option<&'a RequestQuery>,
 ) -> &'a [u8] {
     let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
         return &[];
@@ -149,21 +149,8 @@ pub(crate) fn extract_hash_key<'a>(
             })
             .unwrap_or_default(),
         ConsistentHashOn::Arg(arg_name) => query
-            .and_then(|query| {
-                query.split('&').find_map(|param| {
-                    let (name, value) = param.split_once('=')?;
-                    // Fast path: most query param names are plain identifiers
-                    // that match arg_name byte-for-byte, so the common case stays
-                    // allocation-free. Only percent/plus-encoded names need
-                    // decoding before comparison (e.g. `session%20id` / `foo+bar`
-                    // matching an arg_name of `session id` / `foo bar`). The value
-                    // is intentionally left raw — decoding it would change the hash
-                    // key of existing deployments.
-                    let matched = name == arg_name.as_ref()
-                        || (name.contains(['%', '+']) && uri_utils::url_decode(name) == arg_name.as_ref());
-                    matched.then_some(value.as_bytes())
-                })
-            })
+            .and_then(|query| query.current_hash_arg_raw(arg_name.as_ref()))
+            .map(str::as_bytes)
             .unwrap_or_default(),
         // SourceIp hashes on the normalized client IP; an empty IP yields an
         // empty key, driving the internal RR fallback like the other modes when
@@ -290,7 +277,7 @@ impl CapturedServiceSelection {
         degrade_policy: ServiceDegradePolicy,
         session: Option<&Session>,
         remote_ip: &str,
-        query: Option<&str>,
+        query: Option<&RequestQuery>,
     ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode> {
         let kind = policy_to_kind(lb_policy);
         let section = &self.section;
@@ -362,14 +349,14 @@ impl CapturedServiceSelection {
     }
 }
 
-pub fn select_service_endpoint(
+pub(crate) fn select_service_endpoint(
     service_key: &str,
     section: ServiceSectionKey,
     lb_policy: &Option<ParsedLBPolicy>,
     degrade_policy: ServiceDegradePolicy,
     session: Option<&Session>,
     remote_ip: &str,
-    query: Option<&str>,
+    query: Option<&RequestQuery>,
 ) -> Result<ResolvedServiceEndpoint, EdgionErrorCode> {
     let (available, active) = load_active_projection(service_key).ok_or(endpoint_slice_not_found().empty)?;
     CapturedServiceSelection::from_projection(available, active, &section)?.select(

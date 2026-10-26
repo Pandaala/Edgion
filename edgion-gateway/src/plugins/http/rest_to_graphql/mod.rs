@@ -125,15 +125,7 @@ impl RequestFilter for RestToGraphql {
             log.push("deny encoding");
             return graphql_request::reject(session, 415);
         }
-        if let Err(error) = validate_rest_query(
-            session
-                .ctx()
-                .request_info
-                .entry_raw_query
-                .as_deref()
-                .unwrap_or_default(),
-            self.envelope_limit,
-        ) {
+        if let Err(error) = validate_rest_query(session.ctx().entry_query().unwrap_or_default(), self.envelope_limit) {
             log.push("deny query parameters");
             return graphql_request::reject(session, if error == GraphqlError::TooLarge { 413 } else { 400 });
         }

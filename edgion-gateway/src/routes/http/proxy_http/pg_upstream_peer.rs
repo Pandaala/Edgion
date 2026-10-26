@@ -246,6 +246,13 @@ pub async fn upstream_peer(
     }
 
     apply_upstream_authority(session, ctx, &mut peer)?;
+    ctx.ensure_target_synced(session.req_header_mut()).map_err(|_| {
+        if ctx.grpc_transcoding.is_some() {
+            crate::plugins::http::grpc_json_transcoder::failure()
+        } else {
+            super::pg_upstream_request_filter::local_pre_dispatch_failure()
+        }
+    })?;
     crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
     if ctx.grpc_transcoding.is_some() || ctx.is_grpc_route_matched {
         crate::plugins::http::grpc_json_transcoder::require_h2(&mut peer);
@@ -1547,12 +1554,19 @@ fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> p
     };
     let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
     if !want_raw && ctx.path() != session.req_header().uri.path() {
+        ctx.request_query
+            .check_next_revision()
+            .map_err(|_| super::pg_upstream_request_filter::local_pre_dispatch_failure())?;
         let path_only = ctx
-            .uri(session.req_header())
+            .uri()
             .parse::<http::Uri>()
             .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?;
         crate::ctx::set_path_only_request_target(session.req_header_mut(), path_only)
             .map_err(|e| PingoraError::because(ErrorType::InternalError, "retain request target", e))?;
+        ctx.request_query
+            .invalidate_projection()
+            .map_err(|_| super::pg_upstream_request_filter::local_pre_dispatch_failure())?;
+        ctx.request_query.mark_synced();
     }
     ctx.uri_finalized = true;
     Ok(())

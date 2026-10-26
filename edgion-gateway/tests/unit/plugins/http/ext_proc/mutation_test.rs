@@ -429,17 +429,20 @@ fn collect_request_headers_preserves_current_uri_and_raw_query() {
     ] {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.entry_raw_path = "/entry".to_string();
-        ctx.request_info.entry_raw_query = Some("mode=allow".to_string());
+        ctx.request_query.capture(Some("mode=allow".to_string())).unwrap();
         let request = RequestHeader::build("GET", current_uri.as_bytes(), None).unwrap();
         ctx.refresh_normalized_path(&request, &PathNormalizationConfig::default());
+        ctx.request_query
+            .replace_raw(request.uri.query().map(str::to_owned))
+            .unwrap();
         assert_eq!(ctx.path(), "/api");
-        assert_eq!(ctx.uri(&request), expected);
+        assert_eq!(ctx.uri(), expected);
         assert_eq!(ctx.request_uri(), "/entry?mode=allow");
-        assert_ne!(ctx.uri(&request), ctx.request_uri());
+        assert_ne!(ctx.uri(), ctx.request_uri());
 
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_uri().times(1).returning(move || ctx.uri(&request));
+        session.expect_get_uri().times(1).returning(move || ctx.uri());
         session.expect_get_path().never();
         session.expect_get_request_path().never();
         session.expect_get_request_uri().never();

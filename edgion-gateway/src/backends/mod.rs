@@ -36,9 +36,7 @@ pub(crate) use runtime::{CompiledL4Backends, L4BackendRejection, L4ResolveError,
 pub use runtime::{
     CompiledServiceTarget, LogicalBackendHandle, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
 };
-pub use selector::{
-    backends_for_service_section, select_service_endpoint, service_section_key_from_port, ServiceDegradePolicy,
-};
+pub use selector::{backends_for_service_section, service_section_key_from_port, ServiceDegradePolicy};
 pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
 
@@ -194,7 +192,7 @@ where
                 } else {
                     ""
                 };
-                let query = ctx.query(session.req_header());
+                let query = Some(&ctx.request_query);
                 captured.select(&lb_policy, degrade_policy, Some(session), remote_ip, query)
             })?;
             build_peer_from_lb_selection(
@@ -490,7 +488,7 @@ fn build_peer_from_lb_selection(
         && matches!(&lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
     {
         let remote_ip = ctx.request_info.remote_ip.as_str();
-        let query = ctx.query(session.req_header());
+        let query = Some(&ctx.request_query);
         let hash_key_bytes = extract_hash_key(session, &lb_policy, remote_ip, query);
         ctx.hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
     }
@@ -584,3 +582,5 @@ mod selected_service_input_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/backends/mod_test/native_service_dispatch_tests.rs"]
 mod native_service_dispatch_tests;
+
+pub(crate) use selector::select_service_endpoint;

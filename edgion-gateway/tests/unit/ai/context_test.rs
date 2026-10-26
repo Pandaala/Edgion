@@ -52,7 +52,7 @@ fn absent_ai_baseline_restore_keeps_ordinary_context_allocation_free() {
     let mut request = pingora_http::RequestHeader::build("POST", b"/v1/messages", None).unwrap();
     let (restored, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
         ctx.restore_deferred_credential_mutations(None);
-        ctx.restore_ai_request_baseline(&mut request)
+        ctx.restore_ai_request_baseline(&mut request).unwrap()
     });
     assert!(!restored);
     assert!(ctx.ai_state().is_none());
@@ -65,15 +65,25 @@ fn ai_baseline_captures_once_and_clears_attempt_local_deferred_headers() {
     let mut ctx = EdgionHttpContext::new();
     let mut request = pingora_http::RequestHeader::build("POST", b"/v1/messages", None).unwrap();
     request.insert_header("anthropic-beta", "original").unwrap();
-    ctx.capture_ai_request_baseline(&request);
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(request.uri.query().map(str::to_owned))
+            .unwrap();
+    }
+    ctx.capture_ai_request_baseline(&request).unwrap();
     request.insert_header("anthropic-beta", "modified").unwrap();
     ctx.upsert_deferred_credential_mutation(
         http::HeaderName::from_static("anthropic-version"),
         Arc::new(http::HeaderValue::from_static("attempt-local")),
         None,
     );
-    ctx.capture_ai_request_baseline(&request);
-    assert!(ctx.restore_ai_request_baseline(&mut request));
+    if !ctx.request_query.is_captured() {
+        ctx.request_query
+            .capture(request.uri.query().map(str::to_owned))
+            .unwrap();
+    }
+    ctx.capture_ai_request_baseline(&request).unwrap();
+    assert!(ctx.restore_ai_request_baseline(&mut request).unwrap());
     ctx.apply_deferred_credentials(&mut request).unwrap();
     assert_eq!(request.headers["anthropic-beta"], "original");
     assert!(!request.headers.contains_key("anthropic-version"));
@@ -132,4 +142,30 @@ fn inline_request_body_policy_stays_within_audited_layout() {
         actual <= 48,
         "ResolvedRequestBodyConfig size {actual} exceeds the audited budget 48"
     );
+}
+
+#[test]
+fn ai_baseline_projects_dirty_query_once_and_reuses_decoded_state_on_restore() {
+    let mut ctx = EdgionHttpContext::new();
+    let mut request =
+        pingora_http::RequestHeader::build("POST", b"/entry?token=secret&name=hello%20world", None).unwrap();
+    ctx.request_query
+        .capture(request.uri.query().map(str::to_owned))
+        .unwrap();
+    ctx.request_query.remove_current_names(&["token"]).unwrap();
+    let decoded = ctx.request_query.current_param("name").unwrap().as_ptr();
+    ctx.capture_ai_request_baseline(&request).unwrap();
+    assert!(request.uri.query().unwrap().contains("token="));
+    assert!(ctx.request_query.projection_is_dirty());
+    for value in ["provider=one", "provider=two"] {
+        ctx.request_query.replace_raw(Some(value.into())).unwrap();
+        ctx.capture_ai_request_baseline(&request).unwrap();
+        ctx.request_query.mark_synced();
+        assert!(ctx.restore_ai_request_baseline(&mut request).unwrap());
+        assert_eq!(request.uri.query(), Some("name=hello%20world"));
+        assert_eq!(ctx.query(), Some("name=hello%20world"));
+        assert_eq!(ctx.request_query.current_param("name").unwrap().as_ptr(), decoded);
+        assert_eq!(ctx.entry_query_param("token"), Some("secret"));
+        assert!(ctx.request_query.projection_is_dirty());
+    }
 }

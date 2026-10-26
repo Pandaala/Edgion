@@ -326,41 +326,35 @@ fn test_claims_to_value_includes_standard_fields() {
     assert_eq!(value.get("email").and_then(|v| v.as_str()), Some("u1@example.com"));
 }
 
-#[test]
-fn strip_query_param_removes_named_keeps_others() {
+fn check_query_strip(raw: Option<&str>, name: &str, expected: Option<&str>) {
+    let mut owner = crate::request_query::RequestQuery::default();
+    owner.capture(raw.map(str::to_owned)).unwrap();
+    let expected = expected.map(str::to_owned);
     let mut session = MockPluginSession::new();
     session
-        .expect_request_query()
-        .return_const(Some("api_key=secret&foo=bar"));
-    session
-        .expect_set_request_query()
-        .withf(|query| query == "foo=bar")
+        .expect_remove_request_query_param()
         .times(1)
-        .returning(|_| Ok(()));
+        .returning(move |name| {
+            let changed = owner.remove_current_names(&[name]).unwrap();
+            assert_eq!(owner.current_raw(), expected.as_deref());
+            Ok(changed)
+        });
+    strip_query_param(&mut session, name);
+}
 
-    strip_query_param(&mut session, "api_key");
+#[test]
+fn strip_query_param_removes_named_keeps_others() {
+    check_query_strip(Some("api_key=secret&foo=bar"), "api_key", Some("foo=bar"));
 }
 
 #[test]
 fn strip_query_param_only_param_clears_query() {
-    let mut session = MockPluginSession::new();
-    session.expect_request_query().return_const(Some("api_key=secret"));
-    session
-        .expect_set_request_query()
-        .withf(|query| query.is_empty())
-        .times(1)
-        .returning(|_| Ok(()));
-
-    strip_query_param(&mut session, "api_key");
+    check_query_strip(Some("api_key=secret"), "api_key", None);
 }
 
 #[test]
 fn strip_query_param_without_match_leaves_query_untouched() {
-    let mut session = MockPluginSession::new();
-    session.expect_request_query().return_const(Some("a=1&&b=2&"));
-    session.expect_set_request_query().times(0);
-
-    strip_query_param(&mut session, "api_key");
+    check_query_strip(Some("a=1&&b=2&"), "api_key", Some("a=1&&b=2&"));
 }
 
 #[test]
@@ -511,39 +505,28 @@ fn query_credential_strip_preserves_live_raw_query_boundaries() {
         (Some("caf%E9=secret&keep=1"), "café", Some("keep=1")),
         (Some("café=secret&keep=1"), "café", Some("keep=1")),
     ] {
-        for fail_setter in [false, true] {
-            let mut session = MockPluginSession::new();
-            session.expect_get_query().times(0);
-            session.expect_request_query().times(1).return_const(query);
-            if let Some(expected) = expected {
-                session
-                    .expect_set_request_query()
-                    .withf(move |actual| actual == expected)
-                    .times(1)
-                    .returning(move |_| {
-                        if fail_setter {
-                            Err(std::io::Error::other("query update rejected").into())
-                        } else {
-                            Ok(())
-                        }
-                    });
-            } else {
-                session.expect_set_request_query().times(0);
-            }
-            strip_query_param(&mut session, name);
-        }
+        let result = match expected {
+            Some("") => None,
+            Some(value) => Some(value),
+            None => query,
+        };
+        check_query_strip(query, name, result);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_query_param()
+            .times(1)
+            .returning(|_| Err(std::io::Error::other("query update rejected").into()));
+        strip_query_param(&mut session, name);
     }
 }
 
 #[test]
 fn plain_query_key_comparison_does_not_allocate_key_sized_storage() {
     fn measure(query: &'static str) -> (usize, usize) {
-        let mut session = MockPluginSession::new();
-        session.expect_get_query().times(0);
-        session.expect_request_query().times(1).return_const(Some(query));
-        session.expect_set_request_query().times(0);
+        let mut owner = crate::request_query::RequestQuery::default();
+        owner.capture(Some(query.to_owned())).unwrap();
         let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
-            strip_query_param(&mut session, "absent");
+            assert!(!owner.remove_current_names(&["absent"]).unwrap());
         });
         (stats.calls, stats.requested_bytes)
     }

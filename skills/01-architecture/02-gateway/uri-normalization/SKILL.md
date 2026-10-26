@@ -45,9 +45,9 @@ session trait:        get_path() -> &str              get_request_path() -> &str
 EdgionHttpContext canonical API:
                       ctx.path()                     (current view, read from cache)
                       ctx.request_path()             (entry view, frozen)
-                      ctx.query(req)                 (current view, whole-string passthrough)
-                      ctx.cached_query()    (entry view, single-key decoded, init-once)
-                      ctx.uri(req)                   (current path + current query)
+                      ctx.query()                    (current view, whole-string passthrough)
+                      ctx.entry_query_param(name)    (entry view, single-key decoded, init-once)
+                      ctx.uri()                      (current path + current query)
                       ctx.request_uri()              (entry path + entry query)
                       ctx.refresh_normalized_path(req)(refresh current cache;
                                                        called internally by session_adapter::set_upstream_uri)
@@ -64,8 +64,8 @@ pingora field:        req_header().uri
 | Layer | current view | entry view (frozen) |
 |-------|--------------|----------------------|
 | **EdgionHttpContext methods** (canonical) | `ctx.path() -> &str` | `ctx.request_path() -> &str` |
-| | `ctx.uri(req) -> String` | `ctx.request_uri() -> String` |
-| | `ctx.query(req) -> Option<&str>` (whole, raw, passthrough) | `ctx.cached_query() -> &HashMap<String,String>` (single-key, decoded, frozen) |
+| | `ctx.uri() -> String` | `ctx.request_uri() -> String` |
+| | `ctx.query() -> Option<&str>` (whole, raw, passthrough) | `ctx.entry_query_param(name) -> Option<&str>` (single-key, decoded, frozen) |
 | **EdgionHttpContext write methods** (only used by the adapter) | `ctx.refresh_normalized_path(req)` | — |
 | **pingora raw fields** (business code MUST NOT read directly; allowlist below) | — | `req_header().uri` |
 | **session trait** | `get_path() -> &str` | `get_request_path() -> &str` |
@@ -86,28 +86,52 @@ pingora field:        req_header().uri
 - `request_` prefix = entry raw view (frozen, unaffected by rewrite).
 - query is not normalized; whole-query access uses a single name (`query`).
 
-### query view: whole-string vs single-key
+### Query ownership and views
 
-The query string has two access shapes that follow different views:
+`EdgionHttpContext::request_query` owns the frozen entry raw query and the logical
+current query. `ctx.entry_query()` borrows entry bytes; `ctx.entry_query_param(name)`
+returns the last decoded-name match and decoded value. Routing, ordinary plugin
+single-key reads and access-log query projections use that frozen entry view.
+`ctx.query()` returns the current raw query; `ctx.uri()` combines it with the
+current normalized path. Current readers never fall back to Pingora's possibly
+stale query after entry capture.
 
-| Access shape | View | Encoding | Source |
-|--------------|------|----------|--------|
-| Whole string (`session.get_query()` / `req.query_string`) | current | raw (no decode) | `req_header().uri.query()` (live) |
-| Single key (`session.get_query_param(name)` / `req.query("name")` / `ctx_set TemplateVarType::Query` / `request_restriction` `key: { type: query, name }`) | **entry (frozen)** | **percent-decoded** (`+` → space) | `entry_raw_query` via `EdgionHttpContext::cached_query` |
+Capture moves the existing raw String into the owner without parsing. Tokens,
+decoded names/values and the optional lookup index initialize only on demand;
+plain components borrow raw spans. Encoded components use the canonical resource
+URI decoder. Reads before capture return missing without poisoning later capture.
+Raw syntax, duplicates, bare flags and absent versus empty query stay represented.
+Canonical full-URI composition preserves a trailing `?` for an explicitly empty
+Query; absence has no delimiter. This applies to forwarding, signatures and mirror
+views as well as raw accessors. The empty-string setter still means removal.
+Structured removal preserves surviving raw bytes and order; no-match removal
+preserves every original byte. A changed selection renders once when raw bytes
+are demanded. Replacements create a new backing; successive deletions reuse the
+existing backing and decoded cells without retaining a history of edits.
 
-Single-key accessors share one per-request cache at
-`EdgionHttpContext::parsed_request_caches.query`, represented as
-`OnceLock<Option<Box<HashMap<String, String>>>>`. The no-argument
-`ctx.cached_query()` borrows the context's `request_info.entry_raw_query` only
-when initializing; callers cannot choose a different source. Nonempty maps are
-boxed, while absent or empty queries use a shared static empty map without
-allocation. Parsing remains lazy, and subsequent reads borrow the same map.
-The route matcher, plugins and access-log query projection therefore share decoded
-entry values across live URI rewrites. Capture order remains unchanged: a read
-before entry metadata capture can still initialize the empty cache; the API does
-not enforce snapshot-field immutability. See the
-[query-source contract](../../../04-review/uri-normalization/mandatory-design/normalization-contract.md#frozen-query-cache-source)
-for the ARCH-004 ownership correction and its limits.
+LB has its own policy over the same owner: first pair containing `=`, raw-name OR
+decoded-name equality, and borrowed raw value. The first empty matching value
+terminates lookup. Auth removes all decoded-name matches, including bare flags.
+These policies must not be replaced by frozen last-wins entry lookup.
+
+Query-only edits remain logical and do not finalize the path or update Pingora
+immediately. Concrete target consumers project the current query when needed.
+The common upstream-peer callback synchronizes after backend/provider/authority
+writes and before concrete transcoder validation, before Pingora clones and
+sanitizes the outgoing header. Request-stage transcoder validation has its own
+conditional barrier. `uri_finalized` controls the path policy, not query sync.
+Cache keys, mirror snapshots, signatures and plugin reads consume the owner.
+A failed final projection fails locally without retry or sending a stale target.
+
+AI keeps its concrete header baseline paired with a private baseline inside the
+same Query owner. Restore advances the checked projection epoch; no transferable
+entry-alias snapshot exists. Detached exchanges export an owned target. Error
+summaries omit the request target, so a stale concrete query cannot expose removed
+credentials on a failure before synchronization.
+
+This representation trades first-use token storage and lookup overhead for shared
+parsing and deferred assembly. It does not promise a universal CPU/allocation win;
+see the implementation verification record for measured limits.
 
 ### query view asymmetry (whole-string only — partially closed)
 
@@ -131,27 +155,21 @@ Allowlist (direct reads at the following sites are legitimate):
 
 ---
 
-## `set_upstream_uri` integration point
+## Canonical target writers
 
-`session_adapter.rs:443` is the **only** site in the entire codebase that writes to `req_header_mut().set_uri()`. All rewrite plugins (`proxy_rewrite`, `url_rewrite`, `request_redirect`, DSL `req.set_uri`, etc.) go through the trait wrapper:
+Rewrite plugins use `session.set_upstream_uri()`. The adapter validates the native
+target and normalized path before publishing the header, Query owner and path
+state together. An explicit whole-target rewrite replaces current Query but never
+entry Query. `set_upstream_host()` preserves the logical query and dirty state.
+Query-only setters validate input but defer header publication; structured auth
+removal does not render a replacement. Both retain sealed-transcoder protection.
 
-```rust
-// session_adapter.rs:443 (after modification)
-fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
-    let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
-    self.inner.req_header_mut().set_uri(parsed_uri);
-    self.ctx.refresh_normalized_path(self.inner.req_header());  // newly added line
-    Ok(())
-}
-```
-
-**Plugin layer requires zero changes**: all existing rewrite plugins keep their original code, and trait calls automatically get ctx cache synchronization.
-
-Effects after rewrite:
-
-- `ctx.path()` / `$uri` / `req.uri` → reflects the **new path** (cache refreshed).
-- `ctx.request_path()` / `$request_uri` → still reflects the **entry raw form** (entry view frozen).
-- The upstream receives the rewritten path.
+Native target projection uses the canonical target-form helper: HTTP/1
+absolute-form authority lives in Pingora raw bytes, while HTTP/2 scheme/authority
+live in the typed URI. Preserve both forms. Path finalization retains the selected
+raw/normalized policy and uses the owner query. Snapshot projection does not mark
+the main header synchronized. The common pre-send barrier remains necessary even
+when the path is already finalized.
 
 ---
 
@@ -192,7 +210,9 @@ Steps run in this fixed order:
 3. **merge_slashes** (collapse consecutive `/` into one).
 4. **remove_dot_segments** (RFC 3986 §5.2.4 algorithm).
 
-Note: path normalization **does not rewrite** `req_header().uri` — upstream / ForwardAuth / mirror receive the raw entry form. Only rewrite plugins legitimately rewrite the URI (via the trait `set_upstream_uri`).
+Path normalization updates the current path view at entry. ForwardAuth and mirror use
+the normalized current path with logical current Query; main upstream forwarding
+applies the raw/normalized policy below at its existing finalization stage.
 
 ---
 
@@ -229,11 +249,13 @@ Single-point decision at the entry of `pg_upstream_peer::upstream_peer_http`, wi
 | 3 | global `forward_normalized_path = false` | raw |
 | Default | None of the above triggers | normalized |
 
-The single `uri_finalized` flag covers rewrite final state + single-point decision settled + retry / mirror / fan-out consistency.
+`uri_finalized` records the selected path policy across rewrites and retries.
+Query consistency comes from the owner and its projection barrier; a finalized
+path does not imply the concrete Query is synchronized.
 
-Legitimate `req_header_mut().set_uri()` writes occur in only 2 places (lint Rule 2):
-- `session_adapter::set_upstream_uri` (rewrite class).
-- `pg_upstream_peer::upstream_peer_http` single-point decision block (v4).
-Both must immediately follow with `ctx.uri_finalized = true`.
+Path-changing writes set `uri_finalized`; authority-only writes and Query-only
+projection do not select a path policy. Native header writes are confined to the
+canonical adapter/target helpers and forwarding barrier. AI baseline restoration
+must restore its paired owner state and invalidate the destination projection.
 
 For details, see spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14.

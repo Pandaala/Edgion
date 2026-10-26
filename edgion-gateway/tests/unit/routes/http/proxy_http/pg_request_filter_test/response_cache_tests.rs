@@ -886,7 +886,7 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
                 let tls = serde_json::from_value(json!({
                     "metadata":{"namespace":"cache-c0","name":"cache-c1-drift-tls"},
                     "spec":{"targetRefs":[{"group":"","kind":"Service","name":"unrelated-drift-origin"}],
-                        "resolvedTargetClass":"service","preparedPrecedence":{},"validation":{"hostname":"backend.example.com","wellKnownCACertificates":"System"},"useSystemCa":true}
+                        "resolvedTargetClass":"service","preparedPrecedence":{},"preparedAncestorAdmission":{"mode":"unrestricted"},"validation":{"hostname":"backend.example.com","wellKnownCACertificates":"System"},"useSystemCa":true}
                 })).unwrap();
                 store.update(
                     HashMap::from([(ActualPolicyCleanup::TLS_KEY.into(), Arc::new(tls))]),
@@ -901,7 +901,7 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
                 let traffic = serde_json::from_value(json!({
                     "metadata":{"namespace":"cache-c0","name":"cache-c1-drift-traffic"},
                     "spec":{"targetRefs":[{"group":"","kind":"Service","name":"origin"}],
-                        "resolvedTargetClass":"service","preparedPrecedence":{},"connection":{"connectTimeout":"1s"}}
+                        "resolvedTargetClass":"service","preparedPrecedence":{},"preparedAncestorAdmission":{"mode":"unrestricted"},"connection":{"connectTimeout":"1s"}}
                 }))
                 .unwrap();
                 store.partial_update_policies(
@@ -936,4 +936,107 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
         );
         assert_eq!(cache.pending_bytes(), 0, "{kind}: discarded fill releases its arena");
     }
+}
+
+#[tokio::test]
+async fn common_peer_barrier_projects_late_query_edits_and_rejects_failed_projection() {
+    use crate::plugins::runtime::{PingoraSessionAdapter, PluginSession};
+    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    let fixture = RequestFixture::new(serde_json::json!([]));
+    let _origin = BoundOriginFixture::new();
+    for fail_projection in [false, true] {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        client
+            .write_all(b"GET /cache?token=secret&keep=1 HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n")
+            .await
+            .unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        session.read_request().await.unwrap();
+        let mut ctx = fixture.proxy.new_ctx();
+        ctx.capture_listener_publication(fixture.publication.clone());
+        ctx.capture_plugin_scope(fixture.owner.clone());
+        assert!(!request_filter(&fixture.proxy, &mut session, &mut ctx).await.unwrap());
+        ctx.uri_finalized = true;
+        PingoraSessionAdapter::new(&mut session, &mut ctx)
+            .remove_request_query_param("token")
+            .unwrap();
+        assert_eq!(session.req_header().uri.query(), Some("token=secret&keep=1"));
+        if fail_projection {
+            session.req_header_mut().set_uri("*".parse().unwrap());
+        }
+        let result = fixture.proxy.upstream_peer(&mut session, &mut ctx).await;
+        if fail_projection {
+            let error = result.unwrap_err();
+            assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
+            assert!(!error.retry());
+            assert!(ctx.request_query.projection_is_dirty());
+            assert_eq!(session.req_header().raw_path(), b"*");
+            ctx.request_info.is_grpc_request = true;
+            fixture.proxy.fail_to_proxy(&mut session, &error, &mut ctx).await;
+            assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+            assert_eq!(ctx.request_info.grpc_status(), Some(13));
+            assert_eq!(ctx.final_downstream_status(), Some(200));
+            drop(session);
+            let mut wire = String::new();
+            client.read_to_string(&mut wire).await.unwrap();
+            assert!(wire.starts_with("HTTP/1.1 200"));
+            assert!(wire.to_ascii_lowercase().contains("grpc-status: 13"));
+            assert!(!wire.contains("secret"));
+        } else {
+            result.unwrap();
+            assert_eq!(session.req_header().uri.query(), Some("keep=1"));
+            assert!(!ctx.request_query.projection_is_dirty());
+            assert!(ctx.uri_finalized);
+        }
+    }
+}
+
+#[tokio::test]
+async fn common_peer_projection_failure_keeps_sealed_transcoder_rest_error_contract() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    let descriptor = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../edgion-tests/proto/grpc_json_transcoding/test.pb"
+    ));
+    let fixture = RequestFixture::new(serde_json::json!([{
+        "type":"GrpcJsonTranscoder", "config":{
+            "descriptor":{"type":"inline","base64":STANDARD.encode(descriptor)},
+            "services":["test.TestService"]
+        }
+    }]));
+    let _origin = BoundOriginFixture::new();
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    client
+        .write_all(b"GET /v1/hello/name HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = fixture.proxy.new_ctx();
+    ctx.capture_listener_publication(fixture.publication.clone());
+    ctx.capture_plugin_scope(fixture.owner.clone());
+    assert!(!request_filter(&fixture.proxy, &mut session, &mut ctx).await.unwrap());
+    assert!(ctx.grpc_transcoding.is_some());
+    // Inject corruption after a real seal to exercise the concrete projection
+    // failure boundary; ordinary plugin mutations cannot alter this owner.
+    ctx.uri_finalized = true;
+    ctx.request_query.replace_raw(Some("late=secret".into())).unwrap();
+    session.req_header_mut().set_uri("*".parse().unwrap());
+    let error = fixture.proxy.upstream_peer(&mut session, &mut ctx).await.unwrap_err();
+    assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(502)));
+    assert!(!error.retry());
+    assert!(ctx.request_query.projection_is_dirty());
+    fixture.proxy.fail_to_proxy(&mut session, &error, &mut ctx).await;
+    assert_eq!(session.response_written().unwrap().status.as_u16(), 502);
+    assert_eq!(ctx.final_downstream_status(), Some(502));
+    assert!(session.response_written().unwrap().headers["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    drop(session);
+    let mut wire = String::new();
+    client.read_to_string(&mut wire).await.unwrap();
+    assert!(wire.starts_with("HTTP/1.1 502"));
+    assert!(!wire.contains("secret"));
 }
