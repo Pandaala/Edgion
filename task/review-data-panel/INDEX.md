@@ -19199,3 +19199,17 @@ The original/final shared-time runs have identical identities and outcomes.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated warnings. No full workspace test suite,
 live provider exchange or throughput benchmark ran.
+
+## Reconcile current AI callback ownership coverage
+
+The [callback inventory](CALLBACKS.md#ai-dispatch-ownership-refresh-after-local-optimizations)
+now maps the current AI selection, preparation, provider, response-processor,
+admission, dispatch-start, raw-response and failure-adapter boundaries. It records
+the implemented local projection/ownership/parser improvements while preserving
+separate DNS, baseline, reservation and probe decisions. Peer assembly is scoped
+to structural inspection; direct-owner tests do not establish live transport or
+whole-callee coverage. Independent plan review passed. Fresh verification passed
+89 tests across dispatch, runtime, provider, response, breaker and Common time.
+No runtime code, new optimization task or performance claim was added.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.

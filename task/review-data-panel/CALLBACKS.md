@@ -2021,3 +2021,40 @@ Fresh unchanged-code tests passed TCP 29, UDP 61, TLS 85, compiled-backend runti
 support the named source boundaries; they are not live connection, hot-reload or
 whole-repository verification. No new runtime code or performance benchmark was
 introduced.
+
+## AI dispatch ownership refresh after local optimizations
+
+Revalidated at `240868570`. This section reconciles the named direct boundaries
+with the implementation changes since the older AI retry/admission inventories.
+It is not completion of the reachable DNS, Redis, TLS, body-parser or transport
+graph. Paths below are relative to `edgion-gateway/src/` unless stated otherwise.
+
+| Callback or direct owner | Current work and ownership boundary |
+| --- | --- |
+| `pg_upstream_peer` -> `ai/http/attempt::select_peer` | Drains pending settlement, prepares a target, admits it, checks deadlines after admission and endpoint resolution, then commits context only after successful peer construction. Target and selected generations survive those awaits. Endpoint failure advances the backend scope; credential and dependency refusal follow their existing scheduler scopes. |
+| `ai/runtime/dispatch::select_target` | Uses one lazy exact-capacity local Vec per synchronous call. Static candidate fields are initialized once; every backend scan refreshes exclusion bits and adaptive snapshots in declaration order. No projection survives the call or model re-resolution. Direct credential/stopped paths retain lazy allocation behavior. |
+| `prepare_ready_attempt` and `ai/connectors/provider` | Restore the post-rule header/deferred baseline before candidate preparation; preserve body-generation checks and canonical body ownership. Native Anthropic version observation borrows the winning deferred HeaderValue or inspects live cardinality with one lookup. Profile/RemoteIp rejection remains earlier, and final credential injection/expiry/Connection validation remains later. |
+| `AiAttemptResponseProcessor` construction | One boxed-child pointer is inline in the existing SmallVec dependency; child Boxes remain and multiple pointers still spill. Installation predicates/order and all callback loops remain intact. The wrapper still owns usage and EOS, observes raw encoding before child header changes, short-circuits terminated body processing and forwards cleanup. It is not response aggregation or a new owner. |
+| `PreparedAiAttempt::admission_input` -> `AiAttemptRuntimeState::admit` | Projection retains the selected policy generation. Admission transfers its owned breaker Arc into the permit, then admits the outlier/probe, then reserves optional Redis capacity. Local RAII release is separate from remote reservation settlement. Credential probe ownership remains [deferred](outlier-02-credential-probe-owner.md). |
+| `pg_upstream_request_filter` -> `mark_ai_dispatch_started` | Dispatch accounting begins at the existing upstream-write boundary, after final header checks. Peer preparation and admission do not become dispatch attempts. This refresh changes no retry-budget sample or scheduler transition. |
+| `pg_upstream_response_filter` -> `ai/http/attempt::on_raw_response` | Raw AI status handling applies 429 cooldown, records the response and evaluates retry using live transport/deadline facts. `ai/http/response` preserves Retry-After precedence and delays reset parsing until fallback is needed. Common `time::parse_rate_limit_reset` skips impossible duration parsing for date-shaped hints while keeping epoch precedence and RFC3339 validation. |
+| `pg_fail_to_connect` / `pg_error_while_proxy` -> AI failure adapters | Preserve relay/head retry vetoes, predispatch release versus dispatched failure accounting, and exactly-once status-retry transition. These adapters still delegate scheduler and settlement policy to their existing owners. |
+| `try_ai_backend_peer` / `resolve_ai_endpoint` | Structural inspection only in this refresh: resolve through canonical DNS, filter all addresses through canonical egress, select the first survivor, retain selected policy/TLS ownership, configure timeouts and record the resulting peer. No new DNS, TLS, network or cancellation experiment is claimed. |
+
+Existing decisions are not reopened by this reconciliation: full baseline restore
+[retry-03](retry-03-ai-request-baseline-rebuild.md), optional reservation projection
+[redis-08](redis-08-optional-credential-reservation-input.md), and first-address DNS
+[dns-02](dns-02-ai-first-address-projection.md). Full address filtering preserves
+rejection observations after the selected address. A Vec expression alone does
+not establish an extra allocation; retained generations across awaits likewise
+do not establish an avoidable clone. No new runtime edit or duplicate task was
+selected for this documentation batch.
+
+Fresh verification passed 89 tests: dispatch 39, attempt runtime 26, provider seven,
+response seven, breaker three and Common time seven. These are current direct-owner
+checks; the HTTP attempt adapter, live peer/DNS/TLS/Redis execution and every
+reachable child implementation are not newly tested by that set. Historical
+verification in earlier sections remains historical evidence. No full workspace
+test suite or performance benchmark ran.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
