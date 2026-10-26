@@ -19443,3 +19443,19 @@ Final verification passed the same 32 response-converter tests plus 39 dispatch
 and 14 canonical SSE tests (85 total), formatting, workspace all-target check/Clippy
 and seven repository guards with existing unrelated warnings. No full suite or
 live-provider integration ran.
+
+## Streamed conversion event input decision deferred
+
+The [stream-event input task](conversion-02-stream-event-input.md) records the
+remaining full Value parse before event dispatch, including unused members and
+unknown events. Selective borrowing needs a reviewed acceptance and ownership
+contract: ordinary duplicate keys replace earlier values, complete JSON is
+validated before ignoring an event, and message identity survives callbacks.
+No parser replacement or runtime behavior change was selected. Request-tree,
+output-envelope and native fragmented-feed decisions remain separate tasks.
+
+Fresh unchanged-source verification passed 32 response-converter, 50 tests
+matched by sse::tests and 25 semantic-response tests (107 total). No new test,
+prototype, benchmark, full suite or live-provider test was introduced.
+Formatting, workspace all-target check/Clippy, agent-doc validation and diff
+hygiene passed with existing unrelated warnings.
