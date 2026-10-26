@@ -19387,3 +19387,21 @@ test was introduced. This evidence checks the current contract, not a proposed
 ownership redesign or measured performance gain.
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings.
+
+## Reuse the converted request usage-option lookup
+
+Chat-to-Anthropic stream-option validation now checks the one-field length gate,
+then reads include_usage once through get and boolean projection. The former
+contains_key followed by indexed access performed two inner-map lookups on an
+accepted option. Missing/null options, non-streaming rejection, wrong container,
+extra fields, missing key and non-boolean errors preserve their existing order
+and categories. No conversion ownership or output representation changes.
+
+The existing strict-options regression now includes a single unknown key and a
+string-valued boolean; the existing usage-flags regression also checks explicit
+false without forced injection. All 19 request-converter tests passed with these
+assertions before implementation. This is duplicate-lookup removal only; no
+allocation or throughput benchmark was run.
+Final verification passed the same 19 request-converter and 39 dispatch tests
+(58 total), formatting, workspace all-target check/Clippy and seven repository
+guards with existing unrelated warnings. No full suite or live integration ran.

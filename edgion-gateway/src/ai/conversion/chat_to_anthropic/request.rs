@@ -141,11 +141,12 @@ fn parse_stream_options(
         return Err(AnthropicRequestError::UnsupportedParameter);
     }
     let options = value.as_object().ok_or(AnthropicRequestError::InvalidRequestBody)?;
-    if options.len() != 1 || !options.contains_key("include_usage") {
+    if options.len() != 1 {
         return Err(AnthropicRequestError::InvalidRequestBody);
     }
-    options["include_usage"]
-        .as_bool()
+    options
+        .get("include_usage")
+        .and_then(Value::as_bool)
         .ok_or(AnthropicRequestError::InvalidRequestBody)
 }
 

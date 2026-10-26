@@ -111,6 +111,9 @@ fn computes_stream_and_effective_usage_flags() {
     let mut request = base_request();
     request["stream"] = json!(true);
     request["stream_options"] = json!({"include_usage": false});
+    let unforced = prepare_anthropic_request(request.clone(), "canonical", None, false, LIMIT).unwrap();
+    assert!(unforced.requested_streaming);
+    assert!(!unforced.effective_usage_chunk);
     let prepared = prepare_anthropic_request(request.clone(), "canonical", None, true, LIMIT).unwrap();
     assert!(prepared.requested_streaming);
     assert!(prepared.effective_usage_chunk);
@@ -125,6 +128,8 @@ fn computes_stream_and_effective_usage_flags() {
 fn validates_stream_options_strictly() {
     for options in [
         json!({}),
+        json!({"other": true}),
+        json!({"include_usage": "true"}),
         json!({"include_usage": null}),
         json!({"include_usage": true, "extra": false}),
     ] {
