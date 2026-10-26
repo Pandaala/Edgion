@@ -268,6 +268,43 @@ fn model_list_encoding_preserves_wire_bytes() {
 }
 
 #[test]
+fn model_list_typed_encoding_removes_intermediate_map_allocations() {
+    use crate::test_allocation_counter::count_allocation_stats;
+
+    fn previous_encoder(visible: Vec<String>) -> serde_json::Result<Vec<u8>> {
+        use serde_json::{Map, Value};
+
+        let data = visible
+            .into_iter()
+            .map(|id| {
+                Value::Object(Map::from_iter([
+                    ("id".into(), Value::String(id)),
+                    ("object".into(), Value::String("model".into())),
+                    ("created".into(), Value::from(0)),
+                    ("owned_by".into(), Value::String("edgion".into())),
+                ]))
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_vec(&Value::Object(Map::from_iter([
+            ("object".into(), Value::String("list".into())),
+            ("data".into(), Value::Array(data)),
+        ])))
+    }
+
+    for count in [0, 1, 16, 128] {
+        let previous_input = (0..count)
+            .map(|index| format!("model-{index}-quote\"-slash\\-π"))
+            .collect::<Vec<_>>();
+        let current_input = previous_input.clone();
+        let (previous, previous_stats) = count_allocation_stats(|| previous_encoder(previous_input).unwrap());
+        let (current, current_stats) = count_allocation_stats(|| encode_model_list(current_input).unwrap());
+        assert_eq!(current, previous);
+        assert!(current_stats.calls < previous_stats.calls);
+        assert!(current_stats.requested_bytes < previous_stats.requested_bytes);
+    }
+}
+
+#[test]
 fn canonical_request_preserves_logical_model_and_injects_usage_once() {
     let input =
         Bytes::from_static(br#"{"model":"fast","stream":true,"stream_options":{"custom":7,"include_usage":false}}"#);

@@ -19228,3 +19228,28 @@ is unchanged. Fresh baseline verification passed 22 error/context/HTTP-attempt t
 Formatting, workspace all-target check/Clippy, agent-doc validation and diff
 hygiene passed with existing unrelated warnings. No new rendering implementation,
 full workspace test suite, live exchange or performance measurement was added.
+
+## Serialize model lists without intermediate JSON maps
+
+The private AI model-list encoder now serializes two typed local structures.
+Model IDs still move into the entry collection, while field names and fixed
+`model`, `edgion` and `list` values no longer require owned JSON strings or maps.
+The entry Vec and output buffer remain. Visibility, sorting, deduplication,
+request snapshot ownership, failure handling, headers and write ordering stay
+with their existing owners; no model-list cache or upstream aggregation is added.
+
+Field declaration order matches the current sorted serde_json Map bytes:
+`data, object` outside and `created, id, object, owned_by` inside. The current
+Gateway dependency feature graph does not enable `preserve_order`. Exact-byte
+regressions compare against both the original json! construction and the preceding
+owned-Map encoder, covering empty lists, escaped/multibyte IDs and larger lists.
+A future serde_json feature change must retain or explicitly revisit these tests;
+no alternate-feature build is claimed.
+
+The original 22 proxy tests passed before editing. Final verification passed 23
+proxy and four model-router tests. An isolated encoder comparison for zero, one,
+16 and 128 entries showed fewer allocation calls and fewer cumulative requested
+bytes in every case, with input construction/cloning outside the counters. This
+is not a throughput, peak-memory or whole-request allocation measurement.
+Formatting, workspace all-target check/Clippy and seven repository guards passed
+with existing unrelated warnings. No full suite or live integration test ran.

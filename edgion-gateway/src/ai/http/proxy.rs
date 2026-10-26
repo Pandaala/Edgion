@@ -111,23 +111,31 @@ fn visible_model_ids(
 }
 
 fn encode_model_list(visible: Vec<String>) -> serde_json::Result<Vec<u8>> {
-    use serde_json::{Map, Value};
+    // Match the sorted object keys of the existing serde_json Map encoding.
+    #[derive(serde::Serialize)]
+    struct Model {
+        created: u64,
+        id: String,
+        object: &'static str,
+        owned_by: &'static str,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ModelList {
+        data: Vec<Model>,
+        object: &'static str,
+    }
 
     let data = visible
         .into_iter()
-        .map(|id| {
-            Value::Object(Map::from_iter([
-                ("id".into(), Value::String(id)),
-                ("object".into(), Value::String("model".into())),
-                ("created".into(), Value::from(0)),
-                ("owned_by".into(), Value::String("edgion".into())),
-            ]))
+        .map(|id| Model {
+            created: 0,
+            id,
+            object: "model",
+            owned_by: "edgion",
         })
-        .collect::<Vec<_>>();
-    serde_json::to_vec(&Value::Object(Map::from_iter([
-        ("object".into(), Value::String("list".into())),
-        ("data".into(), Value::Array(data)),
-    ])))
+        .collect();
+    serde_json::to_vec(&ModelList { data, object: "list" })
 }
 
 fn unknown_model_passthrough_allowed<'a>(
