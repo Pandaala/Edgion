@@ -19900,3 +19900,49 @@ No new tests, live integration, full suite or allocation/throughput benchmark ra
 
 Independent plan and final source reviews passed. Agent-doc validation and diff
 hygiene passed; this inventory does not mark the overall campaign complete.
+
+
+## Measure SSE fragment comparison short-circuiting
+
+`SliceChain::range_eq` compares borrowed fragments through the canonical range
+visitor. Replacing `equal &= comparison` with `equal = equal && comparison`
+would skip suffix comparisons after a mismatch, while retaining range validation,
+the complete visitor walk and offset advancement. Actual callers include SSE
+`event_is` (Anthropic event names) and `data_is_literal` (OpenAI `[DONE]`).
+Different lengths already return before traversal. This is distinct from the
+previous contiguous-range search change and deferred dispatch-metadata reuse.
+
+A local optimized probe embedded the actual chain implementation twice, differing
+only in that expression. It used rustc 1.96.1 / LLVM 22.1.2 on aarch64-apple-darwin,
+`rustc -O`, and the existing debug/deps Bytes 1.12.1 library artifact, not a release
+Gateway build. Prebuilt chains held `[DONE]`, `message_delta` or `message_start`
+in one, two or byte-sized fragments. Equal, first-byte mismatch, last-byte
+mismatch and different-length inputs asserted both implementations' outcomes.
+Each case used eight alternating-order samples of one million black-boxed calls;
+ratios compare each implementation's independently sorted upper-middle sample.
+Two executions yielded these candidate/original elapsed-time ranges:
+
+| Case | Ratio across literals and both runs |
+| --- | --- |
+| One fragment, equal | 1.057-1.089 |
+| One fragment, first/last mismatch | 1.042-1.092 |
+| Byte-sized fragments, first mismatch | 0.389-0.485 |
+| Byte-sized fragments, equal | 1.004-1.014 |
+
+Two-fragment results were mixed. Fragmented early misses benefited, but the
+contiguous cases regressed in this probe. Without representative production
+weights, there is no demonstrated overall gain: retain the current implementation
+and create no speculative follow-up task. Reconsider only with profiling showing
+material fragmented-miss cost. This experiment does not measure coalesced storage,
+allocation, full decoding/callback throughput or RSS; it is not a universal
+compiler or workload conclusion. Temporary probe and raw logs are local artifacts,
+not committed benchmark infrastructure.
+
+Unchanged-code verification passed a 229-test substring-filter selection,
+including 80 `sse::`, 25 `ai::guards::semantic::response::` and 14 OpenAI canonical
+SSE tests; the selection also includes unrelated substring matches. Formatting
+and workspace all-target check/Clippy passed with existing warnings. No runtime,
+dependency, test or integration-fixture changes were made.
+
+Independent plan and final source/evidence reviews passed. Agent-doc validation
+and diff hygiene passed; this experiment does not complete transitive coverage.
