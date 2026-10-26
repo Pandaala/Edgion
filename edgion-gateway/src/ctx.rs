@@ -1961,7 +1961,7 @@ impl DeferredCredentialMutations {
     pub(crate) fn apply(&self, request: &mut pingora_http::RequestHeader) -> Result<(), ()> {
         for entry in &self.entries {
             request
-                .insert_header(entry.name.clone(), entry.value.as_ref().clone())
+                .insert_header(&entry.name, entry.value.as_ref().clone())
                 .map_err(|_| ())?;
         }
         Ok(())

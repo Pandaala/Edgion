@@ -18902,3 +18902,27 @@ covering typed sensitivity, repeated fields and deferred credential ownership.
 No live integration, full workspace test suite or benchmark ran.
 Formatting, workspace all-target check/Clippy, seven repository guards and diff
 hygiene passed with existing unrelated Clippy warnings.
+
+## Borrow deferred credential names during attempt materialization
+
+DeferredCredentialMutations::apply now passes a borrowed HeaderName into Pingora
+instead of cloning a temporary name handle. At pinned fork
+1aaa45cc70430bc782990bc20ddee3fef36d6b99, owned and borrowed HeaderName conversions
+both call the same titled_header_name function. Standard-name title mapping,
+custom-name byte conversion, subsequent parsing, insertion and error behavior
+are unchanged. This is not the deferred shared original-case name proposal.
+
+The value clone remains necessary for independent attempt-local request headers;
+sensitive metadata and retained entries survive retries. Existing nomination and
+expiry checks still run before materialization. No logging, cache, policy or
+credential-lifetime change is introduced. The source change removes a temporary
+name-handle clone/drop; it makes no payload-copy, allocation or throughput claim.
+
+Independent plan review passed. Original and final deferred-mutation runs passed
+the same three tests; 15 upstream-request-hook and 100 real-adapter tests also
+passed. These cover replacement/removal, repeated attempts, redaction/sensitivity,
+expiry, nomination and existing adapter ownership. No new tests were needed for
+the equivalent pinned conversion. No full workspace test suite, live integration
+or benchmark ran.
+Formatting, workspace all-target check/Clippy, seven repository guards and diff
+hygiene passed with existing unrelated Clippy warnings.
