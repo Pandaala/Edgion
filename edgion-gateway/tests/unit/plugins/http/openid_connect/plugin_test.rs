@@ -5,6 +5,8 @@ use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use crate::plugins::runtime::DyeOutcome;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::{normalize_path, PathNormalizationConfig};
 use edgion_resources::resources::common::CustomCACertificateRef;
@@ -1318,6 +1320,90 @@ fn test_signed_cookie_roundtrip() {
     assert_eq!(decoded.original_url, "/orders");
 }
 
+fn original_cookie_frame(nonce: &[u8; 12], encrypted: &[u8]) -> String {
+    let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
+    let encrypted_b64 = URL_SAFE_NO_PAD.encode(encrypted);
+    format!("{}.{}", nonce_b64, encrypted_b64)
+}
+
+fn presized_string_cookie_frame(nonce: &[u8; 12], encrypted: &[u8]) -> Result<String, ()> {
+    let nonce_len = base64::encoded_len(nonce.len(), false).ok_or(())?;
+    let encrypted_len = base64::encoded_len(encrypted.len(), false).ok_or(())?;
+    let len = nonce_len
+        .checked_add(1)
+        .and_then(|len| len.checked_add(encrypted_len))
+        .ok_or(())?;
+    let mut output = String::with_capacity(len);
+    URL_SAFE_NO_PAD.encode_string(nonce, &mut output);
+    output.push('.');
+    URL_SAFE_NO_PAD.encode_string(encrypted, &mut output);
+    Ok(output)
+}
+
+#[test]
+fn cookie_frame_preserves_complete_bytes_and_capacity() {
+    let nonce = [0, 1, 2, 127, 128, 253, 254, 255, 17, 33, 65, 129];
+    for len in [
+        0, 1, 2, 3, 16, 64, 256, 767, 768, 769, 1535, 1536, 1537, 2800, 3000, 3800,
+    ] {
+        let encrypted: Vec<u8> = (0..len).map(|index| (index % 256) as u8).collect();
+        let frame = OpenidConnect::encode_cookie_frame(&nonce, &encrypted).unwrap();
+        assert_eq!(frame, original_cookie_frame(&nonce, &encrypted));
+        assert_eq!(frame, presized_string_cookie_frame(&nonce, &encrypted).unwrap());
+        assert_eq!(frame.capacity(), frame.len());
+        assert_eq!(frame.bytes().filter(|byte| *byte == b'.').count(), 1);
+        assert!(!frame.contains('='));
+        let (encoded_nonce, encoded_ciphertext) = frame.split_once('.').unwrap();
+        assert_eq!(URL_SAFE_NO_PAD.decode(encoded_nonce).unwrap(), nonce);
+        assert_eq!(URL_SAFE_NO_PAD.decode(encoded_ciphertext).unwrap(), encrypted);
+    }
+}
+
+#[test]
+fn cookie_frame_allocation_comparison() {
+    let nonce = [17; 12];
+    for len in [0, 16, 256, 767, 768, 769, 1535, 1536, 1537, 2800, 3000, 3800] {
+        let encrypted = vec![129; len];
+        let (original, original_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| original_cookie_frame(&nonce, &encrypted));
+        let (string, string_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            presized_string_cookie_frame(&nonce, &encrypted).unwrap()
+        });
+        let (slice, slice_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            OpenidConnect::encode_cookie_frame(&nonce, &encrypted).unwrap()
+        });
+        assert_eq!(slice, original);
+        assert_eq!(slice, string);
+        // Only synthetic input lengths and allocator statistics are emitted.
+        println!(
+            "cookie-frame input={len}: original calls={} requested={} capacity={}; string calls={} requested={} capacity={}; slice calls={} requested={} capacity={}",
+            original_stats.calls, original_stats.requested_bytes, original.capacity(),
+            string_stats.calls, string_stats.requested_bytes, string.capacity(),
+            slice_stats.calls, slice_stats.requested_bytes, slice.capacity(),
+        );
+    }
+}
+
+#[test]
+fn cookie_encoder_preserves_serialization_failure() {
+    struct Unserializable;
+    impl serde::Serialize for Unserializable {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("synthetic serialization failure"))
+        }
+    }
+    let mut config = base_config();
+    config.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".into());
+    let plugin = OpenidConnect::new(&config, "default".into());
+    assert_eq!(
+        OpenidConnect::encode_signed_cookie_payload(
+            &Unserializable,
+            plugin.session_cipher().expect("prepared session cipher"),
+        ),
+        Err(())
+    );
+}
+
 #[test]
 fn cookie_nonce_decoding_preserves_length_and_error_boundaries() {
     use super::{AuthFailure, OidcVerifyError};
@@ -1357,6 +1443,162 @@ fn cookie_nonce_decoding_preserves_length_and_error_boundaries() {
     changed_nonce[0] ^= 1;
     let tampered = format!("{}.{}", URL_SAFE_NO_PAD.encode(changed_nonce), ciphertext);
     assert_eq!(decode(&tampered), Err(invalid_signature));
+}
+
+// Frozen pre-refactor schema: intentionally independent of the generic production type.
+#[derive(serde::Serialize)]
+struct OriginalPersistedCookie {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    session_ref: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    access_token: String,
+    created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
+}
+
+fn original_persistence_projection(payload: &OidcSessionCookie, session_ref: &str) -> OriginalPersistedCookie {
+    OriginalPersistedCookie {
+        session_ref: session_ref.to_owned(),
+        access_token: if payload.access_token.trim().is_empty() {
+            payload.access_token.clone()
+        } else {
+            String::new()
+        },
+        created_at: payload.created_at,
+        expires_at: payload.expires_at,
+        id_token: payload.id_token.clone(),
+        refresh_token: payload.refresh_token.clone(),
+    }
+}
+
+#[test]
+fn persistence_projection_preserves_exact_json_and_owned_decode() {
+    for session_ref in ["", "generated-reference", "existing-reference", " \t"] {
+        for token in ["access-token", "", " \t"] {
+            for expires_at in [None, Some(42)] {
+                for id_token in [None, Some(""), Some("id-\"\\é")] {
+                    for refresh_token in [None, Some(""), Some("refresh-token")] {
+                        let source = OidcSessionCookie {
+                            session_ref: session_ref.to_owned(),
+                            access_token: token.to_owned(),
+                            created_at: 7,
+                            expires_at,
+                            id_token: id_token.map(str::to_owned),
+                            refresh_token: refresh_token.map(str::to_owned),
+                        };
+                        let original = original_persistence_projection(&source, session_ref);
+                        let expected = serde_json::to_vec(&original).unwrap();
+                        let borrowed = source.for_persistence(session_ref, !token.trim().is_empty());
+                        assert_eq!(serde_json::to_vec(&borrowed).unwrap(), expected);
+                        let owned: OidcSessionCookie = serde_json::from_slice(&expected).unwrap();
+                        assert_eq!(serde_json::to_vec(&owned).unwrap(), expected);
+                        assert_eq!(owned.session_ref, session_ref);
+                        assert_eq!(owned.access_token, original.access_token);
+                        assert_eq!(owned.id_token.as_deref(), id_token);
+                        assert_eq!(owned.refresh_token.as_deref(), refresh_token);
+                        assert_eq!(owned.created_at, 7);
+                        assert_eq!(owned.expires_at, expires_at);
+                        assert_eq!(format!("{source:?}"), "OidcSessionCookie { .. }");
+                        assert_eq!(format!("{borrowed:?}"), "OidcSessionCookie { .. }");
+                    }
+                }
+            }
+        }
+    }
+    let minimal: OidcSessionCookie = serde_json::from_str(r#"{"created_at":7}"#).unwrap();
+    assert_eq!(serde_json::to_string(&minimal).unwrap(), r#"{"created_at":7}"#);
+    assert!(minimal.session_ref.is_empty());
+    assert!(minimal.access_token.is_empty());
+    assert!(minimal.id_token.is_none());
+    let full: OidcSessionCookie = serde_json::from_str(
+        r#"{"session_ref":"ref","access_token":"legacy","created_at":7,"expires_at":42,"id_token":"","refresh_token":""}"#,
+    ).unwrap();
+    assert_eq!(full.access_token, "legacy");
+    assert_eq!(
+        serde_json::to_string(&full.for_persistence("ref", true)).unwrap(),
+        r#"{"session_ref":"ref","created_at":7,"expires_at":42,"id_token":"","refresh_token":""}"#,
+    );
+}
+
+#[test]
+fn persistence_projection_allocation_comparison() {
+    for (case, token, optional_len, generated) in [
+        ("small", "access-token", 32, false),
+        ("empty", "", 0, false),
+        ("whitespace", " \t", 32, false),
+        ("large", "access-token", 2048, false),
+        ("generated", "access-token", 32, true),
+    ] {
+        let source = OidcSessionCookie {
+            session_ref: if generated {
+                String::new()
+            } else {
+                "existing-reference".into()
+            },
+            access_token: token.into(),
+            created_at: 7,
+            expires_at: Some(42),
+            id_token: Some("i".repeat(optional_len)),
+            refresh_token: Some("r".repeat(optional_len)),
+        };
+        let cache_token = !source.access_token.trim().is_empty();
+        let (original, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut projection = original_persistence_projection(&source, &source.session_ref);
+            if generated {
+                projection.session_ref = "generated-reference".to_owned();
+            }
+            serde_json::to_vec(&projection).unwrap()
+        });
+        let (borrowed, after) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let generated_ref = generated.then(|| "generated-reference".to_owned());
+            let reference = generated_ref.as_deref().unwrap_or(&source.session_ref);
+            serde_json::to_vec(&source.for_persistence(reference, !source.access_token.trim().is_empty())).unwrap()
+        });
+        assert_eq!(original, borrowed);
+        let copied =
+            source.session_ref.len() + if cache_token { 0 } else { source.access_token.len() } + optional_len * 2;
+        // Generated-reference fixture ownership is included; RNG is excluded.
+        // Logical copied bytes and allocator totals are not peak RSS measurements.
+        println!(
+            "cookie-projection {case}: original calls={} requested={} json_capacity={}; borrowed calls={} requested={} json_capacity={}; removed_projection_bytes={copied}",
+            before.calls, before.requested_bytes, original.capacity(),
+            after.calls, after.requested_bytes, borrowed.capacity(),
+        );
+    }
+}
+
+#[tokio::test]
+async fn persistence_caches_before_skipped_publication() {
+    for missing_cipher in [false, true] {
+        let mut config = base_config();
+        if !missing_cipher {
+            config.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".into());
+        }
+        let plugin = OpenidConnect::new(&config, "default".into());
+        let source = OidcSessionCookie {
+            session_ref: " \t".into(),
+            access_token: "exact-access-token".into(),
+            created_at: OpenidConnect::now_unix_secs(),
+            expires_at: Some(OpenidConnect::now_unix_secs() + 3600),
+            id_token: Some("i".repeat(config.max_session_cookie_bytes as usize + 1)),
+            refresh_token: Some(String::new()),
+        };
+        let before = serde_json::to_vec(&source).unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_append_response_header().times(0);
+        plugin.maybe_set_session_cookie_header(&mut session, &source).await;
+        assert_eq!(serde_json::to_vec(&source).unwrap(), before);
+        assert_eq!(
+            plugin.get_cached_access_token(" \t").await.as_deref(),
+            Some("exact-access-token")
+        );
+        assert_eq!(plugin.session_cipher().is_none(), missing_cipher);
+    }
 }
 
 #[tokio::test]
@@ -2682,12 +2924,10 @@ fn test_cookie_attr_suffix_respects_cookie_config() {
     cfg.session_cookie_http_only = false;
     cfg.session_cookie_secure = false;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    let session = MockPluginSession::new();
-
-    let suffix = plugin.build_cookie_attr_suffix(&session, 60, "/");
-    assert!(suffix.contains("SameSite=Strict"));
-    assert!(!suffix.contains("HttpOnly"));
-    assert!(!suffix.contains("Secure"));
+    assert_eq!(
+        plugin.build_cookie_header_value("session", "fixture", 60, "/"),
+        "session=fixture; Path=/; SameSite=Strict; Max-Age=60"
+    );
 }
 
 #[test]
@@ -2695,10 +2935,147 @@ fn test_cookie_attr_suffix_sets_secure_when_enabled() {
     let mut cfg = base_config();
     cfg.session_cookie_secure = true;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    let session = MockPluginSession::new();
+    assert_eq!(
+        plugin.build_cookie_header_value("session", "fixture", 60, "/"),
+        "session=fixture; Path=/; SameSite=Lax; Max-Age=60; HttpOnly; Secure"
+    );
+}
 
-    let suffix = plugin.build_cookie_attr_suffix(&session, 60, "/");
-    assert!(suffix.contains("Secure"));
+// Frozen pre-oidc-04 composition, deliberately independent of the new formatter.
+fn old_cookie_header_value(config: &OpenidConnectConfig, name: &str, value: &str, max_age: u64, path: &str) -> String {
+    let secure = if config.session_cookie_secure { "; Secure" } else { "" };
+    let http_only = if config.session_cookie_http_only {
+        "; HttpOnly"
+    } else {
+        ""
+    };
+    let same_site = if config.session_cookie_same_site.eq_ignore_ascii_case("strict") {
+        "Strict"
+    } else if config.session_cookie_same_site.eq_ignore_ascii_case("none") {
+        "None"
+    } else {
+        "Lax"
+    };
+    let suffix = format!(
+        "; Path={}; SameSite={}; Max-Age={}{}{}",
+        path, same_site, max_age, http_only, secure
+    );
+    format!("{}={}{}", name, value, suffix)
+}
+
+#[test]
+fn cookie_header_formatting_matches_original_full_bytes() {
+    let mut plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    let long_path = format!("/callback/{}", "segment/".repeat(128));
+    let long_value = "a".repeat(3800);
+    // Mutating the private fixture config intentionally exercises defensive
+    // formatting too; it does not claim invalid configurations pass admission.
+    for same_site in ["Lax", "Strict", "None", "sTrIcT", "nOnE", "", "unknown", " Strict"] {
+        for secure in [false, true] {
+            for http_only in [false, true] {
+                plugin.config.session_cookie_same_site = same_site.into();
+                plugin.config.session_cookie_secure = secure;
+                plugin.config.session_cookie_http_only = http_only;
+                for (name, value, max_age, path) in [
+                    ("edgion_oidc_state", "fixture.state", 300, "/auth/callback"),
+                    ("edgion_oidc_state", "", 0, "/auth/callback"),
+                    ("custom_session", "fixture.session", plugin.config.session_lifetime, "/"),
+                    ("custom_session", "", 0, "/"),
+                    ("", "", u64::MAX, ""),
+                    ("session", long_value.as_str(), u64::MAX, long_path.as_str()),
+                    ("session", "é=%3B", 1, "/café"),
+                    ("bad;name", "bad\r\nvalue", 2, "/bad;path"),
+                ] {
+                    let actual = plugin.build_cookie_header_value(name, value, max_age, path);
+                    assert_eq!(
+                        actual,
+                        old_cookie_header_value(&plugin.config, name, value, max_age, path)
+                    );
+                    assert_eq!(actual.capacity(), actual.len());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cookie_header_formatting_sizes_decimal_boundaries() {
+    let plugin = OpenidConnect::new(&base_config(), "default".into());
+    let mut max_ages = vec![0, u64::MAX];
+    for exponent in 0..=19 {
+        let power = 10u64.pow(exponent);
+        max_ages.extend([power - 1, power, power + 1]);
+    }
+    for max_age in max_ages {
+        let actual = plugin.build_cookie_header_value("session", "fixture", max_age, "/callback");
+        assert_eq!(
+            actual,
+            old_cookie_header_value(&plugin.config, "session", "fixture", max_age, "/callback"),
+        );
+        assert_eq!(actual.capacity(), actual.len(), "Max-Age {max_age}");
+    }
+}
+
+#[test]
+fn cookie_header_formatting_keeps_plugin_generations_independent() {
+    let mut config = base_config();
+    config.session_cookie_same_site = "Strict".into();
+    config.session_cookie_http_only = false;
+    let old = OpenidConnect::new(&config, "default".into());
+    config.session_cookie_same_site = "Lax".into();
+    config.session_cookie_secure = false;
+    config.session_cookie_http_only = true;
+    let new = OpenidConnect::new(&config, "default".into());
+    for _ in 0..3 {
+        assert_eq!(
+            old.build_cookie_header_value("session", "fixture", 300, "/callback"),
+            "session=fixture; Path=/callback; SameSite=Strict; Max-Age=300; Secure"
+        );
+        assert_eq!(
+            new.build_cookie_header_value("session", "fixture", 0, "/"),
+            "session=fixture; Path=/; SameSite=Lax; Max-Age=0; HttpOnly"
+        );
+    }
+}
+
+#[test]
+fn cookie_header_formatting_allocation_comparison() {
+    let plugin = OpenidConnect::new(&base_config(), "default".into());
+    let long_path = format!("/callback/{}", "segment/".repeat(128));
+    let session_value = "a".repeat(3800);
+    for (case, name, value, max_age, path) in [
+        ("clear", "session", "", 0, "/"),
+        ("state", "edgion_oidc_state", "fixture.state", 300, "/callback"),
+        (
+            "long-path",
+            "edgion_oidc_state",
+            "fixture.state",
+            300,
+            long_path.as_str(),
+        ),
+        (
+            "session",
+            "session",
+            session_value.as_str(),
+            plugin.config.session_lifetime,
+            "/",
+        ),
+    ] {
+        let (baseline, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+            old_cookie_header_value(&plugin.config, name, value, max_age, path)
+        });
+        let (candidate, after) = crate::test_allocation_counter::count_allocation_stats(|| {
+            plugin.build_cookie_header_value(name, value, max_age, path)
+        });
+        assert_eq!(candidate, baseline);
+        // Only synthetic case labels, sizes and allocator statistics are emitted.
+        // Allocation-call counts are measured rather than assumed.
+        println!(
+            "cookie-format {case}: baseline calls={} requested={} capacity={}; candidate calls={} requested={} capacity={}; len={}",
+            before.calls, before.requested_bytes, baseline.capacity(),
+            after.calls, after.requested_bytes, candidate.capacity(), candidate.len()
+        );
+    }
 }
 
 #[test]

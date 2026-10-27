@@ -23,10 +23,10 @@ OAuth 2.0 Security BCP (RFC 9700 §4.2.4): protect intermediate artefacts (state
 
 ## Code shape today
 
-- `plugins/http/openid_connect/session_cookie.rs:183-188` — `build_cookie_attr_suffix` appends `; Secure` iff `config.session_cookie_secure`; shared by both cookies.
-- `plugins/http/openid_connect/callback.rs:169` — state cookie set on the `/authorize` redirect (max-age 300), read back on `/callback`.
-- `plugins/http/openid_connect/session_cookie.rs:107-119` — state payload is AEAD-encrypted (AES-256-GCM keyed by SHA256(session_secret)) before it ever hits the wire.
-- `types/resources/edgion_plugins/plugin_configs/openid_connect.rs:417-419` — config validation already rejects `SameSite=None` with `session_cookie_secure: false`, so the only HTTP-exposed window is `SameSite=Lax/Strict` + explicit `secure: false` (defense in depth).
+- `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` — `build_cookie_header_value` appends `; Secure` iff `config.session_cookie_secure`; shared by both cookies.
+- `edgion-gateway/src/plugins/http/openid_connect/callback.rs` — state cookie set on the `/authorize` redirect (max-age 300), read back on `/callback`.
+- `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` — state payload is AEAD-encrypted (AES-256-GCM keyed by SHA256(session_secret)) before it ever hits the wire.
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs` — config validation already rejects `SameSite=None` with `session_cookie_secure: false`, so the only HTTP-exposed window is `SameSite=Lax/Strict` + explicit `secure: false` (defense in depth).
 
 ## Why we diverge
 
@@ -49,3 +49,40 @@ OAuth 2.0 Security BCP (RFC 9700 §4.2.4): protect intermediate artefacts (state
 ## Resolution references
 
 - `cookie-auth-05` — 2026-05-20 (⚠️ accepted divergence).
+
+## Complete Cookie formatting ownership (oidc-04)
+
+`build_cookie_header_value` constructs the complete name/value and attribute text
+for authorization state, callback session establishment, logout clearing and
+refresh persistence. Attribute policy was already shared; this change removes the
+intermediate owned suffix and the unused session argument. Callers still select
+their existing name, value, path and Max-Age. There are no prepared suffix Strings
+or additional per-generation state, including for plugins that emit no cookies.
+
+The formatter preserves exact attribute order and the existing case-insensitive
+Strict/None choice with an untrimmed Lax fallback. It does not validate or escape
+input, change the configured Secure/HttpOnly policy, publish headers, or move any
+cookie-size check. Encryption, cache writes, failure handling and Set-Cookie append
+order remain with their original owners. The final String-to-HeaderValue ownership
+boundary is separate from this change.
+
+Full-byte tests compare the previous two-stage formatter across all flag choices,
+set/clear forms, lifetime boundaries, long paths/values and defensive bypass inputs.
+Separate plugin generations retain independent policy. The formatter computes exact
+byte capacity from borrowed fragments and the decimal Max-Age length, using checked
+addition, then writes once into the preallocated String. Decimal-boundary tests and
+the full-byte matrix also check exact logical output capacity. No temporary decimal
+String or persistent prepared suffix is needed. If sizing is unrepresentable, the
+allocation hint falls back to normal String growth without a new request error.
+String writes with only standard str/u64 formatting cannot return a formatting error.
+
+The first plain `format!` candidate was rejected: actual-helper synthetic tests
+measured returned capacity growing from 59 to 116 for a clear cookie and from 1117
+to 2144 for a long callback path. A returned String may remain live across an await,
+so fewer intermediate owners alone did not justify that retained-memory regression.
+Exact sizing addresses that growth; allocation comparisons still measure actual
+calls and requested bytes without assuming an allocator-call-count contract.
+Helper measurements do not establish allocator RSS, whole-authentication,
+publication or network throughput improvements.
+Reconsider persistent suffix preparation only with evidence about emission rates,
+plugin populations, retained memory and the complete formatting lifetime.

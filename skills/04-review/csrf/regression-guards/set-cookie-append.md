@@ -24,3 +24,38 @@ missing upstream cookie and verifies failure, useful presence/count context,
 and marker absence from reporter-bound error/message data. Complete and
 missing-CSRF controls retain the verdict boundary. This verifies diagnostic
 safety, not a fresh live append, signature or dynamic-rotation run.
+
+## CSRF Cookie producer ownership (csrf-01)
+
+The current Cookie Display to String to canonical string append path is retained
+as an evaluated tradeoff, not a correctness defect. With locked cookie 0.18.2,
+http 1.5.0 and bytes 1.12.1, HeaderValue::try_from(String) transfers storage;
+from_maybe_shared(String) instead copies. Direct transfer can retain Display's
+spare capacity and allocate Shared immediately; compact copied storage can defer
+that allocation until its first clone.
+
+An isolated optimized probe compared complete Display, conversion and drop across
+72 valid fixture/lifecycle combinations, including first/repeated clones and a
+move/drain. Invalid bypass fixtures matched conversion acceptance; the probe did
+not simulate adapter binding or establish accepted configuration. Direct transfer
+was faster in these local medians, but retained approximately 1.60–1.95 times the
+formatted payload length. For the 17-byte default-name fixture, Secure enabled and
+Max-Age 3600, output length was 298 versus Display capacity 508. Direct consumption
+measured five allocation events for all three alternatives: old copy requested
+1111 bytes, transfer 837, and compact transfer 1111; timing medians were about
+204, 176 and 184 ns respectively. The first clone added one 24-byte allocation to
+old/compact storage, versus none for already-shared transferred storage. These are
+synthetic host/allocator measurements, not retained RSS or whole-plugin throughput.
+
+Retaining compact queued storage and the existing canonical failure policy is
+preferred over this local timing gain. The string adapter deliberately returns a
+successful no-op for malformed values without a bound response and an error when
+bound. Early typed conversion in CSRF cannot reproduce that distinction through
+its current session API. A new generic owned-string seam or manual Cookie formatter
+is not justified solely for this cookie. No token generation, cookie bytes,
+attribute order, Secure/HttpOnly policy, append ordering or PluginLog outcome changes.
+
+Re-evaluate if a separately justified canonical owned session boundary preserves
+these outcomes, formatting capacity changes, or representative complete-lifecycle
+workloads alter the tradeoff. This decision does not prohibit owned header transfer
+for other producers with different storage and validation boundaries.

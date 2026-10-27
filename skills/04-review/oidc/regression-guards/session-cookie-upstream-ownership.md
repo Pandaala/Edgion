@@ -102,5 +102,54 @@ separate Vec and returns that owned output; neither result borrows the input.
 Only input lifetime changes. Nonce/RNG, key use, ciphertext framing, Base64,
 error precedence and generic serialization/deserialization remain unchanged.
 The plain Vec drops neither zeroize data nor release independent caller/crypto
-owners. No in-place crypto or Base64 output redesign is selected, and no lower
-allocation count, measured peak memory or throughput claim follows.
+owners. This input-lifetime change does not itself reduce allocation count or
+establish measured peak memory or throughput improvements. The subsequent framing
+change below does not introduce in-place crypto.
+
+## Encrypted-cookie framing ownership (oidc-02)
+
+The shared encoder now delegates its final framing stage to encode_cookie_frame.
+It computes checked URL_SAFE_NO_PAD lengths, allocates one exact byte buffer,
+encodes nonce and ciphertext directly into disjoint regions around one dot, and
+converts that same buffer into String with safe UTF-8 validation. The two temporary
+Base64 Strings and their final composition copy are removed. Zero-initialization
+and final UTF-8 validation remain; there is no unsafe conversion or buffer pool.
+Unrepresentable sizes and encoding/conversion failures use the existing unit-error
+boundary. Representable inputs retain the same bytes. Serialization, nonce/RNG,
+AES-GCM, plaintext release, decoder errors, cache order, cookie-size checks and
+Set-Cookie publication remain unchanged.
+
+Fixed-input tests compare complete output against the previous framing and a
+pre-sized encode_string alternative, including binary data, empty framing-only
+ciphertext, chunk boundaries and near-limit lengths. They check exact logical
+output capacity and decode both regions. Actual crypto roundtrip, tamper and
+persistence tests remain separate. Synthetic allocation comparisons include full
+framing; their counts are not an allocator API contract. Performance evidence
+must include sizing, allocation and final String conversion, and cannot establish
+whole-authentication throughput, allocator RSS or secret erasure.
+
+
+## Session persistence projection ownership (oidc-07)
+
+OidcSessionCookie retains one six-field serde schema with a default String text
+parameter. Decoded cookies and refresh-cache entries remain owned. Persistence uses
+the same schema with borrowed str fields through for_persistence, avoiding temporary
+reference and optional-token copies. A missing reference still has one local generated
+String owner; existing references, including whitespace, are borrowed unchanged.
+The redacted Debug implementation covers both representations without showing fields.
+
+The trim-based access-token exclusion rule, empty-field omissions, Some(empty)
+optional tokens and timestamp fields are unchanged. Cache insertion still occurs
+before cipher lookup, encryption and size checks; missing cipher or oversized output
+can therefore skip publication after the cache side effect. Source payloads remain
+immutable. The generated owner and source borrow survive the existing cache await;
+serialization produces an independent JSON buffer before encryption.
+
+Independent frozen-schema tests compare exact JSON bytes and fixed literals, owned
+deserialization and both redacted Debug forms. Real persistence tests retain encrypted
+roundtrip/source checks, including cache-before-skipped-publication regressions.
+Allocation comparisons include projection and JSON serialization, with a separate
+synthetic generated-reference owner case. The savings concern temporary projection
+fields, not cache-owned tokens, JSON, crypto or output buffers. Allocator totals and
+logical copied bytes do not establish peak RSS, secret erasure or publisher-wide
+zero allocation; scoped timing must not be presented as authentication throughput.

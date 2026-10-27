@@ -91,3 +91,41 @@ Re-evaluate if:
 - `runtime-03` — 2026-07-18.
 
 - `unify-response-header-mutation-policy` — response replace-all retains protected fields; current verification is recorded in the shared policy page.
+
+## Detached deduplication ownership decision (wasm-01)
+
+Keep the consuming ReplaceAll loop and its compact owned lowercase seen keys.
+A disposable source-derived replay probe compared the current loop with reusing
+already-lowercase exact-capacity names after writer calls. Writer transcript parity
+covered duplicates, mixed/spare names, protected response fields, first-writer
+failure and unknown maps. This candidate saved allocations, but its lowercase scan
+and contains-plus-insert work regressed 256-byte unique-name fixtures in two runs:
+about 3.90 to 5.21 microseconds in one run, with roughly 34–38 percent regressions
+across both. Allocation events fell from 77 to 61 in that fixture. Duplicate-heavy
+fixtures improved about 13 percent; those gains do not erase the relevant regression.
+A separately reviewed HashMap<String, ()> Entry alternative then removed the
+extra lookup and inserted before the writer. It preserved transcripts and early
+source-value release, but two runs still regressed long-name replay about 20–24
+percent (3.58 to 4.44 and 3.80 to 4.55 microseconds). It retained the 77-to-61
+allocation reduction, improved duplicate-heavy fixtures about 9–14 percent, and
+was about 5–8 percent slower on mixed-case fixtures. Its measured allocation bytes
+included bucket storage; unit values were not assumed free. Both consuming reuse
+alternatives are therefore rejected for this scope. No production replay or ABI
+representation changed.
+
+A borrowed-Cow contrast also demonstrated why avoiding key copies alone is not
+sufficient. A separate source-value lifetime audit of 16 values of 8,192 bytes
+observed 8,192 source bytes still live at the last writer for all consuming loops,
+versus all 131,072 bytes for the borrowed loop. All released their source values by
+loop end. Detached writer outputs and key capacity were recorded separately;
+these logical lifetime observations are not allocator RSS or complete peak-memory
+measurements. Timings include a synthetic recording writer and complete replay/
+drop, not a real VM, session transport or whole-callback throughput benchmark.
+
+Original spelling, removals first, protected skipping before deduplication and
+first-set/later-append semantics remain unchanged, including marking the first
+occurrence seen when its writer returns an error. Re-evaluate with representative
+workload evidence or a separately reviewed dedup design that preserves early value
+release without a meaningful regression. This is not a general prohibition on
+owned-name reuse. Snapshot/pending sharing remains separately constrained by the
+[ABI retention decision](../../cpu-memory/regression-guards/wasm-abi-retention-budget.md).

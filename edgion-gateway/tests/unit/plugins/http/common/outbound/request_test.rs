@@ -1166,3 +1166,191 @@ fn origin_header_and_query_values_borrow_session_storage() {
         Some(Cow::Borrowed("cookie-value"))
     ));
 }
+
+#[test]
+fn collected_header_storage_preserves_validation_and_compact_ownership() {
+    for text in ["", "plain", "tab\tvalue", "café", "bad\r\nvalue", "bad\0value"] {
+        let expected = http::HeaderValue::from_str(text);
+        for value in [Cow::Borrowed(text), Cow::Owned(text.to_owned())] {
+            let actual = collected_header_value(value);
+            assert_eq!(actual.is_ok(), expected.is_ok());
+            if let (Ok(actual), Ok(expected)) = (&actual, &expected) {
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    let exact = "exact-owned-value".to_owned().into_boxed_str().into_string();
+    let pointer = exact.as_ptr();
+    let value = collected_header_value(Cow::Owned(exact)).unwrap();
+    assert_eq!(value.as_bytes().as_ptr(), pointer);
+    let mut spare = String::with_capacity(32001);
+    spare.push('x');
+    let pointer = spare.as_ptr();
+    let (value, stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| collected_header_value(Cow::Owned(spare)).unwrap());
+    assert_ne!(value.as_bytes().as_ptr(), pointer);
+    assert_eq!(value, "x");
+    // The old compact conversion allocates for output bytes, not the render hint.
+    assert!(stats.requested_bytes < 32001);
+}
+
+// Frozen old final collection; both paths use the real canonical renderer.
+// Fixtures deliberately exclude forward_all, whose unchanged policy has separate tests.
+fn old_explicit_header_collection(
+    compiled: &CompiledRequest,
+    session: &dyn PluginSession,
+    resolved: Option<&ResolvedSecrets>,
+) -> http::HeaderMap {
+    assert!(!compiled.headers.forward_all);
+    let mut result = http::HeaderMap::new();
+    let mut pairs = Vec::new();
+    collect_list_fields(
+        &compiled.headers,
+        TemplateContext::Request(session),
+        FieldKind::Header,
+        &mut pairs,
+        resolved,
+        &mut Default::default(),
+    )
+    .unwrap();
+    for field in pairs {
+        if let (Ok(name), Ok(mut value)) = (
+            http::HeaderName::from_bytes(field.name.as_bytes()),
+            http::HeaderValue::from_str(&field.value),
+        ) {
+            value.set_sensitive(field.sensitive);
+            result.insert(name, value);
+        }
+    }
+    result
+}
+
+#[test]
+fn rendered_header_collection_allocation_comparison() {
+    for (case, len, template) in [
+        ("short", 31, "${secretRef:ns/token:key}".to_owned()),
+        ("exact", 32, "${secretRef:ns/token:key}".to_owned()),
+        ("grow", 33, "${secretRef:ns/token:key}".to_owned()),
+        ("empty", 0, "${secretRef:ns/token:key}".to_owned()),
+        ("long", 4096, "${secretRef:ns/token:key}".to_owned()),
+        (
+            "missing-hint",
+            0,
+            format!("x{}", "${secretRef:ns/missing:key}".repeat(1000)),
+        ),
+    ] {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                custom: vec![
+                    CustomField {
+                        name: "x-rendered".into(),
+                        source: CustomSource::Template(template),
+                    },
+                    CustomField {
+                        name: "x-literal".into(),
+                        source: CustomSource::Value("literal".into()),
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let session = MockPluginSession::new();
+        let secrets = ResolvedSecrets(std::collections::BTreeMap::from([(
+            "ns/token:key".into(),
+            "s".repeat(len),
+        )]));
+        let mut fields = Vec::new();
+        collect_list_fields(
+            &compiled.headers,
+            TemplateContext::Request(&session),
+            FieldKind::Header,
+            &mut fields,
+            Some(&secrets),
+            &mut Default::default(),
+        )
+        .unwrap();
+        let Cow::Owned(rendered) = &fields[0].value else {
+            panic!("template must own output")
+        };
+        let render_len = rendered.len();
+        let render_capacity = rendered.capacity();
+        if case == "exact" {
+            assert_eq!(render_capacity, render_len);
+        }
+        if case == "missing-hint" {
+            assert_eq!((render_len, render_capacity), (1, 32001));
+        }
+        let render_pointer = rendered.as_ptr();
+        let field = fields.remove(0);
+        let converted = collected_header_value(field.value).unwrap();
+        if case == "exact" {
+            assert_eq!(converted.as_bytes().as_ptr(), render_pointer);
+        }
+        if case == "missing-hint" {
+            assert_ne!(converted.as_bytes().as_ptr(), render_pointer);
+        }
+        drop(converted);
+        drop(fields);
+        let (old, before) = crate::test_allocation_counter::count_allocation_stats(|| {
+            old_explicit_header_collection(&compiled, &session, Some(&secrets))
+        });
+        let (new, after) = crate::test_allocation_counter::count_allocation_stats(|| {
+            compiled
+                .collect_headers(&session, Some(&secrets), &mut Default::default())
+                .unwrap()
+        });
+        assert_eq!(old, new);
+        assert!(new["x-rendered"].is_sensitive());
+        assert!(new["x-literal"].is_sensitive());
+        assert_eq!(format!("{:?}", new["x-rendered"]), "Sensitive");
+        let cloned = new.clone();
+        assert!(cloned["x-rendered"].is_sensitive());
+        if case == "exact" {
+            assert!(after.calls < before.calls);
+        }
+        println!("outbound-header {case}: render_len={render_len} render_capacity={render_capacity}; old_calls={} old_bytes={}; new_calls={} new_bytes={}",
+            before.calls, before.requested_bytes, after.calls, after.requested_bytes);
+    }
+}
+
+#[test]
+fn invalid_rendered_override_preserves_last_valid_header() {
+    for last_valid in [false, true] {
+        let mut spec = OutboundRequestSpec {
+            headers: ListFields {
+                custom: vec![
+                    CustomField {
+                        name: "x-order".into(),
+                        source: CustomSource::Value("first".into()),
+                    },
+                    CustomField {
+                        name: "x-order".into(),
+                        source: CustomSource::Template("${secretRef:ns/token:key}".into()),
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        if last_valid {
+            spec.headers.custom.push(CustomField {
+                name: "x-order".into(),
+                source: CustomSource::Value("last".into()),
+            });
+        }
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        for invalid in ["bad\r\nvalue", "bad\0value"] {
+            let secrets = ResolvedSecrets(std::collections::BTreeMap::from([(
+                "ns/token:key".into(),
+                invalid.into(),
+            )]));
+            let headers = compiled
+                .collect_headers(&MockPluginSession::new(), Some(&secrets), &mut Default::default())
+                .unwrap();
+            assert_eq!(headers["x-order"], if last_valid { "last" } else { "first" });
+            assert!(headers["x-order"].is_sensitive());
+        }
+    }
+}

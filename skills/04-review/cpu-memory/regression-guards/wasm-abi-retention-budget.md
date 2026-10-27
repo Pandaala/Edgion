@@ -96,3 +96,25 @@ finding asked for.
 ## Resolution references
 
 - `runtime-05` — 2026-07-18.
+
+## Snapshot and pending-operation ownership decision (wasm-01)
+
+The existing separately owned snapshot and pending-operation payloads are retained.
+These are distinct ordered views: guest reads need read-your-writes, while detached
+replay survives callback-frame release. Sharing their immutable bytes is possible
+in principle, but is not selected by this bounded investigation. Arc/Bytes owner
+metadata, short/empty fields, fallible allocation and simultaneous detached output
+need a new accounting proof; charging two old payload copies does not prove those
+costs covered. Raising charges would also change exact admission boundaries.
+
+Current fallible clone/reservation and charge-before-semantic-mutation behavior
+remain unchanged, including failure cleanup and attached/standalone callbacks.
+Reservation failure can leave changed collection capacity; atomic rejection refers
+to semantic state, pending operations and counters, not identical allocations.
+No budget refund, profile recalibration, shared representation or frame retention
+was introduced. Shared-owner performance was not measured, so this decision makes
+no claim that sharing would be slower or save a particular amount of memory.
+
+Revisit with a separate lifetime/fallibility/admission design and representative
+short/long-payload evidence. Guest-memory reentry snapshots, initial live-session
+copies and detached replay deduplication remain separate ownership decisions.

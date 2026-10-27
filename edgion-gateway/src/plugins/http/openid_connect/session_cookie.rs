@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 use crate::plugins::http::common::auth_common::strip_cookies;
 use edgion_common::secret::get_secret;
@@ -87,9 +89,25 @@ impl OpenidConnect {
         let nonce = Nonce::from_slice(&nonce_bytes);
         let encrypted = cipher.encrypt(nonce, payload.as_ref()).map_err(|_| ())?;
         drop(payload);
-        let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce_bytes);
-        let encrypted_b64 = URL_SAFE_NO_PAD.encode(encrypted);
-        Ok(format!("{}.{}", nonce_b64, encrypted_b64))
+        Self::encode_cookie_frame(&nonce_bytes, &encrypted)
+    }
+
+    pub(super) fn encode_cookie_frame(nonce: &[u8; 12], encrypted: &[u8]) -> Result<String, ()> {
+        let nonce_len = base64::encoded_len(nonce.len(), false).ok_or(())?;
+        let encrypted_len = base64::encoded_len(encrypted.len(), false).ok_or(())?;
+        let len = nonce_len
+            .checked_add(1)
+            .and_then(|len| len.checked_add(encrypted_len))
+            .ok_or(())?;
+        let mut output = vec![0; len];
+        let (nonce_output, tail) = output.split_at_mut(nonce_len);
+        let (separator, encrypted_output) = tail.split_at_mut(1);
+        separator[0] = b'.';
+        URL_SAFE_NO_PAD.encode_slice(nonce, nonce_output).map_err(|_| ())?;
+        URL_SAFE_NO_PAD
+            .encode_slice(encrypted, encrypted_output)
+            .map_err(|_| ())?;
+        String::from_utf8(output).map_err(|_| ())
     }
 
     pub(super) fn decode_signed_cookie_payload<T: for<'de> Deserialize<'de>>(
@@ -136,7 +154,7 @@ impl OpenidConnect {
         }
     }
 
-    pub(super) fn build_cookie_attr_suffix(&self, _session: &dyn PluginSession, max_age: u64, path: &str) -> String {
+    pub(super) fn build_cookie_header_value(&self, name: &str, value: &str, max_age: u64, path: &str) -> String {
         let secure_attr = if self.config.session_cookie_secure {
             "; Secure"
         } else {
@@ -148,10 +166,29 @@ impl OpenidConnect {
             ""
         };
         let same_site = self.cookie_same_site_value();
-        format!(
-            "; Path={}; SameSite={}; Max-Age={}{}{}",
-            path, same_site, max_age, http_only_attr, secure_attr
-        )
+        let max_age_len = max_age.checked_ilog10().map_or(1, |digits| digits as usize + 1);
+        let capacity = [
+            name.len(),
+            value.len(),
+            path.len(),
+            same_site.len(),
+            max_age_len,
+            http_only_attr.len(),
+            secure_attr.len(),
+            "=; Path=; SameSite=; Max-Age=".len(),
+        ]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        // An unrepresentable length falls back to normal String growth.
+        .unwrap_or(0);
+        let mut cookie = String::with_capacity(capacity);
+        // String writes and the standard str/u64 formatters cannot return fmt::Error.
+        let _ = write!(
+            cookie,
+            "{}={}; Path={}; SameSite={}; Max-Age={}{}{}",
+            name, value, path, same_site, max_age, http_only_attr, secure_attr
+        );
+        cookie
     }
 
     pub(super) fn generate_session_ref() -> String {

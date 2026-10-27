@@ -83,24 +83,12 @@ impl OpenidConnect {
         payload: &OidcSessionCookie,
     ) {
         let cache_token = !payload.access_token.trim().is_empty();
-        let mut persisted_payload = OidcSessionCookie {
-            session_ref: payload.session_ref.clone(),
-            access_token: if cache_token {
-                String::new()
-            } else {
-                payload.access_token.clone()
-            },
-            created_at: payload.created_at,
-            expires_at: payload.expires_at,
-            id_token: payload.id_token.clone(),
-            refresh_token: payload.refresh_token.clone(),
-        };
-        if persisted_payload.session_ref.is_empty() {
-            persisted_payload.session_ref = Self::generate_session_ref();
-        }
+        let generated_ref = payload.session_ref.is_empty().then(Self::generate_session_ref);
+        let session_ref = generated_ref.as_deref().unwrap_or(&payload.session_ref);
+        let persisted_payload = payload.for_persistence(session_ref, cache_token);
         if cache_token {
             self.cache_access_token(
-                &persisted_payload.session_ref,
+                persisted_payload.session_ref,
                 &payload.access_token,
                 persisted_payload.expires_at,
             )
@@ -113,12 +101,8 @@ impl OpenidConnect {
         let Ok(value) = Self::encode_signed_cookie_payload(&persisted_payload, cipher) else {
             return;
         };
-        let cookie = format!(
-            "{}={}{}",
-            self.session_cookie_name(),
-            value,
-            self.build_cookie_attr_suffix(session, self.config.session_lifetime, "/")
-        );
+        let cookie =
+            self.build_cookie_header_value(self.session_cookie_name(), &value, self.config.session_lifetime, "/");
         if self.ensure_session_cookie_size_limit(&cookie).is_err() {
             return;
         }

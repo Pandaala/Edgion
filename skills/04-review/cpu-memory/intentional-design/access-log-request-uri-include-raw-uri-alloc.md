@@ -11,9 +11,9 @@ knowledge_type: intentional-design
 AccessLogEntry::from_context in edgion-gateway/src/observe/access_log/entry.rs
 populates request_uri only when includeRawUri is enabled and entry_raw_path is
 nonempty. EdgionHttpContext::request_uri delegates to compose_uri in ctx.rs,
-joining the frozen entry path and nonempty entry query into an owned String.
-It does not include scheme/authority or use the current rewritten URI. An absent
-or empty query adds no question mark.
+joining the frozen entry path and optional entry query into an owned String.
+It does not include scheme/authority or use the current rewritten URI. Only an
+absent query omits the question mark; a present-empty query retains it.
 
 The field currently uses Option<String> and the canonical masked_opt serializer.
 Sensitive mode is applied when serializing, not when constructing the entry.

@@ -306,7 +306,7 @@ async fn failed_preemptive_refresh_does_not_invalidate_existing_valid_token() {
             &json!({"active":true, "iss":server.uri(), "exp":expiry}),
         )
         .await;
-    let cookie = OidcSessionCookie {
+    let cookie: OidcSessionCookie = OidcSessionCookie {
         session_ref: "private-session-ref".into(),
         access_token: "private-access-token".into(),
         created_at: OpenidConnect::now_unix_secs(),

@@ -7,7 +7,8 @@ Source baseline: 061b1375e.
 
 AccessLogEntry::from_context conditionally calls EdgionHttpContext::request_uri
 when includeRawUri is enabled and the entry raw path is nonempty. compose_uri
-allocates a String for the frozen entry path plus a nonempty entry query.
+allocates a String for the frozen entry path plus its optional entry query,
+including a question mark for a present-empty query.
 The entry then serializes this field through masked_opt into an independently
 owned JSON output. The debug-header filter uses the same projection outside
 Wrap mode; terminal logging is another consumer.
@@ -37,8 +38,9 @@ Do not create a local alternative to canonical sensitive handling.
 
 ## Acceptance for any selected implementation
 
-Preserve the includeRawUri and nonempty entry-path gates; absent/empty query
-must omit the question mark. Preserve frozen entry bytes independently of live
+Preserve the includeRawUri and nonempty entry-path gates; only an absent query
+omits the question mark, while a present-empty query retains it. Preserve frozen
+entry bytes independently of live
 rewrites and exclude absolute-form scheme/authority. Output must remain one
 JSON string with identical escaping for separators, percent-encoded bytes,
 quotes, backslashes and permitted multi-byte characters.

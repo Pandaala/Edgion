@@ -502,7 +502,7 @@ impl CompiledRequest {
         for field in pairs {
             if let (Ok(name), Ok(mut value)) = (
                 reqwest::header::HeaderName::from_bytes(field.name.as_bytes()),
-                reqwest::header::HeaderValue::from_str(&field.value),
+                collected_header_value(field.value),
             ) {
                 // Provenance survives assembly; protect Secrets before storage/transport.
                 value.set_sensitive(field.sensitive);
@@ -586,6 +586,16 @@ fn evaluate_template(
     resolved: Option<&ResolvedSecrets>,
 ) -> Result<String, String> {
     render_outbound(tpl, context, resolved, EscapeMode::None).map(RenderedTemplate::into_string)
+}
+
+fn collected_header_value(
+    value: Cow<'_, str>,
+) -> Result<reqwest::header::HeaderValue, reqwest::header::InvalidHeaderValue> {
+    match value {
+        // Rendering hints can leave large spare buffers; only transfer compact owners.
+        Cow::Owned(value) if value.capacity() == value.len() => reqwest::header::HeaderValue::try_from(value),
+        value => reqwest::header::HeaderValue::from_str(&value),
+    }
 }
 
 /// No Debug implementation: values can contain credentials.

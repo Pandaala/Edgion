@@ -181,3 +181,31 @@ or changing PluginSession missing-value semantics or resource readiness.
 ## Resolution references
 
 - `unify-gateway-request-template-runtime` — fixed and verified on 2026-09-20.
+
+## Rendered outbound header storage (outbound-06)
+
+The outbound collector transfers a rendered String into HeaderValue only when its
+capacity equals its length. Borrowed literal/origin text and owned strings with
+spare capacity retain the existing compact from_str copy. The storage decision is
+local to the collected-header conversion; canonical template parsing, rendering,
+capabilities, missing values and sensitivity provenance are unchanged.
+
+The guard matters because the renderer reserves a 32-byte hint per variable:
+1,000 missing substitutions plus one literal byte can leave a one-byte result in a
+32,001-byte buffer. That spare buffer is still released during collection instead
+of retained with a request across network awaits or retries. Eligible exact-capacity
+strings transfer through locked http 1.5.0 and bytes 1.12.1 without their temporary
+copy. This is workload-dependent, not a promise that every template avoids copying.
+
+Tests compare actual canonical rendering and collection with frozen original
+conversion, including 31/32/33-byte values, empty/long values and missing-variable
+hints. Conversion tests cover byte validity and transferred versus compact copied
+storage; collection tests retain sensitivity, redacted Debug, clones and last-valid
+override behavior. Required fields, trusted contexts, Secret policy, forward_all
+and retry ownership remain governed by their existing tests and owners.
+
+Allocation totals and separate conversion/clone/drop probes are scoped evidence,
+not peak RSS, full renderer timing or outbound transport throughput. Re-evaluate
+if renderer capacity behavior or header-storage dependencies change. Unconditional
+transfer, arbitrary spare-capacity thresholds or new template limits require their
+own reviewed policy; this local guard does not authorize those changes.

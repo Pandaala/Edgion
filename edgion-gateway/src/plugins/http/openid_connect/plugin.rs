@@ -196,19 +196,36 @@ struct AuthorizationStateCookie {
     created_at: u64,
 }
 
+fn cookie_text_is_empty<S: AsRef<str>>(value: &S) -> bool {
+    value.as_ref().is_empty()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
-struct OidcSessionCookie {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    session_ref: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    access_token: String,
+struct OidcSessionCookie<S: AsRef<str> = String> {
+    #[serde(default, skip_serializing_if = "cookie_text_is_empty")]
+    session_ref: S,
+    #[serde(default, skip_serializing_if = "cookie_text_is_empty")]
+    access_token: S,
     created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    id_token: Option<String>,
+    id_token: Option<S>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    refresh_token: Option<String>,
+    refresh_token: Option<S>,
+}
+
+impl OidcSessionCookie {
+    fn for_persistence<'a>(&'a self, session_ref: &'a str, cache_token: bool) -> OidcSessionCookie<&'a str> {
+        OidcSessionCookie {
+            session_ref,
+            access_token: if cache_token { "" } else { &self.access_token },
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            id_token: self.id_token.as_deref(),
+            refresh_token: self.refresh_token.as_deref(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -243,7 +260,7 @@ impl std::fmt::Debug for AuthorizationStateCookie {
     }
 }
 
-impl std::fmt::Debug for OidcSessionCookie {
+impl<S: AsRef<str>> std::fmt::Debug for OidcSessionCookie<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OidcSessionCookie").finish_non_exhaustive()
     }

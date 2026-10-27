@@ -165,6 +165,33 @@ scalar rejection and malformed escapes, including rejection before capture.
 Resources codec tests retain decoded-value coverage. This removes one temporary
 query copy, not all binding allocations or a measured throughput bottleneck.
 
+### Strict query preflight tradeoff (grpc-01)
+
+The existing bounded whole-query decode-and-discard preflight is retained. A
+reviewed disposable candidate validated ASCII percent escapes without allocating,
+then fell back to the existing strict decoder on any escaped non-ASCII byte.
+Oracle checks passed for every single escaped byte and representative malformed,
+UTF-8, separator and plus cases. No production decoder or binding code changed.
+
+The candidate saved one 60,000-byte allocation on a synthetic ASCII-escaped query;
+one optimized run reduced preflight time from about 22.5 to 16.5 microseconds.
+However, late escaped UTF-8 repeated the scan before allocating the same decoded
+buffer. Two runs showed about 31.8 to 47.5 microseconds for a 60,006-byte query,
+and about 25.8 to 39.2 microseconds with an ASCII-escaped prefix: roughly 50 percent
+regressions without allocation savings. Early escaped UTF-8 was approximately
+unchanged; plain input already avoided allocation. These are isolated preflight
+measurements, not whole-bind or request throughput evidence. Actual reflection/
+binding timing was not measured after this rejection gate.
+
+Keep strict validation after path captures/scalar conversion and before query-pair
+processing, including ignored unknown parameters. Raw separators, plus handling,
+path wildcard decoding, the combined 65,536-byte input cap and 64 accumulated-
+selector rule remain unchanged. Existing conservative memory admission stays intact.
+This rejects the measured fallback design, not every possible validation-only
+approach. Revisit with a separately reviewed canonical validation design and
+representative workload evidence covering malformed and late-UTF-8 inputs; do not
+introduce an independent form parser or relax UTF-8 validity merely to avoid a copy.
+
 ## Callback output acquisition (ARCH-033)
 
 `GrpcResponseProcessor::feed` owns an optional callback-local canonical CappedWriter.

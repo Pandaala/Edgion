@@ -27,18 +27,9 @@ impl RequestFilter for OpenidConnect {
             let logout_redirect_target = self
                 .build_logout_redirect_target(fallback_redirect_target, post_logout_redirect_uri, id_token_hint)
                 .await;
-            let clear_session_cookie = format!(
-                "{}={}{}",
-                self.session_cookie_name(),
-                "",
-                self.build_cookie_attr_suffix(session, 0, "/")
-            );
-            let clear_state_cookie = format!(
-                "{}={}{}",
-                Self::state_cookie_name(),
-                "",
-                self.build_cookie_attr_suffix(session, 0, self.callback_path())
-            );
+            let clear_session_cookie = self.build_cookie_header_value(self.session_cookie_name(), "", 0, "/");
+            let clear_state_cookie =
+                self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path());
             let cookies = [clear_session_cookie, clear_state_cookie];
             let _ = self
                 .send_redirect_with_cookies(session, &logout_redirect_target, &cookies)

@@ -30,8 +30,8 @@ No new request cache or response aggregation is authorized.
 
 `req.uri` and `req.request_uri` also need separate treatment: the former composes
 the current normalized path with the live raw query; the latter composes frozen
-entry raw path/query. `compose_uri` omits `?` for absent or empty query. Current
-owned assembly is checked before a final independent Arc is built. A fragment
+entry raw path/query. `compose_uri` omits `?` only for an absent query; a
+present-empty query retains `?`. Current owned assembly is checked before a final independent Arc is built. A fragment
 or conditional-borrow interface may reduce intermediate work, but must preserve
 exact byte-length errors, normalization/provenance and separator semantics.
 Do not replace either with the raw Pingora URI, cache assembled text eagerly, or

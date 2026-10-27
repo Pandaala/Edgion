@@ -190,8 +190,8 @@ impl OpenidConnect {
         let cipher = self.session_cipher().ok_or_else(Self::credential_failure)?;
         let cookie_value = Self::encode_signed_cookie_payload(&cookie_payload, cipher)
             .map_err(|_| OidcVerifyError::SessionEncoding)?;
-        let cookie_suffix = self.build_cookie_attr_suffix(session, 300, self.callback_path());
-        let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
+        let cookie =
+            self.build_cookie_header_value(Self::state_cookie_name(), &cookie_value, 300, self.callback_path());
 
         Ok((auth_url.to_string(), cookie))
     }
@@ -336,11 +336,11 @@ impl OpenidConnect {
             }
         };
 
-        let session_cookie = format!(
-            "{}={}{}",
+        let session_cookie = self.build_cookie_header_value(
             self.session_cookie_name(),
-            session_cookie_value,
-            self.build_cookie_attr_suffix(session, self.config.session_lifetime, "/")
+            &session_cookie_value,
+            self.config.session_lifetime,
+            "/",
         );
         if self.ensure_session_cookie_size_limit(&session_cookie).is_err() {
             let _ = self
@@ -348,12 +348,7 @@ impl OpenidConnect {
                 .await;
             return PluginRunningResult::ErrTerminateRequest;
         }
-        let clear_state_cookie = format!(
-            "{}={}{}",
-            Self::state_cookie_name(),
-            "",
-            self.build_cookie_attr_suffix(session, 0, self.callback_path())
-        );
+        let clear_state_cookie = self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path());
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
         let cookies = [session_cookie, clear_state_cookie];
         let _ = self
