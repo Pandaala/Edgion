@@ -8,6 +8,16 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::waf_session::{MockWafSessionCapability, WafSessionCapability};
 use crate::EdgionHttpContext;
 
+fn set_partial_capture_policy(ctx: &mut EdgionHttpContext, plugin: &WafPlugin, allowed: bool) {
+    assert!(ctx.select_waf(Some(crate::ctx::WafSelection::new(
+        plugin.owner(),
+        crate::ctx::WafLogSource::Route,
+        0,
+        crate::ctx::WafLogMode::On,
+    ))));
+    ctx.set_waf_partial_capture_allowed(allowed);
+}
+
 fn plugin(rules: &str, mode: WafMode) -> WafPlugin {
     plugin_with_inspection(rules, mode, WafRequestBodyInspection::default())
 }
@@ -1498,7 +1508,7 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
         ctx.request_body_config.max_body_size_bytes = 128;
         ctx.request_body_config.max_buffered_size_bytes = 32;
         ctx.request_body_config.memory_buffer_bytes = 16;
-        ctx.waf_partial_capture_allowed = case != 1;
+        set_partial_capture_policy(&mut ctx, &plugin, case != 1);
         if case == 2 {
             let (mut storage, view) = crate::request_body::BodyStorage::new(128, 128);
             storage.write(&Bytes::from(vec![b'x'; 65])).await.unwrap();
@@ -1639,10 +1649,10 @@ async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_de
         });
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 128;
-    ctx.waf_partial_capture_allowed = true;
+    set_partial_capture_policy(&mut ctx, &plugin, true);
     let mut initial_ctx = EdgionHttpContext::new();
     initial_ctx.request_body_config = ctx.request_body_config;
-    initial_ctx.waf_partial_capture_allowed = ctx.waf_partial_capture_allowed;
+    set_partial_capture_policy(&mut initial_ctx, &plugin, ctx.waf_partial_capture_allowed());
     expect_request_head_with_context(&mut session, &mut waf, "/", Vec::new(), initial_ctx);
     session.expect_ctx().return_const(ctx);
     session.expect_ensure_request_body().times(0);

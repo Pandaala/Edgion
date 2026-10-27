@@ -32,7 +32,7 @@ static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// The selection path calls [`now_units`] instead. `upstream.start_time` is
 /// refreshed per attempt so threading it would also be correct; reading fresh
 /// just avoids plumbing an `Instant` through four call sites for a ~20 ns vDSO
-/// read. `ctx.start_time` / `ctx.upstream_start_time` are the ones that must
+/// read. request-level start/test timestamps are the ones that must
 /// never be used — request-scoped, and stale by multiple half-lives on a
 /// retried or long-lived streaming request.
 #[inline]

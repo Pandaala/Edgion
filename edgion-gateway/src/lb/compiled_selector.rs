@@ -219,7 +219,7 @@ impl CompiledSelector {
     /// * `now_units` — decay clock for the Ewma policy. Callers read it fresh
     ///   (`crate::lb::ewma::score::now_units`). `upstream.start_time` is
     ///   per-attempt and would also be correct, but is not plumbed here;
-    ///   `ctx.start_time` / `ctx.upstream_start_time` must never be used — they
+    ///   request-level start/test timestamps must never be used — they
     ///   are request-scoped and stale by multiple half-lives on a retried or
     ///   long-lived streaming request. Taking it as a parameter keeps the decay
     ///   clock injectable in tests.

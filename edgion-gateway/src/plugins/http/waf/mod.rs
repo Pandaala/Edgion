@@ -527,7 +527,7 @@ impl RequestFilter for WafPlugin {
                 Ok(value) => value.is_some(),
                 Err(error) => return self.body_read_failure(session, log, &error),
             };
-            let partial_allowed = ctx.waf_partial_capture_allowed && !cached;
+            let partial_allowed = ctx.waf_partial_capture_allowed() && !cached;
             let storage = ctx.request_body_config.capture_limit();
             let effective = if partial_allowed { window.min(storage) } else { window };
             json_capture::InspectionPolicy {

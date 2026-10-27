@@ -131,7 +131,9 @@ remains predispatch. The list below describes ordinary route selection:
    - Timeouts: route-level `backend_request_timeout` overrides global `request_timeout`; uniformly sets connection / read / write timeout.
    - Idle timeout: uses the global `idle_timeout`.
    - gRPC forces HTTP/2: `peer.options.set_http_version(2, 2)`.
-7. **Metric updates**: increment `try_cnt`, record upstream IP/port, set `upstream_start_time`.
+7. **Metric updates**: increment `try_cnt`, record upstream IP/port, capture the first upstream timestamp only for `Latency` test metrics. The typed
+   request-local test owner is allocated on demand and survives backend replacement;
+   only `Lb` test mode retains a hash key. Ordinary retry counters remain inline.
 
 ### Phase 4: connected_to_upstream
 

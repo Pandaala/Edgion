@@ -15,7 +15,11 @@ directly and returns itself. Eight feature operations no longer grow the common
 session operation list or generated common mock. AI capabilities remain outside
 this bounded change; this decision does not close all of ARCH-001.
 
-`WafRequestContext` remains the sole selected-state owner. No view wrapper,
+`WafRequestContext` remains the sole selected-state owner, including the frozen
+partial-capture policy from the pinned consumer graph. Reading that policy without
+a selected owner returns false without allocating. The policy survives transaction
+removal; no-winner selection completion and shared prefix-capture facts remain
+independent request state. No view wrapper,
 request copy, allocation, lock, registry or generic capability framework is
 introduced. Each synchronous capability borrow ends before ordinary session
 calls or body-capture awaits. Real native admission remains in the adapter;

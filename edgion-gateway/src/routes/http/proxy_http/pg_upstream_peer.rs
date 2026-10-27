@@ -1149,9 +1149,7 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
 
-    if ctx.upstream_start_time.is_none() {
-        ctx.upstream_start_time = Some(std::time::Instant::now());
-    }
+    ctx.record_test_upstream_start();
 
     // Retry-budget denominator (D1a): every upstream attempt to a Service — the
     // first attempt AND every retry (connect-fail, status-code, per-try timeout,

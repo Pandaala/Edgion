@@ -124,3 +124,20 @@ The isolated allocation test was also corrected to prepare the shared LazyLock
 configuration before measuring `with_gateway_config`, matching production
 `pg_new_ctx`. Fresh execution passes with zero allocation calls/bytes and absent
 Wasm state; allocation freedom remains an independent gate from inline size.
+
+## Sparse test-metrics ownership
+
+`RequestTestMetricsState` groups the diagnostic hash key and first-upstream
+timestamp behind one nullable context owner. Only `Lb` mode extracts and retains
+the hash key; only `Latency` mode captures the timestamp. Ordinary, disabled and
+`Retry` modes leave this owner absent. Clearing an absent hash or reading absent
+state does not allocate. General retry counters remain in the ordinary context.
+
+The timestamp belongs to the request, not `BackendContext`: AI backend replacement
+can discard attempt history, so deriving this timestamp from the first retained
+attempt would change its meaning. Both ordinary and AI attempt entry use the same
+first-write helper. This trades one small allocation in the relevant test mode
+for avoiding test-only payload and clock capture on ordinary requests; it makes
+no measured throughput or byte-saving claim. Regression coverage lives in
+`ctx_test/test_metrics_state_tests.rs`, the ordinary/AI attempt tests, native
+Service dispatch tests and the test-data JSON serialization test.

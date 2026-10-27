@@ -605,7 +605,13 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
     let captured = capture(&coordinator, &selected);
     let session = session().await;
     let mut transferred = Vec::new();
-    for test_metrics in [false, true] {
+    for test_type in [
+        None,
+        Some(TestType::None),
+        Some(TestType::Retry),
+        Some(TestType::Latency),
+        Some(TestType::Lb),
+    ] {
         for policy in [
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
                 "x-routing-key".into(),
@@ -622,7 +628,7 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
             None,
         ] {
             let expected = serde_json::to_value(&policy).unwrap();
-            let expected_hash = if test_metrics {
+            let expected_hash = if matches!(test_type, Some(TestType::Lb)) {
                 match &policy {
                     Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)) => Some("2001:db8::42"),
                     Some(ParsedLBPolicy::ConsistentHash(_)) => Some(""),
@@ -649,7 +655,7 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
                 "gateway".to_owned(),
                 None,
                 None,
-                test_metrics.then_some(TestType::Lb),
+                test_type.clone(),
                 None,
                 Vec::new(),
                 None,
@@ -669,7 +675,7 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
                 Some("192.0.2.8:8080".parse().unwrap())
             );
             assert!(!peer.is_tls());
-            assert_eq!(ctx.hash_key.as_deref(), expected_hash);
+            assert_eq!(ctx.test_hash_key(), expected_hash);
             assert_eq!(ctx.request_info.remote_ip, "2001:db8::42");
             assert_eq!(ctx.request_info.remote_ip.as_ptr(), remote_ip_ptr);
             let upstream = ctx.get_current_upstream().unwrap();

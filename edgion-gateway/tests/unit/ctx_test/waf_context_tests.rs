@@ -236,10 +236,12 @@ fn inspection_stop_claims_remaining_phases_and_keeps_hard_admission() {
             0,
             WafLogMode::On
         ))));
+        ctx.set_waf_partial_capture_allowed(true);
         assert!(ctx.install_waf_body_hard_limit(&owner, 64));
         assert!(!ctx.stop_waf_inspection(&Arc::new(()), 32, storage));
         assert!(ctx.stop_waf_inspection(&owner, 32, storage));
         assert_eq!(ctx.request_body_hard_limit(), 64);
+        assert!(ctx.waf_partial_capture_allowed());
         for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
             assert_eq!(ctx.claim_waf_phase(&owner, phase), WafPhaseClaim::Skip);
         }
@@ -251,4 +253,39 @@ fn inspection_stop_claims_remaining_phases_and_keeps_hard_admission() {
             if storage { "storage" } else { "inspection" }
         );
     }
+}
+
+#[test]
+fn partial_capture_policy_reuses_selected_owner_and_absent_reads_do_not_allocate() {
+    let mut ctx = EdgionHttpContext::new();
+    let (_, absent) = crate::test_allocation_counter::count_allocation_stats(|| {
+        assert!(!ctx.waf_partial_capture_allowed());
+        ctx.set_waf_partial_capture_allowed(true);
+        assert!(!ctx.waf_partial_capture_allowed());
+        assert!(ctx.select_waf(None));
+        ctx.set_waf_partial_capture_allowed(true);
+        assert!(!ctx.waf_partial_capture_allowed());
+    });
+    assert!(ctx.waf.is_none());
+    assert_eq!(absent.calls, 0);
+
+    let mut ctx = EdgionHttpContext::new();
+    assert!(ctx.select_waf(Some(WafSelection::new(
+        Arc::new(()),
+        WafLogSource::Route,
+        0,
+        WafLogMode::On,
+    ))));
+    let owner = ctx.waf.as_deref().unwrap() as *const WafRequestContext;
+    let (_, selected) = crate::test_allocation_counter::count_allocation_stats(|| {
+        assert!(!ctx.waf_partial_capture_allowed());
+        ctx.set_waf_partial_capture_allowed(true);
+        assert!(ctx.waf_partial_capture_allowed());
+        assert!(!ctx.select_waf(None));
+        assert!(ctx.waf_partial_capture_allowed());
+        ctx.set_waf_partial_capture_allowed(false);
+        assert!(!ctx.waf_partial_capture_allowed());
+    });
+    assert_eq!(selected.calls, 0);
+    assert_eq!(ctx.waf.as_deref().unwrap() as *const WafRequestContext, owner);
 }

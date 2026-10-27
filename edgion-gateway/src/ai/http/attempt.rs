@@ -277,9 +277,7 @@ fn begin_ai_peer_attempt(ctx: &mut EdgionHttpContext) {
     }
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
-    if ctx.upstream_start_time.is_none() {
-        ctx.upstream_start_time = Some(std::time::Instant::now());
-    }
+    ctx.record_test_upstream_start();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

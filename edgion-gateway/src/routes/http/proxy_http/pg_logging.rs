@@ -327,11 +327,7 @@ fn lb_runtime_cleanup(ctx: &mut EdgionHttpContext) {
 /// All data is collected from ctx at logging stage.
 #[inline]
 fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> String {
-    let Some(test_type) = ctx
-        .gateway_info
-        .as_deref()
-        .and_then(|info| info.metrics_test_type.as_ref())
-    else {
+    let Some(test_type) = ctx.test_metrics_type() else {
         return String::new();
     };
 
@@ -344,7 +340,7 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
                 test_data.ip = upstream.ip.as_deref();
                 test_data.port = upstream.port;
             }
-            test_data.hash_key = ctx.hash_key.as_deref();
+            test_data.hash_key = ctx.test_hash_key();
         }
         TestType::Retry => {
             // Retry test: collect try count and error
@@ -353,7 +349,7 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
         }
         TestType::Latency => {
             // Latency test: collect upstream latency
-            if let Some(start) = ctx.upstream_start_time {
+            if let Some(start) = ctx.test_upstream_start_time() {
                 test_data.latency_ms = Some(Instant::now().saturating_duration_since(start).as_millis() as u64);
             }
         }

@@ -405,7 +405,7 @@ pub async fn request_filter(
         return Ok(true);
     }
 
-    ctx.waf_partial_capture_allowed = plan_waf_body
+    let waf_partial_capture_allowed = plan_waf_body
         && ctx.route_unit.as_ref().is_some_and(|route| {
             allows_partial_body_capture(
                 global_plugins.as_deref().unwrap_or_default(),
@@ -415,6 +415,8 @@ pub async fn request_filter(
                 route.backends.iter().map(|backend| backend.plugin_runtime.as_ref()),
             )
         });
+
+    ctx.set_waf_partial_capture_allowed(waf_partial_capture_allowed);
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
     // Reads the per-request snapshot populated above (zero format!/store cost).

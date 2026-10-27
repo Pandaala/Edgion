@@ -268,7 +268,7 @@ fn body_composition_covers_route_refs_and_unselected_backends() {
         &modifier,
         std::iter::empty()
     ));
-    assert!(!EdgionHttpContext::default().waf_partial_capture_allowed);
+    assert!(!EdgionHttpContext::default().waf_partial_capture_allowed());
 }
 
 #[test]

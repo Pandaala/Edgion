@@ -353,13 +353,13 @@ fn test_metric_json_preserves_fields_and_escaping() {
         effective_policy: None,
     });
     ctx.push_upstream(Some("2001:db8::42".to_owned()), Some(8080));
-    ctx.hash_key = Some("route\"\\\nkey".to_owned());
+    ctx.record_test_hash_key(Some("route\"\\\nkey".to_owned()));
     assert_eq!(
         build_test_data(&ctx, None),
         r#"{"ip":"2001:db8::42","port":8080,"hash_key":"route\"\\\nkey"}"#
     );
-    assert_eq!(ctx.hash_key.as_deref(), Some("route\"\\\nkey"));
-    ctx.hash_key = Some(String::new());
+    assert_eq!(ctx.test_hash_key(), Some("route\"\\\nkey"));
+    ctx.record_test_hash_key(Some(String::new()));
     ctx.get_current_upstream_mut().unwrap().ip = Some(String::new());
     ctx.get_current_upstream_mut().unwrap().port = None;
     assert_eq!(build_test_data(&ctx, None), r#"{"ip":"","hash_key":""}"#);

@@ -481,16 +481,14 @@ fn build_peer_from_lb_selection(
 
     let (use_tls, sni) = extract_tls_config(backend_tls_policy);
 
-    if ctx
-        .gateway_info
-        .as_deref()
-        .is_some_and(|info| info.metrics_test_type.is_some())
+    if matches!(ctx.test_metrics_type(), Some(crate::observe::metrics::TestType::Lb))
         && matches!(&lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
     {
         let remote_ip = ctx.request_info.remote_ip.as_str();
         let query = Some(&ctx.request_query);
         let hash_key_bytes = extract_hash_key(session, &lb_policy, remote_ip, query);
-        ctx.hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
+        let hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
+        ctx.record_test_hash_key(hash_key);
     }
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {

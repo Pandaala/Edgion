@@ -481,3 +481,42 @@ fn absent_ai_connect_cleanup_keeps_ordinary_context_allocation_free() {
     assert!(ctx.ai_state().is_none());
     assert!(!error.retry());
 }
+
+#[test]
+fn test_metrics_attempt_timing_is_latency_only_and_survives_retries() {
+    use crate::observe::metrics::TestType;
+    for mode in [
+        None,
+        Some(TestType::None),
+        Some(TestType::Retry),
+        Some(TestType::Lb),
+        Some(TestType::Latency),
+    ] {
+        let latency = matches!(mode, Some(TestType::Latency));
+        let mut gateway = crate::runtime::GatewayInfo::default();
+        gateway.metrics_test_type = mode;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.gateway_info = Some(Arc::new(gateway));
+        ctx.init_backend_context(
+            crate::ctx::Rsc::new("Service", "test", "first"),
+            "test/first".into(),
+            crate::backends::ServiceBackendKind::Service,
+            None,
+        );
+        begin_ai_peer_attempt(&mut ctx);
+        let first = ctx.test_upstream_start_time();
+        assert_eq!(first.is_some(), latency);
+        assert_eq!(ctx.try_cnt, 1);
+        // AI backend selection can replace attempt history between retries.
+        ctx.init_backend_context(
+            crate::ctx::Rsc::new("Service", "test", "next"),
+            "test/next".into(),
+            crate::backends::ServiceBackendKind::Service,
+            None,
+        );
+        begin_ai_peer_attempt(&mut ctx);
+        assert_eq!(ctx.test_upstream_start_time(), first);
+        assert_eq!(ctx.try_cnt, 2);
+        assert!(ctx.test_hash_key().is_none());
+    }
+}

@@ -140,6 +140,7 @@ pub(crate) struct WafRequestContext {
     access_log: WafAccessLog,
     claimed_phases: u8,
     transaction: Option<edgion_waf::seclang::Transaction<'static>>,
+    partial_capture_allowed: bool,
     request_body_streaming: bool,
     request_body_streamed_bytes: u64,
     request_body_stream_limit: u64,
@@ -155,6 +156,7 @@ impl WafRequestContext {
             access_log: WafAccessLog::new(selection.source, selection.priority, selection.mode),
             claimed_phases: 0,
             transaction: None,
+            partial_capture_allowed: false,
             request_body_streaming: false,
             request_body_streamed_bytes: 0,
             request_body_stream_limit: 0,
@@ -2070,6 +2072,13 @@ pub(crate) struct ResponseHeadHoldClaim {
     pub(crate) active: bool,
 }
 
+/// Diagnostic payload created only by the matching Gateway test-metrics mode.
+#[derive(Default)]
+struct RequestTestMetricsState {
+    hash_key: Option<String>,
+    upstream_start_time: Option<Instant>,
+}
+
 pub struct EdgionHttpContext {
     /// Sparse, generation-pinned Wasm request executions.
     pub(crate) wasm: Option<Box<crate::plugins::http::wasm::request::WasmRequestState>>,
@@ -2167,12 +2176,8 @@ pub struct EdgionHttpContext {
     /// applies or admission was not attempted (bypass paths, no policy).
     pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
 
-    /// Time when first upstream connection was initiated
-    /// Set only once on first connection attempt
-    pub upstream_start_time: Option<Instant>,
-
-    /// Hash key used for consistent hashing (for test metrics)
-    pub hash_key: Option<String>,
+    /// Test-only hash or first-attempt timing; absent on ordinary requests.
+    test_metrics: Option<Box<RequestTestMetricsState>>,
 
     // --- Request-scoped URI and routing state ---
     /// Composed upstream authority for this request, when the target Service
@@ -2227,8 +2232,6 @@ pub struct EdgionHttpContext {
     pub request_body: RequestBodyState,
     /// The admitted WAF prefix pins the body representation against mutation.
     pub(crate) waf_prefix_inspected: bool,
-    /// Set once before ordinary plugin dispatch from the pinned consumer graph.
-    pub(crate) waf_partial_capture_allowed: bool,
 
     /// Lazily allocated request-body callback drivers. The outer state is
     /// small; the fixed-capacity observer registry remains independently boxed
@@ -3125,6 +3128,17 @@ impl EdgionHttpContext {
         true
     }
 
+    /// Frozen consumer-graph policy belongs to the selected WAF, not its transaction.
+    pub(crate) fn set_waf_partial_capture_allowed(&mut self, allowed: bool) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.partial_capture_allowed = allowed;
+        }
+    }
+
+    pub(crate) fn waf_partial_capture_allowed(&self) -> bool {
+        self.waf.as_deref().is_some_and(|waf| waf.partial_capture_allowed)
+    }
+
     /// Hard format admission outlives the selected transaction and parser.
     pub(crate) fn waf_body_hard_limit(&self) -> Option<u64> {
         self.waf.as_deref().and_then(|waf| waf.body_hard_limit)
@@ -3297,8 +3311,7 @@ impl EdgionHttpContext {
             retry_on_status: false,
             peer_timeout_source: None,
             connect_timeout_source: None,
-            upstream_start_time: None,
-            hash_key: None,
+            test_metrics: None,
             upstream_authority: None,
             parsed_request_caches: ParsedRequestCaches::default(),
             request_query: crate::request_query::RequestQuery::default(),
@@ -3313,7 +3326,6 @@ impl EdgionHttpContext {
             preflight_policy: ResolvedPreflightPolicy::default(),
             request_body: RequestBodyState::default(),
             waf_prefix_inspected: false,
-            waf_partial_capture_allowed: false,
             enforce_request_body_limit: false,
             request_body_plugins: None,
             ai_state: None,
@@ -3330,6 +3342,45 @@ impl EdgionHttpContext {
             response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
         }
+    }
+
+    pub(crate) fn test_metrics_type(&self) -> Option<&crate::observe::metrics::TestType> {
+        self.gateway_info.as_deref()?.metrics_test_type.as_ref()
+    }
+
+    pub(crate) fn test_hash_key(&self) -> Option<&str> {
+        self.test_metrics.as_deref()?.hash_key.as_deref()
+    }
+
+    pub(crate) fn record_test_hash_key(&mut self, hash_key: Option<String>) {
+        if !matches!(self.test_metrics_type(), Some(crate::observe::metrics::TestType::Lb)) {
+            return;
+        }
+        if hash_key.is_some() {
+            self.test_metrics
+                .get_or_insert_with(|| Box::new(RequestTestMetricsState::default()))
+                .hash_key = hash_key;
+        } else if let Some(state) = self.test_metrics.as_deref_mut() {
+            state.hash_key = None;
+        }
+    }
+
+    pub(crate) fn test_upstream_start_time(&self) -> Option<Instant> {
+        self.test_metrics.as_deref()?.upstream_start_time
+    }
+
+    /// Keep the first attempt timestamp across retries and AI backend replacement.
+    pub(crate) fn record_test_upstream_start(&mut self) {
+        if !matches!(
+            self.test_metrics_type(),
+            Some(crate::observe::metrics::TestType::Latency)
+        ) {
+            return;
+        }
+        self.test_metrics
+            .get_or_insert_with(|| Box::new(RequestTestMetricsState::default()))
+            .upstream_start_time
+            .get_or_insert_with(Instant::now);
     }
 
     /// Clear response control left by a discarded upstream attempt.
@@ -4141,3 +4192,7 @@ mod context_benchmark_tests;
 #[cfg(test)]
 #[path = "../tests/unit/ctx_test/sp_config_tests.rs"]
 mod sp_config_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/ctx_test/test_metrics_state_tests.rs"]
+mod test_metrics_state_tests;
