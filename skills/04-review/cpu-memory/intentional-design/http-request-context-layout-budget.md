@@ -116,9 +116,9 @@ measured 1408 bytes against the existing 1328 ceiling. The current diff adds onl
 that pointer to the context: a 1400-byte pre-change layout is an inference from
 field width/alignment, not an executed baseline measurement. The other 72 bytes
 have not been audited here. The user subsequently authorized a strict 1800-byte
-ceiling and deferred size reduction to
-`tasks/todo/http-context-layout-budget-revalidation.md`. This replaces the old
-absolute context ceiling without claiming that the historical growth is audited.
+ceiling and deferred size reduction to a follow-up task, subsequently closed under
+the revised ownership-audit scope below. That interim ceiling replaced the old
+absolute context ceiling without claiming that the historical growth was audited.
 
 The isolated allocation test was also corrected to prepare the shared LazyLock
 configuration before measuring `with_gateway_config`, matching production
@@ -141,3 +141,18 @@ for avoiding test-only payload and clock capture on ordinary requests; it makes
 no measured throughput or byte-saving claim. Regression coverage lives in
 `ctx_test/test_metrics_state_tests.rs`, the ordinary/AI attempt tests, native
 Service dispatch tests and the test-data JSON serialization test.
+
+## Ownership audit closure
+
+The user replaced the size-reduction and tighter-ceiling objective with field
+necessity, coherent feature ownership and allocation on first use. The audit
+retained ordinary hot state and existing typed lazy owners, and selected two
+changes: the test-metrics owner above and partial-capture policy inside the
+existing selected WAF owner. Both changes passed independent plan and final
+reviews, 113 targeted tests, workspace check/Clippy and the project static guards.
+These are implementation-time receipts, not a fresh execution during cleanup.
+
+The follow-up task is closed under that revised scope. No compiler-layout ledger,
+size reduction or throughput improvement is claimed. Existing numeric layout
+assertions were left unchanged by the two selected implementations; they do not
+constitute a requirement to shrink the context or box ordinary metadata.

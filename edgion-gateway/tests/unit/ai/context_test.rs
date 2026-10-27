@@ -91,8 +91,8 @@ fn ai_baseline_captures_once_and_clears_attempt_local_deferred_headers() {
 
 #[test]
 fn ordinary_context_size_stays_within_budget() {
-    // User-approved interim ceiling; track layout reductions in
-    // tasks/todo/http-context-layout-budget-revalidation.md.
+    // Retained interim regression guard; ownership decisions are documented in
+    // skills/04-review/cpu-memory/intentional-design/http-request-context-layout-budget.md.
     let budget = 1800;
     let actual = std::mem::size_of::<EdgionHttpContext>();
     assert!(
