@@ -11,7 +11,14 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`edgion_oidc_session` (or `sessionCookieName`) and `edgion_oidc_state` are Gateway credentials. Every request path that continues upstream strips both names through `auth_common::strip_cookie` before proxying. `hideCredentials` remains bearer-`Authorization` only.
+`edgion_oidc_session` (or `sessionCookieName`) and `edgion_oidc_state` are Gateway credentials. Every request path that continues upstream strips both names through `auth_common::strip_cookies` before proxying. `hideCredentials` remains bearer-`Authorization` only.
+
+Both names are removed in one atomic operation. Successful session verification,
+refresh, leeway fallback, direct token authentication and unauthenticated Pass
+all propagate cleanup failures: opaque non-UTF-8 Cookie fields return 400; internal
+mutation failures return 500. Both use the existing runtime response dispatcher;
+none continue upstream with the unsanitized original request. No match preserves
+raw fields; actual removal may normalize separators and combine field lines.
 
 Fix suggestions of the form "gate session-cookie removal on `hideCredentials`" or "leave the encrypted session cookie visible to the application" are **not accepted**.
 
@@ -33,7 +40,7 @@ OIDC `hideCredentials` documents and implements removal of the client `Authoriza
 
 - Gate stripping on `hideCredentials` — default `false` would keep the leak; mixes two credential classes
 - Leave cookies application-visible — the application should not consume a Gateway session credential
-- Add an OIDC-local Cookie parser — reuse `auth_common::strip_cookie`
+- Add an OIDC-local Cookie parser — reuse `auth_common::strip_cookies`
 - Change `hideCredentials` defaults across other auth plugins in the same change — JWT/KeyAuth already strip cookie *sources* when that flag is on; those plugins do not issue Gateway session cookies
 
 ## Re-evaluation Triggers
@@ -47,7 +54,7 @@ Re-open this decision only if:
 
 - [review knowledge](../../SKILL.md) (D0060)
 - `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` (`strip_gateway_owned_cookies`)
-- `edgion-gateway/src/plugins/http/common/auth_common.rs` (`strip_cookie`)
+- `edgion-gateway/src/plugins/http/common/auth_common.rs` (`strip_cookies`)
 - `docs/en/user-guide/edgion-plugins/openid-connect.md`
 
 ## Resolution references

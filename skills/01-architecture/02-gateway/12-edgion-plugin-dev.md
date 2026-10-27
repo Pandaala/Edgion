@@ -80,6 +80,14 @@ fail explicitly when it is missing; an explicit `${method}` template stays curre
 
 URI, query, Host and body views retain their existing owners; see the
 [identity views](uri-normalization/SKILL.md#concept-dual-view-architecture).
+Request Cookie reads use `PluginSessionHeaderExt::get_cookie_ref` for borrowed
+values or `PluginSession::get_cookie` when ownership is needed. Both read the live
+HeaderMap through `request_cookie`; do not add a plugin-local parser or cache.
+Use `remove_request_cookies` for atomic multi-name deletion and propagate its typed
+error through the existing response dispatcher. Successful mutations publish to
+Pingora immediately, including for mid-chain outbound calls. Unused Cookie fields
+remain raw; a read does not rewrite them, and a no-match edit does not assemble them.
+
 Headers and cookies remain execution-time reads. This method accessor adds no
 original header/body cache, request sealing or method mutation permission.
 

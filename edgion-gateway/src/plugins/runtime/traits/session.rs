@@ -28,6 +28,8 @@ pub enum ResponseCacheIntentAdmission {
     Unsupported,
 }
 
+pub use crate::request_cookie::{CookieEditError, CookieEditOutcome};
+
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
@@ -184,6 +186,11 @@ pub trait PluginSession: Send + Sync {
 
     /// Get a cookie value by name
     fn get_cookie(&self, name: &str) -> Option<String>;
+
+    /// Remove all selected raw Cookie names from the live request atomically.
+    // Mockall requires the named lifetime for nested borrowed removal names.
+    #[allow(clippy::needless_lifetimes)]
+    fn remove_request_cookies<'name>(&mut self, names: &[&'name str]) -> Result<CookieEditOutcome, CookieEditError>;
 
     /// Get the request path (without query string)
     fn get_path(&self) -> &str;

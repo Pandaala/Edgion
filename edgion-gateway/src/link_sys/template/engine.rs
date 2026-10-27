@@ -3,6 +3,7 @@
 //! Compiled segments are never reparsed. The output budget bounds rendered UTF-8
 //! bytes, not owned source values returned by session accessors or allocator rounding.
 
+use crate::plugins::runtime::PluginSessionHeaderExt;
 use std::borrow::Cow;
 
 use crate::plugins::runtime::{traits::session::RouteProto, PluginSession};
@@ -249,7 +250,7 @@ fn resolve_var<'a>(
         }
         TemplateVarType::Cookie => {
             let session = context.request_session()?;
-            name.and_then(|name| session.get_cookie(name).map(Cow::Owned))
+            name.and_then(|name| session.get_cookie_ref(name).map(Cow::Borrowed))
         }
         TemplateVarType::Ctx => name.and_then(|n| context.ctx_var(n)).map(Cow::Owned),
         TemplateVarType::Path => Some(Cow::Borrowed(context.request_session()?.get_path())),

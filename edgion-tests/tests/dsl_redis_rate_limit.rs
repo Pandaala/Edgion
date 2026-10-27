@@ -82,6 +82,16 @@ impl PluginSession for ResultSession {
     fn get_query_param(&self, _name: &str) -> Option<String> {
         panic!("unexpected session operation")
     }
+    fn remove_request_cookies(
+        &mut self,
+        _names: &[&str],
+    ) -> Result<
+        edgion_gateway::plugins::runtime::traits::session::CookieEditOutcome,
+        edgion_gateway::plugins::runtime::traits::session::CookieEditError,
+    > {
+        Err(edgion_gateway::plugins::runtime::traits::session::CookieEditError::Internal)
+    }
+
     fn get_cookie(&self, _name: &str) -> Option<String> {
         panic!("unexpected session operation")
     }

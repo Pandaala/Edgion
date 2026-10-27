@@ -581,3 +581,36 @@ fn prepared_metadata_preserves_forwarding_operations_and_raw_username() {
         auth.set_upstream_headers(&mut session, &prepared);
     }
 }
+
+#[tokio::test]
+async fn authenticated_cookie_cleanup_failure_returns_static_local_error() {
+    for (error, status) in [
+        (crate::request_cookie::CookieEditError::Unsanitizable, 400),
+        (crate::request_cookie::CookieEditError::Internal, 500),
+    ] {
+        let mut config = create_test_config();
+        config.hide_credentials = true;
+        config.key_sources = vec![KeyGet::Cookie { name: "token".into() }];
+        config.resolved_keys = Some(HashMap::from([(
+            "valid-cookie-key".into(),
+            metadata_with_group("test-group", None),
+        )]));
+        let auth = KeyAuth::from_config(&config);
+        let mut session = MockPluginSession::new();
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("token=valid-cookie-key"),
+        );
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_remove_request_cookies()
+            .withf(|names| names == ["token"])
+            .times(1)
+            .returning(move |_| Err(error));
+        session.expect_write_response_header().never();
+        session.expect_write_response_body().never();
+        let result = auth.run_request(&mut session, &mut PluginLog::new(PLUGIN_NAME)).await;
+        assert_eq!(result, PluginRunningResult::ErrResponse { status, body: None });
+    }
+}

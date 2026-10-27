@@ -7,7 +7,6 @@ use crate::plugins::http::common::auth_common::{
     strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 /// Maximum size for a single JWT claim header value propagated upstream (8KB).
@@ -45,7 +44,7 @@ impl JwtAuth {
                 }
             }
         }
-        if let Some(t) = cookie_value_ref(session.request_header_map(), &self.config.cookie) {
+        if let Some(t) = session.get_cookie_ref(&self.config.cookie) {
             if !t.is_empty() {
                 return Some((t, TokenSource::Cookie));
             }
@@ -103,9 +102,13 @@ impl JwtAuth {
     }
 
     /// Hide credentials based on token source.
-    pub(super) fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession, source: TokenSource) {
+    pub(super) fn hide_credentials_if_needed(
+        &self,
+        session: &mut dyn PluginSession,
+        source: TokenSource,
+    ) -> Result<(), crate::request_cookie::CookieEditError> {
         if !self.config.hide_credentials {
-            return;
+            return Ok(());
         }
         match source {
             TokenSource::Header => {
@@ -115,8 +118,9 @@ impl JwtAuth {
                 strip_query_param(session, &self.config.query);
             }
             TokenSource::Cookie => {
-                strip_cookie(session, &self.config.cookie);
+                strip_cookie(session, &self.config.cookie)?;
             }
         }
+        Ok(())
     }
 }

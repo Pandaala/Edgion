@@ -422,8 +422,8 @@ fn collect_request_headers_preserves_current_uri_and_raw_query() {
             "/api?tag=one&tag=two&value=foo%26bar&text=hello+world",
             "/api?tag=one&tag=two&value=foo%26bar&text=hello+world",
         ),
-        // The canonical URI accessor omits an empty query delimiter.
-        ("/api?", "/api"),
+        // A present empty Query remains distinct from an absent Query.
+        ("/api?", "/api?"),
         ("/api", "/api"),
         ("/%61pi?mode=deny", "/api?mode=deny"),
     ] {

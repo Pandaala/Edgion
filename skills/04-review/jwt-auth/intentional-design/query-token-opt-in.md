@@ -39,7 +39,7 @@ removing the capability for operators who genuinely need it.
 Token extraction borrows its selected input until synchronous verification
 finishes. Header extraction uses the live first HeaderMap value when it is text-eligible;
 query extraction uses `get_query_param_ref` and the existing frozen decoded
-query cache; Cookie extraction uses the same canonical `cookie_value_ref` parser
+query cache; Cookie extraction uses the same canonical `request_cookie::lookup` parser
 as the owned session getter. No new source or cache is introduced.
 
 Priority and transformations remain Header > enabled Query > Cookie. Only the

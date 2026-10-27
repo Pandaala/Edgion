@@ -295,3 +295,13 @@ stringData:
 - [Basic Auth](./basic-auth.md)
 - [JWT Auth](./jwt-auth.md)
 - [HMAC Auth](./hmac-auth.md)
+
+### Cookie credential cleanup
+
+With `hideCredentials: true`, successful Cookie authentication removes every
+occurrence of the selected cookie name across all Cookie header fields. Surviving
+names and values are preserved; separators may be normalized and fields combined.
+Subsequent plugins, webhooks and upstream requests observe the updated header.
+If removal encounters non-UTF-8 bytes, the request fails with HTTP 400; an internal
+update failure returns HTTP 500. Neither failure forwards the unsanitized request.
+Without a Cookie edit, the raw Cookie fields are not reassembled.

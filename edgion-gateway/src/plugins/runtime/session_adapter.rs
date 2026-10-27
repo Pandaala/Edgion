@@ -324,29 +324,6 @@ pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> 
     }
 }
 
-/// Borrow one cookie value from all request `Cookie` fields in field order.
-///
-/// An invalid UTF-8 field reached before a match makes the lookup fail rather
-/// than allowing a later field to override an uninterpretable credential. A
-/// match returns immediately, so malformed fields after it are irrelevant.
-pub(crate) fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
-    for header in headers.get_all(http::header::COOKIE).iter() {
-        let cookies = header.to_str().ok()?;
-        if let Some(value) = cookies.split(';').find_map(|pair| {
-            let mut parts = pair.trim().splitn(2, '=');
-            let key = parts.next()?;
-            if key == name {
-                parts.next()
-            } else {
-                None
-            }
-        }) {
-            return Some(value);
-        }
-    }
-    None
-}
-
 /// Read one KeyGet value, borrowing canonical session storage where available.
 /// Query uses the frozen entry cache; other selected sources retain their live
 /// reads. Sources without an equivalent borrow use the canonical owned getter.
@@ -356,7 +333,7 @@ pub(crate) fn key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Opt
         KeyGet::TraceId => session.get_request_id_ref().map(Cow::Borrowed),
         KeyGet::Host => session.get_request_hostname().map(Cow::Borrowed),
         KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
-        KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
+        KeyGet::Cookie { name } => session.get_cookie_ref(name).map(Cow::Borrowed),
         KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),
         KeyGet::Ctx { name } => session.get_ctx_var_ref(name).map(Cow::Borrowed),
         KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
@@ -381,7 +358,7 @@ pub(crate) fn key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Opt
 /// `PingoraSessionAdapter` (that needs `&mut` borrows the logging stage does not
 /// have).
 pub fn cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
-    cookie_value_ref(headers, name).map(str::to_owned)
+    crate::request_cookie::lookup(headers, name, crate::request_cookie::FieldScope::All).map(str::to_owned)
 }
 
 /// Return every value for one header, preserving duplicate occurrences.
@@ -1475,6 +1452,33 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.req_header_mut().remove_header(name);
         self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
+    }
+
+    fn remove_request_cookies(
+        &mut self,
+        names: &[&str],
+    ) -> Result<crate::request_cookie::CookieEditOutcome, crate::request_cookie::CookieEditError> {
+        use crate::request_cookie::{plan_removal, CookieEditError, CookieEditOutcome, CookieEditPlan};
+        if names.is_empty() {
+            return Ok(CookieEditOutcome::NoChange);
+        }
+        match plan_removal(&self.inner.req_header().headers, names)? {
+            CookieEditPlan::Absent => Ok(CookieEditOutcome::Absent),
+            CookieEditPlan::NoChange => {
+                self.ctx.remove_deferred_credential_mutation("cookie");
+                Ok(CookieEditOutcome::NoChange)
+            }
+            CookieEditPlan::Remove => {
+                self.remove_request_header("cookie")
+                    .map_err(|_| CookieEditError::Internal)?;
+                Ok(CookieEditOutcome::Removed)
+            }
+            CookieEditPlan::Replace(value) => {
+                self.set_request_header_value("cookie", value)
+                    .map_err(|_| CookieEditError::Internal)?;
+                Ok(CookieEditOutcome::Replaced)
+            }
+        }
     }
 
     fn is_remote_ip_header(&self, name: &str) -> bool {

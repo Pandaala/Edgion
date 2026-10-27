@@ -1,10 +1,8 @@
 use super::{
-    escape_quoted_string, format_claim_header_value, plan_cookie_strip, resolve_claim_path,
-    send_gateway_auth_error_response, set_claims_headers, strip_cookie, strip_query_param,
-    AggregateHeaderBudgetExceeded, Claims, CookieStripPlan,
+    escape_quoted_string, format_claim_header_value, resolve_claim_path, send_gateway_auth_error_response,
+    set_claims_headers, strip_cookie, strip_query_param, AggregateHeaderBudgetExceeded, Claims,
 };
 use crate::plugins::runtime::traits::session::MockPluginSession;
-use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use mockall::Sequence;
 use parking_lot::Mutex;
 use serde_json::json;
@@ -360,40 +358,43 @@ fn strip_query_param_without_match_leaves_query_untouched() {
 #[test]
 fn strip_cookie_removes_named_keeps_others() {
     let mut session = MockPluginSession::new();
-    setup_header_mocks(&mut session, &[("Cookie", "api_key=secret; other=1")]);
     session
-        .expect_set_request_header_value()
-        .withf(|name, value| name == "Cookie" && value == "other=1" && value.is_sensitive())
+        .expect_remove_request_cookies()
+        .withf(|names| names == ["api_key"])
         .times(1)
-        .returning(|_, _| Ok(()));
-
-    strip_cookie(&mut session, "api_key");
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Replaced));
+    assert_eq!(
+        strip_cookie(&mut session, "api_key").unwrap(),
+        crate::request_cookie::CookieEditOutcome::Replaced
+    );
 }
 
 #[test]
 fn strip_cookie_only_cookie_removes_header() {
     let mut session = MockPluginSession::new();
-    setup_header_mocks(&mut session, &[("Cookie", "api_key=secret")]);
     session
-        .expect_remove_request_header()
-        .withf(|name| name == "Cookie")
+        .expect_remove_request_cookies()
+        .withf(|names| names == ["api_key"])
         .times(1)
-        .returning(|_| Ok(()));
-
-    strip_cookie(&mut session, "api_key");
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Removed));
+    assert_eq!(
+        strip_cookie(&mut session, "api_key").unwrap(),
+        crate::request_cookie::CookieEditOutcome::Removed
+    );
 }
 
 #[test]
 fn strip_cookie_merges_multiple_cookie_lines() {
     let mut session = MockPluginSession::new();
-    setup_header_mocks(&mut session, &[("cookie", "api_key=secret; a=1"), ("cookie", "b=2")]);
     session
-        .expect_set_request_header_value()
-        .withf(|name, value| name == "Cookie" && value == "a=1; b=2" && value.is_sensitive())
+        .expect_remove_request_cookies()
+        .withf(|names| names == ["api_key"])
         .times(1)
-        .returning(|_, _| Ok(()));
-
-    strip_cookie(&mut session, "api_key");
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Replaced));
+    assert_eq!(
+        strip_cookie(&mut session, "api_key").unwrap(),
+        crate::request_cookie::CookieEditOutcome::Replaced
+    );
 }
 
 // ── plan_cookie_strip: pure logic, no session mock ───────────────────────
@@ -402,8 +403,28 @@ fn strip_cookie_merges_multiple_cookie_lines() {
 // tests above only need to prove the session wiring (read -> decide ->
 // rewrite), not re-derive the semantics.
 
+#[derive(Debug, PartialEq)]
+enum CookieStripPlan {
+    Absent,
+    NoChange,
+    RemoveHeader,
+    Replace(String),
+}
+
 fn plan(lines: &[&str], names: &[&str]) -> CookieStripPlan {
-    plan_cookie_strip(lines.iter().copied(), names)
+    let mut headers = http::HeaderMap::new();
+    for line in lines {
+        headers.append(http::header::COOKIE, http::HeaderValue::from_str(line).unwrap());
+    }
+    use crate::request_cookie::CookieEditPlan;
+    match crate::request_cookie::plan_removal(&headers, names).unwrap() {
+        CookieEditPlan::Absent => CookieStripPlan::Absent,
+        CookieEditPlan::NoChange => CookieStripPlan::NoChange,
+        CookieEditPlan::Remove => CookieStripPlan::RemoveHeader,
+        CookieEditPlan::Replace(value) => {
+            CookieStripPlan::Replace(std::str::from_utf8(value.as_bytes()).unwrap().to_owned())
+        }
+    }
 }
 
 #[test]
@@ -415,8 +436,8 @@ fn plan_cookie_strip_reports_absent_without_any_cookie_line() {
 fn plan_cookie_strip_removes_header_when_nothing_survives() {
     assert_eq!(plan(&["api_key=secret"], &["api_key"]), CookieStripPlan::RemoveHeader);
     // An empty Cookie line is still a present header with no survivors.
-    assert_eq!(plan(&[""], &["api_key"]), CookieStripPlan::RemoveHeader);
-    assert_eq!(plan(&["  ;  ; "], &["api_key"]), CookieStripPlan::RemoveHeader);
+    assert_eq!(plan(&[""], &["api_key"]), CookieStripPlan::NoChange);
+    assert_eq!(plan(&["  ;  ; "], &["api_key"]), CookieStripPlan::NoChange);
 }
 
 #[test]
@@ -472,10 +493,7 @@ fn plan_cookie_strip_matches_the_raw_key_before_the_first_equals() {
 
 #[test]
 fn plan_cookie_strip_with_no_names_keeps_everything() {
-    assert_eq!(
-        plan(&["a=1; b=2"], &[]),
-        CookieStripPlan::Replace("a=1; b=2".to_string())
-    );
+    assert_eq!(plan(&["a=1; b=2"], &[]), CookieStripPlan::NoChange);
 }
 
 #[test]
@@ -537,24 +555,49 @@ fn plain_query_key_comparison_does_not_allocate_key_sized_storage() {
 
 #[test]
 fn cookie_strip_output_supports_owned_header_conversion() {
-    let long = format!("keep={}", "x".repeat(4096));
-    for lines in [
-        vec!["api_key=secret; keep=1"],
-        vec!["a=1; api_key=secret", "b=2; flag"],
-        vec!["keep=café; api_key=secret"],
-        vec!["keep=a\tb; api_key=secret"],
-        vec!["keep=a\rb; api_key=secret"],
-        vec!["keep=a\nb; api_key=secret"],
-        vec!["keep=a\0b; api_key=secret"],
-        vec!["keep=a\u{7f}b; api_key=secret"],
-        vec![long.as_str()],
+    let long = format!("api_key=secret; keep={}", "x".repeat(4096));
+    for (lines, expected) in [
+        (vec!["api_key=secret; keep=1"], "keep=1".to_owned()),
+        (vec!["a=1; api_key=secret", "b=2; flag"], "a=1; b=2; flag".to_owned()),
+        (vec!["keep=café; api_key=secret"], "keep=café".to_owned()),
+        (vec!["keep=a\tb; api_key=secret"], "keep=a\tb".to_owned()),
+        (vec![long.as_str()], format!("keep={}", "x".repeat(4096))),
     ] {
-        let CookieStripPlan::Replace(value) = plan(&lines, &["api_key"]) else {
-            panic!("fixture must retain a cookie");
+        let mut headers = http::HeaderMap::new();
+        for line in lines {
+            headers.append(http::header::COOKIE, http::HeaderValue::from_str(line).unwrap());
+        }
+        let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            crate::request_cookie::plan_removal(&headers, &["api_key"])
+        });
+        let crate::request_cookie::CookieEditPlan::Replace(value) = result.unwrap() else {
+            panic!("expected matched survivors")
         };
-        assert_eq!(value.capacity(), value.len());
+        assert_eq!(value.as_bytes(), expected.as_bytes());
+        assert!(value.is_sensitive());
+        // Up to three survivors fit the first metadata allocation. Exactly one
+        // additional allocation is the complete output; conversion adds none.
+        assert_eq!(stats.calls, 2);
+        assert_eq!(stats.requested_bytes, 4 * std::mem::size_of::<&str>() + expected.len());
+    }
+}
+
+#[test]
+fn owned_cookie_header_conversion_retains_raw_validation_parity_and_buffer() {
+    // Invalid controls cannot be installed in HeaderMap; exercise conversion
+    // itself without pretending these are accepted request-header fixtures.
+    for raw in [
+        "keep=1",
+        "keep=café",
+        "keep=a\tb",
+        "keep=a\rb",
+        "keep=a\nb",
+        "keep=a\0b",
+        "keep=a\u{7f}b",
+    ] {
+        let value = raw.to_owned();
         let input_ptr = value.as_ptr();
-        let borrowed = http::HeaderValue::from_str(&value);
+        let borrowed = http::HeaderValue::from_str(raw);
         let (owned, stats) =
             crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(value));
         assert_eq!(owned.is_ok(), borrowed.is_ok());

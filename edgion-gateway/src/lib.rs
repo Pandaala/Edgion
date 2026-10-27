@@ -115,3 +115,5 @@ mod request_id_tests;
 #[cfg(test)]
 #[path = "../tests/unit/lib_test/test_subprocess.rs"]
 mod test_subprocess;
+
+pub(crate) mod request_cookie;

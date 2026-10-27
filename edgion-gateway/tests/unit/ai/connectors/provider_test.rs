@@ -194,6 +194,9 @@ async fn native_headers_preserve_all_beta_and_effective_deferred_version_but_iso
             .insert_header("authorization", "Bearer client-key")
             .unwrap();
         let mut ctx = EdgionHttpContext::new();
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
         for (name, value) in [
             ("anthropic-workspace-id", "deferred-workspace"),
             ("x-api-key", "deferred-key"),

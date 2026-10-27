@@ -133,21 +133,13 @@ pub(crate) fn extract_hash_key<'a>(
             .and_then(|v| v.to_str().ok())
             .map(str::as_bytes)
             .unwrap_or_default(),
-        ConsistentHashOn::Cookie(cookie_name) => req_header
-            .headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookies| {
-                cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
-                    let (name, value) = cookie.split_once('=')?;
-                    if name == cookie_name.as_ref() {
-                        Some(value.as_bytes())
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or_default(),
+        ConsistentHashOn::Cookie(cookie_name) => crate::request_cookie::lookup(
+            &req_header.headers,
+            cookie_name.as_ref(),
+            crate::request_cookie::FieldScope::First,
+        )
+        .map(str::as_bytes)
+        .unwrap_or_default(),
         ConsistentHashOn::Arg(arg_name) => query
             .and_then(|query| query.current_hash_arg_raw(arg_name.as_ref()))
             .map(str::as_bytes)

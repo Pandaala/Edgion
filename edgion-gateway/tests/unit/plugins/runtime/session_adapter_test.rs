@@ -1287,3 +1287,133 @@ async fn query_setter_imports_the_validated_transport_query_in_every_target_form
         }
     }
 }
+
+#[tokio::test]
+async fn cookie_cleanup_is_live_for_borrowed_reads_outbound_exports_and_deferred_credentials() {
+    use crate::plugins::http::common::outbound::request::CompiledRequest;
+    use crate::request_cookie::CookieEditOutcome;
+    use edgion_resources::resources::common::outbound_request::{
+        CustomField, CustomSource, ListFields, MethodSpec, OutboundRequestSpec, PathSpec,
+    };
+    use tokio::io::AsyncWriteExt;
+    let (mut client, server) = tokio::io::duplex(4096);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nCookie: token=secret; keep=one\r\nCookie: token=again; keep=two; quoted=\"a=b\"\r\n\r\n").await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert_eq!(adapter.get_cookie_ref("token"), Some("secret"));
+    let original = adapter.request_header_map().clone();
+    adapter
+        .defer_credential_header(
+            http::header::COOKIE,
+            Arc::new(http::HeaderValue::from_static("deferred=secret")),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        adapter.remove_request_cookies(&[]).unwrap(),
+        CookieEditOutcome::NoChange
+    );
+    let mut detached = adapter.inner.req_header().clone();
+    adapter.ctx().apply_deferred_credentials(&mut detached).unwrap();
+    assert_eq!(detached.headers.get("cookie").unwrap(), "deferred=secret");
+    assert_eq!(adapter.request_header_map(), &original);
+    assert_eq!(
+        adapter.remove_request_cookies(&["absent"]).unwrap(),
+        CookieEditOutcome::NoChange
+    );
+    let mut detached = adapter.inner.req_header().clone();
+    adapter.ctx().apply_deferred_credentials(&mut detached).unwrap();
+    assert_eq!(detached.headers, original);
+    assert_eq!(
+        adapter.remove_request_cookies(&["token"]).unwrap(),
+        CookieEditOutcome::Replaced
+    );
+    assert_eq!(adapter.get_cookie_ref("token"), None);
+    assert_eq!(
+        adapter
+            .request_header_map()
+            .get_all(http::header::COOKIE)
+            .iter()
+            .count(),
+        1
+    );
+    assert_eq!(adapter.get_cookie_ref("keep"), Some("one"));
+    assert_eq!(adapter.header_str("cookie"), Some("keep=one; keep=two; quoted=\"a=b\""));
+    assert!(adapter.request_header_map().get("cookie").unwrap().is_sensitive());
+    let spec = OutboundRequestSpec {
+        method: Some(MethodSpec { template: "GET".into() }),
+        path: Some(PathSpec {
+            template: "/check".into(),
+            allow_override: false,
+        }),
+        headers: ListFields {
+            forward_all: true,
+            custom: vec![CustomField {
+                name: "x-cookie-current".into(),
+                source: CustomSource::Template("${cookie:keep}".into()),
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let compiled = CompiledRequest::from_spec(&spec).unwrap();
+    let outbound = compiled
+        .build_request(&adapter, None, "http://upstream.test", None, &mut Default::default())
+        .unwrap();
+    assert_eq!(
+        outbound.headers().get("cookie").unwrap(),
+        "keep=one; keep=two; quoted=\"a=b\""
+    );
+    assert_eq!(outbound.headers().get("x-cookie-current").unwrap(), "one");
+    let snapshot = adapter.request_header_map().clone();
+    adapter.remove_request_cookies(&["keep"]).unwrap();
+    assert_eq!(adapter.header_str("cookie"), Some("quoted=\"a=b\""));
+    assert_eq!(
+        snapshot.get("cookie").unwrap(),
+        outbound.headers().get("cookie").unwrap()
+    );
+}
+
+#[tokio::test]
+async fn cookie_cleanup_opaque_failure_preserves_headers_and_returns_fixed_response() {
+    use crate::request_cookie::{CookieEditError, CookieEditOutcome};
+    use tokio::io::AsyncWriteExt;
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nCookie: token=secret\r\nCookie: opaque=\xff\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    let original = adapter.request_header_map().clone();
+    assert_eq!(adapter.get_cookie_ref("token"), Some("secret"));
+    assert_eq!(
+        adapter.remove_request_cookies(&[]).unwrap(),
+        CookieEditOutcome::NoChange
+    );
+    for names in [&["token"][..], &["missing"][..]] {
+        assert_eq!(
+            adapter.remove_request_cookies(names),
+            Err(CookieEditError::Unsanitizable)
+        );
+        assert_eq!(adapter.request_header_map(), &original);
+    }
+    assert!(matches!(
+        crate::plugins::http::common::auth_common::cookie_cleanup_failure(CookieEditError::Unsanitizable),
+        edgion_resources::filters::PluginRunningResult::ErrResponse {
+            status: 400,
+            body: None
+        }
+    ));
+    assert!(matches!(
+        crate::plugins::http::common::auth_common::cookie_cleanup_failure(CookieEditError::Internal),
+        edgion_resources::filters::PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None
+        }
+    ));
+}

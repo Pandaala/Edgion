@@ -89,7 +89,9 @@ impl RequestFilter for JwtAuth {
                         let _ = session.set_ctx_var("jwt_claims", &claims_json);
                     }
                 }
-                self.hide_credentials_if_needed(session, source);
+                if let Err(error) = self.hide_credentials_if_needed(session, source) {
+                    return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
+                }
                 PluginRunningResult::GoodNext
             }
             Err(_) => {

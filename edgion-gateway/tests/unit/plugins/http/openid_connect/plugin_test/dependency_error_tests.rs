@@ -221,7 +221,12 @@ async fn missing_refresh_endpoint_preserves_all_session_unauth_actions() {
         let mut session = request(None);
         session.expect_get_cookie().returning(move |_| Some(encoded.clone()));
         match action {
-            UnauthAction::Pass => {}
+            UnauthAction::Pass => {
+                session
+                    .expect_remove_request_cookies()
+                    .times(1)
+                    .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Removed));
+            }
             UnauthAction::Deny => expect_auth_response(&mut session, 401, "Unauthorized - Authentication required"),
             UnauthAction::Auth => {
                 session

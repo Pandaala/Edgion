@@ -133,20 +133,27 @@ fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str)
     } else {
         setup_header_mocks(session, &[("cookie", cookie_header)]);
     }
-    let for_set = Arc::clone(&cookie);
-    session.expect_set_request_header_value().returning(move |name, value| {
-        assert!(value.is_sensitive());
-        if name.eq_ignore_ascii_case("Cookie") {
-            *for_set.lock() = Some(value.to_str().unwrap().to_string());
+    let for_edit = Arc::clone(&cookie);
+    session.expect_remove_request_cookies().returning(move |names| {
+        use crate::request_cookie::{CookieEditOutcome, CookieEditPlan};
+        let mut stored = for_edit.lock();
+        let mut headers = http::HeaderMap::new();
+        if let Some(value) = stored.as_ref() {
+            headers.insert(http::header::COOKIE, http::HeaderValue::from_str(value).unwrap());
         }
-        Ok(())
-    });
-    let for_remove = Arc::clone(&cookie);
-    session.expect_remove_request_header().returning(move |name| {
-        if name.eq_ignore_ascii_case("Cookie") {
-            *for_remove.lock() = None;
+        match crate::request_cookie::plan_removal(&headers, names)? {
+            CookieEditPlan::Absent => Ok(CookieEditOutcome::Absent),
+            CookieEditPlan::NoChange => Ok(CookieEditOutcome::NoChange),
+            CookieEditPlan::Remove => {
+                *stored = None;
+                Ok(CookieEditOutcome::Removed)
+            }
+            CookieEditPlan::Replace(value) => {
+                assert!(value.is_sensitive());
+                *stored = Some(std::str::from_utf8(value.as_bytes()).unwrap().to_owned());
+                Ok(CookieEditOutcome::Replaced)
+            }
         }
-        Ok(())
     });
     cookie
 }
@@ -694,6 +701,9 @@ async fn test_bearer_only_without_token_returns_401() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[]);
     session.expect_write_response_header().returning(|_, _| Ok(()));
     session.expect_write_response_body().returning(|_, _| Ok(()));
@@ -753,6 +763,9 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_request_query().return_const(Some("x=1"));
@@ -872,6 +885,9 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_request_query().return_const(Some("x=1"));
@@ -959,6 +975,9 @@ async fn test_authorization_params_appends_non_reserved_params() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_request_query().return_const(None);
@@ -1078,6 +1097,9 @@ async fn test_logout_path_clears_cookies_and_redirects() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
@@ -1127,6 +1149,9 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
@@ -1247,6 +1272,9 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Absent));
     setup_header_mocks(&mut session, &[]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
@@ -2013,7 +2041,7 @@ fn strip_gateway_owned_cookies_removes_session_and_state_keeps_others() {
         "app=keep; edgion_oidc_session=secret; edgion_oidc_state=state; theme=dark",
     );
 
-    plugin.strip_gateway_owned_cookies(&mut session);
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
 
     assert_eq!(cookies.lock().as_deref(), Some("app=keep; theme=dark"));
 }
@@ -2024,7 +2052,7 @@ fn strip_gateway_owned_cookies_drops_header_when_only_gateway_cookies() {
     let mut session = MockPluginSession::new();
     let cookies = install_request_cookies(&mut session, "edgion_oidc_session=secret; edgion_oidc_state=state");
 
-    plugin.strip_gateway_owned_cookies(&mut session);
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
 
     assert!(cookies.lock().is_none());
 }
@@ -2040,7 +2068,7 @@ fn strip_gateway_owned_cookies_uses_configured_session_name() {
         "custom_oidc_session=secret; edgion_oidc_session=app-owned; other=1",
     );
 
-    plugin.strip_gateway_owned_cookies(&mut session);
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
 
     assert_eq!(
         cookies.lock().as_deref(),
@@ -2061,21 +2089,32 @@ fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
             ("cookie", "edgion_oidc_state=state; theme=dark"),
         ],
     );
-    let for_set = Arc::clone(&cookie);
+    let for_edit = Arc::clone(&cookie);
     session
-        .expect_set_request_header_value()
+        .expect_remove_request_cookies()
         .times(1)
-        .returning(move |name, value| {
-            assert!(name.eq_ignore_ascii_case("Cookie"));
+        .returning(move |names| {
+            assert_eq!(names, &["edgion_oidc_session", "edgion_oidc_state"]);
+            let mut headers = http::HeaderMap::new();
+            headers.append(
+                http::header::COOKIE,
+                http::HeaderValue::from_static("edgion_oidc_session=secret; app=keep"),
+            );
+            headers.append(
+                http::header::COOKIE,
+                http::HeaderValue::from_static("edgion_oidc_state=state; theme=dark"),
+            );
+            let crate::request_cookie::CookieEditPlan::Replace(value) =
+                crate::request_cookie::plan_removal(&headers, names)?
+            else {
+                panic!("expected survivors")
+            };
             assert!(value.is_sensitive());
-            *for_set.lock() = Some(value.to_str().unwrap().to_string());
-            Ok(())
+            *for_edit.lock() = Some(value.to_str().unwrap().to_owned());
+            Ok(crate::request_cookie::CookieEditOutcome::Replaced)
         });
-    session.expect_remove_request_header().returning(|_| {
-        panic!("unrelated cookies must keep the Cookie header");
-    });
 
-    plugin.strip_gateway_owned_cookies(&mut session);
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
 
     assert_eq!(cookie.lock().as_deref(), Some("app=keep; theme=dark"));
 }
@@ -3974,6 +4013,142 @@ async fn introspection_endpoint_presence_precedes_cache_and_url_admission_follow
             assert_eq!(result.unwrap(), claims);
         } else {
             assert_eq!(result.unwrap_err().log_tag(), "introspect endpoint missing");
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
+    for scenario in ["bearer", "session", "refresh", "stale", "pass"] {
+        for (error, status) in [
+            (crate::request_cookie::CookieEditError::Unsanitizable, 400),
+            (crate::request_cookie::CookieEditError::Internal, 500),
+        ] {
+            let mut cfg = base_config();
+            cfg.bearer_only = scenario == "bearer";
+            cfg.unauth_action = UnauthAction::Pass;
+            cfg.verification_mode = VerificationMode::IntrospectionOnly;
+            cfg.introspection_cache_ttl = 60;
+            cfg.renew_access_token_on_expiry = true;
+            cfg.clock_skew_seconds = 0;
+            cfg.access_token_expires_leeway = if scenario == "stale" { 300 } else { 0 };
+            cfg.timeout = 1;
+            cfg.token_signing_alg = Some("HS256".into());
+            cfg.allowed_signing_algs = Some(vec!["HS256".into()]);
+            cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".into());
+            cfg.resolved_oidc_client_secret = Some("test-client-secret".into());
+            let plugin = OpenidConnect::new(&cfg, "default".into());
+            plugin
+                .jwks_provider
+                .seed_discovery(DiscoveryDocument {
+                    issuer: "https://idp.example.com".into(),
+                    jwks_uri: "http://169.254.169.254/jwks".into(),
+                    authorization_endpoint: None,
+                    token_endpoint: None,
+                    introspection_endpoint: Some("http://169.254.169.254/introspect".into()),
+                    userinfo_endpoint: None,
+                    end_session_endpoint: None,
+                    revocation_endpoint: None,
+                })
+                .await;
+            let now = OpenidConnect::now_unix_secs();
+            let exp = if matches!(scenario, "refresh" | "stale") {
+                now - 120
+            } else {
+                now + 3600
+            };
+            let claims = json!({"active":true, "iss":"https://idp.example.com", "exp":exp});
+            let token = jsonwebtoken::encode(
+                &Header::new(Algorithm::HS256),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+            )
+            .unwrap();
+            plugin.introspection_cache.insert(
+                OpenidConnect::introspection_cache_key(&token),
+                IntrospectionCacheEntry { claims },
+                Duration::from_secs(60),
+            );
+            let payload = OidcSessionCookie {
+                session_ref: format!("cleanup-{scenario}"),
+                access_token: token.clone(),
+                created_at: now,
+                expires_at: Some(now + 3600),
+                id_token: None,
+                refresh_token: Some("refresh-token".into()),
+            };
+            let encoded =
+                OpenidConnect::encode_signed_cookie_payload(&payload, plugin.session_cipher().unwrap()).unwrap();
+            let lock_key = OpenidConnect::refresh_lock_key(&encoded);
+            if scenario == "refresh" {
+                plugin
+                    .cache_introspection_claims(
+                        "replacement-token",
+                        &json!({"active":true,"iss":"https://idp.example.com","exp":now+3600}),
+                    )
+                    .await;
+                let mut refreshed = payload.clone();
+                refreshed.access_token = "replacement-token".into();
+                plugin.put_refresh_result(&lock_key, refreshed).await;
+            }
+            let flight = if scenario == "stale" {
+                plugin
+                    .jwks_provider
+                    .seed_stale_jwks(
+                        serde_json::from_value(json!({"keys":[{"kty":"oct","k":"c2VjcmV0","alg":"HS256"}]})).unwrap(),
+                    )
+                    .await;
+                Some(plugin.refresh_singleflight.get_or_create(&lock_key))
+            } else {
+                None
+            };
+            let held_guard = match &flight {
+                Some(flight) => Some(flight.lock().lock().await),
+                None => None,
+            };
+            let mut session = MockPluginSession::new();
+            session.expect_get_path().return_const("/".to_owned());
+            session.expect_get_query_param().returning(|_| None);
+            let mut headers = http::HeaderMap::new();
+            if scenario == "bearer" {
+                headers.insert(
+                    http::header::AUTHORIZATION,
+                    http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+                );
+            }
+            session.expect_request_header_map().return_const(headers);
+            let cookie = (!matches!(scenario, "bearer" | "pass")).then_some(encoded);
+            session.expect_get_cookie().returning(move |_| cookie.clone());
+            session.expect_set_request_header_value().returning(|_, _| Ok(()));
+            session.expect_remove_request_header().returning(|_| Ok(()));
+            session.expect_append_response_header().returning(|_, _| Ok(()));
+            session.expect_record_outcome().returning(|_, _| {});
+            session
+                .expect_remove_request_cookies()
+                .withf(|names| names == ["edgion_oidc_session", "edgion_oidc_state"])
+                .times(1)
+                .returning(move |_| Err(error));
+            session.expect_write_response_header().never();
+            session.expect_write_response_body().never();
+            let mut log = PluginLog::new("OpenidConnect");
+            let result = plugin.run_request(&mut session, &mut log).await;
+            drop(held_guard);
+            assert_eq!(
+                result,
+                PluginRunningResult::ErrResponse { status, body: None },
+                "{scenario}"
+            );
+            let entries = plugin_log_entries(&log);
+            let expected = match scenario {
+                "session" => Some("session token verified"),
+                "refresh" => Some("token refresh on expiry"),
+                "stale" => Some("token refresh wait timeout; stale token within leeway"),
+                "pass" => Some("no token; pass"),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                assert!(entries.iter().any(|entry| entry == expected), "{scenario}");
+            }
         }
     }
 }

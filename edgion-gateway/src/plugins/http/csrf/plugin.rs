@@ -15,7 +15,6 @@ use bytes::Bytes;
 use cookie::time::Duration;
 use cookie::{CookieBuilder, SameSite};
 
-use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::CsrfConfig;
@@ -103,7 +102,7 @@ impl RequestFilter for Csrf {
         };
 
         // 2. Get token from COOKIE
-        let Some(cookie_token) = cookie_value_ref(session.request_header_map(), &self.token_name) else {
+        let Some(cookie_token) = session.get_cookie_ref(&self.token_name) else {
             plugin_log.push("Deny missing token");
             return PluginRunningResult::ErrResponse {
                 status: 401,

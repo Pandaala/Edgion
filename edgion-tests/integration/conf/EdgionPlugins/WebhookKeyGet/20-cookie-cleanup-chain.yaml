@@ -1,0 +1,219 @@
+# Cookie cleanup must precede every webhook, mirror and main upstream export.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh20-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh20-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh20-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wh20-api-keys
+  namespace: edgion-default
+type: Opaque
+stringData:
+  keys.yaml: |
+    - key: "test-key-wh20-valid"
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh20-all
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh20-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/mirror/capture"
+      method:
+        template: "GET"
+      headers:
+        forwardAll: true
+        origin:
+          - name: x-trace-id
+        custom:
+          - name: x-wh20-stage
+            value: "all"
+          - name: x-cookie-raw
+            template: "${header:cookie}"
+          - name: x-cookie-keep
+            template: "${cookie:keep}"
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh20-origin
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh20-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/mirror/capture"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: x-trace-id
+          - name: Cookie
+        custom:
+          - name: x-wh20-stage
+            value: "origin"
+          - name: x-cookie-raw
+            template: "${header:cookie}"
+          - name: x-cookie-keep
+            template: "${cookie:keep}"
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh20-named
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh20-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/mirror/capture"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: x-trace-id
+        custom:
+          - name: x-wh20-stage
+            value: "named"
+          - name: x-cookie-raw
+            template: "${header:cookie}"
+          - name: x-cookie-keep
+            template: "${cookie:keep}"
+      cookies:
+        origin:
+          - name: keep
+          - name: other
+          - name: token
+            presence: skipIfMissing
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh20-cookie-cleanup
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: KeyAuth
+      config:
+        keySources:
+          - type: cookie
+            name: token
+        hideCredentials: true
+        keyField: key
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: wh20-api-keys
+                namespace: edgion-default
+    - type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh20_all
+            webhookRef: edgion-default/wh20-all
+            extract:
+              source: header
+              name: x-captured-body-sha256
+          - name: wh20_origin
+            webhookRef: edgion-default/wh20-origin
+            extract:
+              source: header
+              name: x-captured-body-sha256
+          - name: wh20_named
+            webhookRef: edgion-default/wh20-named
+            extract:
+              source: header
+              name: x-captured-body-sha256
+    - type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        maxConcurrent: 100
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh20-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames: ["wh20.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /mirror/capture
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh20-cookie-cleanup
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

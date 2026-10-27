@@ -288,3 +288,10 @@ generation 的规范 outbound client 消费；
 - [JwtAuth 插件](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT 令牌认证
 - [ForwardAuth 插件](forward-auth.md) - 外部鉴权插件
 - [JWE Decrypt 插件](jwe-decrypt.md) - JWE 解密认证
+
+### 请求 Cookie 清理失败
+
+所有继续转发的路径（包括未认证 Pass）都会原子删除 Gateway 的会话和状态 Cookie。
+Cookie 字段包含非 UTF-8 字节时清理失败并返回 HTTP 400；内部更新失败返回 HTTP 500，
+均不会转发未清理的原始请求。成功清理保留应用 Cookie 的名称和值，但可能规范化分隔符并合并字段。
+没有匹配的 Gateway Cookie 时，保留原始字段。

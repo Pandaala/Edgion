@@ -54,13 +54,14 @@ security feature.
   projection must not send the old credential-bearing target. No-match removal
   preserves original syntax and does not render. This is the Query portion of
   auth-01; Cookie survivor-storage evaluation remains independent.
-- Cookie: collect *every* `Cookie` header line via `session.request_headers()`
-  (HTTP/2 may split cookies across multiple fields), drop pairs whose raw
-  trimmed key matches `name` (mirrors `get_cookie`'s raw-key, first-`=` match),
-  then `set_request_header("Cookie", survivors.join("; "))` — or
-  `remove_request_header("Cookie")` if none survive. Reading only the first
-  line + `set_request_header` (which is `insert_header` = replace-all) would
-  drop unrelated cookies carried on other `Cookie` field lines.
+- Cookie: delegate to `PluginSession::remove_request_cookies`, whose canonical
+  `request_cookie` planner inspects every field before publication. Exact raw,
+  case-sensitive names match; values split at the first equals sign. All selected
+  duplicates are removed. A match merges surviving trimmed segments with `; `;
+  no match leaves raw fields unchanged. An empty removal-name list performs no parsing.
+  Invalid UTF-8 anywhere during a nonempty removal request returns a fixed 400;
+  internal construction/publication failures return a fixed 500. Callers propagate
+  these through `ErrResponse`, preventing later plugins and proxying.
 
 **3. There is no `KeyGet::Webhook` arm to strip.**
 
@@ -110,21 +111,29 @@ Re-open only if:
 
 - `fr-auth2-02` — 2026-05-30 (fixed; retargeted 2026-08-23).
 
-## Transfer the merged Cookie buffer
+## Canonical Cookie ownership and measured representation
 
-The shared Cookie-strip path converts its owned merged String directly into
-HeaderValue, then passes that value through the private typed sensitive-header
-writer. The public string-based auth writer delegates to the same sensitivity
-boundary, so every write still marks the value sensitive before the session
-setter. All other auth callers retain their existing borrowed-string interface.
-Invalid header values and setter errors remain ignored by Cookie stripping;
-replacement/removal ordering and multi-line merging remain unchanged.
+Pingora's current HeaderMap remains authoritative. `PluginSessionHeaderExt::get_cookie_ref`
+and the owned getter use `request_cookie::lookup`; raw readers and outbound
+snapshots observe successful edits immediately. There is no pending Cookie render
+or production parsing cache. Unused cookies require no parsing or assembly.
+Lookup retains HeaderValue text eligibility and stops on an opaque field before
+its first valued match; editing accepts UTF-8 fields and rejects opaque bytes
+atomically. These deliberately distinct eligibility contracts are tested.
 
-The pinned http 1.5.0 owned conversion uses the same validation as from_str and
-transfers the buffer through bytes 1.12.1. The plan/conversion matrix checks the
-join result has capacity equal to length, valid bytes retain their original
-pointer, and conversion allocates zero calls/requested bytes. It also compares
-owned/borrowed validation for UTF-8, tabs and internal invalid controls. A typed
-writer test preserves pointer identity, sensitivity and setter error propagation.
-This removes the merged-cookie payload copy; planning, header-map mutation and
-the whole auth callback are not claimed to allocate zero times.
+The planner retains borrowed survivor metadata and allocates an exact output only
+when a name matches. It transfers the owned String into a sensitive HeaderValue;
+conversion tests verify validation parity and allocation/pointer behavior on real
+planner output. No-match removal cancels an existing deferred Cookie override when
+current fields exist, preventing a prior pending header write from resurrecting
+credentials. Absent fields retain deferred intent. An empty removal-name list is now an
+explicit no-op, including its deferred intent; a list containing an empty name
+is distinct and still parses and removes that name.
+
+Measured cache cold-read cost and two-pass matched-removal regressions rejected
+those alternatives. The single-pass Vec is an intentional measured tradeoff, not
+an eliminated intermediate allocation. See the request-cookie benchmark and
+`tasks/pending/request-cookie-management-verification.md` for measurement scope.
+Whole authentication, transport and network throughput are not established by
+these source-helper measurements. Re-evaluate representation only with cold reads,
+repeated reads, matched/no-match deletion and complete mutation costs.

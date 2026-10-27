@@ -245,7 +245,12 @@ async fn source_resolution_borrows_existing_values() {
         (
             LogExtSource::Cookie,
             "name",
-            crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, "name").unwrap(),
+            crate::request_cookie::lookup(
+                &session.req_header().headers,
+                "name",
+                crate::request_cookie::FieldScope::All,
+            )
+            .unwrap(),
         ),
         (LogExtSource::Query, "name", ctx.entry_query_param("name").unwrap()),
         (LogExtSource::Ctx, "name", ctx.get_ctx_var("name").unwrap()),

@@ -62,7 +62,11 @@ fn presence_policies_cover_missing_and_present_fields() {
                     let mut session = MockPluginSession::new();
                     setup_header_mocks(
                         &mut session,
-                        if present { &[("x-source", "private-value")] } else { &[] },
+                        if present {
+                            &[("x-source", "private-value"), ("cookie", "x-source=private-value")]
+                        } else {
+                            &[]
+                        },
                     );
                     session
                         .expect_get_query_param()
@@ -70,9 +74,6 @@ fn presence_policies_cover_missing_and_present_fields() {
                     session
                         .expect_get_query_param_ref()
                         .returning(move |_| present.then_some("private-value"));
-                    session
-                        .expect_get_cookie()
-                        .returning(move |_| present.then(|| "private-value".into()));
                     let mut diagnostics = OutboundRequestDiagnostics::default();
                     let result = compiled.build_request(&session, None, "http://example.test", None, &mut diagnostics);
                     assert_eq!(
@@ -1123,12 +1124,14 @@ fn origin_field_text_selection_preserves_first_value_and_decoded_query() {
 #[test]
 fn origin_header_and_query_values_borrow_session_storage() {
     let mut session = MockPluginSession::new();
-    setup_header_mocks(&mut session, &[("x-source", "private-value")]);
+    setup_header_mocks(
+        &mut session,
+        &[("x-source", "private-value"), ("cookie", "x-source=cookie-value")],
+    );
     session
         .expect_get_query_param_ref()
         .returning(|_| Some("decoded query"));
-    session.expect_get_cookie().returning(|_| Some("cookie-value".into()));
-    for kind in [FieldKind::Header, FieldKind::Query] {
+    for kind in [FieldKind::Header, FieldKind::Query, FieldKind::Cookie] {
         let fields = CompiledListFields {
             forward_all: false,
             origin: vec![CompiledOriginField {
@@ -1140,7 +1143,7 @@ fn origin_header_and_query_values_borrow_session_storage() {
         let expected = match kind {
             FieldKind::Header => session.header_str("x-source").unwrap(),
             FieldKind::Query => session.get_query_param_ref("x-source").unwrap(),
-            FieldKind::Cookie => unreachable!(),
+            FieldKind::Cookie => session.get_cookie_ref("x-source").unwrap(),
         };
         let mut output = Vec::new();
         collect_list_fields(
@@ -1158,7 +1161,8 @@ fn origin_header_and_query_values_borrow_session_storage() {
         assert_eq!(output[0].value, expected);
         assert!(output[0].sensitive);
     }
-    assert!(
-        matches!(get_session_field(&session, &FieldKind::Cookie, "session"), Some(Cow::Owned(value)) if value == "cookie-value")
-    );
+    assert!(matches!(
+        get_session_field(&session, &FieldKind::Cookie, "x-source"),
+        Some(Cow::Borrowed("cookie-value"))
+    ));
 }

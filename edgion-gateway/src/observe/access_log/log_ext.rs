@@ -280,9 +280,11 @@ fn resolve_field<'a>(
         // plugins and the `${query:...}` template already share, so the parse is
         // paid at most once per request.
         LogExtSource::Query => ctx.entry_query_param(&field.name),
-        LogExtSource::Cookie => {
-            crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, &field.name)
-        }
+        LogExtSource::Cookie => crate::request_cookie::lookup(
+            &session.req_header().headers,
+            &field.name,
+            crate::request_cookie::FieldScope::All,
+        ),
         LogExtSource::Ctx => ctx.get_ctx_var(&field.name),
         LogExtSource::RouteLabel => labels_meta().and_then(|m| m.get(&field.name).map(String::as_str)),
         LogExtSource::RouteAnnotation => annotations_meta().and_then(|m| m.get(&field.name).map(String::as_str)),

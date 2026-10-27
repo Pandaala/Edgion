@@ -13,10 +13,10 @@ fn named_session(value: Option<&'static str>) -> MockPluginSession {
     let mut headers = http::HeaderMap::new();
     if let Some(value) = &value {
         headers.insert("x", http::HeaderValue::from_str(value).unwrap());
+        headers.insert("cookie", http::HeaderValue::from_str(&format!("x={value}")).unwrap());
     }
     session.expect_request_header_map().return_const(headers);
     session.expect_get_query_param().return_const(value.clone());
-    session.expect_get_cookie().return_const(value.clone());
     session.expect_get_ctx_var().return_const(value.clone());
     session.expect_matched_route_meta().return_const(value);
     session
@@ -543,6 +543,7 @@ fn resolved_variables_borrow_existing_sources_until_rendered() {
         "secret-value".into(),
     )]));
     let sources = [
+        (TemplateVarType::Cookie, Some("x"), session.get_cookie_ref("x").unwrap()),
         (
             TemplateVarType::Header,
             Some("x"),
@@ -575,10 +576,12 @@ fn resolved_variables_borrow_existing_sources_until_rendered() {
         assert!(matches!(value, Cow::Borrowed(_)));
         assert_eq!(value.as_ptr(), expected.as_ptr());
         assert_eq!(value, expected);
-        assert_eq!(resolved.sensitive, matches!(kind, TemplateVarType::SecretRef));
+        assert_eq!(
+            resolved.sensitive,
+            matches!(kind, TemplateVarType::Cookie | TemplateVarType::SecretRef)
+        );
     }
     for kind in [
-        TemplateVarType::Cookie,
         TemplateVarType::Ctx,
         TemplateVarType::MatchedHttpRoute,
         TemplateVarType::MatchedGrpcRoute,

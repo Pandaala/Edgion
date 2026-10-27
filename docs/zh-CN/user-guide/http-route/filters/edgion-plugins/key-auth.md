@@ -306,3 +306,11 @@ stringData:
 - [Basic Auth](./basic-auth.md)
 - [JWT Auth](./jwt-auth.md)
 - [HMAC Auth](./hmac-auth.md)
+
+### Cookie 凭证清理
+
+启用 `hideCredentials: true` 后，Cookie 鉴权成功会删除所有 Cookie 头字段中同名的凭证。
+其他 Cookie 的名称和值保留，但分隔符可能规范化，多个字段可能合并。
+后续插件、Webhook 和上游请求读取修改后的头。清理遇到非 UTF-8 字节时返回 HTTP 400，
+内部更新失败时返回 HTTP 500；两种失败均不会继续转发未清理的请求。
+没有 Cookie 修改时，不会重新组装原始 Cookie 字段。

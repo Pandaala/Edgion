@@ -307,3 +307,12 @@ Every OpenID Connect outbound call — configured discovery and discovered JWKS,
 - [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT token authentication
 - [ForwardAuth Plugin](forward-auth.md) - External authentication plugin
 - [JWE Decrypt Plugin](jwe-decrypt.md) - JWE decryption authentication
+
+### Request Cookie cleanup failures
+
+Every path that continues upstream removes the Gateway session and state cookies
+atomically, including unauthenticated Pass. A non-UTF-8 Cookie field makes cleanup
+fail with HTTP 400; an internal update failure returns HTTP 500. The original
+unsanitized request is not forwarded. Application cookie names and values survive
+successful cleanup, though separators and field grouping may be normalized.
+No matching Gateway cookie leaves the raw fields unchanged.

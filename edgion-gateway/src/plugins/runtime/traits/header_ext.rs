@@ -24,6 +24,9 @@
 use super::session::PluginSession;
 
 pub trait PluginSessionHeaderExt {
+    /// Read the first eligible matching Cookie value from the current headers.
+    fn get_cookie_ref(&self, name: &str) -> Option<&str>;
+
     /// First value for `name`, dropping present-but-non-UTF-8 values.
     ///
     /// This is the allocation-free equivalent of
@@ -48,6 +51,11 @@ pub trait PluginSessionHeaderExt {
 }
 
 impl<T: PluginSession + ?Sized> PluginSessionHeaderExt for T {
+    #[inline]
+    fn get_cookie_ref(&self, name: &str) -> Option<&str> {
+        crate::request_cookie::lookup(self.request_header_map(), name, crate::request_cookie::FieldScope::All)
+    }
+
     #[inline]
     fn header_str(&self, name: &str) -> Option<&str> {
         self.request_header_map()

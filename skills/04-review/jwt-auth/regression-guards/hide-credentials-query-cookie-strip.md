@@ -24,11 +24,16 @@ plugins still call these helpers before claiming either source is forwarded.
 
 - Query stripping compares the percent-decoded parameter name but preserves
   every surviving pair verbatim. It updates only the query through
-  `PluginSession::set_request_query`, leaving raw-vs-normalized path selection
+  the canonical structured Query removal operation, leaving raw-vs-normalized path selection
   to the upstream stage.
 - Cookie stripping reads every `Cookie` field line, removes every matching
   cookie, and preserves unrelated cookies. This covers HTTP/2 requests where
   cookies may arrive in multiple fields.
+- Cookie cleanup is atomic and fallible: invalid UTF-8 in any field during
+  removal returns 400; internal mutation failures return 500 through the canonical
+  runtime error dispatcher. No later plugin or upstream request runs on failure.
+  No-match deletion preserves the raw fields; successful edits update the live
+  HeaderMap immediately for webhook, mirror and subsequent plugin readers.
 - Only the source that supplied the validated token is removed. A lower-priority
   query or cookie value is not treated as the authenticated credential when a
   header token won extraction priority.
@@ -45,7 +50,7 @@ plugins still call these helpers before claiming either source is forwarded.
 
 ## Re-evaluation triggers
 
-Re-open if `PluginSession::set_request_query` begins finalizing the URI, the
+Re-open if the canonical structured Query removal operation begins finalizing the URI, the
 upstream stage stops reading the live rewritten query, or Cookie replacement no
 longer removes all old field lines.
 

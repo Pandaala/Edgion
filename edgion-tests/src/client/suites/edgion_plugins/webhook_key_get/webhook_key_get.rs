@@ -1089,6 +1089,156 @@ impl WebhookKeyGetTestSuite {
     }
 }
 
+impl WebhookKeyGetTestSuite {
+    fn test_cookie_cleanup_chain() -> TestCase {
+        TestCase::new(
+            "cookie_cleanup_chain",
+            "Cookie cleanup precedes webhook snapshots, mirror and upstream; opaque cleanup rejects dispatch",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match verify_cookie_cleanup_chain(&ctx).await {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "All five exports sanitized; opaque cleanup rejected without downstream captures"
+                                .to_string(),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+}
+
+async fn cookie_chain_captures(ctx: &TestContext, marker: &str) -> Result<Vec<serde_json::Value>, String> {
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true")
+        && std::env::var("EDGION_TEST_BACKEND_ENDPOINT_IPS")
+            .ok()
+            .is_none_or(|value| value.split(',').all(|host| host.trim().is_empty()))
+    {
+        return Err("Cookie capture verification requires the complete backend Pod endpoint inventory".into());
+    }
+    let trace = crate::access_log_client::trace_id_for_marker(marker);
+    let mut hosts = crate::framework::test_backend_hosts(ctx);
+    hosts.sort();
+    hosts.dedup();
+    let mut captures = Vec::new();
+    for host in hosts {
+        let host = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{host}]")
+        } else {
+            host
+        };
+        let response = ctx
+            .http_client
+            .get(format!("http://{host}:30001/mirror/query/{trace}"))
+            .send()
+            .await
+            .map_err(|_| "capture query transport failed".to_string())?;
+        if !response.status().is_success() {
+            return Err("capture query status failed".into());
+        }
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| "capture query JSON failed".to_string())?;
+        let entries = body["captures"].as_array().ok_or("capture query schema failed")?;
+        captures.extend(entries.iter().cloned());
+    }
+    Ok(captures)
+}
+
+async fn verify_cookie_cleanup_chain(ctx: &TestContext) -> Result<(), String> {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let marker = format!("wh20-ok-{}", uuid::Uuid::new_v4());
+    let response = ctx
+        .http_client
+        .get(gw_url(ctx, "/mirror/capture"))
+        .header("host", "wh20.example.com")
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
+        .header("cookie", "token=test-key-wh20-valid; keep=one")
+        .header("cookie", "token=duplicate; other=two")
+        .send()
+        .await
+        .map_err(|_| "Cookie chain request transport failed".to_string())?;
+    if response.status().as_u16() != 200 {
+        return Err(format!("Cookie chain expected 200, got {}", response.status()));
+    }
+    let mut captures = Vec::new();
+    for _ in 0..30 {
+        captures = cookie_chain_captures(ctx, &marker).await?;
+        if captures.len() >= 5 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if captures.len() != 5 {
+        return Err(format!("Expected five Cookie exports, got {}", captures.len()));
+    }
+    let mut stages = std::collections::HashSet::new();
+    let mut mirrors = 0;
+    let mut mains = 0;
+    for capture in &captures {
+        let headers = &capture["headers"];
+        let cookie = headers["cookie"].as_str().ok_or("Cookie survivor missing at export")?;
+        if cookie.contains("token") || cookie.contains("test-key") || cookie.contains("duplicate") {
+            return Err("Credential reached an outbound export".into());
+        }
+        if !cookie.contains("keep=one") || !cookie.contains("other=two") {
+            return Err("Cookie survivor lost at export".into());
+        }
+        if let Some(stage) = headers["x-wh20-stage"].as_str() {
+            stages.insert(stage.to_string());
+            if headers["x-cookie-raw"].as_str() != Some("keep=one; other=two")
+                || headers["x-cookie-keep"].as_str() != Some("one")
+            {
+                return Err("Webhook raw/named template saw stale Cookie state".into());
+            }
+        } else if headers["x-mirror"].as_str() == Some("true") {
+            mirrors += 1;
+        } else {
+            mains += 1;
+        }
+    }
+    if stages
+        != ["all".to_string(), "origin".to_string(), "named".to_string()]
+            .into_iter()
+            .collect()
+        || mirrors != 1
+        || mains != 1
+    {
+        return Err("Missing webhook, mirror or main export identity".into());
+    }
+    let marker = format!("wh20-opaque-{}", uuid::Uuid::new_v4());
+    let mut stream = tokio::net::TcpStream::connect((ctx.target_host.as_str(), GW_PORT))
+        .await
+        .map_err(|_| "Opaque request connection failed".to_string())?;
+    let mut wire = format!("GET /mirror/capture HTTP/1.1\r\nHost: wh20.example.com\r\nConnection: close\r\ntraceparent: {}\r\nCookie: token=test-key-wh20-valid\r\nCookie: opaque=", crate::access_log_client::traceparent_for_marker(&marker)).into_bytes();
+    wire.extend_from_slice(b"\xff\r\n\r\n");
+    stream
+        .write_all(&wire)
+        .await
+        .map_err(|_| "Opaque request write failed".to_string())?;
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .map_err(|_| "Opaque request response timed out".to_string())?
+        .map_err(|_| "Opaque response read failed".to_string())?;
+    if !response.starts_with(b"HTTP/1.1 400 ") {
+        return Err("Opaque cleanup did not return fixed HTTP 400".into());
+    }
+    // Observe the entire window: the first empty query does not prove no dispatch.
+    for _ in 0..30 {
+        if !cookie_chain_captures(ctx, &marker).await?.is_empty() {
+            return Err("Cleanup failure dispatched a downstream exchange".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 impl TestSuite for WebhookKeyGetTestSuite {
     fn name(&self) -> &str {
         "WebhookKeyGet Plugin Tests"
@@ -1114,6 +1264,7 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_url_origin_only_rejected(),
             Self::test_json_body(),
             Self::test_webhook_then_key_auth(),
+            Self::test_cookie_cleanup_chain(),
         ]
     }
 }

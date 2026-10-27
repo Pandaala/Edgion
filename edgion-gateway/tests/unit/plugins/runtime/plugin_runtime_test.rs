@@ -3819,3 +3819,98 @@ async fn wasm_attached_bundle_retains_body_metadata_and_skipped_companion_is_ine
         PluginRunningResult::GoodNext
     );
 }
+
+struct CookieCleanupContinuationWitness;
+
+#[async_trait]
+impl RequestFilter for CookieCleanupContinuationWitness {
+    fn name(&self) -> &str {
+        "CookieCleanupContinuationWitness"
+    }
+    async fn run_request(&self, _session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
+        panic!("a Cookie cleanup rejection must stop the plugin chain");
+    }
+}
+
+#[tokio::test]
+async fn cookie_cleanup_errors_stop_runtime_and_use_canonical_http_grpc_replies() {
+    use crate::plugins::http::key_auth::KeyAuth;
+    use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::KeyMetadata;
+    use tokio::io::AsyncReadExt;
+    for grpc in [false, true] {
+        for status in [400, 500] {
+            let (mut session, mut client) = plugin_test_session().await;
+            session
+                .req_header_mut()
+                .append_header("cookie", "token=accepted-cookie-key")
+                .unwrap();
+            session
+                .req_header_mut()
+                .append_header("cookie", http::HeaderValue::from_bytes(b"opaque=\xff").unwrap())
+                .unwrap();
+            let original = session.req_header().headers.clone();
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.is_grpc_request = grpc;
+            let mut runtime = PluginRuntime::new();
+            if status == 400 {
+                let config = KeyAuthConfig {
+                    key_sources: vec![KeyGet::Cookie { name: "token".into() }],
+                    hide_credentials: true,
+                    resolved_keys: Some(std::collections::HashMap::from([(
+                        "accepted-cookie-key".into(),
+                        KeyMetadata {
+                            headers: Default::default(),
+                            group: "test".into(),
+                        },
+                    )])),
+                    ..Default::default()
+                };
+                runtime.add_request_filter(KeyAuth::create(&config));
+            } else {
+                // Actual auth-plugin propagation of Internal is tested in each
+                // auth suite; here exercise its real shared runtime response.
+                runtime.add_request_filter(Box::new(FixedResultFilter(
+                    crate::plugins::http::common::auth_common::cookie_cleanup_failure(
+                        crate::request_cookie::CookieEditError::Internal,
+                    ),
+                )));
+            }
+            runtime.add_request_filter(Box::new(CookieCleanupContinuationWitness));
+            runtime.run_request_plugins(&mut session, &mut ctx).await;
+            assert!(ctx.plugin_terminated());
+            assert_eq!(ctx.final_downstream_status(), Some(if grpc { 200 } else { status }));
+            assert_eq!(
+                session
+                    .req_header()
+                    .headers
+                    .get_all("cookie")
+                    .iter()
+                    .collect::<Vec<_>>(),
+                original.get_all("cookie").iter().collect::<Vec<_>>()
+            );
+            let wire = tokio::time::timeout(Duration::from_secs(1), async {
+                let mut wire = Vec::new();
+                while !wire.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let mut chunk = [0u8; 1024];
+                    let count = client.read(&mut chunk).await.unwrap();
+                    assert_ne!(count, 0);
+                    wire.extend_from_slice(&chunk[..count]);
+                    assert!(wire.len() <= 8192);
+                }
+                wire
+            })
+            .await
+            .unwrap();
+            let text = String::from_utf8(wire).unwrap().to_ascii_lowercase();
+            assert!(text.starts_with(&format!("http/1.1 {} ", if grpc { 200 } else { status })));
+            if grpc {
+                let code = http_to_grpc_status(status).0;
+                assert_eq!(ctx.request_info.grpc_status(), Some(code));
+                assert!(text.contains(&format!("grpc-status: {code}")));
+            }
+            assert!(!text.contains("accepted-cookie-key"));
+            assert!(!text.contains("opaque"));
+        }
+    }
+}

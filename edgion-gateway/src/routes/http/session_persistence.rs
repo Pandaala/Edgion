@@ -10,7 +10,6 @@ use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersist
 use pingora_proxy::Session;
 use sha2::{Digest, Sha256};
 
-use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
 pub(crate) struct StickyCandidate<'a> {
@@ -90,7 +89,11 @@ pub fn get_persistence_type(sp: &SessionPersistence) -> SessionPersistenceType {
 
 /// Extract a session token from all Cookie fields using canonical first-match semantics.
 pub fn extract_token_from_cookie<'a>(session: &'a Session, cookie_name: &str) -> Option<&'a str> {
-    cookie_value_ref(&session.req_header().headers, cookie_name)
+    crate::request_cookie::lookup(
+        &session.req_header().headers,
+        cookie_name,
+        crate::request_cookie::FieldScope::All,
+    )
 }
 
 /// Extract a session token from a custom header.

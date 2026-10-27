@@ -138,7 +138,11 @@ impl KeyAuth {
     }
 
     /// Hide credentials from upstream request based on the key source used
-    fn hide_credentials(&self, session: &mut dyn PluginSession, used_source: &KeyGet) {
+    fn hide_credentials(
+        &self,
+        session: &mut dyn PluginSession,
+        used_source: &KeyGet,
+    ) -> Result<(), crate::request_cookie::CookieEditError> {
         match used_source {
             KeyGet::Header { name } => {
                 let _ = session.remove_request_header(name);
@@ -150,10 +154,11 @@ impl KeyAuth {
                 strip_query_param(session, name);
             }
             KeyGet::Cookie { name } => {
-                strip_cookie(session, name);
+                strip_cookie(session, name)?;
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Return 401 Unauthorized response
@@ -219,7 +224,9 @@ impl RequestFilter for KeyAuth {
 
         // 4. Hide credentials if configured
         if self.hide_credentials {
-            self.hide_credentials(session, used_source);
+            if let Err(error) = self.hide_credentials(session, used_source) {
+                return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
+            }
         }
 
         PluginRunningResult::GoodNext

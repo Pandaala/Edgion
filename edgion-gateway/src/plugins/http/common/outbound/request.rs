@@ -666,7 +666,7 @@ fn get_session_field<'a>(session: &'a dyn PluginSession, kind: &FieldKind, name:
     match kind {
         FieldKind::Header => session.header_str(name).map(Cow::Borrowed),
         FieldKind::Query => session.get_query_param_ref(name).map(Cow::Borrowed),
-        FieldKind::Cookie => session.get_cookie(name).map(Cow::Owned),
+        FieldKind::Cookie => session.get_cookie_ref(name).map(Cow::Borrowed),
     }
 }
 

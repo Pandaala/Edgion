@@ -237,3 +237,8 @@ harness = false
 name = "wasm_stream_transport"
 path = "tests/wasm_stream_transport.rs"
 required-features = ["test-util"]
+
+[[bench]]
+name = "request_cookie"
+path = "tests/benches/request_cookie.rs"
+harness = false

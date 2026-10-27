@@ -1,6 +1,5 @@
 //! Shared authentication utilities for Edgion request auth plugins.
 
-use crate::plugins::runtime::PluginSessionHeaderExt;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use edgion_resources::resources::edgion_plugins::ClaimHeaderProjectionPlan;
@@ -66,95 +65,32 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
     let _ = session.remove_request_query_param(name);
 }
 
-/// Remove a named cookie from every forwarded `Cookie` header line.
-///
-/// HTTP/2 may split cookies across multiple fields, so all lines are collected
-/// before the survivors are written back as one field — or the header is removed
-/// entirely if none survive. Re-serializing all lines into one avoids the data
-/// loss that a single-line read + replace-all write would cause when the request
-/// carries multiple `Cookie` fields.
-///
-/// Cookie-name matching is a raw key comparison on the trimmed `name=value`
-/// pair (split on the first `=`), mirroring `get_cookie`. The asymmetry with
-/// [`strip_query_param`] — decoded key there, raw key here — is deliberate:
-/// each side matches the extractor it undoes.
-///
-/// Assumes `PluginSession::set_request_header_value` has replace-all-lines semantics
-/// (today it does — the adapter routes it through `insert_header`). Were it to
-/// become append semantics, every surviving cookie would be duplicated.
-pub fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
-    strip_cookies(session, std::slice::from_ref(&name));
+/// Remove every occurrence of one raw Cookie name from current headers.
+pub fn strip_cookie(
+    session: &mut dyn PluginSession,
+    name: &str,
+) -> Result<crate::request_cookie::CookieEditOutcome, crate::request_cookie::CookieEditError> {
+    strip_cookies(session, std::slice::from_ref(&name))
 }
 
-/// Remove every cookie named in `names` in a **single** pass over the request's
-/// `Cookie` lines, followed by a single header rewrite.
-///
-/// Calling [`strip_cookie`] once per name would re-scan and re-write the header
-/// for each one; the end state is identical, so callers stripping more than one
-/// cookie should use this.
-pub fn strip_cookies(session: &mut dyn PluginSession, names: &[&str]) {
-    // Read borrowed, decide, then mutate: the immutable borrow ends with the
-    // plan, which owns its result.
-    let plan = plan_cookie_strip(
-        session
-            .header_all_bytes("cookie")
-            .filter_map(|value| std::str::from_utf8(value).ok()),
-        names,
-    );
-
-    match plan {
-        CookieStripPlan::Absent => {}
-        CookieStripPlan::RemoveHeader => {
-            let _ = session.remove_request_header("Cookie");
-        }
-        CookieStripPlan::Replace(value) => {
-            if let Ok(value) = http::HeaderValue::try_from(value) {
-                let _ = set_sensitive_request_header_value(session, "Cookie", value);
-            }
-        }
-    }
+/// Remove several Cookie names with one validated synchronous publication.
+pub fn strip_cookies(
+    session: &mut dyn PluginSession,
+    names: &[&str],
+) -> Result<crate::request_cookie::CookieEditOutcome, crate::request_cookie::CookieEditError> {
+    session.remove_request_cookies(names)
 }
 
-/// What [`strip_cookies`] should do to the `Cookie` header.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CookieStripPlan {
-    /// The request carried no `Cookie` line; nothing to do.
-    Absent,
-    /// Every pair was stripped; drop the header.
-    RemoveHeader,
-    /// Rewrite the header to this merged value.
-    Replace(String),
-}
-
-/// Pure cookie-strip decision over the request's `Cookie` header lines.
-///
-/// Split out from [`strip_cookies`] so the parsing and merging rules are covered
-/// by ordinary unit tests instead of through a session mock. Multiple `Cookie`
-/// lines are merged into one, matching the single rewrite the caller performs.
-pub(crate) fn plan_cookie_strip<'a>(cookie_lines: impl Iterator<Item = &'a str>, names: &[&str]) -> CookieStripPlan {
-    let mut survivors: Vec<&str> = Vec::new();
-    let mut saw_cookie = false;
-
-    for line in cookie_lines {
-        saw_cookie = true;
-        for pair in line.split(';') {
-            let trimmed = pair.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let key = trimmed.split('=').next().unwrap_or("");
-            if !names.contains(&key) {
-                survivors.push(trimmed);
-            }
-        }
-    }
-
-    if !saw_cookie {
-        CookieStripPlan::Absent
-    } else if survivors.is_empty() {
-        CookieStripPlan::RemoveHeader
-    } else {
-        CookieStripPlan::Replace(survivors.join("; "))
+/// Use the canonical static plugin-failure path; never emit credential details.
+pub(crate) fn cookie_cleanup_failure(
+    error: crate::request_cookie::CookieEditError,
+) -> edgion_resources::filters::PluginRunningResult {
+    edgion_resources::filters::PluginRunningResult::ErrResponse {
+        status: match error {
+            crate::request_cookie::CookieEditError::Unsanitizable => 400,
+            crate::request_cookie::CookieEditError::Internal => 500,
+        },
+        body: None,
     }
 }
 
