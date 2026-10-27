@@ -201,3 +201,42 @@ fn response_factory_rejects_request_body_mutation() {
 fn response_factory_allows_cached_request_body_reads() {
     assert!(DslPlugin::from_config_response(&config("let found = req.body.contains(\"x\")")).is_some());
 }
+
+#[tokio::test]
+async fn body_capacity_exhaustion_overrides_dsl_error_policy() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::{BodyOperationError, BodyReadError};
+    use edgion_resources::EdgionErrorCode;
+
+    for policy in [
+        DslErrorPolicy::Ignore,
+        DslErrorPolicy::DenyWith {
+            status: 418,
+            body: None,
+        },
+    ] {
+        let mut cfg = config("req.body.append(\"x\")\nreturn next()");
+        cfg.error_policy = Some(policy);
+        let plugin = DslPlugin::from_config(&cfg).unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_declares_body().return_const(Some(true));
+        session.expect_request_body_available_len().return_const(Ok(0));
+        session
+            .expect_request_body_append()
+            .returning(|_| Err(BodyOperationError::Body(BodyReadError::CapacityExceeded)));
+        session
+            .expect_record_error()
+            .withf(|code| *code == EdgionErrorCode::BodyCaptureCapacityExceeded)
+            .times(1)
+            .returning(|_| ());
+        session.expect_record_outcome().returning(|_, _| ());
+        let result = plugin.run_request(&mut session, &mut PluginLog::new("test")).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 503,
+                body: None
+            }
+        );
+    }
+}

@@ -1308,6 +1308,15 @@ pub async fn execute_safe(
             running_result
         }
         Ok(Err(runtime_err)) => {
+            if matches!(&runtime_err, RuntimeError::BodyCapacityExceeded) {
+                session.record_error(edgion_resources::EdgionErrorCode::BodyCaptureCapacityExceeded);
+                log.push_err("body-capacity-exhausted");
+                session.record_outcome(DyeOutcome::FailClose, "request-body-capacity-exhausted");
+                return PluginRunningResult::ErrResponse {
+                    status: 503,
+                    body: None,
+                };
+            }
             if matches!(&runtime_err, RuntimeError::BodyAccess { .. }) {
                 log.push_err("request body access error");
                 session.record_outcome(DyeOutcome::FailClose, "request-body-access-error");
@@ -1334,7 +1343,7 @@ pub async fn execute_safe(
                 RuntimeError::JsonLimitExceeded { .. } => "JSON limit exceeded",
                 RuntimeError::XmlLimitExceeded { .. } => "XML limit exceeded",
                 RuntimeError::ApiError { .. } => "api error",
-                RuntimeError::BodyAccess { .. } => unreachable!("handled above"),
+                RuntimeError::BodyAccess { .. } | RuntimeError::BodyCapacityExceeded => unreachable!("handled above"),
                 RuntimeError::RegexError { .. } => "regex error",
                 RuntimeError::Internal { .. } => "internal error",
             };

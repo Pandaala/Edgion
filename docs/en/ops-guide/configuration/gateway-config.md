@@ -573,3 +573,34 @@ conf_sync_security:
 - [GeoIP Restriction](../gateway/geoip.md)
 - [Access Log Format](../observability/access-log.md)
 - [Working Directory Behavior](../../dev-guide/work-directory.md)
+
+## Process-wide request-body storage admission
+
+The startup-only `gateway.request_body_budget` settings apply to all listeners and
+GatewayClasses in one process. They are independent of the hot-reloaded
+`EdgionGatewayConfig.spec.requestBody` per-request policy.
+
+```yaml
+gateway:
+  request_body_budget:
+    memory_limit: 256MiB
+    disk_limit: 2GiB
+    max_captures: 1024
+    max_files: 1024
+```
+
+All values must be positive; invalid sizes and unknown fields abort startup.
+Changing these settings requires a restart. Memory limits count storage-owned
+payload capacities, including materialized copies and retained replay/snapshot
+bytes. Disk limits count reserved spill-file bytes; `max_files` counts open spill
+files. `max_captures` counts admitted captures until their last storage, reader or
+exported payload owner is released. These are safety defaults, not a total process
+heap/RSS or filesystem-space guarantee: transport buffers, plugin parsing/scanner
+outputs, metadata, allocator overhead and OS page cache are outside the byte limits.
+Retained historical snapshots can add metadata, even within one capture.
+
+A request that cannot reserve capacity fails immediately with HTTP 503 and the
+access-log diagnostic `BodyCaptureCapacityExceeded`; there is no capacity wait
+queue. Per-request body limits still return 413. Existing storage I/O concurrency
+and timeout limits also remain in force. An already detached best-effort request
+mirror stops its own copy on capacity exhaustion without changing the main reply.

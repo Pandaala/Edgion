@@ -15,8 +15,10 @@ use std::sync::Arc;
 use super::attached::{AttachedExtProc, OverridePhase};
 use super::client::ExtProcClient;
 use super::mutation;
+use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponse};
+use crate::request_body::BodyReadError;
 use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HttpBody,
     HttpHeaders, ImmediateResponse, ProcessingRequest,
@@ -346,7 +348,17 @@ impl ExtProc {
                     Some(body_mutation::Mutation::ClearBody(false)) | None => None,
                 };
                 if let Some(body) = body {
-                    if session.overwrite_request_body(body).await.is_err() {
+                    if let Err(error) = session.overwrite_request_body(body).await {
+                        if error == BodyReadError::CapacityExceeded {
+                            record_body_read_error_status(session, &error);
+                            if let Some(owner) = owner {
+                                owner.mark_terminal("fail-close", "body-capacity-exhausted");
+                            }
+                            return Err(PluginRunningResult::ErrResponse {
+                                status: 503,
+                                body: None,
+                            });
+                        }
                         return Err(match owner {
                             Some(owner) => self.fail_request_owner(owner, session, log, "body mutation failed", None),
                             None => self.fail_mode(session, log, "body mutation failed", None),
@@ -738,6 +750,14 @@ impl RequestFilter for ExtProc {
         let body = if send_body {
             match session.read_request_body(None).await {
                 Ok(body) => Some(body),
+                Err(error @ BodyReadError::CapacityExceeded) => {
+                    record_body_read_error_status(session, &error);
+                    owner.mark_terminal("fail-close", "body-capacity-exhausted");
+                    return PluginRunningResult::ErrResponse {
+                        status: 503,
+                        body: None,
+                    };
+                }
                 Err(_) => return self.fail_request_owner(&owner, session, log, "body unavailable", None),
             }
         } else {

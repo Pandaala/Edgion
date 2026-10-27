@@ -108,6 +108,7 @@ pub(crate) fn record_body_read_error_status(session: &mut dyn PluginSession, err
         BodyReadError::Timeout => EdgionErrorCode::BodyReadTimeout,
         BodyReadError::Incomplete => EdgionErrorCode::BodyReadAborted,
         BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+        BodyReadError::CapacityExceeded => EdgionErrorCode::BodyCaptureCapacityExceeded,
         BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
         BodyReadError::Unimplemented => EdgionErrorCode::BodyReadUnimplemented,
         BodyReadError::NotBuffered => return,
@@ -297,6 +298,15 @@ fn body_read_failure_result_for_mode(
         log.push_err("body-buffer-limit");
         return PluginRunningResult::ErrResponse {
             status: 413,
+            body: None,
+        };
+    }
+
+    if matches!(err, BodyReadError::CapacityExceeded) {
+        record_body_read_error_status(session, err);
+        log.push_err("body-capacity-exhausted");
+        return PluginRunningResult::ErrResponse {
+            status: 503,
             body: None,
         };
     }

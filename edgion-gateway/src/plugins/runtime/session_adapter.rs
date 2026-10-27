@@ -127,6 +127,10 @@ async fn capture_request_body_core_with_consumer(
                 return Err(match err.etype() {
                     pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
                     pingora_core::ErrorType::HTTPStatus(413) => reject_over_limit_request_body(downstream, cap),
+                    pingora_core::ErrorType::HTTPStatus(503) => {
+                        disable_h1_reuse_after_capture_failure(downstream);
+                        BodyReadError::CapacityExceeded
+                    }
                     // Gateway-local capture failure (spill-file IO, capture
                     // poisoned mid-chunk). Kept apart from the client-caused
                     // `Incomplete` so the access log can alert on it.
@@ -224,6 +228,7 @@ async fn capture_request_body_prefix_core(
         return Err(match error.etype() {
             pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
             pingora_core::ErrorType::HTTPStatus(413) => BodyReadError::BufferLimitExceeded { limit: cap },
+            pingora_core::ErrorType::HTTPStatus(503) => BodyReadError::CapacityExceeded,
             pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
             _ => BodyReadError::Incomplete,
         });
@@ -645,7 +650,10 @@ impl<'a> PingoraSessionAdapter<'a> {
                 .min(self.ctx.request_body_config.capture_limit()),
             self.ctx.request_body_config.storage_operation_timeout,
         );
-        storage.finish().await.map_err(|_| BodyReadError::Incomplete)?;
+        storage.finish().await.map_err(|error| match error.etype() {
+            pingora_core::ErrorType::HTTPStatus(503) => BodyReadError::CapacityExceeded,
+            _ => BodyReadError::Incomplete,
+        })?;
         self.inner
             .set_bodyless_request_replay_buffer(Box::new(storage))
             .map_err(|_| BodyReadError::Incomplete)?;

@@ -380,7 +380,14 @@ impl ProxyRewrite {
         let body_len = session.request_body_available_len(known_bodyless).map_err(|error| {
             record_body_read_error_status(session, &error);
             plugin_log.push_err("body length unavailable");
-            Self::reject(500, None)
+            Self::reject(
+                if error == BodyReadError::CapacityExceeded {
+                    503
+                } else {
+                    500
+                },
+                None,
+            )
         })?;
         if body_len > self.json_body_limit {
             session.record_error(EdgionErrorCode::BodyReadTooLarge);
@@ -391,6 +398,7 @@ impl ProxyRewrite {
         let body = session.read_request_body(None).await.map_err(|error| {
             record_body_read_error_status(session, &error);
             match error {
+                BodyReadError::CapacityExceeded => Self::reject(503, None),
                 BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                     plugin_log.push("deny body too large");
                     Self::reject(413, None)
@@ -474,6 +482,7 @@ impl ProxyRewrite {
             .map_err(|error| {
                 record_body_read_error_status(session, &error);
                 match error {
+                    BodyReadError::CapacityExceeded => Self::reject(503, None),
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                         plugin_log.push("deny mutation size");
                         Self::reject(413, None)

@@ -5,6 +5,7 @@
 //! only; proxied upstream responses remain streaming-only.
 
 mod body_scanners;
+pub mod budget;
 pub mod config;
 mod contracts;
 pub(crate) mod observer;

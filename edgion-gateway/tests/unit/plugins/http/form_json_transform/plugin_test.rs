@@ -746,3 +746,14 @@ fn form_encoding_runs_preserve_bytes_and_output_refusal() {
         }
     }
 }
+
+#[tokio::test]
+async fn capacity_read_failure_records_once_and_returns_503() {
+    assert_read_failure(
+        BodyReadError::CapacityExceeded,
+        Some(EdgionErrorCode::BodyCaptureCapacityExceeded),
+        503,
+        "",
+    )
+    .await;
+}

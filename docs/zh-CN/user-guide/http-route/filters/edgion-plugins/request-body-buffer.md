@@ -37,3 +37,8 @@ spec:
 DSL 将缓存视为 opaque `req.body` 值。`byte_len()`、`contains()`、`matches()`、`sha256()` 和 `json_get()` 等方法无需完整复制成字符串即可检查请求体；只有 `read(offset, max_bytes)` 会为所请求的结果创建有界字符串。无论缓存位于内存还是已溢写到磁盘，所有方法的行为都相同。
 
 需要完整请求 body 的 Wasm 模块通常应放在 `requestPlugins` 并导出 `proxy_on_request_body`；响应阶段的 Wasm 宿主阶段不会暴露这份请求 body 缓存。
+
+请求体捕获及仍被引用的正文共享启动配置
+[`gateway.request_body_budget`](../../../../ops-guide/configuration/gateway-config.md#进程级请求体存储预算)
+的进程级额度。额度不足始终返回 HTTP 503，即使 DSL 或 Wasm 配置为忽略普通错误也不例外。
+它与单请求超限的 413、存储 I/O 故障的 500 分别处理。

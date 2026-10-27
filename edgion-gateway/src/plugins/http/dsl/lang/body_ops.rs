@@ -11,8 +11,8 @@ use bytes::Bytes;
 
 use crate::plugins::runtime::PluginSession;
 use crate::request_body::{
-    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, HmacSha256Scanner,
-    Md5Scanner, RawBodyScanner,
+    BodyOperationError, BodyReadError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult,
+    HmacSha256Scanner, Md5Scanner, RawBodyScanner,
 };
 
 use super::super::runtime::DslRuntime;
@@ -30,8 +30,18 @@ pub(crate) fn body_access_error(message: impl Into<String>) -> RuntimeError {
     }
 }
 
+pub(crate) fn map_body_read_error(error: BodyReadError) -> RuntimeError {
+    match error {
+        BodyReadError::CapacityExceeded => RuntimeError::BodyCapacityExceeded,
+        _ => body_access_error(error.to_string()),
+    }
+}
+
 pub(crate) fn map_body_error(error: BodyOperationError) -> RuntimeError {
-    body_access_error(error.to_string())
+    match error {
+        BodyOperationError::Body(error) => map_body_read_error(error),
+        _ => body_access_error(error.to_string()),
+    }
 }
 
 pub(crate) fn expect_body(value: Value, operation: &'static str) -> Result<(), RuntimeError> {
@@ -124,7 +134,7 @@ impl<'a> DslBodyOps<'a> {
         let known_bodyless = self.session.declares_body() == Some(false);
         self.session
             .request_body_available_len(known_bodyless)
-            .map_err(|error| body_access_error(error.to_string()))
+            .map_err(map_body_read_error)
     }
 
     pub(crate) async fn read_text_range(&mut self, offset: u64, max_bytes: u64) -> Result<String, RuntimeError> {

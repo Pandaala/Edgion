@@ -1871,3 +1871,36 @@ fn callout_deadline_preserves_absolute_grpc_bound_and_unlimited_streams() {
     ctx.request_info.set_grpc_client_deadline(deadline);
     assert_eq!(request_deadline(&ctx), Some(tokio::time::Instant::from_std(deadline)));
 }
+
+#[tokio::test]
+async fn request_body_capacity_exhaustion_cannot_fail_open() {
+    for mutation in [false, true] {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
+        let plugin = actual_plugin(&config_for(f.path(), true));
+        plugin.runtime.get_or_load().await.expect("body fixture loads");
+        let mut session = body_mock(if mutation {
+            Ok(bytes::Bytes::from_static(b"abcdef"))
+        } else {
+            Err(BodyReadError::CapacityExceeded)
+        });
+        if mutation {
+            session
+                .expect_overwrite_request_body()
+                .times(1)
+                .returning(|_| Err(BodyReadError::CapacityExceeded));
+        }
+        session.expect_set_request_header().times(0);
+        session
+            .expect_record_error()
+            .withf(|code| *code == edgion_resources::EdgionErrorCode::BodyCaptureCapacityExceeded)
+            .times(1)
+            .return_const(());
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new("Wasm")).await,
+            PluginRunningResult::ErrResponse {
+                status: 503,
+                body: None
+            }
+        );
+    }
+}

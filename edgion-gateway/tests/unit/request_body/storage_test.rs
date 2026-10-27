@@ -1,3 +1,35 @@
+impl BodySnapshotReader {
+    fn new(snapshot: Arc<BodySnapshot>, storage_operation_timeout: Duration) -> Self {
+        Self::with_lease(
+            snapshot,
+            storage_operation_timeout,
+            budget::process_budget().capture().unwrap(),
+        )
+    }
+}
+
+fn read_at_most_with(
+    len: usize,
+    offset: u64,
+    mut read_at: impl FnMut(&mut [u8], u64) -> io::Result<usize>,
+) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0; len];
+    let filled = read_at_most_into(&mut buf, offset, &mut read_at)?;
+    buf.truncate(filled);
+    Ok(buf)
+}
+
+use bytes::BytesMut;
+fn budgeted_test_file(file: std::fs::File) -> Arc<BudgetedFile> {
+    let lease = budget::process_budget().capture().unwrap();
+    Arc::new(BudgetedFile {
+        file,
+        disk: lease.budget.disk.reserve(0).unwrap().shared(),
+        _file_slot: lease.budget.files.reserve(1).unwrap(),
+        lease,
+    })
+}
+
 use super::*;
 
 #[tokio::test]
@@ -137,7 +169,7 @@ async fn snapshot_isolation_releases_large_source_and_inline_backings() {
 
 #[tokio::test]
 async fn snapshot_isolation_preserves_disk_ranges_without_memory_charge() {
-    let file = Arc::new(tempfile().unwrap());
+    let file = budgeted_test_file(tempfile().unwrap());
     write_all_at(&file, b"disk payload", 0).unwrap();
     let snapshot = BodySnapshot::from_segments(vec![Segment::SourceRange {
         source: Arc::new(BodySource::Disk {
@@ -188,7 +220,7 @@ fn snapshot_isolation_rejects_invalid_memory_range_without_panicking() {
 async fn disk_read_and_join_failures_are_storage_failures() {
     let empty = tempfile().expect("anonymous temp file");
     assert_eq!(
-        read_disk_body(Arc::new(empty), 1, DEFAULT_STORAGE_OPERATION_TIMEOUT,).await,
+        read_disk_body(budgeted_test_file(empty), 1, DEFAULT_STORAGE_OPERATION_TIMEOUT,).await,
         Err(BodyReadError::StorageFailure)
     );
 
@@ -439,7 +471,7 @@ async fn read_snapshot(mut reader: Box<dyn RequestBodySnapshotReader>) -> (Vec<u
     (chunk_lengths, body.freeze())
 }
 
-fn disk_file(storage: &BodyStorage) -> &Arc<File> {
+fn disk_file(storage: &BodyStorage) -> &Arc<BudgetedFile> {
     match storage.view.initial.get().unwrap().source.as_ref() {
         BodySource::Disk { file, .. } => file,
         _ => panic!("test requires a finished disk-backed body"),
@@ -963,11 +995,12 @@ async fn physical_cap_failure_rolls_back_without_changing_replay() {
 #[tokio::test]
 async fn range_budget_is_checked_before_output_capacity() {
     let source = Arc::new(BodySource::Disk {
-        file: Arc::new(tempfile().unwrap()),
+        file: budgeted_test_file(tempfile().unwrap()),
         len: u64::MAX,
     });
     let snapshot = Arc::new(BodySnapshot::from_source(Arc::clone(&source)).unwrap());
     let inner = Arc::new(BodyStorageViewInner {
+        lease: budget::process_budget().capture(),
         initial: OnceLock::new(),
         materialized: OnceCell::new(),
         mutation: RwLock::new(MutationState::default()),

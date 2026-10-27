@@ -113,7 +113,14 @@ impl RequestFilter for FormJsonTransform {
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body length unavailable");
-                return Self::reject(500, None);
+                return Self::reject(
+                    if error == BodyReadError::CapacityExceeded {
+                        503
+                    } else {
+                        500
+                    },
+                    None,
+                );
             }
         };
         if body_len > self.body_limit {
@@ -127,6 +134,7 @@ impl RequestFilter for FormJsonTransform {
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 return match error {
+                    BodyReadError::CapacityExceeded => Self::reject(503, None),
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                         log.push("deny body too large");
                         Self::reject(413, None)
@@ -164,6 +172,7 @@ impl RequestFilter for FormJsonTransform {
         if let Err(error) = session.overwrite_request_body(transformed).await {
             record_body_read_error_status(session, &error);
             return match error {
+                BodyReadError::CapacityExceeded => Self::reject(503, None),
                 BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                     log.push("deny output too large");
                     Self::reject(413, None)
@@ -181,6 +190,9 @@ impl RequestFilter for FormJsonTransform {
             if let Err(error) = session.overwrite_request_body(original).await {
                 record_body_read_error_status(session, &error);
                 log.push_err("body rollback failed");
+                if error == BodyReadError::CapacityExceeded {
+                    return Self::reject(503, None);
+                }
             } else {
                 log.push_err("content type update failed");
             }

@@ -4,11 +4,12 @@ use super::{
     should_append_proxy_error_to_upstream, unary_transport_error, write_proxy_error_reply,
 };
 use crate::observe::RequestDiagnostic;
+use crate::request_body::BodyReadError;
 use crate::routes::http::proxy_http::pg_upstream_response_filter::select_normalized_upstream_candidate;
 use crate::runtime::server::ServerHeaderOpts;
 use crate::{BackendContext, EdgionHttpContext, PeerTimeoutSource};
 use edgion_resources::EdgionErrorCode;
-use pingora_core::{ConnectionClosed, Error, ErrorType};
+use pingora_core::{ConnectionClosed, Error, ErrorType, HTTPStatus};
 use pingora_proxy::Session;
 use tokio::io::AsyncWriteExt;
 
@@ -499,4 +500,21 @@ fn fixed_attempt_errors_borrow_without_allocating_and_deduplicate_owned_timeouts
     assert!(errors[1..]
         .iter()
         .all(|error| matches!(error, Cow::Borrowed("ConnectError"))));
+}
+
+#[test]
+fn replay_capacity_error_preserves_503_and_distinct_local_diagnostic() {
+    let error = Error::because(
+        HTTPStatus(503),
+        "request body capacity",
+        BodyReadError::CapacityExceeded,
+    );
+    assert_eq!(classify_proxy_status(&error), 503);
+    assert_eq!(
+        proxy_error_diagnostic(&error, 503, None),
+        Some(EdgionErrorCode::BodyCaptureCapacityExceeded)
+    );
+    assert!(!can_reuse_downstream_after_proxy_error(503));
+    let unrelated = Error::explain(HTTPStatus(503), "upstream unavailable");
+    assert_eq!(proxy_error_diagnostic(&unrelated, 503, None), None);
 }

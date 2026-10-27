@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Process-wide retained request-body storage budget](regression-guards/request-body-aggregate-budget.md)
+
 - [REST-to-GraphQL request adaptation](regression-guards/rest-to-graphql-request-adaptation.md)
 
 - [Streamed request cap, trailer rejection, and ordered mirror publication](regression-guards/streamed-request-body-admission.md)

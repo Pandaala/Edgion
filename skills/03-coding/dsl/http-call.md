@@ -134,3 +134,9 @@ Integration coverage lives in
 `edgion-tests/integration/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
 and the DSL client suite. Use `resp.set_header()` when a test client must observe a
 computed value; `req.set_header()` changes only the upstream request.
+
+## Request-body aggregate capacity
+
+Body-source capacity failures propagate as `RuntimeError::BodyCapacityExceeded`
+under the [canonical builtin error contract](builtin-error-semantics.md#request-body-aggregate-capacity).
+This does not change outbound-call `ApiError` behavior or outbound response limits.

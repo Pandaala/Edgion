@@ -514,14 +514,17 @@ fn kmp_failure(pattern: &[u8]) -> Vec<usize> {
 }
 
 pub(crate) struct BytesScanner {
-    bytes: Vec<u8>,
+    bytes: super::budget::MemoryBuffer,
 }
 
 impl BytesScanner {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self {
-            bytes: Vec::with_capacity(capacity),
-        }
+    pub(crate) fn with_capacity(
+        capacity: usize,
+        lease: std::sync::Arc<super::budget::CaptureLease>,
+    ) -> Result<Self, BodyReadError> {
+        Ok(Self {
+            bytes: super::budget::MemoryBuffer::new(capacity, lease)?,
+        })
     }
 }
 
@@ -529,12 +532,15 @@ impl RawBodyScanner for BytesScanner {
     type Output = Bytes;
 
     fn push(&mut self, chunk: &[u8]) -> Result<ScanControl, BodyOperationError> {
-        self.bytes.extend_from_slice(chunk);
+        if chunk.len() > self.bytes.capacity().saturating_sub(self.bytes.len()) {
+            return Err(BodyReadError::Incomplete.into());
+        }
+        self.bytes.append(chunk);
         Ok(ScanControl::Continue)
     }
 
     fn finish(self) -> Result<Self::Output, BodyOperationError> {
-        Ok(Bytes::from(self.bytes))
+        Ok(self.bytes.freeze())
     }
 }
 

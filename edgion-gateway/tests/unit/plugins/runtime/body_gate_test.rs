@@ -730,3 +730,18 @@ fn direct_not_buffered_classification_records_no_additional_diagnostic() {
     session.expect_record_error().times(0);
     record_body_read_error_status(&mut session, &BodyReadError::NotBuffered);
 }
+
+#[test]
+fn capacity_exhaustion_overrides_fail_open_and_has_distinct_diagnostic() {
+    for policy in [BodyReadFailureMode::FailOpen, BodyReadFailureMode::FailClose] {
+        let mut session = session_expecting_error(EdgionErrorCode::BodyCaptureCapacityExceeded);
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            body_read_failure_result_for_mode(&mut session, policy, &mut log, &BodyReadError::CapacityExceeded),
+            PluginRunningResult::ErrResponse {
+                status: 503,
+                body: None
+            },
+        );
+    }
+}

@@ -218,6 +218,10 @@ impl RequestFilter for AiGuard {
 
         let body = match session.read_request_body(None).await {
             Ok(body) => body,
+            Err(BodyReadError::CapacityExceeded) => {
+                session.record_error(EdgionErrorCode::BodyCaptureCapacityExceeded);
+                return openai_error_response(session, AiProxyError::BackendUnavailable);
+            }
             Err(BodyReadError::BufferLimitExceeded { .. }) => {
                 log.push_err("body too large");
                 return openai_error_response(session, AiProxyError::RequestTooLarge);
@@ -374,6 +378,10 @@ impl AiGuard {
                             "body changed under guard",
                             EdgionErrorCode::BodyMutationConflict,
                         )
+                    }
+                    Err(BodyReadError::CapacityExceeded) => {
+                        session.record_error(EdgionErrorCode::BodyCaptureCapacityExceeded);
+                        return openai_error_response(session, AiProxyError::BackendUnavailable);
                     }
                     Err(BodyReadError::BufferLimitExceeded { .. }) => {
                         log.push_err("mask exceeds body cap");

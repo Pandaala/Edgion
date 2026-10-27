@@ -1856,3 +1856,44 @@ mod buffered_request {
         assert_eq!(status.code(), tonic::Code::Aborted);
     }
 }
+
+#[tokio::test]
+async fn request_body_capacity_exhaustion_overrides_failure_mode_allow() {
+    use crate::request_body::BodyReadError;
+    use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
+
+    let ext_proc = ExtProc::build(&test_config(true)).unwrap();
+    let owner = AttachedExtProc::test_lazy();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_overwrite_request_body()
+        .returning(|_| Err(BodyReadError::CapacityExceeded));
+    session
+        .expect_record_error()
+        .withf(|code| *code == EdgionErrorCode::BodyCaptureCapacityExceeded)
+        .times(1)
+        .return_const(());
+    let response = CommonResponse {
+        body_mutation: Some(BodyMutation {
+            mutation: Some(body_mutation::Mutation::Body(b"body".to_vec())),
+        }),
+        ..Default::default()
+    };
+    let result = ext_proc
+        .apply_request_common_response(
+            &mut session,
+            &mut PluginLog::new("ExtProc"),
+            Some(&owner),
+            Some(response),
+            true,
+        )
+        .await;
+    assert_eq!(
+        result,
+        Err(PluginRunningResult::ErrResponse {
+            status: 503,
+            body: None
+        })
+    );
+    assert_eq!(owner.test_state(), ("fail-close", "body-capacity-exhausted", true));
+}

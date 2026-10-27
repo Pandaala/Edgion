@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use parking_lot::RwLock;
 use pingora_core::protocols::http::RequestBodyBuffer;
 use pingora_core::{Error as PingoraError, ErrorType, Result as PingoraResult};
@@ -16,6 +16,7 @@ use tokio::sync::{OnceCell, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout_at, Instant};
 
+use super::budget::{self, CaptureLease, MemoryBuffer, Reservation, SharedReservation};
 use super::config::DEFAULT_STORAGE_OPERATION_TIMEOUT;
 use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextCollector, BoundedTextResult,
@@ -237,12 +238,21 @@ where
 }
 
 fn record_storage_io_failure(operation: StorageIoOperation, error: &StorageIoError) {
+    if matches!(error, StorageIoError::Io(error) if matches!(io_body_error(error), BodyReadError::CapacityExceeded)) {
+        return;
+    }
     crate::observe::metrics::record_request_body_storage_io_failure(operation.as_metric_label(), error.metric_reason());
 }
 
 fn storage_io_pingora_error(context: &'static str, error: StorageIoError) -> Box<PingoraError> {
     match error {
-        StorageIoError::Io(error) => PingoraError::because(ErrorType::InternalError, context, error),
+        StorageIoError::Io(error) => {
+            if matches!(io_body_error(&error), BodyReadError::CapacityExceeded) {
+                capacity_pingora_error(BodyReadError::CapacityExceeded)
+            } else {
+                PingoraError::because(ErrorType::InternalError, context, error)
+            }
+        }
         StorageIoError::Join(error) => PingoraError::because(ErrorType::InternalError, context, error),
         StorageIoError::AdmissionTimeout | StorageIoError::AdmissionClosed | StorageIoError::ExecutionTimeout => {
             PingoraError::explain(ErrorType::InternalError, context)
@@ -250,10 +260,48 @@ fn storage_io_pingora_error(context: &'static str, error: StorageIoError) -> Box
     }
 }
 
+/// File closes before its reservations are returned. Late blocking jobs own an Arc.
+struct BudgetedFile {
+    file: File,
+    disk: SharedReservation,
+    _file_slot: Reservation,
+    lease: Arc<CaptureLease>,
+}
+
+impl std::ops::Deref for BudgetedFile {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.file
+    }
+}
+
+fn capacity_pingora_error(error: BodyReadError) -> Box<PingoraError> {
+    PingoraError::because(ErrorType::HTTPStatus(503), "request body capacity exhausted", error).into_in()
+}
+
+fn body_io_error(error: BodyReadError) -> io::Error {
+    io::Error::other(error)
+}
+
+fn io_body_error(error: &io::Error) -> BodyReadError {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<BodyReadError>())
+        .cloned()
+        .unwrap_or(BodyReadError::StorageFailure)
+}
+
+fn storage_body_error(error: StorageIoError) -> BodyReadError {
+    match error {
+        StorageIoError::Io(error) => io_body_error(&error),
+        _ => BodyReadError::StorageFailure,
+    }
+}
+
 #[derive(Clone)]
 enum BodySource {
     Memory(Bytes),
-    Disk { file: Arc<File>, len: u64 },
+    Disk { file: Arc<BudgetedFile>, len: u64 },
 }
 
 #[derive(Clone)]
@@ -534,10 +582,15 @@ struct BodyStorageViewInner {
     mutation: RwLock<MutationState>,
     max_body_size_bytes: u64,
     storage_operation_timeout: Duration,
+    lease: Result<Arc<CaptureLease>, BodyReadError>,
 }
 
 impl BodyStorageViewInner {
+    fn lease(&self) -> Result<Arc<CaptureLease>, BodyReadError> {
+        self.lease.clone()
+    }
     fn snapshot(&self) -> Result<(Arc<BodySnapshot>, u64), BodyReadError> {
+        self.lease()?;
         let mutation = self.mutation.read();
         if let Some(snapshot) = mutation.snapshot.as_ref() {
             return Ok((Arc::clone(snapshot), mutation.generation));
@@ -572,6 +625,7 @@ impl BodyStorageView {
     }
 
     fn snapshot_metadata(&self) -> Result<(u64, u64), BodyReadError> {
+        self.inner.lease()?;
         let mutation = self.inner.mutation.read();
         if let Some(snapshot) = mutation.snapshot.as_ref() {
             return Ok((snapshot.len, mutation.generation));
@@ -610,6 +664,7 @@ impl BodyStorageView {
     }
 
     pub async fn read_all(&self) -> BodyReadResult {
+        self.inner.lease()?;
         let mutation = self.inner.mutation.read().snapshot.clone();
         if let Some(snapshot) = mutation {
             return self.materialize_snapshot(snapshot).await;
@@ -632,18 +687,23 @@ impl BodyStorageView {
     async fn materialize_snapshot(&self, snapshot: Arc<BodySnapshot>) -> BodyReadResult {
         let capacity = usize::try_from(snapshot.len).map_err(|_| BodyReadError::StorageFailure)?;
         if snapshot.contains_disk() {
+            let buffer = MemoryBuffer::new(capacity, self.inner.lease()?)?;
             return run_storage_io(
                 self.inner.storage_operation_timeout,
                 StorageIoOperation::MaterializeRead,
-                move || materialize_snapshot_owned(snapshot, capacity),
+                move || materialize_snapshot_owned(snapshot, buffer),
             )
             .await
-            .map_err(|_| BodyReadError::StorageFailure);
+            .map_err(storage_body_error);
         }
-        self.scan_snapshot(snapshot, BytesScanner::with_capacity(capacity), u64::MAX)
-            .await
-            .map(|result| result.value)
-            .map_err(operation_to_body_error)
+        self.scan_snapshot(
+            snapshot,
+            BytesScanner::with_capacity(capacity, self.inner.lease()?)?,
+            u64::MAX,
+        )
+        .await
+        .map(|result| result.value)
+        .map_err(operation_to_body_error)
     }
 
     pub fn len(&self) -> Result<u64, BodyReadError> {
@@ -660,9 +720,10 @@ impl BodyStorageView {
     /// mutations publish a different snapshot and cannot affect this reader.
     pub fn snapshot_reader(&self) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
         let (snapshot, _) = self.snapshot()?;
-        Ok(Box::new(BodySnapshotReader::new(
+        Ok(Box::new(BodySnapshotReader::with_lease(
             snapshot,
             self.inner.storage_operation_timeout,
+            self.inner.lease()?,
         )))
     }
 
@@ -782,8 +843,12 @@ impl BodyStorageView {
     ) -> Result<BodyScanResult<Bytes>, BodyOperationError> {
         let slice = self.range_snapshot(offset, max_bytes, max_scan_bytes)?;
         let capacity = usize::try_from(slice.len).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        self.scan_snapshot(slice, BytesScanner::with_capacity(capacity), max_scan_bytes)
-            .await
+        self.scan_snapshot(
+            slice,
+            BytesScanner::with_capacity(capacity, self.inner.lease()?)?,
+            max_scan_bytes,
+        )
+        .await
     }
 
     /// Decode an isolated raw byte range without collecting it first. Both
@@ -853,6 +918,15 @@ impl BodyStorageView {
         self.publish(generation, BodySnapshot::empty()).map(|_| ())
     }
 
+    fn check_mutation_len(&self, len: Option<u64>) -> Result<(), BodyReadError> {
+        if len.is_none_or(|len| len > self.inner.max_body_size_bytes) {
+            return Err(BodyReadError::BufferLimitExceeded {
+                limit: self.inner.max_body_size_bytes,
+            });
+        }
+        Ok(())
+    }
+
     pub fn append(&self, bytes: Bytes) -> Result<(), BodyOperationError> {
         if bytes.is_empty() {
             return Ok(());
@@ -863,9 +937,10 @@ impl BodyStorageView {
                 limit: MAX_BODY_SEGMENTS,
             });
         }
+        self.check_mutation_len(snapshot.len.checked_add(bytes.len() as u64))?;
         let mut segments = Vec::with_capacity(snapshot.segments.len() + 1);
         segments.extend(snapshot.segments.iter().cloned());
-        segments.push(Segment::Inline(bytes));
+        segments.push(Segment::Inline(MemoryBuffer::copy(&bytes, self.inner.lease()?)?));
         self.publish(generation, BodySnapshot::from_segments(segments)?)
             .map(|_| ())
     }
@@ -880,8 +955,9 @@ impl BodyStorageView {
                 limit: MAX_BODY_SEGMENTS,
             });
         }
+        self.check_mutation_len(snapshot.len.checked_add(bytes.len() as u64))?;
         let mut segments = Vec::with_capacity(snapshot.segments.len() + 1);
-        segments.push(Segment::Inline(bytes));
+        segments.push(Segment::Inline(MemoryBuffer::copy(&bytes, self.inner.lease()?)?));
         segments.extend(snapshot.segments.iter().cloned());
         self.publish(generation, BodySnapshot::from_segments(segments)?)
             .map(|_| ())
@@ -917,12 +993,14 @@ impl BodyStorageView {
                 bytes_scanned: 0,
             });
         }
+        let from_len = from.len() as u64;
+        let to_len = to.len() as u64;
+        let scanner = LiteralMatchScanner::new(from.to_vec());
+        drop(from);
+        let admitted_to = MemoryBuffer::copy(&to, self.inner.lease()?)?;
+        drop(to);
         let scan = self
-            .scan_snapshot(
-                Arc::clone(&snapshot),
-                LiteralMatchScanner::new(from.to_vec()),
-                max_scan_bytes,
-            )
+            .scan_snapshot(Arc::clone(&snapshot), scanner, max_scan_bytes)
             .await?;
         if scan.value.is_empty() {
             return Ok(BodyScanResult {
@@ -933,8 +1011,6 @@ impl BodyStorageView {
 
         let match_count =
             u64::try_from(scan.value.len()).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        let from_len = u64::try_from(from.len()).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        let to_len = u64::try_from(to.len()).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
         let removed = match_count
             .checked_mul(from_len)
             .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
@@ -952,6 +1028,7 @@ impl BodyStorageView {
             }));
         }
 
+        let to = admitted_to;
         let mut segments = Vec::with_capacity(
             snapshot
                 .segments
@@ -988,12 +1065,20 @@ impl BodyStorageView {
             return Err(BodyReadError::Incomplete);
         }
         if start == end && replacement.is_empty() {
+            drop(replacement);
             return self.materialize_snapshot(snapshot).await;
         }
+        self.check_mutation_len(
+            snapshot
+                .len
+                .checked_sub(end - start)
+                .and_then(|len| len.checked_add(replacement.len() as u64)),
+        )?;
         let mut segments = snapshot.slice(0..start).map_err(operation_to_body_error)?;
         if !replacement.is_empty() {
-            segments.push(Segment::Inline(replacement));
+            segments.push(Segment::Inline(MemoryBuffer::copy(&replacement, self.inner.lease()?)?));
         }
+        drop(replacement);
         segments.extend(snapshot.slice(end..snapshot.len).map_err(operation_to_body_error)?);
         let next = Arc::new(BodySnapshot::from_segments(segments).map_err(operation_to_body_error)?);
         if next.len > self.inner.max_body_size_bytes {
@@ -1043,6 +1128,19 @@ impl BodyStorageView {
             });
         }
 
+        let mut final_len = Some(snapshot.len);
+        let mut previous_end = 0;
+        for (range, replacement) in edits {
+            if range.start < previous_end || range.end < range.start || range.end > snapshot.len {
+                return Err(BodyOperationError::InvalidRange);
+            }
+            previous_end = range.end;
+            final_len = final_len
+                .and_then(|len| len.checked_sub(range.end - range.start))
+                .and_then(|len| len.checked_add(replacement.len() as u64));
+        }
+        self.check_mutation_len(final_len)?;
+
         let mut segments = Vec::with_capacity(
             snapshot
                 .segments
@@ -1063,7 +1161,10 @@ impl BodyStorageView {
             }
             splicer.append_until(range.start, &mut segments)?;
             if !replacement.is_empty() {
-                push_normalized_segment(&mut segments, Segment::Inline(replacement.clone()))?;
+                push_normalized_segment(
+                    &mut segments,
+                    Segment::Inline(MemoryBuffer::copy(replacement, self.inner.lease()?)?),
+                )?;
             }
             splicer.skip_until(range.end)?;
             changed = true;
@@ -1079,6 +1180,12 @@ impl BodyStorageView {
 
     pub fn overwrite_body(&self, body: Bytes) -> Result<(), BodyReadError> {
         let (_, generation) = self.snapshot_metadata()?;
+        if body.len() as u64 > self.inner.max_body_size_bytes {
+            return Err(BodyReadError::BufferLimitExceeded {
+                limit: self.inner.max_body_size_bytes,
+            });
+        }
+        let body = MemoryBuffer::copy(&body, self.inner.lease()?)?;
         let snapshot = BodySnapshot::from_inline(body).map_err(operation_to_body_error)?;
         self.publish(generation, snapshot)
             .map(|_| ())
@@ -1099,11 +1206,13 @@ struct BodySnapshotReader {
     segment_offset: u64,
     storage_operation_timeout: Duration,
     retain_read_permit: bool,
+    lease: Arc<CaptureLease>,
 }
 
 impl BodySnapshotReader {
-    fn new(snapshot: Arc<BodySnapshot>, storage_operation_timeout: Duration) -> Self {
+    fn with_lease(snapshot: Arc<BodySnapshot>, storage_operation_timeout: Duration, lease: Arc<CaptureLease>) -> Self {
         Self {
+            lease,
             snapshot,
             segment_index: 0,
             segment_offset: 0,
@@ -1173,7 +1282,7 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
                 Some(bytes) => {
                     // Exact owned payload: a small logical slice must not pin
                     // an arbitrarily large allocation from the main request.
-                    Segment::Inline(Bytes::from(bytes.to_vec().into_boxed_slice()))
+                    Segment::Inline(MemoryBuffer::copy(bytes, Arc::clone(&self.lease))?)
                 }
                 None => segment.clone(),
             });
@@ -1202,8 +1311,10 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
                     let segment = segment.clone();
                     let segment_offset = self.segment_offset;
                     let work = move || {
-                        read_segment_chunk(&segment, segment_offset, wanted)
-                            .map_err(|error| io::Error::other(error.to_string()))
+                        read_segment_chunk(&segment, segment_offset, wanted).map_err(|error| match error {
+                            BodyOperationError::Body(error) => body_io_error(error),
+                            _ => io::Error::other(error.to_string()),
+                        })
                     };
                     if self.retain_read_permit {
                         let output = run_storage_io_retained_with_limiter(
@@ -1213,12 +1324,12 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
                             work,
                         )
                         .await
-                        .map_err(|_| BodyReadError::StorageFailure)?;
+                        .map_err(storage_body_error)?;
                         Bytes::from_owner(output)
                     } else {
                         run_storage_io(self.storage_operation_timeout, StorageIoOperation::SnapshotRead, work)
                             .await
-                            .map_err(|_| BodyReadError::StorageFailure)?
+                            .map_err(storage_body_error)?
                     }
                 }
                 _ => read_segment_chunk(segment, self.segment_offset, wanted).map_err(operation_to_body_error)?,
@@ -1269,7 +1380,7 @@ where
     S: RawBodyScanner,
 {
     let mut bytes_scanned = 0u64;
-    let mut disk_scratch = Vec::new();
+    let mut disk_scratch: Option<MemoryBuffer> = None;
     for segment in &snapshot.segments {
         let segment_len = segment.len()?;
         let mut local_offset = 0u64;
@@ -1307,10 +1418,13 @@ where
                     {
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
-                    disk_scratch.resize(wanted, 0);
-                    read_exact_at_into(file, &mut disk_scratch, source_offset)
-                        .map_err(|_| BodyOperationError::Body(BodyReadError::StorageFailure))?;
-                    scanner.push(&disk_scratch)?
+                    if disk_scratch.as_ref().is_none_or(|buffer| buffer.capacity() < wanted) {
+                        disk_scratch = Some(MemoryBuffer::new(wanted, Arc::clone(&file.lease))?);
+                    }
+                    let scratch = disk_scratch.as_mut().ok_or(BodyReadError::Incomplete)?;
+                    read_exact_at_into(file, &mut scratch.writable()[..wanted], source_offset)
+                        .map_err(|error| BodyOperationError::Body(io_body_error(&error)))?;
+                    scanner.push(&scratch.writable()[..wanted])?
                 }
                 _ => {
                     let memory = BodySnapshotReader::memory_segment(segment)
@@ -1382,11 +1496,11 @@ fn read_segment_chunk(segment: &Segment, local_offset: u64, wanted: usize) -> Re
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
                     let bytes = read_at_most(file, wanted, source_offset)
-                        .map_err(|_| BodyOperationError::Body(BodyReadError::StorageFailure))?;
+                        .map_err(|error| BodyOperationError::Body(io_body_error(&error)))?;
                     if bytes.len() != wanted {
                         return Err(BodyOperationError::Body(BodyReadError::StorageFailure));
                     }
-                    Ok(Bytes::from(bytes))
+                    Ok(bytes)
                 }
             }
         }
@@ -1475,8 +1589,8 @@ impl RawBodyScanner for LiteralMatchScanner {
 }
 
 enum CaptureStorage {
-    Memory(BytesMut),
-    Disk { file: Arc<File> },
+    Memory(MemoryBuffer),
+    Disk { file: Arc<BudgetedFile> },
     Finished,
     Poisoned,
 }
@@ -1530,7 +1644,15 @@ impl BodyStorage {
         max_body_size_bytes: u64,
         storage_operation_timeout: Duration,
     ) -> (Self, Arc<BodyStorageView>) {
+        let lease = budget::process_budget().capture();
+        let storage = match &lease {
+            Ok(lease) => MemoryBuffer::new(0, Arc::clone(lease))
+                .map(CaptureStorage::Memory)
+                .unwrap_or(CaptureStorage::Poisoned),
+            Err(_) => CaptureStorage::Poisoned,
+        };
         let view = Arc::new(BodyStorageViewInner {
+            lease,
             initial: OnceLock::new(),
             materialized: OnceCell::new(),
             mutation: RwLock::new(MutationState::default()),
@@ -1539,7 +1661,7 @@ impl BodyStorage {
         });
         (
             Self {
-                storage: CaptureStorage::Memory(BytesMut::new()),
+                storage,
                 view: Arc::clone(&view),
                 memory_limit,
                 captured_len: 0,
@@ -1580,6 +1702,7 @@ impl BodyStorage {
 #[async_trait]
 impl RequestBodyBuffer for BodyStorage {
     async fn write(&mut self, data: &Bytes) -> PingoraResult<()> {
+        let lease = self.view.lease().map_err(capacity_pingora_error)?;
         if self.finished {
             return Err(Self::replay_error("request body capture continued after finalization"));
         }
@@ -1608,16 +1731,23 @@ impl RequestBodyBuffer for BodyStorage {
         let storage = std::mem::replace(&mut self.storage, CaptureStorage::Poisoned);
         match storage {
             CaptureStorage::Memory(mut buf) if next_len <= self.memory_limit as u64 => {
-                buf.extend_from_slice(data);
+                let needed = next_len as usize;
+                if needed > buf.capacity() {
+                    let capacity = needed.max(buf.capacity().saturating_mul(2)).min(self.memory_limit);
+                    buf.grow(capacity).map_err(capacity_pingora_error)?;
+                }
+                buf.append(data);
                 self.storage = CaptureStorage::Memory(buf);
             }
             CaptureStorage::Memory(buf) => {
                 let previous = buf.freeze();
-                let incoming = data.clone();
+                let incoming = MemoryBuffer::copy(data, Arc::clone(&lease)).map_err(capacity_pingora_error)?;
+                let disk = lease.budget.disk.reserve(next_len).map_err(capacity_pingora_error)?;
+                let file_slot = lease.budget.files.reserve(1).map_err(capacity_pingora_error)?;
                 let spill = match run_storage_io(
                     self.storage_operation_timeout,
                     StorageIoOperation::SpillCreate,
-                    move || create_spill_file(&previous, &incoming),
+                    move || create_spill_file(&previous, &incoming, disk, file_slot, lease),
                 )
                 .await
                 {
@@ -1632,7 +1762,10 @@ impl RequestBodyBuffer for BodyStorage {
             CaptureStorage::Disk { file } => {
                 let write_file = Arc::clone(&file);
                 let offset = self.captured_len;
-                let incoming = data.clone();
+                let incoming = MemoryBuffer::copy(data, lease).map_err(capacity_pingora_error)?;
+                // The file owns the entire attempted growth even if a syscall
+                // writes only a prefix or finishes after cancellation.
+                file.disk.grow(data_len).map_err(capacity_pingora_error)?;
                 if let Err(error) = run_storage_io(
                     self.storage_operation_timeout,
                     StorageIoOperation::SpillWrite,
@@ -1660,6 +1793,7 @@ impl RequestBodyBuffer for BodyStorage {
     }
 
     async fn finish(&mut self) -> PingoraResult<()> {
+        self.view.lease().map_err(capacity_pingora_error)?;
         if self.finished {
             return Ok(());
         }
@@ -1793,7 +1927,7 @@ impl RequestBodyBuffer for BodyStorage {
                             self.replay_cursor, snapshot.len
                         )));
                     }
-                    Bytes::from(bytes)
+                    bytes
                 }
             },
             Segment::Inline(bytes) => {
@@ -1853,18 +1987,26 @@ impl RequestBodyBuffer for BodyStorage {
     }
 }
 
-fn create_spill_file(previous: &Bytes, incoming: &Bytes) -> io::Result<Arc<File>> {
-    // `tempfile()` returns an anonymous/unlinked file. If a write syscall
-    // outlives its deadline, the blocking closure can retain the fd without
-    // leaving a named request-body file behind.
-    let file = Arc::new(tempfile()?);
+fn create_spill_file(
+    previous: &Bytes,
+    incoming: &Bytes,
+    disk: Reservation,
+    file_slot: Reservation,
+    lease: Arc<CaptureLease>,
+) -> io::Result<Arc<BudgetedFile>> {
+    let file = Arc::new(BudgetedFile {
+        file: tempfile()?,
+        disk: disk.shared(),
+        _file_slot: file_slot,
+        lease,
+    });
     write_all_at(&file, previous, 0)?;
     write_all_at(&file, incoming, previous.len() as u64)?;
     Ok(file)
 }
 
-fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, capacity: usize) -> io::Result<Bytes> {
-    let mut body = vec![0; capacity];
+fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, mut body: MemoryBuffer) -> io::Result<Bytes> {
+    let capacity = body.capacity();
     let mut output_offset = 0usize;
     for segment in &snapshot.segments {
         let segment_len = segment
@@ -1874,9 +2016,9 @@ fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, capacity: usize) -> i
             .map_err(|_| io::Error::other("request body snapshot segment length overflow"))?;
         let output_end = output_offset
             .checked_add(segment_len)
-            .filter(|end| *end <= body.len())
+            .filter(|end| *end <= body.capacity())
             .ok_or_else(|| io::Error::other("request body snapshot output length overflow"))?;
-        copy_segment_into(segment, &mut body[output_offset..output_end])?;
+        copy_segment_into(segment, &mut body.writable()[output_offset..output_end])?;
         output_offset = output_end;
     }
     if output_offset != capacity {
@@ -1885,7 +2027,8 @@ fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, capacity: usize) -> i
             "request body snapshot materialized to an unexpected length",
         ));
     }
-    Ok(Bytes::from(body))
+    body.set_len(capacity);
+    Ok(body.freeze())
 }
 
 fn copy_segment_into(segment: &Segment, output: &mut [u8]) -> io::Result<()> {
@@ -1939,8 +2082,11 @@ fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> io::Result<()>
     Ok(())
 }
 
-fn read_at_most(file: &File, len: usize, offset: u64) -> io::Result<Vec<u8>> {
-    read_at_most_with(len, offset, |buf, position| file.read_at(buf, position))
+fn read_at_most(file: &BudgetedFile, len: usize, offset: u64) -> io::Result<Bytes> {
+    let mut buffer = MemoryBuffer::new(len, Arc::clone(&file.lease)).map_err(body_io_error)?;
+    let filled = read_at_most_into(buffer.writable(), offset, |buf, position| file.read_at(buf, position))?;
+    buffer.set_len(filled);
+    Ok(buffer.freeze())
 }
 
 fn read_exact_at_into(file: &File, mut output: &mut [u8], mut offset: u64) -> io::Result<()> {
@@ -1960,12 +2106,12 @@ fn read_exact_at_into(file: &File, mut output: &mut [u8], mut offset: u64) -> io
     Ok(())
 }
 
-fn read_at_most_with(
-    len: usize,
+fn read_at_most_into(
+    buf: &mut [u8],
     offset: u64,
     mut read_at: impl FnMut(&mut [u8], u64) -> io::Result<usize>,
-) -> io::Result<Vec<u8>> {
-    let mut buf = vec![0; len];
+) -> io::Result<usize> {
+    let len = buf.len();
     let mut filled = 0usize;
     while filled < len {
         let position = offset
@@ -1980,23 +2126,23 @@ fn read_at_most_with(
             .filter(|filled| *filled <= len)
             .ok_or_else(|| io::Error::other("request body read returned an invalid length"))?;
     }
-    buf.truncate(filled);
-    Ok(buf)
+    Ok(filled)
 }
 
-async fn read_disk_body(file: Arc<File>, len: u64, storage_operation_timeout: Duration) -> BodyReadResult {
+async fn read_disk_body(file: Arc<BudgetedFile>, len: u64, storage_operation_timeout: Duration) -> BodyReadResult {
     let len = usize::try_from(len).map_err(|_| BodyReadError::StorageFailure)?;
+    let mut body = MemoryBuffer::new(len, Arc::clone(&file.lease))?;
     run_storage_io(
         storage_operation_timeout,
         StorageIoOperation::MaterializeRead,
         move || {
-            let mut body = vec![0; len];
-            read_exact_at_into(&file, &mut body, 0)?;
-            Ok::<_, io::Error>(Bytes::from(body))
+            read_exact_at_into(&file, body.writable(), 0)?;
+            body.set_len(len);
+            Ok(body.freeze())
         },
     )
     .await
-    .map_err(|_| BodyReadError::StorageFailure)
+    .map_err(storage_body_error)
 }
 
 #[cfg(test)]
@@ -2006,3 +2152,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../tests/unit/request_body/storage_test/storage_io_tests.rs"]
 mod storage_io_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/request_body/storage_test/budget_tests.rs"]
+mod budget_tests;

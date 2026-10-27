@@ -143,6 +143,10 @@ impl RequestFilter for GrpcJsonTranscoder {
         } else {
             match session.read_request_body(None).await {
                 Ok(body) if body.len() <= MAX_JSON_BYTES => body,
+                Err(error @ BodyReadError::CapacityExceeded) => {
+                    record_body_read_error_status(session, &error);
+                    return reject(session, 503).await;
+                }
                 _ => {
                     log.push_err("body read failed");
                     return reject(session, 500).await;
@@ -165,10 +169,20 @@ impl RequestFilter for GrpcJsonTranscoder {
             }
         };
         let len = frame.len();
-        if session.overwrite_request_body(Bytes::from(frame)).await.is_err()
-            || session.set_upstream_method("POST").is_err()
-            || session.set_upstream_uri(&binding.rpc_path).is_err()
-        {
+        if let Err(error) = session.overwrite_request_body(Bytes::from(frame)).await {
+            record_body_read_error_status(session, &error);
+            log.push_err("request body publication failed");
+            return reject(
+                session,
+                if error == BodyReadError::CapacityExceeded {
+                    503
+                } else {
+                    500
+                },
+            )
+            .await;
+        }
+        if session.set_upstream_method("POST").is_err() || session.set_upstream_uri(&binding.rpc_path).is_err() {
             log.push_err("request preparation failed");
             return reject(session, 500).await;
         }

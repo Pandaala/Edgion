@@ -9,7 +9,7 @@ use crate::plugins::runtime::PluginSession;
 use crate::request_body::{BodyOperationError, RawBodyScanner, ScanControl};
 
 use super::super::runtime::DslRuntime;
-use super::body_ops::{body_access_error, DslBodyOps};
+use super::body_ops::{body_access_error, map_body_read_error, DslBodyOps};
 use super::builtins::checked_value_str;
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
@@ -279,7 +279,7 @@ impl Vm {
                 session
                     .overwrite_request_body(Bytes::from(output))
                     .await
-                    .map_err(|error| body_access_error(error.to_string()))?;
+                    .map_err(map_body_read_error)?;
                 Ok(Value::Nil)
             }
             BuiltinId::XmlStringify | BuiltinId::XmlValue => {

@@ -501,3 +501,30 @@ conf_sync_security:
 - [GeoIP 地理限制](../gateway/geoip.md)
 - [Access Log 格式](../observability/access-log.md)
 - [工作目录行为](../../dev-guide/work-directory.md)
+
+## 进程级请求体存储预算
+
+启动配置 `gateway.request_body_budget` 由同一进程的全部监听器和 GatewayClass
+共享，与支持热更新的 `EdgionGatewayConfig.spec.requestBody` 单请求策略独立。
+
+```yaml
+gateway:
+  request_body_budget:
+    memory_limit: 256MiB
+    disk_limit: 2GiB
+    max_captures: 1024
+    max_files: 1024
+```
+
+所有值必须为正数；无效大小和未知字段会阻止启动。修改后需要重启。
+内存预算统计存储拥有的正文分配容量，包括物化副本及仍被重放或快照保留的字节；
+磁盘预算统计临时文件预留字节，`max_files` 限制打开的临时文件数量。
+`max_captures` 在捕获对象、读取器及导出的正文引用全部释放后才归还额度。
+这些默认值是安全上限，不代表进程总堆内存、RSS 或可用磁盘空间保证；传输缓冲、
+插件解析和扫描结果、元数据、分配器开销以及系统页缓存不在字节预算内。
+即使只有一次捕获，保留多个历史快照仍可能增加元数据。
+
+无法预留容量的请求立即返回 HTTP 503，并记录访问日志诊断
+`BodyCaptureCapacityExceeded`，不会加入容量等待队列。单请求正文超限仍返回 413；
+现有存储 I/O 并发与超时限制继续生效。已经分离执行的尽力而为请求镜像在额度不足时
+仅停止镜像，不改变主请求响应。

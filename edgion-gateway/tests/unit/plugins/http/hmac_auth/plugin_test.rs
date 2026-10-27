@@ -1157,3 +1157,26 @@ async fn prepared_challenge_rejects_invalid_direct_hmac_construction_before_writ
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn digest_capacity_exhaustion_returns_local_503_instead_of_auth_denial() {
+    let plugin = plugin_validate_body();
+    let mut session =
+        signed_session_without_digest_read(&["@request-target", "date", "digest"], Some(&body_digest(b"body")));
+    session.expect_ensure_request_body().return_const(Ok(4));
+    session
+        .expect_request_body_sha256()
+        .returning(|| Err(BodyReadError::CapacityExceeded));
+    session
+        .expect_record_error()
+        .withf(|code| *code == EdgionErrorCode::BodyCaptureCapacityExceeded)
+        .times(1)
+        .return_const(());
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new("HmacAuth")).await,
+        PluginRunningResult::ErrResponse {
+            status: 503,
+            body: None
+        }
+    );
+}

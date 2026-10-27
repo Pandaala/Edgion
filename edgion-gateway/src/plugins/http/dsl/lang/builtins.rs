@@ -19,7 +19,7 @@ use crate::request_body::{BodyReadError, RequestBodySnapshotReader};
 use crate::util::http_body::stream_body_capped;
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
-use super::body_ops::body_access_error;
+use super::body_ops::{body_access_error, map_body_read_error};
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::{BodyValue, Value};
@@ -1544,7 +1544,7 @@ impl Vm {
                         session
                             .request_body_snapshot_reader(known_bodyless)
                             .await
-                            .map_err(|error| body_access_error(error.to_string()))?,
+                            .map_err(map_body_read_error)?,
                     ),
                     None,
                 )
@@ -1669,7 +1669,7 @@ impl Vm {
             let (refund, read_error) = settle_opaque_body_upload(&tracking, reserved).await;
             state.body_scan_budget.refund_exact(refund);
             if let Some(error) = read_error {
-                return Err(body_access_error(error.to_string()));
+                return Err(map_body_read_error(error));
             }
         }
         Ok(complete_http_call_response(
@@ -1700,7 +1700,7 @@ impl Vm {
                 let known_bodyless = session.declares_body() == Some(false);
                 session
                     .request_body_available_len(known_bodyless)
-                    .map_err(|error| body_access_error(error.to_string()))?;
+                    .map_err(map_body_read_error)?;
                 Ok(Value::Body(BodyValue::Request))
             }
             BuiltinId::RespBody => Err(body_access_error(

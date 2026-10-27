@@ -135,7 +135,14 @@ impl RequestFilter for RestToGraphql {
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body length unavailable");
-                return graphql_request::reject(session, 500);
+                return graphql_request::reject(
+                    session,
+                    if error == BodyReadError::CapacityExceeded {
+                        503
+                    } else {
+                        500
+                    },
+                );
             }
         };
         if length > self.envelope_limit as u64 {
@@ -160,7 +167,14 @@ impl RequestFilter for RestToGraphql {
                     Err(error) => {
                         record_body_read_error_status(session, &error);
                         log.push_err("body unavailable");
-                        return graphql_request::reject(session, 500);
+                        return graphql_request::reject(
+                            session,
+                            if error == BodyReadError::CapacityExceeded {
+                                503
+                            } else {
+                                500
+                            },
+                        );
                     }
                 }
             };
@@ -195,7 +209,9 @@ impl RequestFilter for RestToGraphql {
             }
         };
         if let Err(error) = session.overwrite_request_body(output).await {
-            let status = if matches!(
+            let status = if error == BodyReadError::CapacityExceeded {
+                503
+            } else if matches!(
                 error,
                 BodyReadError::TooLarge { .. } | BodyReadError::BufferLimitExceeded { .. }
             ) {

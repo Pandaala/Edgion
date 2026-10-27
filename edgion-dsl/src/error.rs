@@ -162,6 +162,8 @@ pub enum RuntimeError {
     /// The gateway treats this typed condition as fixed fail-close instead of
     /// routing it through the configurable DSL API-error policy.
     BodyAccess { message: String },
+    /// Gateway request-body storage admission was refused under local overload.
+    BodyCapacityExceeded,
     /// Regex execution error
     RegexError { message: String },
     /// Internal VM error (should not happen)
@@ -203,6 +205,7 @@ impl fmt::Display for RuntimeError {
                 write!(f, "API error in {}: {}", function, message)
             }
             Self::BodyAccess { message } => write!(f, "body access failed: {}", message),
+            Self::BodyCapacityExceeded => write!(f, "request body storage capacity exhausted"),
             Self::RegexError { message } => write!(f, "regex error: {}", message),
             Self::Internal { message } => write!(f, "internal error: {}", message),
         }

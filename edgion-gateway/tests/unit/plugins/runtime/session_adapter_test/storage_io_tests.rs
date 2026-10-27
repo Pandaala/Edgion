@@ -141,3 +141,135 @@ async fn h2_capture_cleanup_keeps_the_connection_available_to_a_sibling_stream()
     client_result.unwrap();
     assert!(connection_result.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn h1_capacity_exhaustion_cleans_up_complete_and_prefix_capture() {
+    use crate::request_body::budget::{StorageBudget, TEST_BUDGET};
+    for prefix in [false, true] {
+        let budget = StorageBudget::new(1, 64, 4, 4);
+        let (mut client, server) = tokio::io::duplex(4096);
+        let mut session = Session::new_h1(Box::new(server));
+        client
+            .write_all(b"POST /upload HTTP/1.1\r\nHost: test\r\nContent-Length: 8\r\n\r\nbody")
+            .await
+            .unwrap();
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_body_config.memory_buffer_bytes = 64;
+        ctx.request_body_config.max_body_size_bytes = 64;
+        let result = TEST_BUDGET
+            .scope(budget.clone(), async {
+                if prefix {
+                    capture_request_body_prefix_core(session.as_mut(), &mut ctx, 4, 64)
+                        .await
+                        .map(|_| ())
+                } else {
+                    capture_request_body_core(session.as_mut(), &mut ctx, None)
+                        .await
+                        .map(|_| ())
+                }
+            })
+            .await;
+        assert_eq!(result, Err(BodyReadError::CapacityExceeded));
+        assert_eq!(session.as_ref().get_keepalive(), None);
+        assert_eq!(ctx.request_body.cached_len(), Ok(None));
+        drop(session);
+        assert_eq!(budget.usage(), [0; 4]);
+    }
+}
+
+#[tokio::test]
+async fn bodyless_capture_preserves_capacity_refusal() {
+    use crate::request_body::budget::{StorageBudget, TEST_BUDGET};
+    let budget = StorageBudget::new(64, 64, 0, 4);
+    let (mut client, server) = tokio::io::duplex(4096);
+    let mut session = Session::new_h1(Box::new(server));
+    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    assert!(session.read_request().await.unwrap());
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.in_request_body_stage = true;
+    ctx.request_info.body_declared = Some(false);
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    let result = TEST_BUDGET
+        .scope(budget.clone(), adapter.ensure_bodyless_request_replay_owner())
+        .await;
+    assert_eq!(result, Err(BodyReadError::CapacityExceeded));
+    assert_eq!(budget.usage(), [0; 4]);
+}
+
+#[tokio::test]
+async fn h2_capacity_exhaustion_leaves_sibling_stream_usable() {
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let client = tokio::spawn(async move {
+        let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+        let driver = tokio::spawn(connection);
+
+        sender = sender.ready().await.unwrap();
+        let first = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("https://example.test/first")
+            .header(http::header::CONTENT_LENGTH, "4")
+            .body(())
+            .unwrap();
+        let (_first_response, mut first_body) = sender.send_request(first, false).unwrap();
+        first_body.send_data(bytes::Bytes::from_static(b"body"), true).unwrap();
+
+        sender = sender.ready().await.unwrap();
+        let second = http::Request::builder()
+            .uri("https://example.test/second")
+            .body(())
+            .unwrap();
+        let (second_response, _) = sender.send_request(second, true).unwrap();
+        assert_eq!(second_response.await.unwrap().status(), http::StatusCode::NO_CONTENT);
+        drop(sender);
+        driver.abort();
+    });
+
+    let mut connection = handshake(Box::new(server_io), None).await.unwrap();
+    let digest = Arc::new(Digest::default());
+    let Some(H2Accept::Session(first)) = H2Session::from_h2_conn(&mut connection, Arc::clone(&digest))
+        .await
+        .unwrap()
+    else {
+        panic!("first H2 stream reaches the application");
+    };
+    let mut first = pingora_core::protocols::http::server::Session::new_http2(first);
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body_config.memory_buffer_bytes = 1;
+    ctx.request_body_config.max_body_size_bytes = 64;
+    ctx.request_body_config.storage_operation_timeout = Duration::from_millis(100);
+
+    use crate::request_body::budget::{StorageBudget, TEST_BUDGET};
+    let budget = StorageBudget::new(1, 64, 4, 4);
+    let result = TEST_BUDGET
+        .scope(budget.clone(), capture_request_body_core(&mut first, &mut ctx, None))
+        .await;
+    assert_eq!(result, Err(BodyReadError::CapacityExceeded));
+    assert_eq!(ctx.request_body.cached_len(), Ok(None));
+    assert!(first.is_http2());
+    drop(first);
+    assert_eq!(budget.usage(), [0; 4]);
+
+    let Some(H2Accept::Session(mut second)) = H2Session::from_h2_conn(&mut connection, Arc::clone(&digest))
+        .await
+        .unwrap()
+    else {
+        panic!("sibling H2 stream remains usable after first-stream cleanup");
+    };
+    second
+        .write_response_header(
+            Box::new(pingora_http::ResponseHeader::build(http::StatusCode::NO_CONTENT, Some(0)).unwrap()),
+            true,
+        )
+        .unwrap();
+    drop(second);
+    let (client_result, connection_result) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(client, H2Session::from_h2_conn(&mut connection, digest))
+    })
+    .await
+    .expect("second response flushes and the client closes the H2 connection");
+    client_result.unwrap();
+    assert!(connection_result.unwrap().is_none());
+}

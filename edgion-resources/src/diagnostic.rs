@@ -312,6 +312,10 @@ pub enum EdgionErrorCode {
     /// (HTTP 500).
     BodyCaptureStorageFailed,
 
+    /// Process-wide request-body storage admission refused growth or capture
+    /// ownership. The gateway fails closed with HTTP 503 under local overload.
+    BodyCaptureCapacityExceeded,
+
     /// A request-body mutation was computed against one logical snapshot but a
     /// different mutation was published before it could be applied. Always a
     /// gateway-side configuration or ordering fault (two plugins mutating the
@@ -450,6 +454,7 @@ impl EdgionErrorCode {
             Self::BodyRefusedNoSnapshot => "BodyRefusedNoSnapshot",
             Self::BodyReplayFailed => "BodyReplayFailed",
             Self::BodyCaptureStorageFailed => "BodyCaptureStorageFailed",
+            Self::BodyCaptureCapacityExceeded => "BodyCaptureCapacityExceeded",
             Self::BodyMutationConflict => "BodyMutationConflict",
             Self::GrpcClientDeadlineExceeded => "GrpcClientDeadlineExceeded",
             Self::BackendRequestTimeoutRetry => "BackendRequestTimeoutRetry",

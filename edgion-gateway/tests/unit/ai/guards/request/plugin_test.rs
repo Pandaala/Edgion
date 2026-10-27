@@ -684,6 +684,7 @@ async fn composed_publication_faults_remain_stricter_than_fail_open() {
     for (failure, status) in [
         (BodyReadError::GenerationConflict, 500),
         (BodyReadError::BufferLimitExceeded { limit: 1 }, 413),
+        (BodyReadError::CapacityExceeded, 503),
     ] {
         let guard = guard(reject_rule(), "maxReplacementBytes: 6\nfailOpen: true\n");
         let mut session = MockPluginSession::new();

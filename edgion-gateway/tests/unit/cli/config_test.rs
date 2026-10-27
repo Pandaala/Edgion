@@ -993,3 +993,14 @@ fn generated_channel_security_loads_file_and_pathless_plaintext() {
         assert!(cert.cert.is_empty() && cert.key.is_empty() && cert.ca.is_empty());
     }
 }
+
+#[test]
+fn request_body_budget_is_a_strict_startup_configuration_subtree() {
+    let (config, unknown) = deserialize_process_config(
+        "gateway:\n  request_body_budget:\n    memory_limit: 64MiB\n    disk_limit: 128MiB\n    max_captures: 16\n    max_files: 8\n",
+    ).unwrap();
+    assert_eq!(config.gateway.request_body_budget.memory_limit, "64MiB");
+    assert_eq!(config.gateway.request_body_budget.max_captures, 16);
+    assert!(unknown.paths().next().is_none());
+    assert!(deserialize_process_config("gateway:\n  request_body_budget:\n    memory_limt: 1MiB\n").is_err());
+}

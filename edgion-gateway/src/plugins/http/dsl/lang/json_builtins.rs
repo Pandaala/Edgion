@@ -1,7 +1,7 @@
 //! Explicit bounded JSON strings and canonical request-body scanning.
 
 use super::super::runtime::DslRuntime;
-use super::body_ops::{body_access_error, DslBodyOps};
+use super::body_ops::{body_access_error, map_body_read_error, DslBodyOps};
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::{Value, ValueWorkBudget};
@@ -170,7 +170,7 @@ impl Vm {
             session
                 .overwrite_request_body(bytes::Bytes::from(outgoing))
                 .await
-                .map_err(|error| body_access_error(error.to_string()))?;
+                .map_err(map_body_read_error)?;
             return Ok(Value::Bool(true));
         }
         if id == BuiltinId::JsonRead {

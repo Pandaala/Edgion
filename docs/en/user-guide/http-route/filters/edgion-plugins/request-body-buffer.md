@@ -42,10 +42,11 @@ consumer's `errorPolicy`. A request that truthfully declared no body still
 reads as the canonical empty body and needs no cache.
 
 Capture failures happen at the pre-VM body gate and have an empty response
-body: request-body limit failures return 413, timeouts return 408, and capture
-refusals or other failures return 500. These gate responses are distinct from
+body: request-body limit failures return 413, timeouts return 408, process-wide
+storage capacity exhaustion returns 503, and refusals or other failures return 500. These gate responses are distinct from
 the fixed generic 500 used when a later VM Body operation cannot access or
-process an already-required cache.
+process an already-required cache. Aggregate capacity exhaustion remains a fixed
+503 for those later VM operations as well.
 
 DSL sees the cache as an opaque `req.body` value. Methods such as
 `byte_len()`, `contains()`, `matches()`, `sha256()`, and `json_get()` inspect
@@ -56,3 +57,9 @@ memory-backed and spilled storage.
 Wasm modules needing the complete request body should normally run in
 `requestPlugins` and export `proxy_on_request_body`; response-stage Wasm host
 phases do not expose this cached request body.
+
+Capture and retained payloads share the startup-only
+[`gateway.request_body_budget`](../../../../ops-guide/configuration/gateway-config.md#process-wide-request-body-storage-admission)
+limits across listeners. Capacity failure is always fail-closed, including DSL and
+Wasm consumers configured to ignore ordinary errors. It is distinct from a 413
+single-request limit and from a 500 storage I/O failure.

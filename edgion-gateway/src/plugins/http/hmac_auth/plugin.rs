@@ -686,6 +686,9 @@ impl RequestFilter for HmacAuth {
                 return body_read_failure_result(session, self.verifier.body_requirement(), plugin_log, &error);
             }
             HmacVerifyOutcome::DigestReadFailure(error) => {
+                if error == BodyReadError::CapacityExceeded {
+                    return body_read_failure_result(session, self.verifier.body_requirement(), plugin_log, &error);
+                }
                 record_body_read_error_status(session, &error);
                 return self
                     .reject(session, plugin_log, 401, "request body unavailable", "Deny body digest")

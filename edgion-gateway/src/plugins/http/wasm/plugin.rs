@@ -354,6 +354,15 @@ impl WasmPlugin {
             // `body_gate.rs::body_read_failure_result`: consumed bytes were
             // never stored, so no forwarding copy of the body exists and
             // `failOpen` cannot help this request.
+            Err(BodyReadError::CapacityExceeded) => {
+                lease.poison();
+                session.record_error(EdgionErrorCode::BodyCaptureCapacityExceeded);
+                log.push_err("body-capacity-exhausted");
+                return PluginRunningResult::ErrResponse {
+                    status: 503,
+                    body: None,
+                };
+            }
             Err(BodyReadError::StorageFailure) => {
                 lease.poison();
                 session.record_error(EdgionErrorCode::BodyCaptureStorageFailed);
@@ -380,6 +389,7 @@ impl WasmPlugin {
                     // Handled above; unreachable here.
                     BodyReadError::NotBuffered => EdgionErrorCode::BodyRefusedStage,
                     BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+                    BodyReadError::CapacityExceeded => EdgionErrorCode::BodyCaptureCapacityExceeded,
                     BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
                 });
                 return self.fail_mode(session, log, "body read");
@@ -419,12 +429,20 @@ impl WasmPlugin {
                         EdgionErrorCode::BodyReadTooLarge
                     }
                     BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+                    BodyReadError::CapacityExceeded => EdgionErrorCode::BodyCaptureCapacityExceeded,
                     BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
                     BodyReadError::Timeout => EdgionErrorCode::BodyReadTimeout,
                     BodyReadError::Incomplete => EdgionErrorCode::BodyReadAborted,
                     BodyReadError::Unimplemented => EdgionErrorCode::BodyReadUnimplemented,
                     BodyReadError::NotBuffered => EdgionErrorCode::BodyRefusedStage,
                 });
+                if matches!(error, BodyReadError::CapacityExceeded) {
+                    log.push_err("body-capacity-exhausted");
+                    return PluginRunningResult::ErrResponse {
+                        status: 503,
+                        body: None,
+                    };
+                }
                 return self.fail_mode(session, log, "body mutation");
             }
         }

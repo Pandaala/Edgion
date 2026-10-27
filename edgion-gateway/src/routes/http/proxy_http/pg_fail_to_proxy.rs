@@ -1,4 +1,5 @@
 use super::EdgionHttpProxy;
+use crate::request_body::BodyReadError;
 use crate::runtime::server::send_grpc_status_trailers_only;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::send_grpc_trailers_only;
@@ -16,6 +17,23 @@ fn is_downstream_read_timeout(e: &Error) -> bool {
 fn is_terminal_upstream_io_timeout(e: &Error) -> bool {
     matches!(e.etype(), ErrorType::ReadTimedout | ErrorType::WriteTimedout)
         && matches!(e.esource(), ErrorSource::Upstream)
+}
+
+fn is_body_capacity_error(e: &Error) -> bool {
+    if !matches!(e.etype(), HTTPStatus(503)) {
+        return false;
+    }
+    let mut cause = e
+        .cause
+        .as_deref()
+        .map(|cause| cause as &(dyn std::error::Error + 'static));
+    while let Some(error) = cause {
+        if error.downcast_ref::<BodyReadError>() == Some(&BodyReadError::CapacityExceeded) {
+            return true;
+        }
+        cause = error.source();
+    }
+    false
 }
 
 #[inline]
@@ -42,7 +60,9 @@ fn classify_proxy_status(e: &Error) -> u16 {
 
 #[inline]
 fn proxy_error_diagnostic(e: &Error, code: u16, timeout_source: Option<PeerTimeoutSource>) -> Option<EdgionErrorCode> {
-    if is_downstream_read_timeout(e) {
+    if is_body_capacity_error(e) {
+        Some(EdgionErrorCode::BodyCaptureCapacityExceeded)
+    } else if is_downstream_read_timeout(e) {
         Some(EdgionErrorCode::BodyReadTimeout)
     } else if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
         Some(EdgionErrorCode::ClientClosed)
@@ -235,6 +255,7 @@ pub async fn fail_to_proxy(
     // timeout while pushing the replayed body) are deliberately excluded —
     // those are upstream failures, not buffer failures.
     if crate::request_body::request_body_replay_active(session)
+        && !is_body_capacity_error(e)
         && (matches!(e.esource(), ErrorSource::Internal) || matches!(e.etype(), ErrorType::InternalError))
     {
         ctx.record_error(EdgionErrorCode::BodyReplayFailed);

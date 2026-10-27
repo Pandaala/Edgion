@@ -58,6 +58,7 @@
 //!       - WWW-Authenticate
 //! ```
 
+use crate::request_body::BodyReadError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -297,6 +298,14 @@ impl RequestFilter for ForwardAuth {
         let body = if self.forward_body {
             match session.read_request_body(None).await {
                 Ok(body) => Some(body),
+                Err(BodyReadError::CapacityExceeded) => {
+                    session.record_error(edgion_resources::EdgionErrorCode::BodyCaptureCapacityExceeded);
+                    plugin_log.push_err("body-capacity-exhausted");
+                    return PluginRunningResult::ErrResponse {
+                        status: 503,
+                        body: None,
+                    };
+                }
                 Err(_) => {
                     session.record_error(edgion_resources::EdgionErrorCode::BodyReadAborted);
                     plugin_log.push_err("forward auth body unavailable");

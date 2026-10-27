@@ -8,6 +8,7 @@ use crate::ai::protocols::openai::canonical_sse::SemanticSseSource;
 use crate::ai::protocols::openai::request;
 use crate::ai::runtime::attempt_plan::AiOperation;
 use crate::ai::runtime::attempt_runtime::AiAttemptAdmissionInput;
+use crate::request_body::BodyReadError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::AiProvider;
@@ -502,8 +503,14 @@ fn prepare_ready_attempt(
     };
     if !plan.body_is_current || body.as_ptr() != plan.request_body.as_ptr() || body.len() != plan.request_body.len() {
         let is_plan = body.as_ptr() == plan.request_body.as_ptr() && body.len() == plan.request_body.len();
-        ctx.overwrite_request_body(body)
-            .map_err(|_| AiDispatchError::InvalidConfiguration)?;
+        ctx.overwrite_request_body(body).map_err(|error| {
+            if error == BodyReadError::CapacityExceeded {
+                ctx.record_error(edgion_resources::EdgionErrorCode::BodyCaptureCapacityExceeded);
+                AiDispatchError::Client(AiProxyError::BackendUnavailable)
+            } else {
+                AiDispatchError::InvalidConfiguration
+            }
+        })?;
         plan.body_generation = ctx.request_body.generation();
         plan.body_is_current = is_plan;
     }

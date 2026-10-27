@@ -243,3 +243,138 @@ async fn admission_is_bounded_and_permit_outlives_timed_out_waiter() {
     .expect("permit returns after the real blocking operation ends");
     assert_eq!(limiter.available_permits(), 1);
 }
+
+#[tokio::test]
+async fn budget_is_retained_by_late_append_after_timeout_or_cancellation() {
+    use crate::request_body::budget::{StorageBudget, TEST_BUDGET};
+    for cancel in [false, true] {
+        let budget = StorageBudget::new(16, 16, 1, 1);
+        let (mut storage, view) = TEST_BUDGET
+            .scope(Arc::clone(&budget), async {
+                let (mut storage, view) = BodyStorage::with_storage_timeout(1, 16, Duration::from_millis(100));
+                storage.write(&Bytes::from_static(b"ab")).await.unwrap();
+                (storage, view)
+            })
+            .await;
+        let gate = blocking_hook(StorageIoOperation::SpillWrite);
+        let task = tokio::spawn(STORAGE_IO_TEST_HOOK.scope(gate.hook, async move {
+            let result = storage.write(&Bytes::from_static(b"cd")).await;
+            (storage, result)
+        }));
+        wait_until_entered(gate.entered).await;
+        assert_eq!(budget.usage(), [2, 4, 1, 1]);
+        if cancel {
+            task.abort();
+            assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+        } else {
+            let (storage, result) = task.await.unwrap();
+            assert!(result.is_err());
+            drop(storage);
+        }
+        drop(view);
+        assert_eq!(budget.usage(), [2, 4, 1, 1]);
+        gate.release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while budget.usage() != [0; 4] {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn partially_written_file_keeps_attempted_disk_reservation_until_last_owner() {
+    use crate::request_body::budget::StorageBudget;
+    let budget = StorageBudget::new(16, 16, 1, 1);
+    let lease = budget.capture().unwrap();
+    let file = Arc::new(BudgetedFile {
+        file: tempfile().unwrap(),
+        disk: budget.disk.reserve(0).unwrap().shared(),
+        _file_slot: budget.files.reserve(1).unwrap(),
+        lease,
+    });
+    let retained = Arc::clone(&file);
+    file.disk.grow(8).unwrap();
+    let result: Result<(), StorageIoError> =
+        run_storage_io(Duration::from_secs(1), StorageIoOperation::SpillWrite, move || {
+            write_all_at(&file, b"part", 0)?;
+            Err(io::Error::other("injected failure after a partial append"))
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(retained.metadata().unwrap().len(), 4);
+    assert_eq!(budget.usage(), [0, 8, 1, 1]);
+    drop(retained);
+    assert_eq!(budget.usage(), [0; 4]);
+}
+
+struct OpaqueInput {
+    bytes: Vec<u8>,
+    dropped: Arc<AtomicBool>,
+}
+impl AsRef<[u8]> for OpaqueInput {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+impl Drop for OpaqueInput {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+fn opaque_input(bytes: &[u8]) -> (Bytes, Arc<AtomicBool>) {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let body = Bytes::from_owner(OpaqueInput {
+        bytes: bytes.to_vec(),
+        dropped: Arc::clone(&dropped),
+    });
+    (body, dropped)
+}
+
+#[tokio::test]
+async fn mutation_releases_opaque_inputs_before_waiting_for_scanner_or_io() {
+    use crate::request_body::budget::{StorageBudget, TEST_BUDGET};
+    let budget = StorageBudget::new(32, 32, 1, 1);
+    TEST_BUDGET
+        .scope(Arc::clone(&budget), async {
+            let (mut storage, view) = BodyStorage::with_limits(1, 32);
+            storage.write(&Bytes::from_static(b"abcdef")).await.unwrap();
+            storage.finish().await.unwrap();
+            let permits = Arc::clone(scan_limiter())
+                .acquire_many_owned(SCAN_CONCURRENCY as u32)
+                .await
+                .unwrap();
+            let (from, from_dropped) = opaque_input(b"--ab--");
+            let (to, to_dropped) = opaque_input(b"--xy--");
+            let mut mutation = Box::pin(view.replace_literal(from.slice(2..4), to.slice(2..4), 32));
+            drop(from);
+            drop(to);
+            assert!(futures::poll!(&mut mutation).is_pending());
+            assert!(from_dropped.load(Ordering::Acquire));
+            assert!(to_dropped.load(Ordering::Acquire));
+            assert_eq!(budget.usage()[0], 2);
+            drop(mutation);
+            drop(permits);
+            assert_eq!(budget.usage()[0], 0);
+
+            let (original, replacement_dropped) = opaque_input(b"--xy--");
+            let replacement = original.slice(2..4);
+            drop(original);
+            let gate = blocking_hook(StorageIoOperation::MaterializeRead);
+            let work_view = Arc::clone(&view);
+            let task = tokio::spawn(STORAGE_IO_TEST_HOOK.scope(gate.hook, async move {
+                work_view.replace_slice(0..2, replacement).await
+            }));
+            wait_until_entered(gate.entered).await;
+            assert!(replacement_dropped.load(Ordering::Acquire));
+            assert_eq!(budget.usage()[0], 8);
+            gate.release.send(()).unwrap();
+            assert_eq!(task.await.unwrap().unwrap(), "xycdef");
+            drop(view);
+            drop(storage);
+        })
+        .await;
+    assert_eq!(budget.usage(), [0; 4]);
+}

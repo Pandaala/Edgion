@@ -138,3 +138,12 @@ request-stage flag and preserves the canonical frozen-body contract. No response
 aggregation is introduced. redis.get_bounded returns the existing non-throwing
 map, with fixed result_too_large/invalid_response/timeout classes; old get retains
 its separate truncation contract.
+
+## Request-body aggregate capacity
+
+`RuntimeError::BodyCapacityExceeded` preserves request-body storage admission
+failure through body operations and nested body readers. The DSL plugin returns
+fixed HTTP 503 before applying Ignore/DenyWith error policy. Existing BodyAccess
+500 and outbound-call ApiError behavior is unchanged. This budget belongs to the
+request-body storage owner; it does not budget arbitrary DSL strings or outbound
+response bodies. See the [storage budget contract](../../04-review/http-body/regression-guards/request-body-aggregate-budget.md).

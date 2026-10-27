@@ -371,6 +371,11 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub geoip: crate::geoip::GeoIpConfig,
 
+    /// Process-wide request-body storage admission. Restart required.
+    #[arg(skip)]
+    #[serde(default)]
+    pub request_body_budget: crate::request_body::budget::RequestBodyBudgetConfig,
+
     /// How to select the FIPS-approved TLS policy (approved cipher list +
     /// curves) on downstream listeners. `auto` (the default) follows the host
     /// kernel's FIPS mode; `on` always enforces; `off` never does. A real FIPS
@@ -497,6 +502,7 @@ impl Default for GatewayConfig {
             probe_listen: None,
             admin_token: None,
             require_fips: false,
+            request_body_budget: Default::default(),
             geoip: crate::geoip::GeoIpConfig::default(),
             fips_policy: None,
             outbound_egress_block_private: false,

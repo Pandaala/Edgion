@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use crate::request_body::BodyReadError;
 use async_trait::async_trait;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
@@ -59,7 +60,14 @@ impl RequestFilter for JsonSchemaValidation {
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body length unavailable");
-                return Self::reject(500, None);
+                return Self::reject(
+                    if error == BodyReadError::CapacityExceeded {
+                        503
+                    } else {
+                        500
+                    },
+                    None,
+                );
             }
         };
 
@@ -82,7 +90,14 @@ impl RequestFilter for JsonSchemaValidation {
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body materialization failed");
-                return Self::reject(500, None);
+                return Self::reject(
+                    if error == BodyReadError::CapacityExceeded {
+                        503
+                    } else {
+                        500
+                    },
+                    None,
+                );
             }
         };
         if body.len() as u64 > ABSOLUTE_INSTANCE_MAX_BYTES {

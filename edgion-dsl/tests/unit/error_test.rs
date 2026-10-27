@@ -27,3 +27,11 @@ fn value_limit_errors_have_stable_concise_display() {
         "value work budget exceeded (16777216)"
     );
 }
+
+#[test]
+fn body_capacity_has_distinct_stable_display() {
+    assert_eq!(
+        RuntimeError::BodyCapacityExceeded.to_string(),
+        "request body storage capacity exhausted"
+    );
+}

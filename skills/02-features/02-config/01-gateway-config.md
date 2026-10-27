@@ -860,3 +860,9 @@ Admin store-stats exposes `wasm_admission.limits` and current `guest_bytes`,
 `instances`, `preparations`, `idle_instances`, `idle_guest_bytes`. Reading stats
 before startup does not publish defaults. Independent counter samples follow real
 owners, including retired live requests; they are not a transactional heap sample.
+
+## Process-wide request-body storage admission
+
+`gateway.request_body_budget` is a strict startup-only process configuration,
+shared across listeners and EGC generations. See the [operator fields and defaults](../../../docs/en/ops-guide/configuration/gateway-config.md#process-wide-request-body-storage-admission)
+and the [retained-owner accounting contract](../../04-review/http-body/regression-guards/request-body-aggregate-budget.md).

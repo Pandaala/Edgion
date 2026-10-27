@@ -3,6 +3,7 @@
 use super::{json_request_headers_are_supported, supported_identity_encoding};
 use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::request_body::BodyReadError;
 use bytes::Bytes;
 use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::filters::PluginRunningResult;
@@ -121,7 +122,14 @@ where
         Err(error) => {
             record_body_read_error_status(session, &error);
             log.push_err("body length unavailable");
-            return Err(reject(session, 500));
+            return Err(reject(
+                session,
+                if error == BodyReadError::CapacityExceeded {
+                    503
+                } else {
+                    500
+                },
+            ));
         }
     };
     if body_len > envelope_limit as u64
@@ -171,7 +179,14 @@ where
             Err(error) => {
                 record_body_read_error_status(session, &error);
                 log.push_err("body materialization failed");
-                return Err(reject(session, 500));
+                return Err(reject(
+                    session,
+                    if error == BodyReadError::CapacityExceeded {
+                        503
+                    } else {
+                        500
+                    },
+                ));
             }
         };
         catch_redacted_panic(|| ParsedGraphqlRequest::parse_post(&body, envelope_limit).and_then(evaluate))

@@ -42,6 +42,9 @@ pub enum BodyReadError {
     /// and always fail-close — the consumed bytes were not stored, so no
     /// forwarding copy of the body exists.
     StorageFailure,
+    /// Process-wide capture storage capacity is exhausted. Always fail closed
+    /// with HTTP 503; this is local overload, not a per-request size violation.
+    CapacityExceeded,
     /// Downstream request-body capture exceeded its time bound. Distinct from
     /// `Incomplete` (an aborted stream) and `StorageFailure` (storage I/O): a
     /// capture deadline expiry is a client error and maps to HTTP 408, not 500.
@@ -60,6 +63,7 @@ impl std::fmt::Display for BodyReadError {
             BodyReadError::Incomplete => write!(f, "body stream incomplete"),
             BodyReadError::GenerationConflict => write!(f, "body mutation conflict"),
             BodyReadError::StorageFailure => write!(f, "body capture storage failed"),
+            BodyReadError::CapacityExceeded => write!(f, "request body storage capacity exhausted"),
             BodyReadError::Timeout => write!(f, "body read timed out"),
         }
     }
