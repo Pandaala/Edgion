@@ -43,7 +43,7 @@ that decision. No implementation is selected by this task.
   adjacent percent runs, invalid bytes, incomplete tokens, embedded plus,
   `%+A`, `%%41`, and valid-prefix/invalid-tail runs. Include exact and over-limit
   DSL outputs and paths where the existing input String is already oversized.
-- Keep query provenance: `req.query` reads the frozen decoded cache; whole-query
+- Keep query provenance: `req.query` reads the current decoded Query owner; whole-query
   reads are raw. Keep route matching, query duplicate-key behavior, LB raw-name
   fast paths/raw selected values, and auth query-removal policy unchanged.
 - Compare construction, copies, allocation/retained capacity and scan work for

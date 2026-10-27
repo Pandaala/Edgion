@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, strip_cookie, strip_query_param,
+    apply_auth_failure_delay, send_gateway_auth_error_response, strip_cookie, strip_query_param, PreparedAuthChallenge,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::session_adapter::key_value;
@@ -61,7 +61,7 @@ pub struct KeyAuth {
     hide_credentials: bool,
     auth_failure_delay_ms: u64,
     anonymous: Option<String>,
-    realm: String,
+    auth_challenge: PreparedAuthChallenge,
     forward_anonymous_username: bool,
     /// SHA-256(key) → Metadata mapping. Keys are stored as hashes to avoid keeping
     /// plaintext API keys in process memory after initialization.
@@ -83,7 +83,7 @@ impl KeyAuth {
             hide_credentials: config.hide_credentials,
             auth_failure_delay_ms: config.auth_failure_delay_ms,
             anonymous: config.anonymous,
-            realm: config.realm,
+            auth_challenge: PreparedAuthChallenge::new("ApiKey", &config.realm),
             forward_anonymous_username,
             keys,
         }
@@ -163,7 +163,7 @@ impl KeyAuth {
 
     /// Return 401 Unauthorized response
     async fn unauthorized(&self, session: &mut dyn PluginSession, body: &'static str) -> PluginRunningResult {
-        let _ = send_gateway_auth_error_response(session, 401, "ApiKey", &self.realm, None, body).await;
+        let _ = send_gateway_auth_error_response(session, 401, &self.auth_challenge, None, body).await;
         PluginRunningResult::ErrTerminateRequest
     }
 }

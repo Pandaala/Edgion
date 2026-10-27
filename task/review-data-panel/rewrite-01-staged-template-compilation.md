@@ -56,7 +56,7 @@ scanning, allocations/copied bytes and retained compiled metadata for literal,
 variable-heavy and long templates before claiming value. Preserve immutable
 configuration generations and old in-flight plugin instances.
 
-Tests must cover URI and add/set header sinks, frozen query/path inputs,
+Tests must cover URI and add/set header sinks, current query and frozen path-capture inputs,
 absent/empty values, percent encoding, repeated/unknown/prefix-related names,
 injected `$uri`, `$arg_`, numeric and named tokens, existing NUL, capture ten,
 raw regex-capture slashes, query preservation and failure/log behavior. A parser

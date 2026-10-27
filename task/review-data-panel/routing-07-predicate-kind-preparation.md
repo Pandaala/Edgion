@@ -52,7 +52,7 @@ existing condition language. Keeping current dispatch is a valid outcome.
   [HTTP](../../skills/04-review/routing/regression-guards/http-header-match-first-name-wins.md)
   and [gRPC](../../skills/04-review/routing/regression-guards/grpc-header-match-first-name-wins.md)
   contracts independently.
-- Keep the frozen lazy query cache and last-decoded-duplicate semantics. Do not
+- Keep the current lazy Query owner and last-decoded-duplicate semantics. Do not
   parse queries for candidates without query conditions or ahead of existing
   Listener, method and header rejection gates.
 - Prepare only at existing cold constructors. Inspect both HTTP builders,

@@ -3328,7 +3328,7 @@ async fn read_response_body_missing_entry_method_cannot_claim_live_head() {
 }
 
 #[tokio::test]
-async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies() {
+async fn borrowed_query_conditions_observe_current_decoded_values_without_copies() {
     use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
     use edgion_resources::resources::edgion_plugins::conditions::{
         Condition, ConditionSet, KeyMatchCondition, MatchCore, PluginConditions,
@@ -3356,7 +3356,7 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
         assert_eq!(adapter.get_query_param("empty"), Some(String::new()));
         assert_eq!(adapter.get_query_param("missing"), None);
     }
-    let stored = ctx.entry_query_param("x").unwrap().as_ptr();
+    let entry = ctx.entry_query_param("x").unwrap().as_ptr();
     let key = KeyGet::Query { name: "x".to_string() };
     let mut condition = KeyMatchCondition {
         key: key.clone(),
@@ -3380,13 +3380,15 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
     }
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert_eq!(adapter.request_query(), Some("x=changed"));
-    assert_eq!(adapter.get_query_param_ref("x").unwrap().as_ptr(), stored);
+    let current = adapter.get_query_param_ref("x").unwrap().as_ptr();
+    assert_ne!(current, entry);
+    assert_eq!(adapter.get_query_param_ref("x").unwrap().as_ptr(), current);
     let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.key_get(&key));
-    assert_eq!(owned.as_deref(), Some("hello world"));
+    assert_eq!(owned.as_deref(), Some("changed"));
     assert_eq!(calls, 1);
     for _ in 0..2 {
         let (result, calls) = crate::test_allocation_counter::count_allocations(|| conditions.evaluate(&adapter));
-        assert_eq!(result, EvaluationResult::Run);
+        assert_ne!(result, EvaluationResult::Run);
         assert_eq!(calls, 0, "cached query conditions must borrow the stored value");
     }
 }
@@ -3664,7 +3666,7 @@ async fn current_raw_query_borrows_live_uri_without_copying() {
         let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.get_query());
         assert_eq!(owned.as_deref(), borrowed);
         assert_eq!(calls, usize::from(expected.is_some_and(|value| !value.is_empty())));
-        assert_eq!(adapter.get_query_param_ref("frozen"), Some("yes"));
+        assert_eq!(adapter.get_query_param_ref("frozen"), None);
     }
 }
 

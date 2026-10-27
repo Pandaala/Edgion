@@ -13,7 +13,7 @@ conditions for every response chunk. The shared condition evaluator borrows live
 `Header`, `Cookie`, `Path`, `RequestPath`, `Method`, `RemoteIp`, `DirectPeerIp`
 and `Ctx` values for one predicate evaluation. It also borrows the captured
 canonical `TraceId`, frozen normalized `Host` and mTLS certificate candidates.
-Query conditions borrow the decoded frozen entry-query cache for the same short
+Query conditions borrow the decoded logical current Query for the same short
 evaluation; they do not read the live rewritten URI. `KeyExist`, `KeyMatch`,
 `SecretMatch`, and keyed `Probability` use that value accessor. KeyExist uses a
 direct presence check for RemoteIpAndPath, whose existence depends only on a
@@ -78,7 +78,7 @@ The other sources have different costs or lifetimes:
 | Source | Current per-evaluation work | Ownership and source boundary |
 |---|---|---|
 | `TraceId`, `Host` | Borrow captured request identity | The standard W3C ID survives default-header suppression; Host uses the frozen normalized entry value, not the live header. |
-| `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
+| `Query` | Borrows one decoded value from the lazily initialized current Query | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
 | `Ctx` | Borrows the current context value | The short session borrow ends before later plugins set or remove variables. |
 | `RemoteIpAndPath` | KeyExist checks RemoteIp presence; value consumers construct one pre-sized owned composite | A nonempty RemoteIp produces a value even with an empty Path; matching and hashing still need the composite contents. |
 | `JwtClaimMatch` | Borrows context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
@@ -274,5 +274,5 @@ The former condition-local value accessor now lives at
 unchanged; conditions and KeyAuth share the same borrowed read mechanism.
 KeyAuth keeps its separate source whitelist and first-nonempty selection policy.
 This relocation adds no caching and preserves per-evaluation live reads and
-frozen decoded-query ownership. Existing condition tests and real-adapter
+current decoded-query ownership. Existing condition tests and real-adapter
 query/context regressions remain the relevant behavior evidence.

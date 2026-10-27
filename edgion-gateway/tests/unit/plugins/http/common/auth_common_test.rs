@@ -1,6 +1,6 @@
 use super::{
     escape_quoted_string, format_claim_header_value, resolve_claim_path, send_gateway_auth_error_response,
-    set_claims_headers, strip_cookie, strip_query_param, AggregateHeaderBudgetExceeded, Claims,
+    set_claims_headers, strip_cookie, strip_query_param, AggregateHeaderBudgetExceeded, Claims, PreparedAuthChallenge,
 };
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use mockall::Sequence;
@@ -235,8 +235,7 @@ async fn auth_realm_challenges_escape_data_and_preserve_response_contract() {
                 send_gateway_auth_error_response(
                     &mut session,
                     401,
-                    scheme,
-                    realm,
+                    &PreparedAuthChallenge::new(scheme, realm),
                     error_code,
                     "Denied \"token\"\\\r\n",
                 )
@@ -256,9 +255,15 @@ async fn auth_realm_controls_fail_before_any_response_is_written() {
             session.expect_write_response_body().never();
             session.expect_shutdown().never();
             let realm = format!("private-realm{}suffix", char::from(byte));
-            let error = send_gateway_auth_error_response(&mut session, 401, "Bearer", &realm, error_code, "Denied")
-                .await
-                .unwrap_err();
+            let error = send_gateway_auth_error_response(
+                &mut session,
+                401,
+                &PreparedAuthChallenge::new("Bearer", &realm),
+                error_code,
+                "Denied",
+            )
+            .await
+            .unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "realm must not contain ASCII control characters (including tabs and DEL)"
@@ -663,20 +668,29 @@ fn auth_challenge_exact_capacity_preserves_bytes_and_header_conversion() {
                         ),
                         None => format!("{} realm=\"{}\"", scheme, escaped_realm),
                     };
-                    let value = super::build_auth_challenge(scheme, &escaped_realm, code, body);
-                    assert_eq!(value, expected);
-                    assert_eq!(value.capacity(), value.len());
-                    let input_ptr = value.as_ptr();
-                    let borrowed = http::HeaderValue::from_str(&value);
-                    let (owned, stats) =
-                        crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(value));
-                    assert_eq!(owned.is_ok(), borrowed.is_ok());
-                    if let (Ok(owned), Ok(borrowed)) = (owned, borrowed) {
-                        assert_eq!(owned, borrowed);
-                        assert_eq!(owned.as_bytes().as_ptr(), input_ptr);
+                    let prepared = PreparedAuthChallenge::new(scheme, realm);
+                    let actual = prepared.challenge(code, body);
+                    let expected = http::HeaderValue::from_str(&expected);
+                    assert_eq!(actual.is_ok(), expected.is_ok());
+                    if let (Ok(actual), Ok(expected)) = (actual, expected) {
+                        assert_eq!(actual, expected);
                     }
-                    assert_eq!(stats.calls, 0);
-                    assert_eq!(stats.requested_bytes, 0);
+                    if let (Ok(base), Some(code)) = (&prepared.base, code) {
+                        let value = super::build_auth_challenge(base.as_bytes(), code, body);
+                        assert_eq!(value.capacity(), value.len());
+                        let input_ptr = value.as_ptr();
+                        let borrowed = http::HeaderValue::from_bytes(&value);
+                        let (owned, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                            http::HeaderValue::try_from(value)
+                        });
+                        assert_eq!(owned.is_ok(), borrowed.is_ok());
+                        if let (Ok(owned), Ok(borrowed)) = (owned, borrowed) {
+                            assert_eq!(owned, borrowed);
+                            assert_eq!(owned.as_bytes().as_ptr(), input_ptr);
+                        }
+                        assert_eq!(stats.calls, 0);
+                        assert_eq!(stats.requested_bytes, 0);
+                    }
                 }
             }
         }
@@ -685,9 +699,9 @@ fn auth_challenge_exact_capacity_preserves_bytes_and_header_conversion() {
 
 #[test]
 fn auth_challenge_plain_fields_need_one_exact_output_allocation() {
-    for (code, body) in [(None, "ignored\"\\\r\n"), (Some("invalid_token"), "Denied café")] {
+    for (code, body) in [("", "Denied"), ("invalid_token", "Denied café")] {
         let (challenge, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
-            super::build_auth_challenge("Bearer", "edgion", code, body)
+            super::build_auth_challenge(b"Bearer realm=\"edgion\"", code, body)
         });
         assert_eq!(stats.calls, 1);
         assert_eq!(stats.requested_bytes, challenge.len());
@@ -751,9 +765,15 @@ async fn auth_error_response_stops_at_the_first_write_failure() {
                 .returning(|_, _| Err(std::io::Error::other("body rejected").into()));
         }
         session.expect_shutdown().times(0);
-        let error = send_gateway_auth_error_response(&mut session, 401, "Bearer", "edgion", None, "Denied")
-            .await
-            .unwrap_err();
+        let error = send_gateway_auth_error_response(
+            &mut session,
+            401,
+            &PreparedAuthChallenge::new("Bearer", "edgion"),
+            None,
+            "Denied",
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             error.to_string(),
             if fail_header {
@@ -831,4 +851,57 @@ fn consumed_claims_reuse_owned_string_buffers() {
     assert_eq!(value["sub"].as_str().unwrap().as_ptr(), subject);
     assert_eq!(value["aud"][0].as_str().unwrap().as_ptr(), audience);
     assert_eq!(value["custom"]["roles"][0].as_str().unwrap().as_ptr(), role);
+}
+
+#[test]
+fn prepared_auth_challenge_first_and_repeated_clones_allocate_nothing() {
+    for realm in ["edgion", "Partner \"API\"\\", "café €"] {
+        let prepared = PreparedAuthChallenge::new("Bearer", realm);
+        let pointer = prepared.base.as_ref().unwrap().as_bytes().as_ptr();
+        for _ in 0..4 {
+            let (mut header, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                prepared.challenge(None, "ignored\r\n\"").unwrap()
+            });
+            assert_eq!(stats.calls, 0);
+            assert_eq!(stats.requested_bytes, 0);
+            assert_eq!(header.as_bytes().as_ptr(), pointer);
+            header.set_sensitive(true);
+            assert!(!prepared.base.as_ref().unwrap().is_sensitive());
+        }
+    }
+}
+
+#[tokio::test]
+async fn prepared_auth_challenge_concurrent_descriptions_remain_independent() {
+    let prepared = Arc::new(PreparedAuthChallenge::new("Bearer", "café \"API\""));
+    let mut handles = Vec::new();
+    for n in 0..8 {
+        let prepared = prepared.clone();
+        handles.push(tokio::spawn(async move {
+            let description = format!("denied-{n}\"\\\r\n");
+            let expected = format!(
+                "Bearer realm=\"café \\\"API\\\"\", error=\"invalid_token\", error_description=\"denied-{n}\\\"\\\\\""
+            );
+            let mut session = MockPluginSession::new();
+            session
+                .expect_write_response_header()
+                .times(1)
+                .returning(move |header, _| {
+                    assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+                    Ok(())
+                });
+            session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+            session.expect_shutdown().times(1).returning(|| {});
+            send_gateway_auth_error_response(&mut session, 401, &prepared, Some("invalid_token"), &description)
+                .await
+                .unwrap();
+        }));
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
+    assert_eq!(
+        prepared.challenge(None, "ignored").unwrap().as_bytes(),
+        "Bearer realm=\"café \\\"API\\\"\"".as_bytes()
+    );
 }

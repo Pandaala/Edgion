@@ -8,12 +8,15 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-The Gateway's canonical `send_gateway_auth_error_response` validates the raw realm
-and escapes double quotes and backslashes before writing `WWW-Authenticate`.
+The Gateway's canonical `PreparedAuthChallenge` validates and escapes the raw realm
+once during plugin construction. Its immutable header base lives with the plugin's
+runtime generation. `send_gateway_auth_error_response` borrows this owner: None-code
+responses clone the base; Some-code responses append request-specific error fields.
 The six configurable consumers are BasicAuth, KeyAuth, JwtAuth, OpenidConnect,
-LdapAuth, and HmacAuth. Their `realm: String` fields retain the original value
-through configuration serialization and runtime ownership; escaping occurs only
-at response construction. HeaderCertAuth and JweDecrypt pass the constant `edgion`.
+LdapAuth, and HmacAuth; HeaderCertAuth and JweDecrypt prepare constant `edgion`.
+Serialized raw configuration is unchanged. LDAP's configured header_type remains
+the exact challenge scheme. Runtime-only raw realm copies in KeyAuth, HmacAuth and
+LDAP AuthPolicy are replaced by the prepared owner.
 
 The shared `validate_auth_realm` in
 `edgion-resources/src/resources/edgion_plugins/auth_realm.rs` rejects ASCII controls
@@ -40,9 +43,11 @@ authentication bypass or response splitting.
   construction; `compile_plugins` seals errors into the existing fail-closed gate.
   Invalid auth updates replace the previous generation with that gate; they do
   not use the DSL/WAF last-known-good exception. Disabled entries remain inert.
-- Response path: `plugins/http/common/auth_common.rs` revalidates before response
-  construction and reuses `escape_quoted_string` for realm and error description.
-  Ordinary values are borrowed to avoid an extra escaped-string allocation.
+- Construction path: `plugins/http/common/auth_common.rs` validates the realm and
+  reuses `escape_quoted_string`. Invalid direct construction retains a data-free
+  error; the response path checks it before any write, with no panic or fallback.
+- Response descriptions still use the same canonical escaping per request. Prepared
+  base bytes are copied as bytes for dynamic suffixes, preserving UTF-8 obs-text.
 
 ## Alternatives and limits
 
@@ -97,21 +102,24 @@ validation. Historical checks from the Bearer attribute fix are not current test
 - D0039 / `harden-auth-challenge-realm-quoted-strings`: corrected and verified on
   2026-09-07; the original disposition was deferred, not accepted risk.
 
-## Exact-capacity challenge ownership
+## Generation-owned challenge preparation
 
-The shared response helper retains realm validation/escaping before constructing
-the response header. Its private challenge builder sizes the output from the
-already escaped realm and, only when an error code exists, the escaped description.
-Literal separators, raw scheme/code bytes and both challenge forms remain the
-same. The completed String moves into WWW-Authenticate instead of being copied
-through a borrowed conversion. Response header/body/shutdown ordering is unchanged.
+`auth-02-prepared-challenge-generation` moves only stable scheme/realm work into
+the runtime constructor. It does not cache status, body, error code, description or
+secrets. One prepared owner contains a valid HeaderValue or a static failure.
+The constructor promotes shared byte ownership on the cold path; no mutable
+response template, global cache or extra per-request lookup exists. Existing entry
+and request-pinned runtime ownership keeps old/new generations coherent and releases
+prepared data after their final owner and response header clone drop.
 
-The byte-parity matrix compares the previous formatting expressions across 1,680
-combinations, checks exact capacity and compares owned/borrowed header validation.
-Valid owned conversions retain the source pointer and all measured conversions
-allocate zero times on pinned http/bytes. Selected clean-description cases build
-the challenge in one allocation requesting exactly its length; descriptions that
-require escaping can allocate separately. A None code does not escape the body.
-Existing async regressions retain realm rejection before writes and exact response
-headers, body and write ordering. This is not an allocation-free response callback
-or a throughput claim.
+Some-code construction sizes one output Vec from base bytes, raw code and escaped
+description, then transfers it into HeaderValue. None-code paths do not inspect the
+body or append attributes. Existing response ordering, failures, delay and shutdown
+semantics remain unchanged. HeaderValue::to_str must not be used on the prepared
+base because accepted UTF-8 realms can contain obs-text.
+
+The byte-parity and exact-capacity regressions remain, with first/repeated clone,
+concurrent dynamic descriptions, invalid direct construction and generation
+ownership coverage. Allocation assertions describe challenge construction only;
+the complete response still allocates. Retained base bytes and shared metadata are
+an explicit per-generation tradeoff, not a throughput or RSS claim.

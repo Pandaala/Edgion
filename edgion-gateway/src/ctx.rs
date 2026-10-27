@@ -3479,6 +3479,13 @@ impl EdgionHttpContext {
             .finalize_status(session_status.or(selected_status).unwrap_or(0));
     }
 
+    /// Borrow the last decoded-name match from the current Query.
+    /// Unmodified requests reuse the entry document; edits select the current
+    /// backing and reuse its lazy decoded projections without transport sync.
+    pub fn query_param(&self, name: &str) -> Option<&str> {
+        self.request_query.current_param(name)
+    }
+
     /// Borrow the last decoded-name match from the frozen entry Query.
     /// Token and decoded projections initialize on demand and remain reusable
     /// across current-query rewrites. Values follow the canonical percent/plus

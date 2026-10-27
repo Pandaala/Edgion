@@ -1248,6 +1248,9 @@ async fn ip_dependency_abort_discards_queued_output_and_releases_real_conversion
     let mut session = test_session().await;
     session.req_header_mut().set_uri("/v1/hello/world".parse().unwrap());
     let mut ctx = EdgionHttpContext::default();
+    ctx.request_query
+        .capture(session.req_header().uri.query().map(str::to_owned))
+        .unwrap();
     ctx.route_unit = Some(http_route_unit(Arc::new(PluginRuntime::new())));
     ctx.request_info.normalized_current_path = "/v1/hello/world".into();
     ctx.request_info.body_declared = Some(false);

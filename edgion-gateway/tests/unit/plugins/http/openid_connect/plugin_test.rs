@@ -4529,3 +4529,31 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
         }
     }
 }
+
+#[tokio::test]
+async fn prepared_oidc_challenge_preserves_dynamic_descriptions_and_utf8_realm() {
+    let mut config = base_config();
+    config.realm = "café \"API\"\\".to_string();
+    let oidc = actual_oidc(&config, "default".to_string()).unwrap();
+    for body in ["missing scope", "denied \"scope\"\\\r\n"] {
+        let escaped = body
+            .replace(['\r', '\n'], "")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let expected = format!(
+            "Bearer realm=\"café \\\"API\\\"\\\\\", error=\"insufficient_scope\", error_description=\"{escaped}\""
+        );
+        let mut session = MockPluginSession::new();
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |header, _| {
+                assert_eq!(header.status.as_u16(), 403);
+                assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+                Ok(())
+            });
+        session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+        session.expect_shutdown().times(1).returning(|| {});
+        oidc.send_forbidden(&mut session, body).await.unwrap();
+    }
+}

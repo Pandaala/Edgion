@@ -40,13 +40,14 @@ operator perspective: $path / $uri / $query           (current view)
 session trait:        get_path() -> &str              get_request_path() -> &str
                       get_uri() -> String             get_request_uri() -> String
                       get_query() -> Option<String>   get_query_param(name) -> Option<String>
-                       ↑ plugin interface              (single-key, decoded, frozen)
+                       ↑ plugin interface              (single-key, decoded, current)
 
 EdgionHttpContext canonical API:
                       ctx.path()                     (current view, read from cache)
                       ctx.request_path()             (entry view, frozen)
                       ctx.query()                    (current view, whole-string passthrough)
-                      ctx.entry_query_param(name)    (entry view, single-key decoded, init-once)
+                      ctx.query_param(name)          (current view, single-key decoded, lazy)
+                      ctx.entry_query_param(name)    (explicit frozen entry view)
                       ctx.uri()                      (current path + current query)
                       ctx.request_uri()              (entry path + entry query)
                       ctx.refresh_normalized_path(req)(refresh current cache;
@@ -65,20 +66,20 @@ pingora field:        req_header().uri
 |-------|--------------|----------------------|
 | **EdgionHttpContext methods** (canonical) | `ctx.path() -> &str` | `ctx.request_path() -> &str` |
 | | `ctx.uri() -> String` | `ctx.request_uri() -> String` |
-| | `ctx.query() -> Option<&str>` (whole, raw, passthrough) | `ctx.entry_query_param(name) -> Option<&str>` (single-key, decoded, frozen) |
+| | `ctx.query()` (whole, raw), `ctx.query_param(name)` (single-key, decoded) | `ctx.entry_query()`, `ctx.entry_query_param(name)` |
 | **EdgionHttpContext write methods** (only used by the adapter) | `ctx.refresh_normalized_path(req)` | — |
 | **pingora raw fields** (business code MUST NOT read directly; allowlist below) | — | `req_header().uri` |
 | **session trait** | `get_path() -> &str` | `get_request_path() -> &str` |
 | | `get_uri() -> String` | `get_request_uri() -> String` |
-| | `get_query() -> Option<String>` (whole, raw) | `get_query_param(name) -> Option<String>` (single-key, decoded, frozen) |
+| | `get_query()` (whole, raw), `get_query_param(name)` (single-key, decoded) | — |
 | **DSL builtin** | `req.path` | `req.request_path` |
 | | `req.uri` | `req.request_uri` |
-| | `req.query_string` (whole, raw) | `req.query("name")` (single-key, decoded, frozen) |
+| | `req.query_string` (whole, raw), `req.query("name")` (single-key, decoded) | — |
 | **ctx_set template variable** | `$path` | `$request_path` |
 | | `$uri` | `$request_uri` |
-| | (whole-query template var not supported) | `TemplateVarType::Query` with `var_name` (single-key, decoded, frozen) |
+| | `TemplateVarType::Query` with `var_name` (single-key, decoded) | — |
 | **`request_restriction` condition** | `keyMatch` + `key: { type: path }` | `keyMatch` + `key: { type: requestPath }` |
-| | (whole-query key not supported) | `keyMatch` + `key: { type: query, name }` (single-key, decoded, frozen) |
+| | `keyMatch` + `key: { type: query, name }` (single-key, decoded) | — |
 
 ### Naming rules
 
@@ -90,8 +91,13 @@ pingora field:        req_header().uri
 
 `EdgionHttpContext::request_query` owns the frozen entry raw query and the logical
 current query. `ctx.entry_query()` borrows entry bytes; `ctx.entry_query_param(name)`
-returns the last decoded-name match and decoded value. Routing, ordinary plugin
-single-key reads and access-log query projections use that frozen entry view.
+returns the last decoded-name match and decoded value for explicit entry consumers
+such as access-log query projections. Ordinary single-key reads use `ctx.query_param`,
+including routing predicates, authentication, conditions, DSL, templates and outbound
+origin fields. Before edits this reuses the original document; after edits it reads
+the current selection or replacement and never falls back to a removed entry value.
+Initial routing still precedes ordinary request plugins; editing Query does not
+automatically rerun route selection.
 `ctx.query()` returns the current raw query; `ctx.uri()` combines it with the
 current normalized path. Current readers never fall back to Pingora's possibly
 stale query after entry capture.
@@ -137,7 +143,9 @@ see the implementation verification record for measured limits.
 
 `$request_query` / `req.request_query_string` (a whole-string entry view) still does not exist. The entry whole query is only available indirectly via `$request_uri` — split it from there. ROI of adding such a variable is low (most audits care about the full URI). YAGNI.
 
-Single-key entry-view access **does** exist (`get_query_param(name)` / `req.query("name")`); it has been entry-frozen and decoded since the unified-query-string-cache landing (2026-05-10).
+Explicit entry access remains available through `ctx.entry_query_param(name)`.
+Ordinary `get_query_param(name)` and `req.query("name")` now read the current
+Query; the former entry-frozen behavior is superseded by read-after-edit semantics.
 
 ---
 

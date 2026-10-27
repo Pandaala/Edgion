@@ -16,7 +16,7 @@ description: DSL builtin path/uri/query variable reference — views, behavior, 
 | `req.path` | current (normalized) | Current path, post-rewrite | Yes |
 | `req.uri` | current (normalized) | Current path + current query | Yes |
 | `req.query_string` | current | Whole current query string, raw (not decoded, not normalized) | Yes |
-| `req.query("name")` | entry (frozen) | Single query parameter, **percent-decoded** (`+` → space) | No |
+| `req.query("name")` | current | Single query parameter, **percent-decoded** (`+` → space) | Yes |
 | `req.request_path` | entry (frozen) | Raw client-entry path | No |
 | `req.request_uri` | entry (frozen) | Raw client-entry path + raw query | No |
 
@@ -24,7 +24,11 @@ Allocation counts are implementation details, not a script contract: `Value::Str
 `Arc<str>`, and formatting/ownership depends on the selected view. Benchmark the actual
 call path before making an optimization claim.
 
-`req.query("name")` is sourced from `EdgionHttpContext::cached_query` — a per-request decoded HashMap shared with the route matcher and `PluginSession::get_query_param`. Built once at the first reader, then reused; later `req.set_uri(...)` rewrites do **not** change what `req.query("name")` returns within the same request.
+`req.query("name")` uses the logical current Query through
+`PluginSession::get_query_param_ref`. Until an edit it reuses the original backing;
+after replacement or removal it reads the current backing or selection. Tokens and
+decoded values initialize on demand and are reused. A missing current parameter
+never falls back to its entry value.
 
 ### Behavior changes (migration note)
 
@@ -32,7 +36,7 @@ call path before making an optimization claim.
   - Values are unchanged for already-normalized requests
   - For requests containing `%XX` encoding (except unreserved characters) / double slashes / dot-segments / path parameters, the normalized form is returned
 - **`req.request_path` / `req.request_uri`** are newly added variables that reflect the raw entry form
-- **`req.query("name")`** returns the **percent-decoded** value sourced from the entry-frozen query string (was previously returned raw and lived URI). Callers comparing literals must use the decoded form (e.g. compare against `"a b"`, not `"a%20b"`)
+- **`req.query("name")`** returns the **percent-decoded** value sourced from the logical current query string. Callers comparing literals must use the decoded form (e.g. compare against `"a b"`, not `"a%20b"`)
 
 ---
 

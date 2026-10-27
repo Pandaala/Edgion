@@ -267,3 +267,50 @@ fn basic_failure_logs_have_exact_non_attributing_shape() {
         assert!(!entries[0].contains("user "));
     }
 }
+
+#[tokio::test]
+async fn prepared_challenge_rejects_invalid_direct_construction_before_writes() {
+    let auth = BasicAuth::new(&BasicAuthConfig {
+        realm: "private\r\nrealm".to_string(),
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    session.expect_write_response_header().never();
+    session.expect_write_response_body().never();
+    session.expect_shutdown().never();
+    assert!(auth.auth_failed_return(&mut session).await.is_err());
+}
+
+#[tokio::test]
+async fn prepared_challenge_tracks_plugin_generations_and_releases_old_owner() {
+    let old = Arc::new(BasicAuth::new(&BasicAuthConfig {
+        realm: "old".to_string(),
+        ..Default::default()
+    }));
+    let old_weak = Arc::downgrade(&old);
+    let inflight = old.clone();
+    let current = Arc::new(BasicAuth::new(&BasicAuthConfig {
+        realm: "new \"API\"\\".to_string(),
+        ..Default::default()
+    }));
+    drop(old);
+    for (owner, expected) in [
+        (&inflight, "Basic realm=\"old\""),
+        (&current, "Basic realm=\"new \\\"API\\\"\\\\\""),
+    ] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |header, _| {
+                assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+                Ok(())
+            });
+        session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+        session.expect_shutdown().times(1).returning(|| {});
+        owner.auth_failed_return(&mut session).await.unwrap();
+    }
+    assert!(old_weak.upgrade().is_some());
+    drop(inflight);
+    assert!(old_weak.upgrade().is_none());
+}

@@ -177,11 +177,11 @@ pub trait PluginSession: Send + Sync {
 
     // ========== Condition evaluation methods (read-only) ==========
 
-    /// Borrow a decoded value from the lazily initialized frozen entry query.
-    /// The borrow ends with this session read; the live rewritten URI is not the source.
+    /// Borrow a decoded value from the logical current query, parsed lazily.
+    /// Unmodified requests reuse entry storage; successful edits are immediately visible.
     fn get_query_param_ref<'a>(&'a self, name: &str) -> Option<&'a str>;
 
-    /// Get an owned decoded query parameter value from the frozen entry query.
+    /// Get an owned decoded query parameter value from the logical current query.
     fn get_query_param(&self, name: &str) -> Option<String>;
 
     /// Get a cookie value by name

@@ -33,7 +33,7 @@ use crate::cli::config::{
 };
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::auth_common::{
-    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
+    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims, PreparedAuthChallenge,
 };
 use crate::plugins::http::common::outbound::client::extract_ip_literal;
 use crate::plugins::http::common::outbound::egress::{
@@ -295,6 +295,7 @@ impl LogicalWeight for IntrospectionCacheEntry {
 pub struct OpenidConnect {
     name: &'static str,
     config: OpenidConnectConfig,
+    auth_challenge: PreparedAuthChallenge,
     claim_header_projection: ClaimHeaderProjectionPlan,
     callback_path: String,
     prepared_secrets: PreparedOidcSecrets,
@@ -487,6 +488,7 @@ impl OpenidConnect {
         }
 
         Ok(Self {
+            auth_challenge: PreparedAuthChallenge::new("Bearer", &config.realm),
             name: PLUGIN_NAME,
             config,
             claim_header_projection,

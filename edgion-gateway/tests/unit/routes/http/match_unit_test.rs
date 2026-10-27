@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn query_matchers_read_current_owner_while_entry_and_transport_remain_original() {
+    use crate::runtime::store::listener_gateway_info::ListenerEntry;
+    let index = GatewayInfoIndex::from_entries_for_test(vec![(
+        "default/gateway".into(),
+        ListenerEntry {
+            port: 8080,
+            info: Arc::new(GatewayInfo::new(
+                Some("default".into()),
+                "gateway".into(),
+                Some("web".into()),
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+            )),
+            gateway_proof: None,
+            hostname: None,
+            allowed_routes: None,
+        },
+    )]);
+    let parents = Some(Arc::from(vec![ResolvedParentRef {
+        gateway_key: "default/gateway".into(),
+        parent_ns: "default".into(),
+        section_name: Some("web".into()),
+        port: None,
+    }]));
+    let info = MatchInfo::new(
+        "default".into(),
+        "route".into(),
+        0,
+        0,
+        serde_json::from_value(serde_json::json!({"queryParams": [{"name": "mode", "value": "new"}]})).unwrap(),
+        0,
+    );
+    let request = pingora_http::RequestHeader::build("GET", b"/?mode=old", None).unwrap();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(Some("mode=old".into())).unwrap();
+    let matches = |ctx: &EdgionHttpContext| {
+        HttpRouteRuleUnit::deep_match_common(&info, &request, &parents, ctx, &index, &[], &[], true)
+            .unwrap()
+            .is_some()
+    };
+    assert!(!matches(&ctx));
+    ctx.request_query.replace_raw(Some("mode=new".into())).unwrap();
+    assert!(matches(&ctx));
+    ctx.request_query.remove_current_names(&["mode"]).unwrap();
+    assert!(!matches(&ctx));
+    assert_eq!(ctx.entry_query_param("mode"), Some("old"));
+    assert_eq!(request.uri.query(), Some("mode=old"));
+}
+
+#[test]
 fn malformed_backend_filter_remains_backend_scoped() {
     let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
         "backendRefs": [

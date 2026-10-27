@@ -110,8 +110,8 @@ fn name_is_static() {
     assert_eq!(auth.name().as_ptr(), PLUGIN_NAME.as_ptr());
 }
 
-#[test]
-fn constructor_leaves_source_config_unchanged_and_keeps_only_runtime_state() {
+#[tokio::test]
+async fn constructor_leaves_source_config_unchanged_and_keeps_only_runtime_state() {
     let mut config = create_test_config();
     config.hide_credentials = true;
     config.auth_failure_delay_ms = 23;
@@ -134,7 +134,7 @@ fn constructor_leaves_source_config_unchanged_and_keeps_only_runtime_state() {
     assert!(auth.hide_credentials);
     assert_eq!(auth.auth_failure_delay_ms, 23);
     assert_eq!(auth.anonymous.as_deref(), Some("guest"));
-    assert_eq!(auth.realm, "Test API");
+    assert_prepared_challenge(&auth.auth_challenge, "ApiKey realm=\"Test API\"").await;
     assert!(auth.forward_anonymous_username);
     assert_eq!(auth.keys.len(), 1);
     assert!(auth.keys.contains_key(&sha256_of("raw-runtime-key")));
@@ -613,4 +613,20 @@ async fn authenticated_cookie_cleanup_failure_returns_static_local_error() {
         let result = auth.run_request(&mut session, &mut PluginLog::new(PLUGIN_NAME)).await;
         assert_eq!(result, PluginRunningResult::ErrResponse { status, body: None });
     }
+}
+
+async fn assert_prepared_challenge(challenge: &PreparedAuthChallenge, expected: &'static str) {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |header, _| {
+            assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+    send_gateway_auth_error_response(&mut session, 401, challenge, None, "Denied")
+        .await
+        .unwrap();
 }

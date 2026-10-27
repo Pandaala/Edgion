@@ -64,6 +64,7 @@ fn cached_query_initializes_lazily_and_caches() {
         .capture(Some("name=hello%20world&plus=hello+world&n=1".into()))
         .unwrap();
     let first = ctx.entry_query_param("name").unwrap().as_ptr();
+    assert_eq!(ctx.query_param("name").unwrap().as_ptr(), first);
     assert!(ctx.request_query.capture(Some("name=changed".into())).is_err());
     assert_eq!(ctx.entry_query_param("name"), Some("hello world"));
     assert_eq!(ctx.entry_query_param("name").unwrap().as_ptr(), first);
@@ -87,11 +88,13 @@ fn cached_query_uses_entry_snapshot_across_live_rewrites() {
         .replace_raw(Some("name=rewritten+value".into()))
         .unwrap();
     assert_eq!(ctx.query(), Some("name=rewritten+value"));
+    assert_eq!(ctx.query_param("name"), Some("rewritten value"));
     assert_eq!(ctx.entry_query_param("name"), Some("client value"));
     let first = ctx.entry_query_param("name").unwrap().as_ptr();
     ctx.request_query
         .replace_raw(Some("name=later%20value".into()))
         .unwrap();
     assert_eq!(ctx.query(), Some("name=later%20value"));
+    assert_eq!(ctx.query_param("name"), Some("later value"));
     assert_eq!(ctx.entry_query_param("name").unwrap().as_ptr(), first);
 }

@@ -20,7 +20,9 @@ use hmac::{digest::OutputSizeUser, Hmac, Mac};
 use sha2::Digest;
 use sha2::{Sha256, Sha384, Sha512};
 
-use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
+use crate::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
+};
 use crate::plugins::runtime::body_gate::{
     body_read_failure_result, over_plugin_limit_len, plugin_limit_bytes, record_body_read_error_status,
 };
@@ -55,7 +57,7 @@ impl std::fmt::Debug for HmacAuthParams<'_> {
 /// HMAC Auth plugin.
 pub struct HmacAuth {
     auth_failure_delay_ms: u64,
-    realm: String,
+    auth_challenge: PreparedAuthChallenge,
     anonymous: Option<String>,
     hide_credentials: bool,
     verifier: HmacVerifier,
@@ -301,7 +303,7 @@ impl HmacAuth {
         let verifier = HmacVerifier::new(&config.match_config, body_requirement);
         Self {
             auth_failure_delay_ms: config.auth_failure_delay_ms,
-            realm: config.realm.clone(),
+            auth_challenge: PreparedAuthChallenge::new("hmac", &config.realm),
             anonymous: config.anonymous.clone(),
             hide_credentials: config.hide_credentials,
             verifier,
@@ -318,7 +320,7 @@ impl HmacAuth {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.realm, None, message).await;
+        let _ = send_gateway_auth_error_response(session, status, &self.auth_challenge, None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -708,9 +710,14 @@ impl RequestFilter for HmacAuth {
             HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials) => {
                 plugin_log.push_err("no creds configured");
                 apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-                let _ =
-                    send_gateway_auth_error_response(session, 500, "hmac", &self.realm, None, "Internal gateway error")
-                        .await;
+                let _ = send_gateway_auth_error_response(
+                    session,
+                    500,
+                    &self.auth_challenge,
+                    None,
+                    "Internal gateway error",
+                )
+                .await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
             HmacVerifyOutcome::NoMatch(failure) => {

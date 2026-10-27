@@ -87,7 +87,7 @@ existing query, a trailing question mark and empty paths without normalizing
 these inputs; both template and regex URI sinks retain their existing tests.
 
 Argument and path substitutions borrow the canonical session getters until
-percent encoding produces owned output. These read the same frozen query and
+percent encoding produces owned output. These read the same current query and
 init-once path-capture caches as the owned getters; missing arguments still
 become empty, while missing path names stay literal and present empty captures
 become empty. The combined both-context regression forbids owned getter calls.
@@ -121,7 +121,7 @@ canonical regression, and this case does not assert X-Request-Id.
 ProxyRewrite borrows session.request_query after template resolution in each
 URI-rewrite branch, then creates the owned final URI before set_upstream_uri.
 This removes the earlier get_query String snapshot. Both production getters read
-the current request-header URI, not the frozen entry query used by argument
+the logical current Query owner, alongside the current decoded query used by argument
 substitution. The resolver retains mutable session access because named-path
 lookup can initialize the context's path-parameter cache; that initialization
 does not mutate the URI. Re-evaluate this boundary if resolver getters gain URI

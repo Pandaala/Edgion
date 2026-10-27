@@ -99,6 +99,17 @@ ExtensionRef body trait is not evidence of an incompatible target. This boundary
 adds no request state, lock, allocation, response aggregation or dispatch wrapper.
 
 
+### Authentication challenge preparation
+
+The eight built-in authentication challenge consumers own a `PreparedAuthChallenge`
+in their gateway plugin instance (LDAP uses its `AuthPolicy`). Construction validates
+and escapes the stable realm and materializes the scheme/realm header base. The
+shared response writer clones that base for None-code responses and appends only
+request-specific attributes for Some-code responses. Raw resource schemas and
+conf-sync remain unchanged; entry reuse and request pinning determine the prepared
+owner's lifetime. Invalid direct construction retains a failure checked before
+response writes. See the [realm and challenge contract](../../04-review/security/regression-guards/auth-challenge-realm-quoted-strings.md).
+
 ### OIDC signing policy preparation
 
 `OpenidConnect::try_new` resolves the expected and allowed signing algorithms once

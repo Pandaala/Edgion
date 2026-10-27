@@ -99,8 +99,8 @@ establish these release points; behavioral tests do not measure peak lifetime.
 ## Borrowed current query in signing targets
 
 Signing-string construction uses the existing `request_query` borrow instead of
-copying `get_query`. Both accessors read the current request URI query. This is
-not the decoded, frozen entry-query cache: trusted URI rewrites remain visible,
+copying `get_query`. Both accessors read the logical current Query owner. This is
+not a decoded single-key projection: trusted URI rewrites remain visible,
 and percent encodings, plus signs, duplicate keys and empty values stay raw.
 Both request-target spellings omit the question mark for absent or empty queries.
 Path, method and header ordering, final signing-string ownership and digest bytes

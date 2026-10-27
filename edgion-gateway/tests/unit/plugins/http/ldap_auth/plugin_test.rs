@@ -97,7 +97,9 @@ fn parse_credentials_short_circuits_authorization_when_proxy_is_present() {
             assert_eq!(credentials.username(), "alice");
             assert_eq!(credentials.password(), "password");
         }
-        ParseAuthResult::Missing | ParseAuthResult::Invalid => panic!("proxy credentials must be valid"),
+        ParseAuthResult::Missing | ParseAuthResult::Invalid => {
+            panic!("proxy credentials must be valid")
+        }
     }
 }
 
@@ -232,8 +234,8 @@ fn plain_ldap_preserves_caller_secrets_without_retaining_config() {
     assert_eq!(config.resolved_client_certificate, original_client);
 }
 
-#[test]
-fn prepared_plain_generations_remain_independent() {
+#[tokio::test]
+async fn prepared_plain_generations_remain_independent() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<LdapAuth>();
 
@@ -270,20 +272,20 @@ fn prepared_plain_generations_remain_independent() {
     assert_eq!(k1.timeout, Duration::from_millis(111));
     assert!(!k1.conn_settings.starttls());
     assert_eq!(k1.auth.header_type, "ldap-one");
-    assert_eq!(k1.auth.realm, "Realm One");
+    assert_prepared_challenge(&k1.auth.auth_challenge, "ldap-one realm=\"Realm One\"").await;
     assert!(matches!(k1.bind_dn_plan, BindDnPlan::AttributeBase { .. }));
 
     assert_eq!(k2.ldap_url, "ldap://ldap-two.example.com:2389");
     assert_eq!(k2.timeout, Duration::from_millis(222));
     assert!(!k2.conn_settings.starttls());
     assert_eq!(k2.auth.header_type, "ldap-two");
-    assert_eq!(k2.auth.realm, "Realm Two");
+    assert_prepared_challenge(&k2.auth.auth_challenge, "ldap-two realm=\"Realm Two\"").await;
     assert_eq!(k2.auth.anonymous.as_deref(), Some("guest-two"));
     assert!(k2.auth.hide_credentials);
     assert!(matches!(k2.bind_dn_plan, BindDnPlan::Template(_)));
 
     assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
-    assert_eq!(k1.auth.realm, "Realm One");
+    assert_prepared_challenge(&k1.auth.auth_challenge, "ldap-one realm=\"Realm One\"").await;
     assert_eq!(k1.build_bind_dn("alice").unwrap(), "uid=alice,dc=one,dc=example");
 }
 
@@ -1055,4 +1057,22 @@ fn ldap_captured_globals_and_plaintext_activation_are_process_isolated() {
             set_outbound_global_default(previous);
         },
     );
+}
+
+use crate::plugins::runtime::traits::session::MockPluginSession;
+
+async fn assert_prepared_challenge(challenge: &PreparedAuthChallenge, expected: &'static str) {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |header, _| {
+            assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+    send_gateway_auth_error_response(&mut session, 401, challenge, None, "Denied")
+        .await
+        .unwrap();
 }

@@ -83,7 +83,7 @@ encoded bytes and duplicate query parameters remain unchanged, and length checks
 precede final Arc creation. Tests retain compiler evaluation-order and panic
 isolation checks while replacing owned getter mocks with the borrowed interfaces.
 
-`req.query(name)` borrows the existing frozen decoded query cache via
+`req.query(name)` borrows the existing current decoded Query owner via
 `get_query_param_ref`; it does not switch to the current raw URI. `req.cookie`
 reuses the canonical `cookie_value_ref` parser over live request headers. Cookie
 field order, case-sensitive keys, empty values, embedded equals and early failure

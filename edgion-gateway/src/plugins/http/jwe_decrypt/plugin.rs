@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
+    apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers, PreparedAuthChallenge,
 };
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -172,6 +172,7 @@ enum PreparedDecryptor {
 /// JWE Decrypt plugin.
 pub struct JweDecrypt {
     config: JweDecryptConfig,
+    auth_challenge: PreparedAuthChallenge,
     claim_header_projection: ClaimHeaderProjectionPlan,
     decryptor: PreparedDecryptor,
 }
@@ -183,6 +184,7 @@ impl JweDecrypt {
         let claim_header_projection = config.compile_claim_header_projection().unwrap_or_default();
         let decryptor = Self::prepare_decryptor(&mut config, &plugin_namespace);
         Self {
+            auth_challenge: PreparedAuthChallenge::new("Bearer", "edgion"),
             config,
             claim_header_projection,
             decryptor,
@@ -236,7 +238,7 @@ impl JweDecrypt {
         }
         apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ =
-            send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", None, failure.message())
+            send_gateway_auth_error_response(session, failure.status(), &self.auth_challenge, None, failure.message())
                 .await;
         PluginRunningResult::ErrTerminateRequest
     }
@@ -251,7 +253,7 @@ impl JweDecrypt {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-        let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", None, message).await;
+        let _ = send_gateway_auth_error_response(session, status, &self.auth_challenge, None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 

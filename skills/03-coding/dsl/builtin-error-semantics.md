@@ -52,7 +52,7 @@ design note before altering the observable contract.
 
 **Design intent**: these builtins are used in pipelining patterns like `if to_int(req.header("X-Limit")) > 100 { deny }` or `let parts = split(url_decode("a%2Fb"), "/")`. A surprise `ApiError` mid-pipeline would deny every malformed request even when the script's logic could have handled the fallback gracefully (e.g. compared `to_int(x)` to nil). The silent-fallback shape preserves operator-level error handling at the script level.
 
-`req.query(name)` already returns a decoded value from the frozen query cache;
+`req.query(name)` already returns a decoded value from the current Query owner;
 another `url_decode` is a second decoding operation, not a required query-read
 step. The DSL and resource decoders share ordinary form-style plus handling but
 differ on malformed tokens and invalid UTF-8. See the

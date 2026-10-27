@@ -49,8 +49,8 @@ fn create_plugin() -> HmacAuth {
     HmacAuth::new(&config)
 }
 
-#[test]
-fn constructor_retains_only_live_policy_and_one_verifier_generation() {
+#[tokio::test]
+async fn constructor_retains_only_live_policy_and_one_verifier_generation() {
     let (plugin, source_secret_ptr) = {
         let mut config = HmacAuthConfig {
             auth_failure_delay_ms: 17,
@@ -78,7 +78,7 @@ fn constructor_retains_only_live_policy_and_one_verifier_generation() {
     };
 
     assert_eq!(plugin.auth_failure_delay_ms, 17);
-    assert_eq!(plugin.realm, "partners");
+    assert_prepared_challenge(&plugin.auth_challenge, "hmac realm=\"partners\"").await;
     assert_eq!(plugin.anonymous.as_deref(), Some("guest"));
     assert!(plugin.hide_credentials);
     let credential = plugin
@@ -567,7 +567,9 @@ async fn verify_headers_agrees_with_verify_on_header_only_request() {
             assert_eq!(headers, verify);
             assert_eq!(headers, "alice");
         }
-        (headers, verify) => panic!("expected both Verified, got headers={headers:?} verify={verify:?}"),
+        (headers, verify) => {
+            panic!("expected both Verified, got headers={headers:?} verify={verify:?}")
+        }
     }
 }
 
@@ -1121,4 +1123,37 @@ fn prepared_metadata_preserves_source_policy_and_live_setter_operations() {
         .clear();
     let verifier = HmacVerifier::new(&config.match_config, None);
     assert_eq!(verifier.credential("alice").unwrap().headers.capacity(), 0);
+}
+
+async fn assert_prepared_challenge(challenge: &PreparedAuthChallenge, expected: &'static str) {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |header, _| {
+            assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+    send_gateway_auth_error_response(&mut session, 401, challenge, None, "Denied")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn prepared_challenge_rejects_invalid_direct_hmac_construction_before_writes() {
+    let auth = HmacAuth::new(&HmacAuthConfig {
+        realm: "private\0realm".to_string(),
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    session.expect_write_response_header().never();
+    session.expect_write_response_body().never();
+    session.expect_shutdown().never();
+    assert!(
+        send_gateway_auth_error_response(&mut session, 401, &auth.auth_challenge, None, "Denied")
+            .await
+            .is_err()
+    );
 }

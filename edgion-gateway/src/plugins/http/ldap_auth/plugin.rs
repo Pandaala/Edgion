@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
+    PreparedAuthChallenge,
 };
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
@@ -53,7 +54,7 @@ struct AuthPolicy {
     hide_credentials: bool,
     auth_failure_delay_ms: u64,
     anonymous: Option<String>,
-    realm: String,
+    auth_challenge: PreparedAuthChallenge,
     credential_identifier_header: String,
     anonymous_header: String,
 }
@@ -359,7 +360,7 @@ impl LdapAuth {
             hide_credentials: config.hide_credentials,
             auth_failure_delay_ms: config.auth_failure_delay_ms,
             anonymous: config.anonymous.clone(),
-            realm: config.realm.clone(),
+            auth_challenge: PreparedAuthChallenge::new(&config.header_type, &config.realm),
             credential_identifier_header: config.credential_identifier_header.clone(),
             anonymous_header: config.anonymous_header.clone(),
         };
@@ -486,15 +487,7 @@ impl LdapAuth {
     }
 
     async fn unauthorized(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
-        let _ = send_gateway_auth_error_response(
-            session,
-            401,
-            &self.auth.header_type,
-            &self.auth.realm,
-            None,
-            "Unauthorized",
-        )
-        .await;
+        let _ = send_gateway_auth_error_response(session, 401, &self.auth.auth_challenge, None, "Unauthorized").await;
         PluginRunningResult::ErrTerminateRequest
     }
 

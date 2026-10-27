@@ -46,8 +46,8 @@ independent Arc ownership. Marker-present decoding remains unchanged.
 ## Query provenance and round trips
 
 `ReqQuery` delegates to `PluginSession::get_query_param_ref`; the real adapter
-reads `EdgionHttpContext::cached_query`, populated by the resource query parser
-from the frozen entry query. Consequently `req.query("callback")` is already
+reads `EdgionHttpContext::query_param`, populated by the resource query parser
+from the logical current query. Consequently `req.query("callback")` is already
 decoded. Applying `url_decode` again performs a second decoding operation; it
 is appropriate only when an explicit application contract requires another
 encoding layer. The API example uses explicitly encoded text instead.

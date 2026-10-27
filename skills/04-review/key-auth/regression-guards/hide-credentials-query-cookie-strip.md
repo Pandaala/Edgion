@@ -47,7 +47,7 @@ security feature.
 
 - Query: delegate to the canonical session structured-removal operation. It
   removes all decoded-equivalent names from the logical current query, preserving
-  surviving raw encoding and leaving frozen extraction unchanged. It does not
+  surviving raw encoding and making subsequent ordinary extraction observe removal. It does not
   finalize path or eagerly write Pingora. Current readers consume the owner;
   final forwarding projects Query after backend/provider edits while preserving
   the selected raw/normalized path and native HTTP/1 or HTTP/2 authority. Failed

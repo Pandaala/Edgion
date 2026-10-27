@@ -1214,6 +1214,97 @@ async fn key_set_context_writes_share_store_and_preserve_request_isolation() {
 }
 
 #[tokio::test]
+async fn query_edits_reach_outbound_origins_and_templates_without_transport_sync() {
+    use crate::plugins::http::common::outbound::request::{CompiledRequest, OutboundRequestDiagnostics};
+    use edgion_resources::resources::common::outbound_request::{
+        CustomField, CustomSource, ListFields, OriginField, OutboundRequestSpec, PresencePolicy,
+    };
+
+    let mut session = super::record_outcome_tests::test_session_raw(
+        "GET /?api_key=first&api%5Fkey=secret&keep=a%26b HTTP/1.1\r\nHost: example.test\r\n\r\n",
+    )
+    .await;
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.method = Some(http::Method::GET);
+    ctx.request_info.entry_raw_path = "/".into();
+    ctx.request_query
+        .capture(session.req_header().uri.query().map(str::to_owned))
+        .unwrap();
+    let compiled = CompiledRequest::from_spec(&OutboundRequestSpec {
+        args: ListFields {
+            origin: vec![OriginField {
+                name: "api_key".into(),
+                presence: PresencePolicy::SkipIfMissing,
+            }],
+            custom: vec![CustomField {
+                name: "rendered".into(),
+                source: CustomSource::Template("${query:api_key}".into()),
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    let build = |adapter: &PingoraSessionAdapter<'_>| {
+        compiled
+            .build_request(
+                adapter,
+                None,
+                "http://example.test",
+                None,
+                &mut OutboundRequestDiagnostics::default(),
+            )
+            .unwrap()
+    };
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.get_query_param_ref("api_key"), Some("secret"));
+        assert!(build(&adapter)
+            .url()
+            .query_pairs()
+            .any(|(k, v)| k == "api_key" && v == "secret"));
+        crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+        assert_eq!(adapter.get_query_param_ref("api_key"), None);
+        assert_eq!(adapter.get_query_param("api_key"), None);
+        assert_eq!(adapter.get_query_param_ref("keep"), Some("a&b"));
+        let request = build(&adapter);
+        assert!(!request.url().query_pairs().any(|(k, _)| k == "api_key"));
+        assert!(request
+            .url()
+            .query_pairs()
+            .any(|(k, v)| k == "rendered" && v.is_empty()));
+        assert!(!request.url().as_str().contains("secret"));
+
+        adapter.set_request_query("api_key=new+value&empty=").unwrap();
+        assert_eq!(adapter.get_query_param_ref("api_key"), Some("new value"));
+        assert_eq!(adapter.get_query_param_ref("empty"), Some(""));
+        let pointer = adapter.get_query_param_ref("api_key").unwrap().as_ptr();
+        let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            assert_eq!(adapter.get_query_param_ref("api_key").unwrap().as_ptr(), pointer);
+        });
+        assert_eq!(allocations, 0);
+        let request = build(&adapter);
+        assert!(request
+            .url()
+            .query_pairs()
+            .any(|(k, v)| k == "api_key" && v == "new value"));
+        assert!(request
+            .url()
+            .query_pairs()
+            .any(|(k, v)| k == "rendered" && v == "new value"));
+        assert!(adapter.set_upstream_uri("bad uri with spaces").is_err());
+        assert_eq!(adapter.get_query_param_ref("api_key"), Some("new value"));
+        adapter.set_request_query("").unwrap();
+        assert_eq!(adapter.get_query_param_ref("api_key"), None);
+    }
+    assert!(session.req_header().uri.query().unwrap().contains("secret"));
+    assert_eq!(ctx.entry_query_param("api_key"), Some("secret"));
+    assert_eq!(ctx.query_param("api_key"), None);
+    ctx.ensure_target_synced(session.req_header_mut()).unwrap();
+    assert_eq!(session.req_header().uri.query(), None);
+}
+
+#[tokio::test]
 async fn deferred_query_edits_snapshots_authority_and_finalized_target_are_coherent() {
     let mut session = super::record_outcome_tests::test_session_raw(
         "GET /raw?token=one&secret=two&keep=a%26b HTTP/1.1\r\nHost: entry.test\r\n\r\n",
@@ -1248,7 +1339,7 @@ async fn deferred_query_edits_snapshots_authority_and_finalized_target_are_coher
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     adapter.set_upstream_uri("/replacement").unwrap();
     assert_eq!(adapter.request_query(), None);
-    assert_eq!(adapter.get_query_param_ref("token"), Some("one"));
+    assert_eq!(adapter.get_query_param_ref("token"), None);
     assert!(adapter.set_upstream_uri("bad uri with spaces").is_err());
     assert_eq!(adapter.get_uri(), "/replacement");
 }

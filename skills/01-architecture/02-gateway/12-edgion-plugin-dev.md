@@ -21,6 +21,16 @@ Use this for tasks such as:
 - [../../../edgion-gateway/src/plugins/http/plugin_store.rs](../../../edgion-gateway/src/plugins/http/plugin_store.rs)
 - [../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
+## Authentication response preparation
+
+An authentication plugin prepares stable challenge fields once with
+`auth_common::PreparedAuthChallenge::new` in its runtime constructor, retains the
+owner in the plugin and passes a borrow to `send_gateway_auth_error_response`.
+Keep request-specific codes/descriptions at the response call and preserve the
+plugin's existing failure delay and outcome mapping. Never duplicate realm escaping
+or place prepared header bytes in a shared resource schema. See the
+[canonical challenge contract](../../04-review/security/regression-guards/auth-challenge-realm-quoted-strings.md).
+
 ## Key mental model
 
 HTTP plugins now have two distinct runtime build paths. Identify which one you are touching first:
@@ -495,7 +505,7 @@ contain JSON, protocol-method, or content-type recognition.
 When path normalization is enabled, the session trait exposes 5 path/uri read methods. Choosing the wrong view leads to ACL bypass or audit info loss.
 
 > `get_query()` returns the **raw, current** query string verbatim — reflects any in-request URI rewrite (`set_upstream_uri`).
-> `get_query_param(name)` returns the **decoded, entry-frozen** value of a single key — sourced from the request as the client sent it, immune to in-request URI rewrites, and consistent with what HTTPRoute `queryParams` matchers see.
+> `get_query_param(name)` returns the **decoded, current** value of a single key. Unmodified requests reuse the original Query document; successful replacements and removals are immediately visible to subsequent reads. HTTPRoute predicates use the same current accessor without automatically rerunning route selection.
 
 | Method | View | Return type | When to use |
 |--------|------|-------------|-------------|
@@ -504,7 +514,7 @@ When path normalization is enabled, the session trait exposes 5 path/uri read me
 | `session.get_uri()` | current (normalized) | `String` | Full URI of path + query (1 alloc) |
 | `session.get_request_uri()` | entry (frozen) | `String` | Full URI for auditing (entry raw, with query) |
 | `session.get_query()` | current | `Option<String>` | Get the current query (not normalized) |
-| `session.get_query_param(name)` | entry (frozen) | `Option<String>` | Get one query parameter (**percent-decoded**, `+` → space). Backed by per-request `EdgionHttpContext::cached_query`, sourced from `entry_raw_query` — shared with route matcher; safe to call from many plugins; immune to mid-request URI rewrites. |
+| `session.get_query_param(name)` | current | `Option<String>` | Get one query parameter (**percent-decoded**, `+` → space). Uses the shared lazy Query owner and observes edits; `get_query_param_ref` borrows the same value. |
 
 **Default to `get_path()`**. Only use `get_request_path()` / `get_request_uri()` when you explicitly need the client's original form.
 

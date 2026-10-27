@@ -154,20 +154,23 @@ the assertion, not a fresh live Gateway or Kubernetes forwarding run.
 ## Frozen query cache source
 
 The canonical [URI dual-view contract](../../../01-architecture/02-gateway/uri-normalization/SKILL.md)
-requires ordinary decoded single-key reads to use the frozen entry snapshot,
-while whole-string current reads use the logical Query owner. The owner captures
-entry bytes once; `ctx.entry_query_param(name)` selects that source internally.
-Routing, plugin extraction and access-log projections share its lazy canonical
-decoding and last-decoded-name-wins semantics. Access-log masking remains required.
+requires ordinary decoded single-key reads to use the logical current Query,
+just like whole-string current reads. The owner captures entry bytes once;
+`ctx.query_param(name)` reuses that document until edited, then selects the current
+replacement or retained-pair selection. Routing predicates, plugin extraction,
+conditions, DSL, templates and outbound origin fields share its lazy canonical
+decoding and last-decoded-name-wins semantics. Explicit `ctx.entry_query_param`
+and access-log projections retain entry provenance and masking requirements.
+This supersedes the historical ordinary-getter frozen-source contract: removing
+a credential must make later ordinary lookups and Webhook templates see it missing.
+Route selection is not automatically repeated after plugin edits.
 
-ARCH-004 removed caller-selected cache sources. The later lazy Query owner replaces
-the entry-only HashMap and public `entry_raw_query` field, preserving this source
-contract while also owning current tokens and edits. Early reads return missing
-without caching that absence before capture. Plain components borrow raw spans;
-encoded components retain canonical decoder results once per backing. Current LB
-and auth policies differ from entry lookup and must remain separate consumers of
-the same token owner. Specialized DSL/WAF/strict protocol parsers retain their own
-semantics; this owner does not replace them.
+ARCH-004 removed caller-selected cache sources. The later Query owner replaced
+the entry-only HashMap and public `entry_raw_query` field. Early reads return
+missing without caching that absence before capture. Plain components borrow raw
+spans; encoded components retain canonical decoder results once per backing.
+LB retains its separate first-match/raw-value policy. Specialized DSL/WAF/strict
+protocol parsers retain their own semantics; this owner does not replace them.
 
 AI baseline state cannot escape its Query owner. Restore uses a new checked epoch
 and preserves entry identity and reusable caches. A concrete header clone alone
@@ -206,7 +209,7 @@ The output String, byte-run buffer and API remain owned as before. Query parsing
 skips empty pairs, gives no-equals pairs empty values and lets the last decoded
 duplicate key win. Regression assertions live in
 `edgion-resources/tests/unit/uri_utils_test.rs`. This local ownership change
-preserves frozen single-key query reads, raw whole-query reads, LB's plain-name
+preserves canonical single-key decoding, raw whole-query reads, LB's plain-name
 fast path and raw values, and auth's decoded-key comparison with raw surviving
 pairs. The separately bounded DSL decoder remains excluded. No measured
 performance improvement follows from these source and semantic assertions.

@@ -15,7 +15,9 @@ use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
 use crate::ctx::ClientCertInfo;
-use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
+use crate::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
+};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info_from_cert;
 use edgion_resources::filters::PluginRunningResult;
@@ -36,6 +38,7 @@ struct ParsedCa {
 /// Header Cert Auth request plugin.
 pub struct HeaderCertAuth {
     config: HeaderCertAuthConfig,
+    auth_challenge: PreparedAuthChallenge,
     ca_pool: Vec<ParsedCa>,
 }
 
@@ -46,7 +49,11 @@ impl HeaderCertAuth {
         let config = field.config();
         let mut config = config.clone();
         config.resolved_ca_secrets = None;
-        Self { config, ca_pool }
+        Self {
+            config,
+            ca_pool,
+            auth_challenge: PreparedAuthChallenge::new("TLSCert", "edgion"),
+        }
     }
 
     fn load_ca_certs(field: &BoundHeaderCertAuth<'_>) -> Vec<ParsedCa> {
@@ -250,8 +257,7 @@ impl HeaderCertAuth {
         let _ = send_gateway_auth_error_response(
             session,
             self.config.error_status,
-            "TLSCert",
-            "edgion",
+            &self.auth_challenge,
             None,
             &self.config.error_message,
         )

@@ -94,38 +94,70 @@ pub(crate) fn cookie_cleanup_failure(
     }
 }
 
-/// Build and send a 401/403 auth error response for the gateway plane (Pingora).
+/// A generation-owned authentication challenge with only stable fields prepared.
 ///
-/// Always sets `WWW-Authenticate: <scheme> realm="<realm>"`. When `error_code` is
-/// `Some`, the challenge is extended per RFC 6750 §3.1 with `error="<code>"` and
-/// `error_description="<body>"` (the body text escaped as a `quoted-string`).
-/// Realm quotes and backslashes are escaped; ASCII controls, including HTAB and
-/// DEL, are rejected before constructing a response. Configuration validation
-/// uses the same realm policy, without echoing the configured value in errors.
+/// Invalid direct construction retains a data-free error so the response writer
+/// still fails before writing headers or a body. Resource validation remains the
+/// normal admission boundary. No request-specific error or description is cached.
+pub struct PreparedAuthChallenge {
+    base: Result<http::HeaderValue, &'static str>,
+}
+
+impl PreparedAuthChallenge {
+    pub fn new(scheme: &str, realm: &str) -> Self {
+        let base = validate_auth_realm(realm).and_then(|()| {
+            let realm = escape_quoted_string(realm);
+            let mut base = String::with_capacity(scheme.len() + 9 + realm.len());
+            base.push_str(scheme);
+            base.push_str(" realm=\"");
+            base.push_str(&realm);
+            base.push('"');
+            http::HeaderValue::try_from(base)
+                // Promote Bytes' backing to shared ownership on the cold path.
+                // The first response clone then has the same cost as later ones.
+                .map(|base| {
+                    let shared = base.clone();
+                    drop(base);
+                    shared
+                })
+                .map_err(|_| "failed to parse header value")
+        });
+        Self { base }
+    }
+
+    fn challenge(
+        &self,
+        error_code: Option<&str>,
+        body: &str,
+    ) -> Result<http::HeaderValue, Box<dyn std::error::Error + Send + Sync>> {
+        let base = self.base.as_ref().map_err(|error| *error)?;
+        match error_code {
+            None => Ok(base.clone()),
+            Some(code) => Ok(http::HeaderValue::try_from(build_auth_challenge(
+                base.as_bytes(),
+                code,
+                body,
+            ))?),
+        }
+    }
+}
+
+/// Send an auth error with a generation-owned scheme/realm challenge.
 ///
-/// Pass `error_code = None` when the request carried no credentials at all — RFC
-/// 6750 §3.1 says a resource server SHOULD NOT include an error code in that case
-/// — and for non-Bearer schemes (Basic, ApiKey, ...) that do not define these
-/// attributes. Typical Bearer codes: `invalid_token` (token present but invalid),
-/// `insufficient_scope` (403), `invalid_request` (malformed request).
-///
-/// `Connection: close` is intentionally not set — Pingora manages connection lifecycle.
-///
-/// Admin-plane counterpart: `unified_auth::build_admin_auth_error_response` (returns
-/// an axum `Response`; can't be merged — different runtimes and return shapes).
+/// None omits error attributes. Some preserves the caller's error code and uses
+/// the escaped body as error_description. Realm validation/escaping occurs once
+/// in PreparedAuthChallenge; error-description controls are still stripped per
+/// response. Status, body, and connection lifecycle remain request-owned.
 pub async fn send_gateway_auth_error_response(
     session: &mut dyn PluginSession,
     status: u16,
-    scheme: &str,
-    realm: &str,
+    challenge: &PreparedAuthChallenge,
     error_code: Option<&str>,
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    validate_auth_realm(realm)?;
-    let realm = escape_quoted_string(realm);
+    let www_auth = challenge.challenge(error_code, body)?;
     let mut resp = ResponseHeader::build(status, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
-    let www_auth = build_auth_challenge(scheme, &realm, error_code, body);
     resp.insert_header("WWW-Authenticate", www_auth)?;
 
     session.write_response_header(Box::new(resp), false).await?;
@@ -143,32 +175,20 @@ fn build_auth_error_body(status: u16, body: &str) -> Bytes {
     Bytes::from(output)
 }
 
-/// Assemble a challenge from an already escaped realm and the existing error fields.
-fn build_auth_challenge(scheme: &str, escaped_realm: &str, error_code: Option<&str>, body: &str) -> String {
-    const REALM_PREFIX: &str = " realm=\"";
-    const ERROR_PREFIX: &str = ", error=\"";
-    const DESCRIPTION_PREFIX: &str = ", error_description=\"";
-    let error = error_code.map(|code| (code, escape_quoted_string(body)));
-    let capacity = scheme.len()
-        + REALM_PREFIX.len()
-        + escaped_realm.len()
-        + 1
-        + error.as_ref().map_or(0, |(code, description)| {
-            ERROR_PREFIX.len() + code.len() + 1 + DESCRIPTION_PREFIX.len() + description.len() + 1
-        });
-    let mut challenge = String::with_capacity(capacity);
-    challenge.push_str(scheme);
-    challenge.push_str(REALM_PREFIX);
-    challenge.push_str(escaped_realm);
-    challenge.push('"');
-    if let Some((code, description)) = error {
-        challenge.push_str(ERROR_PREFIX);
-        challenge.push_str(code);
-        challenge.push('"');
-        challenge.push_str(DESCRIPTION_PREFIX);
-        challenge.push_str(&description);
-        challenge.push('"');
-    }
+/// Add request-specific attributes without revalidating or escaping the realm.
+fn build_auth_challenge(base: &[u8], code: &str, body: &str) -> Vec<u8> {
+    const ERROR_PREFIX: &[u8] = b", error=\"";
+    const DESCRIPTION_PREFIX: &[u8] = b", error_description=\"";
+    let description = escape_quoted_string(body);
+    let capacity = base.len() + ERROR_PREFIX.len() + code.len() + 1 + DESCRIPTION_PREFIX.len() + description.len() + 1;
+    let mut challenge = Vec::with_capacity(capacity);
+    challenge.extend_from_slice(base);
+    challenge.extend_from_slice(ERROR_PREFIX);
+    challenge.extend_from_slice(code.as_bytes());
+    challenge.push(b'"');
+    challenge.extend_from_slice(DESCRIPTION_PREFIX);
+    challenge.extend_from_slice(description.as_bytes());
+    challenge.push(b'"');
     challenge
 }
 

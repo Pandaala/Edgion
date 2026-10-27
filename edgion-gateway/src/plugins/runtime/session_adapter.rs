@@ -1114,11 +1114,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_query_param_ref<'s>(&'s self, name: &str) -> Option<&'s str> {
-        // Decoded values (percent-decoded, '+' → ' ') shared with the route
-        // matcher via EdgionHttpContext::entry_query_param. Parsed at most once
-        // per request regardless of how many plugins call this method.
-        // The context owns the frozen entry query, independent of live rewrites.
-        self.ctx.entry_query_param(name)
+        // Reuse the original document until edited, then read the logical current
+        // selection or replacement. Never fall back to a removed entry value.
+        self.ctx.query_param(name)
     }
 
     fn get_query_param(&self, name: &str) -> Option<String> {

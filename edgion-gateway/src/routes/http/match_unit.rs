@@ -646,15 +646,13 @@ impl HttpRouteRuleUnit {
         }
 
         // 3. Check Query Parameters — lazy parse: only when this route has query matchers.
-        // The Query owner parses and caches the frozen entry view on demand
+        // The Query owner parses and caches the current view on demand
         // across all route candidates, sharing the result with PluginSession::get_query_param.
-        // The context owns the frozen entry query shared by all readers.
         if has_query_matchers {
             if let Some(query_param_matches) = &match_item.query_params {
                 for (idx, query_param_match) in query_param_matches.iter().enumerate() {
                     let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
-                    if !Self::match_query_param(ctx.entry_query_param(&query_param_match.name), query_param_match, pre)?
-                    {
+                    if !Self::match_query_param(ctx.query_param(&query_param_match.name), query_param_match, pre)? {
                         return Ok(None);
                     }
                 }

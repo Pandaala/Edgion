@@ -61,7 +61,7 @@ async fn entry_method_accessor_remains_borrowed_and_distinct_from_current_identi
         assert_eq!(adapter.get_query().as_deref(), Some("key=current"));
         assert_eq!(adapter.get_request_path(), "/dye-test");
         assert_eq!(adapter.get_request_uri(), "/dye-test");
-        assert_eq!(adapter.get_query_param("key"), None);
+        assert_eq!(adapter.get_query_param("key").as_deref(), Some("current"));
         assert_eq!(adapter.key_get(&KeyGet::Host).as_deref(), Some("entry.example"));
     }
     let mut session = test_session().await;

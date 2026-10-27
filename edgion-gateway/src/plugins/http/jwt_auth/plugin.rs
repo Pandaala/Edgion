@@ -5,6 +5,7 @@
 //! All credentials come from controller-resolved issuer groups (no runtime Secret fetch).
 
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
+use crate::plugins::http::common::auth_common::PreparedAuthChallenge;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -19,6 +20,7 @@ use super::verify;
 /// JWT Authentication plugin
 pub struct JwtAuth {
     pub(super) config: JwtAuthConfig,
+    pub(super) auth_challenge: PreparedAuthChallenge,
     pub(super) claim_header_projection: ClaimHeaderProjectionPlan,
     /// Issuer-group store built once at construction from resolved_groups_by_iss
     pub(super) store: JwtIssuerGroupStore,
@@ -31,6 +33,7 @@ impl JwtAuth {
         let claim_header_projection = config.compile_claim_header_projection().unwrap_or_default();
         let resolved_groups_by_iss = config.resolved_groups_by_iss.take().unwrap_or_default();
         JwtAuth {
+            auth_challenge: PreparedAuthChallenge::new("Bearer", &config.realm),
             store: JwtIssuerGroupStore::new(
                 resolved_groups_by_iss,
                 config.base64_secret,

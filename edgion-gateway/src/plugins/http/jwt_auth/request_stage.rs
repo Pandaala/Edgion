@@ -92,8 +92,7 @@ impl JwtAuth {
         send_gateway_auth_error_response(
             session,
             401,
-            "Bearer",
-            &self.config.realm,
+            &self.auth_challenge,
             error_code,
             "Unauthorized - Invalid or missing JWT",
         )

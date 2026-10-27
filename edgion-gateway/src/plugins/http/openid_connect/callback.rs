@@ -23,21 +23,13 @@ impl OpenidConnect {
     pub(super) async fn send_unauthorized(&self, session: &mut dyn PluginSession, body: &str) -> OidcResult<()> {
         // 401 covers both absent and invalid credentials here; omit the RFC 6750
         // error code (SHOULD NOT when no credentials were presented).
-        send_gateway_auth_error_response(session, 401, "Bearer", &self.config.realm, None, body).await
+        send_gateway_auth_error_response(session, 401, &self.auth_challenge, None, body).await
     }
 
     pub(super) async fn send_forbidden(&self, session: &mut dyn PluginSession, body: &str) -> OidcResult<()> {
         // 403 is reached only on authorization failure (claim/audience/scope check):
         // a valid token lacking sufficient privilege -> RFC 6750 "insufficient_scope".
-        send_gateway_auth_error_response(
-            session,
-            403,
-            "Bearer",
-            &self.config.realm,
-            Some("insufficient_scope"),
-            body,
-        )
-        .await
+        send_gateway_auth_error_response(session, 403, &self.auth_challenge, Some("insufficient_scope"), body).await
     }
 
     /// Apply failure delay before returning a 401/403 response.

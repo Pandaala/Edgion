@@ -4,7 +4,9 @@ use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
+use crate::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
+};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -42,6 +44,7 @@ pub struct BasicAuth {
     // The Arc pins one immutable user-map generation across spawn_blocking.
     user_passwords: Arc<PreparedUserMap>,
     config: BasicAuthConfig,
+    auth_challenge: PreparedAuthChallenge,
 }
 
 impl BasicAuth {
@@ -52,6 +55,7 @@ impl BasicAuth {
         let user_passwords = Arc::new(Self::load_users(users));
 
         BasicAuth {
+            auth_challenge: PreparedAuthChallenge::new("Basic", &runtime_config.realm),
             user_passwords,
             config: runtime_config,
         }
@@ -189,8 +193,7 @@ impl BasicAuth {
         send_gateway_auth_error_response(
             session,
             401,
-            "Basic",
-            &self.config.realm,
+            &self.auth_challenge,
             None,
             "Unauthorized - Authentication required",
         )

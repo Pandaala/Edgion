@@ -103,8 +103,8 @@ ownership changes, or inline ExternalAuth stops sharing ForwardAuth.
 ## Borrowed current query metadata
 
 ForwardAuth context_headers reads request_query directly alongside the other
-current-session metadata. Both production query accessors read the same current
-request-header URI; this removes the get_query temporary String without switching
+current-session metadata. Both production query accessors read the same logical
+current Query owner; this removes the get_query temporary String without switching
 to frozen entry-query data. Body acquisition still finishes before these reads.
 
 The borrowed array and shared session remain valid through the outbound call.

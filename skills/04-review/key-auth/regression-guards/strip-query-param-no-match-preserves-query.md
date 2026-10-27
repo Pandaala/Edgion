@@ -17,12 +17,12 @@ contains the credential key, the request target remains byte-identical.
 
 ## Core Rationale
 
-**1. Extraction and stripping can observe different query snapshots**
+**1. Extraction and stripping share the logical current Query**
 
-Auth extraction reads the frozen entry query through `get_query_param`, while
-credential stripping reads the live query through `request_query`. An earlier
-request plugin can therefore remove or rewrite the credential parameter before
-the auth plugin reaches its hide-credentials step.
+Ordinary extraction uses `get_query_param`, which reads the current Query owner.
+A successful earlier removal is immediately visible to later authentication and
+outbound consumers. No-match deletion remains safe and preserves raw syntax.
+The historical frozen-extraction rule is superseded by this read-after-edit contract.
 
 **2. A no-op must not normalize unrelated query syntax**
 
@@ -39,8 +39,8 @@ path.
   query bytes when no credential was removed.
 - Decode and re-encode all surviving pairs — this would normalize unrelated
   operator-supplied encoding and can invalidate raw-query signatures.
-- Change auth extraction to read the live query — extraction intentionally uses
-  the frozen entry query so plugin reads remain order-independent.
+- Fall back to entry credentials after a current lookup misses — that would
+  re-expose a value removed by an earlier plugin.
 
 ## Re-evaluation Triggers
 
@@ -62,8 +62,7 @@ query representation.
 
 The session structured-removal operation now owns the split/decode/selection work.
 The auth helper no longer creates a survivor vector and immediately joins it into
-a setter input. Current raw reads use the same owner, while extraction continues
-to use frozen entry values. A no-match operation keeps the original raw syntax and
+a setter input. Current raw reads and ordinary single-key extraction use the same current owner. A no-match operation keeps the original raw syntax and
 revision; a match removes all decoded-equivalent names, including bare flags, and
 drops empty separators only as part of the changed selection.
 

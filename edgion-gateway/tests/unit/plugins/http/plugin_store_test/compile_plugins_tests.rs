@@ -3041,3 +3041,52 @@ fn local_rate_limit_extreme_estimator_capacity_publishes_real_runtime() {
         assert_eq!(first_filter(&compiled.plugin_runtime).name(), "RateLimitLocal");
     }
 }
+
+#[tokio::test]
+async fn prepared_auth_challenge_follows_pinned_compiled_generation() {
+    let resource = |realm: &str| -> EdgionPlugins {
+        serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "prepared-realm", "namespace": "default"},
+            "spec": {"requestPlugins": [{"type": "BasicAuth", "config": {
+                "anonymous": "guest", "realm": realm, "authFailureDelayMs": 0
+            }}]}
+        }))
+        .unwrap()
+    };
+    let store = PluginStore::new();
+    let key = "default/prepared-realm".to_string();
+    store.replace_all(HashMap::from([(key.clone(), compile_plugins(&resource("old")))]));
+    let pinned = store.scope().http(&key).unwrap().plugin_runtime.clone();
+    let weak = Arc::downgrade(&pinned);
+    store.apply_delta(
+        HashMap::new(),
+        HashMap::from([(key.clone(), compile_plugins(&resource("new")))]),
+        &HashSet::new(),
+    );
+    let current = store.scope().http(&key).unwrap().plugin_runtime.clone();
+    for (runtime, expected) in [(&pinned, "Basic realm=\"old\""), (&current, "Basic realm=\"new\"")] {
+        let mut session = MockPluginSession::new();
+        crate::plugins::runtime::traits::test_helpers::setup_header_mocks(
+            &mut session,
+            &[("authorization", "Basic !!!")],
+        );
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |header, _| {
+                assert_eq!(header.headers["www-authenticate"].as_bytes(), expected.as_bytes());
+                Ok(())
+            });
+        session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+        session.expect_shutdown().times(1).returning(|| {});
+        let result = runtime
+            .request_plugins_iter()
+            .next()
+            .unwrap()
+            .run_request(&mut session, &mut PluginLog::new("BasicAuth"))
+            .await;
+        assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
+    }
+    drop(pinned);
+    assert!(weak.upgrade().is_none());
+}
