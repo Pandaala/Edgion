@@ -141,7 +141,7 @@ pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
 pub use proxy_rewrite::{
     CompiledJsonBodyRewrite, CompiledJsonPatchOperation, CompiledJsonPatchValue, HeaderActions, HeaderEntry,
-    HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
+    HostFromHeader, HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
 pub use rate_limit_local::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitLocalConfig, RateLimitLocalScope};

@@ -3,12 +3,15 @@
 //! Rewrites requests before forwarding to upstream services.
 //! Supports URI, Host, Method, and Headers modification.
 
+use http::header::HeaderName;
 use jsonptr::PointerBuf;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::json_schema_validation::profile_json_value;
+use crate::common::is_valid_host_authority;
 use crate::resources::common::request_template::{
     CompiledTemplate, SecretPolicy, TemplateAdmission, TemplateSegment, TemplateVarType, VariablePolicy,
 };
@@ -81,6 +84,11 @@ pub struct ProxyRewriteConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
 
+    /// Read exactly one header value as Host, restricted by a full-match regex allowlist.
+    /// Mutually exclusive with `host` and all Host header operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_from_header: Option<HostFromHeader>,
+
     /// Rewrite HTTP method.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<HttpMethod>,
@@ -102,10 +110,78 @@ pub struct ProxyRewriteConfig {
     #[schemars(skip)]
     pub compiled_regex: Option<Regex>,
 
+    /// Prepared dynamic Host source and allowlist.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_host_from_header: Option<CompiledHostFromHeader>,
+
     /// Precompiled JSON Patch plan.
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_json_body: Option<CompiledJsonBodyRewrite>,
+}
+
+/// Explicit header-to-Host rewrite. Both fields are required.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostFromHeader {
+    /// Case-insensitive source header name. The value is a bare host with optional port.
+    pub name: String,
+    /// Rust regex matched against the entire original value, including any port.
+    /// Matching is case-sensitive unless the expression opts into case-insensitivity.
+    pub allow_regex: String,
+}
+
+/// Immutable, bounded header-to-Host admission plan.
+#[derive(Debug, Clone)]
+pub struct CompiledHostFromHeader {
+    pub name: HeaderName,
+    allow_regex: Regex,
+}
+
+impl HostFromHeader {
+    fn compile(&self) -> Result<CompiledHostFromHeader, String> {
+        let name = HeaderName::from_bytes(self.name.as_bytes())
+            .map_err(|_| "hostFromHeader.name must be a valid HTTP header name".to_string())?;
+        if self.allow_regex.is_empty() || self.allow_regex.len() > 4096 {
+            return Err("hostFromHeader.allowRegex must contain 1..=4096 bytes".to_string());
+        }
+        let allow_regex = RegexBuilder::new(&format!(r"\A(?:{})\z", self.allow_regex))
+            .size_limit(1024 * 1024)
+            .dfa_size_limit(1024 * 1024)
+            .build()
+            .map_err(|_| "hostFromHeader.allowRegex is invalid or exceeds compilation limits".to_string())?;
+        Ok(CompiledHostFromHeader { name, allow_regex })
+    }
+}
+
+impl CompiledHostFromHeader {
+    /// Validate syntax independently of the allowlist, even for an expression like `.*`.
+    pub fn allows(&self, value: &str) -> bool {
+        // Bound work before either parsing or matching. A DNS host can contain at
+        // most 253 bytes plus a trailing dot and a six-byte port suffix.
+        if value.len() > 260 || !is_valid_host_authority(value) {
+            return false;
+        }
+        let Ok(authority) = value.parse::<http::uri::Authority>() else {
+            return false;
+        };
+        let host = authority.host();
+        let valid_host = if let Some(ip) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            ip.parse::<std::net::Ipv6Addr>().is_ok()
+        } else {
+            let host = host.strip_suffix('.').unwrap_or(host);
+            host.len() <= 253
+                && host.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        };
+        valid_host && self.allow_regex.is_match(value)
+    }
 }
 
 /// Regex URI rewrite configuration.
@@ -443,6 +519,12 @@ pub struct HeaderActions {
     pub remove: Option<Vec<String>>,
 }
 
+struct PreparedRewrite {
+    regex: Option<Regex>,
+    json_body: Option<CompiledJsonBodyRewrite>,
+    host_from_header: Option<CompiledHostFromHeader>,
+}
+
 impl ProxyRewriteConfig {
     /// Check all validation rules without mutating self.
     ///
@@ -452,7 +534,28 @@ impl ProxyRewriteConfig {
         self.prepare().err()
     }
 
-    fn prepare(&self) -> Result<(Option<Regex>, Option<CompiledJsonBodyRewrite>), String> {
+    fn prepare(&self) -> Result<PreparedRewrite, String> {
+        if self.host.is_some() && self.host_from_header.is_some() {
+            return Err("host and hostFromHeader are mutually exclusive".to_string());
+        }
+        if self.host_from_header.is_some() {
+            if let Some(headers) = &self.headers {
+                let modifies_host = headers
+                    .add
+                    .iter()
+                    .flatten()
+                    .chain(headers.set.iter().flatten())
+                    .any(|entry| entry.name.eq_ignore_ascii_case("host"))
+                    || headers
+                        .remove
+                        .iter()
+                        .flatten()
+                        .any(|name| name.eq_ignore_ascii_case("host"));
+                if modifies_host {
+                    return Err("hostFromHeader conflicts with Host header operations".to_string());
+                }
+            }
+        }
         // Check for Host conflict in headers.set
         if self.host.is_some() {
             if let Some(ref headers) = self.headers {
@@ -474,7 +577,16 @@ impl ProxyRewriteConfig {
             .map(|regex_uri| Regex::new(&regex_uri.pattern).map_err(|error| format!("Invalid regex pattern: {error}")))
             .transpose()?;
         let compiled_json_body = self.json_body.as_ref().map(JsonBodyRewrite::compile).transpose()?;
-        Ok((compiled_regex, compiled_json_body))
+        let host_from_header = self
+            .host_from_header
+            .as_ref()
+            .map(HostFromHeader::compile)
+            .transpose()?;
+        Ok(PreparedRewrite {
+            regex: compiled_regex,
+            json_body: compiled_json_body,
+            host_from_header,
+        })
     }
 
     /// Precompile regex and JSON Patch plans and validate configuration.
@@ -483,11 +595,13 @@ impl ProxyRewriteConfig {
     pub fn precompile(&mut self) -> bool {
         self.compiled_regex = None;
         self.compiled_json_body = None;
-        let Ok((compiled_regex, compiled_json_body)) = self.prepare() else {
+        self.compiled_host_from_header = None;
+        let Ok(prepared) = self.prepare() else {
             return false;
         };
-        self.compiled_regex = compiled_regex;
-        self.compiled_json_body = compiled_json_body;
+        self.compiled_regex = prepared.regex;
+        self.compiled_json_body = prepared.json_body;
+        self.compiled_host_from_header = prepared.host_from_header;
         true
     }
 
@@ -496,6 +610,7 @@ impl ProxyRewriteConfig {
         self.uri.is_some()
             || self.regex_uri.is_some()
             || self.host.is_some()
+            || self.host_from_header.is_some()
             || self.method.is_some()
             || self.headers.is_some()
             || self.json_body.is_some()

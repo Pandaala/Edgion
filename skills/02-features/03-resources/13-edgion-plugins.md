@@ -115,6 +115,7 @@ runtime before its body reads, not at cross-resource publication. See
 | `UrlRewrite` | URL rewrite (Gateway API standard) |
 | `RequestMirror` | Request mirroring (Gateway API standard) |
 | `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting and JSON request-body transforms) |
+
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `RestToGraphql` | Static GraphQL request adaptation with shared KeyGet variables |
@@ -125,6 +126,13 @@ runtime before its body reads, not at cross-resource publication. See
 | `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a bounded content-addressed process-memory cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 | `RequestId` | Incremental correlation IDs; W3C context is core gateway behavior |
+
+`ProxyRewrite.hostFromHeader: {name, allowRegex}` reads exactly one header value as Host.
+Both fields are required; the bounded, precompiled regex matches the entire value (including
+any port). Missing, repeated, malformed or disallowed values return 400 before rewrites.
+It conflicts with fixed `host` and all Host header operations in the same plugin.
+Backend address selection and TLS SNI are unchanged. See the [ProxyRewrite guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/proxy-rewrite.md).
+
 
 ### Routing/Backend
 

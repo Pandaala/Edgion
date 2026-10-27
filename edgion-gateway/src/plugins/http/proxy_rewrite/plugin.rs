@@ -289,6 +289,25 @@ impl ProxyRewrite {
         }
     }
 
+    /// Admit the explicit source before any rewrite side effect. No header value
+    /// borrow crosses mutation; retain only the bounded, validated Host bytes.
+    fn resolve_header_host(
+        &self,
+        session: &dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> Result<Option<String>, PluginRunningResult> {
+        let Some(plan) = &self.config.compiled_host_from_header else {
+            return Ok(None);
+        };
+        let mut values = session.request_header_map().get_all(&plan.name).iter();
+        let value = values.next().and_then(|value| value.to_str().ok());
+        if values.next().is_some() || value.is_none_or(|value| !plan.allows(value)) {
+            plugin_log.push("deny host from header");
+            return Err(Self::reject(400, None));
+        }
+        Ok(value.map(str::to_owned))
+    }
+
     /// Rewrite HTTP method
     fn rewrite_method(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         if let Some(ref method) = self.config.method {
@@ -723,6 +742,10 @@ impl RequestFilter for ProxyRewrite {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        let header_host = match self.resolve_header_host(session, plugin_log) {
+            Ok(host) => host,
+            Err(result) => return result,
+        };
         if let Err(result) = self.modify_json_body(session, plugin_log).await {
             return result;
         }
@@ -741,7 +764,15 @@ impl RequestFilter for ProxyRewrite {
         self.rewrite_uri(session, plugin_log, &original_path, captures.as_ref());
 
         // 2. Host rewrite
-        self.rewrite_host(session, plugin_log);
+        if let Some(host) = header_host {
+            if session.set_upstream_host(&host).is_err() {
+                plugin_log.push_err("host rewrite fail");
+                return Self::reject(400, None);
+            }
+            plugin_log.push("host rewrite");
+        } else {
+            self.rewrite_host(session, plugin_log);
+        }
 
         // 3. Method rewrite
         self.rewrite_method(session, plugin_log);

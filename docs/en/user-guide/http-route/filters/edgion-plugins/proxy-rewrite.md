@@ -40,6 +40,9 @@ spec:
 | `regexUri.pattern` | String | **Required** (within `regexUri`) | Regex match pattern |
 | `regexUri.replacement` | String | **Required** (within `regexUri`) | Replacement template, supports `$1-$9` capture groups |
 | `host` | String | none | New Host request header value |
+| `hostFromHeader` | Object | none | Read Host from exactly one request header; mutually exclusive with `host` |
+| `hostFromHeader.name` | String | **Required** | Case-insensitive source header name |
+| `hostFromHeader.allowRegex` | String | **Required** | Full-value Rust regex allowlist, including any port; 1–4096 bytes |
 | `method` | String | none | New HTTP method: GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS, etc. |
 | `headers` | Object | none | Request header modification operations |
 | `headers.add` | Array\<Object\> | none | Add request headers (append to existing values) |
@@ -47,6 +50,49 @@ spec:
 | `headers.remove` | Array\<String\> | none | Remove request headers |
 | `jsonBody` | Object | none | Structurally rewrite a buffered JSON request body |
 | `jsonBody.operations` | Array\<Object\> | **Required** | Ordered RFC 6902 operations: `add`, `remove`, `replace`, `move`, `copy`, or `test` |
+
+### Read Host from a request header
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: host-from-header
+  namespace: default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        hostFromHeader:
+          name: X-Backend-Host
+          allowRegex: '(?:api|admin)\.internal\.example\.com(?::8080)?'
+```
+
+Reference `host-from-header` with an HTTPRoute `ExtensionRef` in the same namespace.
+For `X-Backend-Host: api.internal.example.com:8080`, the origin receives
+`Host: api.internal.example.com:8080`. Fixed `host` remains a literal string;
+use `hostFromHeader` for this dynamic case.
+
+- Both `name` and `allowRegex` are required. The regex is compiled once at configuration
+  load with bounded compilation memory and always matches the **entire** value. You do
+  not need `^`/`$`. Matching is case-sensitive; use `(?i:...)` for case-insensitivity.
+- A missing, empty, repeated, non-text, malformed or disallowed source returns `400`
+  before URI, body or header rewrites. Comma-separated values are rejected as malformed.
+  Invalid regexes are configuration errors rather than per-request compilation attempts.
+- Independent syntax checks accept DNS names, IPv4 and bracketed IPv6, optionally with
+  a port in `1..=65535`. URLs, paths, userinfo, whitespace and control characters are
+  rejected even when the regex is permissive. Values are neither trimmed nor normalized;
+  the original value, including any port, must match. The maximum is 260 bytes.
+- `hostFromHeader` conflicts with `host` and with Host add/set/remove operations in the
+  same plugin. Other headers may still be rewritten or removed, including the source
+  header after it has been read.
+- The value is read when this plugin executes, after any earlier plugins. Configure the
+  source at a trusted proxy or select a narrow allowlist: this header selects the
+  backend virtual host. Later plugins and backend authority policies may override Host;
+  this is validation of this rewrite, not a final request-wide Host restriction.
+- HTTP/2 URI authority is updated along with Host. Backend selection, connection port,
+  TLS SNI and certificate verification retain their existing owners. An optional port in
+  Host does not change the connection port.
 
 ### Variable Reference
 

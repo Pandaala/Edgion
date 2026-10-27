@@ -1,5 +1,112 @@
-> **Current resume status — 2026-10-11, product commit 6f566a8ae; test addition 65d461d4f.**
-> This block is the current authority for progress. Historical records below
+> **Current resume status — 2026-10-27.** The weighted correction is verified
+> on `d01698e3e` plus the scoped working-tree fix. The pre-fix Kubernetes
+> baseline tested `5e359f300`; both records supersede the older broad F2 list.
+> Historical checkpoints retain their original revision and evidence scope.
+
+## Weighted invalid-reference correction (2026-10-27)
+
+- F2-K8S-WEIGHT-01 is fixed in the working tree based on `d01698e3e`.
+  `ai_rule_invalid_reason` now requires AI facts only for an enabled AiProxy or
+  a canonical EdgionBackend declaration. Ordinary unsupported backend slots reach
+  native weighted selection; their indices, weights and selected-slot 500 remain.
+  Actual AI facts, variants, provider/TPM and mixed-AI admission stay strict.
+- A fresh independent reviewer and the explicitly requested Astra reviewer both
+  returned LGTM. The seven scoped source/test/knowledge hashes matched the
+  reviewed freeze when the interrupted environment resumed.
+- Fresh resumed unit execution passed **9/9** Resources AI admission tests and
+  **41/41** Gateway publication tests. Workspace all-target check and Clippy
+  passed; existing unrelated Clippy warnings remain. Format, agent docs, SSA,
+  metrics inventory, Pingora policy, transform contract, unit layout and diff
+  checks passed. No full-workspace test execution is claimed.
+- Fixed Linux Controller/Gateway hashes matched the running processes. The
+  original five-case short-route probe passed, including equal-weight core
+  same-name/different-name failures alternating 200/500 instead of all-500.
+  After the host interruption, the current binaries were reinstalled and the
+  canonical peer identity refreshed for the restarted client. All five permanent
+  fixture paths passed 24 requests each: same-name core, different-name core and
+  ServiceImport each returned 12 HTTP 200 / 12 HTTP 500; all-invalid returned
+  24 HTTP 500; zero-weight invalid returned 24 HTTP 200.
+- The fresh Linux test-client was hash-verified in the Pod. The canonical
+  Kubernetes PartiallyInvalid suite passed **4/4**. Its first run passed 3/4
+  because the old `all-invalid` fixture was absent from the reused cluster;
+  creating that existing canonical fixture fixed preparation without changing
+  assertions. The failed attempt remains in the evidence directory.
+- Evidence: `tmp/resource-reference-contract/k8s-weighted-fix-20261027/`, notably
+  source-freeze.json, weighted-probe-results.json, resume-fixture-probe.json,
+  resume-route-receipt.json, resume-partially-invalid-suite.log,
+  resume-client-provenance.json, resume-binary-provenance.json,
+  resume-rust-checks.json and resume-fast-checks.json. This scoped correction
+  does not close the full reference task or establish new Standard conformance.
+- Cleanup restored the original running Controller/Gateway hashes, original
+  Gateway process ConfigMap and unchanged Deployment specs. Both run-created
+  routes, the staged test-client and refresh annotation were removed; baseline
+  HTTP health passed. The exact owned integration Lease was released and the
+  host context remains `orbstack`. Canonical peer preparation remains test setup.
+  See resume-cleanup-verification.json. No commit or push was performed.
+
+## Fresh Kubernetes reference verification (2026-10-27)
+
+- Fresh canonical Linux arm64 release Controller, Gateway and test-client binaries
+  were built from `5e359f300c3840bfbe9debed8fb9eca82828da65`. Remote executable
+  hashes matched local binaries. The existing kind test topology was reused on
+  Kubernetes v1.37.0; the host's separate OrbStack context was not changed.
+- The installed Gateway API bundle is v1.6.2 with mixed shipped source profiles.
+  All 22 relevant installed CRDs / 31 versions matched a current vendored schema,
+  ignoring descriptive text. Two custom CRDs required installation updates.
+  This is not a new Standard conformance run or a production-version claim.
+- API-server dry-run admission: **34/34 passed**. Cases cover omitted/defaulted
+  groups and kinds, optional null pruning, required/missing/null fields,
+  ExtensionRef requirements, ReferenceGrant exact/wildcard field shapes, CA union
+  constraints, and long object/reference names. Literal `core` is structurally
+  admitted for a native backendRef and is subsequently rejected by the runtime.
+- Targeted current-binary runtime checks: **22/23 passed**. Passing cases include
+  long Gateway/HTTPRoute names, long cross-namespace certificate Secret references,
+  long BackendTLSPolicy/ConfigMap CA names with actual upstream TLS, standard
+  omitted/core/omitted transitions, Gateway certificate Grant revoke/restore,
+  backend Grant delete/recreate and from/to edits, and CA missing/recovery.
+  A single-recorder positive control and a complete three-second negative window
+  verify that a revoked backend receives no request. All run-owned objects were
+  deleted by the driver.
+- **F2-K8S-WEIGHT-01 failed:** the valid-Service plus invalid-core equal-weight
+  rule returned 32/32 HTTP 500 after the Gateway acknowledged its exact generation.
+  A separate short-name route on an established listener reproduced both same-name
+  and different-name variants (12/12 HTTP 500 each). Single/two-valid controls
+  returned only 200; a valid plus missing Service alternated 200/500. Current
+  AI admission rejects the entire ordinary rule before weighted backend selection.
+  This is the pre-fix failure; the scoped correction above supplies newer evidence.
+- The canonical Kubernetes dynamic driver passed **4/4** selected scenarios:
+  CredentialInjectorDynamic, RequestMirrorReferenceGrant, PmdRefFlap and
+  BtlspRefFlap. The first two include actual traffic; the latter two primarily
+  prove status/reference convergence. AcmeGatewayRefOwnership is an explicit
+  current harness exception because its injected activeChallenges require a
+  status-subresource seeding mechanism; no Kubernetes execution is claimed.
+- Preparation evidence is retained: the old process config needed the current
+  named conf-sync certificate form; initial script preparation also exposed YAML
+  1.1 scalar conversion and late physical-listener binding assumptions. Corrected
+  preparation retained all failed attempts, then reran on current binaries. These
+  preparation failures are not accepted product failures. The canonical peer
+  preparation refreshed stale test-client identity/CIDR fixtures for the live Pod.
+- Evidence root: `tmp/resource-reference-contract/k8s-final-20261027/`.
+  Key records: admission-results.json, crd-schema-verified.json,
+  binary-provenance.json, runtime-results.json, weighted-probe-results.json,
+  dynamic.log, and process configuration/restoration records. Build output and
+  initial failed attempts remain alongside them. No commit or push was performed.
+- Cleanup verification restored the original Controller/Gateway executable hashes,
+  Deployment specs and Gateway process ConfigMap, and passed the baseline HTTP
+  health request. Run-owned objects and the staged client were removed; the
+  integration Lease was released. Updated installation CRDs, canonical peer/CIDR
+  preparation and dynamic initial-fixture restoration are retained as test setup.
+  The final machine-readable result is verification-summary.json in the evidence root.
+- Remaining acceptance at this pre-fix checkpoint: resolve the weighted failure; explicitly
+  disposition the unsupported ACME Kubernetes scenario; complete the source-mode
+  parity and any unrepresented native client/CA-material matrices; then obtain
+  final whole-task acceptance. Existing Standard conformance remains scoped to
+  its recorded older product revision. Do not delete the source alias issue.
+
+## Historical current-status checkpoint (2026-10-11)
+
+> **Recorded product commit 6f566a8ae; test addition 65d461d4f.**
+> This block records the authority at that checkpoint. Historical records below
 > retain their original revision scope, including prior failures and limitations.
 
 ## Current source closure and remaining acceptance

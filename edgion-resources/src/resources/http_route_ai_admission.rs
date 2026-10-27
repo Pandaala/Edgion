@@ -107,9 +107,14 @@ pub fn ai_rule_invalid_reason(
             .backend_refs
             .iter()
             .flatten()
-            .any(|backend| backend.backend_kind() != HTTPBackendRefKind::Service);
+            .any(|backend| backend.backend_kind() == HTTPBackendRefKind::EdgionBackend);
+    // Ordinary HTTP owns invalid backend failure shares. An unsupported slot
+    // must reach weighted selection rather than reject its healthy siblings.
+    if !requires_facts {
+        return None;
+    }
     let Some(resolved) = resolved.filter(|facts| facts_match_rule(rule, facts)) else {
-        return requires_facts.then(|| "AI routing admission metadata is unavailable".to_string());
+        return Some("AI routing admission metadata is unavailable".to_string());
     };
     runtime_ai_rule_invalid_reason(rule, route_namespace, resolved, &proxies)
         .or_else(|| backend_variant_invalid_reason(rule, resolved))

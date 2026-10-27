@@ -10,7 +10,9 @@
 //!
 //! These types are used with `PluginSession::key_get()` and `PluginSession::key_set()`.
 
+mod host_authority;
 mod key_accessor;
 
 pub use crate::resources::edgion_plugins::plugin_configs::WebhookExtract;
+pub use host_authority::is_valid_host_authority;
 pub use key_accessor::{KeyGet, KeySet};

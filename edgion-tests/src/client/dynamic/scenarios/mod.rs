@@ -79,3 +79,5 @@ pub mod dsl_query_lookup;
 
 pub mod metrics_lifetime;
 pub mod shared_http_policy_admission;
+
+pub mod proxy_rewrite_host;

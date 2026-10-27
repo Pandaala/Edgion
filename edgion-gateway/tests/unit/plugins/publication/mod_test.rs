@@ -734,6 +734,37 @@ fn admission_tokens_reject_cross_generation_pairs_and_do_not_pin_routes() {
     assert_eq!(publisher.snapshot().stats().ai_route_tokens, 0);
 }
 
+#[test]
+fn ordinary_invalid_backend_slots_do_not_seal_the_published_rule() {
+    use crate::routes::http::match_unit::HttpRouteRuleUnit;
+
+    let publisher = publisher();
+    let mut mixed = (*route()).clone();
+    mixed.spec.rules = Some(vec![serde_json::from_value(json!({
+        "backendRefs": [
+            {"name": "service", "port": 80, "weight": 1},
+            {"group": "core", "name": "service", "port": 80, "weight": 1}
+        ],
+        "resolvedAiAdmission": {"backends": [{"kind": "service"}, {"kind": "missing"}]}
+    }))
+    .unwrap()]);
+    let mixed = Arc::new(mixed);
+    publisher.replace_routes(
+        RouteKind::Http,
+        HashMap::from([("apps/route".into(), RouteInput::from_http(mixed.clone()))]),
+    );
+    let scope = scope(&publisher, "apps/a");
+    assert!(
+        scope.ai_rule(&mixed, 0),
+        "the ordinary request admission gate must leave selection reachable"
+    );
+    assert!(scope.graphql_rule(&mixed, 0));
+    let runtime = HttpRouteRuleUnit::compile_http_rule(&mixed, 0).unwrap();
+    assert_eq!(runtime.backends.len(), 2);
+    assert!(runtime.backends[0].permitted_service().is_some());
+    assert!(runtime.backends[1].permitted_service().is_none());
+}
+
 fn stream_source() -> Arc<EdgionStreamPlugins> {
     Arc::new(serde_json::from_value(json!({
         "apiVersion": "edgion.io/v1", "kind": "EdgionStreamPlugins",

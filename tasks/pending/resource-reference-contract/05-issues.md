@@ -1,5 +1,17 @@
 # Design and verification issues
 
+## Remaining acceptance (2026-10-27)
+
+F2-K8S-WEIGHT-01 is fixed in the working tree and removed from active blockers.
+The historical failure remains in verification progress; the owning
+[regression guard](../../../skills/04-review/routing/regression-guards/weighted-invalid-backendrefs-retain-traffic-share.md)
+records the reusable boundary. Two independent reviews, including the requested
+Astra review, returned LGTM. Current-binary Kubernetes PartiallyInvalid passed
+4/4, and fresh targeted unit execution passed 9 Resources / 41 Gateway tests.
+See [07-progress.md](07-progress.md) for evidence and verification limits.
+The full task remains open for the explicit ACME Kubernetes harness disposition,
+source-mode parity and unrepresented native client/CA-material matrices.
+
 ## Current disposition (2026-10-11)
 
 - S-R1-01 is source-closed by R12a (`f6b71a52`); F1-COV-R1-01 is

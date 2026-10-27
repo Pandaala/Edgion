@@ -1508,3 +1508,48 @@ async fn cookie_cleanup_opaque_failure_preserves_headers_and_returns_fixed_respo
         }
     ));
 }
+
+#[tokio::test]
+async fn proxy_rewrite_header_host_updates_h1_and_h2_authorities() {
+    use crate::plugins::http::proxy_rewrite::ProxyRewrite;
+    use crate::plugins::runtime::{PluginLog, RequestFilter};
+    use edgion_resources::filters::PluginRunningResult;
+    use edgion_resources::resources::edgion_plugins::ProxyRewriteConfig;
+    use tokio::io::AsyncWriteExt;
+
+    for version in [http::Version::HTTP_11, http::Version::HTTP_2] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client.write_all(b"GET /original?scope=read HTTP/1.1\r\nHost: downstream.example.com\r\nX-Backend-Host: api.internal:8080\r\n\r\n").await.unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        session.read_request().await.unwrap();
+        if version == http::Version::HTTP_2 {
+            session
+                .req_header_mut()
+                .set_uri("https://downstream.example.com/original?scope=read".parse().unwrap());
+            session.req_header_mut().set_version(version);
+            session.req_header_mut().remove_header("Host");
+        }
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_query
+            .capture(session.req_header().uri.query().map(str::to_owned))
+            .unwrap();
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "hostFromHeader": {"name": "X-Backend-Host", "allowRegex": "api\\.internal:8080"}
+        }))
+        .unwrap();
+        let plugin = ProxyRewrite::create(&config, None).unwrap();
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(matches!(
+            plugin
+                .run_request(&mut adapter, &mut PluginLog::new("ProxyRewrite"))
+                .await,
+            PluginRunningResult::GoodNext
+        ));
+        let header = session.req_header();
+        assert_eq!(header.headers.get("Host").unwrap(), "api.internal:8080");
+        assert_eq!(header.uri.path_and_query().unwrap().as_str(), "/original?scope=read");
+        if version == http::Version::HTTP_2 {
+            assert_eq!(header.uri.authority().unwrap().as_str(), "api.internal:8080");
+        }
+    }
+}

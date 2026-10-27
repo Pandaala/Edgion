@@ -10,11 +10,79 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct PartiallyInvalidTestSuite;
 
 impl PartiallyInvalidTestSuite {
+    fn test_invalid_kind_weighted_shares() -> TestCase {
+        TestCase::new(
+            "invalid_kind_weighted_shares",
+            "Invalid kinds fail only their declared traffic share; healthy siblings keep serving",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for (path, expected_successes) in [
+                        ("mixed-same", 12),
+                        ("mixed-other", 12),
+                        ("unsupported-kind", 12),
+                        ("invalid-only", 0),
+                        ("zero-invalid", 24),
+                    ] {
+                        let mut successes = 0;
+                        for _ in 0..24 {
+                            let marker = uuid::Uuid::new_v4().to_string();
+                            let response = match ctx
+                                .http_client
+                                .get(format!("{}/{path}", ctx.http_url()))
+                                .header("Host", "invalid-kind-shares.example.com")
+                                .header("traceparent", crate::access_log_client::traceparent_for_marker(&marker))
+                                .timeout(Duration::from_secs(3))
+                                .send()
+                                .await
+                            {
+                                Ok(response) => response,
+                                Err(error) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("{path}: request failed: {error}"),
+                                    )
+                                }
+                            };
+                            match response.status().as_u16() {
+                                200 => successes += 1,
+                                500 => {}
+                                status => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("{path}: unexpected status {status}"),
+                                    )
+                                }
+                            }
+                            if let Err(error) = response.bytes().await {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("{path}: body read failed: {error}"),
+                                );
+                            }
+                        }
+                        if successes != expected_successes {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{path}: expected {expected_successes}/24 successes, got {successes}/24"),
+                            );
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Mixed invalid kinds preserve 1:1 shares; invalid-only fails and zero-weight invalid is inert"
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     fn test_valid_rule_proxies() -> TestCase {
         TestCase::new(
             "valid_rule_proxies",
@@ -143,6 +211,7 @@ impl TestSuite for PartiallyInvalidTestSuite {
             Self::test_valid_rule_proxies(),
             Self::test_invalid_rule_skipped(),
             Self::test_all_invalid_route_rejected(),
+            Self::test_invalid_kind_weighted_shares(),
         ]
     }
 }

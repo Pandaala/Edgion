@@ -45,6 +45,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiGuardOrderingDynamic",
     "GatewayDynamic",
     "DslDynamic",
+    "ProxyRewriteHostDynamic",
     "DslXmlDynamic",
     "DslQueryLookupDynamic",
     "DslTerminateDynamic",
@@ -1899,6 +1900,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CredentialInjectorDynamic"
         | "CsrfSecretRotation"
         | "DslDynamic"
+        | "ProxyRewriteHostDynamic"
         | "DslXmlDynamic"
         | "DslQueryLookupDynamic"
         | "DslTerminateDynamic"

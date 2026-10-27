@@ -805,3 +805,73 @@ fn regex_uri_capture_markers_preserve_sequential_and_unmatched_behavior() {
         plugin.rewrite_uri(&mut session, &mut PluginLog::new("ProxyRewrite"), path, Some(&captures));
     }
 }
+
+#[tokio::test]
+async fn header_host_rejects_ambiguous_or_disallowed_input_before_any_mutation() {
+    let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "hostFromHeader": {"name": "X-Backend-Host", "allowRegex": "api\\.internal(?::8080)?"},
+        "uri": "/rewritten"
+    }))
+    .unwrap();
+    let plugin = plugin(&config);
+    let mut cases = vec![HeaderMap::new()];
+    for value in [
+        "",
+        "evil.internal",
+        "api.internal.evil",
+        "api.internal:80",
+        "api.internal,evil.internal",
+        "user@api.internal",
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-backend-host", HeaderValue::from_str(value).unwrap());
+        cases.push(headers);
+    }
+    let mut repeated = HeaderMap::new();
+    repeated.append("x-backend-host", HeaderValue::from_static("api.internal"));
+    repeated.append("x-backend-host", HeaderValue::from_static("api.internal"));
+    cases.push(repeated);
+    let mut invalid_text = HeaderMap::new();
+    invalid_text.insert("x-backend-host", HeaderValue::from_bytes(&[0xff]).unwrap());
+    cases.push(invalid_text);
+    for headers in cases {
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        // No path/body read or mutation expectation: rejection must precede them.
+        assert!(matches!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("ProxyRewrite"))
+                .await,
+            PluginRunningResult::ErrResponse { status: 400, .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn header_host_uses_canonical_host_setter_and_propagates_failure() {
+    for fails in [false, true] {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "hostFromHeader": {"name": "X-Backend-Host", "allowRegex": "api\\.internal:8080"}
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-backend-host", HeaderValue::from_static("api.internal:8080"));
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        session.expect_get_path().return_const("/original".to_string());
+        session
+            .expect_set_upstream_host()
+            .with(mockall::predicate::eq("api.internal:8080"))
+            .times(1)
+            .returning(move |_| if fails { Err("sealed mutation".into()) } else { Ok(()) });
+        let result = plugin
+            .run_request(&mut session, &mut PluginLog::new("ProxyRewrite"))
+            .await;
+        assert!(if fails {
+            matches!(result, PluginRunningResult::ErrResponse { status: 400, .. })
+        } else {
+            matches!(result, PluginRunningResult::GoodNext)
+        });
+    }
+}

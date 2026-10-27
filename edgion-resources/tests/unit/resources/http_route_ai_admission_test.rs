@@ -52,7 +52,52 @@ fn required_metadata_never_becomes_ordinary_forwarding() {
     assert_eq!(check(&service, None, 0, None), None);
     assert!(check(&service, None, 1, None).is_some());
     let unsupported = rule(json!([{"group": "edgion.io", "kind": "Unsupported", "name": "target"}]));
-    assert!(check(&unsupported, None, 0, None).is_some());
+    assert_eq!(check(&unsupported, None, 0, None), None);
+}
+
+#[test]
+fn ordinary_invalid_backends_leave_failure_shares_to_native_selection() {
+    for invalid in [
+        json!({"group": "core", "name": "web", "port": 80, "weight": 1}),
+        json!({"group": "core", "name": "other", "port": 80, "weight": 1}),
+        json!({"group": "multicluster.x-k8s.io", "kind": "ServiceImport", "name": "web", "port": 80, "weight": 1}),
+        json!({"kind": "ServiceExternalName", "name": "web", "port": 80, "weight": 1}),
+    ] {
+        for weight in [0, 1] {
+            let mut invalid = invalid.clone();
+            invalid["weight"] = json!(weight);
+            let rule = rule(json!([{"name": "web", "port": 80, "weight": 1}, invalid]));
+            let facts = ResolvedAiAdmission {
+                backends: vec![ResolvedForwardingTarget::Service, ResolvedForwardingTarget::Missing],
+            };
+            for facts in [None, Some(&facts)] {
+                assert_eq!(check(&rule, facts, 0, None), None);
+                assert!(
+                    check(&rule, facts, 1, None).is_some(),
+                    "an enabled AiProxy still requires AI targets"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_invalid_slot_does_not_relax_actual_ai_admission() {
+    let mixed = rule(json!([
+        {"group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 1},
+        {"group": "core", "name": "web", "port": 80, "weight": 1}
+    ]));
+    let facts = ResolvedAiAdmission {
+        backends: vec![ai_fact(true), ResolvedForwardingTarget::Missing],
+    };
+    assert!(check(&mixed, None, 0, None).is_some());
+    assert!(check(&mixed, Some(&facts), 0, None).is_some());
+    assert!(check(&mixed, Some(&facts), 1, None).is_some());
+    let invalid_ai = rule(json!([{"group": "edgion.io", "kind": "EdgionBackend", "name": "models"}]));
+    let facts = ResolvedAiAdmission {
+        backends: vec![ai_fact(false)],
+    };
+    assert!(check(&invalid_ai, Some(&facts), 0, None).is_some());
 }
 
 #[test]

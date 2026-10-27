@@ -722,6 +722,7 @@ impl EdgionPlugin {
         }
         match self {
             EdgionPlugin::Unsupported => Vec::new(),
+            EdgionPlugin::ProxyRewrite(c) => c.host_from_header.iter().map(|source| source.name.clone()).collect(),
             // DirectEndpoint / DynamicInternalUpstream / DynamicExternalUpstream:
             // a single `from: KeyGet` field.
             EdgionPlugin::DirectEndpoint(c) => headers_of(std::iter::once(&c.from)),
@@ -782,7 +783,6 @@ impl EdgionPlugin {
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
-            | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestBodyBuffer(_)

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use http::uri::Authority;
 use http::HeaderValue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::common::KeyGet;
+use crate::common::{is_valid_host_authority, KeyGet};
 use crate::resources::edgion_plugins::PluginValidation;
 
 use super::upstream_fallback::{default_upstream_fallback, UpstreamFallback};
@@ -20,30 +19,6 @@ const OVERRIDE_HOST_AUTHORITY: &str = "overrideHost is not a valid Host authorit
 /// already pass `domain` validation must also pass an explicit `sni`.
 fn is_allowed_external_name_char(c: char) -> bool {
     !c.is_control() && !matches!(c, ' ' | '/' | '\\' | '@' | '#' | '?' | '[' | ']')
-}
-
-fn is_valid_host_authority(value: &str) -> bool {
-    // HTTP Host is `uri-host [ ":" port ]`. URI Authority also allows userinfo.
-    if value.is_empty() || value.contains('@') {
-        return false;
-    }
-    let Ok(authority) = Authority::try_from(value) else {
-        return false;
-    };
-    let host = authority.host();
-    if host.is_empty() {
-        return false;
-    }
-    if value == host {
-        return true;
-    }
-    let Some(port) = value.get(host.len()..).and_then(|rest| rest.strip_prefix(':')) else {
-        return false;
-    };
-    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    port.parse::<i64>().ok().is_some_and(crate::gwapi_types::is_valid_port)
 }
 
 /// DynamicExternalUpstream plugin configuration

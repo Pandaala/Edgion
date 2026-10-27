@@ -40,6 +40,9 @@ spec:
 | `regexUri.pattern` | String | 是 | 正则匹配模式 |
 | `regexUri.replacement` | String | 是 | 替换模板，支持 `$1-$9` 捕获组 |
 | `host` | String | 否 | 新的 Host 请求头值 |
+| `hostFromHeader` | Object | 否 | 从唯一的请求头值读取 Host，与 `host` 互斥 |
+| `hostFromHeader.name` | String | 是（配置 `hostFromHeader` 时） | 来源请求头名称，不区分大小写 |
+| `hostFromHeader.allowRegex` | String | 是（配置 `hostFromHeader` 时） | 匹配完整值（含端口）的 Rust 正则白名单，1–4096 字节 |
 | `method` | String | 否 | 新的 HTTP 方法：GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS 等 |
 | `headers` | Object | 否 | 请求头修改操作 |
 | `headers.add` | Array | 否 | 添加请求头（追加到已有值） |
@@ -47,6 +50,34 @@ spec:
 | `headers.remove` | Array | 否 | 删除请求头 |
 | `jsonBody` | Object | 否 | 结构化重写已缓冲的 JSON 请求 Body |
 | `jsonBody.operations` | Array | 是（配置 `jsonBody` 时） | 按顺序执行的 RFC 6902 操作：`add`、`remove`、`replace`、`move`、`copy`、`test` |
+
+### 从请求头读取 Host
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: host-from-header
+  namespace: default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        hostFromHeader:
+          name: X-Backend-Host
+          allowRegex: '(?:api|admin)\.internal\.example\.com(?::8080)?'
+```
+
+在同 namespace 的 HTTPRoute 中通过 `ExtensionRef` 引用 `host-from-header`。
+请求携带 `X-Backend-Host: api.internal.example.com:8080` 时，后端收到
+`Host: api.internal.example.com:8080`。固定 `host` 仍按字面量处理，动态取值使用 `hostFromHeader`。
+
+- `name` 和 `allowRegex` 都是必填。正则在配置加载时预编译，编译内存有上限，强制匹配**完整值**，无需手写 `^`/`$`。默认区分大小写，可用 `(?i:...)` 忽略大小写。
+- 来源缺失、为空、重复、多值、非文本、格式非法或不匹配时，在 URI、Body 和请求头改写前返回 `400`。逗号分隔的多个值也会被拒绝。非法正则作为配置错误处理。
+- 独立于正则校验 Host 格式：允许 DNS 名称、IPv4、方括号 IPv6，以及可选的 `1..=65535` 端口；即使正则宽松，也拒绝 URL、路径、用户信息、空白和控制字符。值不做裁剪或规范化，包含端口的原始值必须匹配，总长度最多 260 字节。
+- 与固定 `host` 互斥，也不能在同一插件中添加、设置或删除 `Host`。其他请求头仍可改写或删除，包括读取后的来源请求头。
+- 读取的是插件执行时的值，可受前序插件影响。建议由可信前置代理写入，或使用精确的白名单，因为该值能选择后端虚拟主机。后续插件和后端 authority 策略仍可能覆盖 Host；这里限制的是本次改写，不是请求全链路的最终 Host 策略。
+- 同步更新 HTTP/2 URI authority。后端选择、连接端口、TLS SNI 和证书校验保持现有职责；Host 中的端口不会改变实际连接端口。
 
 ### 变量说明
 

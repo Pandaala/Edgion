@@ -308,3 +308,5 @@ impl EdgionPlugins {
 }
 
 pub use plugin_configs::ResponseCacheConfig;
+
+pub use plugin_configs::HostFromHeader;

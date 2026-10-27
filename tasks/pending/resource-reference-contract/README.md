@@ -9,17 +9,23 @@
 | Type | refactor |
 | Priority | P2 |
 | Source | [Core API group alias investigation](../../todo/core-api-group-alias-contract.md) |
-| Current phase | Implementation batches through R12b committed; R13 documentation reconciliation and final acceptance remain in progress |
+| Current phase | Implementation and R13 committed; weighted Kubernetes blocker corrected and verified; remaining acceptance stays open |
 
-## Current status (2026-10-10)
+## Current status (2026-10-27)
 
-The design is accepted and implementation batches through R12b are committed
-locally. R12a fixes valid Kubernetes object-name rejection; R12b retires obsolete
-detached TLS constructors. [07-progress.md](07-progress.md) records exact commits,
-scoped reviews/tests and their limits. R13 reconciles current documentation with
-historical checkpoints. Affected final whole-contract cross-checks and F2 fresh
-admission, dynamic traffic and full Standard conformance remain open. The original
-alias investigation is retained until FULL acceptance; no push has occurred.
+The implementation and R13 documentation reconciliation are committed. Fresh
+Kubernetes checks on source `5e359f300` passed 34 API-server admission cases,
+22 of 23 targeted runtime checks, and all four selected supported dynamic scenarios.
+Long-name HTTP/TLS, certificate and backend Grant revocation/recovery, and CA
+reference failure/recovery now have live evidence. F2-K8S-WEIGHT-01 is corrected
+in the working tree: ordinary rules reach native weighted selection while real AI
+admission remains strict. Two independent reviews, including the requested Astra
+review, returned LGTM. Current-binary Kubernetes PartiallyInvalid passed 4/4,
+including mixed invalid kinds, all-invalid and zero-weight controls. The original
+failing evidence is retained separately from the corrected verification.
+See [07-progress.md](07-progress.md) and [05-issues.md](05-issues.md) for exact
+scope, current evidence, unsupported ACME status seeding, and remaining acceptance.
+The original alias investigation remains open until FULL acceptance.
 
 ## AI guide summary
 

@@ -446,3 +446,121 @@ fn preparation_publishes_only_current_optional_outputs() {
         }
     }
 }
+
+fn dynamic_host_config(pattern: &str) -> ProxyRewriteConfig {
+    serde_json::from_value(serde_json::json!({
+        "hostFromHeader": {"name": "X-Backend-Host", "allowRegex": pattern}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn header_host_allowlist_matches_the_entire_value_and_checks_syntax() {
+    let mut config = dynamic_host_config(r"(?:api|admin)\.internal(?::8080)?");
+    assert!(config.has_any_config());
+    assert!(config.precompile());
+    let plan = config.compiled_host_from_header.as_ref().unwrap();
+    for host in ["api.internal", "admin.internal:8080"] {
+        assert!(plan.allows(host), "{host}");
+    }
+    for host in [
+        "evil-api.internal",
+        "api.internal.evil",
+        "api.internal:80",
+        "API.internal",
+    ] {
+        assert!(!plan.allows(host), "{host}");
+    }
+    // A permissive regex cannot disable Host syntax validation.
+    let mut config = dynamic_host_config(".*");
+    assert!(config.precompile());
+    let plan = config.compiled_host_from_header.as_ref().unwrap();
+    for host in ["api.internal", "API.internal.", "127.0.0.1:8080", "[::1]:8080"] {
+        assert!(plan.allows(host), "{host}");
+    }
+    for host in [
+        "",
+        "https://api.internal",
+        "user@api.internal",
+        "api.internal/path",
+        "api.internal?x=1",
+        "api.internal#x",
+        "api.internal:0",
+        "api.internal:65536",
+        "api.internal:",
+        "api.internal:abc",
+        "api.internal,evil",
+        "api%2einternal",
+        "bad host",
+        "api.internal\r\nx: y",
+        "[invalid]",
+        "-bad.internal",
+        "bad..internal",
+        "api.internal\\evil",
+        "é.internal",
+    ] {
+        assert!(!plan.allows(host), "{host:?}");
+    }
+    assert!(!plan.allows(&"a".repeat(261)));
+    assert!(!plan.allows(&format!("{}.internal", "a".repeat(64))));
+}
+
+#[test]
+fn header_host_config_rejects_invalid_and_conflicting_plans_and_clears_caches() {
+    for pattern in ["", "[", "api|", &"a".repeat(4097)] {
+        let mut config = dynamic_host_config(pattern);
+        // An empty branch is legal but can only allow a syntactically valid Host.
+        if pattern == "api|" {
+            assert!(config.precompile());
+            assert!(!config.compiled_host_from_header.as_ref().unwrap().allows(""));
+        } else {
+            assert!(config.check_fields().is_some());
+            assert!(!config.precompile());
+        }
+    }
+    for patch in [
+        serde_json::json!({"host": "static.internal"}),
+        serde_json::json!({"headers": {"set": [{"name": "hOsT", "value": "other.internal"}]}}),
+        serde_json::json!({"headers": {"add": [{"name": "Host", "value": "other.internal"}]}}),
+        serde_json::json!({"headers": {"remove": ["host"]}}),
+        serde_json::json!({"hostFromHeader": {"name": "bad name", "allowRegex": ".*"}}),
+    ] {
+        let mut value = serde_json::to_value(dynamic_host_config(".*")).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let mut config: ProxyRewriteConfig = serde_json::from_value(value).unwrap();
+        assert!(config.validation_error().is_some());
+        assert!(!config.precompile());
+        assert!(config.compiled_host_from_header.is_none());
+    }
+    let mut config = dynamic_host_config(".*");
+    assert!(config.precompile());
+    let wire = serde_json::to_value(&config).unwrap();
+    assert!(wire.get("compiledHostFromHeader").is_none());
+    let mut received: ProxyRewriteConfig = serde_json::from_value(wire).unwrap();
+    assert!(received.compiled_host_from_header.is_none());
+    assert!(received.precompile());
+    config.host_from_header.as_mut().unwrap().allow_regex = "[".to_string();
+    assert!(!config.precompile());
+    assert!(config.compiled_host_from_header.is_none());
+    for source in [
+        serde_json::json!({"name": "X-Host"}),
+        serde_json::json!({"name": "X-Host", "allowRegex": ".*", "typo": true}),
+    ] {
+        assert!(serde_json::from_value::<ProxyRewriteConfig>(serde_json::json!({"hostFromHeader": source})).is_err());
+    }
+}
+
+#[test]
+fn header_host_registers_source_for_dye_collision_protection() {
+    use crate::resources::edgion_plugins::EdgionPlugin;
+    assert_eq!(
+        EdgionPlugin::ProxyRewrite(dynamic_host_config(".*")).key_header_names(),
+        vec!["X-Backend-Host"]
+    );
+    assert!(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig::default())
+        .key_header_names()
+        .is_empty());
+}

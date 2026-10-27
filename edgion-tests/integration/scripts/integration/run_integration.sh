@@ -2009,6 +2009,9 @@ run_all_tests() {
                     if [ "$G_ITEM" = "RateLimitRedis" ]; then
                         run_token_bucket_partial_refill_redis_test || test_failed=true
                     fi
+                    if [ "$G_ITEM" = "ProxyRewrite" ]; then
+                        run_test "Dyn_ProxyRewriteHostDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ProxyRewriteHostDynamic" || test_failed=true
+                    fi
                     if [ "$G_ITEM" = "GraphqlGuard" ]; then
                         run_test "Dyn_GraphqlGuardDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlGuardDynamic" || test_failed=true
                     fi
@@ -3006,7 +3009,7 @@ main() {
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ] || [ "$G_ITEM" = "MetricsLifetime" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ] && [ "$suites" = "base,HTTPRoute/Basic,EdgionPlugins/base,EdgionPlugins/LdapAuthTls" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ] || [ "$G_ITEM" = "ProxyRewrite" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

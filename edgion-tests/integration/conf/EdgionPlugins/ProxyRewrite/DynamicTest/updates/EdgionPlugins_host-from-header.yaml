@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-host-from-header
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        hostFromHeader:
+          name: X-Backend-Host
+          allowRegex: 'admin\.internal'
