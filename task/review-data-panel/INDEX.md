@@ -83,7 +83,6 @@ retain their original scope; linked canonical knowledge contains later decisions
 
 - [Endpoint probe method ownership and clone timing](endpoint-05-method-clone-timing.md)
 
-- [Rendered authority label storage](authority-01-rendered-label-storage.md)
 
 - [Discovery section traversal storage](discovery-01-section-traversal-storage.md)
 
@@ -17578,12 +17577,15 @@ No full suite, live traffic or benchmark ran.
 
 ## Rendered authority label ownership decision
 
+Historical deferral record; the user subsequently selected the simple 64-byte
+reservation and owned composition described in the linked knowledge below.
+
 The canonical bounded label renderer returns an owned String, but authority
 composition currently copies the validated label into a separately sized final
 String. Reusing the rendered or normalized owner can reduce copies while retaining
 spare capacity or requiring growth. Main request context, cache nomination and
 outbound URL rewriting have different result lifetimes. The
-[authority storage decision](authority-01-rendered-label-storage.md) records these
+[authority storage decision](../../skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md#rendered-authority-label-storage-authority-01) records these
 tradeoffs without selecting an implementation or claiming a measured memory win.
 
 Fresh existing authority tests passed six cases. Independent plan review approved

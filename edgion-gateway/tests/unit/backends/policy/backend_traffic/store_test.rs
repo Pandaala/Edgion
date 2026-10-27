@@ -593,7 +593,7 @@ fn upstream_authority_resolves_and_clears() {
     store.full_set_policies(HashMap::from([("bt6h/p1".to_string(), p)]));
     let resolved = store.get_authority(key).expect("authority resolved");
     assert_eq!(resolved.suffix, ".sandbox.internal");
-    assert_eq!(resolved.compose("tenant-a"), "tenant-a.sandbox.internal");
+    assert_eq!(resolved.compose("tenant-a".to_owned()), "tenant-a.sandbox.internal");
 
     store.full_set_policies(HashMap::new());
     assert!(store.get_authority(key).is_none(), "cleared on removal");

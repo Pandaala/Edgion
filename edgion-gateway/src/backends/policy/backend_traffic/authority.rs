@@ -7,7 +7,8 @@
 
 use edgion_resources::resources::upstream_authority::{validate_label, CompiledUpstreamAuthority};
 
-use crate::link_sys::template::{render_template_in, RenderPolicy, SecretCapability, TemplateContext};
+use crate::link_sys::template::engine::render_template_in_with_capacity;
+use crate::link_sys::template::{RenderPolicy, SecretCapability, TemplateContext};
 use crate::plugins::runtime::PluginSession;
 
 /// Why an authority could not be produced. Both are hard failures — never a
@@ -42,7 +43,7 @@ pub fn render_authority_in(
     c: &CompiledUpstreamAuthority,
     context: TemplateContext<'_>,
 ) -> Result<String, AuthorityError> {
-    let label = render_template_in(
+    let mut label = render_template_in_with_capacity(
         &c.label_template,
         context,
         RenderPolicy {
@@ -50,14 +51,17 @@ pub fn render_authority_in(
             ..RenderPolicy::EMPTY
         },
         SecretCapability::Denied,
+        64,
     )
     .map_err(|_| AuthorityError::InvalidLabel)?
     .into_string();
     if label.is_empty() {
         return Err(AuthorityError::RenderEmpty);
     }
-    let label = validate_label(&label).map_err(|_| AuthorityError::InvalidLabel)?;
-    let composed = c.compose(&label);
+    validate_label(&label).map_err(|_| AuthorityError::InvalidLabel)?;
+    // Keep the reserved buffer when normalizing and appending the fixed suffix.
+    label.make_ascii_lowercase();
+    let composed = c.compose(label);
     // Belt-and-suspenders: admission (`pattern_suffix` in
     // edgion-resources/src/resources/upstream_authority.rs) already rejects
     // any pattern whose final suffix label is all-numeric, which makes an

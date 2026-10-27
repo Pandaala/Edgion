@@ -91,3 +91,22 @@ fn render_authority_rejects_a_composed_ip_literal() {
         "a composed IPv4 literal must be rejected even if it bypassed admission"
     );
 }
+
+#[test]
+fn authority_reserves_short_hosts_and_grows_without_relaxing_label_budget() {
+    let c = compiled("${ctx:tenant}.sandbox.internal");
+    for label in ["a", "A"] {
+        let host = render_authority(&c, &session_with_tenant(label)).unwrap();
+        assert_eq!(host, "a.sandbox.internal");
+        assert!(host.capacity() >= 64);
+    }
+    for label in ["a".repeat(63), "A".repeat(63)] {
+        let host = render_authority(&c, &session_with_tenant(&label)).unwrap();
+        assert_eq!(host, format!("{}.sandbox.internal", "a".repeat(63)));
+        assert!(host.len() > 64);
+    }
+    assert_eq!(
+        render_authority(&c, &session_with_tenant(&"a".repeat(64))),
+        Err(AuthorityError::InvalidLabel)
+    );
+}

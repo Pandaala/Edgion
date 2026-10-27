@@ -209,3 +209,21 @@ not peak RSS, full renderer timing or outbound transport throughput. Re-evaluate
 if renderer capacity behavior or header-storage dependencies change. Unconditional
 transfer, arbitrary spare-capacity thresholds or new template limits require their
 own reviewed policy; this local guard does not authorize those changes.
+
+## Rendered authority label storage (authority-01)
+
+Authority rendering reserves 64 bytes initially, independently of its unchanged
+63-byte aggregate label budget. It uses the canonical walker and validator,
+normalizes in the original buffer, and transfers that String to `compose` to
+append the fixed suffix, growing normally when needed. Other template consumers
+retain their existing capacity hints. Empty/invalid outcomes, Secret denial,
+composed-IP rejection, policy capture and Host/SNI ownership remain unchanged.
+
+The user selected this simple reservation policy instead of capacity predicates
+or compaction. Spare capacity can remain in the main request's authority owner;
+cache nomination and outbound URL rewriting use temporary owners. This is an
+accepted space tradeoff, not a measured throughput or RSS improvement. Uppercase
+validation still creates its existing temporary normalized value. Reconsider only
+with workload evidence; no global scratch buffer or shared renderer-default change
+is implied. Boundary tests cover short lowercase/uppercase hosts, growth beyond
+64 bytes, and rejection of a 64-byte label despite the reserved capacity.

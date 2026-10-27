@@ -225,11 +225,9 @@ impl CompiledUpstreamAuthority {
     }
 
     /// `<label>` + the fixed suffix. `label` must already be `validate_label`-ed.
-    pub fn compose(&self, label: &str) -> String {
-        let mut host = String::with_capacity(label.len() + self.suffix.len());
-        host.push_str(label);
-        host.push_str(&self.suffix);
-        host
+    pub fn compose(&self, mut label: String) -> String {
+        label.push_str(&self.suffix);
+        label
     }
 }
 

@@ -166,8 +166,25 @@ pub fn render_template_in(
     policy: RenderPolicy,
     secrets: SecretCapability<'_>,
 ) -> Result<RenderedTemplate, TemplateEvaluationError> {
+    render_template_in_with_capacity(
+        compiled,
+        context,
+        policy,
+        secrets,
+        compiled.hint_len().min(policy.max_bytes.unwrap_or(usize::MAX)),
+    )
+}
+
+/// Render with a caller-selected allocation hint, independent of the output byte budget.
+pub(crate) fn render_template_in_with_capacity(
+    compiled: &CompiledTemplate,
+    context: TemplateContext<'_>,
+    policy: RenderPolicy,
+    secrets: SecretCapability<'_>,
+    initial_capacity: usize,
+) -> Result<RenderedTemplate, TemplateEvaluationError> {
     let mut out = Output {
-        value: String::with_capacity(compiled.hint_len().min(policy.max_bytes.unwrap_or(usize::MAX))),
+        value: String::with_capacity(initial_capacity),
         max_bytes: policy.max_bytes,
     };
     let mut sensitive = false;

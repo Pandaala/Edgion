@@ -166,7 +166,7 @@ fn compile_accepts_matching_suffix_and_rejects_the_rest() {
     let ok = CompiledUpstreamAuthority::compile(&cfg("*.sandbox.internal", "${ctx:tenant}.sandbox.internal", None))
         .expect("must compile");
     assert_eq!(ok.suffix, ".sandbox.internal");
-    assert_eq!(ok.compose("tenant-a"), "tenant-a.sandbox.internal");
+    assert_eq!(ok.compose("tenant-a".to_owned()), "tenant-a.sandbox.internal");
 
     // Accepted: literals may mix into the label slot.
     assert!(
@@ -315,7 +315,7 @@ fn compile_and_host_matches_pattern_agree_on_case() {
         .expect("mixed-case pattern and template must both normalize and compile");
     assert_eq!(c.suffix, ".sandbox.internal", "stored suffix must be lowercase");
 
-    let host = c.compose(&validate_label("Tenant-A").unwrap());
+    let host = c.compose(validate_label("Tenant-A").unwrap().into_owned());
     assert_eq!(
         host, "tenant-a.sandbox.internal",
         "compose must always emit a lowercase host"
@@ -376,7 +376,7 @@ fn compose_can_never_escape_the_pattern() {
     let suffix = ".sandbox.internal";
     let expected_labels = suffix.matches('.').count() + 1;
     for label in ["a", "tenant-9", &"z".repeat(63)] {
-        let host = c.compose(&validate_label(label).unwrap());
+        let host = c.compose(validate_label(label).unwrap().into_owned());
         assert!(host_matches_pattern(&host, "*.sandbox.internal"), "{host}");
         assert_eq!(
             host.matches('.').count() + 1,
