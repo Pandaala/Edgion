@@ -366,3 +366,33 @@ spec:
         windowBytes: 1
         overlapBytes: 0
         failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-hold-request-timeout
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        api: openaiChat
+        usageObservation: off
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/timeout
+        windowBytes: 1
+        overlapBytes: 0
+        holdFirstWindow: true
+        headHoldTimeoutMs: 5000
+        failOpen: false

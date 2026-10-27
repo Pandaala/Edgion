@@ -159,6 +159,7 @@ fn clone_for_compilation_with(
                     auto_mapping: config.auto_mapping,
                     ignore_unknown_query_parameters: config.ignore_unknown_query_parameters,
                     stream_format: config.stream_format,
+                    timeout: config.timeout.clone(),
                     max_request_message_size: config.max_request_message_size.clone(),
                     max_response_message_size: config.max_response_message_size.clone(),
                     max_response_json_size: config.max_response_json_size.clone(),

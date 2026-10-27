@@ -25,6 +25,7 @@ spec:
           - example.Greeter
         autoMapping: false
         streamFormat: ndjson
+        timeout: 30s
         maxRequestMessageSize: 1m
         maxResponseMessageSize: 512k
         maxResponseJsonSize: 1m
@@ -90,7 +91,7 @@ ProtoJSON 保留 int64 字符串、枚举名称、bytes base64、map 和受支�
 
 硬上限：每个 protobuf 响应消息 512 KiB，每个 JSON record 和尚未释放的转换输出各 1 MiB，每次回调 256 条消息，深度 32，结构节点 16384。
 JSON record 上限至少为 128 字节。进程共享 64 MiB 预算，每个转换预留 32 MiB，最多同时处理两个转换；预算不足返回 503。
-取消及最终输出释放会归还容量。一元 Hold 的绝对超时最多 30 秒；流式转换在回调检查过期，并将上游 I/O 超时限制到 30 秒。
+取消及最终输出释放会归还容量。插件 `timeout` 默认 `30s`，接受 `1ms` 到 `30s`，例如 `timeout: 5s`；不支持用零关闭。预算从转换计划创建开始，并受已有请求或 gRPC 客户端截止时间限制。热更新仅影响新请求。一元 Hold 使用剩余绝对预算；流式转换在回调检查过期，并将上游 I/O 超时限制到剩余预算。
 等待传输事件或下游写入时可能超过回调过期目标。
 
 运行时 protobuf 消息不支持 extension range。非空的显式 string/bytes 默认值在构建反射 descriptor pool 前即被拒绝，自定义 option 的声明也会检查。Map entry 和已知 well-known type 必须具有标准 wire 字段结构。真实 grpc-status 在可修改 trailers 的插件执行前固定，插件不能将失败变为成功。流式输出容量不足会通过既有 sink 取消上游；无法容纳错误 terminal 时，该流是不完整的。

@@ -15,42 +15,7 @@ use std::sync::{
 use std::time::Instant;
 const MAX_FIELDS: usize = 64;
 const ERROR_METADATA: usize = 8192;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeadlineSource {
-    Hold,
-    Request,
-    Grpc,
-}
-#[derive(Clone, Copy)]
-struct EffectiveDeadline {
-    at: Instant,
-    source: DeadlineSource,
-}
-fn effective_deadline(
-    now: Instant,
-    hold: std::time::Duration,
-    request: Option<Instant>,
-    grpc: Option<Instant>,
-) -> Option<EffectiveDeadline> {
-    let mut selected = EffectiveDeadline {
-        at: now.checked_add(hold)?,
-        source: DeadlineSource::Hold,
-    };
-    // Request wins equal deadlines, then gRPC, then the converter ceiling.
-    if let Some(at) = grpc.filter(|at| *at <= selected.at) {
-        selected = EffectiveDeadline {
-            at,
-            source: DeadlineSource::Grpc,
-        };
-    }
-    if let Some(at) = request.filter(|at| *at <= selected.at) {
-        selected = EffectiveDeadline {
-            at,
-            source: DeadlineSource::Request,
-        };
-    }
-    Some(selected)
-}
+use crate::response::deadline::{effective_deadline, DeadlineSource, EffectiveDeadline};
 pub(crate) struct UnaryHead {
     pub(crate) limits: UnaryLimits,
     pub(crate) reservation: Arc<Reservation>,

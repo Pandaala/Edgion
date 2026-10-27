@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +66,7 @@ pub struct GrpcTranscodingPlan {
     pub(crate) binding: Arc<CompiledBinding>,
     reservation: Mutex<Option<Arc<Reservation>>>,
     pub(crate) deadline: Instant,
+    pub(crate) deadline_source: crate::response::deadline::DeadlineSource,
     pub(crate) request_len: usize,
     pub(crate) generation: Option<u64>,
     pub(crate) conflict: AtomicBool,
@@ -82,12 +83,14 @@ impl GrpcTranscodingPlan {
         reservation: Arc<Reservation>,
         request_len: usize,
     ) -> Self {
+        let deadline = Instant::now() + compiled.timeout;
         Self {
             compiled,
             binding,
             reservation: Mutex::new(Some(reservation)),
             request_len,
-            deadline: Instant::now() + Duration::from_secs(30),
+            deadline,
+            deadline_source: crate::response::deadline::DeadlineSource::Hold,
             generation: None,
             conflict: AtomicBool::new(false),
             invalid_response: AtomicBool::new(false),

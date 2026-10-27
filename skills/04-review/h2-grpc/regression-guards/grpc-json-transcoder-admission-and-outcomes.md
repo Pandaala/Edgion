@@ -266,9 +266,12 @@ Revisit this ledger with any dependency container/layout change, new WKT, cap in
 or new retained representation; do not silently increase the 32 MiB reservation.
 
 Use the existing canonical remaining request/backend deadline. Unary Hold has a
-real absolute timer with a 30 s maximum. Streaming caps each upstream read/write
-timeout at 30 s (and the remaining route/backend budget at dial), and checks a
-30 s owner expiration at every processing/terminal callback. This is not a hard
+real absolute timer with a 30 s maximum. The cold-compiled `timeout` setting
+(default `30s`, range `1ms` through `30s`) bounds the conversion owner lifetime.
+Plan installation narrows it to existing request/gRPC client deadlines using the
+shared response deadline selector. Streaming caps each upstream read/write
+timeout at the remaining owner budget (and route/backend budget at dial), and
+checks owner expiration at every processing/terminal callback. This is not a hard
 wall-clock stream lifetime: waiting for a transport event or downstream write can
 overrun that expiration until the existing I/O bound or next callback fires.
 Do not claim a total streaming deadline or add a new fork cancellation seam.

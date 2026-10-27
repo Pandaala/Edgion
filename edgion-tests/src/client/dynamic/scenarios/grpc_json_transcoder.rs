@@ -6,12 +6,28 @@ use crate::framework::TestSuite;
 use crate::suites::GrpcJsonTranscoderDynamicSuite;
 use std::time::Duration;
 fn valid() -> Box<dyn TestSuite> {
-    Box::new(GrpcJsonTranscoderDynamicSuite { valid: true })
+    Box::new(GrpcJsonTranscoderDynamicSuite {
+        valid: true,
+        timeout_short: false,
+    })
 }
 fn invalid() -> Box<dyn TestSuite> {
-    Box::new(GrpcJsonTranscoderDynamicSuite { valid: false })
+    Box::new(GrpcJsonTranscoderDynamicSuite {
+        valid: false,
+        timeout_short: false,
+    })
+}
+fn short() -> Box<dyn TestSuite> {
+    Box::new(GrpcJsonTranscoderDynamicSuite {
+        valid: true,
+        timeout_short: true,
+    })
 }
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "short",
+        factory: short,
+    },
     PhaseSuite {
         name: "valid",
         factory: valid,
@@ -31,6 +47,12 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.apply_dir("updates/invalid").await?;
         ctx.wait_phase(SCENARIO, "invalid", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/recovery").await?;
+        ctx.wait_phase(SCENARIO, "valid", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/timeout-invalid").await?;
+        ctx.wait_phase(SCENARIO, "invalid", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/timeout-short").await?;
+        ctx.wait_phase(SCENARIO, "short", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/timeout-default").await?;
         ctx.wait_phase(SCENARIO, "valid", Duration::from_secs(15)).await?;
         ctx.delete_resources("delete/resources_to_delete.txt").await?;
         ctx.wait_phase(SCENARIO, "deleted", Duration::from_secs(15)).await?;

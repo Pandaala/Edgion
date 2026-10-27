@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-transcoder-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Dsl
+    config:
+      name: descriptor-retention-probe
+      source: let marker = req.header("x-marker")
+      errorPolicy: deny
+  - type: GrpcJsonTranscoder
+    config:
+      timeout: 31s
+      descriptor:
+        type: configMapRef
+        name: grpc-transcoder-dynamic
+        key: test.pb
+      services:
+      - test.TestService

@@ -235,3 +235,80 @@ async fn cache_commit_hook_rejects_onion_date_mutation_before_transport() {
         "cache refusal does not refuse ordinary forwarding"
     );
 }
+
+#[tokio::test]
+async fn guardrail_clamps_to_client_deadline_and_preserves_timeout_attribution() {
+    use std::sync::Arc;
+    use std::time::Instant;
+    let mut ctx = EdgionHttpContext::default();
+    let owner = Arc::new(crate::ai::guards::semantic::AttachedGuardrail::new());
+    let state = ctx.ensure_ai_state();
+    state.attached_guardrail = Some(("test".into(), owner.clone()));
+    state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+        owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
+        limits: limits(),
+        active: true,
+    });
+    state.final_response_eligibility = Some(crate::response::terminal::FinalResponseEligibility {
+        method_allows_body: true,
+        status_allows_body: true,
+        stream_kind: crate::ctx::ResponseStreamKind::Sse,
+    });
+    let deadline = Instant::now() + Duration::from_millis(200);
+    ctx.request_info.set_grpc_client_deadline(deadline);
+    let response = ResponseHeader::build(200, None).unwrap();
+    let session = session().await;
+    let ResponseHeadCommitPlan::Hold(_) =
+        response_head_commit_plan(&session, ResponseHeadSource::Origin, &response, &ctx).unwrap()
+    else {
+        panic!("expected Hold")
+    };
+    assert_eq!(owner.head_deadline.get().unwrap().at, deadline);
+    // Replanning must not rearm or extend the request-scoped deadline.
+    response_head_commit_plan(&session, ResponseHeadSource::Origin, &response, &ctx).unwrap();
+    assert_eq!(owner.head_deadline.get().unwrap().at, deadline);
+    let ResponseHeadBoundaryAction::Fail(error) = response_head_hold_boundary(ResponseHeadBoundary::Timeout, &ctx)
+    else {
+        panic!("expected failure")
+    };
+    assert_eq!(error.etype(), &ErrorType::HTTPStatus(504));
+    assert!(!error.retry());
+    record_guardrail_timeout(&mut ctx, &error);
+    assert_eq!(
+        ctx.diagnostics.entries(),
+        &[crate::observe::RequestDiagnostic::Error(
+            edgion_resources::EdgionErrorCode::GrpcClientDeadlineExceeded
+        )]
+    );
+}
+
+#[tokio::test]
+async fn expired_guardrail_activation_fails_before_starting_hold() {
+    let mut ctx = EdgionHttpContext::default();
+    let owner = std::sync::Arc::new(crate::ai::guards::semantic::AttachedGuardrail::new());
+    let state = ctx.ensure_ai_state();
+    state.attached_guardrail = Some(("test".into(), owner));
+    state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+        owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
+        limits: limits(),
+        active: true,
+    });
+    state.final_response_eligibility = Some(crate::response::terminal::FinalResponseEligibility {
+        method_allows_body: true,
+        status_allows_body: true,
+        stream_kind: crate::ctx::ResponseStreamKind::Sse,
+    });
+    ctx.request_info
+        .set_grpc_client_deadline(std::time::Instant::now() - Duration::from_secs(1));
+    let response = ResponseHeader::build(200, None).unwrap();
+    let error = response_head_commit_plan(&session().await, ResponseHeadSource::Origin, &response, &ctx).unwrap_err();
+    assert_eq!(error.etype(), &ErrorType::HTTPStatus(504));
+    assert!(!error.retry());
+    record_guardrail_timeout(&mut ctx, &error);
+    assert_eq!(
+        ctx.diagnostics.entries(),
+        &[crate::observe::RequestDiagnostic::Error(
+            edgion_resources::EdgionErrorCode::GrpcClientDeadlineExceeded
+        )]
+    );
+}

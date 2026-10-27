@@ -28,6 +28,7 @@ spec:
           - example.Greeter
         autoMapping: false
         streamFormat: ndjson
+        timeout: 30s
         maxRequestMessageSize: 1m
         maxResponseMessageSize: 512k
         maxResponseJsonSize: 1m
@@ -106,8 +107,12 @@ outstanding converted output, 256 messages per processing callback, depth 32 and
 16384 structural nodes. JSON record limits must be at least 128 bytes. A process-wide
 64 MiB budget reserves 32 MiB per active conversion, allowing two concurrent exchanges;
 admission failure returns 503. Cancellation and final output release return capacity.
-Unary has an absolute Hold timeout of at most 30 seconds. Streaming checks expiration
-at callbacks and caps upstream I/O timeouts at 30 seconds; waiting for a transport event
+The plugin `timeout` uses the standard duration syntax (for example, `timeout: 5s`),
+defaults to `30s`, and accepts `1ms` through `30s`; zero does not disable it.
+It starts when the conversion plan is created and is shortened by applicable request
+or gRPC client deadlines. Configuration reloads apply to new requests. Unary Hold
+uses the remaining absolute budget. Streaming checks expiration at callbacks and
+caps upstream I/O timeouts at the remaining budget; waiting for a transport event
 or downstream write can exceed the callback expiration target.
 
 Runtime protobuf message extension ranges are rejected. Nonempty explicit string/bytes defaults are rejected before reflection constructs the descriptor pool, including custom option declarations. Map entries and recognized well-known types must have canonical wire shapes. Transport grpc-status is pinned before mutable trailer companions; companions cannot manufacture success. Immediate streaming output-credit exhaustion cancels the origin through the canonical sink and leaves an incomplete stream if no bounded error terminal can be admitted.

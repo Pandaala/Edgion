@@ -525,6 +525,7 @@ impl TestSuite for GrpcJsonTranscoderTestSuite {
 
 pub struct GrpcJsonTranscoderDynamicSuite {
     pub valid: bool,
+    pub timeout_short: bool,
 }
 impl TestSuite for GrpcJsonTranscoderDynamicSuite {
     fn name(&self) -> &str {
@@ -532,6 +533,7 @@ impl TestSuite for GrpcJsonTranscoderDynamicSuite {
     }
     fn test_cases(&self) -> Vec<TestCase> {
         let valid = self.valid;
+        let timeout_short = self.timeout_short;
         vec![TestCase::new(
             "transcoder_descriptor_generation",
             "ConfigMap apply/delete replaces a mixed DSL/transcoder generation",
@@ -572,6 +574,35 @@ impl TestSuite for GrpcJsonTranscoderDynamicSuite {
                             if status == (if valid { 200 } else { 500 })
                                 && (!valid || body.contains("Hello, name!")) =>
                         {
+                            if valid {
+                                for h2 in [false, true] {
+                                    match call(
+                                        &ctx,
+                                        h2,
+                                        "grpc-transcoder-dynamic.example.com",
+                                        "/v1/hello/name",
+                                        None,
+                                        Some("deadline-probe"),
+                                    )
+                                    .await
+                                    {
+                                        // Owner expiry fails closed with 502; an upstream I/O
+                                        // timeout or native DEADLINE_EXCEEDED maps to 504.
+                                        Ok((status, _, _))
+                                            if if timeout_short {
+                                                matches!(status, 502 | 504)
+                                            } else {
+                                                status == 200
+                                            } => {}
+                                        other => {
+                                            return TestResult::failed(
+                                                start.elapsed(),
+                                                format!("timeout generation has not converged (h2={h2}): {other:?}"),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             TestResult::passed(start.elapsed())
                         }
                         other => {

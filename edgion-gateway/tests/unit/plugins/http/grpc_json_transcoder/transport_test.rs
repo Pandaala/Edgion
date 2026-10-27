@@ -3,12 +3,16 @@ use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
 use pingora_core::upstreams::peer::{HttpPeer, Peer};
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 fn context() -> EdgionHttpContext {
+    context_with_timeout("30s")
+}
+fn context_with_timeout(timeout: &str) -> EdgionHttpContext {
     let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
         "descriptor": {"type":"inline", "base64":STANDARD.encode(include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb"))},
-        "services":["test.TestService"]
+        "services":["test.TestService"], "timeout":timeout
     })).unwrap();
     let compiled = Arc::new(config.compile().unwrap());
     let binding = compiled.bind("GET", "/v1/hello/name", None).unwrap().binding;
@@ -483,4 +487,17 @@ async fn query_strip_only_rejects_a_real_sealed_mutation() {
         );
         assert!(!ctx.request_query.projection_is_dirty());
     }
+}
+
+#[test]
+fn configured_budget_controls_owner_and_upstream_timeout() {
+    let ctx = context_with_timeout("250ms");
+    let plan = ctx.grpc_transcoding.as_ref().unwrap();
+    assert!(plan.deadline > Instant::now());
+    assert!(plan.deadline.duration_since(Instant::now()) <= Duration::from_millis(250));
+    let mut req = RequestHeader::build("POST", b"/test.TestService/SayHello", None).unwrap();
+    req.set_version(http::Version::HTTP_2);
+    prepare_attempt(&mut req, &ctx).unwrap();
+    let timeout = crate::routes::grpc::parse_grpc_timeout(req.headers["grpc-timeout"].to_str().unwrap()).unwrap();
+    assert!(timeout <= Duration::from_millis(250));
 }

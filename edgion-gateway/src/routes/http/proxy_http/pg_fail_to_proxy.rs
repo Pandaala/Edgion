@@ -224,6 +224,7 @@ pub async fn fail_to_proxy(
     // Other downstream transport failures keep the ClientClosed diagnostic.
     record_proxy_error_attribution(ctx, e, code);
     crate::ai::conversion::chat_to_anthropic::head::record_timeout_diagnostic(ctx, e);
+    super::pg_response_head::record_guardrail_timeout(ctx, e);
 
     // A gateway-internal error that surfaced while the captured request body
     // was being replayed to the upstream is a body-replay failure (buffer

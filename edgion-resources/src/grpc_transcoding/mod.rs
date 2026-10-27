@@ -37,6 +37,9 @@ pub enum GrpcJsonStreamFormat {
     Ndjson,
     Sse,
 }
+fn timeout_default() -> String {
+    "30s".into()
+}
 fn request_cap() -> String {
     "1m".into()
 }
@@ -61,6 +64,9 @@ pub struct GrpcJsonTranscoderConfig {
     pub ignore_unknown_query_parameters: bool,
     #[serde(default)]
     pub stream_format: GrpcJsonStreamFormat,
+    /// Conversion lifetime budget, from 1ms through 30s (default 30s).
+    #[serde(default = "timeout_default")]
+    pub timeout: String,
     #[serde(default = "request_cap")]
     pub max_request_message_size: String,
     #[serde(default = "response_cap")]
@@ -91,6 +97,7 @@ pub struct TranscodingLimits {
 pub struct CompiledGrpcTranscoder {
     bindings: Vec<Arc<CompiledBinding>>,
     pub limits: TranscodingLimits,
+    pub timeout: std::time::Duration,
     pub format: GrpcJsonStreamFormat,
     pub ignore_unknown_query: bool,
 }
@@ -125,7 +132,18 @@ impl GrpcJsonTranscoderConfig {
 
     /// Intrinsic checks for unsupported ConfigMap stages must not consume material.
     pub(crate) fn material_free_validation_error(&self) -> Option<String> {
-        self.limits().err().or_else(|| self.descriptor_reference_error())
+        self.limits()
+            .err()
+            .or_else(|| self.parsed_timeout().err())
+            .or_else(|| self.descriptor_reference_error())
+    }
+
+    fn parsed_timeout(&self) -> Result<std::time::Duration, String> {
+        let timeout = crate::duration::parse_duration(&self.timeout).map_err(|_| "invalid transcoder timeout")?;
+        if !(std::time::Duration::from_millis(1)..=std::time::Duration::from_secs(30)).contains(&timeout) {
+            return Err("transcoder timeout must be between 1ms and 30s".into());
+        }
+        Ok(timeout)
     }
 
     pub fn descriptor_bytes(&self) -> Result<Vec<u8>, String> {
@@ -179,6 +197,7 @@ impl GrpcJsonTranscoderConfig {
     }
     fn compile_inner(&self) -> Result<CompiledGrpcTranscoder, String> {
         let limits = self.limits()?;
+        let timeout = self.parsed_timeout()?;
         let bytes = self.descriptor_bytes()?;
         // Admit descriptor structure before the indexed reflection pool expands it.
         let descriptor = descriptor::admission_pool()
@@ -277,6 +296,7 @@ impl GrpcJsonTranscoderConfig {
         edgion_algo::matcher::regex_disjoint::check_disjoint(&groups.into_values().collect::<Vec<_>>())
             .map_err(|error| format!("HTTP mapping overlap admission failed: {error:?}"))?;
         Ok(CompiledGrpcTranscoder {
+            timeout,
             bindings,
             limits,
             format: self.stream_format,

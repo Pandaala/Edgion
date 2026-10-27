@@ -36,6 +36,8 @@ impl Default for GuardrailSummary {
 pub struct AttachedGuardrail {
     summary: OnceLock<GuardrailSummary>,
     head_summary: OnceLock<GuardrailHeadSummary>,
+    pub(crate) head_deadline: OnceLock<crate::response::deadline::EffectiveDeadline>,
+    pub(crate) head_timeout: AtomicBool,
     replacement_header: OnceLock<ResponseHeader>,
     finalized: AtomicBool,
 }
@@ -58,6 +60,8 @@ impl AttachedGuardrail {
         Self {
             summary: OnceLock::new(),
             head_summary: OnceLock::new(),
+            head_deadline: OnceLock::new(),
+            head_timeout: AtomicBool::new(false),
             replacement_header: OnceLock::new(),
             finalized: AtomicBool::new(false),
         }

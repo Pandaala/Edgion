@@ -3923,6 +3923,15 @@ impl TestServiceImpl {
 #[tonic::async_trait]
 impl TestService for TestServiceImpl {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloResponse>, Status> {
+        // Bounded fixture for transcoder timeout hot-reload acceptance.
+        if request
+            .metadata()
+            .get("x-transcoding-fixture")
+            .and_then(|v| v.to_str().ok())
+            == Some("deadline-probe")
+        {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
         // Echo any `x-*` request metadata into the response message. gRPC has
         // no generic header-echo endpoint the way the HTTP catch-all handler
         // does (`echo_handler`/`echo_post_handler` above); this is the

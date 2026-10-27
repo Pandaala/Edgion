@@ -1773,9 +1773,19 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return false;
         }
         plan.generation = self.ctx.request_body.generation();
-        if let Some(timeout) = self.ctx.request_timeout() {
-            plan.deadline = plan.deadline.min(self.ctx.start_time + timeout);
-        }
+        let now = std::time::Instant::now();
+        let Some(selected) = crate::response::deadline::effective_deadline(
+            now,
+            plan.deadline.saturating_duration_since(now),
+            self.ctx
+                .request_timeout()
+                .and_then(|t| self.ctx.start_time.checked_add(t)),
+            self.ctx.request_info.grpc_client_deadline(),
+        ) else {
+            return false;
+        };
+        plan.deadline = selected.at;
+        plan.deadline_source = selected.source;
         self.ctx.request_body.freeze_mutation();
         let plan = Arc::new(plan);
         if !self.ctx.push_response_stream_processor(Box::new(

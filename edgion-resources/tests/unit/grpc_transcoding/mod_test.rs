@@ -1021,3 +1021,22 @@ fn selected_binding_outlives_compiled_owner_and_preserves_ambiguity_gate() {
         Err(TranscodingError::Invalid)
     ));
 }
+
+#[test]
+fn timeout_is_defaulted_bounded_and_preserved_in_transport() {
+    let mut c = config();
+    assert_eq!(c.compile().unwrap().timeout, std::time::Duration::from_secs(30));
+    for value in ["1ms", "250ms", "30s"] {
+        c.timeout = value.into();
+        let restored: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+        assert_eq!(
+            restored.compile().unwrap().timeout,
+            crate::duration::parse_duration(value).unwrap()
+        );
+    }
+    for value in ["0s", "30001ms", "31s", "", "none", "1.5s"] {
+        c.timeout = value.into();
+        assert!(c.material_free_validation_error().is_some(), "{value}");
+        assert!(c.compile().is_err(), "{value}");
+    }
+}

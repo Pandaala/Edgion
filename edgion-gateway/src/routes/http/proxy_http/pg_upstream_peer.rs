@@ -257,8 +257,16 @@ pub async fn upstream_peer(
     if ctx.grpc_transcoding.is_some() || ctx.is_grpc_route_matched {
         crate::plugins::http::grpc_json_transcoder::require_h2(&mut peer);
     }
-    if ctx.grpc_transcoding.is_some() {
-        let cap = std::time::Duration::from_secs(30);
+    if let Some(plan) = &ctx.grpc_transcoding {
+        let cap = plan.deadline.saturating_duration_since(std::time::Instant::now());
+        if peer.options.read_timeout.is_none_or(|timeout| cap <= timeout) {
+            // The conversion ceiling must not masquerade as a route deadline.
+            ctx.peer_timeout_source = match plan.deadline_source {
+                crate::response::deadline::DeadlineSource::Request => Some(crate::PeerTimeoutSource::RequestDeadline),
+                crate::response::deadline::DeadlineSource::Grpc => Some(crate::PeerTimeoutSource::GrpcDeadline),
+                crate::response::deadline::DeadlineSource::Hold => None,
+            };
+        }
         peer.options.read_timeout = Some(peer.options.read_timeout.unwrap_or(cap).min(cap));
         peer.options.write_timeout = Some(peer.options.write_timeout.unwrap_or(cap).min(cap));
     }

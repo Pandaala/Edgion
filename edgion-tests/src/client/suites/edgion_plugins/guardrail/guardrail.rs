@@ -508,6 +508,45 @@ impl GuardrailTestSuite {
         )
     }
 
+    fn held_request_deadline_preempts_guardrail_budget() -> TestCase {
+        TestCase::new(
+            "held_request_deadline_preempts_guardrail_budget",
+            "Route deadline interrupts a held Guardrail decision on H1 and H2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for h2 in [false, true] {
+                        if let Err(error) = reset_observations(&ctx).await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        let response =
+                            match request_openai_protocol(&ctx, "guardrail-hold-request-timeout.example.com", h2).await
+                            {
+                                Ok(response) => response,
+                                Err(error) => return TestResult::failed(start.elapsed(), error),
+                            };
+                        if response.status().as_u16() != 504 {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("expected route timeout 504, got {} (h2={h2})", response.status()),
+                            );
+                        }
+                        match response.bytes().await {
+                            Ok(body) if !held_sse_leaked(&body) => {}
+                            other => {
+                                return TestResult::failed(start.elapsed(), format!("invalid timeout reply: {other:?}"))
+                            }
+                        }
+                        if let Err(error) = assert_one_canonical_call(&ctx, "timeout").await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
     fn timeout_fail_close_discards_window() -> TestCase {
         TestCase::new(
             "timeout_fail_close_discards_window",
@@ -802,6 +841,7 @@ impl TestSuite for GuardrailTestSuite {
             Self::malformed_fail_open_releases_original(),
             Self::one_call_per_canonical_window(),
             Self::timeout_fail_close_discards_window(),
+            Self::held_request_deadline_preempts_guardrail_budget(),
             Self::ext_proc_observes_guardrail_output(),
             Self::reject_preempts_ext_proc_body_and_h2_closes_cleanly(),
             Self::anthropic_translation_composes_with_guardrail(),

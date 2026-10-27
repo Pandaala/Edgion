@@ -77,7 +77,7 @@ WebSockets, and duplex HTTP streams are not Guardrail inputs.
 | `maxReplacementBytes` | `1048576` | Inclusive aggregate decoded replacement cap, `0..=1048576`. |
 | `maxConcurrent` | `64` | Shared in-flight decision limit for this immutable plugin snapshot, `1..=1024`. |
 | `holdFirstWindow` | `false` | When enabled, delay the final downstream response head until the first semantic window resolves. This opts the request out of cache lookup/fill and requires `failOpen: false`. |
-| `headHoldTimeoutMs` | `5000` | Absolute first-head deadline, including waiting for source bytes, permit acquisition, dependency I/O, and decision parsing, `1..=60000`. Used only when `holdFirstWindow` is enabled. |
+| `headHoldTimeoutMs` | `5000` | Absolute first-head deadline, including waiting for source bytes, permit acquisition, dependency I/O, and decision parsing, `1..=60000`. Used only when `holdFirstWindow` is enabled. The effective deadline is the earlier of this budget from Hold activation and the existing request/gRPC client deadline. Budget expiration returns 503; request/client deadline expiration returns 504. |
 | `failOpen` | `false` | On a dependency failure, release the original held bytes and disable Guardrail for the rest of this response. It never changes a policy Reject. |
 
 Guardrail fixes the method to POST. Retry, custom success rules, request body,

@@ -64,7 +64,41 @@ pub(crate) fn response_head_commit_plan(
         owner.prepare_head_replacement(response, &ctx.request_info.trace_id);
     }
 
-    Ok(ResponseHeadCommitPlan::hold(limits))
+    let now = std::time::Instant::now();
+    let selected = crate::response::deadline::effective_deadline(
+        now,
+        limits.timeout(),
+        ctx.request_timeout().and_then(|t| ctx.start_time.checked_add(t)),
+        ctx.request_info.grpc_client_deadline(),
+    );
+    let Some(mut deadline) = selected else {
+        return Err(guardrail_timeout(ctx));
+    };
+    if let Some((_, owner)) = ctx.ai_state().and_then(|state| state.attached_guardrail.as_ref()) {
+        deadline = *owner.head_deadline.get_or_init(|| deadline);
+    }
+    let timeout = deadline.at.saturating_duration_since(now);
+    if timeout.is_zero() {
+        if let Some((_, owner)) = ctx.ai_state().and_then(|state| state.attached_guardrail.as_ref()) {
+            owner.publish_head(
+                ResponseHeadOutcome::Failed(ResponseHeadBoundary::Timeout),
+                ResponseHeadUsage::default(),
+                limits,
+            );
+        }
+        return Err(guardrail_timeout(ctx));
+    }
+    Ok(ResponseHeadCommitPlan::hold(
+        pingora_proxy::ResponseHeadHoldLimits::new(
+            limits.max_input_bytes(),
+            limits.max_output_bytes(),
+            limits.max_nonempty_chunks(),
+            limits.max_events(),
+            limits.max_metadata_bytes(),
+            limits.max_work_units(),
+            timeout,
+        ),
+    ))
 }
 
 pub(crate) fn response_head_hold_boundary(
@@ -85,6 +119,9 @@ pub(crate) fn response_head_hold_boundary(
             crate::ai::conversion::chat_to_anthropic::head::failure(false)
         });
     }
+    if boundary == ResponseHeadBoundary::Timeout {
+        return ResponseHeadBoundaryAction::Fail(guardrail_timeout(ctx));
+    }
     let error_type = match boundary {
         ResponseHeadBoundary::InputLimit
         | ResponseHeadBoundary::OutputLimit
@@ -101,6 +138,55 @@ pub(crate) fn response_head_hold_boundary(
     );
     error.set_retry(false);
     ResponseHeadBoundaryAction::Fail(error)
+}
+
+fn guardrail_timeout(ctx: &EdgionHttpContext) -> Box<Error> {
+    let source = ctx
+        .ai_state()
+        .and_then(|s| s.attached_guardrail.as_ref())
+        .and_then(|(_, owner)| {
+            owner.head_timeout.store(true, std::sync::atomic::Ordering::Release);
+            owner.head_deadline.get().map(|d| d.source)
+        });
+    let status = match source {
+        Some(crate::response::deadline::DeadlineSource::Request | crate::response::deadline::DeadlineSource::Grpc) => {
+            504
+        }
+        _ => 503,
+    };
+    let mut error = Error::explain(
+        ErrorType::HTTPStatus(status),
+        "Guardrail response-head deadline expired",
+    );
+    error.set_retry(false);
+    error
+}
+
+pub(crate) fn record_guardrail_timeout(ctx: &mut EdgionHttpContext, error: &Error) {
+    if error.etype() != &ErrorType::HTTPStatus(504) {
+        return;
+    }
+    let source = ctx
+        .ai_state()
+        .and_then(|s| s.attached_guardrail.as_ref())
+        .and_then(|(_, owner)| {
+            if !owner.head_timeout.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            owner.head_deadline.get().map(|d| d.source)
+        });
+    let diagnostic = match source {
+        Some(crate::response::deadline::DeadlineSource::Request) => {
+            Some(edgion_resources::EdgionErrorCode::RequestTimeoutExceeded)
+        }
+        Some(crate::response::deadline::DeadlineSource::Grpc) => {
+            Some(edgion_resources::EdgionErrorCode::GrpcClientDeadlineExceeded)
+        }
+        _ => None,
+    };
+    if let Some(diagnostic) = diagnostic {
+        ctx.record_error(diagnostic);
+    }
 }
 
 pub(crate) fn response_head_hold_outcome(
