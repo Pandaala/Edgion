@@ -32,8 +32,10 @@ spec:
                   type: object
                   description: |
                     K8s Secret to store the ACME account private key and credentials.
-                    Edgion creates this Secret if absent (with ownerReferences to the
-                    EdgionAcme resource); if it already exists, existing credentials
+                    Edgion creates this Secret if absent, with an EdgionAcme ownerReference
+                    only when both share a namespace and the owner has a UID.
+                    Cross-namespace account Secrets require operator-managed cleanup.
+                    If it already exists, existing credentials
                     are reused, or the `accountCredentials` key is patched in.
                     Mirrors cert-manager's Issuer.spec.acme.privateKeySecretRef.
                   required: ["name"]

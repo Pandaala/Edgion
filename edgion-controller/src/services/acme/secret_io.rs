@@ -38,14 +38,15 @@ pub fn extract_account_json_string(data: &BTreeMap<String, ByteString>) -> Resul
     Ok(Some(Zeroizing::new(s)))
 }
 
-/// Create the account Secret (server-side apply) with optional owner reference to the EdgionAcme.
+/// Create the account Secret with an owner reference only to a same-namespace EdgionAcme.
 pub async fn create_account_secret(
     client: &Client,
     field: &AcmeAccountField<'_>,
     creds_json: &Zeroizing<String>,
 ) -> Result<()> {
     let token = field.token();
-    let target = token.validated()?.target();
+    let reference = token.validated()?;
+    let target = reference.target();
     let secret_name = target.name();
     let namespace = target
         .scope()
@@ -65,7 +66,8 @@ pub async fn create_account_secret(
         ..Default::default()
     };
 
-    if let Some(uid) = acme_uid {
+    // Kubernetes cannot represent ownership by an object in another namespace.
+    if let Some(uid) = acme_uid.filter(|_| reference.source().scope() == target.scope()) {
         meta.owner_references = Some(vec![OwnerReference {
             api_version: "edgion.io/v1".to_string(),
             kind: "EdgionAcme".to_string(),
@@ -74,7 +76,7 @@ pub async fn create_account_secret(
             controller: Some(true),
             block_owner_deletion: Some(true),
         }]);
-    } else {
+    } else if acme_uid.is_none() {
         tracing::debug!(
             resource = %acme_resource_name,
             "EdgionAcme has no metadata.uid; creating account Secret without ownerReferences"

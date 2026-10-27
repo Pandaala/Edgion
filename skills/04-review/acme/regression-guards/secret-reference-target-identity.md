@@ -61,7 +61,10 @@ The background service derives API reads from actual fields. Kubernetes API
 responses require explicit matching namespace/name before payload consumption;
 raw-cache omitted-namespace defaults do not apply to returned API metadata.
 Account persistence takes only the distinct account loan, never an EAB loan,
-and derives its API path, payload identity and source labels/owner reference.
+and derives its API path, payload identity and source labels. An EdgionAcme owner
+reference is attached only when the validated source and target namespaces match
+and the owner has a UID. Cross-namespace account Secrets retain their declared
+destination without an invalid owner reference and require operator-managed cleanup.
 Initial and refreshed snapshots must match that field before UID/RV CAS or
 concurrent-credential adoption. The original UID, deletion check, conflict retry,
 valid-account adoption, missing-key bootstrap and corruption rejection remain.
@@ -69,6 +72,20 @@ The attempt's existing leader/source/serving fences still establish operation
 authority; field identity by itself does not.
 
 ## Alternatives and limits
+
+The final reference-contract review finding B-1 identified that account creation
+previously attached a namespaced EdgionAcme owner reference across namespaces.
+[Kubernetes ownership rules](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#owners-and-dependents)
+treat that owner as absent, making the account Secret eligible for garbage collection
+while its actual issuer remains present. ReferenceGrant permission does not change
+this ownership restriction. The regression in
+`edgion-controller/tests/unit/services/acme/secret_io_test.rs` checks the real create
+request for different namespaces, explicit and implicit same namespace, missing UID,
+and defaulted owner namespace, preserving target, labels, credentials and forced SSA.
+These payload assertions do not establish live garbage-collector execution. Recheck
+this boundary if account persistence or cross-namespace cleanup changes. Existing
+Secrets still use the separate merge-patch path; this correction does not repair
+previously stored invalid owner references.
 
 Do not enforce this only in the CRD: FileSystem, etcd, and typed Kubernetes inputs
 converge on the same handler. The CRD descriptions document the supported targets

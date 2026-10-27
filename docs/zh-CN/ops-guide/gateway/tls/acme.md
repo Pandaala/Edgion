@@ -97,6 +97,10 @@ spec:
 为 `InvalidKind` 的 `ResolvedRefs=False`，并阻止账号恢复、注册及凭据 Secret
 读写。系统不会用同名 Secret 替代不支持的目标类型。
 
+新建的账号 Secret 仅在与 EdgionAcme 同命名空间且 EdgionAcme 有 UID 时设置其
+所有者引用。跨命名空间的账号 Secret 不设置该引用；账号不再使用后需由操作员清理，
+删除 EdgionAcme 不会通过垃圾回收删除这些 Secret。
+
 ### 校验配置
 
 `challenge` 仅接受 `type: http-01` 和必填的 `gatewayRef`，其他校验类型和未知字段会被拒绝。

@@ -99,6 +99,11 @@ namespace. Other groups or kinds produce `Accepted=False` and
 registration, and credential Secret reads/writes. A same-name Secret is never
 used as a substitute for an unsupported target type.
 
+A newly created account Secret has an EdgionAcme owner reference only when both
+objects share a namespace and the EdgionAcme has a UID. Cross-namespace account
+Secrets have no such owner reference and require operator-managed cleanup after
+the account is no longer needed; deleting the EdgionAcme does not garbage-collect them.
+
 ### Challenge configuration
 
 `challenge` accepts only `type: http-01` and a required `gatewayRef`. Other challenge types and unknown fields are rejected.

@@ -132,8 +132,10 @@ is distinct and still parses and removes that name.
 
 Measured cache cold-read cost and two-pass matched-removal regressions rejected
 those alternatives. The single-pass Vec is an intentional measured tradeoff, not
-an eliminated intermediate allocation. See the request-cookie benchmark and
-`tasks/pending/request-cookie-management-verification.md` for measurement scope.
+an eliminated intermediate allocation. The benchmark lives in
+`edgion-gateway/tests/benches/request_cookie.rs`; its helper/HeaderMap sequences
+measure core operations, and allocation counters report requested bytes rather
+than RSS or allocator overhead.
 Whole authentication, transport and network throughput are not established by
 these source-helper measurements. Re-evaluate representation only with cold reads,
 repeated reads, matched/no-match deletion and complete mutation costs.

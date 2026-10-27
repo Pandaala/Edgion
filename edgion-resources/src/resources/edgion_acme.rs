@@ -227,8 +227,9 @@ pub struct EdgionAcmeSpec {
     ///
     /// **REQUIRED** - must be specified by the operator.
     ///
-    /// Edgion will create this Secret if it doesn't exist (with ownerReferences pointing
-    /// to the EdgionAcme resource). If the Secret already exists, Edgion will:
+    /// Edgion creates this Secret if absent, with an EdgionAcme ownerReference only
+    /// when they share a namespace and the owner has a UID. Cross-namespace account
+    /// Secrets require operator-managed cleanup. If the Secret already exists, Edgion will:
     /// - Use existing credentials if `accountCredentials` key is present (backup restore scenario)
     /// - Patch the `accountCredentials` key if the Secret exists but key is missing (self-managed scenario)
     ///

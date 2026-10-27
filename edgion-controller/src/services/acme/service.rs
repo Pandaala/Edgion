@@ -1517,7 +1517,7 @@ async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme) -> Result<Option<Str
 /// Get or create an ACME account for the given resource.
 ///
 /// Uses `spec.privateKeySecretRef` and the `accountCredentials` data key (see `ACME_ACCOUNT_KEY`).
-/// - Secret not found: register, then create Secret (with ownerReferences when uid is set).
+/// - Secret not found: register, then create Secret (with ownerReferences only for a same-namespace owner with a UID).
 /// - Secret exists with valid `accountCredentials`:
 ///   restore — **no overwrite** (backup / operator restore).
 /// - Secret exists but missing that key: register, then **merge-patch** `accountCredentials` only
