@@ -7,7 +7,7 @@ knowledge_type: regression-guards
 # Native CORS prepared response values
 
 GapiCorsFilter consumes HTTPCORSFilter only after its canonical validation passes.
-It retains origin patterns and prepares method/header policies, exposed-header
+It prepares origin pattern structure and method/header policies, exposed-header
 text and Max-Age once. It does not retain a duplicate raw configuration. Fixed
 lists preserve order and the comma-space delimiter; missing or empty lists omit
 the header. Credentialed lists containing an exact wildcard reflect the
@@ -55,3 +55,34 @@ synthetic invalid values. Actual-response session mutation remains unchanged.
 
 Re-evaluate when adding configuration fields, changing canonical validation,
 reflection ownership, origin credential policy or header-pair capacity.
+
+
+## Prepared origin structure
+
+`cors-03-native-origin-preparation` moves fixed wildcard parsing into the validated
+`GapiCorsFilter` generation. Each private origin entry is Any, an owned exact
+string, or the original wildcard string plus byte offsets for its star and port
+boundary. Existing source String buffers move into the runtime; pattern fragments
+and a second raw configuration are not copied. Clones own corresponding strings
+and offsets, and old instances retain their own patterns during replacement.
+
+Matching keeps exact raw equality first, case-sensitive scheme/host prefix and
+suffix comparisons, multi-label/empty wildcard behavior and exact port suffixes.
+An omitted port differs from an explicit default; leading zeroes are significant.
+Live origins are not normalized or newly validated. A local lazy split is shared
+among wildcard candidates during one call, and exact-only matches do not need it.
+The request and upstream-response phases independently read and match the current
+Origin, so header mutation cannot reuse a stale allow decision. Credential-based
+reflection, header order, preflight policy, ignored insertion errors and logging
+are unchanged. EdgionPlugins CORS shorthand and regex contracts remain separate.
+
+A differential reference preserves the prior matching algorithm for valid configured
+patterns and diverse incoming values, including unusual values that are not new
+wire-admission promises. Coverage includes the 64-pattern and 253-byte bounds,
+full-host wildcards, literal-pattern equality, ports, UTF-8, empty/null-like and
+malformed inputs, instance replacement and cross-phase header changes. Matching
+continues to allocate zero; this optimization removes scans rather than allocations.
+The offset enum adds per-entry metadata (40 versus 24 bytes on the measured 64-bit
+build), and conversion costs cold work and a larger vector. Source-bound isolated
+CPU samples demonstrate reduced wildcard matching work, not a full gateway
+throughput or latency guarantee. Exact early-hit cases may see little benefit.

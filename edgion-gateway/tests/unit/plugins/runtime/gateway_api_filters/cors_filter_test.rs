@@ -559,3 +559,183 @@ fn preflight_owned_reflections_preserve_borrowed_insertion_behavior() {
         }
     }
 }
+
+// Frozen pre-preparation algorithm: keep raw equality and permissive live-input
+// handling as a differential oracle, not a new admission policy.
+fn unprepared_origin_match(origin: &str, pattern: &str) -> bool {
+    if pattern == "*" || origin == pattern {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return false;
+    }
+    let Some((p_host, p_port)) = split_origin_port(pattern) else {
+        return false;
+    };
+    let Some((o_host, o_port)) = split_origin_port(origin) else {
+        return false;
+    };
+    if p_port != o_port {
+        return false;
+    }
+    if let Some(suffix) = p_host.strip_prefix('*') {
+        o_host.ends_with(suffix)
+    } else if let Some(pos) = p_host.find('*') {
+        o_host.starts_with(&p_host[..pos]) && o_host.ends_with(&p_host[pos + 1..])
+    } else {
+        false
+    }
+}
+
+fn native_origin_config(patterns: Vec<String>) -> HTTPCORSFilter {
+    HTTPCORSFilter {
+        allow_origins: Some(patterns),
+        allow_credentials: None,
+        allow_methods: None,
+        allow_headers: None,
+        expose_headers: None,
+        max_age: 5,
+    }
+}
+
+#[test]
+fn prepared_origins_preserve_raw_matching_and_bounded_configurations() {
+    let longest = format!(
+        "https://*.{}",
+        ["a".repeat(60), "b".repeat(60), "c".repeat(60), "d".repeat(60)].join(".")
+    );
+    assert_eq!(longest.len(), 253);
+    let patterns = [
+        "*",
+        "https://*",
+        "http://*",
+        "https://*.example.com",
+        "https://*.example.com:443",
+        "https://*.example.com:0443",
+        "https://APP.example",
+        "http://localhost:3000",
+        longest.as_str(),
+    ];
+    let mut origins: Vec<String> = [
+        "",
+        "null",
+        "https://",
+        "https://:",
+        "https://::",
+        "https://app.example.com",
+        "https://foo.bar.example.com",
+        "https://example.com",
+        "https://.example.com",
+        "https://APP.example",
+        "https://app.EXAMPLE.com",
+        "HTTPS://app.example.com",
+        "http://app.example.com",
+        "https://app.example.com:",
+        "https://app.example.com:443",
+        "https://app.example.com:0443",
+        "https://app.example.com:443:443",
+        "https://app.example.com:abc",
+        "https://app.example.com/path",
+        "https://app.example.com?x",
+        "https://café.example.com",
+        "https://€",
+        "prefix://https://app.example.com",
+        "https://app.example.com\n",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    origins.extend(patterns.iter().map(|p| p.to_string()));
+    origins.push(longest.replace('*', "a"));
+    let mut lists: Vec<Vec<String>> = patterns.iter().map(|p| vec![p.to_string()]).collect();
+    lists.push(Vec::new());
+    lists.push(patterns[1..].iter().map(|p| p.to_string()).collect());
+    for wildcard in [false, true] {
+        let list: Vec<_> = (0..64)
+            .map(|i| format!("https://{}s{i}.example", if wildcard { "*." } else { "" }))
+            .collect();
+        origins.extend(list.iter().map(|p| p.replace('*', "a.b")));
+        lists.push(list);
+    }
+    for list in lists {
+        let filter = GapiCorsFilter::try_new(native_origin_config(list.clone())).unwrap();
+        let clone = filter.clone();
+        for origin in &origins {
+            let expected = list.iter().any(|p| unprepared_origin_match(origin, p));
+            for owner in [&filter, &clone] {
+                let (actual, allocations) =
+                    crate::test_allocation_counter::count_allocations(|| owner.is_origin_allowed(origin));
+                assert_eq!(actual, expected, "patterns={list:?}, origin={origin:?}");
+                assert_eq!(allocations, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn prepared_origin_offsets_follow_owned_generations() {
+    let source = "https://*.old.example:0443".to_owned();
+    let ptr = source.as_ptr();
+    let (old, cold) = crate::test_allocation_counter::count_allocation_stats(|| {
+        GapiCorsFilter::try_new(native_origin_config(vec![source])).unwrap()
+    });
+    let PreparedCorsOrigin::Wildcard { source, .. } = &old.allow_origins[0] else {
+        panic!("wildcard must be prepared")
+    };
+    assert_eq!(source.as_ptr(), ptr, "preparation moves the original allocation");
+    eprintln!("native CORS: old entry size={}, prepared entry size={}, prepared vector capacity={}, source capacity={}, constructor allocations={}, requested bytes={}",
+        std::mem::size_of::<String>(), std::mem::size_of::<PreparedCorsOrigin>(), old.allow_origins.capacity(), source.capacity(), cold.calls, cold.requested_bytes);
+    let old = std::sync::Arc::new(old);
+    let weak = std::sync::Arc::downgrade(&old);
+    let in_flight = old.clone();
+    let new = GapiCorsFilter::try_new(native_origin_config(vec!["https://*.new.example:443".into()])).unwrap();
+    drop(old);
+    assert!(in_flight.is_origin_allowed("https://a.old.example:0443"));
+    assert!(!new.is_origin_allowed("https://a.old.example:0443"));
+    assert!(new.is_origin_allowed("https://a.new.example:443"));
+    drop(in_flight);
+    assert!(weak.upgrade().is_none());
+}
+
+#[tokio::test]
+async fn prepared_origins_recheck_live_header_in_each_phase() {
+    let filter = GapiCorsFilter::try_new(native_origin_config(vec!["https://*.allowed.example".into()])).unwrap();
+    for (request, response, allowed) in [
+        ("https://a.allowed.example", "https://denied.example", false),
+        ("https://denied.example", "https://b.allowed.example", true),
+    ] {
+        let mut session = MockPluginSession::new();
+        let mut map = http::HeaderMap::new();
+        map.insert("origin", request.parse().unwrap());
+        session.expect_request_header_map().return_const(map);
+        session.expect_get_method().return_const("GET".to_owned());
+        session
+            .expect_header_value()
+            .withf(|name| name == "origin")
+            .return_const(Some(response.to_owned()));
+        session
+            .expect_set_response_header()
+            .times(usize::from(allowed))
+            .returning(move |name, value| {
+                assert_eq!(name, "Access-Control-Allow-Origin");
+                assert_eq!(value, response);
+                Ok(())
+            });
+        session
+            .expect_append_response_header()
+            .times(usize::from(allowed))
+            .returning(|name, value| {
+                assert_eq!((name, value), ("Vary", "Origin"));
+                Ok(())
+            });
+        let mut log = PluginLog::new("GapiCorsFilter");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            filter.run_upstream_response_filter(&mut session, &mut log),
+            PluginRunningResult::GoodNext
+        );
+    }
+}

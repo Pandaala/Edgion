@@ -51,6 +51,7 @@ fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
     let key = "unit-test-ns/rr-generation-validation";
     let store = get_global_edgion_config_data_store();
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(RegionRouteConfig {
@@ -123,6 +124,7 @@ fn base_regions_used_when_no_override_ref() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -148,6 +150,7 @@ fn overlay_missing_falls_back_to_base() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -374,6 +377,7 @@ fn overlay_envelope_disabled_falls_back_to_base() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -437,6 +441,7 @@ fn overlay_invalid_regions_falls_back_to_base() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -472,6 +477,7 @@ async fn route_to_records_success_outcome_with_region_name() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -513,6 +519,7 @@ async fn route_to_local_region_pass_records_success_outcome_with_region_name() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -544,6 +551,7 @@ async fn route_to_rejected_jump_records_no_outcome() {
         ..Default::default()
     };
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
@@ -607,6 +615,7 @@ fn wrong_overlay_type_preserves_the_complete_base_and_reports_fallback() {
     .unwrap();
     get_global_edgion_config_data_store().insert_raw_for_test(key, Arc::new(resource));
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".into(),
         init_error: None,
         base: Arc::new(RegionRouteConfig {
@@ -633,6 +642,7 @@ fn wrong_overlay_type_preserves_the_complete_base_and_reports_fallback() {
 #[test]
 fn extracted_route_values_preserve_source_order_and_ownership() {
     let plugin = RegionRoute {
+        writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(RegionRouteConfig::default()),
@@ -797,4 +807,186 @@ async fn borrowed_hash_input_preserves_passthrough_and_writeback() {
             PluginRunningResult::GoodNext
         );
     }
+}
+
+fn writeback_config(targets: Vec<KeySet>) -> RegionRouteConfig {
+    RegionRouteConfig {
+        key_get: vec![KeyGet::Header { name: "x-key".into() }],
+        hash_key_get: Some(vec![KeyGet::Header { name: "x-hash".into() }]),
+        hash_calc: Some(HashCalcConfig {
+            algorithm: HashAlgorithm::Crc32,
+            modulo: 1000,
+            write_back: targets,
+        }),
+        route_rules: vec![RouteRule::RouteByHashRange],
+        // "routing-key" hashes to 554, outside this range.
+        regions: vec![make_region("unused", 0, 10, "unused:80")],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn prepared_writeback_targets_preserve_labels_and_move_allocation_to_construction() {
+    let targets = vec![
+        KeySet::Header { name: "x-a".into() },
+        KeySet::ResponseHeader { name: "x-b".into() },
+        KeySet::Cookie { name: "c".into() },
+        KeySet::Ctx { name: "d".into() },
+        KeySet::Header { name: "x-a".into() },
+    ];
+    let config = writeback_config(targets);
+    assert_eq!(
+        RegionRoute::prepare_writeback_log_targets(&config),
+        "hdr:x-a,res_hdr:x-b,cookie:c,ctx:d,hdr:x-a"
+    );
+    fn prior_label_assembly(config: &RegionRouteConfig) -> String {
+        let mut targets = String::new();
+        if let Some(calc) = &config.hash_calc {
+            for target in &calc.write_back {
+                if !targets.is_empty() {
+                    targets.push(',');
+                }
+                targets.push_str(&target.as_log_str());
+            }
+        }
+        targets
+    }
+    for count in [0, 1, 8, 64] {
+        let config = writeback_config(
+            (0..count)
+                .map(|i| KeySet::Ctx {
+                    name: format!("target-{i}-{}", "x".repeat(32)),
+                })
+                .collect(),
+        );
+        let (prior, old_hot) = crate::test_allocation_counter::count_allocation_stats(|| prior_label_assembly(&config));
+        let (prepared, cold) = crate::test_allocation_counter::count_allocation_stats(|| {
+            RegionRoute::prepare_writeback_log_targets(&config)
+        });
+        let (borrowed, hot) =
+            crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(prepared.as_str()));
+        assert_eq!(hot.calls, 0);
+        assert_eq!(borrowed, prepared);
+        assert_eq!(prior, prepared);
+        assert!(prepared.capacity() <= prior.capacity());
+        if count == 0 {
+            assert_eq!(cold.calls, 0);
+            assert_eq!(prepared.capacity(), 0);
+        } else {
+            assert!(cold.calls > count);
+        }
+        println!(
+            "targets={count} removed_label_calls={} removed_requested_bytes={} retained_capacity={} inline={}",
+            old_hot.calls,
+            old_hot.requested_bytes,
+            prepared.capacity(),
+            std::mem::size_of::<String>()
+        );
+    }
+    let (empty, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        RegionRoute::prepare_writeback_log_targets(&RegionRouteConfig::default())
+    });
+    assert!(empty.is_empty());
+    assert_eq!(stats.calls, 0);
+}
+
+#[tokio::test]
+async fn prepared_writeback_logs_keep_generations_modes_failures_and_bypass() {
+    crate::test_subprocess::assert_in_subprocess_async(
+        "plugins::http::region_route::plugin::tests",
+        "prepared_writeback_logs_keep_generations_modes_failures_and_bypass",
+        "EDGION_REGION_WRITEBACK_CHILD",
+        "labels",
+        || async {
+            use edgion_resources::sensitive::SENSITIVE_MODE;
+            use std::sync::atomic::Ordering;
+            for bound in [false, true] {
+                for construction_mode in [0, 1, 2] {
+                    SENSITIVE_MODE.store(construction_mode, Ordering::SeqCst);
+                    let targets = vec![
+                        KeySet::Header { name: "x-a".into() },
+                        KeySet::ResponseHeader { name: "x-b".into() },
+                        KeySet::Cookie { name: "c".into() },
+                        KeySet::Ctx { name: "d".into() },
+                        KeySet::Header { name: "x-a".into() },
+                    ];
+                    let mut config = writeback_config(targets.clone());
+                    let old = if bound {
+                        RegionRoute::create(&config, "default")
+                    } else {
+                        RegionRoute::create_inline(&config).unwrap()
+                    };
+                    config.hash_calc.as_mut().unwrap().write_back = vec![KeySet::Ctx { name: "new".into() }];
+                    let new = if bound {
+                        RegionRoute::create(&config, "default")
+                    } else {
+                        RegionRoute::create_inline(&config).unwrap()
+                    };
+                    drop(config);
+                    for mode in [0, 1, 2] {
+                        SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                        for (plugin, expected_targets, raw_label) in [
+                            (&old, targets.clone(), "hdr:x-a,res_hdr:x-b,cookie:c,ctx:d,hdr:x-a"),
+                            (&new, vec![KeySet::Ctx { name: "new".into() }], "ctx:new"),
+                        ] {
+                            for bypass in [false, true] {
+                                let mut session = MockPluginSession::new();
+                                setup_header_mocks(
+                                    &mut session,
+                                    &[
+                                        ("x-key", "routing-key"),
+                                        ("x-hash", if bypass { "554" } else { "invalid" }),
+                                    ],
+                                );
+                                let mut sequence = mockall::Sequence::new();
+                                if bypass {
+                                    session.expect_key_set().never();
+                                } else {
+                                    for (i, expected) in expected_targets.iter().cloned().enumerate() {
+                                        session
+                                            .expect_key_set()
+                                            .withf(move |target, value| {
+                                                target.as_log_str() == expected.as_log_str()
+                                                    && value.as_deref() == Some("554")
+                                            })
+                                            .times(1)
+                                            .in_sequence(&mut sequence)
+                                            .returning(move |_, _| {
+                                                if i % 2 == 0 {
+                                                    Ok(())
+                                                } else {
+                                                    Err("fixture failure".into())
+                                                }
+                                            });
+                                    }
+                                }
+                                let mut log = PluginLog::new("RegionRoute");
+                                assert_eq!(
+                                    plugin.run_request(&mut session, &mut log).await,
+                                    PluginRunningResult::GoodNext
+                                );
+                                let rendered = log.render_for_test();
+                                let lines: Vec<_> = rendered.lines().filter(|line| *line != "--- ").collect();
+                                if bypass {
+                                    assert_eq!(lines.len(), 1);
+                                    assert!(lines[0].starts_with("hash_pass="));
+                                } else {
+                                    let target = match mode {
+                                        0 => raw_label.to_string(),
+                                        1 => "***".to_string(),
+                                        _ => format!("<E>{raw_label}</E>"),
+                                    };
+                                    assert_eq!(lines.len(), 3);
+                                    assert!(lines[0].starts_with("hash key="));
+                                    assert_eq!(lines[1], format!("hash_wb→{target}"));
+                                    assert!(lines[2].ends_with("no_range, pass"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    .await;
 }

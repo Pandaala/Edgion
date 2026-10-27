@@ -47,9 +47,39 @@ impl PreparedCorsHeader {
     }
 }
 
+/// Offsets refer only to the original owned, validated pattern.
+#[derive(Clone, Debug)]
+enum PreparedCorsOrigin {
+    Any,
+    Exact(String),
+    Wildcard {
+        source: String,
+        wildcard: usize,
+        host_end: usize,
+    },
+}
+
+impl PreparedCorsOrigin {
+    fn new(source: String) -> Self {
+        if source == "*" {
+            return Self::Any;
+        }
+        let offsets =
+            split_origin_port(&source).and_then(|(host, _)| host.find('*').map(|wildcard| (wildcard, host.len())));
+        match offsets {
+            Some((wildcard, host_end)) => Self::Wildcard {
+                source,
+                wildcard,
+                host_end,
+            },
+            None => Self::Exact(source),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GapiCorsFilter {
-    allow_origins: Vec<String>,
+    allow_origins: Vec<PreparedCorsOrigin>,
     credentials: bool,
     has_wildcard_origin: bool,
     allow_methods: PreparedCorsHeader,
@@ -68,7 +98,7 @@ impl GapiCorsFilter {
         let allow_origins = config.allow_origins.unwrap_or_default();
         let has_wildcard_origin = allow_origins.iter().any(|origin| origin == "*");
         Ok(Self {
-            allow_origins,
+            allow_origins: allow_origins.into_iter().map(PreparedCorsOrigin::new).collect(),
             credentials,
             has_wildcard_origin,
             allow_methods: PreparedCorsHeader::new(config.allow_methods, credentials),
@@ -82,49 +112,38 @@ impl GapiCorsFilter {
     }
 
     fn is_origin_allowed(&self, origin: &str) -> bool {
+        // Exact-only lists do not parse the live value. Wildcard candidates share
+        // one split within this invocation, never across request/response phases.
+        let mut origin_parts = None;
         for pattern in &self.allow_origins {
-            if pattern == "*" {
-                return true;
-            }
-            if self.origin_matches_pattern(origin, pattern) {
-                return true;
+            match pattern {
+                PreparedCorsOrigin::Any => return true,
+                PreparedCorsOrigin::Exact(source) => {
+                    if origin == source {
+                        return true;
+                    }
+                }
+                PreparedCorsOrigin::Wildcard {
+                    source,
+                    wildcard,
+                    host_end,
+                } => {
+                    if origin == source {
+                        return true;
+                    }
+                    let Some((host, port)) = *origin_parts.get_or_insert_with(|| split_origin_port(origin)) else {
+                        continue;
+                    };
+                    if port == &source[*host_end..]
+                        && host.starts_with(&source[..*wildcard])
+                        && host.ends_with(&source[*wildcard + 1..*host_end])
+                    {
+                        return true;
+                    }
+                }
             }
         }
         false
-    }
-
-    /// Match origin against a pattern that may contain a wildcard `*` in the host.
-    /// Per Gateway API spec, `*` is a greedy left-match within the host portion.
-    /// E.g. `https://*.example.com` matches `https://foo.bar.example.com`.
-    fn origin_matches_pattern(&self, origin: &str, pattern: &str) -> bool {
-        if origin == pattern {
-            return true;
-        }
-
-        if !pattern.contains('*') {
-            return false;
-        }
-
-        let Some((p_scheme_host, p_port)) = split_origin_port(pattern) else {
-            return false;
-        };
-        let Some((o_scheme_host, o_port)) = split_origin_port(origin) else {
-            return false;
-        };
-
-        if p_port != o_port {
-            return false;
-        }
-
-        if let Some(suffix) = p_scheme_host.strip_prefix('*') {
-            o_scheme_host.ends_with(suffix)
-        } else if let Some(pos) = p_scheme_host.find('*') {
-            let prefix = &p_scheme_host[..pos];
-            let suffix = &p_scheme_host[pos + 1..];
-            o_scheme_host.starts_with(prefix) && o_scheme_host.ends_with(suffix)
-        } else {
-            false
-        }
     }
 
     /// The caller has found a textual Origin, with no intervening request-header mutation.

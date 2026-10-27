@@ -865,7 +865,7 @@ decisions remain [routing-01](routing-01-dynamic-internal-input-ownership.md),
 [routing-06](routing-06-prepared-dynamic-rule-index.md) and
 [dye-02](dye-02-lazy-outcome-value-formatting.md). RegionRoute selection/endpoint
 decisions remain region-01/02; the newly isolated static writeback-label tradeoff
-is [region-03](region-03-prepared-writeback-log-targets.md). RealIp scratch,
+is [region-03](../../skills/04-review/routing/regression-guards/region-route-effective-table-validation.md). RealIp scratch,
 RequestId source evaluation and GeoIP decoding/membership retain their existing
 ip-02, trace-02 and geoip-01/02 tasks. Deeper policy, discovery, DNS, trace-ID and
 GeoIP dependencies remain open; this table is not transitive coverage.
@@ -1013,7 +1013,7 @@ plaintext still feeds multiple ordered consumers. Its header transfer remains
 before optional consumers finish. CSRF checks the current execution point, not a
 frozen method or a guarantee against later rewrites; see the
 [method-order contract](../../skills/04-review/csrf/regression-guards/execution-time-method-rewrite-boundary.md).
-Cookie production remains [csrf-01](csrf-01-cookie-header-ownership.md).
+Cookie production remains [csrf-01](../../skills/04-review/csrf/regression-guards/set-cookie-append.md#csrf-cookie-producer-ownership-csrf-01).
 
 Credential staging preserves the owned sensitive generation across later stages
 and retries. The adapter can reject protected transcoder-header mutations. Final

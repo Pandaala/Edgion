@@ -44,7 +44,7 @@ Compare these alternatives before implementation:
   transfer means zero allocations or that shrinking is free.
 
 No alternative is selected. This is separate from
-[outbound header ownership](outbound-06-rendered-header-storage.md): no HeaderValue
+[outbound header ownership](../../skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md#rendered-outbound-header-storage-outbound-06): no HeaderValue
 or Bytes representation change is proposed here. Existing behavior is valid.
 
 ## Acceptance before implementation

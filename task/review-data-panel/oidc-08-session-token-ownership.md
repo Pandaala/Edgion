@@ -31,7 +31,7 @@ describes the inspected baseline before this narrower change.
 
 Keep the current combined representation if measured savings do not justify
 the branch and ownership complexity. No replacement has been implemented or
-benchmarked. This differs from [cookie serialization projection](oidc-07-borrowed-session-cookie-projection.md)
+benchmarked. This differs from [cookie serialization projection](../../skills/04-review/oidc/regression-guards/session-cookie-upstream-ownership.md#session-persistence-projection-ownership-oidc-07)
 and [introspection claims ownership](oidc-05-introspection-claims-ownership.md).
 
 ## Boundaries and acceptance

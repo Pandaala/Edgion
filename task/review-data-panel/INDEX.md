@@ -60,6 +60,9 @@ this final reconciliation; earlier batch results retain their stated scopes.
 
 ## Deferred decisions
 
+Closed findings are omitted from this list. Historical execution records below
+retain their original scope; linked canonical knowledge contains later decisions.
+
 - [HTTP/1 chunk-size header storage](transport-03-h1-chunk-size-header-storage.md)
 
 - [SSE degradation remainder ownership](sse-05-degradation-remainder-ownership.md)
@@ -86,7 +89,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 
 - [Encrypted health-probe preparation](health-01-encrypted-probe-preparation.md)
 
-- [Rendered outbound header storage](outbound-06-rendered-header-storage.md)
 
 - [Semantic window fragment projection](sse-04-semantic-fragment-projection.md)
 
@@ -236,7 +238,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 
 - [Inactive downstream request-body module dispatch](context-02-request-body-module-dispatch.md)
 
-- [Borrowed OIDC session-cookie serialization](oidc-07-borrowed-session-cookie-projection.md)
 
 - [OIDC session token ownership across refresh](oidc-08-session-token-ownership.md)
 
@@ -251,7 +252,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 - [CtxSet extraction and trim projection ownership](ctx-02-extract-trim-projection.md)
 
 - [RegionRoute prepared endpoint projection](region-02-prepared-endpoint-projection.md)
-- [RegionRoute prepared writeback log targets](region-03-prepared-writeback-log-targets.md)
 
 - [Lazy HMAC missing-header diagnostics](hmac-04-lazy-missing-header-diagnostic.md)
 
@@ -279,11 +279,9 @@ this final reconciliation; earlier batch results retain their stated scopes.
 
 - [OIDC introspection claims ownership](oidc-05-introspection-claims-ownership.md)
 
-- [OIDC cookie attribute preparation](oidc-04-cookie-attribute-formatting.md)
 
 - [OIDC required-scope membership storage](oidc-03-required-scope-membership.md)
 
-- [OIDC cookie Base64 output construction](oidc-02-cookie-base64-output.md)
 
 - [Shared OIDC claims serialization](oidc-01-shared-claims-serialization.md)
 
@@ -323,7 +321,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 - [Local limiter initialization and window ownership](rate-limit-01-local-estimator-initialization.md)
 
 - [Gateway-owned CORS Max-Age preparation](cors-01-derived-max-age-preparation.md)
-- [Prepare native CORS origin patterns](cors-03-native-origin-preparation.md)
 
 - [Dynamic fallback metric label capacity](metrics-01-fallback-label-capacity.md)
 
@@ -383,7 +380,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 
 - [gRPC mapping selector storage](grpc-10-mapping-selector-storage.md)
 
-- [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
 
 - [Canonical decoded query-name comparison](uri-01-decoded-name-comparison.md)
 
@@ -424,7 +420,6 @@ this final reconciliation; earlier batch results retain their stated scopes.
 - [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
 - [Incremental HMAC signing input](hmac-03-incremental-signing-input.md)
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
-- [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
 - [DSL outbound method normalization](dsl-02-http-method-normalization.md)
 - [DSL opaque upload task ownership](dsl-03-opaque-upload-task-ownership.md)
@@ -5326,7 +5321,7 @@ The dependency form parser is permissive, so removing preflight would change
 malformed and ignored-unknown acceptance. Raw separators and encoded plus prevent
 splitting/re-decoding the preflight output as an equivalent shortcut.
 
-[grpc-01](grpc-01-query-preflight-decoding.md) records validation-only, ASCII-fast-path
+[grpc-01](../../skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md#strict-query-preflight-tradeoff-grpc-01) records validation-only, ASCII-fast-path
 and strict-component alternatives, their validation-order/ownership constraints and
 CPU/temporary-buffer measurement requirements. It also preserves the existing
 64-accumulated-selector rule rather than inventing a raw-pair cap. No runtime code,
@@ -7680,7 +7675,7 @@ No full suite, live integration or throughput benchmark ran.
 
 ## Defer CSRF response cookie storage transfer
 
-[csrf-01-cookie-header-ownership.md](csrf-01-cookie-header-ownership.md) records
+[csrf-01-cookie-header-ownership.md](../../skills/04-review/csrf/regression-guards/set-cookie-append.md#csrf-cookie-producer-ownership-csrf-01) records
 the temporary cookie String copied through the session string appender. Owned
 transfer, retained capacity and exact formatting remain a user decision, separate
 from pending-operation replay ownership. The task preserves append/order,
@@ -17042,7 +17037,7 @@ or benchmark ran.
 The shared outbound builder copies owned rendered strings into HeaderValue.
 Direct String transfer preserves validation and sensitivity but can keep the
 renderer's disproportionate hint capacity alive with network requests and clones.
-[outbound-06](outbound-06-rendered-header-storage.md) records compact copying,
+[outbound-06](../../skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md#rendered-outbound-header-storage-outbound-06) records compact copying,
 exact-capacity-only transfer and a separately reviewed general retention policy.
 No alternative or new template bound is selected. Independent plan review blocked
 unconditional transfer as a no-tradeoff optimization and approved this task.

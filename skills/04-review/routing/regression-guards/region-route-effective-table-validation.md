@@ -232,3 +232,28 @@ configured map overrides, hash passthrough and writeback, effective overlay
 validation and one-hop failover remain unchanged. Focused tests cover source
 identity and borrowed/owned shape plus direct/map/bypass and hash request paths.
 No throughput or callback-wide zero-allocation claim follows.
+
+## Fixed writeback diagnostic targets
+
+RegionRoute prepares the joined writeback target names once in its shared bound/
+inline constructor. The private String follows the immutable base configuration;
+overlays replace only regions. Preparation uses canonical KeySet::as_log_str and
+preserves order, duplicates and commas. Empty/absent writeback lists allocate no
+label payload. Construction shrinks the joined String to avoid retaining its growth
+slack. This adds one String owner plus its capacity per plugin instance,
+including configurations that never take the computed-hash branch.
+
+Request execution still attempts every setter with the current hash, ignores the
+same setter failures and logs the targets after all writes, before range lookup.
+Precomputed-hash, missing-input and empty-list paths retain their previous skips.
+Targets describe attempted writes, not successful ones. The raw prepared text
+passes through sensitive at request logging time; construction-time masking never
+becomes part of the prepared data. No new log, metric, interface or queue exists.
+
+Regression coverage compares all four target kinds and duplicates, bound/inline
+construction, old/new configurations, failed writes, computed no-range and hash
+passthrough. Sensitive Off/Replace/Wrap modes run in the existing isolated test
+subprocess mechanism, with construction and request modes varied independently.
+Allocation evidence separates removed repeated target formatting from the retained
+String capacity and the unchanged hash-value, setter and log work. It makes no
+whole-request allocation-free or throughput claim.

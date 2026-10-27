@@ -15,7 +15,7 @@
 //!
 //! # Request-time resolution
 //! `compute_effective_regions` is called per request: one ArcSwap load with paired raw/proof lookups.
-//! The plugin struct itself caches only the base config (Arc) and the optional overlay store key.
+//! The plugin retains the base config, optional overlay key and fixed writeback log targets.
 
 use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
@@ -96,6 +96,8 @@ pub struct RegionRoute {
     /// `None` means no overlay is configured; base regions are used directly.
     override_key: Option<String>,
     init_error: Option<&'static str>,
+    /// Fixed diagnostic targets; sensitivity is applied when each request logs.
+    writeback_log_targets: String,
 }
 
 impl RegionRoute {
@@ -127,9 +129,24 @@ impl RegionRoute {
                     "region_table_invalid"
                 }
             }),
+            writeback_log_targets: Self::prepare_writeback_log_targets(ep_config),
             base: Arc::new(ep_config.clone()),
             override_key,
         })
+    }
+
+    fn prepare_writeback_log_targets(config: &RegionRouteConfig) -> String {
+        let mut targets = String::new();
+        if let Some(calc) = &config.hash_calc {
+            for target in &calc.write_back {
+                if !targets.is_empty() {
+                    targets.push(',');
+                }
+                targets.push_str(&target.as_log_str());
+            }
+        }
+        targets.shrink_to_fit();
+        targets
     }
 
     /// Resolve the effective region table for this request (per-request, lock-free).
@@ -374,15 +391,10 @@ impl RegionRoute {
 
         // Write back computed hash if configured.
         if !calc.write_back.is_empty() {
-            let mut wb_targets = String::new();
             for wb in &calc.write_back {
                 let _ = session.key_set(wb, Some(hash_val.to_string()));
-                if !wb_targets.is_empty() {
-                    wb_targets.push(',');
-                }
-                wb_targets.push_str(&wb.as_log_str());
             }
-            log.push_fmt("hash_wb→{}", la![sensitive(&wb_targets)]);
+            log.push_fmt("hash_wb→{}", la![sensitive(&self.writeback_log_targets)]);
         }
 
         let result = Self::lookup_by_hash(regions, hash_val);

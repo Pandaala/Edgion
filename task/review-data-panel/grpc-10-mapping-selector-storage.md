@@ -32,7 +32,7 @@ could avoid cloning those paths, but adds a representation split between static
 and dynamic selectors and changes merge ownership. No representation or inline
 capacity is selected, and no performance bottleneck or gain is measured.
 
-This differs from [grpc-01](grpc-01-query-preflight-decoding.md), which concerns
+This differs from [grpc-01](../../skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md#strict-query-preflight-tradeoff-grpc-01), which concerns
 the discarded whole-query decoded validation buffer, and
 [grpc-03](grpc-03-prepared-wire-schema.md), which concerns response wire-tag lookup.
 No descriptor graph expansion, global selector cache or lazy request-time index

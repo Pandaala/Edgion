@@ -96,7 +96,7 @@ for capacity, overlap with decoded pairs and replay/snapshot owners, and release
 on every failure. Preserve conservative existing admission only where it is
 proven to cover the new representation; otherwise obtain an explicit decision.
 
-This differs from [wasm-01](wasm-01-header-snapshot-ownership.md), which concerns
+This differs from [wasm-01](../../skills/04-review/cpu-memory/regression-guards/wasm-abi-retention-budget.md#snapshot-and-pending-operation-ownership-decision-wasm-01), which concerns
 sharing immutable decoded payloads between the readable snapshot and queued replay.
 Do not bundle those representations or assume shared payloads pay for metadata.
 

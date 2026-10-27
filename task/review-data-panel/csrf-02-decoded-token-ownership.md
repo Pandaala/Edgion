@@ -26,7 +26,7 @@ compare a scoped decode-and-verify owner with the existing owned token. Do not
 make the public issuance representation lifetime-dependent merely to share a
 verification type. No new representation, parser, public API or implementation
 is selected. This differs from the existing
-[cookie-header ownership task](csrf-01-cookie-header-ownership.md).
+[cookie-header ownership decision](../../skills/04-review/csrf/regression-guards/set-cookie-append.md#csrf-cookie-producer-ownership-csrf-01).
 
 ## Required boundaries
 
