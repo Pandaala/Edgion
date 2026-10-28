@@ -96,6 +96,7 @@ struct NormalizedBackendSlot {
 
 struct NormalizedServiceSection {
     identity: ServicePortIdentity,
+    // Unique numeric sockets in BTreeMap order; materialization preserves it.
     slots: Vec<NormalizedBackendSlot>,
 }
 
@@ -114,13 +115,29 @@ pub struct ResolvedBackendSlot {
 pub struct ResolvedServiceSection {
     pub identity: ServicePortIdentity,
     pub(crate) prepared_app_protocol: Option<BackendAppProtocol>,
-    pub all_slots: Arc<[Arc<ResolvedBackendSlot>]>,
+    // Strict numeric SocketAddr order, unique and Inet-only. Materialization
+    // preserves the private normalized geometry produced by normalize_section.
+    all_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub ready_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub selectors: CompiledSelectors,
     direct_endpoint_ports: BTreeMap<IpAddr, BTreeSet<NonZeroU16>>,
 }
 
 impl ResolvedServiceSection {
+    /// All published slots in unique numeric socket order, including unready slots.
+    pub fn all_slots(&self) -> &[Arc<ResolvedBackendSlot>] {
+        &self.all_slots
+    }
+
+    /// Find a published slot by numeric address without evaluating live health.
+    pub fn slot_for_addr(&self, target: SocketAddr) -> Option<&ResolvedBackendSlot> {
+        let index = self
+            .all_slots
+            .binary_search_by_key(&Some(&target), |slot| slot.backend.addr.as_inet())
+            .ok()?;
+        Some(self.all_slots[index].as_ref())
+    }
+
     /// Authorize a direct endpoint within this Service port section.
     ///
     /// Direct overrides intentionally include published unready slots. Without

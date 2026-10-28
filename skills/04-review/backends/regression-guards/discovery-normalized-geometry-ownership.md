@@ -99,3 +99,30 @@ freshly compiled Gateway library test binary. Workspace checks and independent
 result review remain pending at this implementation checkpoint; full workspace
 tests, integrations and performance measurements were not run. Re-evaluate if
 facade representation, URL presentation, safety filtering or cursor ownership changes.
+
+
+## Sorted section slot lookup
+
+`backend-01-selected-slot-lookup`: `normalize_section` merges origins through a
+`BTreeMap<SocketAddr, ...>`, producing strictly increasing unique numeric sockets.
+The sole runtime constructor, `materialize_section`, preserves that order and
+creates Inet-only backends. `ResolvedServiceSection::all_slots` is private;
+`all_slots()` exposes only an immutable slice. `slot_for_addr` searches that
+same array with binary search, without a second index or request allocation.
+
+Ordinary winner resolution must additionally verify `Arc::ptr_eq`: matching an
+address alone does not prove ownership by the captured section. Sticky lookup
+uses socket identity, includes unready slots, and retains its existing readiness
+and live-health evaluation. Lookup itself never evaluates health. Old captured
+sections retain their own array and wrappers across replacement. With unique
+sockets, binary lookup preserves the previous first-match behavior.
+
+Construction regressions cover mixed IPv4/IPv6 order, heterogeneous ports,
+duplicate origins, unready slots, misses and empty generations. Selector tests
+reject same-address wrappers from another generation while retaining old lookup.
+The `service_slot_lookup` benchmark compares address lookup and compiled selector
+plus metadata lookup against linear baselines; it excludes request capture,
+degrade evaluation and live runtime eligibility and is not a throughput benchmark.
+No array element, extra map or publication sorting is added. The separate RR/CH
+successful-winner address-map lookup remains deferred in the original task.
+Re-evaluate this contract whenever a constructor or slot mutation API is added.

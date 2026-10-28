@@ -1417,7 +1417,7 @@ fn service_degrade_capture_controls_actual_selection_across_retries() {
         coordinator.set_health_policy(KEY, Some(Arc::clone(&health)));
         let generation = coordinator.load_generation();
         let available = generation.available(KEY).unwrap();
-        for slot in available.resolve_section(&section).unwrap().all_slots.iter() {
+        for slot in available.resolve_section(&section).unwrap().all_slots().iter() {
             let healthy = slot.backend.addr.as_inet().unwrap().ip().to_string() == "10.8.2.1";
             assert!(coordinator.record_health_completion(
                 &health,

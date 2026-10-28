@@ -1903,3 +1903,70 @@ fn active_health_isolated_across_same_socket_sections() {
     assert!(active.entries[first_identity.as_ref()].health_eligible());
     assert!(!active.entries[second_identity.as_ref()].health_eligible());
 }
+
+#[test]
+fn section_lookup_preserves_numeric_order_origins_and_unready_slots() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    publish_base(&coordinator);
+    let mut sources = HashMap::new();
+    for (name, family, addresses, port, ready) in [
+        ("v4", "IPv4", vec!["10.0.0.10", "10.0.0.2"], 8080, true),
+        ("duplicate", "IPv4", vec!["10.0.0.2"], 8080, false),
+        ("other-port", "IPv4", vec!["10.0.0.2"], 9090, false),
+        ("v6", "IPv6", vec!["2001:db8::10", "2001:db8::2"], 8080, true),
+    ] {
+        let mut source = (*slice(name, Some(name), ready)).clone();
+        source.address_type = family.to_string();
+        source.endpoints[0].addresses = addresses.into_iter().map(str::to_string).collect();
+        source.ports = Some(slice_ports(&[("http", port)]));
+        sources.insert(format!("default/{name}"), Arc::new(source));
+    }
+    coordinator.replace_endpoint_slices(&sources);
+    let section_key = ServiceSectionKey::Number(NonZeroU16::new(80).unwrap());
+    let section = coordinator
+        .load_generation()
+        .available("default/backend")
+        .unwrap()
+        .resolve_section(&section_key)
+        .unwrap();
+    let expected: Vec<SocketAddr> = [
+        "10.0.0.2:8080",
+        "10.0.0.2:9090",
+        "10.0.0.10:8080",
+        "[2001:db8::2]:8080",
+        "[2001:db8::10]:8080",
+    ]
+    .into_iter()
+    .map(|addr| addr.parse().unwrap())
+    .collect();
+    assert_eq!(
+        section
+            .all_slots()
+            .iter()
+            .map(|slot| *slot.backend.addr.as_inet().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for (index, addr) in expected.iter().enumerate() {
+        let found = section.slot_for_addr(*addr).unwrap();
+        assert!(std::ptr::eq(found, section.all_slots()[index].as_ref()));
+    }
+    assert_eq!(section.slot_for_addr(expected[0]).unwrap().origin_set.len(), 2);
+    assert!(!section.slot_for_addr(expected[1]).unwrap().ready);
+    for missing in ["10.0.0.1:8080", "10.0.0.2:8081", "[2001:db8::11]:8080"] {
+        assert!(section.slot_for_addr(missing.parse().unwrap()).is_none());
+    }
+    coordinator.replace_endpoint_slices(&HashMap::new());
+    let empty = coordinator
+        .load_generation()
+        .available("default/backend")
+        .unwrap()
+        .resolve_section(&section_key)
+        .unwrap();
+    assert!(empty.all_slots().is_empty());
+    assert!(empty.slot_for_addr(expected[0]).is_none());
+    assert!(
+        section.slot_for_addr(expected[0]).is_some(),
+        "retained generations stay searchable"
+    );
+}

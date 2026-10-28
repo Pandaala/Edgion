@@ -195,10 +195,8 @@ fn slot_for_backend<'a>(
     backend: &Arc<LbBackend>,
 ) -> Option<&'a crate::backends::discovery::ResolvedBackendSlot> {
     section
-        .all_slots
-        .iter()
-        .find(|slot| Arc::ptr_eq(&slot.backend, backend))
-        .map(Arc::as_ref)
+        .slot_for_addr(*backend.addr.as_inet()?)
+        .filter(|slot| Arc::ptr_eq(&slot.backend, backend))
 }
 
 /// One coherent discovery projection for a peer attempt. Runtime endpoint state
@@ -319,10 +317,7 @@ impl CapturedServiceSelection {
 
     pub(crate) fn endpoint_for_addr(&self, target: SocketAddr) -> Option<(ResolvedServiceEndpoint, bool)> {
         let section = &self.section;
-        let slot = section
-            .all_slots
-            .iter()
-            .find(|slot| slot.backend.addr.as_inet().is_some_and(|addr| *addr == target))?;
+        let slot = section.slot_for_addr(target)?;
         let backend = Arc::clone(&slot.backend);
         let ready = slot.ready;
         let slot_proof = slot.proof;
@@ -368,7 +363,7 @@ pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionK
     };
     match available.resolve_section(section) {
         Ok(section) => section
-            .all_slots
+            .all_slots()
             .iter()
             .map(|slot| Arc::clone(&slot.backend))
             .collect::<Vec<_>>()

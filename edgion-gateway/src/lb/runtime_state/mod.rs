@@ -116,7 +116,7 @@ fn try_publish_sp_snapshot(
         return None;
     }
     let resolved = available.resolve_section(section).ok()?;
-    let entries = build_sp_affinity_map(resolved.all_slots.iter().map(|slot| slot.backend.as_ref()), None);
+    let entries = build_sp_affinity_map(resolved.all_slots().iter().map(|slot| slot.backend.as_ref()), None);
     let after_generation = coordinator.load_generation();
     let after_active = cell.active.load_full();
     if !Arc::ptr_eq(&current_generation, &after_generation)
