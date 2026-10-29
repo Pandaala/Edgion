@@ -1,0 +1,35 @@
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionGatewayConfig",
+  "metadata": {
+    "name": "downstream-ecdh-curves"
+  },
+  "spec": {
+    "tcpTimeout": {
+      "idleTimeout": "120s"
+    }
+  }
+}
+---
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionTls",
+  "metadata": {
+    "name": "downstream-ecdh-curves",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "ecdh-edgion",
+        "sectionName": "tls"
+      }
+    ],
+    "hosts": [
+      "ecdh-edgion.sandbox.example.com"
+    ],
+    "secretRef": {
+      "name": "edge-tls"
+    }
+  }
+}

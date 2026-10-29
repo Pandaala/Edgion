@@ -1,5 +1,5 @@
 {
-  "current_max": 32005,
+  "current_max": 32006,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -435,6 +435,9 @@
     },
     "TCPRoute/L4TimeoutHotReload/Passthrough": {
       "tls": 31980
+    },
+    "Gateway/DownstreamEcdhCurves": {
+      "https": 32006
     },
     "Gateway/EgcRuntimeHotReload": {
       "http": 31981

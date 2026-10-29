@@ -22,6 +22,7 @@ fn scenarios_for_fixture(metrics_lifetime: bool) -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::shared_http_policy_admission::SCENARIO,
         crate::dynamic::scenarios::preflight_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::egc_runtime_hot_reload::SCENARIO,
+        crate::dynamic::scenarios::downstream_ecdh_curves::SCENARIO,
         crate::dynamic::scenarios::cors_validation::SCENARIO,
         crate::dynamic::scenarios::acme_gatewayref_ownership::SCENARIO,
         crate::dynamic::scenarios::http_route_named_parameter_precedence::SCENARIO,

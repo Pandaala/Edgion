@@ -5,7 +5,44 @@ description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configur
 
 # EdgionGatewayConfig CRD Schema
 
+## Unified downstream TLS policy
+
+`ResolvedGatewayConfig.downstream_tls` owns `DownstreamTlsPolicy`: the EGC
+minimum, shared cold `CipherPolicy`, and existing numeric `CurvePolicy`.
+`CompiledEdgionTls` uses the same cipher compiler. Absent ciphers inherit;
+explicit `[]` means backend defaults; a rendered CString or rejection remains
+immutable. Resources/Controller validate NUL and curve syntax without linking
+BoringSSL. The strict backend cipher setter validates effective expressions.
+
+The early callback first selects the native, EdgionTls or exact frontend-mTLS
+overlay identity, then applies policy once through `apply_selected_downstream_policy`.
+Local minimum/ciphers replace EGC defaults independently, including a lower local
+minimum or a valid local cipher masking an invalid default. Curves have no local
+override. Unspecified ciphers inherit active FIPS/backend defaults; an explicit
+empty list bypasses only the cipher default, never FIPS curve restrictions.
+Any effective-policy error emits one canonical SSL audit and returns select error.
+Certificate callbacks configure identity/mTLS only and never reload/reapply policy.
+The local EGC Arc lives through application; SSL owns the copied settings afterward,
+so no redundant EGC Arc is stored in SslCtx. Identity Arcs retain their existing lifetime.
+
+No Rust handshake cipher joining, parsing or temporary cipher allocation occurs.
+BoringSSL's public strict cipher setter internally parses its string; this existing
+backend cost remains accepted. No SSL_CTX swapping, new locks or stores are added.
+TLS1.3 suites and physical listener ownership/retargeting boundaries remain unchanged.
+
+
 > API Group: `edgion.io/v1alpha1` | Scope: Cluster | Referenced via GatewayClass.spec.parametersRef
+
+## Downstream TLS curves
+
+`spec.downstreamTls.ecdhCurves` is an optional ordered string array (1-4 unique
+entries) from `X25519`, `P-256`, `P-384`, `P-521`. The shared validator lives in
+`edgion-resources/src/resources/downstream_tls.rs`; the Gateway cold-compiles numeric
+IDs and retains invalid policies as rejection states. This EGC field is the only
+curve configuration source, shared by every SNI and certificate source on its
+bound listener. See
+`docs/en/ops-guide/gateway/tls/tls-termination.md` for the operator contract,
+including FIPS constraints and the startup-owner EGC binding on shared sockets.
 
 ## Optional expensive WAF checks
 

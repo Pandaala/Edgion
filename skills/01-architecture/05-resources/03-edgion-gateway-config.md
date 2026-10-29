@@ -5,6 +5,32 @@ description: EdgionGatewayConfig resource — Edgion's extended global gateway c
 
 # EdgionGatewayConfig resource
 
+## Unified downstream TLS policy
+
+`ResolvedGatewayConfig.downstream_tls` owns `DownstreamTlsPolicy`: the EGC
+minimum, shared cold `CipherPolicy`, and existing numeric `CurvePolicy`.
+`CompiledEdgionTls` uses the same cipher compiler. Absent ciphers inherit;
+explicit `[]` means backend defaults; a rendered CString or rejection remains
+immutable. Resources/Controller validate NUL and curve syntax without linking
+BoringSSL. The strict backend cipher setter validates effective expressions.
+
+The early callback first selects the native, EdgionTls or exact frontend-mTLS
+overlay identity, then applies policy once through `apply_selected_downstream_policy`.
+Local minimum/ciphers replace EGC defaults independently, including a lower local
+minimum or a valid local cipher masking an invalid default. Curves have no local
+override. Unspecified ciphers inherit active FIPS/backend defaults; an explicit
+empty list bypasses only the cipher default, never FIPS curve restrictions.
+Any effective-policy error emits one canonical SSL audit and returns select error.
+Certificate callbacks configure identity/mTLS only and never reload/reapply policy.
+The local EGC Arc lives through application; SSL owns the copied settings afterward,
+so no redundant EGC Arc is stored in SslCtx. Identity Arcs retain their existing lifetime.
+
+No Rust handshake cipher joining, parsing or temporary cipher allocation occurs.
+BoringSSL's public strict cipher setter internally parses its string; this existing
+backend cost remains accepted. No SSL_CTX swapping, new locks or stores are added.
+TLS1.3 suites and physical listener ownership/retargeting boundaries remain unchanged.
+
+
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
 EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to configure global gateway behavior parameters. It is a custom extension outside the Gateway API standard.
@@ -149,3 +175,14 @@ HTTPDNS provider lookup remains separate and follows the current typed store.
 HTTP RealIp and global EGC RealIp store only nonempty `trustedIpRefs`; IpGroups live in referenced IpLists. The actual owning EP/EGC catalogue provides the same cold key compiler as Boolean IP conditions. A global EGC requires explicit target namespaces and permits only current Cluster visibility or the controller's validation-disabled scope; its TLS administrative exemption and namespaced grants do not apply. Controller generation processing clears old proof and dependency edges before recomputing from actual fields, including missing-target recovery edges. Shared EGC Accepted remains intrinsic-only; deployment-local trust availability adds no shared condition.
 
 The global policy captures a ConfigData snapshot directly before PluginSession exists; the HTTP policy reuses its dispatch-local adapter view. Both preflight every trust ref once and use that same view for the PROXY-effective downstream peer and all forwarded hops. Any unavailable list makes all trust false for that decision; content/visibility/delete/recovery changes remain live without rebuilding policy or copying CIDRs. Invalid input publishes a sealed plugin generation or disables global extraction, with clean-generation recovery. The narrow realIp CRD preservation and typed invalid marker prevent removed/unknown fields from becoming silently pruned successful configs; resolver-only proof is schema-hidden and recomputed on ingest. Referenced IpLists retain central partial-good entry compilation, replacing the former inline strict-trust admission.
+
+## Downstream ECDH policy
+
+`spec.downstreamTls.ecdhCurves` uses the shared Resources validator in Controller
+preparse and Gateway cold compilation. `ResolvedGatewayConfig` owns the compiled
+numeric group list or sealed rejection state. The existing startup-bound handle
+loads this generation once per handshake and applies it directly for every SNI
+and certificate source. There is no listener override or policy matcher. Missing
+EGC retains the existing default-generation behavior. Shared socket ownership and
+GatewayClass retargeting limitations remain unchanged. See the
+[TLS policy owner](../02-gateway/04-tls/SKILL.md).

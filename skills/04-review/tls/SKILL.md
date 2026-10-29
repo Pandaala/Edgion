@@ -31,6 +31,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Downstream ECDH EGC policy ownership](regression-guards/downstream-ecdh-policy-ownership.md)
+
 - [HTTPS frontend HTTP/2 policy reaches its ALPN owner](regression-guards/https-http2-alpn-policy-handoff.md)
 
 - [Allowed SAN regex case mode](regression-guards/allowed-san-regex-case-mode.md)

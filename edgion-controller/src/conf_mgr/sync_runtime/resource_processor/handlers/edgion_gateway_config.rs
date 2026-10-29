@@ -53,6 +53,11 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         let mut errors = san_guard::check_egc_san(egc);
         // dnsResolver `linkSysRef` and `servers` are mutually exclusive (the
         // structural CRD cannot express `oneOf`, so it is enforced here).
+        if let Some(policy) = &egc.spec.downstream_tls {
+            if let Err(error) = policy.validate() {
+                errors.push(format!("downstreamTls: {error}"));
+            }
+        }
         errors.extend(egc.spec.validate_dns_resolver());
         errors.extend(egc.spec.validate_link_sys());
         errors.extend(egc.spec.validate_request_body());

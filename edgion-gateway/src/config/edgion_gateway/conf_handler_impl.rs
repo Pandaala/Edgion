@@ -53,6 +53,7 @@ impl Default for ResolvedL4Timeouts {
 /// in-flight requests retain their captured values across hot reloads.
 #[derive(Clone)]
 pub struct ResolvedGatewayConfig {
+    pub(crate) downstream_tls: crate::tls::downstream_policy::DownstreamTlsPolicy,
     pub waf_expensive_checks: bool,
     pub request_body: ResolvedRequestBodyConfig,
     pub remote_ip_header: http::HeaderName,
@@ -138,6 +139,9 @@ impl ResolvedGatewayConfig {
             fallback
         };
         Self {
+            downstream_tls: crate::tls::downstream_policy::DownstreamTlsPolicy::compile(
+                config.spec.downstream_tls.as_ref(),
+            ),
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             waf_expensive_checks: config.spec.waf.expensive_checks,
             remote_ip_header,
@@ -165,6 +169,7 @@ impl ResolvedGatewayConfig {
 impl Default for ResolvedGatewayConfig {
     fn default() -> Self {
         Self {
+            downstream_tls: crate::tls::downstream_policy::DownstreamTlsPolicy::default(),
             request_body: ResolvedRequestBodyConfig::default(),
             waf_expensive_checks: false,
             remote_ip_header: default_remote_ip_header(),

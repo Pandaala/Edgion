@@ -911,3 +911,32 @@ async fn global_trust_missing_targets_register_recovery_and_retarget_clears_prev
         .get_refs("default/proxies")
         .is_empty());
 }
+
+#[test]
+fn downstream_curves_preparse_uses_shared_validation() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    let mut config: EdgionGatewayConfig = serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"curves"},"spec":{"downstreamTls":{"ecdhCurves":["P-256","P-256"]}}}),
+    )
+    .unwrap();
+    let errors = EdgionGatewayConfigHandler::new().preparse(&mut config, &ctx);
+    assert!(errors.iter().any(|error| error.contains("duplicate curve")));
+}
+
+#[test]
+fn downstream_cipher_preparse_preserves_backend_grammar_and_rejects_nul() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    for (ciphers, rejected) in [
+        (serde_json::json!([]), false),
+        (serde_json::json!(["HIGH:!aNULL"]), false),
+        (serde_json::json!(["DEFAULT\0invalid"]), true),
+    ] {
+        let mut config: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"tls-defaults"},
+            "spec":{"downstreamTls":{"minTlsVersion":"TLS1_3","ciphers":ciphers}}
+        }))
+        .unwrap();
+        let errors = EdgionGatewayConfigHandler::new().preparse(&mut config, &ctx);
+        assert_eq!(errors.iter().any(|error| error.contains("NUL")), rejected);
+    }
+}

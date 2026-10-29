@@ -31,8 +31,12 @@ FIPS 模式面向需要 FIPS 对齐加密姿态的部署。当 Gateway 二进制
 | 最低 TLS 版本 | 不变——BoringSSL 本就默认 TLS 1.2+，符合 FIPS 要求 |
 | TLS 1.3 套件 | 不变（见[已知限制](#已知限制)） |
 
-运维覆盖始终优先：若某 listener 的 `EdgionTls.spec.ciphers` 已设置，则使用该列表而非 FIPS 默认值
-（批准的曲线仍然生效）。参见[按 listener 覆盖](#按-listener-覆盖密码套件)。
+密码套件优先级为 EdgionTls 显式列表、EGC `spec.downstreamTls.ciphers`、
+FIPS 批准默认值。任一层的显式 `[]` 使用后端默认套件。最低版本同样由 EdgionTls
+覆盖 EGC 默认值。曲线仅由 EGC `spec.downstreamTls.ecdhCurves` 设置：缺省采用
+NIST 曲线，显式 NIST 子集保留顺序，包含 X25519 则拒绝握手。密码套件覆盖不会
+放宽曲线限制；空列表、重复或不支持的曲线均无效。配置更新仅影响新握手，现有连接
+保留协商结果。参见[下游 TLS 默认策略](../../configuration/edgion-gateway-config.md)。
 
 ## 启用 FIPS
 
@@ -278,9 +282,9 @@ FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（
 - **上行（Gateway → 后端）TLS 密码套件不受 FIPS 限制。** Pingora 0.8.1 连接器使用静态密码套件列表，无
   per-peer 钩子。上行依赖 BoringSSL FIPS 模式加既有的服务端证书校验。
 - **不强制密钥类型策略**（例如拒绝 Ed25519 叶子密钥）。
-- **TLS 1.3 会话恢复（PSK）** 跳过 per-connection 的密码套件 / 曲线限制，因此恢复的 TLS 1.3 握手的临时
-  群组不会被重新限制。这与既有的 per-connection `EdgionTls.ciphers` 机制一致，且属于上述 TLS 1.3 限制
-  范围内。
+- **TLS 1.3 会话恢复（PSK）** 与完整 TLS 1.3 握手具有相同的密码套件限制：BoringSSL 的密码套件列表
+  API 无法限制 TLS 1.3 套件。曲线策略在证书查找之前的早期 ClientHello 回调中单独应用。
+  本次变更尚未验证 PSK 专属的曲线协商行为。
 
 ## 故障排查
 

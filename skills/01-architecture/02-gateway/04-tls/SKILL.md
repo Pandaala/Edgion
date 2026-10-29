@@ -5,6 +5,32 @@ description: TLS subsystem overview — TLS Store, SNI matching, certificate man
 
 # TLS subsystem overview
 
+## Unified downstream TLS policy
+
+`ResolvedGatewayConfig.downstream_tls` owns `DownstreamTlsPolicy`: the EGC
+minimum, shared cold `CipherPolicy`, and existing numeric `CurvePolicy`.
+`CompiledEdgionTls` uses the same cipher compiler. Absent ciphers inherit;
+explicit `[]` means backend defaults; a rendered CString or rejection remains
+immutable. Resources/Controller validate NUL and curve syntax without linking
+BoringSSL. The strict backend cipher setter validates effective expressions.
+
+The early callback first selects the native, EdgionTls or exact frontend-mTLS
+overlay identity, then applies policy once through `apply_selected_downstream_policy`.
+Local minimum/ciphers replace EGC defaults independently, including a lower local
+minimum or a valid local cipher masking an invalid default. Curves have no local
+override. Unspecified ciphers inherit active FIPS/backend defaults; an explicit
+empty list bypasses only the cipher default, never FIPS curve restrictions.
+Any effective-policy error emits one canonical SSL audit and returns select error.
+Certificate callbacks configure identity/mTLS only and never reload/reapply policy.
+The local EGC Arc lives through application; SSL owns the copied settings afterward,
+so no redundant EGC Arc is stored in SslCtx. Identity Arcs retain their existing lifetime.
+
+No Rust handshake cipher joining, parsing or temporary cipher allocation occurs.
+BoringSSL's public strict cipher setter internally parses its string; this existing
+backend cost remains accepted. No SSL_CTX swapping, new locks or stores are added.
+TLS1.3 suites and physical listener ownership/retargeting boundaries remain unchanged.
+
+
 ## Architecture
 
 The Edgion Gateway TLS subsystem is split into two directions plus a storage layer:
@@ -117,8 +143,8 @@ Responsibilities (this is the only true effective point for `min_tls_version`):
 - Capture both the EdgionTls and Gateway matcher results for the listener/SNI.
 - If the Gateway entry has a frontend client-auth decision, process it first. `StrictReject` closes the connection immediately; an EdgionTls certificate may overlay a usable decision only when its resolved attachment identifies that exact winning Gateway listener.
 - Otherwise use the ordinary EdgionTls match first, then the certificate-only Gateway entry as fallback.
-- When the selected EdgionTls certificate has `spec.min_tls_version`, call `ssl.set_min_proto_version(...)` per connection.
-  - On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return `Err(SelectCertError::ERROR)`.
+- Resolve selected EdgionTls minimum over the EGC default, then call `ssl.set_min_proto_version(...)` per connection.
+  - On failure, fail-closed: `err_log = "minimum TLS version rejected"` + `log_ssl` + return `Err(SelectCertError::ERROR)`.
 - Write the selected EdgionTls, Gateway entry, or exact Gateway/EdgionTls overlay pair plus the resolved SNI into SSL ex_data via `store_ssl_ctx` as a snapshot.
 - Return `Ok(())` only after a usable match is selected and `store_ssl_ctx` succeeds, allowing the handshake to proceed to cert_cb.
 - Return `Err(SelectCertError::ERROR)` after writing the connection audit when any early decision fails: SNI and configured fallback SNI are both absent; the Gateway frontend outcome is `StrictReject`; exact overlay selection finds a client-auth/attachment conflict; applying the selected EdgionTls minimum version fails; snapshot storage fails; or neither matcher supplies a certificate.
@@ -141,7 +167,7 @@ Responsibilities:
 6. `err_log` was set during apply (cert/key load, install, mTLS configuration failure): `log_ssl` immediately and **skip finalize** — ex_data stays null (the entry-time `take_ssl_ctx` already cleared it), BoringSSL aborts the handshake because the cert was not installed, and `free_ssl_ctx` returns immediately on a null ptr, avoiding double logging.
 7. Apply succeeded: call `finalize_ssl_ctx` to stamp `tls_id` and write the SslCtx back to ex_data via `store_ssl_ctx` for `handshake_complete_callback` to consume.
 
-`apply_edgion_tls_cert` does only the following inside cert_cb timing: cert/key install, mTLS verify configuration, and `configure_ciphers` (the TLS1.2 cipher list still works in cert_cb because BoringSSL chooses the cipher only after cert_cb — `handshake_server.cc:810`). **It no longer handles `min_tls_version`**.
+`apply_edgion_tls_cert` does only the following inside cert_cb timing: cert/key install and mTLS verify configuration. **It no longer handles `min_tls_version`**.
 
 ### 3. Completion callback `handshake_complete_callback`
 
@@ -151,20 +177,20 @@ Responsibilities:
 
 When select_cb has stored a snapshot but cert_cb is never invoked (typical case: version negotiation fails and BoringSSL's alert protocol_version terminates the handshake outright), the FFI release callback `free_ssl_ctx` fires when the SSL object is destroyed.
 
-`free_ssl_ctx` checks `ssl_ctx.meta.tls_id.is_none()` — meaning `finalize_ssl_ctx` did not run — and pushes `err_log = "early abort"` (without overriding a more specific err_log) + `log_ssl`. This closes the audit blind spot of "connections rejected by the min_tls_version policy leaving no record in ssl.log".
+`free_ssl_ctx` checks the private `failure_logged` flag and emits any unclaimed failure, including failures after certificate installation. Without a specific error, it uses `"early abort"` before finalization or `"handshake failed"` afterward. The mTLS rejection callback claims the flag before logging; successful completion consumes the snapshot. A populated `tls_id` does not prove handshake completion or audit emission.
 
 Wrapped in `edgion_common::startup::catch_redacted_panic` so neither a panic nor a dynamic panic payload can cross or leak through the FFI boundary (same pattern as `mtls_verify_callback`).
 
 ### Overall priority
 
 ```
-ClientHello → select_cb (SNI resolve + Layer 1/2 match + min_tls_version + snapshot)
+ClientHello → select_cb (SNI resolve + identity selection + effective TLS policy + snapshot)
             ├─ no SNI / cert not found / min ver fail / store_ssl_ctx fail
             │     → log_ssl once + return Err → BoringSSL abort, cert_cb does not fire
             └─ hit → snapshot stored → return Ok
             → freeze version range
             → version negotiation (may be rejected here by alert; triggers free_ssl_ctx "early abort" audit)
-            → cert_cb (consume snapshot + apply cert/mtls/ciphers; no fallback matching)
+            → cert_cb (consume snapshot + apply cert/mtls; no fallback matching)
             ├─ apply failure → log_ssl once + skip finalize → BoringSSL abort
             └─ success → finalize_ssl_ctx + store_ssl_ctx writes back to ex_data
             → cipher selection (TLS1.2)
@@ -198,3 +224,23 @@ Match failures are handled in select_cb only (`"cert not found"`); cert_cb perfo
 | `edgion-gateway/src/runtime/matching/tls.rs` | GatewayTlsMatcher |
 | `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | TlsCallback |
 | `edgion-gateway/src/tls/validation/cert.rs` | Certificate validation |
+
+## Downstream ECDH policy ownership
+
+`resources::downstream_tls` owns the four classical curve names and pure validation;
+Gateway `tls::curve_policy` compiles ordered numeric IDs during EGC publication.
+`ResolvedGatewayConfig` is the sole policy owner. There is no listener option,
+curve-policy matcher projection or certificate-resource override.
+
+The early select callback loads the existing bound EGC generation once and applies
+its policy with numeric `SSL_set1_group_ids` after identity selection, before protocol negotiation.
+All SNI names and both native and EdgionTls identities use that same policy. No
+Edgion-side parsing, joining, policy allocation or lock is added per handshake;
+BoringSSL copies the bounded group slice into per-SSL configuration. FIPS rejects
+incompatible explicit groups and preserves valid NIST subsets/order; the implicit
+profile uses the same numeric setter. Certificate branches never reapply minimum, cipher or curve policy. Errors use the existing single SSL audit/rejection path.
+
+The physical socket retains its startup-owner EGC binding; GatewayClass reference
+retargeting and ownership transfer remain outside this feature. EGC updates affect
+new handshakes, while existing TLS sessions retain negotiated state. See
+[the regression boundary](../../../04-review/tls/regression-guards/downstream-ecdh-policy-ownership.md).

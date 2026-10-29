@@ -1,0 +1,50 @@
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionGatewayConfig",
+  "metadata": {
+    "name": "downstream-ecdh-curves"
+  },
+  "spec": {
+    "tcpTimeout": {
+      "idleTimeout": "120s"
+    },
+    "downstreamTls": {
+      "minTlsVersion": "TLS1_2",
+      "ciphers": [
+        "ECDHE-RSA-AES128-GCM-SHA256",
+        "ECDHE-ECDSA-AES128-GCM-SHA256"
+      ],
+      "ecdhCurves": [
+        "P-256"
+      ]
+    }
+  }
+}
+---
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionTls",
+  "metadata": {
+    "name": "downstream-ecdh-curves",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "ecdh-edgion",
+        "sectionName": "tls"
+      }
+    ],
+    "hosts": [
+      "ecdh-edgion.sandbox.example.com"
+    ],
+    "secretRef": {
+      "name": "edge-tls"
+    },
+    "minTlsVersion": "TLS1_2",
+    "ciphers": [
+      "ECDHE-RSA-AES256-GCM-SHA384",
+      "ECDHE-ECDSA-AES256-GCM-SHA384"
+    ]
+  }
+}

@@ -7,6 +7,7 @@ pub mod backend_tls_policy;
 pub mod circuit_breaker;
 pub mod common;
 pub mod config_data_ref;
+pub mod downstream_tls;
 pub mod edgion_acme;
 pub mod edgion_backend;
 pub mod edgion_backend_traffic_policy;

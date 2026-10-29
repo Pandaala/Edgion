@@ -71,7 +71,13 @@ pub async fn init_ssl_logger(config: &edgion_resources::LogConfig) -> anyhow::Re
 /// Log an SSL callback entry — non-blocking, safe to call from TLS callbacks
 #[inline]
 pub fn log_ssl(entry: &TlsConnMeta) {
+    #[cfg(test)]
+    tests::record(entry);
     if let Some(logger) = SSL_LOGGER.get() {
         logger.log(entry);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/observe/logs/ssl_log_test.rs"]
+pub(crate) mod tests;

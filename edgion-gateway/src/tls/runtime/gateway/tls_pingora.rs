@@ -20,7 +20,6 @@ use pingora_core::protocols::tls::TlsRef;
 use pingora_core::tls::ssl::{ClientHello, NameType, SelectCertError, SslRef, SslVerifyMode};
 use pingora_core::{Error as PingoraError, ErrorType};
 use rand::random;
-use std::ffi::CStr;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -34,6 +33,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// digest extension.
 #[derive(Clone)]
 struct SslCtx {
+    failure_logged: bool,
     meta: TlsConnMeta,
     matched_edgion_tls: Option<Arc<CompiledEdgionTls>>,
     matched_gateway_tls: Option<Arc<GatewayTlsEntry>>,
@@ -67,6 +67,7 @@ fn install_compiled_serving_identity(ssl: &mut SslRef, certificate: &CompiledSer
 impl SslCtx {
     fn new(port: u16) -> Self {
         Self {
+            failure_logged: false,
             meta: TlsConnMeta {
                 ts: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -127,10 +128,9 @@ mod ssl_ctx_ex_data {
     }
 
     /// BoringSSL-invoked free callback for SSL ex_data. Reclaims the Box and,
-    /// when `finalize_ssl_ctx` never ran (no `tls_id`), emits an ssl.log entry
-    /// — covers the early-abort case where BoringSSL alerts during version
-    /// negotiation between select_cb and cert_cb (typical: min_tls_version
-    /// rejects the client).
+    /// emits any unclaimed failure audit, before or after certificate installation.
+    /// Successful completion consumes the slot; mTLS rejection claims its audit
+    /// before logging, so neither produces a duplicate during destruction.
     unsafe extern "C" fn free_ssl_ctx(
         _parent: *mut c_void,
         ptr: *mut c_void,
@@ -146,11 +146,18 @@ mod ssl_ctx_ex_data {
         // destructor inside the shared redacted FFI boundary.
         let _ = catch_redacted_panic(|| unsafe {
             let mut ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
-            if ssl_ctx.meta.tls_id.is_none() {
+            if !ssl_ctx.failure_logged {
                 // Preserve a more specific upstream err_log (e.g. "min ver: …")
                 // if select_cb already set one.
                 if ssl_ctx.meta.err_log.is_none() {
-                    ssl_ctx.meta.err_log = Some("early abort".to_string());
+                    ssl_ctx.meta.err_log = Some(
+                        if ssl_ctx.meta.tls_id.is_some() {
+                            "handshake failed"
+                        } else {
+                            "early abort"
+                        }
+                        .to_string(),
+                    );
                 }
                 crate::observe::logs::ssl_log::log_ssl(&ssl_ctx.meta);
             }
@@ -194,12 +201,12 @@ mod ssl_ctx_ex_data {
         }
     }
 
-    /// Peek at TlsConnMeta in SSL ex_data without taking ownership.
+    /// Claim the pending failure audit without taking ex-data ownership.
     /// Used by mTLS verify callback to write ssl.log on failure.
     ///
     /// # Safety
-    /// `ssl_ptr` must be a valid SSL pointer during the call.
-    pub(super) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::ctx::TlsConnMeta> {
+    /// `ssl_ptr` must be valid with exclusive, serialized callback access during the call.
+    pub(super) unsafe fn claim_tls_failure_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::ctx::TlsConnMeta> {
         let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
         if idx < 0 {
             return None;
@@ -208,8 +215,13 @@ mod ssl_ctx_ex_data {
         if ptr.is_null() {
             return None;
         }
-        let ctx = &*(ptr as *const SslCtx);
-        Some(ctx.meta.clone())
+        let ctx = &mut *(ptr as *mut SslCtx);
+        if ctx.failure_logged {
+            return None;
+        }
+        let meta = ctx.meta.clone();
+        ctx.failure_logged = true;
+        Some(meta)
     }
 
     /// Take SslCtx from SSL object. Transfers ownership back via Box::from_raw
@@ -261,14 +273,14 @@ mod ssl_ctx_ex_data {
 
 use ssl_ctx_ex_data::{store_ssl_ctx, take_ssl_ctx};
 
-/// Peek at TlsConnMeta stored in SSL ex_data without taking ownership.
+/// Claim the pending failure audit and clone its metadata without taking ex-data ownership.
 /// Used by mTLS verify callback to write ssl.log on handshake failure.
 ///
 /// # Safety
-/// `ssl_ptr` must be a valid SSL pointer during the call.
+/// `ssl_ptr` must be valid with exclusive, serialized callback access during the call.
 #[cfg(feature = "boringssl")]
-pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::ctx::TlsConnMeta> {
-    ssl_ctx_ex_data::peek_tls_conn_meta(ssl_ptr)
+pub(crate) unsafe fn claim_tls_failure_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::ctx::TlsConnMeta> {
+    ssl_ctx_ex_data::claim_tls_failure_meta(ssl_ptr)
 }
 
 // ---------------------------------------------------------------------------
@@ -425,17 +437,24 @@ impl TlsAccept for TlsCallback {
     }
 }
 
-/// Map EdgionTls `TlsVersion` (CRD enum) to BoringSSL `SslVersion`. Free fn
-/// so the select_cb closure can call it without borrowing `&TlsCallback`.
-fn map_tls_version(v: edgion_resources::resources::edgion_tls::TlsVersion) -> pingora_core::tls::ssl::SslVersion {
-    use edgion_resources::resources::edgion_tls::TlsVersion;
-    use pingora_core::tls::ssl::SslVersion;
-    match v {
-        TlsVersion::Tls10 => SslVersion::TLS1,
-        TlsVersion::Tls11 => SslVersion::TLS1_1,
-        TlsVersion::Tls12 => SslVersion::TLS1_2,
-        TlsVersion::Tls13 => SslVersion::TLS1_3,
-    }
+/// Apply the selected identity's overrides against the single captured EGC.
+/// Shared by every selection branch; no later callback may reload policy.
+fn apply_selected_downstream_policy(
+    ssl: &mut SslRef,
+    selected: &SslCtx,
+    policy: &crate::tls::downstream_policy::DownstreamTlsPolicy,
+    enforce_fips: bool,
+) -> std::result::Result<(), &'static str> {
+    let local = selected
+        .gateway_edgion_tls_overlay
+        .as_ref()
+        .or(selected.matched_edgion_tls.as_ref());
+    policy.apply(
+        ssl,
+        local.and_then(|entry| entry.tls.spec.min_tls_version),
+        local.map(|entry| &entry.operator_cipher),
+        enforce_fips,
+    )
 }
 
 fn edgion_tls_attaches_to_gateway(candidate: &EdgionTls, gateway: &GatewayTlsEntry) -> bool {
@@ -536,63 +555,40 @@ impl TlsCallback {
                         log_ssl(&ssl_ctx.meta);
                         return Err(SelectCertError::ERROR);
                     };
-                    if let Some(candidate) = exact_overlay {
-                        if let Some(min_version) = candidate.tls.spec.min_tls_version {
-                            if let Err(e) = ch.ssl_mut().set_min_proto_version(Some(map_tls_version(min_version))) {
-                                ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
-                                log_ssl(&ssl_ctx.meta);
-                                return Err(SelectCertError::ERROR);
-                            }
-                        }
-                        ssl_ctx.gateway_edgion_tls_overlay = Some(candidate);
-                    }
+                    ssl_ctx.gateway_edgion_tls_overlay = exact_overlay;
                     ssl_ctx.matched_gateway_tls = Some(gw);
-                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
-                        return Err(SelectCertError::ERROR);
-                    }
-                    return Ok(());
-                }
-
-                // ── 2. Layer 1: EdgionTls ────────────────────────────────
-                let et = et_matcher_snapshot
-                    .match_eligible_sni(&lk, sni, |attachment| gateway_snapshot.listener_is_eligible(attachment));
-                if let Some(et) = et {
-                    // Only Mutual / OptionalMutual actually drive mTLS verification.
-                    // Terminate mode short-circuits in configure_mtls without setting
-                    // any verify mode, so flagging is_mtls=true there would mislead
-                    // ssl.log / tls.log / access_log consumers.
+                } else if let Some(et) = et_matcher_snapshot
+                    .match_eligible_sni(&lk, sni, |attachment| gateway_snapshot.listener_is_eligible(attachment))
+                {
                     ssl_ctx.meta.is_mtls = et.tls.is_mtls_enabled();
-                    if let Some(min_version) = et.tls.spec.min_tls_version {
-                        if let Err(e) = ch.ssl_mut().set_min_proto_version(Some(map_tls_version(min_version))) {
-                            ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
-                            log_ssl(&ssl_ctx.meta);
-                            return Err(SelectCertError::ERROR);
-                        }
-                    }
                     ssl_ctx.matched_edgion_tls = Some(et);
-                    // store_ssl_ctx failure already emits its own ssl.log entry.
-                    // Fail-closed here so cert_cb is never reached without a
-                    // snapshot — preserves the "one ssl.log per connection"
-                    // invariant.
-                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
-                        return Err(SelectCertError::ERROR);
-                    }
-                    return Ok(());
-                }
-
-                // ── 3. Layer 2: GatewayTls ───────────────────────────────
-                if let Some(gw) = gw {
+                } else if let Some(gw) = gw {
                     ssl_ctx.matched_gateway_tls = Some(gw);
-                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
-                        return Err(SelectCertError::ERROR);
-                    }
-                    return Ok(());
+                } else {
+                    ssl_ctx.meta.err_log = Some("cert not found".to_string());
+                    log_ssl(&ssl_ctx.meta);
+                    return Err(SelectCertError::ERROR);
                 }
 
-                // ── 4. No match: emit audit log and close connection ─────
-                ssl_ctx.meta.err_log = Some("cert not found".to_string());
-                log_ssl(&ssl_ctx.meta);
-                Err(SelectCertError::ERROR)
+                // Resolve after identity selection, so local overrides replace
+                // defaults before any setter can reject an ineffective default.
+                // The EGC Arc pins this decision; SSL owns the applied settings
+                // afterward, and cert_cb consumes only the identity snapshot.
+                if let Err(reason) = apply_selected_downstream_policy(
+                    ch.ssl_mut(),
+                    &ssl_ctx,
+                    &gateway_config.downstream_tls,
+                    crate::tls::fips_profile::fips_policy_active(),
+                ) {
+                    ssl_ctx.meta.err_log = Some(reason.to_string());
+                    log_ssl(&ssl_ctx.meta);
+                    return Err(SelectCertError::ERROR);
+                }
+                // Failure already writes its audit and must prevent cert_cb.
+                if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
+                    return Err(SelectCertError::ERROR);
+                }
+                Ok(())
             },
         );
 
@@ -632,10 +628,8 @@ impl TlsCallback {
     /// bound, the early `return` only skips the log entry — the connection
     /// still completes on whatever default BoringSSL had inherited.
     ///
-    /// Concretely: `spec.ciphers` is processed first. `SSL_set_strict_cipher_list`
-    /// is pure SSL-level configuration with no cert dependency, so the early
-    /// position is safe; and on failure we have not yet bound cert/key, so the
-    /// `return` here is what actually fails the handshake closed.
+    /// TLS policy already succeeded in select_cb, whose error return aborts
+    /// before version negotiation. Certificate setup cannot reapply defaults.
     ///
     /// The same rule applies to `spec.client_auth`: mTLS verify configuration
     /// is a security-boundary control (operator-required client cert), and
@@ -670,64 +664,7 @@ impl TlsCallback {
             sv: edgion_tls.get_sync_version(),
         });
 
-        // Cipher policy is a security-boundary control (FIPS-only, exclude-weak,
-        // …). BoringSSL's `SSL_set_strict_cipher_list` rejects unrecognized
-        // names rather than applying them and leaves the SSL on its inherited
-        // default suite — so on Err we MUST not bind cert/key, otherwise the
-        // handshake completes negotiating from BoringSSL's full default and the
-        // operator's restrictive policy is silently dropped. Doing this BEFORE
-        // cert/key (instead of the historical "after" position) is what
-        // converts the `err_log + return` pattern into an actual handshake
-        // abort, since "no cert bound" is the only fail-close lever we have
-        // from inside cert_cb (see the function-level doc above).
-        // Cipher selection: operator `spec.ciphers` wins (the free per-workload
-        // override); otherwise a FIPS build applies the approved default set;
-        // otherwise BoringSSL's default is left in place. All three keep the
-        // fail-close ordering: any Err returns before cert/key are bound, so the
-        // handshake aborts rather than silently negotiating a wider policy.
-        use crate::tls::fips_profile::{
-            configure_fips_ciphers, configure_fips_curves, decide_cipher_action, fips_policy_active, CipherAction,
-        };
-        // FIPS enforcement is active on a real FIPS build OR when force-enabled
-        // via config/env (fips_policy_active). When active, the approved-curve
-        // restriction always applies, even if the operator overrides the cipher
-        // list — curves are orthogonal to the cipher list, so a `spec.ciphers`
-        // override must not silently re-enable a non-approved curve (e.g.
-        // X25519).
-        let enforce_fips = fips_policy_active();
-        if enforce_fips {
-            if let Err(e) = configure_fips_curves(ssl) {
-                ssl_ctx.meta.err_log = Some(format!("fips curves config: {e}"));
-                return;
-            }
-        }
-        match decide_cipher_action(edgion_tls.spec.ciphers.is_some(), enforce_fips) {
-            CipherAction::Operator => {
-                // The cipher string was rendered when this generation was
-                // published; only the strict FFI call stays here, so its
-                // fail-closed rejection behaviour is unchanged (tls-F002).
-                match compiled.operator_cipher.as_ref() {
-                    Err(e) => {
-                        ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
-                        return;
-                    }
-                    Ok(Some(cipher)) => {
-                        if let Err(e) = self.configure_ciphers(ssl, cipher) {
-                            ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
-                            return;
-                        }
-                    }
-                    Ok(None) => {}
-                }
-            }
-            CipherAction::FipsDefault => {
-                if let Err(e) = configure_fips_ciphers(ssl) {
-                    ssl_ctx.meta.err_log = Some(format!("fips cipher config: {e}"));
-                    return;
-                }
-            }
-            CipherAction::BoringDefault => {}
-        }
+        // Minimum version, ciphers and curves were applied once in select_cb.
 
         // mTLS client-cert verification is a security-boundary control
         // (operator-required client cert). `configure_mtls` only touches
@@ -855,24 +792,6 @@ impl TlsCallback {
                     return;
                 }
                 Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
-            }
-        }
-
-        // FIPS: a FIPS build defaults this listener to the approved cipher/curve
-        // set, matching the EdgionTls path. The Gateway API listener path has no
-        // operator cipher field, so both the approved curves and the approved
-        // cipher list always apply on a FIPS build (BoringSSL default
-        // otherwise). Runs BEFORE apply_compiled_certificate_to_ssl binds cert/key, so a
-        // rejected cipher/curve aborts the handshake (fail-closed) rather than
-        // negotiating a wider policy.
-        if crate::tls::fips_profile::fips_policy_active() {
-            if let Err(e) = crate::tls::fips_profile::configure_fips_curves(ssl) {
-                ssl_ctx.meta.err_log = Some(format!("fips curves config: {e}"));
-                return;
-            }
-            if let Err(e) = crate::tls::fips_profile::configure_fips_ciphers(ssl) {
-                ssl_ctx.meta.err_log = Some(format!("fips cipher config: {e}"));
-                return;
             }
         }
 
@@ -1133,39 +1052,6 @@ impl TlsCallback {
             }
         } else {
             ssl.set_verify(verify_mode);
-        }
-
-        Ok(())
-    }
-
-    /// Configure cipher list (similar to Nginx ssl_ciphers directive)
-    ///
-    /// Takes the cipher string rendered when the generation was published and
-    /// applies it via BoringSSL FFI. Returns `Err` if BoringSSL rejects it.
-    ///
-    /// Note: TLS 1.3 ciphers are hardcoded in BoringSSL and cannot be configured.
-    fn configure_ciphers(&self, ssl: &mut SslRef, cipher: &CStr) -> Result<(), Box<PingoraError>> {
-        #[cfg(feature = "boringssl")]
-        {
-            // SAFETY: SslRef -> SSL* conversion for FFI call. `ssl` is valid for
-            // this call, and `cipher` is owned by the published generation, so it
-            // outlives the FFI call.
-            unsafe {
-                let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
-                let ret = boring_sys::SSL_set_strict_cipher_list(ssl_ptr, cipher.as_ptr());
-
-                if ret != 1 {
-                    return Err(PingoraError::explain(
-                        ErrorType::InternalError,
-                        format!("rejected ciphers: {}", cipher.to_string_lossy()),
-                    ));
-                }
-            }
-        }
-
-        #[cfg(not(feature = "boringssl"))]
-        {
-            let _ = (ssl, cipher);
         }
 
         Ok(())

@@ -258,3 +258,16 @@ spec:
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("retry.attempts"));
 }
+
+#[test]
+fn downstream_tls_curves_round_trip_without_implicit_default() {
+    let empty: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+    assert!(empty.downstream_tls.is_none());
+    assert!(serde_json::to_value(empty).unwrap().get("downstreamTls").is_none());
+    let spec: EdgionGatewayConfigSpec =
+        serde_json::from_value(serde_json::json!({"downstreamTls":{"ecdhCurves":["P-384","X25519"]}})).unwrap();
+    assert_eq!(
+        serde_json::to_value(spec).unwrap()["downstreamTls"]["ecdhCurves"],
+        serde_json::json!(["P-384", "X25519"])
+    );
+}

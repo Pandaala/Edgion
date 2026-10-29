@@ -18,11 +18,11 @@
 #[cfg(feature = "boringssl")]
 use crate::runtime::matching::tls::CompiledBoringCertificateChain;
 use crate::runtime::matching::tls::CompiledServingCertificate;
+use crate::tls::downstream_policy::CipherPolicy;
 use edgion_resources::resources::edgion_tls::{ClientAuthMode, EdgionTls};
 use pingora_core::tls::pkey::PKey;
 use pingora_core::tls::x509::store::{X509Store, X509StoreBuilder};
 use pingora_core::tls::x509::X509;
-use std::ffi::CString;
 use std::sync::Arc;
 
 /// Placeholder category for an entry that never reaches the matcher
@@ -45,10 +45,9 @@ pub struct CompiledEdgionTls {
     /// either no `clientAuth`, or `ClientAuthMode::Terminate`, which presents a
     /// server certificate but never requests a client certificate.
     pub client_ca_store: Result<Option<Arc<X509Store>>, String>,
-    /// Cold-compiled operator cipher list. `Ok(None)` means `spec.ciphers` is
-    /// absent or empty, which the handshake treats as "leave the inherited
-    /// suite in place" exactly as before.
-    pub operator_cipher: Result<Option<CString>, String>,
+    /// Shared cold cipher preparation; absence and explicit backend defaults
+    /// remain distinct until the selected identity inherits its EGC policy.
+    pub(crate) operator_cipher: CipherPolicy,
 }
 
 impl CompiledEdgionTls {
@@ -58,7 +57,7 @@ impl CompiledEdgionTls {
         Self {
             identity: compile_identity(&tls),
             client_ca_store: compile_client_ca_store(&tls),
-            operator_cipher: compile_operator_cipher(&tls),
+            operator_cipher: CipherPolicy::compile(tls.spec.ciphers.as_deref()),
             tls,
         }
     }
@@ -70,7 +69,7 @@ impl CompiledEdgionTls {
             tls,
             identity: Err(NOT_COMPILED),
             client_ca_store: Ok(None),
-            operator_cipher: Ok(None),
+            operator_cipher: CipherPolicy::Inherit,
         }
     }
 }
@@ -169,22 +168,6 @@ fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -
             .map_err(|e| format!("Failed to add CA cert to store: {}", e))?;
     }
     Ok(count)
-}
-
-/// Render `spec.ciphers` into the NUL-terminated form
-/// `SSL_set_strict_cipher_list` consumes. The FFI call itself stays on the
-/// handshake path so its fail-closed rejection behaviour (tls-F002) is
-/// unchanged; only the join and the `CString` allocation move here.
-fn compile_operator_cipher(tls: &EdgionTls) -> Result<Option<CString>, String> {
-    let Some(ciphers) = tls.spec.ciphers.as_ref() else {
-        return Ok(None);
-    };
-    if ciphers.is_empty() {
-        return Ok(None);
-    }
-    CString::new(ciphers.join(":"))
-        .map(Some)
-        .map_err(|e| format!("cipher null byte: {e}"))
 }
 
 #[cfg(all(test, feature = "boringssl"))]

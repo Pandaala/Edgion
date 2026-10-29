@@ -1,5 +1,42 @@
 # TLS Termination
 
+## Downstream TLS defaults
+
+`EdgionGatewayConfig.spec.downstreamTls` sets defaults for TLS termination on
+listeners bound to that GatewayClass configuration, for both native Gateway
+certificates and EdgionTls identities:
+
+```yaml
+spec:
+  downstreamTls:
+    minTlsVersion: TLS1_2
+    ciphers: [ECDHE-RSA-AES128-GCM-SHA256, ECDHE-ECDSA-AES128-GCM-SHA256]
+    ecdhCurves: [P-256, P-384]
+```
+
+| Field | Inheritance and override |
+|---|---|
+| `minTlsVersion` | EdgionTls explicit value wins, then this default, then backend default. A local `TLS1_2` can override a `TLS1_3` default. `TLS1_0`/`TLS1_1` remain deprecated operator opt-ins. |
+| `ciphers` | Precedence: EdgionTls explicit list → EGC list → FIPS/backend default. Only when both fields are absent is the FIPS/backend default inherited. An explicit `[]` at either level selects backend defaults, including under FIPS policy. Applies to TLS 1.2 and earlier only. |
+| `ecdhCurves` | Ordered unique list of 1–4 names: `X25519`, `P-256`, `P-384`, `P-521`. There is no EdgionTls or listener curve override. |
+
+Under active FIPS policy, absent curves use `P-256/P-384/P-521`; explicit NIST
+subsets retain their order, while `X25519` rejects the handshake. Cipher overrides
+never bypass this curve restriction. Without active FIPS policy, absent curves
+use backend defaults. Empty, duplicate or unsupported curve lists are invalid.
+
+Invalid effective cipher policy fails closed; it never falls back to broader
+suites. A valid local cipher override can mask an invalid inherited cipher list.
+Controller validation checks transport-safe syntax, while Gateway BoringSSL
+validates cipher expressions when applying the effective policy. Updates rejected
+before publication retain the previously admitted generation.
+
+New handshakes capture one EGC generation and apply effective settings before
+protocol negotiation. Established TLS connections keep their negotiated state.
+A physical socket retains its startup owner's EGC binding; hot updates do not
+retarget GatewayClass references or transfer shared-listener ownership.
+
+
 Terminate client TLS at the Gateway using the standard Gateway API listener configuration.
 
 ## Overview
@@ -75,6 +112,48 @@ spec:
   # Minimum accepted TLS version (optional).
   minTlsVersion: TLS1_2
 ```
+
+## ECDH curve policy
+
+Configure downstream ECDH groups in the EdgionGatewayConfig referenced by
+GatewayClass. This is the only curve configuration field; Gateway listeners and
+EdgionTls do not have curve overrides. The policy applies equally to all SNI names
+and to native `certificateRefs` and EdgionTls certificates on the bound listener.
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: gateway-defaults
+spec:
+  downstreamTls:
+    ecdhCurves: [X25519, P-256]
+```
+
+Supported names are exactly `X25519`, `P-256`, `P-384`, and `P-521`. The array
+preserves order, accepts each name at most once, and must contain one to four
+names. Aliases, whitespace, empty arrays and unknown names are invalid.
+
+Omitting `ecdhCurves` preserves the backend defaults, except that active FIPS
+policy selects `P-256:P-384:P-521`. Under FIPS, an explicit array may contain only
+these NIST curves: the requested subset/order is retained, while any `X25519`
+entry rejects new handshakes. Admission rejects malformed arrays and preserves the previously published policy.
+If malformed configuration reaches the Gateway through another transport, it seals
+new-handshake rejection rather than reverting to a broader default. Cipher
+overrides cannot bypass curve policy.
+
+Curve policy controls key exchange separately from cipher suites and certificate
+key type. It does not require ECDHE: TLS 1.2 non-ECDHE suites, if enabled, remain
+governed by the existing cipher configuration and do not negotiate an ECDH group.
+This applies to downstream TLS termination, not TLS passthrough or upstream TLS.
+
+EGC updates apply to new handshakes without restart; established TLS sessions
+retain their negotiated state. Removing the field or deleting the referenced EGC
+restores existing runtime defaults. Each physical listener retains the EGC handle
+selected by its startup owner. Different GatewayClasses sharing that socket do
+not acquire separate defaults, and changing GatewayClass parametersRef does not
+retarget an already-created listener. Use separate sockets when different EGC
+policies are required.
 
 ## Certificate management
 

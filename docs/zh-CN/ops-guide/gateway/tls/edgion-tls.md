@@ -1,5 +1,10 @@
 # EdgionTls
 
+## 继承下游 TLS 默认策略
+
+`spec.minTlsVersion` 与 `spec.ciphers` 按证书身份覆盖 GatewayClass 的 EGC 默认值。字段缺省时继承；显式 `ciphers: []` 使用后端默认套件，包括启用 FIPS 策略时。没有按证书身份覆盖曲线的字段。参见[下游 TLS 默认策略](../../configuration/edgion-gateway-config.md)。
+
+
 > **🔌 Edgion 扩展**
 >
 > `EdgionTls` 是 Edgion 自定义 CRD（`edgion.io/v1`），提供 Gateway API 之外的 TLS 功能：双向 TLS（mTLS）、最低 TLS 版本和 OpenSSL 格式密码套件列表。不属于标准 Gateway API 规范。
@@ -95,8 +100,8 @@ spec:
 | `hosts` | Array\<String\> | **必填** | 此证书服务的主机名，支持单个最左侧标签通配符，如 `*.example.com` |
 | `secretRef` | Object | **必填** | 持有服务端证书的 `kubernetes.io/tls` Secret，跨命名空间需要 `ReferenceGrant` |
 | `clientAuth` | Object | none | mTLS 客户端证书验证；见下表 |
-| `minTlsVersion` | Enum | none（BoringSSL 默认 = TLS 1.2+） | 最低接受的 TLS 版本。可选值：`TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
-| `ciphers` | Array\<String\> | none（BoringSSL 默认） | TLS 1.2 及以下的 OpenSSL 格式密码套件列表，如 `ECDHE-RSA-AES256-GCM-SHA384` |
+| `minTlsVersion` | Enum | none（继承 EGC，其次为后端默认值） | 最低接受的 TLS 版本。可选值：`TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
+| `ciphers` | Array\<String\> | none（继承 EGC，其次为 FIPS/后端默认值） | TLS 1.2 及以下的 OpenSSL 格式密码套件列表，如 `ECDHE-RSA-AES256-GCM-SHA384` |
 
 > **没有** `maxTlsVersion` 字段，密码套件是扁平的 OpenSSL 格式列表，没有"profile"选择器。请只配置上表中列出的字段。
 
@@ -109,7 +114,7 @@ spec:
 | `TLS1_2` | TLS 1.2 | 现代部署的推荐基线 |
 | `TLS1_3` | TLS 1.3 | 最强安全性；所有客户端都支持时使用 |
 
-未设置 `minTlsVersion` 时，使用 BoringSSL 默认值（TLS 1.2+），这是安全的选择。
+未设置 `minTlsVersion` 时继承 EGC 最低版本；两者均缺省时使用后端默认值。
 
 ### 安全参数——`clientAuth`（mTLS）
 

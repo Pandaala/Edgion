@@ -5,7 +5,7 @@
 
 use crate::observe::logs::ssl_log::log_ssl;
 use crate::tls::runtime::backend::cert_extractor::{extract_client_cert_info_from_cert, extract_presented_sans};
-use crate::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
+use crate::tls::runtime::gateway::tls_pingora::claim_tls_failure_meta;
 use crate::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
 use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
@@ -283,7 +283,7 @@ unsafe fn log_mtls_failure(ssl_ptr: *mut boring_sys::SSL, reason: &str) {
     if ssl_ptr.is_null() {
         return;
     }
-    if let Some(mut meta) = peek_tls_conn_meta(ssl_ptr) {
+    if let Some(mut meta) = claim_tls_failure_meta(ssl_ptr) {
         meta.err_log = Some(reason.to_string());
         log_ssl(&meta);
     }

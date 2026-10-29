@@ -38,6 +38,30 @@ an accepted unreachable risk on pinned BoringSSL 5.2, not correct
 one-entry behavior and not a production-reachable bug. Select-callback
 store failure already emits once and returns `SelectCertError::ERROR`.
 
+## Reachable post-certificate failure audit (CAND-B-001)
+
+Certificate installation assigns `tls_id` before TLS negotiation completes.
+It must not serve as an audit-emission marker: a disjoint ECDH group can
+reject the handshake after certificate installation and before completion.
+The ex-data destructor logs any remaining context whose private
+`failure_logged` flag is false, including contexts with a TLS ID.
+The mTLS failure callback claims that flag before emitting its existing
+record, preventing a second record during destruction. Successful completion
+still consumes the context; the no-snapshot fallback remains silent.
+
+This reachable failure fix does not change the accepted clone handoff or
+the separate, unreachable same-slot setter-failure case below. The generic
+`handshake failed` message does not identify the underlying BoringSSL error.
+
+Regression coverage in `tls_pingora_test.rs` includes
+`tls13_post_certificate_group_failure_and_success_emit_one_audit`: paired
+in-memory TLS streams pause for the production certificate callback, then
+verify a real `NO_SHARED_GROUP` failure and a successful completion each emit
+exactly one canonical audit. The ex-data lifecycle test separately checks
+pending and claimed failures before/after finalization and consumed contexts.
+The mTLS claim-to-log wiring is source-reviewed; these tests do not claim a
+live mTLS exchange or PSK coverage.
+
 ## Rationale and evidence
 
 Canonical one-entry audit text remains

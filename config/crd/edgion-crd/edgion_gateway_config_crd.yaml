@@ -23,6 +23,30 @@ spec:
             spec:
               type: object
               properties:
+                downstreamTls:
+                  type: object
+                  properties:
+                    minTlsVersion:
+                      type: string
+                      enum: [TLS1_0, TLS1_1, TLS1_2, TLS1_3]
+                      description: "Default minimum TLS version; EdgionTls may override. TLS1_0/TLS1_1 are deprecated opt-ins."
+                    ciphers:
+                      type: array
+                      description: "Default OpenSSL cipher expressions (TLS 1.2 and earlier); EdgionTls replaces this list. Empty selects backend defaults, including under FIPS policy."
+                      items:
+                        type: string
+                    ecdhCurves:
+                      type: array
+                      minItems: 1
+                      maxItems: 4
+                      x-kubernetes-validations:
+                        - rule: "self.all(c, self.filter(x, x == c).size() == 1)"
+                          message: "ecdhCurves must not contain duplicates"
+                      items:
+                        type: string
+                        maxLength: 6
+                        enum: [X25519, P-256, P-384, P-521]
+
                 # ============================================
                 # Server Configuration
                 # ============================================

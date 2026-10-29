@@ -1,5 +1,12 @@
 # EdgionTls
 
+## Inherited TLS defaults
+
+`spec.minTlsVersion` and `spec.ciphers` override the GatewayClass EGC defaults per identity.
+An absent field inherits; an explicit `ciphers: []` selects backend defaults, even under FIPS policy.
+There is no per-identity curve override. See [downstream TLS defaults](../../configuration/edgion-gateway-config.md).
+
+
 > **🔌 Edgion extension**
 >
 > `EdgionTls` is an Edgion custom CRD (`edgion.io/v1`) that adds TLS capabilities beyond the Gateway API: mutual TLS (mTLS), a minimum TLS version, and an OpenSSL-format cipher list. It is not part of standard Gateway API.
@@ -95,8 +102,8 @@ spec:
 | `hosts` | Array\<String\> | **Required** | Hostnames this certificate serves. Supports a single left-most-label wildcard, e.g. `*.example.com` |
 | `secretRef` | Object | **Required** | `kubernetes.io/tls` Secret holding the server certificate. Cross-namespace requires a `ReferenceGrant` |
 | `clientAuth` | Object | none | mTLS client-certificate verification; see the table below |
-| `minTlsVersion` | Enum | none (BoringSSL default = TLS 1.2+) | Minimum accepted TLS version. Allowed values: `TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
-| `ciphers` | Array\<String\> | none (BoringSSL defaults) | OpenSSL-format cipher list for TLS 1.2 and below, e.g. `ECDHE-RSA-AES256-GCM-SHA384` |
+| `minTlsVersion` | Enum | none (inherit EGC, then backend) | Minimum accepted TLS version. Allowed values: `TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
+| `ciphers` | Array\<String\> | none (inherit EGC, then FIPS/backend) | OpenSSL-format cipher list for TLS 1.2 and below, e.g. `ECDHE-RSA-AES256-GCM-SHA384` |
 
 > There is **no** `maxTlsVersion` field, and ciphers are a flat OpenSSL-format list — there is no cipher "profile" selector. Configure only the fields listed above.
 
@@ -109,7 +116,7 @@ spec:
 | `TLS1_2` | TLS 1.2 | Recommended baseline for modern deployments |
 | `TLS1_3` | TLS 1.3 | Strongest; use when all clients support it |
 
-When `minTlsVersion` is unset, BoringSSL's default (TLS 1.2+) applies, which is the safe path.
+When `minTlsVersion` is unset, the EGC minimum applies; if both are absent, the backend default applies.
 
 ### Security parameters — `clientAuth` (mTLS)
 

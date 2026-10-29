@@ -1,5 +1,36 @@
 # TLS 终结
 
+## 下游 TLS 默认策略
+
+`EdgionGatewayConfig.spec.downstreamTls` 为绑定到该 GatewayClass 配置的 TLS 终结监听器提供默认策略，
+同时适用于原生 Gateway 证书和 EdgionTls 证书：
+
+```yaml
+spec:
+  downstreamTls:
+    minTlsVersion: TLS1_2
+    ciphers: [ECDHE-RSA-AES128-GCM-SHA256, ECDHE-ECDSA-AES128-GCM-SHA256]
+    ecdhCurves: [P-256, P-384]
+```
+
+| 字段 | 继承与覆盖规则 |
+|---|---|
+| `minTlsVersion` | EdgionTls 显式值优先，其次为此默认值，最后为后端默认值。局部 `TLS1_2` 可覆盖全局 `TLS1_3`；`TLS1_0`/`TLS1_1` 仍是已弃用的显式选择。 |
+| `ciphers` | 优先级：EdgionTls 显式列表 → EGC 列表 → FIPS/后端默认值。仅当两处字段都缺省时才继承 FIPS/后端默认值。任一层的显式 `[]` 都表示使用后端默认套件，包括启用 FIPS 策略时。仅影响 TLS 1.2 及更早版本。 |
+| `ecdhCurves` | 由 `X25519`、`P-256`、`P-384`、`P-521` 组成的有序列表，长度为 1–4 且不能重复。EdgionTls 和 listener 均没有曲线覆盖字段。 |
+
+启用 FIPS 策略时，缺省曲线为 `P-256/P-384/P-521`；显式 NIST 子集保留其顺序，
+包含 `X25519` 则拒绝握手。密码套件覆盖不会绕过曲线限制。未启用 FIPS 策略时，
+缺省曲线采用后端默认值。空列表、重复名称和不支持的曲线均无效。
+
+实际生效的密码套件配置无效时拒绝握手，不回退到更宽松的默认值；有效的局部密码套件
+覆盖可屏蔽无效的继承列表。Controller 验证传输安全语法，Gateway 的 BoringSSL 在应用
+实际策略时验证套件表达式。发布前被拒绝的更新保留此前已接收的配置代际。
+
+新握手捕获一个 EGC 配置代际并在协议协商前应用策略；已建立连接保留协商结果。
+物理端口保留启动时所属的 EGC 绑定，热更新不会重新绑定 GatewayClass 引用或转移共享监听器所有权。
+
+
 使用标准 Gateway API 监听器配置，在 Gateway 上终结客户端 TLS。
 
 ## 概述

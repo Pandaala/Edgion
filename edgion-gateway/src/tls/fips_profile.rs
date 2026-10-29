@@ -1,13 +1,13 @@
 //! FIPS-approved TLS profile (Model A+).
 //!
 //! When the gateway is a FIPS build, downstream listeners default to the
-//! FIPS-approved cipher/curve set unless the operator overrides via
-//! `EdgionTls.ciphers`. See
+//! FIPS-approved cipher/curve set. EGC defaults and higher-priority
+//! `EdgionTls.ciphers` may override ciphers;
+//! ingress curve policy may select a NIST subset but cannot enable X25519. See
 //! skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md.
 //!
-//! Backend-agnostic surface: `fips_module_available` and `decide_cipher_action`
-//! are callable on both the boringssl and rustls builds (the startup path uses
-//! them). The BoringSSL FFI helpers that take an `SslRef` are
+//! Backend-agnostic surface: `fips_module_available` and policy resolution
+//! are available to the startup path. The BoringSSL FFI helpers that take an `SslRef` are
 //! `#[cfg(feature = "boringssl")]`-gated, mirroring every other `SslRef` user in
 //! this crate; their only callers live in the boringssl-gated handshake code.
 
@@ -25,14 +25,18 @@ ECDHE-RSA-AES128-GCM-SHA256:\
 ECDHE-ECDSA-AES256-GCM-SHA384:\
 ECDHE-RSA-AES256-GCM-SHA384";
 
-/// FIPS-approved ECDH curves (NIST P-curves), for `SSL_set1_curves_list`.
+/// FIPS-approved ECDH curves (NIST P-curves), for the numeric supported-group policy.
 pub const FIPS_CURVES: &str = "P-256:P-384:P-521";
 
 #[cfg(feature = "boringssl")]
-const FIPS_TLS12_CIPHERS_C: &CStr =
+pub(crate) const FIPS_TLS12_CIPHERS_C: &CStr =
     c"ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384";
 #[cfg(feature = "boringssl")]
-const FIPS_CURVES_C: &CStr = c"P-256:P-384:P-521";
+const FIPS_GROUP_IDS: &[u16] = &[
+    boring_sys::SSL_GROUP_SECP256R1 as u16,
+    boring_sys::SSL_GROUP_SECP384R1 as u16,
+    boring_sys::SSL_GROUP_SECP521R1 as u16,
+];
 
 /// Whether BoringSSL reports that this binary is running in FIPS mode.
 /// Compile-time, process-wide; `false` on any non-boringssl build. This signal
@@ -73,71 +77,16 @@ pub fn fips_policy_active() -> bool {
     fips_module_available() || fips_policy_forced()
 }
 
-/// Which cipher-list configuration `apply_edgion_tls_cert` should apply
-/// downstream. This governs only the TLS 1.2 cipher *list*; the FIPS-approved
-/// *curve* restriction is orthogonal and, on a FIPS build, always applies
-/// regardless of this decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CipherAction {
-    /// Operator set `EdgionTls.ciphers`; use them verbatim (operator override).
-    Operator,
-    /// FIPS build, no operator ciphers; apply the approved cipher list.
-    FipsDefault,
-    /// Non-FIPS build, no operator ciphers; leave BoringSSL's default.
-    BoringDefault,
-}
-
-/// Decide the cipher-list action. Operator ciphers always win (the free
-/// per-workload override); otherwise, when FIPS enforcement is active, apply the
-/// approved list. `enforce_fips` is `fips_policy_active()` at the call site.
-pub fn decide_cipher_action(has_operator_ciphers: bool, enforce_fips: bool) -> CipherAction {
-    match (has_operator_ciphers, enforce_fips) {
-        (true, _) => CipherAction::Operator,
-        (false, true) => CipherAction::FipsDefault,
-        (false, false) => CipherAction::BoringDefault,
-    }
-}
-
-/// Apply the FIPS-approved TLS 1.2 cipher list to this connection. Mirrors
-/// `TlsCallback::configure_ciphers`'s strict fail-closed FFI: BoringSSL rejects
-/// unknown names, so a non-1 return must abort (the caller stamps `err_log` and
-/// returns before binding cert). TLS 1.3 suites are not configurable in
-/// BoringSSL and are intentionally left untouched.
-#[cfg(feature = "boringssl")]
-pub(crate) fn configure_fips_ciphers(ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
-    // SAFETY: SslRef -> SSL* for FFI; ssl and the static C string are valid for
-    // this call.
-    unsafe {
-        let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
-        if boring_sys::SSL_set_strict_cipher_list(ssl_ptr, FIPS_TLS12_CIPHERS_C.as_ptr()) != 1 {
-            return Err(PingoraError::explain(
-                ErrorType::InternalError,
-                "fips default cipher list rejected".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Apply the FIPS-approved ECDH curve restriction to this connection. Applied
-/// on any FIPS build independently of the cipher-list decision, because an
+/// by the early ingress policy when FIPS is active and no explicit curve list
+/// is selected, independently of the cipher-list decision, because an
 /// operator `spec.ciphers` override must not silently re-enable a non-approved
 /// curve (e.g. X25519). Same strict fail-closed FFI contract as
-/// `configure_fips_ciphers`.
+/// `downstream_policy::CipherPolicy`.
 #[cfg(feature = "boringssl")]
 pub(crate) fn configure_fips_curves(ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
-    // SAFETY: SslRef -> SSL* for FFI; ssl and the static C string are valid for
-    // this call.
-    unsafe {
-        let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
-        if boring_sys::SSL_set1_curves_list(ssl_ptr, FIPS_CURVES_C.as_ptr()) != 1 {
-            return Err(PingoraError::explain(
-                ErrorType::InternalError,
-                "fips curves list rejected".to_string(),
-            ));
-        }
-    }
-    Ok(())
+    super::curve_policy::set_groups(ssl, FIPS_GROUP_IDS)
+        .map_err(|_| PingoraError::explain(ErrorType::InternalError, "fips curves list rejected".to_string()))
 }
 
 /// How the approved cipher/curve policy is selected when BoringSSL FIPS mode is

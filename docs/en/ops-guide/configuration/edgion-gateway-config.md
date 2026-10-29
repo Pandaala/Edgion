@@ -2,6 +2,42 @@
 
 EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef`. Updates propagate to existing Gateways without restarting the process; the field determines which new request, connection, or operation adopts the update.
 
+## Downstream TLS defaults
+
+`EdgionGatewayConfig.spec.downstreamTls` sets defaults for TLS termination on
+listeners bound to that GatewayClass configuration, for both native Gateway
+certificates and EdgionTls identities:
+
+```yaml
+spec:
+  downstreamTls:
+    minTlsVersion: TLS1_2
+    ciphers: [ECDHE-RSA-AES128-GCM-SHA256, ECDHE-ECDSA-AES128-GCM-SHA256]
+    ecdhCurves: [P-256, P-384]
+```
+
+| Field | Inheritance and override |
+|---|---|
+| `minTlsVersion` | EdgionTls explicit value wins, then this default, then backend default. A local `TLS1_2` can override a `TLS1_3` default. `TLS1_0`/`TLS1_1` remain deprecated operator opt-ins. |
+| `ciphers` | Precedence: EdgionTls explicit list → EGC list → FIPS/backend default. Only when both fields are absent is the FIPS/backend default inherited. An explicit `[]` at either level selects backend defaults, including under FIPS policy. Applies to TLS 1.2 and earlier only. |
+| `ecdhCurves` | Ordered unique list of 1–4 names: `X25519`, `P-256`, `P-384`, `P-521`. There is no EdgionTls or listener curve override. |
+
+Under active FIPS policy, absent curves use `P-256/P-384/P-521`; explicit NIST
+subsets retain their order, while `X25519` rejects the handshake. Cipher overrides
+never bypass this curve restriction. Without active FIPS policy, absent curves
+use backend defaults. Empty, duplicate or unsupported curve lists are invalid.
+
+Invalid effective cipher policy fails closed; it never falls back to broader
+suites. A valid local cipher override can mask an invalid inherited cipher list.
+Controller validation checks transport-safe syntax, while Gateway BoringSSL
+validates cipher expressions when applying the effective policy. Updates rejected
+before publication retain the previously admitted generation.
+
+New handshakes capture one EGC generation and apply effective settings before
+protocol negotiation. Established TLS connections keep their negotiated state.
+A physical socket retains its startup owner's EGC binding; hot updates do not
+retarget GatewayClass references or transfer shared-listener ownership.
+
 ## Optional expensive WAF checks
 
 `spec.waf.expensiveChecks` defaults to `false`. Set it to `true` to enable

@@ -1,21 +1,5 @@
 use super::*;
 
-#[test]
-fn decide_cipher_action_operator_always_wins() {
-    assert_eq!(decide_cipher_action(true, true), CipherAction::Operator);
-    assert_eq!(decide_cipher_action(true, false), CipherAction::Operator);
-}
-
-#[test]
-fn decide_cipher_action_fips_default_when_no_operator_ciphers() {
-    assert_eq!(decide_cipher_action(false, true), CipherAction::FipsDefault);
-}
-
-#[test]
-fn decide_cipher_action_boring_default_on_non_fips() {
-    assert_eq!(decide_cipher_action(false, false), CipherAction::BoringDefault);
-}
-
 #[cfg(feature = "boringssl")]
 #[test]
 fn approved_tls12_ciphers_are_valid_boringssl_names() {
@@ -30,7 +14,8 @@ fn approved_tls12_ciphers_are_valid_boringssl_names() {
 #[test]
 fn ffi_profile_strings_match_the_public_profile() {
     assert_eq!(FIPS_TLS12_CIPHERS_C.to_str().unwrap(), FIPS_TLS12_CIPHERS);
-    assert_eq!(FIPS_CURVES_C.to_str().unwrap(), FIPS_CURVES);
+    assert_eq!(FIPS_GROUP_IDS, &[23, 24, 25]);
+    assert_eq!(FIPS_CURVES, "P-256:P-384:P-521");
 }
 
 #[cfg(not(feature = "fips"))]
@@ -67,7 +52,9 @@ fn configure_fips_ciphers_and_curves_apply_cleanly() {
     let mut ssl = Ssl::new(&ctx).unwrap();
     // Exercises the real strict cipher FFI and the curves FFI on a live Ssl,
     // covering the "approved strings accepted, else fail closed" risk.
-    configure_fips_ciphers(ssl.as_mut()).expect("approved fips ciphers must apply on a boringssl build");
+    crate::tls::downstream_policy::CipherPolicy::Inherit
+        .apply(ssl.as_mut(), true)
+        .expect("approved fips ciphers must apply on a boringssl build");
     configure_fips_curves(ssl.as_mut()).expect("approved fips curves must apply on a boringssl build");
 }
 
@@ -120,7 +107,9 @@ fn fips_policy_rejects_chacha20_and_accepts_approved_at_tls12() {
             tcp.set_write_timeout(Some(Duration::from_secs(5))).ok();
             let mut ssl = Ssl::new(&server_ctx).unwrap();
             // The code under test: apply the FIPS-approved policy.
-            configure_fips_ciphers(ssl.as_mut()).unwrap();
+            crate::tls::downstream_policy::CipherPolicy::Inherit
+                .apply(ssl.as_mut(), true)
+                .unwrap();
             configure_fips_curves(ssl.as_mut()).unwrap();
             ssl.accept(tcp).is_ok()
         });

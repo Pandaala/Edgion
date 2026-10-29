@@ -31,8 +31,8 @@ before proposing one.
 
 `TlsCallback::apply_edgion_tls_cert` preserves this order:
 
-1. Apply FIPS curve policy, then the compiled operator cipher (or the FIPS
-   default set). A failure returns before anything is bound.
+1. TLS minimum, cipher and curve policy has already succeeded in the early
+   select callback. Certificate application never reapplies that policy.
 2. Apply the mTLS verification policy from the compiled client CA store. A
    failure returns before anything is bound.
 3. Clear any serving identity inherited by the per-connection SSL.
@@ -120,7 +120,7 @@ partial update.
 
 Both downstream serving paths are now cold-compiled and share
 `install_compiled_serving_identity`. They remain separate functions because
-their surrounding policy differs: EdgionTls owns the resource's cipher and
+their surrounding policy differs: the early policy owner resolves EdgionTls cipher overrides, while EdgionTls retains
 `clientAuth` branches, while the Gateway Listener path owns dual-certificate
 selection by client signature algorithm and `frontendValidation`. See
 [superseded/cert-key-install-helper-deferred.md](../superseded/cert-key-install-helper-deferred.md)

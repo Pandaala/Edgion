@@ -29,6 +29,10 @@ pub const MAX_RETRY_ATTEMPTS: u32 = i32::MAX as u32;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionGatewayConfigSpec {
+    /// Default downstream TLS policy for listeners bound to this configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downstream_tls: Option<super::downstream_tls::DownstreamTlsConfig>,
+
     /// Controller-computed status for this deployment, transported to the Gateway.
     /// Never supplied by operators or used as the persisted status history.
     #[serde(default, skip_serializing_if = "Option::is_none")]

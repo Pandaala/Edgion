@@ -14,7 +14,7 @@ binary is a FIPS build, two things hold:
 1. **FIPS-mode module** — BoringSSL reports FIPS mode (`boring::fips::enabled()` is true) and its
    runtime integrity self-test passes.
 2. **Approved-by-default TLS** — downstream server TLS defaults to the FIPS-approved TLS 1.2
-   cipher set and ECDH curves, unless an operator overrides ciphers explicitly on a listener.
+   cipher set and ECDH curves, unless an operator sets EGC defaults or an EdgionTls cipher override.
 
 This applies to the **BoringSSL** backend only (the default TLS backend). FIPS is not available on
 the `rustls` backend.
@@ -35,9 +35,13 @@ On a FIPS build, downstream TLS-terminating listeners apply the approved default
 | Minimum TLS version | Unchanged — BoringSSL already defaults to TLS 1.2+, which is FIPS-acceptable |
 | TLS 1.3 suites | Unchanged (see [Known limitations](#known-limitations)) |
 
-An operator override always wins: if a listener's `EdgionTls.spec.ciphers` is set, that list is used
-instead of the FIPS default (the approved curves still apply). See
-[Per-listener override](#per-listener-cipher-override).
+Cipher precedence is explicit EdgionTls list, then EGC
+`spec.downstreamTls.ciphers`, then the approved FIPS default. An explicit `[]`
+at either level selects backend cipher defaults. Minimum version uses the same
+EdgionTls-over-EGC precedence. Curves remain EGC-only: absent `ecdhCurves` uses
+the NIST profile, explicit NIST subsets/order are retained, and X25519 fails
+closed. Cipher overrides never relax that curve restriction. See
+[downstream TLS defaults](../../configuration/edgion-gateway-config.md).
 
 ## Enabling FIPS
 
@@ -241,12 +245,15 @@ Decision order:
 
 ```text
 operator set spec.ciphers        -> use them (override wins)
-else fips_policy_active()        -> apply the approved default cipher list + curves
+else fips_policy_active()        -> apply the approved default cipher list
   (true on a FIPS build, OR on fips_policy=on, OR on fips_policy=auto with a FIPS host)
 else                              -> leave the BoringSSL default (non-FIPS behavior)
 ```
 
-The approved ECDH curves still apply even when `ciphers` is overridden. See
+Curve restrictions still apply even when `ciphers` is overridden. A downstream
+ECDH configuration may select a subset of `P-256`, `P-384`, `P-521`; a list
+containing `X25519` rejects new handshakes while FIPS policy is active. See
+[ECDH curve policy](./tls-termination.md#ecdh-curve-policy) for the EGC configuration. See
 [EdgionTls](./edgion-tls.md) for the full cipher field semantics.
 
 ## Verifying FIPS is active
@@ -312,9 +319,10 @@ FIPS mode covers the common downstream posture, but has documented gaps (see the
   has a static cipher list with no per-peer hook. Upstream relies on BoringSSL FIPS mode plus
   existing server-certificate verification.
 - **No key-type policy** (e.g. rejecting Ed25519 leaf keys) is enforced.
-- **TLS 1.3 session resumption (PSK)** skips the per-connection cipher/curve restriction, so a
-  resumed TLS 1.3 handshake's ephemeral group is not re-restricted. Consistent with the existing
-  per-connection `EdgionTls.ciphers` mechanism and within the TLS 1.3 limitation above.
+- **TLS 1.3 session resumption (PSK)** has the same cipher-suite limitation as a full TLS 1.3
+  handshake: BoringSSL cipher-list APIs do not restrict TLS 1.3 suites. Curve policy is applied
+  separately in the early ClientHello callback, before certificate lookup. PSK-specific curve
+  negotiation has not been verified by this change.
 
 ## Troubleshooting
 

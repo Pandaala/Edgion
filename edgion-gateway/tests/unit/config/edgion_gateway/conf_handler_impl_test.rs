@@ -13,6 +13,7 @@ fn make_config(name: &str) -> EdgionGatewayConfig {
     EdgionGatewayConfig::new(
         name,
         EdgionGatewayConfigSpec {
+            downstream_tls: None,
             current_status: None,
             server: None,
             http_timeout: None,
@@ -1616,4 +1617,88 @@ fn global_real_ip_valid_invalid_clean_publication_and_live_visibility_recovery()
         HashMap::new(),
         HashSet::from(["trust-publication".into()]),
     );
+}
+
+#[test]
+fn downstream_curve_generation_retains_invalid_and_absent_states() {
+    use crate::tls::curve_policy::CurvePolicy;
+    let config = |names: serde_json::Value| -> EdgionGatewayConfig {
+        serde_json::from_value(
+            serde_json::json!({"metadata":{"name":"curve-default"},"spec":{"downstreamTls":{"ecdhCurves":names}}}),
+        )
+        .unwrap()
+    };
+    let old = Arc::new(ResolvedGatewayConfig::resolve(&config(serde_json::json!([
+        "P-384", "P-256"
+    ]))));
+    let invalid = ResolvedGatewayConfig::resolve(&config(serde_json::json!([])));
+    assert!(matches!(invalid.downstream_tls.curves, CurvePolicy::Reject(_)));
+    assert!(matches!(&old.downstream_tls.curves, CurvePolicy::Explicit { groups, .. } if groups == &[24,23]));
+    assert!(matches!(
+        ResolvedGatewayConfig::default().downstream_tls.curves,
+        CurvePolicy::Inherit
+    ));
+}
+
+#[test]
+fn downstream_curve_handle_publishes_updates_and_deletion_without_rebinding() {
+    use crate::tls::curve_policy::CurvePolicy;
+    use edgion_resources::resources::downstream_tls::DownstreamTlsConfig;
+    let _guard = TEST_MUTEX.lock();
+    clear_store();
+    let handler = EdgionGatewayConfigHandler::new();
+    let handle = bind_gateway_config(Some("curves"));
+    assert!(matches!(handle.load().downstream_tls.curves, CurvePolicy::Inherit));
+    let mut config = make_config("curves");
+    config.spec.downstream_tls = Some(DownstreamTlsConfig {
+        ecdh_curves: Some(vec!["P-256".into()]),
+        ..Default::default()
+    });
+    handler.full_set(&HashMap::from([("curves".into(), Arc::new(config.clone()))]));
+    let old = handle.load();
+    config.spec.downstream_tls.as_mut().unwrap().ecdh_curves = Some(vec!["P-384".into()]);
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([("curves".into(), Arc::new(config))]),
+        HashSet::new(),
+    );
+    assert!(matches!(&handle.load().downstream_tls.curves, CurvePolicy::Explicit{groups,..} if groups==&[24]));
+    assert!(matches!(&old.downstream_tls.curves, CurvePolicy::Explicit{groups,..} if groups==&[23]));
+    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["curves".into()]));
+    assert!(matches!(handle.load().downstream_tls.curves, CurvePolicy::Inherit));
+    clear_store();
+}
+
+#[test]
+fn downstream_defaults_publish_atomically_and_restore_after_deletion() {
+    use crate::tls::downstream_policy::CipherPolicy;
+    use edgion_resources::resources::edgion_tls::TlsVersion;
+    let _guard = TEST_MUTEX.lock();
+    clear_store();
+    let handler = EdgionGatewayConfigHandler::new();
+    let handle = bind_gateway_config(Some("tls-defaults"));
+    let config = |minimum: &str, cipher: &str| -> Arc<EdgionGatewayConfig> {
+        Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"tls-defaults"},
+                "spec":{"downstreamTls":{"minTlsVersion":minimum,"ciphers":[cipher]}}
+            }))
+            .unwrap(),
+        )
+    };
+    handler.full_set(&HashMap::from([("tls-defaults".into(), config("TLS1_2", "HIGH"))]));
+    let retained = handle.load();
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([("tls-defaults".into(), config("TLS1_3", "DEFAULT\0bad"))]),
+        HashSet::new(),
+    );
+    assert_eq!(retained.downstream_tls.min_tls_version, Some(TlsVersion::Tls12));
+    assert!(matches!(retained.downstream_tls.ciphers, CipherPolicy::Explicit(_)));
+    assert_eq!(handle.load().downstream_tls.min_tls_version, Some(TlsVersion::Tls13));
+    assert!(matches!(handle.load().downstream_tls.ciphers, CipherPolicy::Reject(_)));
+    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["tls-defaults".into()]));
+    assert!(handle.load().downstream_tls.min_tls_version.is_none());
+    assert!(matches!(handle.load().downstream_tls.ciphers, CipherPolicy::Inherit));
+    clear_store();
 }

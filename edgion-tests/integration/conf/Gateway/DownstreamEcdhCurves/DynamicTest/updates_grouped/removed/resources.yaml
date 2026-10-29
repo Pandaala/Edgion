@@ -1,0 +1,12 @@
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionGatewayConfig",
+  "metadata": {
+    "name": "downstream-ecdh-curves"
+  },
+  "spec": {
+    "tcpTimeout": {
+      "idleTimeout": "120s"
+    }
+  }
+}

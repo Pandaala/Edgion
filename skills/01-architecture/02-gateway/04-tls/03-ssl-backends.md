@@ -74,10 +74,14 @@ ordinary builders do not fetch or use that override. At startup:
 - `auto` follows `/proc/sys/crypto/fips_enabled` and tightens the downstream profile on a FIPS host;
 - a non-FIPS binary on a FIPS host emits a warning and exposes host/module metrics.
 
-When enforcement is active and `EdgionTls.spec.ciphers` is absent, downstream TLS defaults to the
+When enforcement is active and both `EdgionTls.spec.ciphers` and
+`EdgionGatewayConfig.spec.downstreamTls.ciphers` are absent, downstream TLS defaults to the
 approved TLS 1.2 cipher set in `fips_profile::FIPS_TLS12_CIPHERS` and the NIST P-curves P-256,
-P-384, and P-521. An explicit operator cipher list wins for TLS 1.2; the curve restriction remains
-active on a genuine FIPS build.
+P-384, and P-521. EdgionTls overrides EGC ciphers; explicit `[]` selects backend defaults. An explicit operator cipher list wins for TLS 1.2; the curve restriction remains
+active whenever FIPS policy is enforced. An explicit downstream curve list may
+select an ordered subset of those NIST curves; a list containing X25519 rejects
+the handshake. Curve application belongs to the early ingress policy callback,
+independent of certificate-source and cipher overrides.
 
 Limitations:
 

@@ -1,0 +1,71 @@
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionGatewayConfig",
+  "metadata": {
+    "name": "downstream-ecdh-curves"
+  },
+  "spec": {
+    "downstreamTls": {
+      "ecdhCurves": [
+        "P-256"
+      ]
+    },
+    "tcpTimeout": {
+      "idleTimeout": "120s"
+    }
+  }
+}
+---
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "Gateway",
+  "metadata": {
+    "name": "ecdh-default",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "gatewayClassName": "downstream-ecdh-curves",
+    "listeners": [
+      {
+        "name": "tls",
+        "protocol": "HTTPS",
+        "port": 32006,
+        "hostname": "ecdh-default.sandbox.example.com",
+        "tls": {
+          "mode": "Terminate",
+          "certificateRefs": [
+            {
+              "name": "edge-tls"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+---
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "Gateway",
+  "metadata": {
+    "name": "ecdh-edgion",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "gatewayClassName": "downstream-ecdh-curves",
+    "listeners": [
+      {
+        "name": "tls",
+        "protocol": "HTTPS",
+        "port": 32006,
+        "hostname": "ecdh-edgion.sandbox.example.com",
+        "tls": {
+          "mode": "Terminate",
+          "options": {
+            "edgion.io/cert-provider": "EdgionTls"
+          }
+        }
+      }
+    ]
+  }
+}

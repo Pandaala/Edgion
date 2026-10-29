@@ -102,7 +102,10 @@ the override is isolated to explicit FIPS builders and ordinary builds do not fe
 On a FIPS build,
 downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
 (`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)
-unless `EdgionTls.spec.ciphers` is set explicitly (operator override always wins). The gateway-local
+unless `EdgionGatewayConfig.spec.downstreamTls.ciphers` or the higher-priority
+`EdgionTls.spec.ciphers` is set explicitly (an empty list selects backend defaults).
+`downstreamTls.minTlsVersion` supplies the default minimum, with EdgionTls local
+overrides; `downstreamTls.ecdhCurves` is EGC-only and cannot bypass active FIPS curve restrictions. The gateway-local
 `require_fips` config field (also settable via `EDGION_REQUIRE_FIPS`) fails startup non-zero if
 `require_fips: true` but the binary is not a FIPS build. The gateway-local `fips_policy` field is a
 tri-state (`auto` | `on` | `off`, default `auto`) resolved with precedence env

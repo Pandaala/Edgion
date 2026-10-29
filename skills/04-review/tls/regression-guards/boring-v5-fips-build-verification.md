@@ -78,6 +78,26 @@ runtime utilities used by the isolated scenario.
 
 ## Re-evaluation triggers
 
+### TLS 1.3 cipher limitation and resumption
+
+The cipher-list API restriction applies to both full and resumed TLS 1.3
+handshakes. Do not explain it as PSK skipping Edgion's certificate callback:
+in pinned boring-sys 5.2.0, `ssl/handshake_server.cc::do_cert_callback` invokes
+`cert_cb` before entering the TLS 1.3 state machine, and
+`ssl/tls13_server.cc` selects session reuse later. The cipher-list contract in
+`include/openssl/ssl.h` explicitly excludes TLS 1.3 from these setters.
+
+Downstream curve policy is applied separately in the early ClientHello
+callback. This source verification does not establish PSK-specific curve
+negotiation coverage; no such live test is claimed. Recheck this distinction
+when changing the TLS backend, callback order, cipher APIs, or resumption tests.
+
+`CAND-B-002` corrected the misleading PSK explanation in both language versions
+of the FIPS operator guide. It was a documentation error, not evidence of a
+runtime PSK policy bypass.
+
+### Build contract
+
 - Boring changes the `fips` feature or its source-build prerequisites.
 - A released `boring-sys` vendors upstream commit
   `4d6b2f971e456962b70e4e91768caffdb36fe016` or a descendant, allowing the
@@ -96,3 +116,12 @@ runtime utilities used by the isolated scenario.
 ## Resolution references
 
 - `FIPS-01` — 2026-08-30.
+
+## Downstream default precedence
+
+The early `DownstreamTlsPolicy` owner applies EdgionTls explicit ciphers over EGC
+`downstreamTls.ciphers`, then the active FIPS default. Explicit empty lists select
+backend defaults at either level. Curve policy is EGC-only and still rejects
+X25519 under active FIPS, even with a cipher override. Certificate callbacks no
+longer apply a second FIPS profile. Minimum versions inherit EGC defaults with
+local EdgionTls overrides. Both language operator guides describe these axes.

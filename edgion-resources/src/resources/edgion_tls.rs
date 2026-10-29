@@ -196,7 +196,7 @@ pub struct EdgionTlsSpec {
     ///
     /// Options: `TLS1_0`, `TLS1_1`, `TLS1_2`, `TLS1_3`.
     ///
-    /// **Recommended: leave unset (BoringSSL default = TLS 1.2+) or set
+    /// **Recommended: leave unset (inherit EGC, then backend default) or set
     /// explicitly to `TLS1_2` / `TLS1_3`.** `TLS1_0` and `TLS1_1` are
     /// deprecated by IETF RFC 8996 and are accepted only for explicit
     /// legacy-client compatibility — the operator takes responsibility
@@ -205,7 +205,8 @@ pub struct EdgionTlsSpec {
     pub min_tls_version: Option<TlsVersion>,
     /// Cipher list in OpenSSL format (optional, similar to Nginx ssl_ciphers)
     /// Example: ["ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"]
-    /// If not configured, uses BoringSSL default ciphers
+    /// If absent, inherits EGC defaults, then the FIPS/backend profile.
+    /// An explicit empty list selects backend defaults, even under FIPS policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ciphers: Option<Vec<String>>,
     /// Resolved cert Secret (filled by Controller from `secret_ref`, never from user YAML).

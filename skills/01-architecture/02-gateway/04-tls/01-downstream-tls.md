@@ -5,6 +5,32 @@ description: Downstream TLS (client→gateway) — Pingora Listener TLS callback
 
 # Downstream TLS (client→gateway)
 
+## Unified downstream TLS policy
+
+`ResolvedGatewayConfig.downstream_tls` owns `DownstreamTlsPolicy`: the EGC
+minimum, shared cold `CipherPolicy`, and existing numeric `CurvePolicy`.
+`CompiledEdgionTls` uses the same cipher compiler. Absent ciphers inherit;
+explicit `[]` means backend defaults; a rendered CString or rejection remains
+immutable. Resources/Controller validate NUL and curve syntax without linking
+BoringSSL. The strict backend cipher setter validates effective expressions.
+
+The early callback first selects the native, EdgionTls or exact frontend-mTLS
+overlay identity, then applies policy once through `apply_selected_downstream_policy`.
+Local minimum/ciphers replace EGC defaults independently, including a lower local
+minimum or a valid local cipher masking an invalid default. Curves have no local
+override. Unspecified ciphers inherit active FIPS/backend defaults; an explicit
+empty list bypasses only the cipher default, never FIPS curve restrictions.
+Any effective-policy error emits one canonical SSL audit and returns select error.
+Certificate callbacks configure identity/mTLS only and never reload/reapply policy.
+The local EGC Arc lives through application; SSL owns the copied settings afterward,
+so no redundant EGC Arc is stored in SslCtx. Identity Arcs retain their existing lifetime.
+
+No Rust handshake cipher joining, parsing or temporary cipher allocation occurs.
+BoringSSL's public strict cipher setter internally parses its string; this existing
+backend cost remains accepted. No SSL_CTX swapping, new locks or stores are added.
+TLS1.3 suites and physical listener ownership/retargeting boundaries remain unchanged.
+
+
 ## Overview
 
 Downstream TLS handles the TLS handshake from clients to the Gateway. The core implementation is the `TlsCallback` struct, which implements Pingora's `TlsAccept` trait and injects custom logic at key stages of the TLS handshake.
@@ -24,10 +50,10 @@ the annotation requires a restart. See the
 
 | # | Stage | Trigger location (`tls_pingora.rs`) | Normal / failure path |
 |---|-------|------------------------------------|------------------------|
-| 1 | `select_certificate_callback` (early cb) | The `set_select_certificate_callback` closure in `new_tls_settings_with_callback` | Failure: each of `no SNI` / `min ver: ...` / `cert not found` calls `log_ssl` once and returns `Err(SelectCertError::ERROR)` so BoringSSL aborts; on `store_ssl_ctx` failure, fail-closed (store_ssl_ctx itself logs ssl, select_cb just returns Err); on success, after `store_ssl_ctx` saves the snapshot, return `Ok(())` |
+| 1 | `select_certificate_callback` (early cb) | The `set_select_certificate_callback` closure in `new_tls_settings_with_callback` | Failure: each of `no SNI` / `minimum TLS version rejected` / `cert not found` calls `log_ssl` once and returns `Err(SelectCertError::ERROR)` so BoringSSL aborts; on `store_ssl_ctx` failure, fail-closed (store_ssl_ctx itself logs ssl, select_cb just returns Err); on success, after `store_ssl_ctx` saves the snapshot, return `Ok(())` |
 | 2 | `certificate_callback` (cert_cb) | `TlsAccept::certificate_callback` | Failure (apply set `err_log`): `log_ssl` immediately and skip `finalize_ssl_ctx`; ex_data stays null; BoringSSL aborts naturally because cert wasn't installed. On success, `finalize_ssl_ctx` stamps `tls_id` + `store_ssl_ctx` for stage 3 |
 | 3 | `handshake_complete_callback` | `TlsAccept::handshake_complete_callback` | Handshake success → `log_ssl` once; failed handshakes never reach this stage |
-| 4 | `free_ssl_ctx` (FFI release fallback) | `ssl_ctx_ex_data::free_ssl_ctx` | Only when ex_data is non-null (select_cb already stored a snapshot) AND `tls_id.is_none()` (finalize did not run): logs ssl belatedly with `err_log = "early abort"` if empty. Covers the early-abort case where "select_cb hit but BoringSSL terminates during version negotiation" |
+| 4 | `free_ssl_ctx` (FFI release fallback) | `ssl_ctx_ex_data::free_ssl_ctx` | When ex_data is non-null and its failure audit has not already been claimed: logs an unconsumed handshake failure, before or after certificate installation. mTLS claims the audit before its immediate failure log |
 
 **Core principle**: each stage logs ssl on failure at the time of failure plus aborts (no propagation to later stages); on success, do not log — let a later stage with more complete fields (`tls_id`, `handshake_complete_time`, `client_cert_info`, etc.) emit the log. A connection produces at most one ssl.log entry.
 
@@ -42,7 +68,7 @@ Responsibilities:
 1. **SNI resolution**: extract the SNI from ClientHello (`ch.servername(NameType::HOST_NAME)`); if missing, fall back to `EdgionGatewayConfig.security_protect.fallback_sni`; if both are missing → `err_log = "no SNI"` + `log_ssl` + return Err.
 2. **Layer 1 match**: `TlsCertMatcher::match_sni(listener_key, sni)` — query EdgionTls. On hit:
    - Set `is_mtls = et.tls.is_mtls_enabled()` (true only for Mutual / OptionalMutual; Terminate is not mTLS).
-   - If `et.tls.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection. On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return Err.
+   - After selecting the effective identity, resolve its minimum over EGC defaults → `ssl.set_min_proto_version(...)` per-connection. On failure, fail-closed: `err_log = "minimum TLS version rejected"` + `log_ssl` + return Err.
 3. **Layer 2 match** (when Layer 1 misses): `GatewayTlsMatcher::match_sni` — query Gateway listener TLS.
 4. **Write snapshot**: write the match result (`Arc<CompiledEdgionTls>` — the accepted resource plus its cold-compiled serving identity, CA store and cipher — or `GatewayTlsEntry`, plus the resolved SNI) into SSL ex_data via `store_ssl_ctx`. On `store_ssl_ctx` failure it has already done `log_ssl` once internally; select_cb returns Err directly (fail-closed), keeping at most one ssl.log per connection.
 5. **Both miss**: `err_log = "cert not found"` + `log_ssl` + return Err.
@@ -90,7 +116,10 @@ serving chain, private key, optional mTLS CA store, and operator cipher string
 are compiled once when `TlsStore` publishes an accepted generation
 (`CompiledEdgionTls`), so this callback copies no Secret bytes and parses no PEM:
 
-1. Apply the independent FIPS cipher/curve and mTLS policy before touching the
+The early ClientHello callback has already applied the effective minimum, cipher
+and curve policy for either certificate source; certificate application never re-applies it.
+
+1. Apply mTLS verification (TLS policy already succeeded in select_cb) before touching the
    serving identity.
 2. Clear any identity inherited by the per-connection SSL.
 3. Consume the compiled serving identity. A resource that failed to compile
@@ -103,7 +132,7 @@ are compiled once when `TlsStore` publishes an accepted generation
    inherited identity nor a partially installed replacement remains usable.
 6. Optional configuration (only items effective inside cert_cb timing):
    - **mTLS** (`configure_mtls`): install the compiled CA certificate store, then set verify mode and verify depth.
-   - **Cipher suite** (`configure_ciphers`): apply the compiled TLS1.2 cipher string via BoringSSL FFI (still works in cert_cb because BoringSSL selects the cipher only after cert_cb — `handshake_server.cc:810`).
+   - **TLS policy**: already applied by the early callback; no cipher setter runs here.
 
 A resource whose mTLS CA content cannot be compiled keeps its matcher position
 and fails the handshake closed; it is never dropped from the index, which would
@@ -190,19 +219,19 @@ select_certificate_callback   certificate_callback          handshake_complete_c
        │                              │                                │
        ├── SslCtx::new()              ├── take_ssl_ctx(ssl)            ├── take_ssl_ctx(ssl)
        ├── Layer 1 match              │   (consume snapshot)           ├── extract client cert
-       ├── set_min_proto_version      ├── apply cert/mtls/ciphers      ├── stamp handshake_complete_time
+       ├── set_min_proto_version      ├── apply cert/mtls      ├── stamp handshake_complete_time
        └── store_ssl_ctx(ssl, ctx)    ├── finalize_ssl_ctx (tls_id)    └── log_ssl + return Arc<TlsConnMeta>
                                       └── store_ssl_ctx(ssl, ctx)
                                               │
                                       (if handshake aborted, on SSL destruction)
-                                      free_ssl_ctx → tls_id.is_none()?
-                                              → log_ssl "early abort"
+                                      free_ssl_ctx → !failure_logged?
+                                              → log_ssl pending handshake failure
 ```
 
 - `SSL_get_ex_new_index`: register a custom ex_data index (once globally) and a `free_ssl_ctx` release callback at the same time.
 - `SSL_set_ex_data` / `store_ssl_ctx`: store a `Box<SslCtx>` pointer (select_cb and cert_cb each write once).
 - `SSL_get_ex_data` / `take_ssl_ctx`: consume-style reads that transfer ownership (cert_cb and handshake_complete_cb each take once).
-- `free_ssl_ctx`: invoked by BoringSSL when the SSL object is destroyed. Frees an SslCtx that was not consumed and, when `tls_id.is_none()` (`finalize_ssl_ctx` didn't run), emits an `"early abort"` audit log (see the section below).
+- `free_ssl_ctx`: invoked by BoringSSL when the SSL object is destroyed. Frees an SslCtx that was not consumed and, when its failure audit is unclaimed, emits an abort audit log (see the section below).
 
 In non-BoringSSL builds, ex_data operations are no-ops, and `handshake_complete_callback` returns a basic `TlsConnMeta`.
 
@@ -210,11 +239,11 @@ In non-BoringSSL builds, ex_data operations are no-ops, and `handshake_complete_
 
 When a connection is terminated by BoringSSL after `select_certificate_callback` but before `certificate_callback` (typical case: min_tls_version rejecting a TLS1.2 client via alert protocol_version), the regular ssl.log path (cert_cb → finalize_ssl_ctx → handshake_complete_callback → log_ssl) does not fire.
 
-To complete the audit, `mod ssl_ctx_ex_data::free_ssl_ctx` (the memory-release callback registered with BoringSSL via `SSL_get_ex_new_index`) checks `tls_id.is_none()` on SSL object destruction — meaning `finalize_ssl_ctx` did not run — and pushes `"early abort"` into err_log (without overriding a more specific err_log) before calling `log_ssl`.
+To complete the audit, `mod ssl_ctx_ex_data::free_ssl_ctx` (the memory-release callback registered with BoringSSL via `SSL_get_ex_new_index`) checks the private `failure_logged` flag on SSL object destruction. An unclaimed context emits once, including failures after certificate installation such as disjoint ECDH groups. The mTLS failure callback claims this flag before its existing immediate log. A TLS ID identifies the connection, not successful negotiation.
 
 Implementation notes:
 - The whole callback body is wrapped in `edgion_common::startup::catch_redacted_panic` so neither a panic nor a dynamic panic payload can cross or leak through FFI (same pattern as `mtls_verify_callback.rs`).
-- Sets `"early abort"` only when `meta.err_log.is_none()`, preserving more specific causes set by upstream stages such as select_cb (e.g., `"min ver: ..."`).
+- When `meta.err_log.is_none()`, uses `"early abort"` before certificate finalization or `"handshake failed"` after it; preserves any existing specific cause. The generic message does not identify the BoringSSL error.
 - This path is available only on the boringssl backend (depends on the ex_data mechanism).
 
 ## Key source files

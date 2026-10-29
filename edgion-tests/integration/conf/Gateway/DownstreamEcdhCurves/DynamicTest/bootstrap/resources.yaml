@@ -1,0 +1,148 @@
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "ecdh-backend",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "ports": [
+      {
+        "name": "http-30001",
+        "port": 30001,
+        "protocol": "TCP",
+        "targetPort": 30001
+      }
+    ],
+    "type": "ClusterIP"
+  }
+}
+---
+{
+  "apiVersion": "discovery.k8s.io/v1",
+  "kind": "EndpointSlice",
+  "metadata": {
+    "name": "ecdh-backend",
+    "namespace": "edgion-test",
+    "labels": {
+      "kubernetes.io/service-name": "ecdh-backend"
+    }
+  },
+  "addressType": "IPv4",
+  "ports": [
+    {
+      "name": "http-30001",
+      "port": 30001,
+      "protocol": "TCP"
+    }
+  ],
+  "endpoints": [
+    {
+      "addresses": [
+        "127.0.0.1"
+      ],
+      "conditions": {
+        "ready": true
+      }
+    }
+  ]
+}
+---
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "GatewayClass",
+  "metadata": {
+    "name": "downstream-ecdh-curves"
+  },
+  "spec": {
+    "controllerName": "edgion.io/gateway-controller",
+    "parametersRef": {
+      "group": "edgion.io",
+      "kind": "EdgionGatewayConfig",
+      "name": "downstream-ecdh-curves"
+    }
+  }
+}
+---
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "name": "ecdh-default",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "ecdh-default",
+        "sectionName": "tls"
+      }
+    ],
+    "hostnames": [
+      "ecdh-default.sandbox.example.com"
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "ecdh-backend",
+            "port": 30001
+          }
+        ]
+      }
+    ]
+  }
+}
+---
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "name": "ecdh-edgion",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "ecdh-edgion",
+        "sectionName": "tls"
+      }
+    ],
+    "hostnames": [
+      "ecdh-edgion.sandbox.example.com"
+    ],
+    "rules": [
+      {
+        "backendRefs": [
+          {
+            "name": "ecdh-backend",
+            "port": 30001
+          }
+        ]
+      }
+    ]
+  }
+}
+---
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionTls",
+  "metadata": {
+    "name": "downstream-ecdh-curves",
+    "namespace": "edgion-test"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "ecdh-edgion",
+        "sectionName": "tls"
+      }
+    ],
+    "hosts": [
+      "ecdh-edgion.sandbox.example.com"
+    ],
+    "secretRef": {
+      "name": "edge-tls"
+    }
+  }
+}

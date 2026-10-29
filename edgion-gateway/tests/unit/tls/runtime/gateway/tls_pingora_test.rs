@@ -438,20 +438,22 @@ fn uncompilable_operator_cipher_fails_closed_before_binding_identity() {
     resource.spec.ciphers = Some(vec!["ECDHE-RSA-AES128-GCM-SHA256\0EXTRA".to_string()]);
     let compiled_resource = compiled(Arc::new(resource));
     assert!(
-        compiled_resource.operator_cipher.is_err(),
+        matches!(
+            compiled_resource.operator_cipher,
+            crate::tls::downstream_policy::CipherPolicy::Reject(_)
+        ),
         "the cipher string must fail at publication, not at handshake"
     );
 
     let server_ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
     let mut ssl = Ssl::new(&server_ctx).unwrap();
-    let mut ssl_ctx = SslCtx::new(443);
-    TlsCallback::new(443).apply_edgion_tls_cert(ssl.as_mut(), &compiled_resource, &mut ssl_ctx);
-
-    let err_log = ssl_ctx.meta.err_log.as_deref().expect("cipher failure must be audited");
-    assert!(
-        err_log.starts_with("cipher config: "),
-        "unexpected audit category: {err_log}"
+    let result = crate::tls::downstream_policy::DownstreamTlsPolicy::default().apply(
+        ssl.as_mut(),
+        None,
+        Some(&compiled_resource.operator_cipher),
+        false,
     );
+    assert_eq!(result, Err("ciphers must not contain NUL bytes"));
     assert!(
         ssl.certificate().is_none(),
         "a cipher policy failure must return before any identity is bound"
@@ -666,4 +668,531 @@ fn unparseable_certs_are_skipped_then_fall_back() {
 fn single_cert_is_index_zero() {
     assert_eq!(pick_secret_index(&[RSA], true), Some(0));
     assert_eq!(pick_secret_index(&[ECDSA], false), Some(0));
+}
+
+#[test]
+fn handshake_failure_audit_survives_certificate_finalization_and_is_claimed_once() {
+    use crate::observe::logs::ssl_log::{log_ssl, tests::capture};
+    use boring::ssl::{Ssl, SslContext, SslMethod};
+    use foreign_types::ForeignType;
+
+    let context = SslContext::builder(SslMethod::tls()).unwrap().build();
+    for finalized in [false, true] {
+        for claimed in [false, true] {
+            let entries = capture(|| {
+                let mut ssl = Ssl::new(&context).unwrap();
+                let mut ctx = SslCtx::new(443);
+                if finalized {
+                    ctx.meta.tls_id = Some("audit-test".to_string());
+                }
+                assert!(super::ssl_ctx_ex_data::store_ssl_ctx(&mut ssl, &ctx));
+                if claimed {
+                    let mut meta = unsafe { super::claim_tls_failure_meta(ssl.as_ptr()) }.unwrap();
+                    meta.err_log = Some("client verification failed".to_string());
+                    log_ssl(&meta);
+                    assert!(unsafe { super::claim_tls_failure_meta(ssl.as_ptr()) }.is_none());
+                }
+                drop(ssl);
+            });
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].err_log.as_deref(),
+                Some(if claimed {
+                    "client verification failed"
+                } else if finalized {
+                    "handshake failed"
+                } else {
+                    "early abort"
+                })
+            );
+        }
+    }
+    let entries = capture(|| {
+        let mut ssl = Ssl::new(&context).unwrap();
+        assert!(super::ssl_ctx_ex_data::store_ssl_ctx(&mut ssl, &SslCtx::new(443)));
+        assert!(super::ssl_ctx_ex_data::take_ssl_ctx(&ssl).is_some());
+        drop(ssl);
+    });
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn tls13_post_certificate_group_failure_and_success_emit_one_audit() {
+    use crate::observe::logs::ssl_log::tests::capture;
+    use crate::tls::curve_policy::CurvePolicy;
+    use boring::ssl::{ErrorCode, Ssl, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion};
+    use edgion_resources::resources::downstream_tls::parse_ecdh_curves;
+    use foreign_types::{ForeignType, ForeignTypeRef};
+    use pingora_core::listeners::TlsAccept;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::io::{self, Read, Write};
+    use std::rc::Rc;
+
+    struct MemoryStream {
+        incoming: Rc<RefCell<VecDeque<u8>>>,
+        outgoing: Rc<RefCell<VecDeque<u8>>>,
+    }
+    impl Read for MemoryStream {
+        fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+            let mut incoming = self.incoming.borrow_mut();
+            if incoming.is_empty() && !target.is_empty() {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let count = target.len().min(incoming.len());
+            for slot in &mut target[..count] {
+                *slot = incoming.pop_front().unwrap();
+            }
+            Ok(count)
+        }
+    }
+    impl Write for MemoryStream {
+        fn write(&mut self, source: &[u8]) -> io::Result<usize> {
+            self.outgoing.borrow_mut().extend(source);
+            Ok(source.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    unsafe extern "C" fn pause_certificate(_: *mut boring_sys::SSL, _: *mut std::ffi::c_void) -> std::ffi::c_int {
+        -1
+    }
+    let _guard = HANDSHAKE_TEST_LOCK.lock();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let chain = serving_chain("audit", &key);
+    let identity = compiled(edgion_tls_identity(chain.chain_pem, key.serialize_pem()));
+    for offered in ["P-256", "P-384"] {
+        let entries = capture(|| {
+            let mut server = SslContext::builder(SslMethod::tls()).unwrap();
+            server.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+            let identity = identity.clone();
+            server.set_select_certificate_callback(move |mut hello| {
+                let mut ctx = SslCtx::new(443);
+                ctx.matched_edgion_tls = Some(identity.clone());
+                let policy = crate::tls::downstream_policy::DownstreamTlsPolicy::compile(Some(
+                    &edgion_resources::resources::downstream_tls::DownstreamTlsConfig {
+                        ecdh_curves: Some(vec!["P-384".into()]),
+                        ..Default::default()
+                    },
+                ));
+                super::apply_selected_downstream_policy(hello.ssl_mut(), &ctx, &policy, false).unwrap();
+                assert!(super::ssl_ctx_ex_data::store_ssl_ctx(hello.ssl_mut(), &ctx));
+                Ok(())
+            });
+            let server_ssl = Ssl::new(&server.build()).unwrap();
+            // Match Pingora's pause -> async certificate callback -> resume order.
+            unsafe { boring_sys::SSL_set_cert_cb(server_ssl.as_ptr(), Some(pause_certificate), std::ptr::null_mut()) };
+            let mut client = SslContext::builder(SslMethod::tls()).unwrap();
+            client.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+            client.set_verify(SslVerifyMode::NONE);
+            let mut client_ssl = Ssl::new(&client.build()).unwrap();
+            CurvePolicy::compile(parse_ecdh_curves([offered]).map(Some))
+                .apply(&mut client_ssl, false)
+                .unwrap();
+            let a = Rc::new(RefCell::new(VecDeque::new()));
+            let b = Rc::new(RefCell::new(VecDeque::new()));
+            let mut server = SslStream::new(
+                server_ssl,
+                MemoryStream {
+                    incoming: a.clone(),
+                    outgoing: b.clone(),
+                },
+            )
+            .unwrap();
+            let mut client = SslStream::new(
+                client_ssl,
+                MemoryStream {
+                    incoming: b,
+                    outgoing: a,
+                },
+            )
+            .unwrap();
+            let callback = TlsCallback { port: 443 };
+            let (mut client_done, mut server_done, mut certificate_called, mut group_failed) =
+                (false, false, false, false);
+            for _ in 0..32 {
+                if !client_done {
+                    match client.connect() {
+                        Ok(()) => client_done = true,
+                        Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                        Err(error) => panic!("unexpected client error: {error}"),
+                    }
+                }
+                if !server_done {
+                    match server.accept() {
+                        Ok(()) => server_done = true,
+                        Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                        Err(error) if error.code() == ErrorCode::WANT_X509_LOOKUP => {
+                            assert!(!certificate_called);
+                            runtime.block_on(callback.certificate_callback(server.ssl_mut()));
+                            certificate_called = true;
+                            unsafe { boring_sys::SSL_set_cert_cb(server.ssl().as_ptr(), None, std::ptr::null_mut()) };
+                        }
+                        Err(error) => {
+                            assert!(certificate_called);
+                            assert!(error.to_string().contains("NO_SHARED_GROUP"), "{error}");
+                            group_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if client_done && server_done {
+                    break;
+                }
+            }
+            assert!(certificate_called);
+            assert_eq!(group_failed, offered == "P-256");
+            assert_eq!(client_done && server_done, offered == "P-384");
+            if server_done {
+                assert!(runtime
+                    .block_on(callback.handshake_complete_callback(server.ssl()))
+                    .is_some());
+            }
+            drop(server);
+        });
+        assert_eq!(entries.len(), 1, "offered {offered}");
+        assert!(
+            entries[0].tls_id.is_some(),
+            "real certificate finalization must have run"
+        );
+        assert_eq!(
+            entries[0].err_log.as_deref(),
+            (offered == "P-256").then_some("handshake failed")
+        );
+        assert_eq!(entries[0].handshake_complete_time.is_some(), offered == "P-384");
+    }
+}
+
+#[test]
+fn selected_policy_negotiates_native_edgion_and_overlay_with_pinned_generation() {
+    use crate::observe::logs::ssl_log::tests::capture;
+    use crate::tls::downstream_policy::DownstreamTlsPolicy;
+    use boring::ssl::{ErrorCode, SelectCertError, Ssl, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion};
+    use edgion_resources::resources::downstream_tls::DownstreamTlsConfig;
+    use edgion_resources::resources::edgion_tls::TlsVersion;
+    use foreign_types::{ForeignType, ForeignTypeRef};
+    use pingora_core::listeners::TlsAccept;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::io::{self, Read, Write};
+    use std::rc::Rc;
+    struct MemoryStream {
+        incoming: Rc<RefCell<VecDeque<u8>>>,
+        outgoing: Rc<RefCell<VecDeque<u8>>>,
+    }
+    impl Read for MemoryStream {
+        fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+            let mut incoming = self.incoming.borrow_mut();
+            if incoming.is_empty() && !target.is_empty() {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let count = target.len().min(incoming.len());
+            for slot in &mut target[..count] {
+                *slot = incoming.pop_front().unwrap();
+            }
+            Ok(count)
+        }
+    }
+    impl Write for MemoryStream {
+        fn write(&mut self, source: &[u8]) -> io::Result<usize> {
+            self.outgoing.borrow_mut().extend(source);
+            Ok(source.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    unsafe extern "C" fn pause_certificate(_: *mut boring_sys::SSL, _: *mut std::ffi::c_void) -> std::ffi::c_int {
+        -1
+    }
+
+    let _guard = HANDSHAKE_TEST_LOCK.lock();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let chain = serving_chain("policy", &key);
+    let base = edgion_tls_identity(chain.chain_pem, key.serialize_pem());
+    let aes128 = "ECDHE-ECDSA-AES128-GCM-SHA256";
+    let aes256 = "ECDHE-ECDSA-AES256-GCM-SHA384";
+    let chacha = "ECDHE-ECDSA-CHACHA20-POLY1305";
+    // label, default minimum, default ciphers, local minimum, local ciphers,
+    // client version, client cipher, FIPS policy, expected handshake.
+    let cases = [
+        (
+            "inherit",
+            TlsVersion::Tls12,
+            Some(vec![aes128]),
+            None,
+            None,
+            SslVersion::TLS1_2,
+            aes128,
+            false,
+            true,
+        ),
+        (
+            "minimum rejects",
+            TlsVersion::Tls13,
+            None,
+            None,
+            None,
+            SslVersion::TLS1_2,
+            aes128,
+            false,
+            false,
+        ),
+        (
+            "minimum control",
+            TlsVersion::Tls13,
+            None,
+            None,
+            None,
+            SslVersion::TLS1_3,
+            aes128,
+            false,
+            true,
+        ),
+        (
+            "cipher rejects",
+            TlsVersion::Tls12,
+            Some(vec![aes128]),
+            None,
+            None,
+            SslVersion::TLS1_2,
+            aes256,
+            false,
+            false,
+        ),
+        (
+            "invalid default",
+            TlsVersion::Tls12,
+            Some(vec!["NOT-A-CIPHER"]),
+            None,
+            None,
+            SslVersion::TLS1_2,
+            aes128,
+            false,
+            false,
+        ),
+        (
+            "FIPS default",
+            TlsVersion::Tls12,
+            None,
+            None,
+            None,
+            SslVersion::TLS1_2,
+            chacha,
+            true,
+            false,
+        ),
+        (
+            "EGC empty FIPS",
+            TlsVersion::Tls12,
+            Some(vec![]),
+            None,
+            None,
+            SslVersion::TLS1_2,
+            chacha,
+            true,
+            true,
+        ),
+        (
+            "local lower",
+            TlsVersion::Tls13,
+            Some(vec![aes128]),
+            Some(TlsVersion::Tls12),
+            None,
+            SslVersion::TLS1_2,
+            aes128,
+            false,
+            true,
+        ),
+        (
+            "local higher",
+            TlsVersion::Tls12,
+            None,
+            Some(TlsVersion::Tls13),
+            None,
+            SslVersion::TLS1_2,
+            aes128,
+            false,
+            false,
+        ),
+        (
+            "local cipher",
+            TlsVersion::Tls12,
+            Some(vec![aes128]),
+            None,
+            Some(vec![aes256]),
+            SslVersion::TLS1_2,
+            aes256,
+            false,
+            true,
+        ),
+        (
+            "masked invalid",
+            TlsVersion::Tls12,
+            Some(vec!["NOT-A-CIPHER"]),
+            None,
+            Some(vec![aes256]),
+            SslVersion::TLS1_2,
+            aes256,
+            false,
+            true,
+        ),
+        (
+            "local empty FIPS",
+            TlsVersion::Tls12,
+            Some(vec![aes128]),
+            None,
+            Some(vec![]),
+            SslVersion::TLS1_2,
+            chacha,
+            true,
+            true,
+        ),
+    ];
+    for source in ["native", "edgion", "overlay"] {
+        for (label, minimum, ciphers, local_minimum, local_ciphers, version, client_cipher, fips, expected) in &cases {
+            if source == "native" && (local_minimum.is_some() || local_ciphers.is_some()) {
+                continue;
+            }
+            let entries = capture(|| {
+                let config = DownstreamTlsConfig {
+                    min_tls_version: Some(*minimum),
+                    ciphers: ciphers
+                        .as_ref()
+                        .map(|values| values.iter().map(|v| (*v).to_owned()).collect()),
+                    ecdh_curves: Some(vec!["P-256".into()]),
+                };
+                let published = Arc::new(arc_swap::ArcSwap::from_pointee(DownstreamTlsPolicy::compile(Some(
+                    &config,
+                ))));
+                let mut local = (*base).clone();
+                local.spec.min_tls_version = *local_minimum;
+                local.spec.ciphers = local_ciphers
+                    .as_ref()
+                    .map(|values| values.iter().map(|v| (*v).to_owned()).collect());
+                let identity = compiled(Arc::new(local));
+                let mut selected = SslCtx::new(443);
+                if source == "edgion" {
+                    selected.matched_edgion_tls = Some(identity);
+                } else {
+                    let (_, mut gateway) = overlay_fixture("winner", false);
+                    gateway.certificate_refs.push(identity.tls.spec.secret_ref.clone());
+                    gateway.compiled_serving_certificates =
+                        Some(Arc::from(vec![identity.identity.as_ref().unwrap().clone()]));
+                    gateway.frontend_mtls = if source == "overlay" {
+                        FrontendMtlsOutcome::InsecureFallback
+                    } else {
+                        FrontendMtlsOutcome::NotConfigured
+                    };
+                    let gateway = Arc::new(gateway);
+                    if source == "overlay" {
+                        identity.tls.spec.warm_listener_attachment_index();
+                        selected.gateway_edgion_tls_overlay =
+                            select_gateway_edgion_tls_overlay(Some(identity), &gateway).unwrap();
+                        assert!(selected.gateway_edgion_tls_overlay.is_some());
+                    }
+                    selected.matched_gateway_tls = Some(gateway);
+                }
+                let mut server = SslContext::builder(SslMethod::tls()).unwrap();
+                let current = published.clone();
+                let fips = *fips;
+                server.set_select_certificate_callback(move |mut hello| {
+                    let policy = current.load_full();
+                    let mut selected = selected.clone();
+                    if let Err(reason) =
+                        super::apply_selected_downstream_policy(hello.ssl_mut(), &selected, &policy, fips)
+                    {
+                        selected.meta.err_log = Some(reason.into());
+                        super::log_ssl(&selected.meta);
+                        return Err(SelectCertError::ERROR);
+                    }
+                    assert!(super::ssl_ctx_ex_data::store_ssl_ctx(hello.ssl_mut(), &selected));
+                    Ok(())
+                });
+                let server_ssl = Ssl::new(&server.build()).unwrap();
+                unsafe {
+                    boring_sys::SSL_set_cert_cb(server_ssl.as_ptr(), Some(pause_certificate), std::ptr::null_mut())
+                };
+                let mut client = SslContext::builder(SslMethod::tls()).unwrap();
+                client.set_min_proto_version(Some(*version)).unwrap();
+                client.set_max_proto_version(Some(*version)).unwrap();
+                client.set_cipher_list(client_cipher).unwrap();
+                client.set_verify(SslVerifyMode::NONE);
+                let client_ssl = Ssl::new(&client.build()).unwrap();
+                let a = Rc::new(RefCell::new(VecDeque::new()));
+                let b = Rc::new(RefCell::new(VecDeque::new()));
+                let mut server = SslStream::new(
+                    server_ssl,
+                    MemoryStream {
+                        incoming: a.clone(),
+                        outgoing: b.clone(),
+                    },
+                )
+                .unwrap();
+                let mut client = SslStream::new(
+                    client_ssl,
+                    MemoryStream {
+                        incoming: b,
+                        outgoing: a,
+                    },
+                )
+                .unwrap();
+                let callback = TlsCallback::new(443);
+                let (mut client_done, mut server_done) = (false, false);
+                for _ in 0..32 {
+                    if !client_done {
+                        match client.connect() {
+                            Ok(()) => client_done = true,
+                            Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if !server_done {
+                        match server.accept() {
+                            Ok(()) => server_done = true,
+                            Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                            Err(error) if error.code() == ErrorCode::WANT_X509_LOOKUP => {
+                                // A later publication must not alter this handshake.
+                                published.store(Arc::new(DownstreamTlsPolicy::compile(Some(&DownstreamTlsConfig {
+                                    ciphers: Some(vec!["NOT-A-CIPHER".into()]),
+                                    min_tls_version: Some(TlsVersion::Tls13),
+                                    ..Default::default()
+                                }))));
+                                runtime.block_on(callback.certificate_callback(server.ssl_mut()));
+                                unsafe {
+                                    boring_sys::SSL_set_cert_cb(server.ssl().as_ptr(), None, std::ptr::null_mut())
+                                };
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if client_done && server_done {
+                        break;
+                    }
+                }
+                assert_eq!(client_done && server_done, *expected, "{source}: {label}");
+                if server_done {
+                    assert_eq!(server.ssl().version2(), Some(*version), "{source}: {label}");
+                    if *version == SslVersion::TLS1_2 {
+                        assert_eq!(
+                            server.ssl().current_cipher().unwrap().name(),
+                            *client_cipher,
+                            "{source}: {label}"
+                        );
+                    }
+                    runtime.block_on(callback.handshake_complete_callback(server.ssl()));
+                }
+                drop(server);
+            });
+            assert_eq!(entries.len(), 1, "{source}: {label} must emit one audit");
+            assert_eq!(
+                entries[0].handshake_complete_time.is_some(),
+                *expected,
+                "{source}: {label}"
+            );
+        }
+    }
 }

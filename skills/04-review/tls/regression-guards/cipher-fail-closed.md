@@ -1,6 +1,6 @@
 ---
 name: cipher-fail-closed
-description: spec.ciphers is now configured BEFORE cert/key in apply_edgion_tls_cert, so a configure_ciphers Err leaves no cert bound and BoringSSL must fail the handshake. Reject re-reports claiming spec.ciphers silently falls through to BoringSSL defaults on an unrecognized name.
+description: Effective downstream cipher policy rejects in the early select callback; historical cert-callback ordering evidence remains documented.
 knowledge_type: regression-guards
 ---
 
@@ -9,19 +9,21 @@ knowledge_type: regression-guards
 **Status:** ✅ fixed · 2026-05-27 (re-fixed by reordering, same date)
 **Severity:** High (BadLogic) — silent bypass of an operator-set security boundary
 
-## Conclusion
+## Current boundary
 
-`apply_edgion_tls_cert` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now
-processes `spec.ciphers` **before** binding cert/key to the SSL. When
-`configure_ciphers` returns `Err`, the function stamps
-`ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"))` and `return`s; because
-`ssl_use_certificate` / `ssl_use_private_key` have not yet run, BoringSSL has no cert to
-serve and the handshake aborts. The `certificate_callback` gate (`:282-285`) sees
-`err_log.is_some()` and writes the real rejection reason to the audited `ssl.log`.
+Cipher policy is now resolved and applied once in `select_certificate_callback`,
+after selecting the serving identity and before protocol negotiation. EGC defaults
+and EdgionTls overrides share `CipherPolicy` preparation and the strict backend setter.
+A rejected effective policy logs once and returns `SelectCertError::ERROR`, so no
+certificate callback or fallback identity can serve the connection. Empty lists
+explicitly choose backend defaults; absence inherits. Invalid inherited cipher
+configuration can be masked by a valid local override, because only effective
+policy is applied. Curves remain independent and cannot be overridden locally.
 
-Re-reports of the form "spec.ciphers silently falls through to BoringSSL default suite",
-"cipher config failure does not block handshake", or "rejected cipher names never surface
-in ssl.log" are **not accepted** — none is still true.
+The following describes the historical cert-callback correction. Its security
+invariant remains current; its former setter location is superseded by the early
+policy owner. The in-memory selected-policy matrix covers native/Edgion/overlay,
+actual negotiation, invalid effective/masked policy and exactly-once auditing.
 
 ## Why the first fix attempt was insufficient
 
