@@ -101,6 +101,16 @@ spec:
 
 Payload-header destinations are canonicalized and ordered before request processing. Case variants such as `X-User` and `x-user` therefore conflict within one JweDecrypt plugin configuration and are rejected. Separate plugins retain execution-order, last-write-wins behavior.
 
+### Configured projection headers
+
+When this plugin executes, all configured projection destinations are removed before
+bounded claim/payload projection. Missing, empty, unsupported, unsafe, or oversized
+values leave their destination absent, including destinations after aggregate-budget
+exhaustion. Removal or projection write failure returns a fixed 500 without forwarding.
+This also applies to non-strict no-token allowance and non-JSON decrypted payloads. `forwardHeader` retains its separate behavior.
+Unconfigured names are unaffected. Disabled or condition-skipped plugins do not run
+cleanup; these paths provide no authenticated-header guarantee.
+
 ## Common Configuration Scenarios
 
 ### 1. Decrypt and forward to a different header

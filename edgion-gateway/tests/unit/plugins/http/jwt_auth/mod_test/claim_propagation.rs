@@ -48,6 +48,10 @@ async fn test_claims_to_headers() {
         Ok(())
     });
 
+    mock.expect_remove_request_header()
+        .withf(|name| name.starts_with("x-user-"))
+        .times(3)
+        .returning(|_| Ok(()));
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
 

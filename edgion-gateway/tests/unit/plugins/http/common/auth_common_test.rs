@@ -12,6 +12,52 @@ use std::sync::Arc;
 
 use edgion_resources::resources::edgion_plugins::compile_claim_header_projection;
 
+#[tokio::test]
+async fn projection_clears_duplicate_inputs_even_for_skipped_values_and_exhausted_budget() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    let plan = compile_claim_header_projection(Some(&HashMap::from([
+        ("first".into(), "X-A".into()),
+        ("second".into(), "X-B".into()),
+    ])))
+    .unwrap();
+    for (first, value_cap, total_cap, expected_a, expected_b) in [
+        (json!(null), 8, 64, None, Some("ok")),
+        (json!({}), 8, 64, None, Some("ok")),
+        (json!(""), 8, 64, None, Some("ok")),
+        (json!("bad\r\nvalue"), 32, 64, None, Some("ok")),
+        (json!("bad\u{7f}"), 8, 64, None, Some("ok")),
+        (json!("oversized"), 8, 64, None, Some("ok")),
+        (json!("12345"), 8, 7, None, None),
+        (json!("ok"), 8, 5, Some("ok"), None),
+        (json!("ok"), 8, 0, None, None),
+    ] {
+        let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+        for name in ["X-A", "X-B"] {
+            session.req_header_mut().append_header(name, "forged").unwrap();
+            session.req_header_mut().append_header(name, "duplicate").unwrap();
+        }
+        session.req_header_mut().insert_header("x-unrelated", "keep").unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        set_claims_headers(
+            &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+            &json!({"first":first, "second":"ok"}),
+            &plan,
+            value_cap,
+            total_cap,
+        )
+        .unwrap();
+        for (name, expected) in [("x-a", expected_a), ("x-b", expected_b)] {
+            let values: Vec<_> = session.req_header().headers.get_all(name).iter().collect();
+            assert_eq!(values.len(), usize::from(expected.is_some()));
+            if let Some(value) = expected {
+                assert_eq!(values[0], value);
+            }
+        }
+        assert_eq!(session.req_header().headers["x-unrelated"], "keep");
+    }
+}
+
 #[test]
 fn claim_header_array_formatting_is_bounded_and_preserves_scalar_order() {
     let value = json!([
@@ -72,30 +118,41 @@ fn claim_header_scalar_value_enforces_exact_byte_cap() {
 }
 
 #[test]
-fn failed_header_write_does_not_consume_aggregate_budget() {
+fn failed_header_write_stops_projection() {
     let mapping = HashMap::from([
         ("first".to_string(), "x-a".to_string()),
         ("second".to_string(), "x-b".to_string()),
     ]);
     let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
-    let claims = json!({"first": "1", "second": "2"});
     let mut session = MockPluginSession::new();
     let mut sequence = Sequence::new();
-
+    for name in ["x-a", "x-b"] {
+        session
+            .expect_remove_request_header()
+            .withf(move |actual| actual == name)
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(()));
+    }
     session
         .expect_set_request_header_value()
-        .withf(|name, value| name == "x-a" && value == "1" && value.is_sensitive())
+        .withf(|name, _| name == "x-a")
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Err(std::io::Error::other("injected write failure").into()));
-    session
-        .expect_set_request_header_value()
-        .withf(|name, value| name == "x-b" && value == "2" && value.is_sensitive())
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_, _| Ok(()));
+    assert!(set_claims_headers(&mut session, &json!({"first":"1", "second":"2"}), &plan, 1, 4).is_err());
+}
 
-    set_claims_headers(&mut session, &claims, &plan, 1, 4);
+#[test]
+fn failed_destination_removal_prevents_any_projection() {
+    let plan = compile_claim_header_projection(Some(&HashMap::from([("sub".into(), "x-sub".into())]))).unwrap();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("injected removal failure").into()));
+    session.expect_set_request_header_value().never();
+    assert!(set_claims_headers(&mut session, &json!({"sub":"trusted"}), &plan, 128, 128).is_err());
 }
 
 #[test]
@@ -107,6 +164,10 @@ fn aggregate_cap_uses_the_plan_order_at_exact_boundary() {
     let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
     let claims = json!({"first": "1", "second": "2"});
     let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .times(plan.entries().len())
+        .returning(|_| Ok(()));
 
     session
         .expect_set_request_header_value()
@@ -114,7 +175,7 @@ fn aggregate_cap_uses_the_plan_order_at_exact_boundary() {
         .times(1)
         .returning(|_, _| Ok(()));
 
-    set_claims_headers(&mut session, &claims, &plan, 1, 4);
+    set_claims_headers(&mut session, &claims, &plan, 1, 4).unwrap();
 }
 
 #[test]
@@ -139,6 +200,10 @@ fn shuffled_mapping_construction_and_execution_produce_identical_writes() {
         let captured = writes.clone();
         let mut session = MockPluginSession::new();
         session
+            .expect_remove_request_header()
+            .times(plan.entries().len())
+            .returning(|_| Ok(()));
+        session
             .expect_set_request_header_value()
             .times(3)
             .returning(move |name, value| {
@@ -149,7 +214,7 @@ fn shuffled_mapping_construction_and_execution_produce_identical_writes() {
                 Ok(())
             });
 
-        set_claims_headers(&mut session, &serde_json::Value::Object(claims), &plan, 8, 64);
+        set_claims_headers(&mut session, &serde_json::Value::Object(claims), &plan, 8, 64).unwrap();
         assert_eq!(
             *writes.lock(),
             vec![
@@ -167,9 +232,13 @@ fn aggregate_cap_rejects_the_first_candidate_at_plus_one() {
     let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
     let claims = json!({"first": "1"});
     let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .times(plan.entries().len())
+        .returning(|_| Ok(()));
     session.expect_set_request_header_value().never();
 
-    set_claims_headers(&mut session, &claims, &plan, 1, 3);
+    set_claims_headers(&mut session, &claims, &plan, 1, 3).unwrap();
 }
 
 #[test]
@@ -182,6 +251,10 @@ fn invalid_header_value_does_not_consume_aggregate_budget() {
     for unsafe_value in [json!("bad\u{7f}"), json!(["bad\u{7f}"])] {
         let claims = json!({"unsafe": unsafe_value, "safe": "2"});
         let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .times(plan.entries().len())
+            .returning(|_| Ok(()));
 
         session
             .expect_set_request_header_value()
@@ -189,7 +262,7 @@ fn invalid_header_value_does_not_consume_aggregate_budget() {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        set_claims_headers(&mut session, &claims, &plan, 4, 7);
+        set_claims_headers(&mut session, &claims, &plan, 4, 7).unwrap();
     }
 }
 

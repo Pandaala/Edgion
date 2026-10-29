@@ -322,14 +322,39 @@ pub fn resolve_claim_path<'a>(value: &'a serde_json::Value, path: &str) -> Optio
     Some(current)
 }
 
-/// Map claims to upstream request headers with safety checks.
+/// Remove every configured projection destination before publishing trusted values.
+/// Call this directly for successful paths that have no claims to project.
+pub fn clear_claim_headers(
+    session: &mut dyn PluginSession,
+    plan: &ClaimHeaderProjectionPlan,
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    for entry in plan.entries() {
+        session.remove_request_header(entry.header_name())?;
+    }
+    Ok(())
+}
+
+/// Fail closed without exposing header names, values, or adapter error details.
+pub fn claim_header_failure(
+    log: &mut crate::plugins::runtime::PluginLog,
+) -> edgion_resources::filters::PluginRunningResult {
+    log.push_err("claim header mutation failed");
+    edgion_resources::filters::PluginRunningResult::ErrResponse {
+        status: 500,
+        body: None,
+    }
+}
+
+/// Replace configured destinations with bounded, trusted claims. Clear all names
+/// first so missing/invalid values and an exhausted budget cannot retain input.
 pub fn set_claims_headers(
     session: &mut dyn PluginSession,
     claims: &serde_json::Value,
     plan: &ClaimHeaderProjectionPlan,
     max_header_value_bytes: usize,
     max_total_header_bytes: usize,
-) {
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    clear_claim_headers(session, plan)?;
     let mut total_bytes: usize = 0;
 
     for entry in plan.entries() {
@@ -350,12 +375,12 @@ pub fn set_claims_headers(
             Cow::Borrowed(value) => http::HeaderValue::from_str(value),
             Cow::Owned(value) => http::HeaderValue::try_from(value),
         };
-        if header_value
-            .is_ok_and(|value| set_sensitive_request_header_value(session, entry.header_name(), value).is_ok())
-        {
+        if let Ok(value) = header_value {
+            set_sensitive_request_header_value(session, entry.header_name(), value)?;
             total_bytes += added_bytes;
         }
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

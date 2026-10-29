@@ -10,6 +10,7 @@ pub fn all() -> Vec<&'static Scenario> {
 fn scenarios_for_fixture(metrics_lifetime: bool) -> Vec<&'static Scenario> {
     let mut scenarios = vec![
         crate::dynamic::scenarios::proxy_rewrite_host::SCENARIO,
+        crate::dynamic::scenarios::jwt_claim_headers::SCENARIO,
         crate::dynamic::scenarios::rest_to_graphql::SCENARIO,
         crate::dynamic::scenarios::ai_messages_binding::SCENARIO,
         crate::dynamic::scenarios::grpc_json_transcoder::SCENARIO,

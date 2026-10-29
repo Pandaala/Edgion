@@ -149,6 +149,16 @@ invalid JWT retains the original 401 rejection. This limit is not configurable.
 
 ---
 
+### Configured projection headers
+
+When this plugin executes, all configured projection destinations are removed before
+bounded claim/payload projection. Missing, empty, unsupported, unsafe, or oversized
+values leave their destination absent, including destinations after aggregate-budget
+exhaustion. Removal or projection write failure returns a fixed 500 without forwarding.
+This also applies to unauthenticated `Pass`. Fixed token/userinfo output headers retain their separate behavior.
+Unconfigured names are unaffected. Disabled or condition-skipped plugins do not run
+cleanup; these paths provide no authenticated-header guarantee.
+
 ## Recommended Security Switches
 
 `usePkce` and `useNonce` both default to `false`, matching the defaults of peer gateways (Kong, APISIX, Envoy — the OIDC spec defines both as OPTIONAL for authorization code flow). **However, for production deployments both should be set to `true`**. They provide defense-in-depth for the authorization code flow, cost is negligible, and all mainstream IdPs (Keycloak, Auth0, Okta, Google, Azure AD) support them natively.

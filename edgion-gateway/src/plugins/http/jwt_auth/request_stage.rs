@@ -53,7 +53,11 @@ impl JwtAuth {
     }
 
     /// Set headers from JWT claims based on claims_to_headers configuration.
-    pub(super) fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
+    pub(super) fn set_claims_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        claims: &serde_json::Value,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
         if !self.claim_header_projection.entries().is_empty() {
             // Enforce hardcoded size limits to prevent a valid JWT from injecting arbitrarily
             // large claim values into upstream headers.
@@ -63,20 +67,26 @@ impl JwtAuth {
                 &self.claim_header_projection,
                 MAX_JWT_CLAIM_HEADER_VALUE_BYTES,
                 MAX_JWT_CLAIM_TOTAL_HEADER_BYTES,
-            );
+            )?;
         }
+        Ok(())
     }
 
     /// Handle anonymous access.
     /// Sets X-Anonymous-Consumer and X-Consumer-Username headers.
-    pub(super) fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
+    pub(super) fn handle_anonymous_access(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> crate::plugins::runtime::PluginSessionResult<bool> {
         if let Some(ref anonymous) = self.config.anonymous {
+            crate::plugins::http::common::auth_common::clear_claim_headers(session, &self.claim_header_projection)?;
             plugin_log.push_fmt("Anon={}", la![sensitive(anonymous)]);
-            let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-            let _ = set_sensitive_request_header(session, "X-Consumer-Username", anonymous);
-            return true;
+            set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")?;
+            set_sensitive_request_header(session, "X-Consumer-Username", anonymous)?;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 
     /// Return 401 Unauthorized response with WWW-Authenticate header.

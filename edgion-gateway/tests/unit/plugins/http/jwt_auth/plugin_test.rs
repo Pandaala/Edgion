@@ -8,6 +8,186 @@ use super::*;
 
 fn assert_send_sync<T: Send + Sync>() {}
 
+async fn projection_session() -> pingora_proxy::Session {
+    crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await
+}
+
+fn signed_projection_token(sub: Option<&str>) -> String {
+    let mut claims = serde_json::json!({"iss":"issuer-1", "key":"kid-1", "exp":4102444800u64});
+    if let Some(sub) = sub {
+        claims["sub"] = serde_json::json!(sub);
+    }
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(b"prepared-secret-at-least-32-bytes-long"),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn configured_identity_headers_replace_all_input_or_remain_absent() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    for sub in [None, Some("trusted"), Some(""), Some("bad\r\nvalue")] {
+        let mut config = config_with_resolved_credential();
+        config.claims_to_headers = Some(HashMap::from([("sub".into(), "X-Consumer-Username".into())]));
+        let auth = JwtAuth::new(&config, "default".into());
+        let mut session = projection_session().await;
+        session
+            .req_header_mut()
+            .insert_header("authorization", format!("Bearer {}", signed_projection_token(sub)))
+            .unwrap();
+        session
+            .req_header_mut()
+            .append_header("X-Consumer-Username", "administrator")
+            .unwrap();
+        session
+            .req_header_mut()
+            .append_header("x-consumer-username", "second-forgery")
+            .unwrap();
+        session.req_header_mut().insert_header("x-unrelated", "keep").unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        assert_eq!(
+            auth.run_request(
+                &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+                &mut PluginLog::new("JwtAuth")
+            )
+            .await,
+            PluginRunningResult::GoodNext
+        );
+        let values: Vec<_> = session
+            .req_header()
+            .headers
+            .get_all("x-consumer-username")
+            .iter()
+            .collect();
+        if sub == Some("trusted") {
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], "trusted");
+            assert!(values[0].is_sensitive());
+        } else {
+            assert!(values.is_empty());
+        }
+        assert_eq!(session.req_header().headers["x-unrelated"], "keep");
+    }
+}
+
+#[tokio::test]
+async fn projection_consumes_token_before_clearing_same_named_destination() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    for hide in [false, true] {
+        let mut config = config_with_resolved_credential();
+        config.hide_credentials = hide;
+        config.claims_to_headers = Some(HashMap::from([("sub".into(), "Authorization".into())]));
+        let auth = JwtAuth::new(&config, "default".into());
+        let mut session = projection_session().await;
+        session
+            .req_header_mut()
+            .insert_header(
+                "authorization",
+                format!("Bearer {}", signed_projection_token(Some("trusted"))),
+            )
+            .unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        assert_eq!(
+            auth.run_request(
+                &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+                &mut PluginLog::new("JwtAuth")
+            )
+            .await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            session
+                .req_header()
+                .headers
+                .get("authorization")
+                .map(|v| v.to_str().unwrap()),
+            if hide { None } else { Some("trusted") }
+        );
+    }
+}
+
+#[tokio::test]
+async fn anonymous_clears_custom_claim_destinations_before_setting_its_identity() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    let mut config = JwtAuthConfig {
+        anonymous: Some("guest".into()),
+        ..Default::default()
+    };
+    config.claims_to_headers = Some(HashMap::from([
+        ("sub".into(), "x-custom-identity".into()),
+        ("name".into(), "X-Consumer-Username".into()),
+    ]));
+    let auth = JwtAuth::new(&config, "default".into());
+    let mut session = projection_session().await;
+    for name in ["x-custom-identity", "x-consumer-username"] {
+        session.req_header_mut().append_header(name, "forged").unwrap();
+        session.req_header_mut().append_header(name, "duplicate").unwrap();
+    }
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_query.capture(None).unwrap();
+    assert_eq!(
+        auth.run_request(
+            &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+            &mut PluginLog::new("JwtAuth")
+        )
+        .await,
+        PluginRunningResult::GoodNext
+    );
+    assert!(!session.req_header().headers.contains_key("x-custom-identity"));
+    assert_eq!(session.req_header().headers["x-consumer-username"], "guest");
+    assert_eq!(session.req_header().headers["x-anonymous-consumer"], "true");
+}
+
+#[tokio::test]
+async fn claim_mutation_failures_never_continue_authenticated_or_anonymous_requests() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    for anonymous in [false, true] {
+        for removal in [false, true] {
+            let mut config = config_with_resolved_credential();
+            config.anonymous = anonymous.then(|| "guest".into());
+            config.claims_to_headers = Some(HashMap::from([("sub".into(), "x-sub".into())]));
+            let auth = JwtAuth::new(&config, "default".into());
+            let mut headers = http::HeaderMap::new();
+            if !anonymous {
+                headers.insert(
+                    http::header::AUTHORIZATION,
+                    http::HeaderValue::from_str(&format!("Bearer {}", signed_projection_token(Some("trusted"))))
+                        .unwrap(),
+                );
+            }
+            let mut session = MockPluginSession::new();
+            session.expect_request_header_map().return_const(headers);
+            session.expect_get_query_param_ref().returning(|_| None);
+            session.expect_remove_request_header().times(1).returning(move |_| {
+                if removal {
+                    Err(std::io::Error::other("private removal detail").into())
+                } else {
+                    Ok(())
+                }
+            });
+            session
+                .expect_set_request_header_value()
+                .times(if removal { 0 } else { 1 })
+                .returning(|_, _| Err(std::io::Error::other("private write detail").into()));
+            let mut log = PluginLog::new("JwtAuth");
+            assert_eq!(
+                auth.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None
+                }
+            );
+            assert!(log.contains("claim header mutation failed"));
+            assert!(!log.contains("private"));
+        }
+    }
+}
+
 fn config_with_resolved_credential() -> JwtAuthConfig {
     let credential = ResolvedJwtCredential {
         key: Some("kid-1".to_string()),
