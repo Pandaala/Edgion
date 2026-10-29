@@ -18,6 +18,6 @@ mod builder;
 mod error;
 mod frozen;
 
-pub use builder::PathRadixBuilder;
+pub use builder::{PathRadixBuilder, PathRadixKey};
 pub use error::PathRadixError;
 pub use frozen::{PathMatchKind, PathRadixTree};

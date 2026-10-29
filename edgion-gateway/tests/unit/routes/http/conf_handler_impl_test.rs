@@ -282,6 +282,102 @@ fn route_with_paths(
     crate::test_current_status::from_value(json).expect("route fixture must deserialize")
 }
 
+#[test]
+fn parameter_aliases_cannot_bypass_path_length_validation() {
+    let unit = |name: &str, path: &str| {
+        let route = route_with_paths(
+            "default",
+            name,
+            vec!["aliases.example.com"],
+            "2026-09-13T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": "Exact", "value": path}}]}]),
+        );
+        let data = HashMap::from([(format!("default/{name}"), Arc::new(route))]);
+        parse_http_routes_to_domain_rules(&data)
+            .remove("aliases.example.com")
+            .unwrap()
+            .0
+            .remove(0)
+    };
+    let short = unit("short", "/:id");
+    let long = unit("long", &format!("/:{}", "p".repeat(u16::MAX as usize)));
+    for units in [vec![short.clone(), long.clone()], vec![long, short]] {
+        assert!(RadixRouteMatchEngine::build(units).is_err());
+    }
+}
+
+#[test]
+fn parameter_aliases_survive_full_and_incremental_publication() {
+    let host = "aliases.example.com";
+    let pattern = RadixHostnamePattern::parse(host).unwrap();
+    let make_route = |name: &str, path: &str, kind: &str| {
+        let mut route = route_with_paths(
+            "default",
+            name,
+            vec![host],
+            "2026-09-13T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": kind, "value": path}}]}]),
+        );
+        route.pre_parse();
+        Arc::new(route)
+    };
+    let mut data = HashMap::new();
+    for (name, path, kind) in [
+        ("health", "/health", "Exact"),
+        ("prefix", "/static", "PathPrefix"),
+        ("regex", "^/regex$", "RegularExpression"),
+        ("escaped", "/users/::literal", "Exact"),
+    ] {
+        data.insert(format!("default/{name}"), make_route(name, path, kind));
+    }
+    for i in 0..255 {
+        let name = format!("alias-{i:03}");
+        data.insert(
+            format!("default/{name}"),
+            make_route(&name, &format!("/users/:p{i:03}"), "Exact"),
+        );
+    }
+    let assert_table = |table: &DomainRouteRules, aliases: usize| {
+        let rules = table.hosts.get(&pattern).expect("hostname must remain published");
+        assert_eq!(rules.regex_routes.len(), 1);
+        assert!(rules.regex_routes_engine.is_some());
+        let engine = rules.match_engine.as_ref().unwrap();
+        assert_eq!(engine.buckets_for_test().len(), 4);
+        assert_eq!(engine.ordered_candidates_for_test("/health").len(), 1);
+        assert_eq!(engine.ordered_candidates_for_test("/static/child").len(), 1);
+        let candidates = engine.ordered_candidates_for_test("/users/value");
+        assert_eq!(candidates.len(), aliases);
+        for (i, (_, idx)) in candidates.iter().enumerate() {
+            let path = &engine.paths_for_test()[*idx as usize];
+            assert_eq!(path.normalized, format!("/users/:p{i:03}"));
+            let params = crate::ctx::parse_path_params(&path.normalized, "/users/value");
+            assert_eq!(params.get(&format!("p{i:03}")).map(String::as_str), Some("value"));
+        }
+        assert_eq!(engine.ordered_candidates_for_test("/users/:literal").len(), aliases + 1);
+    };
+    let initial = build_domain_route_rules_from_routes(&data, &DomainRouteRules::new());
+    assert_table(&initial, 255);
+    let key = "default/alias-255".to_string();
+    data.insert(key.clone(), make_route("alias-255", "/users/:p255", "Exact"));
+    let changes = HttpRouteChanges {
+        resource_keys: HashSet::from([key.clone()]),
+        hostnames: HashSet::from([host.to_string()]),
+    };
+    let patched = patch_domain_route_rules(&data, &initial, &changes);
+    assert_table(&patched, 256);
+    assert_table(&build_domain_route_rules_from_routes(&data, &initial), 256);
+    data.remove(&key);
+    assert_table(&patch_domain_route_rules(&data, &patched, &changes), 255);
+    // Exact and Prefix share indexing structure, but retain consumption policy.
+    data.insert(key, make_route("alias-255", "/users/:p255/", "PathPrefix"));
+    let mixed = patch_domain_route_rules(&data, &initial, &changes);
+    assert_table(&mixed, 256);
+    let engine = mixed.hosts.get(&pattern).unwrap().match_engine.as_ref().unwrap();
+    let descendants = engine.ordered_candidates_for_test("/users/value/child");
+    assert_eq!(descendants.len(), 1);
+    assert!(engine.paths_for_test()[descendants[0].1 as usize].is_prefix_match);
+}
+
 /// Routes sharing one hostname whose paths overlap and which differ across
 /// several precedence levels (path length, exact vs prefix, method, header
 /// count, creation timestamp, route name, rule index).

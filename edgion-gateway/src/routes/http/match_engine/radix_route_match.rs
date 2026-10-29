@@ -3,7 +3,7 @@ use crate::ctx::EdgionHttpContext;
 use crate::routes::http::match_unit::{MatchSpecificity, RouteMatchResult};
 use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixError, PathRadixTree};
+use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixError, PathRadixKey, PathRadixTree};
 use edgion_resources::err::EdError;
 use edgion_resources::err::EdError::RouteNotFound;
 use pingora_proxy::Session;
@@ -161,7 +161,7 @@ impl RadixRouteMatchEngine {
         let mut builder = PathRadixBuilder::new();
         let mut total_paths = 0usize;
         let mut next_tree_value = 1usize;
-        let mut path_to_value: HashMap<String, usize> = HashMap::new();
+        let mut path_to_value: HashMap<PathRadixKey, usize> = HashMap::new();
 
         for (route_idx, runtime) in route_runtimes.iter().enumerate() {
             for (path, is_prefix) in runtime.extract_paths() {
@@ -171,15 +171,20 @@ impl RadixRouteMatchEngine {
 
                 let radix_path = RadixPath::new(path, route_idx, is_prefix);
                 let tree_key = radix_path.tree_key();
+                // One tree value per matching shape; authored candidates retain
+                // their parameter names, Exact/Prefix policy and precedence.
+                let shape = PathRadixKey::new(tree_key).map_err(|e| {
+                    EdError::InternalError(format!("Failed to insert path '{}' into radix tree: {}", tree_key, e))
+                })?;
 
-                let tree_value = if let Some(&existing_value) = path_to_value.get(tree_key) {
+                let tree_value = if let Some(&existing_value) = path_to_value.get(&shape) {
                     existing_value
                 } else {
                     let new_value = next_tree_value;
                     builder.insert(tree_key, new_value).map_err(|e: PathRadixError| {
                         EdError::InternalError(format!("Failed to insert path '{}' into radix tree: {}", tree_key, e))
                     })?;
-                    path_to_value.insert(tree_key.to_string(), new_value);
+                    path_to_value.insert(shape, new_value);
                     next_tree_value += 1;
                     new_value
                 };

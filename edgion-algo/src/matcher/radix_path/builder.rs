@@ -26,12 +26,33 @@ pub(crate) enum NodeType {
 }
 
 /// A path segment parsed from the route pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PathSegment {
     /// Static segment (e.g., "/api/", "/users")
     Static(Vec<u8>),
     /// Parameter segment (matches any non-empty content until next '/')
     Param,
+}
+
+/// Build-time identity of a path's matching structure, independent of parameter
+/// names. Static bytes remain distinct from parameter markers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PathRadixKey(Vec<PathSegment>);
+
+impl PathRadixKey {
+    /// Parse with the insertion grammar, resolving escapes and coalescing
+    /// adjacent static fragments so parser boundaries do not affect identity.
+    pub fn new(path: &str) -> Result<Self, PathRadixError> {
+        let bytes = PathRadixBuilder::validate_path(path)?;
+        let mut canonical = Vec::new();
+        for segment in PathRadixBuilder::parse_path(bytes) {
+            match (canonical.last_mut(), segment) {
+                (Some(PathSegment::Static(previous)), PathSegment::Static(bytes)) => previous.extend(bytes),
+                (_, segment) => canonical.push(segment),
+            }
+        }
+        Ok(Self(canonical))
+    }
 }
 
 /// A radix tree node used during the build phase.
@@ -120,8 +141,16 @@ impl PathRadixBuilder {
     /// * `Ok(())` if insertion succeeded
     /// * `Err(PathRadixError)` if insertion fails due to constraints
     pub fn insert(&mut self, path: &str, value: usize) -> Result<(), PathRadixError> {
-        let path_bytes = path.as_bytes();
+        // Insertion and indexing share canonical segments. In particular,
+        // escaped static fragments must be joined before walking the tree.
+        let PathRadixKey(segments) = PathRadixKey::new(path)?;
+        Self::insert_segments(&mut self.root, &segments, value, path)?;
+        self.route_count += 1;
+        Ok(())
+    }
 
+    fn validate_path(path: &str) -> Result<&[u8], PathRadixError> {
+        let path_bytes = path.as_bytes();
         if path_bytes.is_empty() {
             return Err(PathRadixError::EmptyPath);
         }
@@ -134,10 +163,7 @@ impl PathRadixBuilder {
             });
         }
 
-        let segments = Self::parse_path(path_bytes);
-        Self::insert_segments(&mut self.root, &segments, value, path)?;
-        self.route_count += 1;
-        Ok(())
+        Ok(path_bytes)
     }
 
     /// Parse a path into segments, recognizing `:param` syntax.

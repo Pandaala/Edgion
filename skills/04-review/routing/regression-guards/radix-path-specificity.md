@@ -37,6 +37,43 @@ sort are unchanged. Prefix trailing-slash eligibility is corrected below.
 
 ## Rationale and evidence
 
+### Structural buckets preserve parameter aliases
+
+`ISSUE-001` (`run-e6cbd068`, parameter-alias hostname outage) exposed a
+separate insertion identity defect: the Gateway bucketed literal spellings,
+but the leaf parser discards parameter names. Inserting 256 aliases therefore
+exceeded the leaf's 255-value bound and withdrew the whole hostname group.
+
+Gateway publication now buckets by `edgion_algo::matcher::radix_path::PathRadixKey`.
+This opaque identity reuses the insertion parser, resolves escapes, and merges
+adjacent static fragments. Static bytes and parameter markers remain different
+variants; escaped literal colons cannot collide with parameters. Each authored
+candidate retains its path, Exact/Prefix policy, capture names and precedence.
+Key construction and insertion share empty-path and byte-length validation;
+an alias cannot bypass input bounds by reusing an existing bucket.
+The leaf capacity and hostname build-error policy are unchanged. Identity
+construction happens only at publication, never during request matching.
+
+Regression coverage: `structural_keys_preserve_the_insertion_grammar` checks
+alias and escape identity; `parameter_aliases_survive_full_and_incremental_publication`
+checks 255/256 aliases, unrelated literal/prefix/regex route retention, candidate
+ordering, capture names, full publication, incremental addition and removal,
+and Exact/Prefix consumption within a shared bucket. The insertion-bound and
+alias-length regressions preserve validation independent of insertion order.
+Re-evaluate if the insertion grammar, candidate ownership or bucket expansion
+changes. This correction does not establish isolation for other build failures.
+
+Verification for this correction:
+- `cargo test -p edgion-algo matcher::radix_path::`: 27 passed.
+- `cargo test -p edgion-gateway --lib routes::http:: -- --test-threads=1`: 587 passed.
+  The first parallel run passed 586 and failed the GraphQL response-cache
+  `response_cache_actual_graphql_tail_shares_final_bytes_across_matches_and_body_generations_only`
+  test at its cache entry-count assertion. That test passed in isolation and in
+  the serial suite; the concurrent failure's cause was not established here.
+- Workspace all-target `cargo check` and `cargo clippy` passed; Clippy reported
+  existing warnings outside this diff. Formatting and all repository quick-check
+  guards passed. Independent review approved the final code and knowledge scope.
+
 The original `http-route-named-parameter-precedence` task identified
 `normalized.chars().count() * 4 + type_bonus` as the root cause. For the same
 request `/a/b`, static Exact `/a/b` scored 19, parameter Exact
@@ -91,6 +128,55 @@ semantics are now replaced; the Unicode unit remains required for static text.
 Historical raw-Unicode examples apply to File/etcd extension inputs, not a claim
 that Kubernetes accepts raw Unicode through the vendored structural CRD.
 Do not use the previous formula or its old expected winners as current policy.
+
+### Escaped static fragments retain their full prefix
+
+Follow-up review of the structural-bucket correction found an existing insertion
+defect: `/::literal/test` failed to match `/:literal/test` and instead matched
+`/test`. Parsing an escape followed by another segment produced consecutive
+`Static` fragments. Recursing into the next fragment from the same build node
+could split its prefix before its parent attached it under the original child
+key, losing the intended path prefix.
+
+`PathRadixBuilder::insert` now consumes `PathRadixKey`'s canonical segments too.
+Joining adjacent static bytes before recursive insertion makes the actual tree
+and indexing identity share one interpretation, without changing parameter
+boundaries, input bounds, terminal capacity or frozen traversal.
+
+`escaped_segments_preserve_the_complete_path` and
+`distinct_escaped_prefixes_keep_all_terminal_values` both failed before this
+correction and pass afterward. They cover the wrong-suffix regression, an
+independent `/test` route, multiple escaped segments, parameters before/after
+escapes, descendant consumption, 256 distinct prefixes, and both insertion
+orders. The focused radix suite passes 29 tests. Re-evaluate if parsing or
+insertion bypasses the canonical segment representation.
+
+The `HttpRouteNamedParameterPrecedence` dynamic scenario now also generates
+255 independently conditioned aliases on a dedicated hostname, adds the 256th,
+and removes it again through the Controller Admin API. Each phase probes all
+256 selectors through real HTTP requests; p254/p255 additionally assert the
+selected capture and the unresolved alternative via ProxyRewrite. Unrelated
+Exact, Prefix and Regex requests stay live, and `/escaped/:literal/tail` must
+succeed while `/tail` remains 404. Generated resources use the canonical apply
+helper and deterministic cleanup names; no generated fixture files are stored.
+The existing Kubernetes parent/phase contract is retained, but local validation
+must not be reported as a fresh Kubernetes run.
+
+Verification of the escaped-segment and capacity follow-up:
+- Radix unit suite: 29 passed; HTTP routing suite (serial): 587 passed;
+  RequestAccessPolicy suite: 23 passed; test-client dynamic registration tests:
+  5 passed.
+- Canonical `prepare.sh` succeeded. Local
+  `start_all_with_conf.sh --suites base,HTTPRoute/Basic,HTTPRoute/NamedParameterPrecedence`
+  and `test_client -g --dynamic-scenario HttpRouteNamedParameterPrecedence`
+  passed against the rebuilt FileSystem Controller/Gateway/test-server stack.
+  This executes the absent -> 255 -> 256 -> 255 -> absent phases, including
+  all-selector and capture assertions. Scenario resource cleanup and process
+  cleanup succeeded. Kubernetes execution was not rerun.
+- Workspace all-target check and Clippy passed (existing warnings outside the
+  diff), as did formatting, repository quick-check guards and integration
+  preflight guards. Fresh independent review approved production semantics,
+  dynamic lifecycle and actual test-server response assumptions.
 
 ## Verification and re-evaluation
 
