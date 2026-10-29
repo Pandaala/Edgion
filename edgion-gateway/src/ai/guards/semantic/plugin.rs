@@ -71,7 +71,6 @@ impl Guardrail {
         session: &mut dyn PluginSession,
         owner: &AttachedGuardrail,
         reason: &'static str,
-        _log: &mut PluginLog,
     ) -> PluginRunningResult {
         if self.fail_open {
             session.ai().disable_semantic_guard();
@@ -147,7 +146,11 @@ impl UpstreamResponse for Guardrail {
         true
     }
 
-    async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+    async fn run_upstream_response(
+        &self,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
         let Some(owner) = session.ai().attached_guardrail(&self.identity) else {
             return PluginRunningResult::GoodNext;
         };
@@ -163,7 +166,7 @@ impl UpstreamResponse for Guardrail {
             .ai_state()
             .is_some_and(|state| state.stream_processor.is_some());
         if !(200..300).contains(&status) || !content_type_ok || !encoding_ok || !canonical_ai {
-            return self.precommit_failure(session, &owner, "response-not-applicable", log);
+            return self.precommit_failure(session, &owner, "response-not-applicable");
         }
         let Ok(processor) = GuardrailResponseProcessor::new(
             Arc::clone(&self.client),
@@ -176,10 +179,10 @@ impl UpstreamResponse for Guardrail {
             self.fail_open,
             self.head_limits.is_some(),
         ) else {
-            return self.precommit_failure(session, &owner, "window-config", log);
+            return self.precommit_failure(session, &owner, "window-config");
         };
         if !session.ai().install_semantic_response_processor(Box::new(processor)) {
-            return self.precommit_failure(session, &owner, "late-response-processor", log);
+            return self.precommit_failure(session, &owner, "late-response-processor");
         }
         PluginRunningResult::GoodNext
     }

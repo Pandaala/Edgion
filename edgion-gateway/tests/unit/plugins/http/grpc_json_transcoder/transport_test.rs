@@ -321,29 +321,14 @@ fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
 
 #[test]
 fn correction_ai_installation_and_outgoing_attempt_defenses_are_sticky() {
-    use crate::ai::{AiAttemptPlan, AiPlanError, AiProviderLabel, AiRequestContext, AiUsageShared};
-    for request_context in [false, true] {
-        let mut ctx = context();
-        let accepted = if request_context {
-            ctx.try_set_ai_request_context(AiRequestContext {
-                provider: AiProviderLabel::OpenAi,
-                model: "model".into(),
-                pricing: None,
-                requested_streaming: false,
-                usage: Arc::new(AiUsageShared::default()),
-                quota: None,
-                quota_status: None,
-            })
-        } else {
-            ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))
-        };
-        assert!(!accepted);
-        assert!(ctx.ai_state().is_none());
-        assert_eq!(
-            ctx.grpc_transcoding.as_ref().unwrap().outcome.lock().kind,
-            Outcome::OwnerConflict
-        );
-    }
+    use crate::ai::{AiAttemptPlan, AiPlanError};
+    let mut ctx = context();
+    assert!(!ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
+    assert!(ctx.ai_state().is_none());
+    assert_eq!(
+        ctx.grpc_transcoding.as_ref().unwrap().outcome.lock().kind,
+        Outcome::OwnerConflict
+    );
     let req = RequestHeader::build("POST", b"/test.TestService/SayHello", None).unwrap();
     let mut ctx = context();
     ctx.ensure_ai_state();

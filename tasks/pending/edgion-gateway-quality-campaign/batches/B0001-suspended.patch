@@ -1,0 +1,49 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index b13b839b4..439380fed 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1803,7 +1803,6 @@ dependencies = [
+  "arc-swap",
+  "async-trait",
+  "axum 0.8.9",
+- "axum-server",
+  "base64",
+  "boring",
+  "boring-sys",
+@@ -1819,7 +1818,6 @@ dependencies = [
+  "edgion-resources",
+  "edgion-waf",
+  "edgion-wasm",
+- "etcd-client",
+  "expect-test",
+  "flate2",
+  "foreign-types",
+diff --git a/edgion-gateway/Cargo.toml b/edgion-gateway/Cargo.toml
+index e83ba2205..b60808255 100644
+--- a/edgion-gateway/Cargo.toml
++++ b/edgion-gateway/Cargo.toml
+@@ -52,7 +52,7 @@ edgion-algo.workspace = true
+ tikv-jemallocator = { workspace = true, optional = true }
+ mimalloc = { workspace = true, optional = true }
+ 
+-# Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
++# Shared resource/config schema.
+ edgion-resources.workspace = true
+ 
+ # Runtime-independent native WAF engine.
+@@ -103,7 +103,6 @@ futures.workspace = true
+ 
+ # HTTP server
+ axum.workspace = true
+-axum-server.workspace = true
+ 
+ # Utilities
+ bytes.workspace = true
+@@ -140,7 +139,6 @@ pingora-load-balancing.workspace = true
+ pingora-proxy.workspace = true
+ pingora-ketama.workspace = true
+ tinyufo.workspace = true
+-etcd-client.workspace = true
+ fred.workspace = true
+ 
+ # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)

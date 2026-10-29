@@ -930,7 +930,6 @@ async fn messages_invalid_utf8_is_fixed_400_before_request_plan_independent_of_p
                         .times(1)
                         .return_const(true);
                     ai.expect_set_ai_attempt_plan().never();
-                    ai.expect_set_ai_request_context().never();
                     session
                         .expect_ai()
                         .return_var(Box::new(ai) as Box<dyn AiSessionCapability>);

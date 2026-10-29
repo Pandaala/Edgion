@@ -636,10 +636,7 @@ impl AiProxy {
                     return Self::reject(session, log, "quota-identity-missing", AiProxyError::QuotaUnavailable);
                 }
                 QuotaAdmission::Exhausted(retry_after) => match quota.on_exceeded() {
-                    QuotaExceededAction::Reject => {
-                        return reject_quota_exhausted(session, log, retry_after);
-                    }
-                    QuotaExceededAction::Throttle { .. } => {
+                    QuotaExceededAction::Reject | QuotaExceededAction::Throttle { .. } => {
                         return reject_quota_exhausted(session, log, retry_after);
                     }
                     QuotaExceededAction::Downgrade { model } => {

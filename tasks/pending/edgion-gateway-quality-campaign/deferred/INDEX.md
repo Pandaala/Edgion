@@ -10,3 +10,4 @@
 | D0006 | `isolate-wasm-test-preparation-admission.md` (historical task, removed) | closed by R0001 | Independently reviewed repair; full workspace tests and default integration passed. |
 | D0007 | `audit-backend-tls-store-test-writers.md` (historical task, removed) | closed by R0001 | Independently reviewed repair; full workspace tests and default integration passed. |
 | D0008 | `reaudit-http-context-layout-assertions.md` (historical task, removed) | closed by R0001 | Independently reviewed repair; full workspace tests and default integration passed. |
+| D0009 | `tasks/todo/resolve-october-2026-supply-chain-advisories.md` | deferred by user; nonblocking for local pruning | Fourteen known Zstd/YAML records remain after verified local mitigation. User explicitly deferred upstream work; scans remain failing, with no policy ignore. New findings are not exempted. |

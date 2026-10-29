@@ -29,7 +29,7 @@ struct Fields<'a> {
     #[serde(borrow, default, deserialize_with = "raw_field")]
     context_management: Option<&'a RawValue>,
 }
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 struct Item<'a> {
     #[serde(rename = "type", borrow, default, deserialize_with = "raw_field")]
     kind: Option<&'a RawValue>,

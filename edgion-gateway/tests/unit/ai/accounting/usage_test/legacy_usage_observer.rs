@@ -112,15 +112,6 @@ impl<'de> DeserializeSeed<'de> for RootSeed {
 
 struct RootVisitor;
 
-impl<'de> serde::Deserialize<'de> for UsageEventObservation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(RootVisitor)
-    }
-}
-
 impl<'de> Visitor<'de> for RootVisitor {
     type Value = UsageEventObservation;
 

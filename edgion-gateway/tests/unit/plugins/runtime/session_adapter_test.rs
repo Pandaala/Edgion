@@ -994,19 +994,10 @@ async fn ai_capability_absent_reads_and_accessor_do_not_allocate() {
 
 #[tokio::test]
 async fn ai_capability_first_writers_and_guard_generation_remain_request_owned() {
-    use crate::ai::{AiPlanError, AiProviderLabel, AiUsageShared};
+    use crate::ai::AiPlanError;
     use edgion_resources::resources::edgion_plugins::AiApi;
     let mut session = ai_capability_session().await;
     let mut ctx = EdgionHttpContext::new();
-    let context = |model: &str| AiRequestContext {
-        provider: AiProviderLabel::OpenAi,
-        model: model.to_owned(),
-        pricing: None,
-        requested_streaming: false,
-        usage: Arc::new(AiUsageShared::default()),
-        quota: None,
-        quota_status: None,
-    };
     if !ctx.request_query.is_captured() {
         ctx.request_query
             .capture(session.req_header().uri.query().map(str::to_owned))
@@ -1015,8 +1006,6 @@ async fn ai_capability_first_writers_and_guard_generation_remain_request_owned()
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(adapter.ai().capture_ai_client_api(AiApi::OpenaiChat));
     assert!(!adapter.ai().capture_ai_client_api(AiApi::AnthropicMessages));
-    assert!(adapter.ai().set_ai_request_context(context("first")));
-    assert!(!adapter.ai().set_ai_request_context(context("second")));
     assert!(adapter
         .ai()
         .set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
@@ -1028,7 +1017,6 @@ async fn ai_capability_first_writers_and_guard_generation_remain_request_owned()
     adapter.ai().record_ai_guard_decision("other".to_owned(), Some(8));
     let state = ctx.ai_state().unwrap();
     assert_eq!(state.client_api, Some(AiApi::OpenaiChat));
-    assert_eq!(state.request.as_ref().unwrap().model, "first");
     assert!(matches!(
         state.attempt_plan,
         Some(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))

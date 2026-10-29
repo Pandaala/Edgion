@@ -41,7 +41,7 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
     Path('ai/runtime/attempt_runtime.rs'): ('record_test_attempt', 'settlement_decisions_for_test'),
     Path('ai/runtime/circuit_breaker.rs'): ('in_flight',),
     Path('ai/runtime/credential_outlier.rs'): ('admit', 'apply_retry_after', 'configure_backend', 'current_handle', 'effective_handle_for_test', 'fallback_handle_for_test', 'force_expired_cooldown_for_test', 'record_failure', 'record_success', 'state'),
-    Path('ai/quota/mod.rs'): ('new_for_test', 'observed_output_for_test'),
+    Path('ai/quota/mod.rs'): ('observed_output_for_test',),
     Path('ai/accounting/usage.rs'): ('add_output_units_for_test',),
     Path('backends/discovery/coordinator.rs'): ('expire_outlier_deadlines_for_test', 'set_completion_barrier_for_test', 'set_degrade_threshold', 'set_next_epoch_for_test'),
     Path('backends/discovery/dns_cache.rs'): ('len',),

@@ -639,8 +639,10 @@ For AI tests, configure one `MockAiSessionCapability` per common mock, then atta
 it once with `session.expect_ai().return_var(Box::new(ai) as Box<dyn AiSessionCapability>)`.
 Shared reads and mutable publication/take use that same instance. Preserve the
 canonical publication `Result`: rejection returns the original offered batch and
-keeps any resident batch; take consumes once. Context/plan/processor rejection
-consumes its offer. Required capability methods supply no permissive production
+keeps any resident batch; take consumes once. Plan/processor rejection consumes
+its offer. Request context is installed by prepared-attempt commit after admission
+and successful peer creation, not by a capability setter. Required capability
+methods supply no permissive production
 fallback. A manual adapter without AI use should reject unexpected access
 explicitly. See the [integration boundary](05-plugin-system.md#ai-session-capability).
 

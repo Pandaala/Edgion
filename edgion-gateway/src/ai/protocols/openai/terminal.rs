@@ -13,13 +13,11 @@ pub enum AiClientStreamDialect {
 }
 
 pub(crate) fn emit_guardrail_rejection(
-    dialect: Option<AiClientStreamDialect>,
-    eligibility: Option<FinalResponseEligibility>,
+    dialect: AiClientStreamDialect,
+    eligibility: FinalResponseEligibility,
     sink: &mut ResponseBodySink,
 ) -> TerminalEmission {
-    if dialect != Some(AiClientStreamDialect::OpenAiCompatibleSse)
-        || !eligibility.is_some_and(FinalResponseEligibility::allows_sse)
-    {
+    if dialect != AiClientStreamDialect::OpenAiCompatibleSse || !eligibility.allows_sse() {
         return TerminalEmission::NoEvent;
     }
     let Some(event) = bounded_terminal_event(GUARDRAIL_REJECTED_EVENT) else {

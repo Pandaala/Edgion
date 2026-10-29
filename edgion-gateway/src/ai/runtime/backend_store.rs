@@ -421,10 +421,6 @@ pub fn create_edgion_backend_handler() -> Box<dyn ConfHandler<EdgionBackend> + S
     Box::new(get_global_edgion_backend_store())
 }
 
-pub fn count_ai_backends() -> usize {
-    GLOBAL_EDGION_BACKEND_STORE.count()
-}
-
 #[cfg(test)]
 include!("../../../tests/support/ai/runtime/backend_store_test/424_static_item.rs");
 

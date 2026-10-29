@@ -417,7 +417,6 @@ fn parse_messages(
                     translated.push(translated_message("user", std::mem::take(&mut tool_results)));
                 }
             }
-            "developer" => return Err(AnthropicRequestError::UnsupportedParameter),
             _ => return Err(AnthropicRequestError::UnsupportedParameter),
         }
     }
@@ -556,10 +555,7 @@ fn required_tool_name(value: Option<&Value>) -> Result<&str, AnthropicRequestErr
 }
 
 fn require_exact_keys(object: &Map<String, Value>, expected: &[&str]) -> Result<(), AnthropicRequestError> {
-    if object.len() != expected.len()
-        || expected.iter().any(|field| !object.contains_key(*field))
-        || object.keys().any(|field| !expected.contains(&field.as_str()))
-    {
+    if object.len() != expected.len() || object.keys().any(|field| !expected.contains(&field.as_str())) {
         return Err(AnthropicRequestError::InvalidRequestBody);
     }
     Ok(())

@@ -448,7 +448,7 @@ async fn token_totals_cover_every_attempt_by_fixed_provider_and_source() {
     assert_eq!(state.charged_request_tokens(), Ok(15));
     assert_eq!(
         state.metric_totals(),
-        Ok([
+        [
             AiAttemptTokenTotals {
                 provider: AiProviderLabel::OpenAi,
                 usage_source: GenAiAttemptUsageSource::Reported,
@@ -462,7 +462,7 @@ async fn token_totals_cover_every_attempt_by_fixed_provider_and_source() {
                 output_tokens: 3,
             },
         ]
-        .as_slice())
+        .as_slice()
     );
 }
 
@@ -747,7 +747,7 @@ async fn unknown_attempts_keep_identity_and_known_metric_buckets() {
         state.settlement_decisions_for_test(),
         [SettlementOperation::Reconcile(3), SettlementOperation::Retain]
     );
-    assert_eq!(state.metric_totals().unwrap()[0].input_tokens, 2);
+    assert_eq!(state.metric_totals()[0].input_tokens, 2);
 }
 
 #[tokio::test]
@@ -803,7 +803,7 @@ async fn successful_ttft_is_recorded_without_numeric_usage() {
     assert_eq!(adaptive.snapshot().charged_tokens_60s, 0);
     assert_eq!(state.attempts()[0].usage_source, GenAiAttemptUsageSource::NotObserved);
     assert!(state.attempts()[0].input_tokens.is_none());
-    assert!(state.metric_totals().unwrap().is_empty());
+    assert!(state.metric_totals().is_empty());
 }
 
 #[test]
@@ -879,7 +879,7 @@ fn attempt_log_size_counts_wire_bytes_without_allocating() {
     assert_eq!(state.attempts(), entries);
     assert!(state.attempts_truncated());
     assert_eq!(state.charged_request_tokens(), Ok(6));
-    let totals = state.metric_totals().unwrap();
+    let totals = state.metric_totals();
     assert_eq!(totals.len(), 1);
     assert_eq!((totals[0].input_tokens, totals[0].output_tokens), (4, 2));
 }

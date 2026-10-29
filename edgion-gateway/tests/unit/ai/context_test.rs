@@ -15,18 +15,99 @@ fn context(model: &str) -> AiRequestContext {
     }
 }
 
-#[test]
-fn first_ai_context_writer_wins() {
-    let mut ctx = EdgionHttpContext::new();
-    assert!(ctx.ai_state().is_none());
-    assert!(ctx.try_set_ai_request_context(context("model-a")));
-    assert!(!ctx.try_set_ai_request_context(context("model-b")));
-    assert_eq!(
-        ctx.ai_state()
-            .and_then(|state| state.request.as_ref())
-            .map(|ai| ai.model.as_str()),
-        Some("model-a")
-    );
+#[tokio::test]
+async fn ai_attempt_context_replacement_preserves_request_quota_status() {
+    use crate::ai::quota::{AiQuotaRequest, QuotaApplyResult, QuotaFuture, QuotaSink};
+    use edgion_resources::resources::edgion_plugins::AiApi;
+    use std::time::Duration;
+
+    struct Sink;
+    impl QuotaSink for Sink {
+        fn apply_cumulative(&self, _: u64, _: u64, _: bool) -> QuotaFuture<'_> {
+            Box::pin(async { Ok(QuotaApplyResult { over_limit: false }) })
+        }
+    }
+    let quota = || {
+        AiQuotaRequest::start(
+            Arc::new(Sink),
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        )
+    };
+
+    for (api, dialect) in [
+        (AiApi::OpenaiChat, Some(AiClientStreamDialect::OpenAiCompatibleSse)),
+        (AiApi::AnthropicMessages, None),
+    ] {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.ai_state().is_none());
+        assert!(ctx.capture_ai_client_api(api));
+        let first_quota = quota();
+        let first_accumulator = first_quota.accumulator();
+        let mut first = context("model-a");
+        let first_usage = Arc::clone(&first.usage);
+        first.quota = Some(first_quota);
+        first.quota_status = Some("bypassed");
+        ctx.replace_ai_attempt_context(first);
+        let state = ctx.ai_state().unwrap();
+        let installed = state.request.as_ref().unwrap();
+        assert_eq!(installed.model, "model-a");
+        assert!(Arc::ptr_eq(&installed.usage, &first_usage));
+        assert!(Arc::ptr_eq(
+            &installed.quota.as_ref().unwrap().accumulator(),
+            &first_accumulator
+        ));
+        assert_eq!(installed.quota_status, Some("bypassed"));
+        assert_eq!(state.client_stream_dialect, dialect);
+
+        let mut second = context("model-b");
+        let second_usage = Arc::clone(&second.usage);
+        second.provider = AiProviderLabel::Anthropic;
+        second.requested_streaming = true;
+        second.quota_status = Some("fail_open");
+        ctx.replace_ai_attempt_context(second);
+        let installed = ctx.ai_state().unwrap().request.as_ref().unwrap();
+        assert_eq!(installed.model, "model-b");
+        assert_eq!(installed.provider, AiProviderLabel::Anthropic);
+        assert!(installed.requested_streaming);
+        assert!(Arc::ptr_eq(&installed.usage, &second_usage));
+        assert!(!Arc::ptr_eq(&installed.usage, &first_usage));
+        assert!(Arc::ptr_eq(
+            &installed.quota.as_ref().unwrap().accumulator(),
+            &first_accumulator
+        ));
+        assert_eq!(installed.quota_status, Some("fail_open"));
+
+        let explicit_quota = quota();
+        let explicit_accumulator = explicit_quota.accumulator();
+        let mut third = context("model-c");
+        third.quota = Some(explicit_quota);
+        ctx.replace_ai_attempt_context(third);
+        let installed = ctx.ai_state().unwrap().request.as_ref().unwrap();
+        assert!(Arc::ptr_eq(
+            &installed.quota.as_ref().unwrap().accumulator(),
+            &explicit_accumulator
+        ));
+        assert!(!Arc::ptr_eq(
+            &installed.quota.as_ref().unwrap().accumulator(),
+            &first_accumulator
+        ));
+        assert_eq!(installed.quota_status, Some("fail_open"));
+
+        ctx.replace_ai_attempt_context(context("model-d"));
+        let state = ctx.ai_state().unwrap();
+        let installed = state.request.as_ref().unwrap();
+        assert_eq!(installed.model, "model-d");
+        assert!(Arc::ptr_eq(
+            &installed.quota.as_ref().unwrap().accumulator(),
+            &explicit_accumulator
+        ));
+        assert_eq!(installed.quota_status, Some("fail_open"));
+        assert_eq!(state.client_api, Some(api));
+        assert_eq!(state.client_stream_dialect, dialect);
+    }
 }
 
 #[test]

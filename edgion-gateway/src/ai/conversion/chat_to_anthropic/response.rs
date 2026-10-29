@@ -641,7 +641,7 @@ impl AnthropicResponseProcessor {
 
     fn handle_message_stop(&mut self, output: &mut Vec<u8>) -> Result<(), ()> {
         self.require_active_message()?;
-        if self.active_block.is_some() || !self.finish_emitted || self.message_stopped || !self.usage.output_seen {
+        if self.active_block.is_some() || !self.finish_emitted || !self.usage.output_seen {
             return Err(());
         }
         self.message_stopped = true;
@@ -747,12 +747,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         true
     }
     fn finalize_incomplete(&mut self, _outcome: &'static str, _reason: &'static str) {
-        if self.unary.is_some() {
-            self.usage_shared.mark_json_unavailable();
-        }
-        self.non_streaming_input = Vec::new();
-        self.unary = None;
-        self.sealed = true;
+        self.release_inflight();
     }
     fn release_inflight(&mut self) {
         if self.unary.is_some() {

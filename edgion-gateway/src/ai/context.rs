@@ -130,23 +130,6 @@ impl EdgionHttpContext {
             Some(AiAttemptPlan::Ready(plan)) if matches!(plan.api, edgion_resources::resources::edgion_plugins::AiApi::OpenaiResponses | edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
     }
 
-    pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
-        if let Some(owner) = &self.grpc_transcoding {
-            owner.reject_mutation();
-            return false;
-        }
-        let state = self.ensure_ai_state();
-        if state.request.is_some() {
-            false
-        } else {
-            state.request = Some(context);
-            state.client_stream_dialect = (state.client_api
-                != Some(edgion_resources::resources::edgion_plugins::AiApi::AnthropicMessages))
-            .then_some(AiClientStreamDialect::OpenAiCompatibleSse);
-            true
-        }
-    }
-
     /// Replace attempt-local provider/usage state while retaining the one
     /// request-wide quota handle across AI failover attempts.
     pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {

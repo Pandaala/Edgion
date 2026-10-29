@@ -269,7 +269,7 @@ impl GuardrailResponseProcessor {
             sink.reserve_response_head_work(1).map_err(|_| "head-work-limit")?;
         }
         let snapshot = self.window.snapshot_all().map_err(|_| "semantic-source")?;
-        if snapshot.is_empty() || snapshot.iter().all(|entry| entry.current.is_empty()) {
+        if snapshot.iter().all(|entry| entry.current.is_empty()) {
             return Ok(ParsedDecision::Pass);
         }
         let windows: Vec<_> = snapshot
@@ -292,7 +292,7 @@ impl GuardrailResponseProcessor {
                 &self.client,
                 TemplateContext::Trusted(session),
                 None,
-                self.client.max_response_bytes.min(MAX_DECISION_RESPONSE_BYTES),
+                MAX_DECISION_RESPONSE_BYTES,
                 &[("content-type", "application/json")],
                 Some(request),
                 // Guardrail validation forbids all origin fields. In
@@ -433,7 +433,7 @@ impl GuardrailResponseProcessor {
         let emission = session
             .ai_terminal_render_context()
             .map_or(TerminalEmission::NoEvent, |(dialect, eligibility)| {
-                emit_guardrail_rejection(Some(dialect), Some(eligibility), sink)
+                emit_guardrail_rejection(dialect, eligibility, sink)
             });
         session.mark_response_terminal_emission(emission);
         sink.terminate();

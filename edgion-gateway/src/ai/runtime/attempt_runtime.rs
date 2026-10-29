@@ -346,9 +346,8 @@ impl AiAttemptRuntimeState {
             .ok_or(())
     }
 
-    #[allow(clippy::result_unit_err)]
-    pub fn metric_totals(&self) -> Result<&[AiAttemptTokenTotals], ()> {
-        Ok(self.metric_totals.as_slice())
+    pub fn metric_totals(&self) -> &[AiAttemptTokenTotals] {
+        self.metric_totals.as_slice()
     }
 
     pub(crate) fn accounting_overflow(&self) -> bool {

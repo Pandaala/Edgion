@@ -172,7 +172,7 @@ impl<'a> Parser<'a> {
             // lookup is by name, so an undecoded key would make every lookup
             // miss. Only values honour the decode mode.
             let token = self.string()?;
-            let key = if token.value.is_empty() && !self.decode_strings {
+            let key = if !self.decode_strings {
                 decode_json_string(&self.input[token.start..token.end]).ok_or(())?
             } else {
                 token.value

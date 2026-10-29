@@ -52,9 +52,6 @@ pub(crate) fn finalize_guardrail_log(ctx: &mut EdgionHttpContext) {
         return;
     };
     let stages = ctx.stage_logs_mut();
-    if stages.is_empty() {
-        return;
-    }
     'stages: for stage in stages.iter_mut() {
         for log in &mut stage.filters {
             if log.internal_token.as_deref() == Some(identity.as_str()) {

@@ -52,7 +52,7 @@ edgion-algo.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
 
-# Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
+# Shared resource/config schema.
 edgion-resources.workspace = true
 
 # Runtime-independent native WAF engine.
@@ -103,7 +103,6 @@ futures.workspace = true
 
 # HTTP server
 axum.workspace = true
-axum-server.workspace = true
 
 # Utilities
 bytes.workspace = true
@@ -140,7 +139,6 @@ pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
 pingora-ketama.workspace = true
 tinyufo.workspace = true
-etcd-client.workspace = true
 fred.workspace = true
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)

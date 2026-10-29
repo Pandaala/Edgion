@@ -548,7 +548,7 @@ async fn streaming_tool_indexes_are_independent_of_content_block_indexes() {
 #[tokio::test]
 async fn streaming_quota_tracks_semantic_deltas_and_cumulative_usage_monotonically() {
     let usage = Arc::new(AiUsageShared::default());
-    let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+    let quota = Arc::new(QuotaAccumulator::new(100));
     let mut processor = AnthropicResponseProcessor::new_with_quota(
         "claude-canonical".to_string(),
         true,

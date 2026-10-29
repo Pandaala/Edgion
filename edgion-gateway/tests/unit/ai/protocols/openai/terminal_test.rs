@@ -10,11 +10,7 @@ fn guardrail_refusal_is_one_bounded_terminal_sse_record() {
     };
     let mut sink = ResponseBodySink::new();
     assert_eq!(
-        emit_guardrail_rejection(
-            Some(AiClientStreamDialect::OpenAiCompatibleSse),
-            Some(eligibility),
-            &mut sink
-        ),
+        emit_guardrail_rejection(AiClientStreamDialect::OpenAiCompatibleSse, eligibility, &mut sink),
         TerminalEmission::Rendered
     );
     assert_eq!(sink.peek_extra(), &[Bytes::from_static(GUARDRAIL_REJECTED_EVENT)]);
@@ -33,11 +29,7 @@ fn bodyless_refusal_never_reserves_sink_output() {
     };
     let mut sink = ResponseBodySink::new();
     assert_eq!(
-        emit_guardrail_rejection(
-            Some(AiClientStreamDialect::OpenAiCompatibleSse),
-            Some(eligibility),
-            &mut sink
-        ),
+        emit_guardrail_rejection(AiClientStreamDialect::OpenAiCompatibleSse, eligibility, &mut sink),
         TerminalEmission::NoEvent
     );
     assert!(sink.peek_extra().is_empty());
@@ -54,11 +46,7 @@ fn exhausted_sink_keeps_the_same_terminal_without_a_fallback_event() {
     sink.push(Bytes::from(vec![0; pingora_proxy::RESPONSE_BODY_EMIT_BUDGET]))
         .expect("the exact sink budget must be accepted");
     assert_eq!(
-        emit_guardrail_rejection(
-            Some(AiClientStreamDialect::OpenAiCompatibleSse),
-            Some(eligibility),
-            &mut sink
-        ),
+        emit_guardrail_rejection(AiClientStreamDialect::OpenAiCompatibleSse, eligibility, &mut sink),
         TerminalEmission::NoEvent
     );
     assert_eq!(sink.peek_extra().len(), 1);

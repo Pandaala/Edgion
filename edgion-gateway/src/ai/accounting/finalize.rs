@@ -78,21 +78,19 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
     };
     state.summary = Some(summary);
     if state.attempt_runtime.ever_dispatched() {
-        if let Ok(totals) = state.attempt_runtime.metric_totals() {
-            for total in totals {
-                let source = match total.usage_source {
-                    GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
-                    GenAiAttemptUsageSource::Estimated => GenAiUsageSource::Estimated,
-                    GenAiAttemptUsageSource::Unknown | GenAiAttemptUsageSource::NotObserved => continue,
-                };
-                record_genai_tokens(
-                    metrics_enabled,
-                    total.provider,
-                    source,
-                    total.input_tokens,
-                    total.output_tokens,
-                );
-            }
+        for total in state.attempt_runtime.metric_totals() {
+            let source = match total.usage_source {
+                GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
+                GenAiAttemptUsageSource::Estimated => GenAiUsageSource::Estimated,
+                GenAiAttemptUsageSource::Unknown | GenAiAttemptUsageSource::NotObserved => continue,
+            };
+            record_genai_tokens(
+                metrics_enabled,
+                total.provider,
+                source,
+                total.input_tokens,
+                total.output_tokens,
+            );
         }
     } else if let Some(usage) = usage {
         record_genai_tokens(

@@ -169,14 +169,17 @@ for alternatives, transfer contracts and verification limits.
 ### AI session capability
 
 `PluginSession::ai()` returns a short mutable borrow of `AiSessionCapability`
-in `runtime/traits/ai_session.rs`. Twelve request-plan, guard and canonical
+in `runtime/traits/ai_session.rs`. Eleven request-plan, guard and canonical
 handoff operations extend this feature contract instead of the shared operation
 list. `PingoraSessionAdapter` implements it directly and returns itself; the
 existing lazy `ai::context::AiHttpState` remains the sole exchange state owner.
 The accessor and absent-state reads/take create no state or wrapper.
 
 Release each synchronous borrow before ordinary session operations or awaits.
-First-writer context/plan and processor offers are consumed even when rejected.
+First-writer plan and processor offers are consumed even when rejected.
+Request context is installed by prepared-attempt commit after admission and
+successful peer creation; it replaces attempt-local state while preserving
+request quota/status when the new context omits them.
 Canonical publication instead returns the original rejected batch and preserves
 any resident batch; take transfers that batch exactly once. Publication still
 initializes AI state before its existing semantic-ownership check. Guard identity,

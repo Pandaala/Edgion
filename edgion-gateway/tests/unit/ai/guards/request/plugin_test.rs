@@ -420,7 +420,6 @@ fn evaluator_projection_borrows_ordered_span_and_replacement_text() {
                 part: GuardPart::Content,
             },
             role: None,
-            context: String::new(),
             current: "unchanged".to_string(),
             token: 0..11,
         },
@@ -430,7 +429,6 @@ fn evaluator_projection_borrows_ordered_span_and_replacement_text() {
                 part: GuardPart::Content,
             },
             role: None,
-            context: String::new(),
             current: "original".to_string(),
             token: 12..22,
         },
@@ -772,7 +770,6 @@ fn evaluator_projection_scans_sorted_rule_output_without_copying_text() {
                 },
             },
             role: None,
-            context: String::new(),
             current: if index % 3 == 0 { "secret" } else { "public" }.into(),
             token: u64::from(index) * 10..u64::from(index) * 10 + 8,
         })
@@ -1079,7 +1076,6 @@ fn final_key_validation_matches_linear_reference_for_ordered_and_fallback_inputs
             .map(|index| GuardSpan {
                 key: key(index),
                 role: None,
-                context: String::new(),
                 current: String::new(),
                 token: 0..2,
             })
@@ -1118,7 +1114,6 @@ fn ordered_final_validation_is_allocation_free_at_inclusive_budget() {
                 part: GuardPart::Content,
             },
             role: None,
-            context: String::new(),
             current: String::new(),
             token: 0..2,
         })

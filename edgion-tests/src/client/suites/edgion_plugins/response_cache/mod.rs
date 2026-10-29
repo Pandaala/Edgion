@@ -483,6 +483,26 @@ struct DynamicMissReceipt {
     origin: Option<(u64, Vec<u8>)>,
 }
 impl DynamicMissReceipt {
+    fn pending_target_endpoints(
+        &mut self,
+        phase: &str,
+        status: u16,
+        log: &crate::access_log_client::AccessLogEntry,
+        before: u64,
+        after: u64,
+    ) -> bool {
+        let pending = phase == "target"
+            && self.origin.is_none()
+            && status == 503
+            && log.status_code() == Some(503)
+            && log.has_diagnostic("error", "BackendEndpointSliceNotFoundByRoundRobinDefault")
+            && before == after;
+        if pending {
+            self.origin = None;
+        }
+        pending
+    }
+
     fn observe(&mut self, cached: bool, body: &[u8], port: u16, activity: DynamicActivity) -> Result<bool> {
         let DynamicActivity {
             before,
@@ -619,6 +639,11 @@ async fn dynamic_contract(ctx: &TestContext, phase: &str) -> Result<()> {
             .get_access_log_with_retry(&reply.marker, 15, 200)
             .await?;
         let after = origin_count(ctx, id, port).await?;
+        // EndpointSlice and rebuilt route publications can arrive independently.
+        if receipt.pending_target_endpoints(phase, reply.status, &log, before, after) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        }
         if reply.status != 200 || log.status_code() != Some(200) {
             bail!("dynamic origin status did not converge");
         }
@@ -673,6 +698,57 @@ impl TestSuite for ResponseCacheDynamicSuite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn target_endpoint_convergence_requires_exact_failure_before_a_new_origin_receipt() {
+        let log = |status, kind: &str, code: &str| crate::access_log_client::AccessLogEntry {
+            data: serde_json::json!({
+                "request_info": {"status": status},
+                "diagnostics": [{"kind": kind, "code": code}],
+            }),
+        };
+        let code = "BackendEndpointSliceNotFoundByRoundRobinDefault";
+        let missing = log(503, "error", code);
+        let mut receipt = DynamicMissReceipt::default();
+        assert!(receipt.pending_target_endpoints("target", 503, &missing, 4, 4));
+        assert!(receipt.origin.is_none());
+        for phase in ["initial", "disabled", "reenabled", "body-filter", "deleted"] {
+            assert!(!receipt.pending_target_endpoints(phase, 503, &missing, 4, 4));
+        }
+        for status in [200, 404, 500, 502, 504] {
+            assert!(!receipt.pending_target_endpoints("target", status, &missing, 4, 4));
+            assert!(!receipt.pending_target_endpoints("target", 503, &log(status, "error", code), 4, 4));
+        }
+        assert!(!receipt.pending_target_endpoints("target", 503, &log(503, "info", code), 4, 4));
+        assert!(!receipt.pending_target_endpoints("target", 503, &log(503, "error", "InternalError"), 4, 4));
+        let absent = crate::access_log_client::AccessLogEntry {
+            data: serde_json::json!({"request_info": {"status": 503}}),
+        };
+        assert!(!receipt.pending_target_endpoints("target", 503, &absent, 4, 4));
+        assert!(!receipt.pending_target_endpoints("target", 503, &missing, 4, 5));
+        assert!(!receipt.pending_target_endpoints("target", 503, &missing, 4, 3));
+
+        let body = |ordinal| format!("public cache fixture backend 30002 origin {ordinal}").into_bytes();
+        let activity = |before, after, upstreams, age| DynamicActivity {
+            before,
+            after,
+            upstreams,
+            age,
+        };
+        // A transient response and a pre-existing hit cannot prove a new target miss.
+        assert!(!receipt.observe(true, &body(4), 30002, activity(4, 4, 0, true)).unwrap());
+        assert!(receipt.pending_target_endpoints("target", 503, &missing, 4, 4));
+        assert!(!receipt
+            .observe(true, &body(5), 30002, activity(4, 5, 1, false))
+            .unwrap());
+        // After the actual target miss, another 503 must fail the status assertion.
+        assert!(!receipt.pending_target_endpoints("target", 503, &missing, 5, 5));
+        assert!(!receipt.observe(true, &body(4), 30002, activity(5, 5, 0, true)).unwrap());
+        assert!(!receipt
+            .observe(true, &body(5), 30002, activity(5, 5, 0, false))
+            .unwrap());
+        assert!(receipt.observe(true, &body(5), 30002, activity(5, 5, 0, true)).unwrap());
+    }
+
     #[test]
     fn dynamic_probe_caps_successful_receipts_and_preserves_bounded_ordinary_error_pages() {
         let id = "response-cache-dynamic";

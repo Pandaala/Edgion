@@ -24,8 +24,8 @@ pub struct CompiledRules {
     rules: Vec<CompiledRule>,
 }
 
-/// A span as the rule engine sees it: a key, an optional role scope, prior
-/// context, and the current text.
+/// A span as the rule engine sees it: a key, an optional role scope, and the
+/// current text.
 ///
 /// Generic over the key so the response-side hook can pass its own bucket key
 /// without a second rule language.
@@ -85,8 +85,8 @@ impl CompiledRules {
 
     /// Evaluate every rule in declared order over the sorted span snapshot.
     ///
-    /// A `Reject` wins immediately and suppresses any replacement, so no
-    /// masked text is computed for a request that is about to be refused.
+    /// A matching `Reject` stops evaluation immediately and discards any
+    /// replacements accumulated by earlier masking rules.
     /// Otherwise each masking rule rewrites the accumulated text of the spans
     /// it matches, and the aggregate replacement budget is checked as it goes.
     pub fn evaluate<K: Copy + Ord>(

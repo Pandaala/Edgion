@@ -16,7 +16,7 @@ use super::traits::header_ext::PluginSessionHeaderExt;
 use super::traits::session::{empty_response_header_map, RequestBodyInspectionCapture, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, WafSessionCapability};
 #[cfg(test)]
-use crate::ai::{AiAttemptPlan, AiRequestContext};
+use crate::ai::AiAttemptPlan;
 use crate::link_sys::template::evaluate_template;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader};

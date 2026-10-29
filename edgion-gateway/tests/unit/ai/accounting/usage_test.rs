@@ -999,7 +999,7 @@ fn streaming_observer_bounded_cross_product_matches_value_oracle() {
 #[tokio::test]
 async fn openai_streaming_processor_updates_quota_only_for_semantic_deltas() {
     let shared = Arc::new(AiUsageShared::default());
-    let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+    let quota = Arc::new(QuotaAccumulator::new(100));
     let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota.clone()), true, false);
 
     for (event, expected) in [
@@ -1135,7 +1135,7 @@ fn public_off_initialization_suppresses_converter_numeric_publication() {
 async fn responses_reports_consumption_for_all_native_json_terminal_statuses() {
     for status in ["completed", "incomplete", "failed", "cancelled"] {
         let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
-        let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+        let quota = Arc::new(QuotaAccumulator::new(1));
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), false, false);
         let body = format!(
             r#"{{"output":[{{"text":"repeated output"}}],"status":"{status}","usage":{{"input_tokens":11,"output_tokens":7}}}}"#
@@ -1197,7 +1197,7 @@ async fn responses_missing_invalid_or_partial_json_usage_never_becomes_an_estima
 #[tokio::test]
 async fn responses_sse_deltas_and_done_repeats_only_charge_one_terminal_usage_total() {
     let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
-    let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+    let quota = Arc::new(QuotaAccumulator::new(1));
     let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, false);
     let body = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\",\"sequence_number\":1}\n\ndata: {\"type\":\"response.output_text.done\",\"text\":\"text\",\"sequence_number\":2}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"output\":[{\"text\":\"text\"}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n";
     let chunks: Vec<_> = body
@@ -1245,7 +1245,7 @@ async fn responses_heartbeat_blocks_do_not_invalidate_usage_or_trigger_active_re
     let body=b": ping\n\nid: transport-id\n\nevent: heartbeat\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}}\n\n: final ping\n\n";
     for active in [false, true] {
         let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
-        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let quota = Arc::new(QuotaAccumulator::new(100));
         let mut processor = UsageExtractionProcessor::new_responses(shared.clone(), Some(quota.clone()), true, active);
         let mut session = mock_session();
         let mut sink = ResponseBodySink::new();
@@ -1276,7 +1276,7 @@ async fn poisoned_chat_payload_keeps_accounting_with_or_without_guarding() {
     use parking_lot::Mutex;
     for guarding in [false, true] {
         let shared = Arc::new(AiUsageShared::default());
-        let quota = Arc::new(QuotaAccumulator::new_for_test(16));
+        let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota.clone()), true, true);
         let batches = Arc::new(Mutex::new(Vec::new()));
         let captured = batches.clone();

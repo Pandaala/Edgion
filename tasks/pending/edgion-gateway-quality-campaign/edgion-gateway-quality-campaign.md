@@ -6,11 +6,11 @@
 |---|---|
 | Created | 2026-10-28 |
 | Updated | 2026-10-29 |
-| Status | in-progress |
+| Status | in-progress; local code pruning resumed |
 | Type | refactor |
 | Baseline | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
 | Active anchor | edgion-gateway |
-| Active serial batch | R0001 authorized baseline repair |
+| Active serial batch | B0048 implementation planning |
 
 ## Objective and authority
 
@@ -24,15 +24,19 @@ The user's integration-test scope overrides the skill default freeze: existing i
 
 - Untracked `impl/`: do not edit, delete, stage or claim coverage.
 - Untracked `tasks/todo/repository-code-pruning.md`: read-only user-owned spec; do not stage.
-- Initial tracked worktree/index were clean. Current implementation changes remain within the independently approved 40-path R0001 allow-list (39 tracked paths and one new script).
+- Initial tracked worktree/index were clean. R0001 and R0002 are committed locally. The current retention batch owns coordinator records only; prior implementation batches are committed.
 
 ## Current execution state
 
-R0001 implementation and independent final review are complete within 40 approved paths. All 107 subprocess wrappers preserve original bodies and existing Gateway/Controller test identities; one intentional capability regression test was added. Latest full workspace tests passed: 13,152 passed, zero failed, 67 ignored across 78 successful target summaries. Workspace check, Clippy (existing advisory warnings), format and static guards passed. TLS real-socket matrix passed three additional repetitions; capability tests passed 31/31; standalone MetricsLifetime passed with owned-process cleanup. Canonical integration preparation completed successfully.
+Baseline repairs are committed: R0001 `6407efe23012ad6f53622f7ad53c33c662c1accb`, R0002 `3a5cdf1fc`. R0002 includes local dependency mitigation and the narrowly reviewed ResponseCache synchronization repair. Its final prepared default integration passed 279 groups, zero failures/timeouts, 11 existing skips; affected codec/Wasm and all required local checks passed. The earlier full workspace sweep passed 13,152/0/67 before later targeted phases; it is not represented as a final-state full sweep.
 
-R0001 now passes every required gate. Final untargeted default integration: 290 groups, 279 passed, zero failed or timed out, 11 existing default skips; all isolated and final residue/metrics/requeue guards passed. The stale DSL fixture discovered during default integration was independently repaired and verified in both targeted and full default execution. Six repaired deferred tasks are closed; D0001 and D0005 remain open. R0001 is ready for the authorized local commit, after which B0001 must be revalidated against the new HEAD.
+The user explicitly deferred the known 14 upstream Zstd/YAML records and instructed local pruning to continue. Those scans remain failing and D0009 stays open, but they no longer block verified local commits. No ignores, source-policy exceptions or new finding waivers. D0001 and D0005 also remain separately open.
 
-Pruning candidates: B0001(build dependencies), B0002(accounting finalizer), B0003(usage tests) are analysis-ready/held behind R0001 commit. Revalidate their evidence against new HEAD before promotion.14 Gateway targets have analyst evidence, zero have terminal independent acceptance. Gateway ledger has1243 rows. Initial tracked-path inventory has9172 rows; classification is provisional until evidence-based disposition. Inventory/search/compile are never semantic coverage.
+Latest code commits: B0007 d989998e9 removed the unused context setter; B0012 95ca47fdf simplified request validation; B0013 0113f0db4 reused response cleanup; B0016 9ed4637b2 removed redundant evaluator checks (97 before/after tests plus 30 final transport tests). All passed independent review and required checks. Earlier commits and retained files are recorded in the changelog.
+
+B0047 committed as 11ea75781. B0048 is planning removal of the redundant quota test constructor and corresponding guard exception within five frozen paths. B0049 quota runtime retention, B0050 adaptive routing and B0051 candidate analysis are queued.
+
+The Gateway ledger has 1243 rows, with 58 independently accepted terminal targets: twenty changed and thirty-eight examined-no-change. Initial repository tracked-path inventory has 9172 rows. Candidate analysis, inventory and successful compilation are not semantic coverage. No user impl/ or original specification is included in commits; no push. The original repository goal remains incomplete.
 
 ## Execution order
 
@@ -50,4 +54,4 @@ Within each anchor use stable module/file order and actual unit/support mounts. 
 - [R0001](batches/R0001-baseline-repair.md)
 - [Deferred index](deferred/INDEX.md)
 
-R0001 verification is complete and pending local commit. No pruning performance or coverage improvement is claimed.
+R0001 is complete and committed. No pruning performance or coverage improvement is claimed.

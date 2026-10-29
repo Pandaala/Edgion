@@ -154,7 +154,7 @@ impl CompiledEvaluator {
         session: &dyn PluginSession,
         spans: &[(GuardSpanKey, &str)],
     ) -> Result<GuardDecision<GuardSpanKey>, &'static str> {
-        if spans.is_empty() || spans.iter().all(|(_, text)| text.is_empty()) {
+        if spans.iter().all(|(_, text)| text.is_empty()) {
             return Ok(GuardDecision::Pass);
         }
         // Data minimization: only the selected bounded span text and its
@@ -172,7 +172,7 @@ impl CompiledEvaluator {
                 &self.client,
                 session,
                 None,
-                self.client.max_response_bytes.min(MAX_DECISION_RESPONSE_BYTES),
+                MAX_DECISION_RESPONSE_BYTES,
                 &[("content-type", "application/json")],
                 Some(request),
                 // Evaluator validation forbids all origin fields, so no

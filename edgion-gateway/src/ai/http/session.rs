@@ -1,15 +1,11 @@
 //! AI capability implementation for the production HTTP session adapter.
 
 use super::PingoraSessionAdapter;
-use crate::ai::{AiAttemptPlan, AiRequestContext};
+use crate::ai::AiAttemptPlan;
 
 impl crate::plugins::runtime::traits::AiSessionCapability for PingoraSessionAdapter<'_> {
     fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
         self.ctx.capture_ai_client_api(api)
-    }
-
-    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
-        self.ctx.try_set_ai_request_context(context)
     }
 
     fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {

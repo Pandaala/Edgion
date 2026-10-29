@@ -1183,13 +1183,11 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             // phase records the outcome.
             terminate_over_quota(&self.shared, sink, session, stream_kind == ResponseStreamKind::Sse);
         } else if self.sse.degraded() {
-            // `quota.add_output_units` is only ever called from inside
-            // `feed_each`'s visitor, and a degraded decoder returns from
-            // `feed_each` immediately for the rest of the stream. So from here
-            // on nothing grows the accumulator, no flush is triggered, and
-            // `over_limit()` can never flip — the branch above is dead for this
-            // request. Without this arm the upstream would keep generating
-            // billable tokens with enforcement silently switched off.
+            // After degradation, `feed_records` emits `Opaque` records, which
+            // cannot advance Chat semantic output units via `add_output_units`.
+            // Active enforcement must fail closed rather than let upstream
+            // generation continue without reliable quota observation. An
+            // in-flight worker flush may still publish an over-limit result.
             //
             // Checked after the over-limit arm on purpose: if the limit was
             // already reached, that is the accurate reason to report, and the

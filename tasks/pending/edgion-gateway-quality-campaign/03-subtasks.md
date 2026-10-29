@@ -4,59 +4,59 @@ Inventory is not semantic coverage. All rows await technical inspection.
 
 | Anchor crate | Path | Module | Status | Batch | Outcome | Last checked commit |
 |---|---|---|---|---|---|---|
-| edgion-gateway | edgion-gateway/Cargo.toml | Cargo.toml | in-progress | B0001 | Read-only analysis | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/build.rs | build.rs | in-progress | B0001 | Read-only analysis | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/src/ai/accounting/finalize.rs | src/ai | analysis-ready | B0002 | Read-only analysis | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/src/ai/accounting/mod.rs | src/ai | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/src/ai/accounting/usage.rs | src/ai | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/src/ai/config.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/connectors/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/connectors/provider.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/context.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/budget.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/head.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/limits.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/request.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/response.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/conversion/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/request/evaluator.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/request/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/request/plugin.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/request/rules.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/request/spans.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/semantic/attached.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/semantic/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/semantic/plugin.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/semantic/protocol.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/guards/semantic/response.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/http/attempt.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/http/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/http/proxy.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/http/response.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/http/session.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/error.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/processor.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/request.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/usage.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/error.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/json_span.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/canonical_sse.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/error.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/json_usage.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/request.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/responses.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/openai/terminal.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/protocols/request.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/quota/mod.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/quota/runtime.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/routing/adaptive.rs | src/ai | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/src/ai/routing/candidate.rs | src/ai | pending | - | Not inspected | - |
+| edgion-gateway | edgion-gateway/Cargo.toml | Cargo.toml | changed | B0001 | Removed two redundant direct dependencies; all surviving features preserved | 3a5cdf1fc324698de574a01f4933003395e43e65 |
+| edgion-gateway | edgion-gateway/build.rs | build.rs | examined-no-change | B0001 | Retained early allocator/TLS exclusivity diagnostics | 3a5cdf1fc324698de574a01f4933003395e43e65 |
+| edgion-gateway | edgion-gateway/src/ai/accounting/finalize.rs | src/ai | changed | B0002 | Removed impossible metric accessor error wrapper; 40 tests preserved | b9e90b799191b6934f4d073cf7a6b61a9a447a05 |
+| edgion-gateway | edgion-gateway/src/ai/accounting/mod.rs | src/ai | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/src/ai/accounting/usage.rs | src/ai | changed | B0003 | Removed unused parser entry / corrected comment; 52 tests retained | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/src/ai/config.rs | src/ai | examined-no-change | B0004 | Retained public config, unique startup runtime and live test-util initialization | 26567c97d2a662874fbbfb5d5bc412c3d681e34a |
+| edgion-gateway | edgion-gateway/src/ai/connectors/mod.rs | src/ai | examined-no-change | B0005 | Retained live provider registration and accurate module contract | 86ea193ba666f3b40f887b722fd4a4c5d40d83c8 |
+| edgion-gateway | edgion-gateway/src/ai/connectors/provider.rs | src/ai | examined-no-change | B0006 | Retained live provider, version and credential isolation contracts | 93e535dc94e6c5ad4289b772036bf36dc04028b5 |
+| edgion-gateway | edgion-gateway/src/ai/context.rs | src/ai | changed | B0007 | Removed unused setter after adjudication; replacement regression and 145 tests passed | 948681d0d |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/budget.rs | src/ai | examined-no-change | B0008 | Joint admission/output RAII ownership independently retained; project checks passed | d989998e9 |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/head.rs | src/ai | examined-no-change | B0009 | Distinct header phases, bounded metadata and deadline ownership retained; checks passed | c52c6d323 |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/limits.rs | src/ai | examined-no-change | B0010 | Live arithmetic, capacity and failure-atomic limits retained; checks passed | 954eca8d9 |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/mod.rs | src/ai | examined-no-change | B0011 | Live module/export boundary independently retained; checks passed | 8ef2ff750 |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/request.rs | src/ai | changed | B0012 | Removed redundant field scan and identical rejection arm; 58 tests and checks passed | e7283a6d5 |
+| edgion-gateway | edgion-gateway/src/ai/conversion/chat_to_anthropic/response.rs | src/ai | changed | B0013 | Reused identical cleanup and removed redundant terminal condition; 71 tests/checks passed | 95ca47fdf |
+| edgion-gateway | edgion-gateway/src/ai/conversion/mod.rs | src/ai | examined-no-change | B0014 | Live conversion module retained independently; checks passed | 0113f0db4 |
+| edgion-gateway | edgion-gateway/src/ai/guards/mod.rs | src/ai | examined-no-change | B0015 | Live guard module boundary independently retained; checks passed | 84362ce88 |
+| edgion-gateway | edgion-gateway/src/ai/guards/request/evaluator.rs | src/ai | changed | B0016 | Removed redundant empty test and duplicate cap merge; 97 plus30 tests/checks passed | 52cd30aeb |
+| edgion-gateway | edgion-gateway/src/ai/guards/request/mod.rs | src/ai | examined-no-change | B0017 | Live private module and facade export retained independently; checks passed | 9ed4637b2 |
+| edgion-gateway | edgion-gateway/src/ai/guards/request/plugin.rs | src/ai | examined-no-change | B0018 | Distinct validation, projection and publication boundaries retained; checks passed | 826c5ff8a |
+| edgion-gateway | edgion-gateway/src/ai/guards/request/rules.rs | src/ai | changed | B0019 | Corrected two misleading comments; executable/test bytes unchanged; checks passed | b4359d4f0 |
+| edgion-gateway | edgion-gateway/src/ai/guards/request/spans.rs | src/ai | changed | B0020 | Removed unused request context field; 81 tests and all checks passed | d3f599a04 |
+| edgion-gateway | edgion-gateway/src/ai/guards/semantic/attached.rs | src/ai | examined-no-change | B0021 | Live lifecycle/summary/head ownership independently retained; checks passed | 976fcd855 |
+| edgion-gateway | edgion-gateway/src/ai/guards/semantic/mod.rs | src/ai | examined-no-change | B0022 | Live module plus nameable public argument type retained; checks passed | 4ad7fc8f5 |
+| edgion-gateway | edgion-gateway/src/ai/guards/semantic/plugin.rs | src/ai | changed | B0023 | Removed unused internal log parameter; five tests and checks passed | 7e660d216 |
+| edgion-gateway | edgion-gateway/src/ai/guards/semantic/protocol.rs | src/ai | examined-no-change | B0024 | Live strict protocol and serialized context retained independently; checks passed | 72f766c6a |
+| edgion-gateway | edgion-gateway/src/ai/guards/semantic/response.rs | src/ai | changed | B0025 | Removed redundant empty check and duplicate cap merge;55 tests/checks passed | 1a274252a |
+| edgion-gateway | edgion-gateway/src/ai/http/attempt.rs | src/ai | changed | B0026 | Merged identical admission arms;200 tests and all checks passed | ad1826069 |
+| edgion-gateway | edgion-gateway/src/ai/http/mod.rs | src/ai | changed | B0027 | Removed redundant empty-log guard;five tests and checks passed | b91bfde02 |
+| edgion-gateway | edgion-gateway/src/ai/http/proxy.rs | src/ai | changed | B0028 | Merged identical final quota rejection arms;40 tests/checks passed | a84635497 |
+| edgion-gateway | edgion-gateway/src/ai/http/response.rs | src/ai | examined-no-change | B0029 | Raw encoding and cooldown priority independently retained;checks passed | 48a9e2ef0 |
+| edgion-gateway | edgion-gateway/src/ai/http/session.rs | src/ai | examined-no-change | B0030 | Current shared-helper capability bridge independently retained;checks passed | d676350bc |
+| edgion-gateway | edgion-gateway/src/ai/mod.rs | src/ai | changed | B0031 | Removed unused count helper/export and corrected description;30 tests/checks passed | 6b70dca71 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/error.rs | src/ai | examined-no-change | B0032 | Fixed SDK/error event boundaries and caching independently retained;checks passed | 5e8c5e9a5 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/mod.rs | src/ai | examined-no-change | B0033 | Live native protocol module boundary independently retained;checks passed | 3d1c960c7 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/processor.rs | src/ai | examined-no-change | B0034 | Native passthrough, usage and terminal owners independently retained;checks passed | 660b6e9f5 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/request.rs | src/ai | changed | B0035 | Removed unused private Default derive;ten tests and checks passed | e12374a9f |
+| edgion-gateway | edgion-gateway/src/ai/protocols/anthropic/usage.rs | src/ai | examined-no-change | B0036 | Raw cumulative usage and last-wins boundaries independently retained;checks passed | 0fa824a07 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/error.rs | src/ai | examined-no-change | B0037 | Early client-dialect and canonical error ownership retained;checks passed | 334be0de1 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/json_span.rs | src/ai | changed | B0038 | Simplified mode-guaranteed condition;36 tests and checks passed | e2eb9b5ae |
+| edgion-gateway | edgion-gateway/src/ai/protocols/mod.rs | src/ai | examined-no-change | B0039 | Live protocol modules and current public error API retained;checks passed | c7869371c |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/canonical_sse.rs | src/ai | examined-no-change | B0040 | Independently verified framing, accounting and bounded raw ownership | 67335a70a |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/error.rs | src/ai | examined-no-change | B0041 | Independently verified shared error vocabulary and SDK refusal shapes | e2eb9b5ae |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/json_usage.rs | src/ai | examined-no-change | B0042 | Independently verified last-wins, EOF and usage boundaries | 67335a70a |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/mod.rs | src/ai | examined-no-change | B0043 | Independently verified six live modules and current error API | 67335a70a |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/request.rs | src/ai | examined-no-change | B0044 | Independently verified parsing and streaming gate ownership | 9a4043208 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/responses.rs | src/ai | examined-no-change | B0045 | Independently verified terminal observations and bounded errors | d56ffca52 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/openai/terminal.rs | src/ai | changed | B0046 | Removed unreachable renderer argument states; 42 before/final tests and independent review passed | 745fcedf2 |
+| edgion-gateway | edgion-gateway/src/ai/protocols/request.rs | src/ai | examined-no-change | B0047 | Independently verified borrowed parsing and byte boundaries | a9f1e6566 |
+| edgion-gateway | edgion-gateway/src/ai/quota/mod.rs | src/ai | in-progress | B0048 | Remove redundant test constructor and guard exception; plan-first pending | e405b125d |
+| edgion-gateway | edgion-gateway/src/ai/quota/runtime.rs | src/ai | analysis-ready | B0049 | Distinct admission, throttle and settlement lifecycles; refresh after B0048 | e405b125d |
+| edgion-gateway | edgion-gateway/src/ai/routing/adaptive.rs | src/ai | analysis-ready | B0050 | Remove unused production alias; existing test uses canonical reconcile | 64fc8ffa5 |
+| edgion-gateway | edgion-gateway/src/ai/routing/candidate.rs | src/ai | analysis-ready | B0051 | Remove repeated negative-weight helper after canonical validation; plan-first pending | 11ea75781 |
 | edgion-gateway | edgion-gateway/src/ai/routing/mod.rs | src/ai | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/src/ai/routing/model_router.rs | src/ai | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/src/ai/runtime/attempt.rs | src/ai | pending | - | Not inspected | - |
@@ -622,12 +622,12 @@ Inventory is not semantic coverage. All rows await technical inspection.
 | edgion-gateway | edgion-gateway/tests/listener_tls_tcp_alpn.rs | tests/listener_tls_tcp_alpn.rs | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/otlp_transport.rs | tests/otlp_transport.rs | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/rate_limit_local_overflow_redis.rs | tests/rate_limit_local_overflow_redis.rs | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/104_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/119_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/158_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/27_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/68_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/89_macro_definition.rs | tests/support | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/104_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/119_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/158_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/27_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/68_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/support/ai/accounting/usage_test/89_macro_definition.rs | tests/support | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
 | edgion-gateway | edgion-gateway/tests/support/ai/routing/adaptive_test/753_function_item.rs | tests/support | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/support/ai/runtime/backend_store_test/424_static_item.rs | tests/support | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/support/ai/runtime/backend_store_test/431_struct_item.rs | tests/support | pending | - | Not inspected | - |
@@ -703,9 +703,9 @@ Inventory is not semantic coverage. All rows await technical inspection.
 | edgion-gateway | edgion-gateway/tests/support/tls/store/tls_store_test/577_impl_item.rs | tests/support | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/support/wasm_stream_transport/lifecycle_probe.wat | tests/support | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/tls_passthrough_clienthello.rs | tests/tls_passthrough_clienthello.rs | pending | - | Not inspected | - |
-| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/finalize_test.rs | tests/unit | analysis-ready | B0002 | Read-only analysis | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/usage_test.rs | tests/unit | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
-| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/usage_test/legacy_usage_observer.rs | tests/unit | analysis-ready | B0003 | Read-only analysis; mount membership to verify | 75c4d51ecd195193ba6a91d210736c0be4e4676f |
+| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/finalize_test.rs | tests/unit | changed | B0002 | Removed impossible metric accessor error wrapper; 40 tests preserved | b9e90b799191b6934f4d073cf7a6b61a9a447a05 |
+| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/usage_test.rs | tests/unit | examined-no-change | B0003 | Retained live module, test or visitor support | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
+| edgion-gateway | edgion-gateway/tests/unit/ai/accounting/usage_test/legacy_usage_observer.rs | tests/unit | changed | B0003 | Removed unused parser entry / corrected comment; 52 tests retained | c9d77bd98fac39e48bb06fbeb4ed799c779338f8 |
 | edgion-gateway | edgion-gateway/tests/unit/ai/config_test.rs | tests/unit | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/unit/ai/connectors/provider_test.rs | tests/unit | pending | - | Not inspected | - |
 | edgion-gateway | edgion-gateway/tests/unit/ai/context_test.rs | tests/unit | pending | - | Not inspected | - |

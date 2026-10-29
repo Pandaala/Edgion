@@ -9,7 +9,7 @@ knowledge_type: intentional-design
 ## Decision and scope
 
 The AI portion of ARCH-001 uses one required `PluginSession::ai()` accessor
-returning `&mut dyn AiSessionCapability`. Twelve operations live in
+returning `&mut dyn AiSessionCapability`. Eleven operations live in
 `plugins/runtime/traits/ai_session.rs`; PingoraSessionAdapter implements the trait
 directly and returns itself. The implementation lives physically in
 `ai/http/session.rs`, mounted only as a private child of `session_adapter.rs`;
@@ -27,8 +27,12 @@ awaits. All current feature read consumers already hold mutable session access.
 
 ## Transfer and lifecycle contracts
 
-Client API capture precedes AiProxy rejection. Context and immutable-plan first
-writers retain their resident value and consume rejected offers. Semantic
+Client API capture precedes AiProxy rejection. The immutable-plan first writer
+retains its resident value and consumes rejected offers. Request context is
+installed by the prepared-attempt commit after admission and successful peer
+creation, replacing attempt-local provider/usage while retaining request quota
+and status when the new context omits them. The former context first-writer
+capability had no production business callers and has been removed. Semantic
 processor installation also consumes rejected offers. Canonical publication has
 a distinct contract: failure returns the original offered batch unchanged and
 keeps any resident batch; take consumes the resident exactly once. These
@@ -53,7 +57,8 @@ No unavailable fallback instance or production overhead is added for mocks.
 The later Task 06 cancellation repair adds a transport-free response capability.
 Response processors call its four AI stream operations directly; production
 response and full-session adapters share the same context-owned implementation.
-The twelve-operation request integration trait remains unchanged. The original
+That repair left the request integration trait unchanged; the later unused
+context-setter removal reduced it from twelve operations to eleven. The original
 bounded decision below did not prohibit that separately reviewed response split.
 See [response cancellation ownership](../regression-guards/response-callback-downstream-cancellation.md).
 
@@ -71,7 +76,8 @@ Sources: traits/ai_session.rs, traits/session.rs, session_adapter.rs, ai/context
 AiProxy, request/semantic guards, canonical SSE, usage extraction, streaming
 Chat-to-Anthropic conversion and the response-body driver. Discriminating tests
 cover real-type automock/Send short borrows, original batch pointer retention,
-resident preservation/single take, allocation-free absent access, first writers,
+resident preservation/single take, allocation-free absent access, client API and
+plan first writers, attempt context replacement with quota/status inheritance,
 guard generation, duplicate/frozen processor offer drops and head-owner disable.
 Fresh executed check receipts and independent acceptance belong in the bounded
 implementation task. Historical integration tests are not fresh refactor evidence.

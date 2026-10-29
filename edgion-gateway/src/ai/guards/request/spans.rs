@@ -63,9 +63,6 @@ pub struct GuardSpanKey {
 pub struct GuardSpan {
     pub key: GuardSpanKey,
     pub role: Option<AiGuardRole>,
-    /// Prior context. Always empty on the request side; the response-side hook
-    /// supplies the window overlap.
-    pub context: String,
     pub current: String,
     pub token: std::ops::Range<u64>,
 }
@@ -163,7 +160,6 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
             spans.push(GuardSpan {
                 key,
                 role,
-                context: String::new(),
                 current: text,
                 token: token.start as u64..token.end as u64,
             });

@@ -22,7 +22,7 @@ async fn run(body: &str, sse: bool, known_unknown: bool) -> Arc<AiUsageShared> {
     if known_unknown {
         shared.mark_observation_unavailable();
     }
-    let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+    let quota = Arc::new(QuotaAccumulator::new(1));
     let mut processor = MessagesProcessor::new(shared.clone(), Some(quota.clone()), sse, false, "m".into());
     let mut session = MockPluginSession::new();
     session.expect_record_error().returning(|_| {});
@@ -126,7 +126,7 @@ async fn native_iteration_attribution_rejects_only_invalid_active_streams() {
         (r#"[{"type":"message"}]"#, true),
     ] {
         let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
-        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let quota = Arc::new(QuotaAccumulator::new(100));
         let mut processor = MessagesProcessor::new(shared.clone(), Some(quota), true, true, "m".into());
         let body = iteration_stream(r#""model":"wrong","model":"m-v1""#, iterations);
         let mut session = MockPluginSession::new();
@@ -257,7 +257,7 @@ async fn native_reject_owns_one_error_event_while_throttle_does_not_cut() {
     use crate::response::terminal::TerminalEmission;
     for reject in [true, false] {
         let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
-        let quota = Arc::new(QuotaAccumulator::new_for_test(1));
+        let quota = Arc::new(QuotaAccumulator::new(1));
         quota.mark_over_limit();
         let mut processor = MessagesProcessor::new(shared.clone(), Some(quota), true, reject, "m".into());
         let mut session = MockPluginSession::new();

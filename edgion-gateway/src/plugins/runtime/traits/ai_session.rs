@@ -1,6 +1,6 @@
 //! AI operations at the plugin/session integration boundary.
 
-use crate::ai::{AiAttemptPlan, AiRequestContext};
+use crate::ai::AiAttemptPlan;
 
 /// Short-lived access to the request's AI integration operations.
 ///
@@ -12,9 +12,6 @@ use crate::ai::{AiAttemptPlan, AiRequestContext};
 pub trait AiSessionCapability: Send + Sync {
     /// Capture the client API before local rejection; a conflicting API is refused.
     fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool;
-
-    /// First writer wins. Every offer is consumed, including a rejected context.
-    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool;
 
     /// First writer wins. Every offer is consumed, including a rejected plan.
     fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool;

@@ -102,11 +102,6 @@ impl QuotaAccumulator {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_for_test(flush_tokens: u64) -> Self {
-        Self::new(flush_tokens)
-    }
-
-    #[cfg(test)]
     pub(crate) fn observed_output_for_test(&self) -> u64 {
         self.observed_output.load(Ordering::Relaxed)
     }

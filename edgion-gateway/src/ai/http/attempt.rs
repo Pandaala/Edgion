@@ -157,7 +157,7 @@ pub(crate) async fn select_peer(
                     }
                 }
             }
-            AiAttemptAdmission::Skip => {
+            AiAttemptAdmission::Skip | AiAttemptAdmission::DependencyDenied => {
                 if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                     return Err(response);
                 }
@@ -171,15 +171,6 @@ pub(crate) async fn select_peer(
                     return Err(response);
                 }
                 if !handle_ai_predispatch_service_failure(ctx) {
-                    end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                    return Err(PingoraError::new(ErrorType::InternalError));
-                }
-            }
-            AiAttemptAdmission::DependencyDenied => {
-                if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                    return Err(response);
-                }
-                if !handle_ai_predispatch_failure(ctx, true) {
                     end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                     return Err(PingoraError::new(ErrorType::InternalError));
                 }

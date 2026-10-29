@@ -1,4 +1,4 @@
-//! AI Gateway runtime configuration.
+//! AI Gateway runtime, routing, protocols, and accounting.
 
 pub mod accounting;
 pub mod config;
@@ -36,7 +36,7 @@ pub use accounting::usage::{
     GenAiAttemptUsageSource, GenAiSummary, ReportedAiUsage, UsageExtractionProcessor,
 };
 pub use runtime::backend_store::{
-    count_ai_backends, create_edgion_backend_handler, get_global_ai_backend_store, get_global_edgion_backend_store,
+    create_edgion_backend_handler, get_global_ai_backend_store, get_global_edgion_backend_store,
     global_ai_backend_store, global_edgion_backend_store, AiBackendSnapshot, AiBackendStore, EdgionBackendStore,
     ResolvedModel, RuntimeAiBackend, RuntimeAiCredential, RuntimeAiCredentialPool, RuntimeAiEndpoint,
 };

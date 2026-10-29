@@ -256,7 +256,7 @@ async fn retry_metrics_sum_all_attempts_and_emit_once() {
     let runtime = &ctx.ai_state().unwrap().attempt_runtime;
     let expected = runtime.attempts().to_vec();
     let ledger_ptr = runtime.attempts().as_ptr();
-    let metric_totals = runtime.metric_totals().unwrap().to_vec();
+    let metric_totals = runtime.metric_totals().to_vec();
     let truncated = runtime.attempts_truncated();
     assert_eq!(runtime.charged_request_tokens(), Ok(19));
 
@@ -280,7 +280,7 @@ async fn retry_metrics_sum_all_attempts_and_emit_once() {
     assert_eq!(state.summary.as_ref(), Some(&first));
     assert_eq!(state.summary.as_ref().unwrap().attempts.as_ptr(), ledger_ptr);
     assert_eq!(state.attempt_runtime.charged_request_tokens(), Ok(19));
-    let after_totals = state.attempt_runtime.metric_totals().unwrap();
+    let after_totals = state.attempt_runtime.metric_totals();
     assert_eq!(after_totals.len(), metric_totals.len());
     for (before, after) in metric_totals.iter().zip(after_totals) {
         assert_eq!(before.provider, after.provider);
