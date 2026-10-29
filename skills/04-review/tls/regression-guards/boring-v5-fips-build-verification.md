@@ -125,3 +125,11 @@ backend defaults at either level. Curve policy is EGC-only and still rejects
 X25519 under active FIPS, even with a cipher override. Certificate callbacks no
 longer apply a second FIPS profile. Minimum versions inherit EGC defaults with
 local EdgionTls overrides. Both language operator guides describe these axes.
+
+`CAND-DOC-001` corrected the detailed cipher decision trees in both operator
+guides: they must include the EGC fallback and explicit-empty semantics, just
+like the introductory precedence text. With local ciphers absent and EGC set
+to `[]` or an explicit expression, jumping directly to FIPS defaults predicts
+the wrong cipher policy. Check these examples against `CipherPolicy::resolve`
+and `apply`; curve restrictions remain independent. This is a documentation
+correction, not a runtime policy change or new FIPS verification claim.

@@ -217,8 +217,9 @@ spec:
 决策顺序：
 
 ```text
-运维设置了 spec.ciphers            -> 使用它们（覆盖优先）
-否则 fips_policy_active() 为真      -> 应用批准的默认密码套件 + 曲线
+设置了 EdgionTls.spec.ciphers       -> 使用该列表；[] 使用后端默认套件
+否则设置了 EGC downstreamTls.ciphers -> 使用该列表；[] 使用后端默认套件
+否则 fips_policy_active() 为真      -> 应用批准的默认密码套件
   （FIPS 构建上恒真，或 fips_policy=on，或 fips_policy=auto 且宿主机为 FIPS 节点）
 否则                                -> 保留 BoringSSL 默认（非 FIPS 行为）
 ```

@@ -244,7 +244,8 @@ spec:
 Decision order:
 
 ```text
-operator set spec.ciphers        -> use them (override wins)
+EdgionTls.spec.ciphers is set    -> use that list; [] selects backend defaults
+else EGC downstreamTls.ciphers is set -> use that list; [] selects backend defaults
 else fips_policy_active()        -> apply the approved default cipher list
   (true on a FIPS build, OR on fips_policy=on, OR on fips_policy=auto with a FIPS host)
 else                              -> leave the BoringSSL default (non-FIPS behavior)
