@@ -59,9 +59,13 @@ names, plus HmacAuth's upstreamHeaderFields, use the canonical Resources HTTP to
 check during shared Controller/Gateway admission. Existing empty/control checks
 retain precedence; new diagnostics identify only the field or index. HMAC metadata
 selection preserves exact whitelist spelling, and signed-header pseudo names are
-outside this check. These producers do not adopt claim-projection normalization,
-collision rules or sanitization: valid-name writes and skipped-write behavior remain
-unchanged. This is character admission, not an additional header-length policy.
+outside this check. That change did not adopt claim-projection normalization,
+collision rules or sanitization; preserving skipped writes was historical scope, not
+acceptance of client input on active certificate outputs. ISSUE-003 subsequently clears
+HeaderCertAuth's active destinations, including absent SAN and anonymous continuations;
+see the [certificate projection guard](../../header-cert-auth/regression-guards/certificate-identity-header-projection.md).
+HMAC behavior remains outside that correction. Character admission is not an additional
+header-length policy.
 
 - Appending or joining competing claims into one header was rejected because the mapping expresses
   one source per destination; implicit multi-value semantics would change what an upstream

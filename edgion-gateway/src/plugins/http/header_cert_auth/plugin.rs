@@ -42,6 +42,11 @@ pub struct HeaderCertAuth {
     ca_pool: Vec<ParsedCa>,
 }
 
+enum HeaderApplicationError {
+    Identity(&'static str),
+    Mutation,
+}
+
 impl HeaderCertAuth {
     /// Create plugin instance.
     pub fn new(field: &BoundHeaderCertAuth<'_>) -> Self {
@@ -128,36 +133,71 @@ impl HeaderCertAuth {
         value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
     }
 
-    fn set_anonymous_headers(&self, session: &mut dyn PluginSession) {
-        let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-        let _ = set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, "anonymous");
+    fn clear_identity_headers(&self, session: &mut dyn PluginSession) -> Result<(), HeaderApplicationError> {
+        let headers = &self.config.upstream_headers;
+        let names: &[&str] = if self.config.skip_consumer_lookup {
+            &[&headers.dn_header, &headers.san_header, &headers.fingerprint_header]
+        } else {
+            &[&headers.consumer_header, &headers.fingerprint_header]
+        };
+        // Clear every active destination before any write, including aliased names.
+        for name in names {
+            session
+                .remove_request_header(name)
+                .map_err(|_| HeaderApplicationError::Mutation)?;
+        }
+        Ok(())
     }
 
-    fn apply_headers(&self, session: &mut dyn PluginSession, cert_info: &ClientCertInfo) -> Result<(), &'static str> {
+    fn set_anonymous_headers(&self, session: &mut dyn PluginSession) -> Result<(), HeaderApplicationError> {
+        set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")
+            .map_err(|_| HeaderApplicationError::Mutation)?;
+        set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, "anonymous")
+            .map_err(|_| HeaderApplicationError::Mutation)
+    }
+
+    fn header_failure(plugin_log: &mut PluginLog) -> PluginRunningResult {
+        plugin_log.push_err("certificate header mutation failed");
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None,
+        }
+    }
+
+    fn apply_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        cert_info: &ClientCertInfo,
+    ) -> Result<(), HeaderApplicationError> {
         if self.config.skip_consumer_lookup {
             if !Self::contains_header_control_chars(&cert_info.subject) {
-                let _ =
-                    set_sensitive_request_header(session, &self.config.upstream_headers.dn_header, &cert_info.subject);
+                set_sensitive_request_header(session, &self.config.upstream_headers.dn_header, &cert_info.subject)
+                    .map_err(|_| HeaderApplicationError::Mutation)?;
             }
             if let Some(san) = cert_info.sans.first() {
                 if !Self::contains_header_control_chars(san) {
-                    let _ = set_sensitive_request_header(session, &self.config.upstream_headers.san_header, san);
+                    set_sensitive_request_header(session, &self.config.upstream_headers.san_header, san)
+                        .map_err(|_| HeaderApplicationError::Mutation)?;
                 }
             }
         } else {
-            let identity = self.get_identity(cert_info).ok_or("identity-not-found")?;
+            let identity = self
+                .get_identity(cert_info)
+                .ok_or(HeaderApplicationError::Identity("identity-not-found"))?;
             if Self::contains_header_control_chars(identity) {
-                return Err("invalid-identity");
+                return Err(HeaderApplicationError::Identity("invalid-identity"));
             }
-            let _ = set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, identity);
+            set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, identity)
+                .map_err(|_| HeaderApplicationError::Mutation)?;
         }
 
         if !Self::contains_header_control_chars(&cert_info.fingerprint) {
-            let _ = set_sensitive_request_header(
+            set_sensitive_request_header(
                 session,
                 &self.config.upstream_headers.fingerprint_header,
                 &cert_info.fingerprint,
-            );
+            )
+            .map_err(|_| HeaderApplicationError::Mutation)?;
         }
         Ok(())
     }
@@ -292,13 +332,26 @@ impl RequestFilter for HeaderCertAuth {
             CertSourceMode::Header => self.extract_from_header(session),
         };
 
+        // Extract first: Header mode may use the same name for input and output.
+        // Cleanup also applies to anonymous continuations without a certificate.
+        if self.clear_identity_headers(session).is_err() {
+            return Self::header_failure(plugin_log);
+        }
+
         let cert_info = match cert_info {
             Ok(info) => info,
             Err(detail) => {
                 if self.config.allow_anonymous {
-                    self.set_anonymous_headers(session);
-                    if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
-                        let _ = session.remove_request_header(&self.config.certificate_header_name);
+                    if self.set_anonymous_headers(session).is_err() {
+                        return Self::header_failure(plugin_log);
+                    }
+                    if self.config.mode == CertSourceMode::Header
+                        && self.config.hide_credentials
+                        && session
+                            .remove_request_header(&self.config.certificate_header_name)
+                            .is_err()
+                    {
+                        return Self::header_failure(plugin_log);
                     }
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
@@ -310,10 +363,21 @@ impl RequestFilter for HeaderCertAuth {
 
         if let Err(detail) = self.apply_headers(session, &cert_info) {
             drop(cert_info);
+            let detail = match detail {
+                HeaderApplicationError::Mutation => return Self::header_failure(plugin_log),
+                HeaderApplicationError::Identity(detail) => detail,
+            };
             if self.config.allow_anonymous {
-                self.set_anonymous_headers(session);
-                if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
-                    let _ = session.remove_request_header(&self.config.certificate_header_name);
+                if self.set_anonymous_headers(session).is_err() {
+                    return Self::header_failure(plugin_log);
+                }
+                if self.config.mode == CertSourceMode::Header
+                    && self.config.hide_credentials
+                    && session
+                        .remove_request_header(&self.config.certificate_header_name)
+                        .is_err()
+                {
+                    return Self::header_failure(plugin_log);
                 }
                 plugin_log.push("Allow anonymous");
                 return PluginRunningResult::GoodNext;
@@ -322,8 +386,13 @@ impl RequestFilter for HeaderCertAuth {
             return self.reject(session, plugin_log, detail).await;
         }
 
-        if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
-            let _ = session.remove_request_header(&self.config.certificate_header_name);
+        if self.config.mode == CertSourceMode::Header
+            && self.config.hide_credentials
+            && session
+                .remove_request_header(&self.config.certificate_header_name)
+                .is_err()
+        {
+            return Self::header_failure(plugin_log);
         }
 
         plugin_log.push("cert verify:ok");

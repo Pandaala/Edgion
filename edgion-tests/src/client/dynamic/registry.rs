@@ -78,6 +78,7 @@ fn scenarios_for_fixture(metrics_lifetime: bool) -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::gateway_class_params_flap::SCENARIO,
         crate::dynamic::scenarios::edgion_tls_last_known_good::SCENARIO,
         crate::dynamic::scenarios::allowed_san_regex_ignore_case::SCENARIO,
+        crate::dynamic::scenarios::header_cert_headers::SCENARIO,
         crate::dynamic::scenarios::waf_dynamic::SCENARIO,
         crate::dynamic::scenarios::waf_dynamic::EXPENSIVE_SCENARIO,
         crate::dynamic::scenarios::wasm_runtime_ownership::SCENARIO,

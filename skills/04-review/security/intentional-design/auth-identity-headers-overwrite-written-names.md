@@ -20,6 +20,9 @@ explicitly configured claim destinations. ISSUE-002 now clears all configured Jw
 OpenID Connect claim and JweDecrypt payload projection destinations before adding bounded,
 trusted values, including the executing plugins' no-claim successful continuations.
 See the [projection guard](../regression-guards/auth-claim-header-projection.md).
+ISSUE-003 likewise clears HeaderCertAuth's active certificate identity destinations;
+missing SANs and anonymous continuations cannot retain client input there. See the
+[certificate projection guard](../../header-cert-auth/regression-guards/certificate-identity-header-projection.md).
 D0052 historically fixed ordering and collisions without changing skip-vs-strip behavior.
 
 Fix suggestions of the form "unify identity-header sanitization across every auth plugin",

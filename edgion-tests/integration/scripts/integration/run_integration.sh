@@ -1997,6 +1997,8 @@ run_all_tests() {
                         run_test "Dyn_DslQueryLookupDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslQueryLookupDynamic" || test_failed=true
                     elif [ "$G_ITEM" = "JwtClaimHeadersDynamic" ]; then
                         run_test "Dyn_JwtClaimHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario JwtClaimHeadersDynamic" || test_failed=true
+                    elif [ "$G_ITEM" = "HeaderCertHeadersDynamic" ]; then
+                        run_test "Dyn_HeaderCertHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario HeaderCertHeadersDynamic" || test_failed=true
                     elif [ "$G_ITEM" = "DslXmlDynamic" ]; then
                         run_test "Dyn_DslXmlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslXmlDynamic" || test_failed=true
                     elif ! should_skip_test "$test_name"; then
@@ -2016,6 +2018,9 @@ run_all_tests() {
                     fi
                     if [ "$G_ITEM" = "JwtAuth" ]; then
                         run_test "Dyn_JwtClaimHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario JwtClaimHeadersDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "HeaderCertAuth" ]; then
+                        run_test "Dyn_HeaderCertHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario HeaderCertHeadersDynamic" || test_failed=true
                     fi
                     if [ "$G_ITEM" = "GraphqlGuard" ]; then
                         run_test "Dyn_GraphqlGuardDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlGuardDynamic" || test_failed=true
@@ -2673,6 +2678,8 @@ main() {
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/GraphqlRateLimit"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/JwtClaimHeadersDynamic" ]; then
                     suites="${base_suites},EdgionPlugins/JwtAuth"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/HeaderCertAuth" ] || [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/HeaderCertHeadersDynamic" ]; then
+                    suites="${base_suites},EdgionTls/mTLS,EdgionPlugins/HeaderCertAuth"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/AiGuard" ]; then
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/AiGuard"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Guardrail" ]; then

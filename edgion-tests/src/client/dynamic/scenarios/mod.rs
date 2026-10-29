@@ -31,6 +31,7 @@ pub mod form_json_transform;
 pub mod gateway_class_params_flap;
 pub mod gateway_dynamic;
 pub mod grpc_route_delegation_dynamic;
+pub mod header_cert_headers;
 pub mod json_schema_validation;
 pub mod l4_timeout_hot_reload;
 pub mod link_sys_disabled_tls;

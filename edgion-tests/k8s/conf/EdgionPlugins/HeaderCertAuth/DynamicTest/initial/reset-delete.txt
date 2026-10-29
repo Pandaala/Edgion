@@ -1,0 +1,5 @@
+# Runtime-generated resources owned exclusively by HeaderCertHeadersDynamic.
+httproutes.gateway.networking.k8s.io/edgion-test/header-cert-headers
+edgionplugins.edgion.io/edgion-test/header-cert-headers
+edgiontls.edgion.io/edgion-test/header-cert-headers
+secrets/edgion-test/header-cert-headers

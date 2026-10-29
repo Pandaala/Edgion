@@ -120,6 +120,30 @@ requestPlugins:
 - **Consumer identity**: Extracts identity from the certificate SAN, CN, or fingerprint based on `consumerBy`, and writes it to `upstreamHeaders.consumerHeader` (default `X-Consumer-Username`)
 - With `hideCredentials: true` (the default), the source certificate header is not forwarded upstream
 
+### Certificate identity header ownership
+
+Each executing plugin clears its active output destinations before writing identity values:
+`dnHeader`, `sanHeader`, and `fingerprintHeader` when `skipConsumerLookup: true`, or
+`consumerHeader` and `fingerprintHeader` otherwise. This also removes duplicate input fields.
+With distinct output names, a certificate without a SAN leaves the SAN destination absent; DN/SAN values containing
+CR, LF, or NUL are omitted rather than retaining client input. Other invalid header values
+fail the write and return HTTP 500. Anonymous continuations clear the same active
+destinations before writing the anonymous consumer marker and identity.
+
+Header removal or write failures return HTTP 500 without forwarding, even with
+`allowAnonymous: true`. Authentication failures still use the configured rejection or
+anonymous policy. Disabled or condition-skipped plugins do not perform cleanup, and inactive
+output names and unrelated headers are not reserved.
+
+Use distinct output names when the backend needs separate fields. Aliased output names
+retain the existing write order (DN, then first SAN, then fingerprint; or consumer, then
+fingerprint). Header-mode certificate extraction happens before cleanup, so an input name
+can also be an output name; `hideCredentials: true` still removes that name at the end.
+Later plugins can modify these headers according to their execution order.
+
+For Connection mode with EdgionTls, enable `edgion.io/expose-client-cert: "true"` on the
+EdgionTls resource. Gateway `frontendValidation` mTLS exposes certificate metadata automatically.
+
 ---
 
 ## Troubleshooting
