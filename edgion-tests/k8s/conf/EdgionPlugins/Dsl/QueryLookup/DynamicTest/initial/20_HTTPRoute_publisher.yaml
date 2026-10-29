@@ -1,0 +1,48 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "name": "dsl-query-publisher-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "edgion-plugins-gateway",
+        "namespace": "edgion-test"
+      }
+    ],
+    "hostnames": [
+      "dsl-query-lookup-dynamic.example.com"
+    ],
+    "rules": [
+      {
+        "matches": [
+          {
+            "path": {
+              "type": "Exact",
+              "value": "/graphql/operations"
+            }
+          }
+        ],
+        "filters": [
+          {
+            "type": "ExtensionRef",
+            "extensionRef": {
+              "group": "edgion.io",
+              "kind": "EdgionPlugins",
+              "name": "dsl-query-publisher-dynamic"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "response-cache",
+            "port": 30001,
+            "namespace": "edgion-test"
+          }
+        ]
+      }
+    ]
+  }
+}

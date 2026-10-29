@@ -2646,6 +2646,7 @@ run_all_selected_suites() {
     "EdgionPlugins/RequestMirror|EdgionPlugins|RequestMirror"
     "EdgionPlugins/RestToGraphql|EdgionPlugins|RestToGraphql"
     "EdgionPlugins/ResponseRewrite|EdgionPlugins|ResponseRewrite"
+    "EdgionPlugins/ResponseCache|EdgionPlugins|ResponseCache"
     "EdgionPlugins/RequestRestriction|EdgionPlugins|RequestRestriction"
     "EdgionPlugins/IpRestriction|EdgionPlugins|IpRestriction"
     "EdgionPlugins/IpRestrictionPartialGood|EdgionPlugins|IpRestrictionPartialGood"

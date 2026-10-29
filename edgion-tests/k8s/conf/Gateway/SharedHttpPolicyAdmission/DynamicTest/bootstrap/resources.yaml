@@ -1,0 +1,144 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: shared-policy
+spec:
+  controllerName: edgion.io/gateway-controller
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-policy-a
+  namespace: edgion-test
+  annotations:
+    edgion.io/enable-http2: "true"
+spec:
+  gatewayClassName: shared-policy
+  listeners:
+    - name: shared
+      protocol: HTTP
+      port: 32002
+      hostname: shared-policy-a.sandbox.example.com
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-policy-b
+  namespace: edgion-test
+  annotations:
+    edgion.io/enable-http2: "true"
+spec:
+  gatewayClassName: shared-policy-b
+  listeners:
+    - name: shared
+      protocol: HTTP
+      port: 32002
+      hostname: shared-policy-b.sandbox.example.com
+    - name: healthy
+      protocol: HTTP
+      port: 32003
+      hostname: shared-policy-b.sandbox.example.com
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shared-policy-a
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: shared-policy-a
+  hostnames:
+    - shared-policy-a.sandbox.example.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shared-policy-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: shared-policy-b
+  hostnames:
+    - shared-policy-b.sandbox.example.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: shared-policy-b
+spec:
+  controllerName: edgion.io/gateway-controller
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-policy-tls
+  namespace: edgion-test
+spec:
+  gatewayClassName: shared-policy
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 32004
+      hostname: gateway-tls.test.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: shared-policy-recovery-cert
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shared-policy-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: shared-policy-tls
+  hostnames:
+    - gateway-tls.test.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: shared-policy-unusable
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: shared-policy-missing-config
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-policy-unusable
+  namespace: edgion-test
+  annotations:
+    edgion.io/enable-http2: "false"
+spec:
+  gatewayClassName: shared-policy-unusable
+  listeners:
+    - name: shared
+      protocol: HTTP
+      port: 32002
+      hostname: shared-policy-unusable.sandbox.example.com

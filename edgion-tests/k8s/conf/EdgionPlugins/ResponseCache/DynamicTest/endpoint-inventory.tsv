@@ -1,0 +1,7 @@
+# phase	namespace	service	port	expected_count
+initial	edgion-test	response-cache-dynamic	30001	nonempty
+disabled	edgion-test	response-cache-dynamic	30001	nonempty
+reenabled	edgion-test	response-cache-dynamic	30001	nonempty
+body-filter	edgion-test	response-cache-dynamic	30001	nonempty
+target	edgion-test	response-cache-dynamic	30002	nonempty
+deleted	edgion-test	response-cache-dynamic	30002	nonempty

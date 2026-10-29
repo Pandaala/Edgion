@@ -4,6 +4,7 @@ use crate::dynamic::ScenarioCtx;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::port_config::{PortConfig, PortKind};
 use anyhow::{ensure, Context, Result};
+use base64::Engine;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
@@ -256,19 +257,31 @@ async fn recover_initially_missing_certificate(ctx: &ScenarioCtx) -> Result<()> 
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    let work_dir = std::env::var("EDGION_WORK_DIR").context("missing integration work directory")?;
-    let pid_path = std::path::Path::new(&work_dir).join("pids/gateway.pid");
-    let pid_before = tokio::fs::read_to_string(&pid_path).await?;
+    let local_process = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        ensure!(
+            std::env::var("EDGION_TEST_GATEWAY_RESTART_GUARD").as_deref() == Ok("true"),
+            "Kubernetes certificate recovery requires the runner Gateway restart guard"
+        );
+        None
+    } else {
+        let work_dir = std::env::var("EDGION_WORK_DIR").context("missing integration work directory")?;
+        let pid_path = std::path::Path::new(&work_dir).join("pids/gateway.pid");
+        let pid_before = tokio::fs::read_to_string(&pid_path).await?;
+        Some((pid_path, pid_before))
+    };
     let recovery = async {
-        // Admin reads intentionally omit Secret material. Use the generated
-        // local test fixture without logging its contents.
-        let fixture_path = std::path::Path::new(&work_dir).join("config/edgion-test/Secret_edgion-test_edge-tls.yaml");
-        let mut secret: Value = serde_yaml::from_str(&tokio::fs::read_to_string(fixture_path).await?)?;
-        secret["metadata"] = serde_json::json!({"name": CERT, "namespace": NAMESPACE});
-        secret
-            .as_object_mut()
-            .context("invalid Secret fixture")?
-            .remove("status");
+        // Generate an owned certificate in either topology; never read redacted
+        // Admin output or depend on a host-local generated fixture.
+        let certificate = rcgen::generate_simple_self_signed(vec!["gateway-tls.test.com".into()])?;
+        let secret = serde_json::json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": CERT, "namespace": NAMESPACE},
+            "type": "kubernetes.io/tls",
+            "data": {
+                "tls.crt": base64::engine::general_purpose::STANDARD.encode(certificate.cert.pem()),
+                "tls.key": base64::engine::general_purpose::STANDARD.encode(certificate.signing_key.serialize_pem())
+            }
+        });
         let response = client
             .create("Secret", Some(NAMESPACE), serde_yaml::to_string(&secret)?)
             .await?;
@@ -289,10 +302,12 @@ async fn recover_initially_missing_certificate(ctx: &ScenarioCtx) -> Result<()> 
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        ensure!(
-            tokio::fs::read_to_string(&pid_path).await? == pid_before,
-            "certificate recovery restarted the Gateway"
-        );
+        if let Some((pid_path, pid_before)) = &local_process {
+            ensure!(
+                tokio::fs::read_to_string(pid_path).await? == *pid_before,
+                "certificate recovery restarted the Gateway"
+            );
+        }
         Ok::<_, anyhow::Error>(())
     }
     .await;

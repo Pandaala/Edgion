@@ -1,4 +1,8 @@
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
+DslQueryLookupDynamic	EdgionPlugins/Dsl/QueryLookup/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-query-executor-dynamic
+ProxyRewriteHostDynamic	EdgionPlugins/ProxyRewrite/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	proxy-host-from-header
+ResponseCacheDynamic	EdgionPlugins/ResponseCache/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	response-cache-dynamic
+SharedHttpPolicyAdmission	Gateway/SharedHttpPolicyAdmission/DynamicTest	bootstrap	gateways.gateway.networking.k8s.io	gateway	edgion-test	shared-policy-a
 JwtClaimHeadersDynamic	EdgionPlugins/JwtAuth/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	jwt-claim-headers
 CorsValidation	EdgionPlugins/Cors/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-default	cors-validation-dynamic
 DslTerminateDynamic	EdgionPlugins/DslTerminateDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-terminate-dynamic

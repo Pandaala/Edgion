@@ -100,10 +100,13 @@ ISSUE-002 verification in this run:
   registration: the K8s manifest and three matching fixtures now include
   `JwtClaimHeadersDynamic`. Scenario enumeration, fixture identity/equivalence checks,
   suite-parity regression tests, dynamic-runner tests and main-runner wiring tests passed.
-  Repository-wide parity still fails for five gaps also present in the HEAD canonical
-  inventory (DslQueryLookupDynamic, ProxyRewriteHostDynamic, ResponseCacheDynamic,
-  SharedHttpPolicyAdmission, and static EdgionPlugins/ResponseCache); this scenario is
-  no longer missing. Live Kubernetes execution was not performed.
+  That review also identified five pre-existing parity gaps (DslQueryLookupDynamic,
+  ProxyRewriteHostDynamic, ResponseCacheDynamic, SharedHttpPolicyAdmission, and static
+  EdgionPlugins/ResponseCache). A subsequent user-authorized repair added their K8s
+  fixtures and executable registrations, selector-owned Service target changes,
+  all-replica origin observations and an explicit Gateway process-restart guard.
+  Repository-wide parity now passes with zero missing canonical entries. Live
+  Kubernetes execution was not performed; runner regression tests cover the wiring.
 - All nine project quick checks passed (format, workspace check/clippy and six Python
   guards). Clippy reported existing warnings outside this change.
 - A broader HTTP-plugin test invocation was not clean: 2078 passed and 63 unrelated

@@ -1,0 +1,42 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: response-cache-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: x-response-cache-key
+        hideCredentials: true
+        upstreamHeaderFields: []
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: response-cache-dynamic-key
+                namespace: edgion-default
+    - type: GraphqlGuard
+      conditions:
+        run:
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values: ["POST"]
+      config:
+        maxDepth: 8
+        maxFields: 64
+        maxAliases: 16
+        maxRootFields: 16
+    - type: RequestId
+      config: {}
+    - type: ResponseCache
+      enable: false
+      config:
+        maxTtl: 60s
+        graphqlQueries: true
+        vary:
+          - type: header
+            name: x-cache-vary

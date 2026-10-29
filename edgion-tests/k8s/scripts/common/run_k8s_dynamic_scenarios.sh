@@ -246,7 +246,7 @@ needs_endpoint_discovery=false
 for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   case "${scenario_id}" in
     DirectEndpointPortResolution|RegionRouteValidation) needs_endpoint_discovery=true ;;
-    AiGuardOrderingDynamic|AiMessagesBinding|AiResponsesContinuation|DslXmlDynamic)
+    ResponseCacheDynamic|DslQueryLookupDynamic|AiGuardOrderingDynamic|AiMessagesBinding|AiResponsesContinuation|DslXmlDynamic)
       BACKEND_ENDPOINT_IPS="$(
         "${ENDPOINT_INVENTORY}" --namespace edgion-test \
           --service edgion-test-server --port 30001 --timeout-secs 30 --output ips
@@ -693,6 +693,7 @@ run_scenario_with_phase_barriers() {
     EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}" \
     EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}" \
     EDGION_TEST_K8S_MODE=true \
+    EDGION_TEST_GATEWAY_RESTART_GUARD=true \
     EDGION_TEST_DNS_FLAP_SERVER_HOST="${EDGION_TEST_DNS_FLAP_SERVER_HOST:-test-http-retry.edgion-test.svc.cluster.local}" \
     EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
     EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
@@ -944,9 +945,21 @@ kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
 
 total=0
 failed=0
+gateway_process_identity() {
+  kubectl get pods -n edgion-system -l app=edgion-gateway --request-timeout=5s -o json | jq -ce '
+    [.items[] | select(.metadata.deletionTimestamp == null) |
+      {uid: .metadata.uid, containers: [.status.containerStatuses[]? |
+        {name, restartCount, containerID, running: .state.running.startedAt}]}] | sort_by(.uid) |
+    if length > 0 and all(.[]; (.containers | length) > 0 and all(.containers[]; .running != null))
+    then . else error("Gateway process identity unavailable") end'
+}
 for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   total=$((total + 1))
   scenario_rc=0
+  gateway_identity_before=""
+  if [[ "${scenario_id}" == "SharedHttpPolicyAdmission" ]]; then
+    gateway_identity_before="$(gateway_process_identity)" || scenario_rc=1
+  fi
   echo "@@DYNAMIC_START ${scenario_id}"
   mark_scenario_dirty "${scenario_id}"
   if [[ "${scenario_id}" == "ExtProcTlsPolicyRecovery" ]]; then
@@ -974,6 +987,7 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}" \
       EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}" \
       EDGION_TEST_K8S_MODE=true \
+      EDGION_TEST_GATEWAY_RESTART_GUARD=true \
       EDGION_TEST_DNS_FLAP_SERVER_HOST="${EDGION_TEST_DNS_FLAP_SERVER_HOST:-test-http-retry.edgion-test.svc.cluster.local}" \
       EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
       EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
@@ -1000,6 +1014,13 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
     scenario_rc=1
   fi
 
+  if [[ "${scenario_id}" == "SharedHttpPolicyAdmission" ]]; then
+    gateway_identity_after="$(gateway_process_identity)" || scenario_rc=1
+    if [[ -z "${gateway_identity_before}" || "${gateway_identity_before}" != "${gateway_identity_after}" ]]; then
+      echo "ERROR: Gateway process identity changed during ${scenario_id}" >&2
+      scenario_rc=1
+    fi
+  fi
   if [[ "${scenario_rc}" -eq 0 ]]; then
     echo "@@DYNAMIC_RESULT ${scenario_id} PASS 0"
   else
