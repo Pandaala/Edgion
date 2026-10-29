@@ -691,7 +691,7 @@
     "EdgionConfigData_crs-supported-policy.yaml": "3a8e7491e12680833b5473432b9658b0b99ebd822a388813d50961bb319fb79b",
     "EdgionConfigData_crs-supported-standard.yaml": "7294d92907051899eed0b7777edd4bd0671c9f5952afb55d553cd5aa86b5cbf4",
     "EdgionConfigData_crs-supported-strict.yaml": "c0ce86ccfd853ef29e80974238ba355f86b28a9d05ae55036012401ec404cfb9",
-    "EdgionPlugins_crs-supported.yaml": "d7aad85d4762fea6220e8bf832a16435924132653c12c2e288577ceb186eed38"
+    "EdgionPlugins_crs-supported.yaml": "9f16efd5de5e2e9cede0df2a53e1120baa65c8530a80b94f365ebbf19243855c"
   },
   "product_tuning_units": 1,
   "profiles": {

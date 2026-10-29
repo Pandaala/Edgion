@@ -231,25 +231,33 @@ fn client_identity_rejects_missing_empty_and_malformed_material() {
 
 #[test]
 fn gateway_identity_does_not_enable_tls_without_policy() {
-    let gateway_key = "test/gateway-identity-without-policy";
-    let store = get_global_gateway_backend_tls_store();
-    let gateway = gateway_identity_owner("test", "gateway-identity-without-policy", Secret::default());
-    store.update_from_gateway(gateway_key, &gateway);
-    assert!(
-        store.get(gateway_key).is_some(),
-        "the no-policy control must carry an actual stored identity"
-    );
+    crate::test_subprocess::assert_in_subprocess(
+        "backends::peer_builder::tests",
+        "gateway_identity_does_not_enable_tls_without_policy",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "gateway_identity_does_not_enable_tls_without_policy",
+        || {
+            let gateway_key = "test/gateway-identity-without-policy";
+            let store = get_global_gateway_backend_tls_store();
+            let gateway = gateway_identity_owner("test", "gateway-identity-without-policy", Secret::default());
+            store.update_from_gateway(gateway_key, &gateway);
+            assert!(
+                store.get(gateway_key).is_some(),
+                "the no-policy control must carry an actual stored identity"
+            );
 
-    let result = peer_from_backend_tls_lookup(
-        SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
-        &BackendTlsPolicyLookup::Absent,
-        Some(gateway_key),
-    );
-    store.remove(gateway_key);
+            let result = peer_from_backend_tls_lookup(
+                SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+                &BackendTlsPolicyLookup::Absent,
+                Some(gateway_key),
+            );
+            store.remove(gateway_key);
 
-    let peer = result.expect("Gateway identity must not be parsed without a BackendTLSPolicy");
-    assert!(!peer.is_tls());
-    assert!(peer.client_cert_key.is_none());
+            let peer = result.expect("Gateway identity must not be parsed without a BackendTLSPolicy");
+            assert!(!peer.is_tls());
+            assert!(peer.client_cert_key.is_none());
+        },
+    );
 }
 
 #[test]

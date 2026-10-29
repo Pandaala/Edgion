@@ -319,6 +319,145 @@ mod capability_tests {
             .collect()
     }
 
+    fn isolated_dynamic_runner_names_covered_by_default(
+        runner: &str,
+        targeted: &str,
+        scripts: &[(&str, &str)],
+    ) -> BTreeSet<String> {
+        let normalized = runner.lines().map(str::trim).collect::<Vec<_>>().join("\n");
+        // Credit the actual default branch only when failures terminate the run.
+        if !normalized.contains(concat!(
+            "if [ -z \"$G_RESOURCE\" ]; then\n",
+            "REPORT_PHASE=\"isolated scenarios\"\n",
+            "if ! run_isolated_scenarios; then\n",
+            "log_error \"FAIL: isolated standalone scenarios\"\n",
+            "exit 1\nfi\nfi"
+        )) {
+            return BTreeSet::new();
+        }
+        let Some((_, body)) = runner.split_once("run_isolated_scenarios() {") else {
+            return BTreeSet::new();
+        };
+        fn array<'a>(body: &'a str, name: &str) -> Option<Vec<&'a str>> {
+            let (_, body) = body.split_once(format!("local {name}=(").as_str())?;
+            let (body, _) = body.split_once("\n    )")?;
+            body.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| line.strip_prefix('"')?.strip_suffix('"'))
+                .collect()
+        }
+        let (Some(names), Some(commands)) = (array(body, "names"), array(body, "commands")) else {
+            return BTreeSet::new();
+        };
+        if names.len() != commands.len() || names.iter().collect::<BTreeSet<_>>().len() != names.len() {
+            return BTreeSet::new();
+        }
+        let registered: BTreeSet<_> = dynamic::all().iter().map(|scenario| scenario.id).collect();
+        let mut ids = BTreeSet::new();
+        for (script_name, source) in scripts {
+            let command = format!("${{SCRIPT_DIR}}/test_{script_name}.sh");
+            if !names
+                .iter()
+                .zip(&commands)
+                .any(|(name, path)| name == script_name && **path == command)
+                || !source.lines().any(|line| line == "set -euo pipefail")
+                || source.lines().any(|line| line.trim_start().starts_with("set +e"))
+            {
+                continue;
+            }
+            // This runner's reviewed terminal structure is a direct command
+            // followed only by its success message. A conditional or function
+            // wrapper must close after the command and cannot match this suffix.
+            let Some((before_success, success)) = source.trim_end().rsplit_once('\n') else {
+                continue;
+            };
+            if success != "echo \"PASS: owned MetricsLifetime scenario\"" {
+                continue;
+            }
+            let Some((_, command)) = before_success.rsplit_once('\n') else {
+                continue;
+            };
+            let prefix = "EDGION_TEST_METRICS_LIFETIME=1 \"$TEST_CLIENT_BIN\" -g --admin-port \"$CTRL_ADMIN_PORT\" --dynamic-scenario ";
+            if let Some(id) = command.strip_prefix(prefix) {
+                // This exact inline flag enables the fixture-gated registry entry
+                // in the child, without mutating the parallel unit-test environment.
+                let fixture_id = dynamic::scenarios::metrics_lifetime::SCENARIO.id;
+                if (registered.contains(id) || id == fixture_id)
+                    && source.lines().filter(|line| *line == command).count() == 1
+                {
+                    ids.insert(id);
+                }
+            }
+        }
+        let marker = "run_test \"";
+        targeted
+            .match_indices(marker)
+            .filter_map(|(index, _)| {
+                let after = &targeted[index + marker.len()..];
+                let (name, command) = after.split_once('"')?;
+                let command = command.split_once(marker).map_or(command, |(own, _)| own);
+                let command = command.split_once("|| test_failed=true")?.0;
+                let id = command.split_once("--dynamic-scenario ")?.1;
+                let id = id.split_whitespace().next()?.trim_end_matches('"');
+                ids.contains(id).then(|| name.to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn isolated_metrics_lifetime_coverage_requires_default_execution_and_failure_propagation() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let script = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/test_metrics_lifetime.sh"
+        ));
+        let (targeted, _) = runner_suite_sweeps(runner).unwrap();
+        let covered = |runner: &str, script: &str| {
+            isolated_dynamic_runner_names_covered_by_default(runner, targeted, &[("metrics_lifetime", script)])
+        };
+        assert_eq!(covered(runner, script), BTreeSet::from(["Dyn_MetricsLifetime".into()]));
+        for broken in [
+            runner.replace("        \"metrics_lifetime\"\n", ""),
+            runner.replace(
+                "${SCRIPT_DIR}/test_metrics_lifetime.sh",
+                "${SCRIPT_DIR}/test_missing.sh",
+            ),
+            runner.replace("if ! run_isolated_scenarios; then", "if false; then"),
+            runner.replace(
+                "if ! run_isolated_scenarios; then",
+                "if ! run_isolated_scenarios || true; then",
+            ),
+            runner.replace(
+                "log_error \"FAIL: isolated standalone scenarios\"\n            exit 1",
+                "log_error \"FAIL: isolated standalone scenarios\"\n            true",
+            ),
+        ] {
+            assert!(covered(&broken, script).is_empty());
+        }
+        let invocation = "EDGION_TEST_METRICS_LIFETIME=1 \"$TEST_CLIENT_BIN\" -g --admin-port \"$CTRL_ADMIN_PORT\" --dynamic-scenario MetricsLifetime";
+        for broken in [
+            script.replace("EDGION_TEST_METRICS_LIFETIME=1 ", ""),
+            script.replace("EDGION_TEST_METRICS_LIFETIME=1 ", "EDGION_TEST_METRICS_LIFETIME=0 "),
+            script.replace(invocation, &format!("if false; then\n{invocation}\nfi")),
+            script.replace(invocation, &format!("unused_scenario() {{\n{invocation}\n}}")),
+            script.replace(
+                "--dynamic-scenario MetricsLifetime",
+                "--dynamic-scenario MissingScenario",
+            ),
+            script.replace(
+                "--dynamic-scenario MetricsLifetime",
+                "--dynamic-scenario MetricsLifetime || true",
+            ),
+            script.replace("set -euo pipefail", "set -uo pipefail"),
+        ] {
+            assert!(covered(runner, &broken).is_empty());
+        }
+    }
+
     #[test]
     fn tls_geo_stage1_uses_supported_passthrough_without_weakening_terminate_gates() {
         let gateway: edgion_resources::Gateway = serde_yaml::from_str(include_str!(concat!(
@@ -1392,7 +1531,18 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         const KNOWN_TARGETED_ONLY: &[(&str, &str)] = &[];
 
         let targeted_names = names(targeted);
-        let dynamic_covered = dynamic_runner_names_covered_by_default(runner, targeted, default_sweep);
+        let mut dynamic_covered = dynamic_runner_names_covered_by_default(runner, targeted, default_sweep);
+        dynamic_covered.extend(isolated_dynamic_runner_names_covered_by_default(
+            runner,
+            targeted,
+            &[(
+                "metrics_lifetime",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/integration/scripts/integration/test_metrics_lifetime.sh"
+                )),
+            )],
+        ));
         assert!(
             targeted_names.len() > 50,
             "expected the targeted block to hold the bulk of the suite list, found {} — \

@@ -27,12 +27,9 @@ use crate::resources::backend_tls_policy::{SubjectAltName, WellKnownCACertificat
 #[serde(rename_all = "camelCase")]
 pub struct CustomCACertificateRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(
-        length(max = 253),
-        pattern(r"^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
-    )]
+    #[schemars(length(max = 253), pattern(crate::gwapi_types::REFERENCE_GROUP_PATTERN))]
     pub group: Option<String>,
-    #[schemars(length(min = 1, max = 63), pattern(r"^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$"))]
+    #[schemars(length(min = 1, max = 63), pattern(crate::gwapi_types::REFERENCE_KIND_PATTERN))]
     pub kind: String,
     #[schemars(length(min = 1, max = 253))]
     pub name: String,

@@ -279,6 +279,38 @@ pub fn config(package: &Package, profile: &str) -> Result<WafConfig> {
 pub fn bundle_resource(name: &str, data: &WafRuleBundleData) -> Value {
     json!({"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":name,"namespace":"edgion-default"},"spec":{"data":{"type":"WafRuleBundle","config":data}}})
 }
+// Kubernetes YAML 1.1 treats bare `on` as a boolean, while the CRD requires
+// a string. Restrict this rendering adjustment to generated WAF plugin maps.
+fn serialize_waf_plugin(plugin: &Value) -> Result<String> {
+    ensure!(plugin["kind"] == "EdgionPlugins", "expected a WAF plugin resource");
+    let mode = plugin["spec"]["waf"]["mode"].as_str().context("WAF mode string")?;
+    ensure!(matches!(mode, "on" | "detectionOnly"), "unexpected WAF mode");
+    let mut yaml = serde_yaml::to_string(plugin)?;
+    if mode == "on" {
+        ensure!(
+            yaml.lines().filter(|line| *line == "    mode: on").count() == 1,
+            "expected one generated WAF mode line"
+        );
+        yaml = yaml
+            .lines()
+            .map(|line| {
+                if line == "    mode: on" {
+                    "    mode: \"on\""
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+    }
+    ensure!(
+        serde_yaml::from_str::<Value>(&yaml)? == *plugin,
+        "WAF YAML rendering changed resource values"
+    );
+    Ok(yaml)
+}
+
 pub fn outputs(package: &Package) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
     files.insert(
@@ -325,7 +357,7 @@ pub fn outputs(package: &Package) -> Result<BTreeMap<String, String>> {
         );
     }
     files.insert(format!("EdgionConfigData_{POLICY}.yaml"),serde_yaml::to_string(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":POLICY,"namespace":"edgion-default"},"spec":{"data":{"type":"WafPolicy","config":policy(package)?}}}))?);
-    files.insert("EdgionPlugins_crs-supported.yaml".into(),serde_yaml::to_string(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"crs-supported","namespace":"edgion-default"},"spec":{"waf":{"mode":"on","policyRef":{"name":POLICY},"activeProfile":"standard","requestBody":{"inspection":"full"}}}}))?);
+    files.insert("EdgionPlugins_crs-supported.yaml".into(),serialize_waf_plugin(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"crs-supported","namespace":"edgion-default"},"spec":{"waf":{"mode":"on","policyRef":{"name":POLICY},"activeProfile":"standard","requestBody":{"inspection":"full"}}}}))?);
     let record = json!({"version":"supported-v1","original_core_units":627,"retained_original_units":565,"original_setup_units":1,"product_tuning_units":1,"core_digest":package.core.compute_digest(),"setup_sha256":sha(package.setup.as_bytes()),"profiles":policy(package)?,"outputs_sha256":files.iter().map(|(n,c)|(n.clone(),sha(c.as_bytes()))).collect::<BTreeMap<_,_>>(),"excluded_units":package.manifest.units.iter().filter(|u|!u.excluded_capabilities.is_empty()).collect::<Vec<_>>()});
     files.insert("acceptance.json".into(), serde_json::to_string_pretty(&record)? + "\n");
     Ok(files)
@@ -400,7 +432,7 @@ pub fn wire_outputs(package: &Package) -> Result<BTreeMap<String, String>> {
         let plugin = json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"waf-dynamic","namespace":"edgion-default"},"spec":{"waf":{"mode":mode,"policyRef":{"name":"waf-policy"},"activeProfile":profile,"requestBody":{"inspection":"full"}}}});
         files.insert(
             format!("updates/{phase}/EdgionPlugins_waf-dynamic.yaml"),
-            serde_yaml::to_string(&plugin)?,
+            serialize_waf_plugin(&plugin)?,
         );
     }
     let mut tampered = package.core.clone();

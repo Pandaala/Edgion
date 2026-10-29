@@ -61,6 +61,12 @@ const REMOTE_IP_ONLY_RESERVED_HEADER_NAMES: [&str; 3] = ["host", "content-length
 /// Runtime twin: [`crate::resources::common::group_name::validate_group_name`].
 pub const GROUP_NAME_PATTERN: &str = r"^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$";
 
+/// Gateway API reference API group, including the empty core group.
+pub const REFERENCE_GROUP_PATTERN: &str = r"^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$";
+
+/// Gateway API reference kind: an ASCII letter followed by kind-name characters.
+pub const REFERENCE_KIND_PATTERN: &str = r"^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$";
+
 /// Maximum group name length (Kubernetes label-value limit).
 pub const GROUP_NAME_MAX_LEN: u32 = 63;
 

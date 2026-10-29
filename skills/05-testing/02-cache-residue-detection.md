@@ -65,7 +65,20 @@ through the same canonical per-slot eviction path as scraping.
 Never ignore these paths or the entire `metrics` object. Nonexpired event history
 is legitimate; resource-owned gauge contribution tokens must release after wipe.
 The dedicated MetricsLifetime scenario uses a two-second TTL to prove actual
-idle removal and later renewal. Unit tests cover the cached route matrix directly
+idle removal and later renewal. The default untargeted integration runner invokes
+`test_metrics_lifetime.sh` through its bounded isolated-scenario queue before the
+shared topology starts. Its lifetime cap of 64 deliberately saturates admission,
+so it owns a separate filesystem Controller, Gateway and small HTTP backend;
+sharing the ordinary Gateway would pollute later suites' lifetime metrics state.
+The original MetricsLifetime fixtures and 120-second phase assertions are reused.
+Ports are registered and preflighted even for direct invocation; an existing
+service causes failure rather than being stopped. Owned binaries honor artifact
+selection and coverage instrumentation. Cleanup signals only recorded child PIDs,
+stops the Gateway before its sync source, and allows the coverage Gateway its
+60-second profile-flush window. Logs remain in the owned integration work directory.
+The capability guard requires the real default mapping and failure-propagating
+scenario invocation; targeted-only registration does not establish default coverage.
+Unit tests cover the cached route matrix directly
 because integration mode uses the logging fallback path. Reverse verification
 must independently break expiration and owner release and confirm that these
 exact residue paths fail; restore both faults before final verification.

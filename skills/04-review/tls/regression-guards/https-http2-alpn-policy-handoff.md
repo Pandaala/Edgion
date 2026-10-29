@@ -52,6 +52,18 @@ Pingora server with bounded cleanup. Controller admission currently rejects
 TLS/Terminate, so this narrow transport-seam test makes no Controller support or
 TLSRoute conformance claim. It does not run alongside the shared topology.
 
+The hand-built transport fixture represents an already processed Controller
+publication: it supplies the existing Gateway UID/generation, a fixture epoch,
+and a valid-shaped 64-character lowercase hexadecimal attachment digest. The
+Gateway and EdgionTls attachment share the same canonical returned proof. Before
+the handshake, the test asserts that this proof is resolved and that the actual
+TLS snapshot selects an eligible certificate using the captured Gateway snapshot's
+`listener_is_eligible` predicate, matching the early certificate callback.
+An unresolved proof must remain ineligible even when certificate compilation,
+listener indexing and connection admission succeed. This fixture does not test
+Controller admission or attachment-digest generation; it does not duplicate the
+production digest algorithm or relax any production eligibility condition.
+
 No certificate/mTLS callback, handshake offload, H2 limit, request-body,
 observability or cross-cutting owner is changed. The six new resource fixtures
 are mirrored in the Kubernetes tree because the HTTPS suite is shared. The

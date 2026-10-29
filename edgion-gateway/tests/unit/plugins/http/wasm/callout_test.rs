@@ -226,39 +226,48 @@ async fn body_stream_timeout_drops_in_flight_permit_without_leak() {
 
 #[tokio::test]
 async fn early_resume_counts_taken_remainder_and_poisoned_vm_is_not_reused() {
-    use super::super::host_abi::WasmPhase;
-    use super::super::vm_manager::{tests::actual_runtime, CalloutGrant, WasmVmManager};
-    use edgion_resources::plugin_configs::WasmConfig;
-    let guest = r#"(module
-        (import "env" "proxy_continue_request" (func $resume (result i32)))
-        (memory (export "memory") 1)
-        (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) i32.const 1)
-        (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32) call $resume drop))"#;
-    let file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), wat::parse_str(guest).unwrap()).unwrap();
-    let mut config = WasmConfig::default();
-    config.source.file = Some(file.path().to_string_lossy().into_owned());
-    let manager = WasmVmManager::new_for_test();
-    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
-    let entry = runtime.get_or_load().await.unwrap();
-    let mut lease = entry.acquire(100).unwrap();
-    lease
-        .state_mut()
-        .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], Default::default());
-    lease.open_request(0, true).unwrap();
-    for token in 1..=3 {
-        let mut pending = callout("invalid URL".into(), 100);
-        pending.token = token;
-        lease.state_mut().frame.pending_callouts.push(pending);
-    }
-    let id = lease.context_id().unwrap();
-    let outcome = resolve_callouts_on(&mut lease, id, 100, "callout-test", None)
-        .await
-        .unwrap();
-    assert_eq!((outcome.delivered, outcome.leftover), (1, 2));
-    assert!(!lease.is_healthy());
-    drop(lease);
-    assert_eq!(entry.pool_len(), 0);
+    crate::test_subprocess::assert_in_subprocess_async(
+        "plugins::http::wasm::callout::tests",
+        "early_resume_counts_taken_remainder_and_poisoned_vm_is_not_reused",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "early_resume_counts_taken_remainder_and_poisoned_vm_is_not_reused",
+        || async {
+            use super::super::host_abi::WasmPhase;
+            use super::super::vm_manager::{tests::actual_runtime, CalloutGrant, WasmVmManager};
+            use edgion_resources::plugin_configs::WasmConfig;
+            let guest = r#"(module
+                (import "env" "proxy_continue_request" (func $resume (result i32)))
+                (memory (export "memory") 1)
+                (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) i32.const 1)
+                (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32) call $resume drop))"#;
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), wat::parse_str(guest).unwrap()).unwrap();
+            let mut config = WasmConfig::default();
+            config.source.file = Some(file.path().to_string_lossy().into_owned());
+            let manager = WasmVmManager::new_for_test();
+            let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+            let entry = runtime.get_or_load().await.unwrap();
+            let mut lease = entry.acquire(100).unwrap();
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], Default::default());
+            lease.open_request(0, true).unwrap();
+            for token in 1..=3 {
+                let mut pending = callout("invalid URL".into(), 100);
+                pending.token = token;
+                lease.state_mut().frame.pending_callouts.push(pending);
+            }
+            let id = lease.context_id().unwrap();
+            let outcome = resolve_callouts_on(&mut lease, id, 100, "callout-test", None)
+                .await
+                .unwrap();
+            assert_eq!((outcome.delivered, outcome.leftover), (1, 2));
+            assert!(!lease.is_healthy());
+            drop(lease);
+            assert_eq!(entry.pool_len(), 0);
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -324,31 +333,40 @@ fn response_header_snapshot_rejects_bytes_and_count_before_copying() {
 
 #[tokio::test]
 async fn expired_request_abandons_tokens_without_guest_callback() {
-    use super::super::vm_manager::{tests::actual_runtime, CalloutGrant, WasmVmManager};
-    let guest = r#"(module (memory (export "memory") 1)
-        (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) i32.const 1)
-        (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32) unreachable))"#;
-    let file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), wat::parse_str(guest).unwrap()).unwrap();
-    let mut config = edgion_resources::plugin_configs::WasmConfig::default();
-    config.source.file = Some(file.path().to_string_lossy().into_owned());
-    let manager = WasmVmManager::new_for_test();
-    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
-    let entry = runtime.get_or_load().await.unwrap();
-    let mut lease = entry.acquire(100).unwrap();
-    lease.open_request(0, true).unwrap();
-    lease
-        .state_mut()
-        .frame
-        .pending_callouts
-        .push(callout("https://example.test".into(), 1000));
-    let id = lease.context_id().unwrap();
-    let error = resolve_callouts_on(&mut lease, id, 1000, "expired", Some(tokio::time::Instant::now()))
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(error, "wasm request deadline expired");
-    assert!(!lease.is_healthy());
-    drop(lease);
-    assert_eq!(entry.pool_len(), 0);
+    crate::test_subprocess::assert_in_subprocess_async(
+        "plugins::http::wasm::callout::tests",
+        "expired_request_abandons_tokens_without_guest_callback",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "expired_request_abandons_tokens_without_guest_callback",
+        || async {
+            use super::super::vm_manager::{tests::actual_runtime, CalloutGrant, WasmVmManager};
+            let guest = r#"(module (memory (export "memory") 1)
+                (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) i32.const 1)
+                (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32) unreachable))"#;
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), wat::parse_str(guest).unwrap()).unwrap();
+            let mut config = edgion_resources::plugin_configs::WasmConfig::default();
+            config.source.file = Some(file.path().to_string_lossy().into_owned());
+            let manager = WasmVmManager::new_for_test();
+            let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+            let entry = runtime.get_or_load().await.unwrap();
+            let mut lease = entry.acquire(100).unwrap();
+            lease.open_request(0, true).unwrap();
+            lease
+                .state_mut()
+                .frame
+                .pending_callouts
+                .push(callout("https://example.test".into(), 1000));
+            let id = lease.context_id().unwrap();
+            let error = resolve_callouts_on(&mut lease, id, 1000, "expired", Some(tokio::time::Instant::now()))
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error, "wasm request deadline expired");
+            assert!(!lease.is_healthy());
+            drop(lease);
+            assert_eq!(entry.pool_len(), 0);
+        },
+    )
+    .await;
 }

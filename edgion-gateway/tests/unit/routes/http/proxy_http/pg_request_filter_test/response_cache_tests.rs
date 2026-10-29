@@ -75,90 +75,99 @@ impl Drop for BoundOriginFixture {
 
 #[tokio::test]
 async fn response_cache_first_actual_tail_binding_and_consumed_peer_fill_then_hit_and_input_miss() {
-    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
-    use crate::plugins::http::response_cache::ResponseCachePolicy;
-    let mut fixture = RequestFixture::new(serde_json::json!([]));
-    let _origin = BoundOriginFixture::new();
-    let mut cache = Harness::new(1024);
-    cache.stamp_unique_publication(&mut fixture.publication);
-    let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig::default()).unwrap();
-    for (index, target) in ["/cache", "/cache", "/cache?changed=true"].into_iter().enumerate() {
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
-        client
-            .write_all(format!("GET {target} HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n").as_bytes())
-            .await
-            .unwrap();
-        let mut session = Session::new_h1(Box::new(server));
-        session.read_request().await.unwrap();
-        let mut ctx = fixture.proxy.new_ctx();
-        ctx.capture_listener_publication(fixture.publication.clone());
-        ctx.capture_plugin_scope(fixture.owner.clone());
-        ctx.request_info.in_request_body_stage = true;
-        assert_eq!(
-            crate::response_cache::nominate(&mut ctx, &policy, cache.local_store()),
-            crate::plugins::runtime::traits::session::ResponseCacheIntentAdmission::Admitted
-        );
-        let before = cache.lookup_count();
-        let handled = request_filter(&fixture.proxy, &mut session, &mut ctx).await.unwrap();
-        assert_eq!(
-            cache.lookup_count(),
-            before + 1,
-            "actual tail binds and reaches canonical lookup"
-        );
-        assert_eq!(handled, index == 1);
-        if index == 0 {
-            fixture
-                .proxy
-                .upstream_peer(&mut session, &mut ctx)
-                .await
-                .expect("real consumed peer selection");
-            let mut header = cache.response();
-            header.insert_header("content-length", "5").unwrap();
-            fixture
-                .proxy
-                .upstream_response_filter(&mut session, &mut header, &mut ctx)
-                .await
-                .unwrap();
-            fixture
-                .proxy
-                .response_filter(&mut session, &mut header, &mut ctx)
-                .await
-                .unwrap();
-            let mut body = Some(bytes::Bytes::from_static(b"hello"));
-            fixture
-                .proxy
-                .upstream_response_body_filter_event(
-                    &mut session,
-                    &mut body,
-                    UpstreamResponseBodyEvent::Data { end_of_stream: true },
-                    &mut ResponseBodySink::default(),
-                    &mut ctx,
-                )
-                .await
-                .unwrap();
-            fixture
-                .proxy
-                .response_head_will_commit(&session, &header, &mut ctx)
-                .unwrap();
-            session.write_response_header(Box::new(header), false).await.unwrap();
-            session.write_response_body(body, true).await.unwrap();
-            fixture.proxy.logging(&mut session, None, &mut ctx).await;
-            assert_eq!(cache.entry_count(), 1, "only real consumed peer evidence admits a fill");
-        } else if index == 1 {
-            assert!(ctx.get_current_upstream().is_none());
-            assert_eq!(ctx.try_cnt, 0);
-            assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
-        } else {
-            assert!(session.response_written().is_none());
-        }
-        drop(session);
-        drop(ctx);
-        let mut wire = String::new();
-        client.read_to_string(&mut wire).await.unwrap();
-        if index != 2 {
-            assert!(wire.ends_with("hello"));
-        }
-    }
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_request_filter::response_cache_tests",
+        "response_cache_first_actual_tail_binding_and_consumed_peer_fill_then_hit_and_input_miss",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "response_cache_first_actual_tail_binding_and_consumed_peer_fill_then_hit_and_input_miss",
+        || async {
+            let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+            use crate::plugins::http::response_cache::ResponseCachePolicy;
+            let mut fixture = RequestFixture::new(serde_json::json!([]));
+            let _origin = BoundOriginFixture::new();
+            let mut cache = Harness::new(1024);
+            cache.stamp_unique_publication(&mut fixture.publication);
+            let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig::default()).unwrap();
+            for (index, target) in ["/cache", "/cache", "/cache?changed=true"].into_iter().enumerate() {
+                let (mut client, server) = tokio::io::duplex(64 * 1024);
+                client
+                    .write_all(format!("GET {target} HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n").as_bytes())
+                    .await
+                    .unwrap();
+                let mut session = Session::new_h1(Box::new(server));
+                session.read_request().await.unwrap();
+                let mut ctx = fixture.proxy.new_ctx();
+                ctx.capture_listener_publication(fixture.publication.clone());
+                ctx.capture_plugin_scope(fixture.owner.clone());
+                ctx.request_info.in_request_body_stage = true;
+                assert_eq!(
+                    crate::response_cache::nominate(&mut ctx, &policy, cache.local_store()),
+                    crate::plugins::runtime::traits::session::ResponseCacheIntentAdmission::Admitted
+                );
+                let before = cache.lookup_count();
+                let handled = request_filter(&fixture.proxy, &mut session, &mut ctx).await.unwrap();
+                assert_eq!(
+                    cache.lookup_count(),
+                    before + 1,
+                    "actual tail binds and reaches canonical lookup"
+                );
+                assert_eq!(handled, index == 1);
+                if index == 0 {
+                    fixture
+                        .proxy
+                        .upstream_peer(&mut session, &mut ctx)
+                        .await
+                        .expect("real consumed peer selection");
+                    let mut header = cache.response();
+                    header.insert_header("content-length", "5").unwrap();
+                    fixture
+                        .proxy
+                        .upstream_response_filter(&mut session, &mut header, &mut ctx)
+                        .await
+                        .unwrap();
+                    fixture
+                        .proxy
+                        .response_filter(&mut session, &mut header, &mut ctx)
+                        .await
+                        .unwrap();
+                    let mut body = Some(bytes::Bytes::from_static(b"hello"));
+                    fixture
+                        .proxy
+                        .upstream_response_body_filter_event(
+                            &mut session,
+                            &mut body,
+                            UpstreamResponseBodyEvent::Data { end_of_stream: true },
+                            &mut ResponseBodySink::default(),
+                            &mut ctx,
+                        )
+                        .await
+                        .unwrap();
+                    fixture
+                        .proxy
+                        .response_head_will_commit(&session, &header, &mut ctx)
+                        .unwrap();
+                    session.write_response_header(Box::new(header), false).await.unwrap();
+                    session.write_response_body(body, true).await.unwrap();
+                    fixture.proxy.logging(&mut session, None, &mut ctx).await;
+                    assert_eq!(cache.entry_count(), 1, "only real consumed peer evidence admits a fill");
+                } else if index == 1 {
+                    assert!(ctx.get_current_upstream().is_none());
+                    assert_eq!(ctx.try_cnt, 0);
+                    assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+                } else {
+                    assert!(session.response_written().is_none());
+                }
+                drop(session);
+                drop(ctx);
+                let mut wire = String::new();
+                client.read_to_string(&mut wire).await.unwrap();
+                if index != 2 {
+                    assert!(wire.ends_with("hello"));
+                }
+            }
+        },
+    )
+    .await;
 }
 
 impl RequestFixture {
@@ -656,143 +665,160 @@ impl RequestFixture {
 
 #[tokio::test]
 async fn response_cache_real_tail_ranges_and_conditionals_never_lookup_or_capture() {
-    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
-    use crate::plugins::http::response_cache::ResponseCachePolicy;
-    let mut fixture = RequestFixture::new(serde_json::json!([]));
-    let _origin = BoundOriginFixture::new();
-    let mut cache = Harness::new(1024);
-    cache.stamp_unique_publication(&mut fixture.publication);
-    let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig::default()).unwrap();
-    let (mut session, mut ctx, _client, handled) = fixture
-        .actual_tail(
-            &cache,
-            &policy,
-            "GET /cache HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n",
-        )
-        .await;
-    assert!(!handled);
-    fixture.finish_actual_origin(&cache, &mut session, &mut ctx).await;
-    drop(session);
-    drop(ctx);
-    assert_eq!(cache.entry_count(), 1);
-    let lookups = cache.lookup_count();
-    for (name, value) in [
-        ("Range", "bytes=0-1"),
-        ("If-Range", "\"version\""),
-        ("If-Match", "*"),
-        ("If-None-Match", "\"version\""),
-        ("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"),
-        ("If-Unmodified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"),
-    ] {
-        for _ in 0..2 {
-            let wire = format!("GET /cache HTTP/1.1\r\nHost: cache-c0.example.test\r\n{name}: {value}\r\n\r\n");
-            let (mut session, mut ctx, _client, handled) = fixture.actual_tail(&cache, &policy, &wire).await;
-            assert!(!handled, "{name} remains origin-owned even with a populated cache");
-            assert_eq!(cache.lookup_count(), lookups);
-            assert!(ctx.response_cache.is_none(), "no capture owner survives bypass");
-            assert_eq!(cache.pending_bytes(), 0);
-            assert_eq!(session.req_header().headers.get(name).unwrap(), value);
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_request_filter::response_cache_tests",
+        "response_cache_real_tail_ranges_and_conditionals_never_lookup_or_capture",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "response_cache_real_tail_ranges_and_conditionals_never_lookup_or_capture",
+        || async {
+            let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+            use crate::plugins::http::response_cache::ResponseCachePolicy;
+            let mut fixture = RequestFixture::new(serde_json::json!([]));
+            let _origin = BoundOriginFixture::new();
+            let mut cache = Harness::new(1024);
+            cache.stamp_unique_publication(&mut fixture.publication);
+            let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig::default()).unwrap();
+            let (mut session, mut ctx, _client, handled) = fixture
+                .actual_tail(
+                    &cache,
+                    &policy,
+                    "GET /cache HTTP/1.1\r\nHost: cache-c0.example.test\r\n\r\n",
+                )
+                .await;
+            assert!(!handled);
             fixture.finish_actual_origin(&cache, &mut session, &mut ctx).await;
-            assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+            drop(session);
+            drop(ctx);
             assert_eq!(cache.entry_count(), 1);
-        }
-    }
+            let lookups = cache.lookup_count();
+            for (name, value) in [
+                ("Range", "bytes=0-1"),
+                ("If-Range", "\"version\""),
+                ("If-Match", "*"),
+                ("If-None-Match", "\"version\""),
+                ("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"),
+                ("If-Unmodified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"),
+            ] {
+                for _ in 0..2 {
+                    let wire = format!("GET /cache HTTP/1.1\r\nHost: cache-c0.example.test\r\n{name}: {value}\r\n\r\n");
+                    let (mut session, mut ctx, _client, handled) = fixture.actual_tail(&cache, &policy, &wire).await;
+                    assert!(!handled, "{name} remains origin-owned even with a populated cache");
+                    assert_eq!(cache.lookup_count(), lookups);
+                    assert!(ctx.response_cache.is_none(), "no capture owner survives bypass");
+                    assert_eq!(cache.pending_bytes(), 0);
+                    assert_eq!(session.req_header().headers.get(name).unwrap(), value);
+                    fixture.finish_actual_origin(&cache, &mut session, &mut ctx).await;
+                    assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+                    assert_eq!(cache.entry_count(), 1);
+                }
+            }
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn response_cache_actual_graphql_tail_shares_final_bytes_across_matches_and_body_generations_only() {
-    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
-    use crate::plugins::http::response_cache::ResponseCachePolicy;
-    use serde_json::json;
-    const ENVELOPE: &str = r#"{"query":"query Q { ping }","operationName":"Q","variables":{"n":1}}"#;
-    let script = format!(
-        "if req.header(\"x-transport\") == \"id\" {{ json.set_body({}) }}",
-        serde_json::to_string(ENVELOPE).unwrap()
-    );
-    let filters = json!([{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"request-policy"}}]);
-    let backend = json!([{"name":"origin","port":8080}]);
-    let mut fixture = RequestFixture::with_rules(
-        json!([
-            {"type":"Dsl","config":{"name":"cache-reconstruction","source":script}},
-            {"type":"ProxyRewrite","config":{"uri":"/graphql","headers":{"remove":["x-transport"]}}},
-            {"type":"GraphqlGuard","config":{}}
-        ]),
-        json!([
-            {"matches":[
-                {"path":{"type":"Exact","value":"/graphql"},"headers":[{"name":"x-transport","value":"full","type":"Exact"}]},
-                {"path":{"type":"Exact","value":"/graphql"},"headers":[{"name":"x-transport","value":"id","type":"Exact"}]}
-            ],"filters":filters,"backendRefs":backend},
-            {"matches":[{"path":{"type":"Exact","value":"/other"}}],"filters":filters,"backendRefs":backend}
-        ]),
-    );
-    let _origin = BoundOriginFixture::new();
-    let mut cache = Harness::new(1024);
-    cache.stamp_unique_publication(&mut fixture.publication);
-    let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig {
-        graphql_queries: true,
-        ..Default::default()
-    })
-    .unwrap();
-    let mut first_generation = None;
-    for (index, (path, transport, input)) in [
-        ("/graphql", "full", ENVELOPE),
-        ("/graphql", "id", r#"{"id":"Q","variables":{"n":1}}"#),
-        (
-            "/graphql",
-            "full",
-            r#"{"query":"query Q { ping }","operationName":"Q","variables":{"n":2}}"#,
-        ),
-        ("/other", "full", ENVELOPE),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let wire = format!("POST {path} HTTP/1.1\r\nHost: cache-c0.example.test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-transport: {transport}\r\n\r\n{input}", input.len());
-        let before = cache.lookup_count();
-        let (mut session, mut ctx, _client, handled) = fixture.actual_tail(&cache, &policy, &wire).await;
-        assert_eq!(cache.lookup_count(), before + 1, "successful real guard reaches lookup");
-        let unit = ctx.route_unit.as_ref().unwrap();
-        assert_eq!(
-            (unit.matched_info.rule_id, unit.matched_info.match_id),
-            match index {
-                1 => (0, 1),
-                3 => (1, 0),
-                _ => (0, 0),
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_request_filter::response_cache_tests",
+        "response_cache_actual_graphql_tail_shares_final_bytes_across_matches_and_body_generations_only",
+        "EDGION_R0001_ISOLATED_TEST_CHILD",
+        "response_cache_actual_graphql_tail_shares_final_bytes_across_matches_and_body_generations_only",
+        || async {
+            let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+            use crate::plugins::http::response_cache::ResponseCachePolicy;
+            use serde_json::json;
+            const ENVELOPE: &str = r#"{"query":"query Q { ping }","operationName":"Q","variables":{"n":1}}"#;
+            let script = format!(
+                "if req.header(\"x-transport\") == \"id\" {{ json.set_body({}) }}",
+                serde_json::to_string(ENVELOPE).unwrap()
+            );
+            let filters = json!([{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"request-policy"}}]);
+            let backend = json!([{"name":"origin","port":8080}]);
+            let mut fixture = RequestFixture::with_rules(
+                json!([
+                    {"type":"Dsl","config":{"name":"cache-reconstruction","source":script}},
+                    {"type":"ProxyRewrite","config":{"uri":"/graphql","headers":{"remove":["x-transport"]}}},
+                    {"type":"GraphqlGuard","config":{}}
+                ]),
+                json!([
+                    {"matches":[
+                        {"path":{"type":"Exact","value":"/graphql"},"headers":[{"name":"x-transport","value":"full","type":"Exact"}]},
+                        {"path":{"type":"Exact","value":"/graphql"},"headers":[{"name":"x-transport","value":"id","type":"Exact"}]}
+                    ],"filters":filters,"backendRefs":backend},
+                    {"matches":[{"path":{"type":"Exact","value":"/other"}}],"filters":filters,"backendRefs":backend}
+                ]),
+            );
+            let _origin = BoundOriginFixture::new();
+            let mut cache = Harness::new(1024);
+            cache.stamp_unique_publication(&mut fixture.publication);
+            let policy = ResponseCachePolicy::compile(&edgion_resources::ResponseCacheConfig {
+                graphql_queries: true,
+                ..Default::default()
+            })
+            .unwrap();
+            let mut first_generation = None;
+            for (index, (path, transport, input)) in [
+                ("/graphql", "full", ENVELOPE),
+                ("/graphql", "id", r#"{"id":"Q","variables":{"n":1}}"#),
+                (
+                    "/graphql",
+                    "full",
+                    r#"{"query":"query Q { ping }","operationName":"Q","variables":{"n":2}}"#,
+                ),
+                ("/other", "full", ENVELOPE),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let wire = format!("POST {path} HTTP/1.1\r\nHost: cache-c0.example.test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-transport: {transport}\r\n\r\n{input}", input.len());
+                let before = cache.lookup_count();
+                let (mut session, mut ctx, _client, handled) = fixture.actual_tail(&cache, &policy, &wire).await;
+                assert_eq!(cache.lookup_count(), before + 1, "successful real guard reaches lookup");
+                let unit = ctx.route_unit.as_ref().unwrap();
+                assert_eq!(
+                    (unit.matched_info.rule_id, unit.matched_info.match_id),
+                    match index {
+                        1 => (0, 1),
+                        3 => (1, 0),
+                        _ => (0, 0),
+                    }
+                );
+                assert_eq!(ctx.path(), "/graphql");
+                let generation = ctx
+                    .response_cache_graphql_proof
+                    .get()
+                    .expect("real successful GraphqlGuard evidence")
+                    .generation;
+                if handled {
+                    assert!(
+                        ctx.request_body.generation().is_none(),
+                        "cached response releases the late request body view"
+                    );
+                } else {
+                    assert_eq!(ctx.request_body.generation(), Some(generation));
+                }
+                assert_eq!(
+                    handled,
+                    index == 1,
+                    "final envelope shares across matches; variables and rule remain isolated"
+                );
+                if index == 0 {
+                    first_generation = Some(generation);
+                    fixture.finish_actual_origin(&cache, &mut session, &mut ctx).await;
+                    assert_eq!(cache.entry_count(), 1);
+                } else if index == 1 {
+                    assert_ne!(
+                        Some(generation),
+                        first_generation,
+                        "reconstruction publishes a different physical body generation"
+                    );
+                    assert_eq!(ctx.try_cnt, 0);
+                    assert!(ctx.get_current_upstream().is_none());
+                }
             }
-        );
-        assert_eq!(ctx.path(), "/graphql");
-        let generation = ctx
-            .response_cache_graphql_proof
-            .get()
-            .expect("real successful GraphqlGuard evidence")
-            .generation;
-        if handled {
-            assert!(
-                ctx.request_body.generation().is_none(),
-                "cached response releases the late request body view"
-            );
-        } else {
-            assert_eq!(ctx.request_body.generation(), Some(generation));
-        }
-        assert_eq!(
-            handled,
-            index == 1,
-            "final envelope shares across matches; variables and rule remain isolated"
-        );
-        if index == 0 {
-            first_generation = Some(generation);
-            fixture.finish_actual_origin(&cache, &mut session, &mut ctx).await;
-            assert_eq!(cache.entry_count(), 1);
-        } else if index == 1 {
-            assert_ne!(
-                Some(generation),
-                first_generation,
-                "reconstruction publishes a different physical body generation"
-            );
-            assert_eq!(ctx.try_cnt, 0);
-            assert!(ctx.get_current_upstream().is_none());
-        }
-    }
+        },
+    ).await;
 }
 
 struct ActualPolicyCleanup {

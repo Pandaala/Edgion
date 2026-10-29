@@ -157,3 +157,13 @@ not response-callout support, shared-VM fairness or production capacity; see the
 [cancellation contract](../../plugin-runtime/regression-guards/response-callback-downstream-cancellation.md).
 Reopen model selection only for a concrete workload that misses its resource or
 latency target, with an independently reviewed design and equivalent measurements.
+
+## Test process ownership
+
+Tests that actually load or preload guest modules use the canonical test subprocess
+helper to isolate process-wide admission from unrelated parallel tests. Each child
+retains the production preparation, instance, and guest-memory limits. Existing
+capacity, cancellation, retirement, and intra-test concurrency assertions still
+exercise those real limits; process isolation does not bypass admission or serialize
+operations within a test. The helper selects the exact test and requires its unique
+completion marker, preventing a missing test from appearing successful.

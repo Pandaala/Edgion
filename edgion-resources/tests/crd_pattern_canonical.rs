@@ -47,6 +47,8 @@ fn edgion_crd_patterns_are_canonical() {
         edgion_resources::gwapi_types::PRECISE_HOSTNAME_PATTERN,
         edgion_resources::gwapi_types::HEADER_NAME_PATTERN,
         edgion_resources::gwapi_types::GROUP_NAME_PATTERN,
+        edgion_resources::gwapi_types::REFERENCE_GROUP_PATTERN,
+        edgion_resources::gwapi_types::REFERENCE_KIND_PATTERN,
         edgion_resources::resources::edgion_backend::AI_CREDENTIAL_ALIAS_PATTERN,
         edgion_resources::resources::edgion_backend::AI_REDIS_REF_PATTERN,
         edgion_resources::resources::edgion_backend::AI_PRICE_PATTERN,

@@ -105,6 +105,19 @@ fn tls_to_tcp_builder_does_not_advertise_http_alpn() {
         }))
         .unwrap(),
     );
+    // This transport fixture supplies a processed Controller publication proof;
+    // it does not exercise Controller admission or attachment-digest generation.
+    gateway.spec.resolved_attachment_proof = Some(edgion_resources::resources::edgion_tls::GatewayAttachmentProof {
+        instance: gateway.metadata.uid.clone().expect("fixture Gateway UID"),
+        generation: gateway.metadata.generation.expect("fixture Gateway generation"),
+        epoch: "alpn-test-controller-publication".into(),
+        attachment_digest: "a".repeat(64),
+    });
+    let attachment_proof = edgion_resources::resources::gateway::gateway_attachment_proof(&gateway);
+    assert!(
+        attachment_proof.is_resolved(),
+        "fixture must carry a resolved publication proof"
+    );
     let class: edgion_resources::GatewayClass = serde_json::from_value(serde_json::json!({
         "metadata": {"name": "alpn-test-class"},
         "spec": {"controllerName": "edgion.io/gateway-controller"}
@@ -145,7 +158,7 @@ fn tls_to_tcp_builder_does_not_advertise_http_alpn() {
             gateway_name: "gateway".into(),
             listener_name: "tls".into(),
             listener_key: listener_key.clone(),
-            gateway_proof: edgion_resources::resources::gateway::gateway_attachment_proof(&gateway),
+            gateway_proof: attachment_proof,
         },
     ]);
     let validation = edgion_gateway::tls::validation::cert::validate_cert(&tls);
@@ -184,6 +197,16 @@ fn tls_to_tcp_builder_does_not_advertise_http_alpn() {
         .match_sni_candidates(&listener_key, "test.example.com")[0]
         .identity
         .is_ok());
+    let gateway_snapshot = edgion_gateway::runtime::matching::tls::get_gateway_tls_matcher().snapshot();
+    assert!(
+        get_global_tls_store()
+            .snapshot()
+            .match_eligible_sni(&listener_key, "test.example.com", |attachment| {
+                gateway_snapshot.listener_is_eligible(attachment)
+            })
+            .is_some(),
+        "published identity must satisfy the handshake's current Gateway attachment eligibility"
+    );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let filter =
         edgion_gateway::plugins::stream::StreamPluginConnectionFilter::new(listener_key.clone(), address.port());

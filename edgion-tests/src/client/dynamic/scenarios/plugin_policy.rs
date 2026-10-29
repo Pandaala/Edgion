@@ -312,7 +312,50 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/PluginPolicy/DynamicTest/initial");
         for name in ["mock", "dsl", "waf", "response", "body", "async"] {
             let input = std::fs::read_to_string(root.join(format!("EdgionPlugins_pp-{name}.yaml"))).unwrap();
-            let resource: edgion_resources::EdgionPlugins = serde_yaml::from_str(&input).unwrap();
+            let mut resource: edgion_resources::EdgionPlugins = serde_yaml::from_str(&input).unwrap();
+            if name == "waf" {
+                use edgion_resources::resources::edgion_config_data::{WafPolicyData, WafRuleBundleData};
+                use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedWafBundle;
+
+                let read_fixture = |name: &str| -> serde_json::Value {
+                    serde_yaml::from_str(&std::fs::read_to_string(root.join(name)).unwrap()).unwrap()
+                };
+                let policy = read_fixture("EdgionConfigData_pp-waf-policy.yaml");
+                let bundle = read_fixture("EdgionConfigData_pp-waf-rules.yaml");
+                let namespace = resource.metadata.namespace.as_deref().unwrap();
+                let waf = resource.spec.waf.as_mut().unwrap();
+                assert_eq!(waf.policy_ref.name, policy["metadata"]["name"].as_str().unwrap());
+                assert_eq!(waf.policy_ref.namespace.as_deref().unwrap_or(namespace), namespace);
+                assert_eq!(policy["metadata"]["namespace"], namespace);
+                assert_eq!(policy["spec"]["data"]["type"], "WafPolicy");
+                assert_eq!(bundle["spec"]["data"]["type"], "WafRuleBundle");
+                let policy: WafPolicyData = serde_json::from_value(policy["spec"]["data"]["config"].clone()).unwrap();
+                assert_eq!(policy.default_profile, "baseline");
+                assert!(waf.active_profile.is_none());
+                assert!(waf.active_profile_ref.is_none());
+                let references = &policy.profiles[&policy.default_profile].bundle_refs;
+                assert_eq!(references.len(), 1);
+                let reference = &references[0];
+                assert!(!reference.optional);
+                assert_eq!(reference.target.name, bundle["metadata"]["name"].as_str().unwrap());
+                assert_eq!(reference.target.namespace.as_deref().unwrap_or(namespace), namespace);
+                assert_eq!(bundle["metadata"]["namespace"], namespace);
+                let data: WafRuleBundleData = serde_json::from_value(bundle["spec"]["data"]["config"].clone()).unwrap();
+                let digest = data.compute_digest();
+                assert_eq!(data.digest.as_deref(), Some(digest.as_str()));
+                assert_eq!(reference.expected_digest.as_deref(), Some(digest.as_str()));
+                // Schema validation consumes the Controller-resolved projection,
+                // so resolve the real sibling fixtures rather than inline rules.
+                waf.owner_namespace = Some(namespace.into());
+                waf.selected_profile = Some(policy.default_profile.clone());
+                waf.resolved_ref_indices = vec![0];
+                waf.resolved_bundles = Some(vec![ResolvedWafBundle {
+                    identity: format!("{namespace}/{}", reference.target.name),
+                    digest,
+                    data,
+                }]);
+                waf.resolved_policy = Some(policy);
+            }
             let errors = resource.validate_plugins();
             if name == "async" {
                 assert!(

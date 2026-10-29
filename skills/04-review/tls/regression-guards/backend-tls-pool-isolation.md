@@ -159,3 +159,13 @@ this check. Success status, server identity and path checks remain required.
 This does not assert transparent forwarding of the managed `X-Trace-ID` header or
 replace any trust, identity or pool-isolation evidence. Pure synthetic response
 checks validate marker parsing; they do not establish live TLS/mTLS acceptance.
+
+## Test publication ownership
+
+Production `GatewayHandler::full_set` and `partial_update` serialize Gateway
+TLS store writes under the global GatewayStore write lock. Tests that directly
+publish Gateway TLS fixtures instead use the canonical subprocess helper, matching
+the existing isolated publication tests. This keeps unrelated fixture writers from
+losing each other's copy-on-write updates without changing production publication.
+The original cleanup, identity precedence, digest, and final reuse-hash assertions
+remain required inside each child process.

@@ -9,8 +9,8 @@ knowledge_type: intentional-design
 ## Decision and scope
 
 The user-approved interim `EdgionHttpContext` ceiling is strictly below 1800
-bytes on all pointer widths (2026-10-14). `RequestInfo` retains its audited
-432-byte layout. The earlier 1328-byte context ledger below is historical. Inline `ResolvedRequestBodyConfig` has a
+bytes on all pointer widths (2026-10-14). `RequestInfo` currently has an audited
+400-byte native 64-bit layout (2026-10-29). The earlier 1328-byte context ledger below is historical. Inline `ResolvedRequestBodyConfig` has a
 48-byte budget. These are review boundaries, not a stable Rust ABI or permission
 for unreviewed future growth. The interim ceiling includes deliberate headroom;
 it is not a claim that every current context field has been audited.
@@ -24,7 +24,7 @@ field declarations reconstruct a 1264-byte layout, with 16 bytes of headroom.
 The earlier cf8dd648 ledger measured 1304 bytes with alignment 8. At that
 revision, necessary storage since d9854dd5 added 40 bytes; 24 bytes exceeded
 the original ceiling. This earlier measurement is historical, not the current
-layout. Fresh native inspection now measures 1328 bytes with alignment 8; the
+layout. The historical native inspection measured 1328 bytes with alignment 8; the
 additional 24 bytes come entirely from the frozen entry method in RequestInfo.
 
 | Storage | Audited growth | Purpose and origin |
@@ -35,7 +35,7 @@ additional 24 bytes come entirely from the frozen entry method in RequestInfo.
 | Five hot flags and tail alignment | 8 bytes | AiGuard-before-rewrite identity (525ee095), fatal strict-jump conflicts (aacf57b7), body enforcement and WAF partial capture (2aa2686e) grow the aligned flag tail from 16 to 24. |
 | Canonical frozen entry Method | 24 bytes | 3c0a9125 adds Option<http::Method>; subsequent consolidation derives HEAD/CONNECT identity from it instead of two flags. Outbound calls consume the frozen method (3b7edd1c), with no live-header fallback. |
 
-Current RequestInfo has 425 bytes of field storage and seven tail-padding bytes,
+That historical RequestInfo had 425 bytes of field storage and seven tail-padding bytes,
 for 432 bytes with alignment 8. Its `method` occupies 24 bytes (the same size as
 `http::Method`; Option uses its existing representation). Reconstructing the
 previous shape removes those 24 bytes and restores the two one-byte HEAD/CONNECT
@@ -79,7 +79,7 @@ ctx::request_scenario_state_tests, ctx::request_body_plugin_state_tests and
 request_body::config. Fresh execution receipts and independent approval belong
 in the bounded implementation task.
 
-Current field sizes and ordering came from fresh native aarch64-Darwin rustc
+The historical field sizes and ordering came from native aarch64-Darwin rustc
 `-Zprint-type-sizes` output on the repository toolchain.
 The original 1264-byte ledger was reconstructed from original declarations and
 unchanged field layouts; an external aligned-shape probe validates its arithmetic.
@@ -156,3 +156,26 @@ The follow-up task is closed under that revised scope. No compiler-layout ledger
 size reduction or throughput improvement is claimed. Existing numeric layout
 assertions were left unchanged by the two selected implementations; they do not
 constitute a requirement to shrink the context or box ordinary metadata.
+
+## Baseline assertion re-audit (2026-10-29)
+
+A fresh native `aarch64-apple-darwin` compiler `-Zprint-type-sizes` probe using
+repository toolchain rustc 1.96.1 (`31fca3adb`, LLVM 22.1.2) measures `RequestInfo` at 400 bytes with alignment 8: 393 bytes of fields
+and seven padding bytes. Relative to the historical 432-byte shape, commit
+`7b1755089` moves the 24-byte query owner out of RequestInfo, and `25e0fefda`
+replaces the owned protocol string with a borrowed protocol (eight fewer bytes).
+These changes explain the exact reduction; no new storage change is made here.
+
+`PluginExecutionState` measures 184 bytes with alignment 8: 177 bytes of fields
+and seven padding bytes. Commit `6118e8e2` adds the `ip_body_denied` boolean,
+which moves the prior 176-byte shape across the alignment boundary.
+`PluginAuxState` remains 296 bytes (289 field bytes plus seven padding bytes),
+and its nullable box remains eight bytes. The complete `EdgionHttpContext`
+measures 1376 bytes, below the unchanged strict 1800-byte ceiling.
+
+Only the two stale exact assertions change, from 432 to 400 and 176 to 184.
+Ordinary-request allocation and absent-state checks, lazy-owner checks, the
+auxiliary-state assertion, and the context ceiling remain independent gates.
+These are native layout measurements, not a Rust ABI guarantee, cross-target
+proof, heap/RSS measurement, or fresh execution of the historical verification
+receipts above. Fresh regression results belong to the active repair record.

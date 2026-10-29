@@ -211,22 +211,52 @@ impl Fixture {
         .unwrap();
         edgion_gateway::config::gateway_class::create_gateway_class_handler()
             .full_set(&HashMap::from([("hello-wire".into(), Arc::new(class))]));
-        let gateway: Gateway = serde_json::from_value(json!({
-            "metadata": {"namespace": "hello-wire", "name": "gateway"},
+        let mut gateway: Gateway = serde_json::from_value(json!({
+            "metadata": {"namespace": "hello-wire", "name": "gateway", "generation": 1,
+                "annotations": {"edgion.io/local-bind-ip": addr.ip().to_string()}},
             "spec": {"gatewayClassName": "hello-wire",
                 "addresses": [{"type": "IPAddress", "value": addr.ip().to_string()}],
                 "listeners": [{"name": "tls", "port": addr.port(), "protocol": "TLS",
                     "hostname": HOST, "tls": {"mode": "Passthrough"}}]}
         }))
         .unwrap();
+        assert_eq!(
+            edgion_resources::listener_key::resolve_listener_addr(&gateway, i32::from(addr.port())),
+            addr,
+            "the published listener identity must match the owned socket"
+        );
+        // Supply the serving status from a processed Controller publication.
+        gateway.spec.current_status = Some(serde_json::from_value(json!({
+            "listeners": [{"name": "tls", "attachedRoutes": 1,
+                "supportedKinds": [{"group": "gateway.networking.k8s.io", "kind": "TLSRoute"}],
+                "conditions": [
+                    {"type": "Accepted", "status": "True", "observedGeneration": 1,
+                     "reason": "Accepted", "message": "Listener is accepted", "lastTransitionTime": "2026-10-29T00:00:00Z"},
+                    {"type": "Programmed", "status": "True", "observedGeneration": 1,
+                     "reason": "Programmed", "message": "Listener is programmed", "lastTransitionTime": "2026-10-29T00:00:00Z"}
+                ]}]
+        })).unwrap());
         edgion_gateway::runtime::create_gateway_handler()
             .full_set(&HashMap::from([("hello-wire/gateway".into(), Arc::new(gateway))]));
+        let listener_index =
+            edgion_gateway::runtime::store::listener_gateway_info::get_listener_gateway_info_store().get_index(&key);
+        assert!(
+            listener_index.get("hello-wire/gateway", "tls").is_some(),
+            "the canonical listener index must contain the owned Gateway attachment"
+        );
 
         let mut route: TLSRoute = serde_json::from_value(json!({
-            "metadata": {"namespace": "hello-wire", "name": "route"},
+            "metadata": {"namespace": "hello-wire", "name": "route", "generation": 1},
             "spec": {"parentRefs": [{"name": "gateway", "sectionName": "tls"}], "hostnames": [HOST], "rules": [{"backendRefs": [{"name": "backend", "port": port}]}]}
         }))
         .unwrap();
+        route.spec.current_status = Some(serde_json::from_value(json!({
+            "parents": [{"parentRef": {"name": "gateway", "sectionName": "tls"},
+                "controllerName": "edgion.io/gateway-controller", "conditions": [{
+                    "type": "Accepted", "status": "True", "observedGeneration": 1,
+                    "reason": "Accepted", "message": "Route is accepted", "lastTransitionTime": "2026-10-29T00:00:00Z"
+                }]}]
+        })).unwrap());
         route.spec.resolved_status_controller = Some("edgion.io/gateway-controller".into());
         route.spec.resolved_listeners = Some(vec![ResolvedTlsListener {
             listener_key: key.clone(),

@@ -168,3 +168,19 @@ the bound.
 - `tls-03` — 2026-05-19.
 - `add-malformed-clienthello-passthrough-coverage` / D0118 — test gap following B0210;
   socket-level rejection coverage, with no runtime behavior change.
+
+## Processed socket-test fixtures
+
+The isolated socket matrix supplies Controller-published Gateway listener
+Accepted/Programmed status and the TLSRoute's matching Accepted parent status,
+with the resolved status controller and listener projection. These are required
+routing inputs, not parser bypasses: missing listener status or accepted parent
+attachments remains ineligible. The fixture's generation and observed generation
+agree. An explicit `edgion.io/local-bind-ip` aligns the owned loopback socket,
+resolved route key and published Gateway listener identity; `spec.addresses` does
+not configure local binding. Canonical address resolution and the public listener
+index are checked before the socket matrix proves actual dispatch.
+The malformed-record rejection, valid replay, access-log, endpoint-safety,
+and cleanup assertions remain unchanged. This hand-built publication does not
+establish Controller status generation; historical execution above remains scoped
+to its recorded revision, and fresh receipts belong to the active repair record.

@@ -6,7 +6,7 @@ metadata:
 spec:
   waf:
     activeProfile: strict
-    mode: on
+    mode: "on"
     policyRef:
       name: waf-policy
     requestBody:

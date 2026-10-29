@@ -212,12 +212,9 @@ pub struct FrontendTLSValidation {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendCACertificateRef {
-    #[schemars(
-        length(max = 253),
-        pattern(r"^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
-    )]
+    #[schemars(length(max = 253), pattern(crate::gwapi_types::REFERENCE_GROUP_PATTERN))]
     pub group: String,
-    #[schemars(length(min = 1, max = 63), pattern(r"^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$"))]
+    #[schemars(length(min = 1, max = 63), pattern(crate::gwapi_types::REFERENCE_KIND_PATTERN))]
     pub kind: String,
     #[schemars(length(min = 1, max = 253))]
     pub name: String,

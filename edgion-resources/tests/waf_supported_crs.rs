@@ -12,6 +12,29 @@ fn supported_package_is_reproducible_and_keeps_exact_original_order() {
     profile::generate(true).unwrap();
     profile::generate_wire(true).unwrap();
     let package = profile::load().unwrap();
+    let product = profile::outputs(&package).unwrap();
+    let wire = profile::wire_outputs(&package).unwrap();
+    for (yaml, expected_mode) in [
+        (&product["EdgionPlugins_crs-supported.yaml"], "on"),
+        (&wire["updates/to_supported_on/EdgionPlugins_waf-dynamic.yaml"], "on"),
+        (
+            &wire["updates/to_supported_standard/EdgionPlugins_waf-dynamic.yaml"],
+            "on",
+        ),
+        (
+            &wire["updates/to_supported_detection/EdgionPlugins_waf-dynamic.yaml"],
+            "detectionOnly",
+        ),
+    ] {
+        let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(value["spec"]["waf"]["mode"], expected_mode);
+        if expected_mode == "on" {
+            assert_eq!(yaml.lines().filter(|line| *line == "    mode: \"on\"").count(), 1);
+            assert_eq!(yaml.lines().filter(|line| *line == "    mode: on").count(), 0);
+        } else {
+            assert_eq!(*yaml, serde_yaml::to_string(&value).unwrap());
+        }
+    }
     for name in ["standard", "strict"] {
         let config = profile::config(&package, name).unwrap();
         let generation = config.compile_generation().unwrap();

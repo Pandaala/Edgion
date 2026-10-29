@@ -658,6 +658,7 @@ run_isolated_scenarios() {
         "proxy_protocol_policy_lifecycle"
         "udp_process_shutdown"
         "oidc_egress"
+        "metrics_lifetime"
     )
     local commands=(
         "${SCRIPT_DIR}/test_controller_no_auth.sh"
@@ -668,6 +669,7 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_proxy_protocol_policy_lifecycle.sh"
         "${SCRIPT_DIR}/test_udp_process_shutdown.sh"
         "${SCRIPT_DIR}/test_oidc_egress.sh"
+        "${SCRIPT_DIR}/test_metrics_lifetime.sh"
     )
 
     local proxy_scenarios_skipped=false
@@ -2620,7 +2622,8 @@ main() {
             --scenario fips_policy \
             --scenario geoip_db_states \
             --scenario unknown_config_fields \
-            --scenario proxy_protocol_policy_lifecycle; then
+            --scenario proxy_protocol_policy_lifecycle \
+            --scenario metrics_lifetime; then
             report_test "Preflight_IsolatedPorts" "FAIL" "0"
             exit 1
         fi

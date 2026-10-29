@@ -2237,17 +2237,14 @@ impl DslTestSuite {
     // `/extra` after the matched prefix. The radix matcher must still bind
     // `:item=book-7` rather than `book-7/extra`, while PathPrefix permits the
     // suffix beyond the template.
-    // ==================== Scenario 27: cached_query frozen at entry time ====================
+    // ==================== Scenario 27: current query and frozen entry URI ====================
 
-    /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites
-    /// the URI to a different query, req.query("name") read afterwards must
-    /// still return the entry-time value. test_server's /request-header-test
-    /// echoes incoming request headers in the response body, so we look for
-    /// "X-Captured-Name: BEFORE_REWRITE".
+    /// Verify that a warmed query getter follows req.set_uri while the explicit
+    /// entry URI remains frozen. The upstream echoes each captured view as a header.
     fn test_freeze_query_param() -> TestCase {
         TestCase::new(
             "dsl_freeze_query_param",
-            "DSL: cached_query stays at entry value after req.set_uri",
+            "DSL: query follows req.set_uri while entry URI remains frozen",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -2268,24 +2265,27 @@ impl DslTestSuite {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let body = resp.text().await.unwrap_or_default();
-                            // header_echo_handler renders headers as "  Name: value\n" lines
-                            if body.contains("X-Captured-Name: BEFORE_REWRITE") {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "cached_query frozen to entry value after set_uri".to_string(),
-                                )
-                            } else if body.contains("X-Captured-Name: AFTER_REWRITE") {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "REGRESSION: cached_query read live URI after set_uri (entry freeze broken)"
-                                        .to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("X-Captured-Name not in echoed headers; body=\n{}", body),
-                                )
+                            // Compare complete echoed lines so prefixes cannot satisfy a view assertion.
+                            for expected in [
+                                "X-Before-Name: BEFORE_REWRITE",
+                                "X-Captured-Name: AFTER_REWRITE",
+                                "X-Entry-Uri: /test/dsl-freeze-query?name=BEFORE_REWRITE",
+                                "X-Current-Uri: /request-header-test?name=AFTER_REWRITE",
+                            ] {
+                                let count = body.lines().filter(|line| line.trim() == expected).count();
+                                if count != 1 {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "Expected exactly one echoed line {expected:?}, got {count}; body=\n{body}"
+                                        ),
+                                    );
+                                }
                             }
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Current query and URI follow set_uri; entry URI remains frozen".to_string(),
+                            )
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }

@@ -1,7 +1,5 @@
-# Verifies that EdgionHttpContext::cached_query is frozen to entry_raw_query.
-# req.set_uri rewrites the URI to a different query, but req.query("name")
-# read afterwards must still return the entry-time value, proving the cache
-# is order-independent regardless of plugin URI rewrites.
+# Verify that query reads follow the current URI after a rewrite while the
+# explicit entry URI remains frozen. Read before rewriting to warm the query cache.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -14,6 +12,12 @@ spec:
       config:
         name: "freeze-query"
         source: |
+          let before = req.query("name")
+          if before == nil {
+            req.set_header("X-Before-Name", "MISSING")
+          } else {
+            req.set_header("X-Before-Name", before)
+          }
           req.set_uri("/request-header-test?name=AFTER_REWRITE")
           let captured = req.query("name")
           if captured == nil {
@@ -21,4 +25,6 @@ spec:
           } else {
             req.set_header("X-Captured-Name", captured)
           }
+          req.set_header("X-Entry-Uri", req.request_uri)
+          req.set_header("X-Current-Uri", req.uri)
         errorPolicy: deny

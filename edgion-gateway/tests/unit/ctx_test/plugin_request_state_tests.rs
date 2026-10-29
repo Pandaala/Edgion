@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn plugin_state_layout_keeps_hot_and_sparse_costs_separate() {
-    assert_eq!(std::mem::size_of::<PluginExecutionState>(), 176);
+    assert_eq!(std::mem::size_of::<PluginExecutionState>(), 184);
     assert_eq!(std::mem::size_of::<PluginAuxState>(), 296);
     assert_eq!(std::mem::size_of::<Option<Box<PluginAuxState>>>(), 8);
 }

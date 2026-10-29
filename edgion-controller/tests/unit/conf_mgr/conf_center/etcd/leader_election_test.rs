@@ -529,7 +529,7 @@ async fn diagnostic_panic_preserves_pending_campaign_and_shutdown() {
             starts.fetch_add(1, Ordering::SeqCst);
             tokio::select! {
                 _ = signal.wait() => CampaignResult::Shutdown,
-                _ = win_rx => CampaignResult::Won(LeaderKey::default()),
+                Ok(()) = win_rx => CampaignResult::Won(LeaderKey::default()),
             }
         };
         let diagnostic = async {

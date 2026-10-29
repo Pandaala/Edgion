@@ -480,10 +480,8 @@ mod metric_rendering {
         assert!(!line.contains("warn="));
     }
 
-    /// Pin: rendering an unchanged fleet twice must produce byte-identical
-    /// output. A non-deterministic label value would mint a brand-new
-    /// series identity on every scrape (far worse than the per-resource
-    /// cardinality this per-kind design was built to avoid).
+    /// Pin stable series identities, values, and metadata across scrapes.
+    /// The canonical exporter does not guarantee sample ordering.
     #[test]
     fn rendering_is_deterministic_across_repeated_calls() {
         let _guard = TEST_MUTEX.lock();
@@ -507,10 +505,29 @@ mod metric_rendering {
 
         let first = render_unknown_config_fields_metric();
         let second = render_unknown_config_fields_metric();
-        assert_eq!(
-            first, second,
-            "repeated rendering of an unchanged fleet must be byte-identical"
-        );
+        for rendered in [&first, &second] {
+            let mut lines = rendered.lines();
+            assert_eq!(
+                lines.next(),
+                Some(concat!(
+                    "# HELP edgion_controller_unknown_config_fields ",
+                    "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, or LinkSys schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync."
+                ))
+            );
+            assert_eq!(
+                lines.next(),
+                Some("# TYPE edgion_controller_unknown_config_fields gauge")
+            );
+            let mut samples: Vec<_> = lines.collect();
+            samples.sort_unstable();
+            assert_eq!(
+                samples,
+                vec![
+                    "edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\"} 30",
+                    "edgion_controller_unknown_config_fields{kind=\"EdgionStreamPlugins\"} 1",
+                ]
+            );
+        }
     }
 
     /// Pin: this metric must remain independent of

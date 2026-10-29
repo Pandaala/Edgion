@@ -21,6 +21,23 @@ async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
     (state, tmp_data)
 }
 
+async fn seed_resource(state: &AdminState, body: String) {
+    let seed: Value = serde_json::from_str(&body).expect("seed resource JSON");
+    let version = seed["metadata"]["resourceVersion"]
+        .as_str()
+        .expect("seed resource version")
+        .parse()
+        .expect("numeric seed resource version");
+    state
+        .conf_center()
+        .create_one("EdgionConfigData", Some("default"), "override", body)
+        .await
+        .expect("seed resource must be created");
+    // Direct storage fixtures bypass processor initialization, which restores
+    // the persisted version floor before the real admin API accepts writes.
+    crate::conf_mgr::sync_runtime::resource_version::bump_resource_version_floor(version);
+}
+
 fn override_body(resource_version: &str) -> String {
     serde_json::json!({
         "apiVersion": "edgion.io/v1",
@@ -52,11 +69,7 @@ fn override_body(resource_version: &str) -> String {
 #[tokio::test]
 async fn failover_advances_stored_resource_version() {
     let (state, _tmp) = make_fs_state().await;
-    state
-        .conf_center()
-        .create_one("EdgionConfigData", Some("default"), "override", override_body("42"))
-        .await
-        .expect("seed resource must be created");
+    seed_resource(&state, override_body("42")).await;
 
     let applied =
         patch_edgion_config_data_failover(&state, "default", "override", "RegionRouteOverride", "east", "west")
@@ -90,11 +103,7 @@ async fn failover_advances_stored_resource_version() {
 #[tokio::test]
 async fn failover_on_stale_stored_version_still_applies() {
     let (state, _tmp) = make_fs_state().await;
-    state
-        .conf_center()
-        .create_one("EdgionConfigData", Some("default"), "override", override_body("7"))
-        .await
-        .expect("seed resource must be created");
+    seed_resource(&state, override_body("7")).await;
 
     let applied =
         patch_edgion_config_data_failover(&state, "default", "override", "RegionRouteOverride", "east", "west")
@@ -111,11 +120,7 @@ async fn failover_rejects_self_dangling_and_cyclic_targets_without_writing() {
         if target == "west" {
             seed["spec"]["data"]["config"]["regions"][1]["failoverTo"] = Value::String("east".into());
         }
-        state
-            .conf_center()
-            .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
-            .await
-            .unwrap();
+        seed_resource(&state, seed.to_string()).await;
         let result = cluster_edgion_config_data_failover(
             State(state.clone()),
             Json(EdgionConfigDataFailoverRequest {
@@ -147,11 +152,7 @@ async fn failover_rejects_malformed_complete_table_even_when_already_applied() {
         let (state, _tmp) = make_fs_state().await;
         let mut seed: Value = serde_json::from_str(&override_body("42")).unwrap();
         seed["spec"]["data"]["config"]["regions"][0][field] = value;
-        state
-            .conf_center()
-            .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
-            .await
-            .unwrap();
+        seed_resource(&state, seed.to_string()).await;
         // Clearing an already absent failover must not approve a broken table.
         let result =
             patch_edgion_config_data_failover(&state, "default", "override", "RegionRouteOverride", "east", "").await;
@@ -172,11 +173,7 @@ fn mixed_override_body() -> Value {
 async fn mixed_raw_failover_mutates_only_canonical_table_and_preserves_idempotence() {
     let (state, _tmp) = make_fs_state().await;
     let seed = mixed_override_body();
-    state
-        .conf_center()
-        .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
-        .await
-        .unwrap();
+    seed_resource(&state, seed.to_string()).await;
     let mut previous: Value = serde_yaml::from_str(
         &state
             .conf_center()
@@ -256,11 +253,7 @@ async fn mixed_raw_failover_rejects_invalid_or_missing_canonical_table_without_w
             }
             _ => unreachable!(),
         };
-        state
-            .conf_center()
-            .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
-            .await
-            .unwrap();
+        seed_resource(&state, seed.to_string()).await;
         let before = state
             .conf_center()
             .get_one("EdgionConfigData", Some("default"), "override")
