@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: auth-claim-headers
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://test.example"
+            secretRefs:
+              - name: auth-claim-headers
+                namespace: edgion-default
+        algorithm: HS256
+        header: authorization
+        query: jwt
+        allowTokenInQuery: true
+        cookie: jwt
+        keyClaimName: key
+        hideCredentials: true
+        claimsToHeaders:
+          role: X-New-Role

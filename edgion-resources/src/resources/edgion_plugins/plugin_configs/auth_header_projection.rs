@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 
 pub const INVALID_HEADER_DESTINATION: &str = "claim-to-header destination must be a valid HTTP header name";
 pub const DUPLICATE_HEADER_DESTINATION: &str = "claim-to-header destinations must be unique ignoring ASCII case";
+pub(super) const PROTOCOL_OWNED_CLAIM_DESTINATION: &str =
+    "claimsToHeaders cannot target Host; use a dedicated identity header";
 
 /// One prevalidated claim/payload path to upstream-header projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +40,19 @@ pub fn compile_claim_header_projection(
     mapping: Option<&HashMap<String, String>>,
 ) -> Result<ClaimHeaderProjectionPlan, &'static str> {
     compile_claim_header_projection_with_owned_destinations(mapping, &[])
+}
+
+/// Compile authenticated identity destinations that can remain absent after sanitation.
+pub(super) fn compile_authenticated_claim_header_projection(
+    mapping: Option<&HashMap<String, String>>,
+    owned_destinations: &[&str],
+) -> Result<ClaimHeaderProjectionPlan, &'static str> {
+    let plan = compile_claim_header_projection_with_owned_destinations(mapping, owned_destinations)?;
+    // HTTP/2 authority can recreate Host after header-map sanitation.
+    if plan.entries().iter().any(|entry| entry.header_name() == "host") {
+        return Err(PROTOCOL_OWNED_CLAIM_DESTINATION);
+    }
+    Ok(plan)
 }
 
 /// Compile a mapping after reserving destinations already written by this plugin path.

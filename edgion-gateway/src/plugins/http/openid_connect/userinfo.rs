@@ -42,7 +42,8 @@ impl OpenidConnect {
         id_token: Option<&str>,
         userinfo_json: Option<&str>,
         claims: &Value,
-    ) {
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
+        crate::plugins::http::common::auth_common::sanitize_claim_headers(session, &self.claim_header_projection)?;
         let mut total_added: usize = 0;
         let max_total = self.config.max_total_header_bytes as usize;
         let max_value = self.config.max_header_value_bytes as usize;
@@ -99,6 +100,7 @@ impl OpenidConnect {
                 );
             }
         }
+        Ok(())
     }
 
     pub(super) async fn fetch_userinfo_json(&self, access_token: &str, plugin_log: &mut PluginLog) -> Option<String> {

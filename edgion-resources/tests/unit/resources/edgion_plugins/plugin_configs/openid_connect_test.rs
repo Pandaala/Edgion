@@ -323,6 +323,24 @@ fn validation_rejects_case_insensitive_claim_header_destination_collision() {
 }
 
 #[test]
+fn validation_rejects_protocol_owned_host_claim_destination() {
+    for destination in ["Host", "host", "HOST", "hOsT", "X-Tenant"] {
+        let config = OpenidConnectConfig {
+            discovery: "https://idp.example.com/discovery".to_string(),
+            client_id: "client".to_string(),
+            bearer_only: true,
+            verification_mode: VerificationMode::JwksOnly,
+            claims_to_headers: Some(HashMap::from([("tenant".to_string(), destination.to_string())])),
+            ..Default::default()
+        };
+        let expected = (destination != "X-Tenant")
+            .then_some(super::super::auth_header_projection::PROTOCOL_OWNED_CLAIM_DESTINATION);
+        assert_eq!(config.get_validation_error(), expected);
+        assert_eq!(config.compile_claim_header_projection().err(), expected);
+    }
+}
+
+#[test]
 fn validation_rejects_claim_destination_owned_by_enabled_fixed_header() {
     for destination in ["x-access-token", "x-id-token", "x-userinfo", "authorization"] {
         let mut cfg = OpenidConnectConfig {

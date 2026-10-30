@@ -243,3 +243,18 @@ fn validation_rejects_case_insensitive_claim_header_destination_collision() {
         Some(super::super::DUPLICATE_HEADER_DESTINATION)
     );
 }
+
+#[test]
+fn validation_rejects_protocol_owned_host_claim_destination() {
+    for destination in ["Host", "host", "HOST", "hOsT", "X-Tenant"] {
+        let config = JwtAuthConfig {
+            anonymous: Some("anonymous".to_string()),
+            claims_to_headers: Some(HashMap::from([("tenant".to_string(), destination.to_string())])),
+            ..Default::default()
+        };
+        let expected = (destination != "X-Tenant")
+            .then_some(super::super::auth_header_projection::PROTOCOL_OWNED_CLAIM_DESTINATION);
+        assert_eq!(config.validation_error().as_deref(), expected);
+        assert_eq!(config.compile_claim_header_projection().err(), expected);
+    }
+}

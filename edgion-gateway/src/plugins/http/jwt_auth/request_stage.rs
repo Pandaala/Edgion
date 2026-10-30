@@ -53,7 +53,12 @@ impl JwtAuth {
     }
 
     /// Set headers from JWT claims based on claims_to_headers configuration.
-    pub(super) fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
+    pub(super) fn set_claims_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        claims: &serde_json::Value,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
+        crate::plugins::http::common::auth_common::sanitize_claim_headers(session, &self.claim_header_projection)?;
         if !self.claim_header_projection.entries().is_empty() {
             // Enforce hardcoded size limits to prevent a valid JWT from injecting arbitrarily
             // large claim values into upstream headers.
@@ -65,6 +70,7 @@ impl JwtAuth {
                 MAX_JWT_CLAIM_TOTAL_HEADER_BYTES,
             );
         }
+        Ok(())
     }
 
     /// Handle anonymous access.

@@ -86,7 +86,13 @@ impl RequestFilter for JwtAuth {
                     "OK group={} iss={} u={}",
                     la![ok.group.group.as_str(), ok.issuer(), sensitive(username)],
                 );
-                self.set_claims_headers(session, ok.claims());
+                if self.set_claims_headers(session, ok.claims()).is_err() {
+                    plugin_log.push_err("claim header cleanup failed");
+                    return PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None,
+                    };
+                }
                 if self.config.store_claims_in_ctx {
                     if let Ok(claims_json) = serde_json::to_string(ok.claims()) {
                         let _ = session.set_ctx_var("jwt_claims", &claims_json);

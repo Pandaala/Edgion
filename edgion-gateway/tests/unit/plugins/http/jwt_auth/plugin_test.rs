@@ -44,6 +44,53 @@ fn prepared_jwt_auth_is_send_and_sync() {
 }
 
 #[tokio::test]
+async fn authenticated_claim_sanitation_runs_for_missing_claim_and_fails_closed() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    for fail in [false, true] {
+        let mut config = config_with_resolved_credential();
+        config.claims_to_headers = Some(HashMap::from([("role".into(), "X-Role".into())]));
+        let auth = JwtAuth::new(&config, "default".into());
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &serde_json::json!({"iss":"issuer-1", "key":"kid-1", "exp":4102444800u64}),
+            &EncodingKey::from_secret(b"prepared-secret-at-least-32-bytes-long"),
+        )
+        .unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        headers.insert("x-role", "admin".parse().unwrap());
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-role")
+            .times(1)
+            .returning(move |_| {
+                if fail {
+                    Err("injected removal failure".into())
+                } else {
+                    Ok(())
+                }
+            });
+        session.expect_set_request_header_value().never();
+        session.expect_set_ctx_var().returning(|_, _| Ok(()));
+        let result = auth.run_request(&mut session, &mut PluginLog::new("JwtAuth")).await;
+        assert_eq!(
+            result,
+            if fail {
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn authenticated_cookie_cleanup_failure_returns_static_local_error() {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::RequestFilter;

@@ -83,3 +83,5 @@ pub mod shared_http_policy_admission;
 pub mod proxy_rewrite_host;
 
 pub mod downstream_ecdh_curves;
+
+pub mod auth_claim_headers;

@@ -2,6 +2,25 @@ use super::*;
 use base64::Engine;
 
 #[test]
+fn payload_projection_retains_host_admission() {
+    let config = JweDecryptConfig {
+        secret_ref: Some(SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "jwe-secret".to_string(),
+            namespace: None,
+        }),
+        payload_to_headers: Some(HashMap::from([("tenant".to_string(), "hOsT".to_string())])),
+        ..Default::default()
+    };
+    assert!(config.validation_error().is_none());
+    assert_eq!(
+        config.compile_claim_header_projection().unwrap().entries()[0].header_name(),
+        "host"
+    );
+}
+
+#[test]
 fn operator_validation_requires_secret_ref() {
     let cfg = JweDecryptConfig::default();
     let err = cfg.detect_validation_error();

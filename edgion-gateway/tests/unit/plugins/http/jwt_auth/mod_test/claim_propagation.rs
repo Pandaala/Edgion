@@ -38,6 +38,8 @@ async fn test_claims_to_headers() {
     mock.expect_get_query_param_ref().returning(|_| None);
     mock.expect_get_cookie().times(0);
 
+    mock.expect_remove_request_header().times(3).returning(|_| Ok(()));
+
     let headers_set: Arc<Mutex<StdHashMap<String, String>>> = Arc::new(Mutex::new(StdHashMap::new()));
     let headers_clone = headers_set.clone();
     mock.expect_set_request_header_value().returning(move |name, value| {

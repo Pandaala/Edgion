@@ -112,6 +112,90 @@ fn plugin_log_entries(plugin_log: &PluginLog) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn claim_sanitation_precedes_fixed_outputs_even_when_they_exhaust_the_budget() {
+    for fail in [false, true] {
+        let mut cfg = base_config();
+        cfg.claims_to_headers = Some(HashMap::from([("role".into(), "X-Role".into())]));
+        cfg.set_access_token_header = true;
+        cfg.max_total_header_bytes = 15;
+        let plugin = OpenidConnect::new(&cfg, "default".into());
+        let mut session = MockPluginSession::new();
+        let mut sequence = mockall::Sequence::new();
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-role")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| {
+                if fail {
+                    Err("injected removal failure".into())
+                } else {
+                    Ok(())
+                }
+            });
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Access-Token" && value == "a")
+            .times(if fail { 0 } else { 1 })
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        let result = plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"role":"user"}));
+        assert_eq!(result.is_err(), fail);
+    }
+}
+
+#[tokio::test]
+async fn authenticated_bearer_claim_cleanup_failure_prevents_upstream_continuation() {
+    let mut cfg = base_config();
+    cfg.verification_mode = VerificationMode::IntrospectionOnly;
+    cfg.introspection_cache_ttl = 60;
+    cfg.claims_to_headers = Some(HashMap::from([("role".into(), "X-Role".into())]));
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".into(),
+            jwks_uri: "https://idp.example.com/jwks".into(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".into()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+    plugin
+        .cache_introspection_claims(
+            "cached-token",
+            &json!({
+                "active":true, "iss":"https://idp.example.com", "exp":OpenidConnect::now_unix_secs()+3600
+            }),
+        )
+        .await;
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_owned());
+    let mut headers = http::HeaderMap::new();
+    headers.insert(http::header::AUTHORIZATION, "Bearer cached-token".parse().unwrap());
+    session.expect_request_header_map().return_const(headers);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-role")
+        .times(1)
+        .returning(|_| Err("injected removal failure".into()));
+    session.expect_set_request_header_value().never();
+    session.expect_remove_request_cookies().never();
+    assert_eq!(
+        plugin
+            .run_request(&mut session, &mut PluginLog::new("OpenidConnect"))
+            .await,
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None
+        }
+    );
+}
+
 /// Shared Cookie header for `get_cookie` and `strip_cookie` on a mock session.
 fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str) -> Arc<Mutex<Option<String>>> {
     let cookie = Arc::new(Mutex::new(
@@ -3127,13 +3211,15 @@ fn test_apply_upstream_headers_sets_id_token_and_userinfo_headers() {
         .times(1)
         .returning(|_, _| Ok(()));
 
-    plugin.apply_upstream_headers(
-        &mut session,
-        "access-token",
-        Some("id-token"),
-        Some("{\"sub\":\"userinfo-user\"}"),
-        &json!({"sub": "user-1"}),
-    );
+    plugin
+        .apply_upstream_headers(
+            &mut session,
+            "access-token",
+            Some("id-token"),
+            Some("{\"sub\":\"userinfo-user\"}"),
+            &json!({"sub": "user-1"}),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -3145,13 +3231,15 @@ fn test_apply_upstream_headers_skips_oversized_id_token_header() {
     let mut session = MockPluginSession::new();
 
     session.expect_set_request_header_value().never();
-    plugin.apply_upstream_headers(
-        &mut session,
-        "access-token",
-        Some("id-token-too-long"),
-        None,
-        &json!({"sub": "user-1"}),
-    );
+    plugin
+        .apply_upstream_headers(
+            &mut session,
+            "access-token",
+            Some("id-token-too-long"),
+            None,
+            &json!({"sub": "user-1"}),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -3162,13 +3250,15 @@ fn test_apply_upstream_headers_rejects_unsafe_userinfo_header_value() {
     let mut session = MockPluginSession::new();
 
     session.expect_set_request_header_value().never();
-    plugin.apply_upstream_headers(
-        &mut session,
-        "access-token",
-        None,
-        Some("{\"sub\":\"user\n1\"}"),
-        &json!({"sub": "user-1"}),
-    );
+    plugin
+        .apply_upstream_headers(
+            &mut session,
+            "access-token",
+            None,
+            Some("{\"sub\":\"user\n1\"}"),
+            &json!({"sub": "user-1"}),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -3180,6 +3270,11 @@ fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_
     cfg.max_total_header_bytes = 15;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-sub")
+        .times(1)
+        .returning(|_| Ok(()));
     let mut sequence = mockall::Sequence::new();
 
     session
@@ -3195,7 +3290,9 @@ fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
 
-    plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}));
+    plugin
+        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}))
+        .unwrap();
 }
 
 #[test]
@@ -3222,6 +3319,11 @@ fn authorization_length_limits_preserve_publication_order_and_remaining_budget()
         cfg.max_total_header_bytes = total_cap;
         let plugin = OpenidConnect::new(&cfg, "default".to_string());
         let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-sub")
+            .times(1)
+            .returning(|_| Ok(()));
         let events = Arc::new(Mutex::new(Vec::new()));
         let header_events = events.clone();
         session.expect_set_request_header_value().returning(move |name, value| {
@@ -3242,7 +3344,9 @@ fn authorization_length_limits_preserve_publication_order_and_remaining_budget()
                 ctx_events.lock().push("ctx".to_string());
                 Ok(())
             });
-        plugin.apply_upstream_headers(&mut session, token, None, None, &json!({"sub": "u"}));
+        plugin
+            .apply_upstream_headers(&mut session, token, None, None, &json!({"sub": "u"}))
+            .unwrap();
         let mut expected = Vec::new();
         if prior {
             expected.push(format!("X-Access-Token={token}"));

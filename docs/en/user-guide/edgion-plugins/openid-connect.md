@@ -123,6 +123,10 @@ registry is also separate from both caches.
 | `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value in bytes |
 | `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers in bytes |
 
+After successful authentication, all configured `claimsToHeaders` destinations are cleared before upstream headers are produced. A missing, empty, unsupported, unsafe, or oversized claim leaves its destination absent. Cleanup also runs when fixed token outputs exhaust the total header budget; cleanup failure stops forwarding with HTTP 500. Fixed output headers retain their own existing behavior. Anonymous/pass-through and skipped or disabled plugin paths are outside this sanitation contract.
+
+`claimsToHeaders` cannot target `Host` (case-insensitive). Configuration validation rejects it because HTTP/2 `:authority` can recreate that header during protocol conversion. Use a dedicated identity header such as `X-Tenant`.
+
 Claim-header destinations are canonicalized and ordered before request processing. Case variants such as `X-User` and `x-user` therefore conflict within one OpenID Connect plugin configuration and are rejected. Separate plugins retain execution-order, last-write-wins behavior.
 
 ### Security Parameters

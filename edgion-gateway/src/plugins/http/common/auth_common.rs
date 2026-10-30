@@ -322,6 +322,18 @@ pub fn resolve_claim_path<'a>(value: &'a serde_json::Value, path: &str) -> Optio
     Some(current)
 }
 
+/// Clear every configured destination before authenticated claim projection.
+/// Use the session mutation boundary so deferred credentials are removed too.
+pub(crate) fn sanitize_claim_headers(
+    session: &mut dyn PluginSession,
+    plan: &ClaimHeaderProjectionPlan,
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    for entry in plan.entries() {
+        session.remove_request_header(entry.header_name())?;
+    }
+    Ok(())
+}
+
 /// Map claims to upstream request headers with safety checks.
 pub fn set_claims_headers(
     session: &mut dyn PluginSession,

@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn authenticated_projection_rejects_host_without_restricting_generic_projection() {
+    for destination in ["Host", "host", "HOST", "hOsT"] {
+        let mapping = HashMap::from([("tenant".to_string(), destination.to_string())]);
+        assert_eq!(
+            compile_authenticated_claim_header_projection(Some(&mapping), &[]),
+            Err(PROTOCOL_OWNED_CLAIM_DESTINATION)
+        );
+        assert!(compile_claim_header_projection(Some(&mapping)).is_ok());
+    }
+    let mapping = HashMap::from([("tenant".to_string(), "X-Tenant".to_string())]);
+    let plan = compile_authenticated_claim_header_projection(Some(&mapping), &[]).unwrap();
+    assert_eq!(plan.entries()[0].header_name(), "x-tenant");
+}
+
+#[test]
 fn compilation_canonicalizes_destinations_and_is_stable_across_insertion_order() {
     let first = HashMap::from([
         ("subject".to_string(), "X-Subject".to_string()),

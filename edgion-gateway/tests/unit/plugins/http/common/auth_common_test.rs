@@ -13,6 +13,59 @@ use std::sync::Arc;
 use edgion_resources::resources::edgion_plugins::compile_claim_header_projection;
 
 #[test]
+fn sanitation_removes_all_destinations_before_skipped_or_budget_limited_projection() {
+    let plan = compile_claim_header_projection(Some(&HashMap::from([
+        ("first".into(), "X-A".into()),
+        ("later".into(), "X-Z".into()),
+    ])))
+    .unwrap();
+    for (claims, value_cap, total_cap) in [
+        (json!({}), 8, 64),
+        (json!({"first": null, "later": {"role":"admin"}}), 8, 64),
+        (json!({"first":"", "later":"bad\r\nvalue"}), 8, 64),
+        (json!({"first":"oversized", "later":"oversized"}), 1, 64),
+        (json!({"first":"ok", "later":"ok"}), 8, 0),
+        (json!({"first":"ok", "later":"ok"}), 8, 4),
+    ] {
+        let headers = Arc::new(Mutex::new(http::HeaderMap::new()));
+        headers.lock().append("x-a", "forged".parse().unwrap());
+        headers.lock().append("X-A", "second".parse().unwrap());
+        headers.lock().insert("x-z", "forged".parse().unwrap());
+        headers.lock().insert("x-unrelated", "keep".parse().unwrap());
+        let mut session = MockPluginSession::new();
+        let removed = headers.clone();
+        session.expect_remove_request_header().times(2).returning(move |name| {
+            removed.lock().remove(name);
+            Ok(())
+        });
+        session.expect_set_request_header_value().never();
+        super::sanitize_claim_headers(&mut session, &plan).unwrap();
+        set_claims_headers(&mut session, &claims, &plan, value_cap, total_cap);
+        let headers = headers.lock();
+        assert!(!headers.contains_key("x-a"));
+        assert!(!headers.contains_key("x-z"));
+        assert_eq!(headers["x-unrelated"], "keep");
+    }
+}
+
+#[test]
+fn sanitation_failure_stops_at_the_failed_destination() {
+    let plan = compile_claim_header_projection(Some(&HashMap::from([
+        ("a".into(), "X-A".into()),
+        ("z".into(), "X-Z".into()),
+    ])))
+    .unwrap();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-a")
+        .times(1)
+        .returning(|_| Err("injected removal failure".into()));
+    session.expect_set_request_header_value().never();
+    assert!(super::sanitize_claim_headers(&mut session, &plan).is_err());
+}
+
+#[test]
 fn claim_header_array_formatting_is_bounded_and_preserves_scalar_order() {
     let value = json!([
         "alpha", {"ignored": true}, 7, false, null, ["ignored"],

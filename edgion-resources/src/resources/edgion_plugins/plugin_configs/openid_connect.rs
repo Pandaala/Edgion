@@ -396,7 +396,7 @@ impl OpenidConnectConfig {
         if self.access_token_in_authorization_header {
             owned_destinations.push("Authorization");
         }
-        super::compile_claim_header_projection_with_owned_destinations(
+        super::auth_header_projection::compile_authenticated_claim_header_projection(
             self.claims_to_headers.as_ref(),
             &owned_destinations,
         )

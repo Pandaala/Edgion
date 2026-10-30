@@ -352,6 +352,10 @@ Kubernetes always decodes the outer Secret `.data` Base64 layer before the Contr
 
 JwtAuth adds no consumer header by default. To forward `sub`, configure an explicit claim mapping such as `claimsToHeaders: {sub: X-Consumer-Username}`. The mapping uses bounded header values and replaces the configured destination header. Destination names are canonicalized case-insensitively before request processing, so mappings such as `X-User` and `x-user` in one plugin configuration are rejected as duplicates. Separate plugins retain normal execution-order, last-write-wins behavior.
 
+After successful authentication, every configured `claimsToHeaders` destination is cleared before claim projection. Missing, empty, unsupported, unsafe, or oversized claims leave that header absent, including when the total output budget is exhausted. A cleanup failure stops forwarding with HTTP 500. This applies only to the authenticated path; anonymous access and skipped or disabled plugins do not gain a global identity-header cleanup policy.
+
+`claimsToHeaders` cannot target `Host` (case-insensitive). Configuration validation rejects it because HTTP/2 `:authority` can recreate that header during protocol conversion. Use a dedicated identity header such as `X-Tenant`.
+
 ### Authentication Failure
 
 Returns **401 Unauthorized**:

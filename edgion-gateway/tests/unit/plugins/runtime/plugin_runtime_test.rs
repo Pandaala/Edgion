@@ -2088,6 +2088,45 @@ fn inline_descriptor_factory_and_unsupported_stage_compiler_errors_remain_unchan
 }
 
 #[test]
+fn authenticated_host_claim_destinations_fail_shared_admission_before_runtime_construction() {
+    for (kind, config) in [
+        ("JwtAuth", serde_json::json!({"anonymous":"guest"})),
+        (
+            "OpenidConnect",
+            serde_json::json!({
+                "discovery":"https://idp.example.com/discovery", "clientId":"client",
+                "bearerOnly":true, "verificationMode":"JwksOnly"
+            }),
+        ),
+    ] {
+        for destination in ["Host", "host", "HOST", "hOsT", "X-Tenant"] {
+            let mut config = config.clone();
+            config["claimsToHeaders"] = serde_json::json!({"tenant": destination});
+            let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"host-claim","namespace":"apps"},
+                "spec":{"requestPlugins":[{"type":kind,"config":config}]}
+            }))
+            .unwrap();
+            let errors = owner.validate_plugins();
+            let compiled = crate::plugins::http::compile_plugins(&owner);
+            assert_eq!(compiled.preparse_errors, errors, "{kind}/{destination}");
+            if destination == "X-Tenant" {
+                assert!(errors.is_empty(), "{kind}: {errors:?}");
+                assert!(compiled.is_activatable);
+            } else {
+                assert_eq!(
+                    errors,
+                    vec![format!(
+                    "requestPlugins[0] ({kind}): claimsToHeaders cannot target Host; use a dedicated identity header"
+                )]
+                );
+                assert!(!compiled.is_activatable);
+            }
+        }
+    }
+}
+
+#[test]
 fn borrowed_rate_dependency_aliases_preserve_original_positions_and_error_precedence() {
     use edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors_with_aliases;
     let source: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({

@@ -120,6 +120,10 @@ LRU capacity 时，`shards: 0` 表示单分片；仅覆盖 shards 是无效配�
 | `maxHeaderValueBytes` | Integer | `4096` | 单个映射 Header 值的最大字节数 |
 | `maxTotalHeaderBytes` | Integer | `16384` | 所有映射 Header 的总最大字节数 |
 
+认证成功后，网关先清除所有 `claimsToHeaders` 配置的目标请求头，再生成上游请求头。声明缺失、为空、类型不支持、不安全或超限时，目标头保持不存在。即使固定令牌输出耗尽总请求头预算，也必须执行清理；清理失败返回 HTTP 500，不转发上游。固定输出头保持原有行为，此规则不扩展到匿名放行、跳过或禁用插件的路径。
+
+`claimsToHeaders` 的目标不能是 `Host`（不区分大小写）；配置校验会拒绝它，因为 HTTP/2 的 `:authority` 可能在协议转换时重新生成该头。请使用 `X-Tenant` 等专用身份头。
+
 ### 安全参数
 
 | 参数 | 类型 | 默认值 | 说明 |

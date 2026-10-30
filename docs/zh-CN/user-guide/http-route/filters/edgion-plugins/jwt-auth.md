@@ -352,6 +352,10 @@ Kubernetes 总会先解码 Secret `.data` 的外层 Base64，之后 Controller �
 
 JwtAuth 默认不添加消费者请求头。要转发 `sub`，请显式配置声明映射，例如 `claimsToHeaders: {sub: X-Consumer-Username}`。映射后的请求头值受大小限制，并替换配置的目标请求头。
 
+认证成功后，网关先清除所有 `claimsToHeaders` 配置的目标请求头，再写入可信声明。声明缺失、为空、类型不支持、不安全或超限时，该请求头保持不存在；总输出预算耗尽时也会清除目标头。清理失败返回 HTTP 500，不转发上游。此规则仅适用于已认证路径，不改变匿名访问、跳过或禁用插件的行为，也不预留全局身份请求头。
+
+`claimsToHeaders` 的目标不能是 `Host`（不区分大小写）；配置校验会拒绝它，因为 HTTP/2 的 `:authority` 可能在协议转换时重新生成该头。请使用 `X-Tenant` 等专用身份头。
+
 ### 认证失败
 
 返回 **401 Unauthorized**：

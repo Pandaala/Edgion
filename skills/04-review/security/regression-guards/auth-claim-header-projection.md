@@ -20,9 +20,22 @@ JweDecrypt reserves its `forwardHeader`; a configured projection cannot claim th
 Request processing consumes only that immutable plan, never the source `HashMap`.
 
 This correction is local to each plugin instance. Separate plugins retain execution-order,
-last-write-wins behavior. A missing, empty, unsupported, unsafe, or oversized value still skips its
-write and does not clear a pre-existing destination header. D0052 does not establish Envoy-style
-sanitize-before-rules behavior or reserve a global identity-header family.
+last-write-wins behavior. AUTH-01 adds a separate sanitation boundary on authenticated JwtAuth
+and OpenID Connect paths: all compiled claim destinations are removed through PluginSession
+before projection, even when claims are absent/invalid/oversized or OIDC has no remaining budget.
+Removal also clears deferred credential mutations. A removal error terminates with a static 500
+and no response body, before projection or upstream continuation. Failed projection writes leave
+an absent destination rather than a client-supplied value. JweDecrypt retains its existing skip-write
+behavior. Anonymous, disabled and condition-skipped paths remain outside this correction; no
+filter-wide identity-header family is reserved.
+
+AUTH-01 follow-up P1-C1 rejects `Host` destinations, ignoring ASCII case, for JWT/OIDC
+in their shared Resources authenticated projection compiler. Header-map removal does
+not remove HTTP/2 URI authority, and the pinned Pingora adapter recreates Host for an
+HTTP/1 upstream. Host therefore cannot serve as an owned claim destination with the
+missing-claim absence contract. Use a dedicated identity header instead. The generic
+payload compiler and JweDecrypt admission remain unchanged; this is not a general
+protocol-header prohibition or an authority-rewriting feature.
 
 ## Rationale and evidence
 
@@ -77,10 +90,28 @@ sensitive lowercase writes in JwtAuth/OIDC/JweDecrypt, and JweDecrypt constructi
 
 Re-evaluate this guard if the configuration changes from one-source-per-destination mappings to an
 ordered list with explicit append/merge semantics, if aggregate selection gains an operator-defined
-priority, or if plugin composition adopts cross-plugin header ownership. Envoy-style clearing of a
-configured destination when its claim is skipped remains a separate behavior decision; do not infer
-it from D0052.
+priority, or if plugin composition adopts cross-plugin header ownership. AUTH-01 sanitation applies only to the authenticated JWT/OIDC output boundary. Re-evaluate
+its placement if anonymous or skipped paths acquire configured-destination ownership; do not infer
+Envoy filter-wide sanitize-before-rules parity.
 
 ## Resolution references
 
 - `D0052` — fixed 2026-09-11; the closed todo was migrated into this regression guard.
+
+## AUTH-01 verification boundary
+
+The shared helper regression covers skipped values and exhausted aggregate budgets. JWT tests
+exercise valid-token missing-claim and cleanup-failure handling. OIDC tests cover zero remaining
+budget and cached bearer failure propagation; all four session/refresh/bearer callers return the
+fixed failure immediately. AuthClaimHeadersDynamic observes the actual upstream echo and changes
+the configured destination across runtime generations. The existing projection bounds, ordering,
+sensitive writes and JweDecrypt behavior remain independently covered. Fresh execution results
+belong to the implementation verification record; source coverage alone is not a passing run.
+
+- `AUTH-01` — authenticated JWT/OIDC configured-destination sanitation; bounded scope above.
+- `P1-C1` — Host admission follow-up: Resources tests cover case variants, normal
+  identity destinations and unchanged JWE admission; Gateway tests compare shared
+  validation and runtime compilation errors for otherwise valid JWT/OIDC resources.
+  The trigger was established statically through pinned Pingora revision
+  `1aaa45cc70430bc782990bc20ddee3fef36d6b99`, `proxy_h1.rs` and
+  `proxy_common.rs::set_h1_host_from_authority`. No transport change is claimed.

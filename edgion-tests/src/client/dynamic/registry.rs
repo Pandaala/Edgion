@@ -57,6 +57,7 @@ fn scenarios_for_fixture(metrics_lifetime: bool) -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::json_schema_validation::SCENARIO,
         crate::dynamic::scenarios::form_json_transform::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::SCENARIO,
+        crate::dynamic::scenarios::auth_claim_headers::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::GROUPED_SCENARIO,
         crate::dynamic::scenarios::rate_limit_local_dynamic::SCENARIO,
         crate::dynamic::scenarios::rate_limit_local_overflow::SCENARIO,

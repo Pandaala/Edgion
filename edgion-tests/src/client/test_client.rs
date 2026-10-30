@@ -63,6 +63,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "FormJsonTransformDynamic",
     "RestToGraphqlDynamic",
     "BasicAuthDynamic",
+    "AuthClaimHeadersDynamic",
     "BasicAuthDynamicGrouped",
     "RateLimitLocalDynamic",
     "RateLimitLocalOverflowDynamic",
@@ -2043,6 +2044,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "RequestMirrorReferenceGrant"
         | "DirectEndpointPortResolution"
         | "BasicAuthDynamic"
+        | "AuthClaimHeadersDynamic"
         | "BasicAuthDynamicGrouped"
         | "BodyDynamic"
         | "CanaryHotSwap"

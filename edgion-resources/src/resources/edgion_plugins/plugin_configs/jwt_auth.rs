@@ -261,7 +261,10 @@ impl Default for JwtAuthConfig {
 
 impl JwtAuthConfig {
     pub fn compile_claim_header_projection(&self) -> Result<super::ClaimHeaderProjectionPlan, &'static str> {
-        super::compile_claim_header_projection(self.claims_to_headers.as_ref())
+        super::auth_header_projection::compile_authenticated_claim_header_projection(
+            self.claims_to_headers.as_ref(),
+            &[],
+        )
     }
 }
 
