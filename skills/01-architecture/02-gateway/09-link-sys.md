@@ -25,6 +25,14 @@ provider; its key-only OtlpLogSender never owns an exporter or probe.
 
 ### Elasticsearch
 
+Cluster-health reads, including initialization and rebuild, use the canonical
+Gateway chunk collector with a fixed 1 MiB input cap before JSON parsing.
+Declared oversize is rejected before polling; actual bytes remain bounded when
+length is absent or inaccurate. Overflow fails the health check without parsing
+the prefix. Initialization retains its unhealthy baseline and background recovery
+behavior. Status-only background probes do not collect bodies. This bound is
+independent of bulk receipt configuration and is not a total heap budget.
+
 The resources-owned UTC date-pattern validator is shared by Controller LinkSys
 validation and `EsCandidate::from_prepared`. Candidate admission runs before
 fingerprint/resourceVersion reuse, construction and background task startup.

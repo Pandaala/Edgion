@@ -425,6 +425,13 @@ spec:
 
 ## Elasticsearch connector
 
+Cluster-health response bodies have a fixed 1 MiB limit, including initialization
+and rebuild checks. Responses above the limit fail the check while being received;
+they are never accepted as truncated JSON. An initial failure marks the connector
+unhealthy but still starts background recovery. Background probes check HTTP status
+without collecting the body. `bulk.maxResponseBytes` controls bulk acknowledgements
+separately and does not change this health-response limit.
+
 ```yaml
 apiVersion: edgion.io/v1
 kind: LinkSys

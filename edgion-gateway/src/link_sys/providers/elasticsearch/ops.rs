@@ -4,11 +4,38 @@
 //! Covers: cluster health, index CRUD, document CRUD, search, and health status.
 
 use anyhow::Result;
+use bytes::Bytes;
+use futures::Stream;
 use reqwest::StatusCode;
 use serde_json::Value;
 
 use super::client::EsLinkClient;
 use crate::link_sys::LinkSysHealth;
+use crate::util::http_body::stream_body_chunks_capped;
+
+// Cluster-level health is a small document. Keep its receiving limit independent
+// of bulk receipts and enforce it before parsing, including during initialization.
+const MAX_HEALTH_RESPONSE_BYTES: usize = 1024 * 1024;
+
+async fn read_cluster_health_stream<S, E>(declared_length: Option<u64>, stream: S) -> Result<String>
+where
+    S: Stream<Item = std::result::Result<Bytes, E>>,
+{
+    if declared_length.is_some_and(|length| length > MAX_HEALTH_RESPONSE_BYTES as u64) {
+        anyhow::bail!("ES cluster health response exceeds 1 MiB");
+    }
+    let (body, overflow) = stream_body_chunks_capped(stream, MAX_HEALTH_RESPONSE_BYTES)
+        .await
+        .map_err(|_| anyhow::anyhow!("ES cluster health response read failed"))?;
+    if overflow {
+        anyhow::bail!("ES cluster health response exceeds 1 MiB");
+    }
+    let body: Value = serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!("ES cluster health parse error"))?;
+    body["status"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("ES cluster health: missing 'status' field"))
+}
 
 // ============================================================================
 // Cluster Operations
@@ -27,14 +54,7 @@ impl EsLinkClient {
         if !resp.status().is_success() {
             anyhow::bail!("ES cluster health returned status {}", resp.status());
         }
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| anyhow::anyhow!("ES cluster health parse error: {:?}", e))?;
-        body["status"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("ES cluster health: missing 'status' field"))
+        read_cluster_health_stream(resp.content_length(), resp.bytes_stream()).await
     }
 
     /// GET /_cluster/health using the round-robin endpoint (admin/ping path).

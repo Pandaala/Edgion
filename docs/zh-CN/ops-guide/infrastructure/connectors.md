@@ -396,6 +396,11 @@ spec:
 
 ## Elasticsearch 连接器
 
+集群健康响应体采用固定的 1 MiB 上限，初始化和重建检查均适用。超过上限时，
+检查在接收过程中失败，不会将截断的 JSON 当作成功响应。首次检查失败会将连接器
+标记为不健康，但仍启动后台恢复。后台探测只检查 HTTP 状态，不收集响应体。
+`bulk.maxResponseBytes` 单独控制批量写入回执，不会改变健康响应的上限。
+
 ```yaml
 apiVersion: edgion.io/v1
 kind: LinkSys
