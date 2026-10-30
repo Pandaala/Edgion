@@ -327,22 +327,23 @@ class Scenario:
                     raise
         raise AssertionError("Lease replacement conflict retry exhausted")
 
-    def reload_and_leadership(self, expected, signature):
+    def restart_and_leadership(self, expected, signature):
         self.stop_monitor()
         assert not self.monitor_errors, self.monitor_errors
-        request = urllib.request.Request(f"http://127.0.0.1:{self.admin}/api/v1/reload", method="POST", data=b"",
-                                         headers={"Authorization": f"Bearer {self.token}"})
-        with HTTP.open(request, timeout=5) as response:
-            assert response.status == 200
-        def reloaded():
+        previous_pid = self.controller.pid
+        self.controller.terminate()
+        self.controller.wait(timeout=30)
+        self.controller = self.start(self.controller_command, "controller-restart.log", self.controller_env)
+        assert self.controller.pid != previous_pid
+        def restarted():
             if self.ready_status() != 200:
                 return False
             new = self.signature()
             return new if new["server_id"] != signature["server_id"] else False
-        new_signature = wait_for(reloaded, "administrative reload republishes server", 30)
-        self.checkpoint("administrative-reload-converges", expected, new_signature)
+        new_signature = wait_for(restarted, "process restart republishes server", 30)
+        self.checkpoint("process-restart-converges", expected, new_signature)
         self.start_monitor(new_signature)
-        wait_for(lambda: self.pod_is_leader(True), "real Lease acquired after reload", 20)
+        wait_for(lambda: self.pod_is_leader(True), "real Lease acquired after restart", 20)
         lease = json.loads(self.kubectl("get", "lease", "namespace-watch-leader", "-n", self.names[0], "-o", "json"))
         lease_uid = lease["metadata"]["uid"]
         if self.mode == "leader-only":
@@ -443,8 +444,10 @@ class Scenario:
                {"http_proxy", "https_proxy", "all_proxy"}}
         env.update(KUBECONFIG=str(self.work / "kubeconfig.json"), EDGION_ADMIN_TOKEN=self.token,
                    POD_NAME="controller-identity", POD_NAMESPACE=a)
-        self.start([str(self.args.binary), "--config-file", str(config_path), "--work-dir", str(self.work),
-                    "--test-mode"], "controller.log", env)
+        self.controller_command = [str(self.args.binary), "--config-file", str(config_path),
+                                   "--work-dir", str(self.work), "--test-mode"]
+        self.controller_env = env
+        self.controller = self.start(self.controller_command, "controller.log", env)
         wait_for(lambda: all(self.faults.seen[key].is_set() for key in
                             ("a_second", "b_initial", "namespace")), "initial LIST interleaving", 10)
         self.faults.gates["b_initial"].set()
@@ -479,7 +482,7 @@ class Scenario:
         self.checkpoint("runtime-relist-deletes-and-replaces-uid", expected, signature)
         assert self.faults.counts[(a, "list")] == 3, "Unexpected A source duplication or relist"
         assert self.faults.counts[(b, "list")] == 1, "B unexpectedly relisted"
-        self.reload_and_leadership(expected, signature)
+        self.restart_and_leadership(expected, signature)
         self.stop_monitor()
         assert self.monitor_samples > 0 and not self.monitor_errors, self.monitor_errors
         self.result["status"] = "PASS"

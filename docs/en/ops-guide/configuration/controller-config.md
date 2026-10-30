@@ -241,7 +241,7 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
-| `cache_ready_deadline_secs` | `Integer` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` — covers the internal 30 s readiness-poll budget plus the post-ready tail (WatchObj registration, revalidations, leader-job start). **Must be `> 30`** (startup validation error otherwise). **Restart-bound, not hot-reloadable** — `POST /api/v1/reload` re-arms the deadline every iteration but always with the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
+| `cache_ready_deadline_secs` | `Integer` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` — covers the internal 30 s readiness-poll budget plus the post-ready tail (WatchObj registration, revalidations, leader-job start). **Must be `> 30`** (startup validation error otherwise). **Restart-bound** — each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
 
 At startup, the Controller waits for a complete initial load of its required
 watch sources before publishing configuration synchronization. Later Kubernetes
@@ -250,8 +250,7 @@ then reconcile that source through the existing worker. An ordinary relist does
 not restart all resource controllers or withdraw the configuration-sync service.
 Namespace label changes also refresh affected Selector Gateways.
 
-Administrative reloads and terminal controller failures still rebuild resource
-state after stopping the old tasks. In `leader-only` mode, leadership loss also
+Terminal controller failures still rebuild resource state after stopping the old tasks. In `leader-only` mode, leadership loss also
 stops that resource generation. In `all-serve` mode, leadership changes preserve
 resource watching and configuration serving while changing leader-only services.
 
@@ -530,7 +529,7 @@ admin_token: "edg_..."
 
 ### [cli_tokens] — Static CLI Tokens
 
-Static Bearer tokens for programmatic or CI access to the Admin API. Each token is bound to a fine-grained RBAC policy. Tokens are stored as SHA-256 hex digests (never plaintext). Hot-reloadable.
+Static Bearer tokens for programmatic or CI access to the Admin API. Each token is bound to a fine-grained RBAC policy. Tokens are stored as SHA-256 hex digests (never plaintext). Changes require restarting every Controller replica.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -561,14 +560,14 @@ For the token generation workflow, rotation instructions, and the full security 
 ## Federation Client (`center`)
 
 Add the optional `center` section to join this Controller to a federation Center.
-Omit it entirely when not using federation.
+Omit it entirely when not using federation. Changes to this process configuration require restarting every Controller replica.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:12251`) |
 | `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
 | `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
-| `enabled` | `Boolean` | `true` | Hot-reloadable kill-switch; `false` stops the federation client without a restart (reload via `POST /api/v1/reload`) |
+| `enabled` | `Boolean` | `true` | Startup enable switch; `false` disables the federation client. Changes require a process restart |
 | `env` | `Array<String>` | `[]` | Environment tags reported to Center |
 | `tag` | `Array<String>` | `[]` | Extension tags reported to Center |
 | `security` | Object | — | mTLS certificates for the channel; required (federation fails closed without it) |

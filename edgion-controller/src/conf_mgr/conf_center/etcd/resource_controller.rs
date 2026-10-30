@@ -14,6 +14,7 @@ use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
+use tokio_util::task::AbortOnDropHandle;
 
 use super::event::{EtcdDocument, EtcdEvent};
 use super::status::EtcdStatusHandler;
@@ -22,6 +23,7 @@ use crate::conf_mgr::conf_center::common::{
     clear_runtime_invalid, get_runtime_invalid, parse_resource_content_offline, store_runtime_invalid,
     RuntimeInvalidEnvelopes,
 };
+use crate::conf_mgr::conf_center::non_kube_common::LocalTaskScope;
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -41,6 +43,7 @@ where
     event_rx: KindEventReceiver,
     conf_prefix: Arc<str>,
     shutdown_signal: Option<ShutdownSignal>,
+    scope: LocalTaskScope,
     fs_raw_store: Arc<LocalRawStore<K>>,
     invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
 }
@@ -68,6 +71,7 @@ where
             event_rx,
             conf_prefix,
             shutdown_signal: None,
+            scope: LocalTaskScope::default(),
             fs_raw_store,
             invalid_envelopes: Arc::new(RuntimeInvalidEnvelopes::default()),
         }
@@ -75,6 +79,11 @@ where
 
     pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
         self.shutdown_signal = Some(signal);
+        self
+    }
+
+    pub(super) fn with_scope(mut self, scope: LocalTaskScope) -> Self {
+        self.scope = scope;
         self
     }
 
@@ -92,7 +101,7 @@ where
         let mut init_done = false;
         let mut init_count: usize = 0;
         let mut init_timer: Option<InitSyncTimer> = None;
-        let mut worker_handle: Option<JoinHandle<()>> = None;
+        let mut worker_handle: Option<AbortOnDropHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
         loop {
@@ -200,14 +209,15 @@ where
                         self.processor.notify_ready();
                         init_done = true;
 
-                        worker_handle = Some(spawn_worker(
+                        worker_handle = Some(AbortOnDropHandle::new(spawn_worker(
                             self.processor.clone(),
                             kind,
                             self.shutdown_signal.clone(),
                             self.fs_raw_store.clone(),
                             self.status_handler.clone(),
                             self.invalid_envelopes.clone(),
-                        ));
+                            &self.scope,
+                        )));
                     }
                     EtcdEvent::Apply { key, content } => {
                         if !init_done {
@@ -267,8 +277,8 @@ where
         }
 
         // Wait for worker
-        if let Some(handle) = worker_handle {
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+        if let Some(mut handle) = worker_handle {
+            match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     tracing::error!(
@@ -279,6 +289,8 @@ where
                     );
                 }
                 Err(_) => {
+                    handle.abort();
+                    let _ = handle.await;
                     tracing::warn!(
                         component = "etcd_resource_controller",
                         kind = kind,
@@ -413,135 +425,143 @@ fn spawn_worker<K>(
     fs_raw_store: Arc<LocalRawStore<K>>,
     status_handler: Arc<EtcdStatusHandler>,
     invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
+    scope: &LocalTaskScope,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
 {
     let workqueue = processor.workqueue();
 
-    tokio::spawn(async move {
-        let mut shutdown = shutdown_signal;
+    let cancel = scope.cancel.clone();
+    scope.tracker.spawn(async move {
+        let processing = async {
+            let mut shutdown = shutdown_signal;
 
-        loop {
-            let item = match &mut shutdown {
-                Some(signal) => {
-                    tokio::select! {
-                        item = workqueue.dequeue() => item,
-                        _ = signal.wait() => break,
-                    }
-                }
-                None => workqueue.dequeue().await,
-            };
-
-            match item {
-                Some(work_item) => {
-                    if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
-                        let _ = processor
-                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
-                            .await;
-                        if let Err(e) = status_handler
-                            .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
-                            .await
-                        {
-                            tracing::warn!(
-                                component = "etcd_resource_controller",
-                                kind = kind,
-                                key = %work_item.key,
-                                error = %e,
-                                "Failed to write runtime-invalid error status"
-                            );
+            loop {
+                let item = match &mut shutdown {
+                    Some(signal) => {
+                        tokio::select! {
+                            item = workqueue.dequeue() => item,
+                            _ = signal.wait() => break,
                         }
-                        workqueue.done(&work_item.key);
-                        continue;
                     }
+                    None => workqueue.dequeue().await,
+                };
 
-                    // Get the latest object from raw_store (updated by event loop)
-                    let store_obj = fs_raw_store.get(&work_item.key).map(|arc_obj| (*arc_obj).clone());
+                match item {
+                    Some(work_item) => {
+                        if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
+                            let _ = processor
+                                .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                                .await;
+                            if let Err(e) = status_handler
+                                .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
+                                .await
+                            {
+                                tracing::warn!(
+                                    component = "etcd_resource_controller",
+                                    kind = kind,
+                                    key = %work_item.key,
+                                    error = %e,
+                                    "Failed to write runtime-invalid error status"
+                                );
+                            }
+                            workqueue.done(&work_item.key);
+                            continue;
+                        }
 
-                    // Status read only when there is an object to process — in
-                    // etcd mode this is a network RPC; deletes must not pay it.
-                    let existing_status_json = if store_obj.is_some() {
-                        status_handler.read_status_json(kind, &work_item.key).await
-                    } else {
-                        None
-                    };
-                    // A resource that produces no status of its own cannot
-                    // overwrite the status a previous failure left behind, so
-                    // remember whether one is present before it is consumed.
-                    let had_error_sidecar = existing_status_json
-                        .as_deref()
-                        .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
+                        // Get the latest object from raw_store (updated by event loop)
+                        let store_obj = fs_raw_store.get(&work_item.key).map(|arc_obj| (*arc_obj).clone());
 
-                    let result = processor
-                        .process_work_item(
-                            &work_item.key,
-                            store_obj,
-                            existing_status_json,
-                            work_item.trigger_chain.clone(),
-                        )
-                        .await;
+                        // Status read only when there is an object to process — in
+                        // etcd mode this is a network RPC; deletes must not pay it.
+                        let existing_status_json = if store_obj.is_some() {
+                            status_handler.read_status_json(kind, &work_item.key).await
+                        } else {
+                            None
+                        };
+                        // A resource that produces no status of its own cannot
+                        // overwrite the status a previous failure left behind, so
+                        // remember whether one is present before it is consumed.
+                        let had_error_sidecar = existing_status_json
+                            .as_deref()
+                            .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
 
-                    match result {
-                        WorkItemResult::Processed {
-                            obj,
-                            status_changed,
-                            persisted_status,
-                        } => {
-                            if status_changed {
-                                if let Some(status_value) = extract_status_value(&obj) {
-                                    match status_handler
-                                        .write_status_value(kind, &work_item.key, &status_value)
-                                        .await
-                                    {
-                                        Ok(()) => {
-                                            crate::conf_mgr::sync_runtime::record_status_write(kind, "etcd");
+                        let result = processor
+                            .process_work_item(
+                                &work_item.key,
+                                store_obj,
+                                existing_status_json,
+                                work_item.trigger_chain.clone(),
+                            )
+                            .await;
+
+                        match result {
+                            WorkItemResult::Processed {
+                                obj,
+                                status_changed,
+                                persisted_status,
+                            } => {
+                                if status_changed {
+                                    if let Some(status_value) = extract_status_value(&obj) {
+                                        match status_handler
+                                            .write_status_value(kind, &work_item.key, &status_value)
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                crate::conf_mgr::sync_runtime::record_status_write(kind, "etcd");
+                                            }
+                                            Err(e) => {
+                                                crate::conf_mgr::sync_runtime::record_status_write_error(kind, "etcd");
+                                                tracing::warn!(
+                                                    component = "etcd_resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    error = %e,
+                                                    "Failed to write status to etcd"
+                                                );
+                                            }
                                         }
-                                        Err(e) => {
-                                            crate::conf_mgr::sync_runtime::record_status_write_error(kind, "etcd");
-                                            tracing::warn!(
-                                                component = "etcd_resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to write status to etcd"
-                                            );
-                                        }
+                                    } else {
+                                        tracing::warn!(
+                                            component = "etcd_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            "Status changed but failed to extract"
+                                        );
                                     }
-                                } else {
-                                    tracing::warn!(
-                                        component = "etcd_resource_controller",
-                                        kind = kind,
-                                        key = %work_item.key,
-                                        "Status changed but failed to extract"
-                                    );
-                                }
-                            } else if persisted_status.is_none() && had_error_sidecar {
-                                // A repaired resource that computes no status of
-                                // its own must still drop the retained error
-                                // status; nothing else will overwrite it.
-                                if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
-                                    tracing::warn!(
-                                        component = "etcd_resource_controller",
-                                        kind = kind,
-                                        key = %work_item.key,
-                                        error = %e,
-                                        "Failed to clear stale error status after repair"
-                                    );
+                                } else if persisted_status.is_none() && had_error_sidecar {
+                                    // A repaired resource that computes no status of
+                                    // its own must still drop the retained error
+                                    // status; nothing else will overwrite it.
+                                    if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                        tracing::warn!(
+                                            component = "etcd_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            error = %e,
+                                            "Failed to clear stale error status after repair"
+                                        );
+                                    }
                                 }
                             }
+                            WorkItemResult::Deleted { key } => {
+                                let _ = status_handler.delete_status(kind, &key).await;
+                            }
+                            WorkItemResult::Skipped => {}
                         }
-                        WorkItemResult::Deleted { key } => {
-                            let _ = status_handler.delete_status(kind, &key).await;
-                        }
-                        WorkItemResult::Skipped => {}
+
+                        workqueue.done(&work_item.key);
                     }
-
-                    workqueue.done(&work_item.key);
+                    None => break,
                 }
-                None => break,
             }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {},
+            _ = processing => {},
         }
-
         tracing::info!(component = "etcd_resource_controller", kind = kind, "Worker task ended");
     })
 }

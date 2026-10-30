@@ -1,11 +1,11 @@
 ---
 name: ctl-commands
-description: edgion-cli subcommand details — apply, get, delete, reload arguments, implementation logic, examples.
+description: edgion-cli subcommand details — apply, get, delete arguments, implementation logic, examples.
 ---
 
 # edgion-cli subcommands
 
-edgion-cli provides 7 subcommands: apply (apply configuration), get (query resources), delete (delete resources), reload (reload resources), gen-certs (generate mTLS certificates), gen-token (mint a CLI token), and login (authentication). apply, delete, and reload are only available with the center target; gen-certs and gen-token do not depend on a target and do not contact the controller.
+The resource and authentication commands include apply (apply configuration), get (query resources), delete (delete resources), gen-certs (generate mTLS certificates), gen-token (mint a CLI token), and login (authentication). apply and delete are only available with the center target; gen-certs and gen-token do not depend on a target and do not contact the controller.
 
 ## apply
 
@@ -151,41 +151,6 @@ edgion-cli delete httproute my-route -n default
 edgion-cli delete -f gateway.yaml
 ```
 
-## reload
-
-Reload all resources from storage; only supports the center target. Triggers a full reprocessing on the Controller.
-
-### Syntax
-
-```bash
-edgion-cli reload
-```
-
-### Implementation logic
-
-Calls `POST /api/v1/reload`. After the Controller receives the request:
-
-1. Clear all ServerCaches (`reset_for_relink`)
-2. Generate a new `server_id`
-3. Re-read all resources from ConfCenter (File/K8s/Etcd)
-4. Re-run the full processing pipeline
-5. Gateway detects the `server_id` change and automatically re-runs a full relist
-
-### Use cases
-
-- Forcing a re-sync when Controller is out of state with external storage
-- Manually triggering full reprocessing in development
-- Troubleshooting resource-processing pipeline issues
-
-### Examples
-
-```bash
-# Reload all resources
-edgion-cli reload
-
-# Connect to a Controller at a specific address
-edgion-cli --server http://10.0.0.1:12101 reload
-```
 
 ## gen-certs
 

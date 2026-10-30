@@ -12,7 +12,10 @@ The FileSystem and etcd resource-controller event loops accept
 `InitDone` only once per run. Their local `init_done` boolean guards the entire
 completion branch before the timer, `ResourceProcessor::on_init_done`, readiness
 notification where present, and `spawn_worker`. A duplicate completion warns and
-continues without replacing `worker_handle: Option<JoinHandle<()>>`.
+continues without replacing `worker_handle: Option<AbortOnDropHandle<()>>`.
+Local workers also belong to an iteration-scoped task tracker; cancellation and
+drain before runtime reuse are covered by the separate
+[lifecycle supervision guard](liveness-probe-and-lifecycle-supervision.md).
 
 Kubernetes now guards completion at each native source Writer and separately
 performs one committed-union bootstrap before starting its worker. Runtime

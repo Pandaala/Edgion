@@ -7,7 +7,7 @@ knowledge_type: intentional-design
 # `ClientCache::start_watch` keeps backoff+jitter on every watch-break relist — DESIGN-TRADEOFF
 
 **Status:** ⚠️ accepted tradeoff · 2026-05-28 (server-id branch) · 2026-05-28 (extended to all four break paths)
-**Severity:** Low (BadLogic — control-plane convergence latency on controller failover / reload / version-skew)
+**Severity:** Low (BadLogic — control-plane convergence latency on controller failover / resource-epoch replacement / version-skew)
 
 ## Conclusion
 
@@ -103,7 +103,7 @@ different solutions", not as "the kind-watcher forgot to do what the meta-watche
   loop to skip the sleep"** (F015 framing) — same rejection. `WATCH_ERR_SERVER_RELOAD` in
   particular is a broadcast signal that arrives on every kind simultaneously; gating the
   sleep on it produces the worst-case `17 × N_gateway` synchronized relist exactly when the
-  controller is mid-reload and least equipped to absorb the burst. Broadening F004's single
+  controller is rebuilding its resource epoch and least equipped to absorb the burst. Broadening F004's single
   branch to four branches strictly enlarges the thundering-herd surface, not the win.
 - **"Set `server_switched` / `is_signal_break` and in the backoff block sleep only the jitter,
   skip the `backoff_secs` base"** — saves ~2s per controller restart on an event that takes
@@ -113,7 +113,7 @@ different solutions", not as "the kind-watcher forgot to do what the meta-watche
 - **"Replace the 2s sleep with a short fixed delay (e.g. 100ms) for signal-triggered relists,
   keeping exponential backoff only for genuine transport failures"** (F015 alternative
   framing) — same fanout objection: 100ms × `17 × N_gateway` is still a synchronized burst
-  inside the controller's own reload window, just at a slightly later moment. The base 2s
+  inside the controller's resource-epoch replacement window, just at a slightly later moment. The base 2s
   exists to space the reconnect attempts beyond the controller's startup tail, not to throttle
   steady-state traffic.
 - **"Mirror `start_watch_server_meta`'s `continue` verbatim"** — the two paths have different

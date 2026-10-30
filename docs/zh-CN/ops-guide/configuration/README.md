@@ -6,7 +6,7 @@ Edgion 有三个独立的配置层。在查阅 schema 之前，先确定需要�
 
 | 配置层 | 载体 | 作用域 | 变更方式 |
 |--------|------|--------|---------|
-| Controller 进程配置 | YAML 文件（`config/edgion-controller.yaml`） | 单个 Controller 实例 | 重启进程（部分段支持 `POST /api/v1/reload` 热重载） |
+| Controller 进程配置 | YAML 文件（`config/edgion-controller.yaml`） | 单个 Controller 实例 | 重启进程 |
 | Gateway 进程配置 | YAML 文件（`config/edgion-gateway.yaml`） | 单个 Gateway 实例 | 重启进程 |
 | 运行时配置 | `EdgionGatewayConfig` CRD（`edgion.io/v1alpha1`） | 整个 GatewayClass | 动态生效（无需重启） |
 

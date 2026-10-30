@@ -1159,8 +1159,6 @@ impl KubernetesController {
 pub enum ControllerExitReason {
     /// Shutdown was requested
     Shutdown,
-    /// Administrative reload was requested.
-    ReloadRequested,
     /// A required controller stopped unexpectedly
     AllControllersStopped,
     /// Lost leadership

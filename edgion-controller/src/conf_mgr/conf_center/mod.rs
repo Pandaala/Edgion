@@ -19,7 +19,7 @@
 //! ## Traits
 //!
 //! - `CenterApi`: CRUD operations for configuration storage
-//! - `CenterLifeCycle`: Lifecycle management (start, reload, shutdown)
+//! - `CenterLifeCycle`: Lifecycle management (start, leadership, shutdown)
 //! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
 //!
 //! ## Configuration

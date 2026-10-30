@@ -384,7 +384,7 @@ rbac:
   allow:
     - verbs: [get, list]
       kinds: [EdgionConfigData]
-    - verbs: [reload]
+    - verbs: [create]
       kinds: ["*"]
 "#,
     )

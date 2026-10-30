@@ -116,12 +116,12 @@ async fn require_token_configured_gate(
 }
 
 /// Reject admin write requests with `503 Service Unavailable` while the
-/// controller is still in init / reload. Mounted on the write subset of
+/// controller is still initializing. Mounted on the write subset of
 /// `create_admin_router` (POST/PUT/DELETE on `/api/v1/cluster/...` and
 /// `/api/v1/namespaced/...`). Read endpoints, health, and auth routes are
 /// intentionally not gated.
 ///
-/// Includes `Retry-After: 30` — controller init / reload typically completes within 30 s.
+/// Includes `Retry-After: 30` — controller initialization typically completes within 30 s.
 async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request: Request, next: Next) -> Response {
     if state.is_ready() {
         next.run(request).await
@@ -249,8 +249,7 @@ struct ServerInfoResponse {
 
 /// Get server info including server_id
 ///
-/// This endpoint returns the current server_id which changes on reload.
-/// Useful for verifying that reload has taken effect.
+/// This endpoint returns the current serving generation and readiness.
 async fn get_server_info(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<ApiResponse<ServerInfoResponse>>, StatusCode> {
@@ -270,151 +269,6 @@ async fn get_server_info(
                 mode: "controller".to_string(),
             };
             Ok(Json(ApiResponse::ok_body(info)))
-        }
-    }
-}
-
-/// Re-read `[center]` and `cli_tokens` from the config file on disk, atomically
-/// swap the authz policy + cli_tokens map, and notify the federation supervisor.
-/// Called from `reload_all_resources` BEFORE `request_reload()` so the
-/// newer/stricter policy is live before any reloaded handler runs.
-///
-/// On load error: logs a warning and keeps the current policy -- on load error
-/// we keep the current policy and still proceed to `request_reload()`. Note that
-/// the current policy might already be deny-all, so this is NOT fail-open.
-///
-/// `cli_tokens` rebuild is NOT gated on `[center]` presence: cli tokens are
-/// independent of the federation center, so a center-less deployment can still
-/// hot-reload them. When `[center]` is absent the center policy defaults to
-/// deny-all via `authorizer.apply(deny_all, cli_map)`.
-///
-/// Factored out for unit-testability; the handler calls this and then
-/// `request_reload()`.
-fn apply_center_reload(state: &AdminState) {
-    let path = match &state.config_file {
-        Some(p) => p.clone(),
-        None => return,
-    };
-
-    let cli_cfg = crate::config::EdgionControllerConfig {
-        config_file: Some(path.clone()),
-        ..Default::default()
-    };
-
-    let full = match crate::config::EdgionControllerConfig::load(cli_cfg) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                component = "admin_api",
-                path = %path,
-                error = %e,
-                "reload: failed to re-read config; keeping current policy"
-            );
-            return;
-        }
-    };
-
-    // --- 1) Resolve new center policy (if [center] is present) ---
-    // When [center] is absent the center policy falls back to deny-all.
-    // The center_reload_tx is only notified when [center] is explicitly present,
-    // so the supervisor is not disturbed by center-less configs.
-    let (new_center_policy, center_for_supervisor) = if let Some(center) = full.center {
-        if let Some(rbac) = &center.rbac {
-            if let Err(e) = rbac.validate() {
-                tracing::warn!(
-                    component = "fed_rbac",
-                    error = %e,
-                    "invalid center.rbac rule; it will not match any request"
-                );
-            }
-            // Lint the operator-supplied center RBAC policy (the built-in default is
-            // known-good and does not need linting).
-            crate::authz::lint::lint_rbac_policy(rbac, "reload", "center");
-        }
-        let policy = crate::fed_sync::default_policy::center_policy_from(center.rbac.as_ref());
-        (policy, Some(center))
-    } else {
-        (crate::authz::CenterPolicy::deny_all(), None)
-    };
-
-    // --- 2) Rebuild cli_tokens map ---
-    // Uses the shared lint pass: per-entry shape validation, GLOBAL dedup
-    // (no silent last-wins on duplicate name/hash), advisory WARNs for
-    // unknown/non-canonical kinds, unknown verbs, and dangerous grants.
-    // Map key = token_sha256 VERBATIM (already a hash; do NOT re-hash).
-    let cli_map = crate::authz::lint::build_cli_token_map(&full.cli_tokens, "reload");
-
-    // --- 3) Atomically apply center policy + cli_tokens in a single write ---
-    // This is the SINGLE writer on the reload path (supervisor reads channel for
-    // lifecycle only; it does NOT call swap_policy separately).
-    state.authorizer.apply(new_center_policy, cli_map);
-
-    // --- 4) Notify supervisor when [center] is present ---
-    if let Some(center) = center_for_supervisor {
-        let _ = state.center_reload_tx.send(center);
-    }
-}
-
-/// Reload all resources - triggers a full restart of the configuration center
-///
-/// This endpoint triggers a full reload:
-/// 1. Stop current controllers
-/// 2. Clear PROCESSOR_REGISTRY
-/// 3. Create new ConfigSyncServer (new server_id)
-/// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
-///
-/// Gateway clients will detect the server_id change and re-list all resources.
-///
-/// Returns `Retry-After: 5` on 503. `request_reload()` refuses for more than one
-/// transient reason — a reload is already queued, or the config center is not
-/// started/ready — so the response body, not the status, is what says which.
-///
-/// **The 200 is an initiation acknowledgement only.** `request_reload()` is
-/// fire-and-forget, so this response can promise nothing about steps 1-4 above;
-/// a reload that starts and then wedges still answers 200 here. There is
-/// deliberately no completion signal on this response and no callback: the new
-/// `server_id` from step 3 *is* the completion signal, and it reaches observers
-/// on their own channels — Gateways via conf_sync re-list, and Center via the
-/// `server_id` on the federation watch stream (which Center compares against
-/// the value it cached before dispatching; see
-/// `EdgionCenter/crates/center-app/src/api/reload_ops.rs`). Callers that need a
-/// terminal state must observe one of those, or poll
-/// `GET /api/v1/server-info`, rather than reading this 200 as "reloaded".
-async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl IntoResponse {
-    tracing::info!(
-        component = "admin_api",
-        event = "reload_requested",
-        "Reload requested via Admin API"
-    );
-
-    // Re-read [center] from disk and apply it before triggering the async
-    // fire-and-forget resource reload, so the newer/stricter policy is live first.
-    apply_center_reload(&state);
-
-    match state.conf_mgr.request_reload() {
-        Ok(()) => {
-            tracing::info!(
-                component = "admin_api",
-                event = "reload_initiated",
-                "Reload initiated successfully"
-            );
-            Json(types::ApiResponse::ok_body(
-                "Reload initiated - controllers will restart with new server_id".to_string(),
-            ))
-            .into_response()
-        }
-        Err(e) => {
-            tracing::warn!(
-                component = "admin_api",
-                event = "reload_failed",
-                error = %e,
-                "Reload request failed"
-            );
-            let body = Json(ApiResponse::<()>::err_body(format!("reload unavailable: {}", e)));
-            let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
-            resp.headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
-            resp
         }
     }
 }
@@ -510,19 +364,10 @@ async fn trigger_conf_sync_rotate(
 
 /// Build the shared admin state. Used by the admin router and the dedicated
 /// probe listener (readiness reads the same `conf_mgr`-backed state).
-pub fn build_admin_state(
-    conf_mgr: Arc<ConfMgr>,
-    schema_validator: Arc<SchemaValidator>,
-    config_file: Option<String>,
-    authorizer: Arc<crate::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
-) -> Arc<AdminState> {
+pub fn build_admin_state(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaValidator>) -> Arc<AdminState> {
     Arc::new(AdminState {
         conf_mgr,
         schema_validator,
-        config_file,
-        authorizer,
-        center_reload_tx,
     })
 }
 
@@ -541,17 +386,11 @@ pub fn create_metrics_router() -> Router {
 }
 
 /// Create the admin API router with unified K8s-style endpoints
-pub fn create_admin_router(
-    conf_mgr: Arc<ConfMgr>,
-    schema_validator: Arc<SchemaValidator>,
-    config_file: Option<String>,
-    authorizer: Arc<crate::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
-) -> Router {
-    let admin_state = build_admin_state(conf_mgr, schema_validator, config_file, authorizer, center_reload_tx);
+pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaValidator>) -> Router {
+    let admin_state = build_admin_state(conf_mgr, schema_validator);
 
     // Write routes — gated by readiness middleware so requests arriving during
-    // controller init / reload are rejected with 503 instead of racing the
+    // controller initialization are rejected with 503 instead of racing the
     // processor LIST + cache build.
     let write_routes = Router::new()
         .route("/api/v1/cluster/{kind}", post(cluster_handlers::create_cluster))
@@ -609,7 +448,6 @@ pub fn create_admin_router(
         // Special operations
         .route("/api/v1/access", get(access_handlers::get_access))
         .route("/api/v1/server-info", get(get_server_info))
-        .route("/api/v1/reload", post(reload_all_resources))
         // Effective resolved views for Center dashboard polling.
         .route(
             "/api/v1/region-routes/effective",
@@ -677,19 +515,11 @@ pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
-    config_file: Option<String>,
     authorizer: Arc<crate::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
     allow_admin_ips: Vec<String>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(
-        conf_mgr.clone(),
-        schema_validator,
-        config_file,
-        authorizer.clone(),
-        center_reload_tx,
-    );
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
 
     // Enforce authz on the business routes (route_layer: only matched routes,
     // never the fallback). A request reaches a handler only with a `Role`
@@ -800,10 +630,6 @@ fn warn_if_admin_exposure_insecure(addr: &std::net::SocketAddr, allow_admin_ips:
 #[cfg(test)]
 #[path = "../../tests/unit/api/mod_test/auth_status_tests.rs"]
 mod auth_status_tests;
-
-#[cfg(test)]
-#[path = "../../tests/unit/api/mod_test/reload_center_tests.rs"]
-mod reload_center_tests;
 
 #[cfg(test)]
 #[path = "../../tests/unit/api/mod_test/admin_exposure_tests.rs"]

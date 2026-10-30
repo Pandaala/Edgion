@@ -3,7 +3,7 @@
 //! Each long-lived leader-job worker keeps its `JoinHandle` and hands it to
 //! [`observe_worker`]. Death is surfaced via `edgion_controller_leader_job_alive`
 //! going 0 while the replica is still leader; recovery is by alert + operator
-//! action (`/api/v1/reload` or pod restart). A blind in-place restart was
+//! action (process restart). A blind in-place restart was
 //! deliberately rejected: a panicking worker usually means corrupted state and
 //! risks a panic loop (see the wedge-recovery design spec).
 
@@ -35,7 +35,7 @@ where
                 leader_job = job,
                 panicked = result.is_err(),
                 "Leader job worker died unexpectedly; the job stays down for the rest of the \
-                 leadership term — recover via /api/v1/reload or pod restart"
+                 leadership term — restart the Controller process to recover"
             );
         }
     });

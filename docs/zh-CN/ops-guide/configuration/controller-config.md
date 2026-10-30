@@ -224,14 +224,14 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 | `gateway_address` | `String` | — | Gateway status 中报告的地址，可选 |
 | `ha_mode` | `String` | — | HA 模式：`"leader-only"` 或 `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | 跳过 CRD 预检和 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute"]` |
-| `cache_ready_deadline_secs` | `Integer` | `90` | 已启动的 watcher 集合到达 `CachesReady` 前的超时上限（秒）——覆盖内部 30 秒的就绪轮询预算，加上就绪后的收尾阶段（WatchObj 注册、revalidation、leader-job 启动）。**必须 `> 30`**，否则启动时校验失败拒绝启动。**随进程重启生效，不支持热重载**——`POST /api/v1/reload` 每次迭代都会重新武装该超时，但始终使用启动时捕获的值；修改此字段需要完整重启进程。经验法则：当单一资源 kind 的数量接近每 kind 工作队列容量（5000）时应调大此值——由于每次超时触发的重启都会 `runtime.reset()` 并从头重放，过小的值会造成**永久性**重启循环而不是一次性失败。最坏情况下，重启触发前的等待时间约为配置值的 **2 倍**（同一超时预算还会通过 `tokio::time::timeout` 包裹最初的 `start_event_watchers` 调用，返回后再为收尾阶段重新武装一次）。完整机制见 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) |
+| `cache_ready_deadline_secs` | `Integer` | `90` | 已启动的 watcher 集合到达 `CachesReady` 前的超时上限（秒）——覆盖内部 30 秒的就绪轮询预算，加上就绪后的收尾阶段（WatchObj 注册、revalidation、leader-job 启动）。**必须 `> 30`**，否则启动时校验失败拒绝启动。**随进程重启生效**——每次资源运行周期初始化都使用启动时捕获的值；修改此字段需要完整重启进程。经验法则：当单一资源 kind 的数量接近每 kind 工作队列容量（5000）时应调大此值——由于每次超时触发的重启都会 `runtime.reset()` 并从头重放，过小的值会造成**永久性**重启循环而不是一次性失败。最坏情况下，重启触发前的等待时间约为配置值的 **2 倍**（同一超时预算还会通过 `tokio::time::timeout` 包裹最初的 `start_event_watchers` 调用，返回后再为收尾阶段重新武装一次）。完整机制见 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) |
 
 首次启动时，Controller 会等待所需监听来源完成首次完整加载，再发布配置同步服务。
 运行期间 Kubernetes 重新 LIST 时，会保留该来源上一次完整快照，成功后再替换，并通过
 原有 worker 处理变化。普通 relist 不会重启全部资源 Controller 或撤下配置同步服务。
 Namespace 标签变化也会触发使用 Selector 的 Gateway 重新计算。
 
-管理接口 reload 和不可恢复的 Controller 任务故障仍会在旧任务退出后重建资源状态。
+不可恢复的 Controller 任务故障仍会在旧任务退出后重建资源状态。
 `leader-only` 模式丢失领导权时也会停止当前资源运行周期；`all-serve` 模式的领导权
 切换会保留资源监听和配置服务，仅调整领导者专属服务。
 
@@ -368,7 +368,7 @@ admin_token: "edg_..."
 
 ### [cli_tokens] — 静态 CLI Token
 
-用于编程或 CI 访问 Admin API 的静态 Bearer Token。每个 Token 绑定到细粒度的 RBAC 策略。Token 以 SHA-256 十六进制摘要存储（永不明文）。支持热重载。
+用于编程或 CI 访问 Admin API 的静态 Bearer Token。每个 Token 绑定到细粒度的 RBAC 策略。Token 以 SHA-256 十六进制摘要存储（永不明文）。修改后需要重启每个 Controller 副本。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -398,14 +398,14 @@ Token 生成工作流、轮换说明和所有安全注意事项，详见[联邦 
 
 ## 联邦客户端（center）
 
-添加可选的 `center` 段以将此 Controller 加入联邦 Center。不使用联邦时完全省略。
+添加可选的 `center` 段以将此 Controller 加入联邦 Center。不使用联邦时完全省略。修改此进程配置后需要重启每个 Controller 副本。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `address` | `String` | **必填** | Center 服务器的 gRPC 地址（如 `https://center.example.com:12251`） |
 | `name` | `String` | **必填** | 此 Controller 的逻辑名称，上报给 Center |
 | `cluster` | `String` | **必填** | 集群名称，用于路由和聚合 |
-| `enabled` | `Boolean` | `true` | 热重载开关；`false` 可停止联邦客户端而无需重启（通过 `POST /api/v1/reload` 重载） |
+| `enabled` | `Boolean` | `true` | 启动时生效的开关；`false` 禁用联邦客户端。修改后需要重启进程 |
 | `env` | `Array<String>` | `[]` | 上报给 Center 的环境标签 |
 | `tag` | `Array<String>` | `[]` | 上报给 Center 的扩展标签 |
 | `security` | Object | — | 通道的 mTLS 证书；必填（无此配置时联邦失败关闭） |

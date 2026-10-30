@@ -92,17 +92,6 @@ fn default_denies_list_secret() {
 }
 
 #[test]
-fn default_allows_reload_on_non_resource() {
-    assert!(allows(&az(), Verb::Reload, NON_RESOURCE_KIND));
-}
-
-#[test]
-fn default_denies_reload_on_resource_kinds() {
-    assert!(!allows(&az(), Verb::Reload, "Gateway"));
-    assert!(!allows(&az(), Verb::Reload, "*"));
-}
-
-#[test]
 fn default_denies_create_httproute() {
     // write is EdgionConfigData-only; HTTPRoute must be denied for create.
     assert!(!allows(&az(), Verb::Create, "HTTPRoute"));

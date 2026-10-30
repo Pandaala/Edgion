@@ -83,12 +83,11 @@ const RESOURCE_VERBS: [Verb; 7] = [
     Verb::Delete,
 ];
 
-const OPERATIONS: [(&str, Verb, &str); 9] = [
+const OPERATIONS: [(&str, Verb, &str); 8] = [
     ("regionRoute.list", Verb::List, "RegionRoute"),
     ("regionRoute.failover", Verb::Failover, "RegionRoute"),
     ("acme.trigger", Verb::AcmeTrigger, ResourceKind::Service.as_str()),
     ("confSync.rotate", Verb::ConfSyncRotate, NON_RESOURCE_KIND),
-    ("reload", Verb::Reload, NON_RESOURCE_KIND),
     ("serverInfo", Verb::ServerInfo, NON_RESOURCE_KIND),
     ("diagnostics", Verb::Diagnostics, NON_RESOURCE_KIND),
     ("wipeAll", Verb::WipeAll, NON_RESOURCE_KIND),

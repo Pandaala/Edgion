@@ -1,4 +1,4 @@
-//! EtcdCenter — CenterLifeCycle implementation with reload loop.
+//! EtcdCenter — CenterLifeCycle implementation with leadership-scoped iterations.
 //!
 //! Delegates shared lifecycle logic to `CenterBase` (see `non_kube_common`).
 //! The only etcd-specific work is creating `EtcdController` for each iteration.
@@ -135,7 +135,7 @@ impl CenterLifeCycle for EtcdCenter {
                 shutdown_handle,
                 "etcd_center",
                 Some(self.election.handle()),
-                move |shutdown, runtime, error_tx| {
+                move |shutdown, runtime, error_tx, scope| {
                     let ctrl = EtcdController::new(
                         client.clone(),
                         key_prefix.clone(),
@@ -143,7 +143,7 @@ impl CenterLifeCycle for EtcdCenter {
                         controller_name.clone(),
                     );
                     tokio::spawn(async move {
-                        if let Err(e) = ctrl.run(shutdown, runtime).await {
+                        if let Err(e) = ctrl.run(shutdown, runtime, scope).await {
                             tracing::error!(
                                 component = "etcd_center",
                                 error = %e,
@@ -189,10 +189,6 @@ impl CenterLifeCycle for EtcdCenter {
                 leader_admin_addr: handle.current_leader().map(|l| l.admin_addr),
             }
         }
-    }
-
-    fn request_reload(&self) -> Result<(), String> {
-        self.base.request_reload()
     }
 
     fn runtime(&self) -> Arc<ControllerRuntime> {

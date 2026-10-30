@@ -50,8 +50,7 @@ run_all_serve_lifecycle()
         ├── start_event_watchers_all_serve()
         │   ├── Controller (with leader_handle)   # status writes are guarded
         │   ├── Caches watcher (no ACME)          # ACME is moved to leader services
-        │   ├── Leadership watcher (bidirectional)
-        │   └── Reload watcher
+        │   └── Leadership watcher (bidirectional)
         ├── event loop:
         │   ├── CachesReady → set gRPC server
         │   │   └── if is_leader → start_leader_services()
@@ -59,7 +58,7 @@ run_all_serve_lifecycle()
         │   │   └── if caches_ready → start_leader_services()
         │   ├── LeadershipLost
         │   │   └── stop_leader_services() (continue serving gRPC!)
-        │   └── ControllerExit / ReloadRequested → exit
+        │   └── ControllerExit → exit
         └── cleanup: unpublish ConfigSyncServer, stop leader services, reset runtime
 ```
 
@@ -200,7 +199,6 @@ enum LifecycleEvent {
     LeadershipLost,               // lost leadership
     LeadershipAcquired,           // acquired leadership (all-serve mode only)
     ControllerExit(reason),       // KubernetesController exited (shutdown/terminal failure)
-    ReloadRequested,              // Admin API triggered a reload
 }
 ```
 
@@ -215,7 +213,6 @@ The loop drives a shared `next_loop_turn()` helper (a three-way `select!`, not a
 | `LeadershipLost` | Exit run_main_flow | stop_leader_services, keep serving gRPC |
 | `LeadershipAcquired` | Not used | If caches_ready, start_leader_services |
 | `ControllerExit` | Exit the loop, trigger retry/rebuild | Same as left |
-| `ReloadRequested` | Exit the loop, trigger reload | Same as left |
 
 ## Watcher Tasks
 
@@ -246,7 +243,6 @@ Preflight logic (`version_detection.rs`):
 | **Controller** | Run `KubernetesController.run()` (spawn all ResourceControllers) | `ControllerExit(reason)` |
 | **Caches** | Wait for all phased processors to register + all sync-to-Gateway kinds to be ready | `CachesReady` / `CachesTimeout` |
 | **Leader** | Monitor leadership state changes (poll the `AtomicBool` every 100ms) | `LeadershipLost` / `LeadershipAcquired` |
-| **Reload** | Listen for Admin API reload signals (`mpsc::Receiver`) | `ReloadRequested` |
 
 **Leader watcher initial-state broadcast** (all-serve mode):
 At startup, the leader watcher checks the current state immediately; if it is already leader it emits a `LeadershipAcquired` immediately rather than waiting for the next 100ms tick.
@@ -280,7 +276,7 @@ are registered into the runtime-owned processor registry only after Phase 1. If 
 ### Troubleshooting Tip
 
 If Gateway logs repeatedly show `Failed to list resources: Unknown kind: HTTPRoute/GRPCRoute/EdgionTls/...`,
-but existing traffic still works, prioritize checking whether only a partial set of WatchObjs was published after a Controller restart/reload.
+but existing traffic still works, prioritize checking whether only a partial set of WatchObjs was published after a Controller restart or resource-epoch replacement.
 
 ## Retry and Backoff
 
@@ -346,10 +342,9 @@ observed (`deadline_armed = !caches_ready`). Its duration is `cache_ready_deadli
 - **Validation**: rejected at startup unless `> 30` (the internal readiness-poll budget) — a deadline that
   cannot even cover the poll is a designed-in restart loop. See
   `KubernetesConfig::validate()` in `edgion-controller/src/config/conf_center/kubernetes.rs`.
-- **Restart-bound, not hot-reloadable**: the value is read from `self.config`, captured once at
-  `KubernetesCenter` construction. `POST /api/v1/reload` restarts the loop iteration (a benign
-  `RelinkRequested` exit) and every iteration arms a fresh deadline, but always with the **boot-time**
-  value — changing this field requires a process restart, not just a reload.
+- **Restart-bound**: the value is read from `self.config`, captured once at
+  `KubernetesCenter` construction. Each resource-epoch initialization arms a fresh deadline
+  with the **boot-time** value. Changing this field requires a process restart.
   See [`skills/02-features/02-config/00-controller-config.md`](../../../../02-features/02-config/00-controller-config.md)
   for the operator-facing field reference.
 - **Sizing rule of thumb**: raise the deadline when a single resource kind's count approaches the per-kind
@@ -423,7 +418,7 @@ both HA modes:
 - **`run_all_serve_lifecycle`**: gained the same failure counter + backoff + give-up, replacing the previous
   fixed 1 s / 5 s sleep-and-retry-forever behavior. `ServingFlowExit` distinguishes real failures
   (`CachesTimeout` / `AllControllersStopped` / watcher panic / deadline / channel closed — counted toward
-  give-up) from **benign** exits (manual `/api/v1/reload` — reset the counter and do
+  give-up) from **benign** leadership transitions (reset the counter and do
   **not** count toward give-up), mirroring the leader-only classification.
 
 Without this, all-serve mode's previous behavior was to retry forever on persistent failure (~90 s cycle by

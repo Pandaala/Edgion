@@ -13,12 +13,8 @@
 //!    (GET /api/v1/region-routes/effective), and failover covers the POST
 //!    failover endpoint.
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
-//!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
-//!    it is safe to read by default; Center uses it to verify reload propagation.
-//!  - reload on the NonResource route (POST /api/v1/reload). The Center's
-//!    reload button arrives as a proxied request classified on the same
-//!    synthetic NonResource label; the Command channel that used to carry it
-//!    is gone.
+//!    only a serving generation (server_id), readiness, and mode -- no secrets -- so
+//!    it is safe to read by default; Center uses it to observe serving generations.
 //!
 //! Nothing else is allowed: no diagnostics, wipe-all.
 //!
@@ -129,11 +125,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///      of the ResourceKind exhaustiveness gate -- it is a synthetic classifier
 ///      label only used on the fed-proxy routing layer.
 ///   4. server-info on the NonResource route. Read-only and non-sensitive
-///      (server_id / ready / mode only); Center reads it to verify reloads.
-///   5. reload on the NonResource route. The Center's reload button arrives
-///      as a proxied POST /api/v1/reload, classified (reload, NonResource) by
-///      the same synthetic label as rule 4; the Command channel that used to
-///      carry it is gone.
+///      (server_id / ready / mode only); Center reads it to observe serving generations.
 pub(crate) fn default_center_policy() -> CenterPolicy {
     let read_kinds: Vec<String> = DEFAULT_READ_KINDS.iter().map(|s| s.to_string()).collect();
 
@@ -163,16 +155,9 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 kinds: vec!["RegionRoute".to_string()],
             },
             // Rule 4: server-info on the NonResource route. Read-only and
-            // non-sensitive (server_id / ready / mode); used to verify reloads.
+            // non-sensitive (server_id / ready / mode); used to observe serving generations.
             FedAllowRule {
                 verbs: vec!["server-info".to_string()],
-                kinds: vec![NON_RESOURCE_KIND.to_string()],
-            },
-            // Rule 5: reload on the non-resource route. The Center's reload
-            // button arrives as a proxied POST /api/v1/reload; the Command
-            // channel that used to carry it is gone.
-            FedAllowRule {
-                verbs: vec!["reload".to_string()],
                 kinds: vec![NON_RESOURCE_KIND.to_string()],
             },
         ],

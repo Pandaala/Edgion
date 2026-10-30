@@ -57,7 +57,7 @@ If neither source provides a non-blank token (and no `cli_tokens` are configured
 ## Token model
 
 - The admin token maps to an **allow-all wildcard** (`*`/`*`) RBAC policy — it is a `Role::Restricted` carrying that policy, held on the `Authorizer` via `set_admin_token`. There is no separate "superuser" role.
-- It **survives reloads**: `Authorizer::apply` re-merges the admin-token entry into the cli-token map on every reload.
+- `Authorizer::apply` merges the admin-token entry into the cli-token map at startup. Token configuration changes require a process restart.
 - **Scoped, role-limited** tokens for automation are configured separately under `[cli_tokens]` (each with a fine-grained `rbac.allow` policy). See `skills/02-features/02-config/00-controller-config.md`.
 
 ## Gateway: Providing the Admin Token
@@ -110,7 +110,7 @@ NetworkPolicy template ships at `cicd/deploy/kubernetes/controller/optional/netw
 The pre-shared token is stateless — there is no session, cookie, or server-side blacklist. To revoke access:
 
 1. **Rotate the admin token**: update the `edgion-admin-credentials` Secret (key `token`) and perform a rolling restart (`kubectl rollout restart deployment/edgion-controller -n edgion-system`). The old token stops working immediately on the new pods.
-2. **Revoke a scoped cli token**: remove (or change) its `cli_tokens[].token_sha256` entry and `POST /api/v1/reload` — no restart needed (the token table is hot-reloadable; the admin token survives the reload).
+2. **Revoke a scoped cli token**: remove (or change) its `cli_tokens[].token_sha256` entry and restart every Controller replica. Old instances retain their startup token tables until they exit.
 
 Rotating the admin token is the fastest bulk revocation; routine per-client scoping should use `[cli_tokens]` instead of sharing the admin token.
 
@@ -140,7 +140,7 @@ Removed config keys: `local_auth` (username/password/jwt_secret/cookie_secure), 
 - 2026-06-12: Admin API auth switched to **token-only** (BREAKING). Removed the browser-login stack
   (`local_auth`, `unified_auth`, OIDC admin `auth`, the `/api/v1/auth/{login,logout,me}` endpoints,
   `Role::Superuser`). The operator now supplies a single Istio-style pre-shared bearer token via
-  `EDGION_ADMIN_TOKEN` / `admin_token`; it maps to an allow-all wildcard policy and survives reloads.
+  `EDGION_ADMIN_TOKEN` / `admin_token`; it maps to an allow-all wildcard policy and is loaded at startup.
   No token configured → server boots, business routes 503, startup WARN.
 - 2026-06-01: Controller removed admin-credential auto-generation (BREAKING) — superseded by the
   token-only switch above.

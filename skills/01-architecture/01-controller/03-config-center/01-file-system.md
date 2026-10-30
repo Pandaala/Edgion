@@ -13,7 +13,7 @@ FileSystemCenter watches a recursive local YAML tree and runs changes through th
 FileSystemCenter
 ├── writer: FileSystemStorage       # CenterApi delegate (CRUD operations)
 ├── config: FileSystemConfig        # configuration (conf_dir, etc.)
-└── base: CenterBase                # ControllerRuntime, ConfigSyncServer slot, reload/lifecycle state
+└── base: CenterBase                # ControllerRuntime, ConfigSyncServer slot, lifecycle state
 
 FileSystemController.run()
 ├── FileSystemWatcher (shared, centralized file watching)
@@ -69,12 +69,14 @@ FileSystemCenter does not call the K8s API; it writes status to a local `.status
 
 ## Startup Flow
 
-The `start()` method of FileSystemCenter performs the following steps (with reload-loop support):
+The `start()` method of FileSystemCenter runs one resource generation until
+shutdown or a terminal backend error. Process configuration changes require a
+process restart; file resources continue to update through the watcher.
 
 ```
 start(shutdown_handle)
-└── loop:
-    ├── 1. Create iteration_shutdown + reload channel + error channel
+└── resource generation:
+    ├── 1. Create iteration shutdown, descendant task ownership, and error channel
     ├── 2. FileSystemController.run()
     │   ├── Clean up orphan .status files
     │   ├── spawn_all_controllers (shared with EtcdController):
@@ -89,10 +91,9 @@ start(shutdown_handle)
     ├── 4. Trigger cross-namespace revalidation
     ├── 5. Create ConfigSyncServer + register all WatchObjs
     ├── 6. set_config_sync_server(Some)  ← gRPC service becomes available
-    ├── 7. select! { shutdown / reload / error }
-    └── 8. Cleanup: clear ConfigSyncServer, abort controllers, ControllerRuntime::reset()
+    ├── 7. select! { shutdown / error }
+    └── 8. Withdraw ConfigSyncServer, stop and drain old tasks, reset runtime
         ├── Shutdown → return
-        ├── Reload → continue loop (new server_id)
         └── Error → wait for shutdown signal then return
 ```
 
@@ -189,8 +190,8 @@ processing time; do not assume a universal 1.5-second bound for large trees.
   do not establish a process-wide memory or byte bound.
 - Runtime dispatch selects shutdown while awaiting channel room. Cancellation
   abandons that watcher generation, including registry changes made before the
-  cancelled send; it does not roll them back or continue dispatch. Reload's next
-  prime replaces the registry atomically. Receiver closure ends dispatch with a
+  cancelled send; it does not roll them back or continue dispatch. A new process
+  primes its registry from the current directory. Receiver closure ends dispatch with a
   metadata-only error. Blocking filesystem work, PollWatcher setup and existing
   worker cleanup retain their own limitations; no universal shutdown deadline is
   promised.
@@ -246,7 +247,7 @@ or promise cross-kind atomicity.
 | 410 Gone handling | N/A | Triggers a full KubernetesController rebuild |
 | File parsing | Extracts Kind/namespace/name from the file name | K8s API returns structured objects |
 | RawStore implementation | `LocalRawStore` (manually maintained HashMap, also used by Etcd) | `KubeRawStore` (wraps the reflector Store) |
-| Reload | Supported (triggered by Admin API, new server_id) | Supported (same as left) |
+| Process configuration changes | Restart the process | Restart all affected replicas |
 | Use cases | Development, testing, CI | Production K8s deployments |
 
 ## Multi-version Resource Compatibility

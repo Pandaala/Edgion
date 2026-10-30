@@ -41,7 +41,7 @@ are **not accepted**.
 Before the fix, the startup self-check was fail-open: a `None` (no TLS block) or
 `skip_tls=true` channel skipped the SPIFFE check and connected in plaintext, so a
 compromised/malicious Center or a MITM on the plaintext channel could drive
-arbitrary admin endpoints (mutating CRUD, `/api/v1/reload`, test-mode
+arbitrary admin endpoints (mutating CRUD, test-mode
 `/api/v1/admin/wipe-all`) with no credentials. The fix makes mTLS a hard
 precondition; combined with the Controller's SPIFFE self-check and the Center-side
 peer-identity binding (common-center-01), both ends fail closed.

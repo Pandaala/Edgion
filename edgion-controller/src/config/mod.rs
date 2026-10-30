@@ -158,7 +158,7 @@ pub struct EdgionControllerConfig {
 
     /// Static cli tokens for role-scoped API access.
     /// Each entry names a token (by its SHA-256 hex digest) and assigns it
-    /// a fine-grained RBAC policy. Hot-reloadable.
+    /// a fine-grained RBAC policy. Changes require a process restart.
     #[arg(skip)]
     #[serde(default)]
     pub cli_tokens: Vec<CliTokenConfig>,
@@ -753,7 +753,7 @@ pub struct CenterClientConfig {
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
-    /// Hot-reloadable kill-switch. When false, the federation client is not run.
+    /// Startup switch. When false, the federation client is not run.
     #[serde(default = "default_center_enabled")]
     pub enabled: bool,
     /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.

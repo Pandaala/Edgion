@@ -62,17 +62,6 @@ data:
           ]
         },
         {
-          "id": 4,
-          "type": "timeseries",
-          "title": "Reload duration (s)",
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-          "targets": [
-            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
-              "expr": "edgion_controller_reload_duration_seconds_last" }
-          ]
-        },
-        {
           "id": 5,
           "type": "stat",
           "title": "Cert expiry countdown (days)",

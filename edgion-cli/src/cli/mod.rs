@@ -137,9 +137,6 @@ pub enum Commands {
         file: Option<String>,
     },
 
-    /// Reload all resources from storage
-    Reload,
-
     /// Generate mTLS certificates for conf_sync gRPC channel
     GenCerts(commands::gen_certs::GenCertsArgs),
 
@@ -301,12 +298,6 @@ impl Cli {
                     file.as_deref(),
                 )
                 .await
-            }
-            Commands::Reload => {
-                if self.target != TargetType::Center {
-                    anyhow::bail!("reload command only supported for 'center' target");
-                }
-                commands::reload::reload(&client).await
             }
             Commands::GenCerts(_)
             | Commands::Login { .. }

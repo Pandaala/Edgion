@@ -18,7 +18,7 @@ use super::leadership_gate::LeadershipGate;
 use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
-use crate::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
+use crate::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend, LocalTaskScope};
 use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::conf_mgr::ControllerRuntime;
@@ -28,6 +28,7 @@ use edgion_resources::ResourceMeta;
 /// Backend implementation that wires `EtcdWatcher` and `EtcdResourceController`
 /// into the shared [`LocalControllerBackend`] interface.
 struct EtcdControllerBackend {
+    scope: LocalTaskScope,
     watcher: Arc<EtcdWatcher>,
     status_handler: Arc<EtcdStatusHandler>,
     conf_prefix: Arc<str>,
@@ -66,8 +67,9 @@ impl LocalControllerBackend for EtcdControllerBackend {
             event_rx,
             self.conf_prefix.clone(),
         )
-        .with_shutdown(shutdown_signal);
-        tokio::spawn(async move { ctrl.run().await })
+        .with_shutdown(shutdown_signal)
+        .with_scope(self.scope.clone());
+        self.scope.spawn(async move { ctrl.run().await })
     }
 }
 
@@ -102,7 +104,12 @@ impl EtcdController {
     }
 
     /// Run the controller.
-    pub async fn run(&self, shutdown_signal: ShutdownSignal, runtime: Arc<ControllerRuntime>) -> Result<()> {
+    pub async fn run(
+        &self,
+        shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
+        scope: LocalTaskScope,
+    ) -> Result<()> {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %self.key_prefix,
@@ -121,6 +128,7 @@ impl EtcdController {
         };
 
         let backend = EtcdControllerBackend {
+            scope,
             watcher: watcher.clone(),
             status_handler,
             conf_prefix: format!("{}/conf/", self.key_prefix).into(),

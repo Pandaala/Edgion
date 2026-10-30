@@ -12,7 +12,7 @@ fn deny_all_has_fixed_cardinality_and_canonical_serialization() {
     let access = snapshot(&role(Vec::new())).unwrap();
     assert_eq!(access.resources.len(), 22);
     assert!(access.resources.iter().all(|row| row.verbs.is_empty()));
-    assert_eq!(access.operations.len(), 9);
+    assert_eq!(access.operations.len(), 8);
     assert!(access.operations.iter().all(|operation| !operation.allowed));
     assert_eq!(access.resources[0].kind, "GatewayClass");
     assert_eq!(access.resources[0].scope, "cluster");
@@ -81,14 +81,5 @@ fn default_center_policy_expands_expected_secret_and_operation_boundaries() {
             .unwrap()
             .allowed
     );
-    // The default Center policy grants `reload` on the non-resource route
-    // so the Center's reload action works without operator configuration.
-    assert!(
-        snapshot
-            .operations
-            .iter()
-            .find(|operation| operation.name == "reload")
-            .unwrap()
-            .allowed
-    );
+    assert!(!snapshot.operations.iter().any(|operation| operation.name == "reload"));
 }

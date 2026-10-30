@@ -51,10 +51,8 @@ fn failover_literal_route_is_failover_regionroute() {
 }
 
 #[test]
-fn reload_is_nonresource_kind() {
-    let (v, k) = classify("POST", Some("/api/v1/reload"), None).unwrap();
-    assert_eq!(v, Verb::Reload);
-    assert_eq!(k, NON_RESOURCE_KIND);
+fn removed_reload_route_is_unclassified() {
+    assert!(classify("POST", Some("/api/v1/reload"), None).is_none());
 }
 
 #[test]

@@ -421,6 +421,7 @@ fn fs_worker_test_harness(conf_dir: &std::path::Path) -> FsWorkerTestHarness {
         None,
         raw_store.clone(),
         invalid_envelopes.clone(),
+        &super::LocalTaskScope::default(),
     );
     (
         processor,
@@ -606,6 +607,7 @@ async fn imported_controller_envelope_status_is_never_cleared() {
         None,
         raw_store.clone(),
         Arc::new(RuntimeInvalidEnvelopes::default()),
+        &super::LocalTaskScope::default(),
     );
 
     let key = "default/p1";

@@ -10,13 +10,9 @@ async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
             .await
             .expect("ConfMgr::create"),
     );
-    let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
     let state = Arc::new(AdminState {
         conf_mgr,
         schema_validator: Arc::new(SchemaValidator::empty()),
-        config_file: None,
-        authorizer: Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all())),
-        center_reload_tx: tx,
     });
     (state, tmp_data)
 }

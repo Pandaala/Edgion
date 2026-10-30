@@ -75,7 +75,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         .await;
 
         // Restore the shared suite fixture even when the rotation assertion
-        // fails, so later suites and a second --with-reload sweep start at A.
+        // fails, so later suites and a second --with-restart sweep start at A.
         let restore_result = async {
             ctx.apply_dir("initial/00_Secret_ai-provider.yaml").await?;
             ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await

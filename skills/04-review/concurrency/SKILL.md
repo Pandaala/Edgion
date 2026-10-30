@@ -21,7 +21,7 @@ before applying a decision to current code.
 - [runtime F-005 — cross-store rebuild ordering in `partial_update` — DESIGN-TRADEOFF](intentional-design/partial-update-inconsistency-windows.md)
 - [`CacheData` write lock kept across `partial_update` — DESIGN-TRADEOFF](intentional-design/partial-update-under-lock-intentional.md)
 - [`ClientCache::start_watch` keeps backoff+jitter on every watch-break relist — DESIGN-TRADEOFF](intentional-design/relist-backoff-on-server-switch-intentional.md)
-- [Controller-Reload Detection via 1s Polling — DESIGN-TRADEOFF](intentional-design/reload-detection-polling-vs-event-driven.md)
+- [ConfigSyncServer Generation Detection via 1s Polling — DESIGN-TRADEOFF](intentional-design/reload-detection-polling-vs-event-driven.md)
 - [`ClientCache::start_watch` two remaining extraction phases deliberately deferred — DEFERRED-REFACTOR](intentional-design/start-watch-extract-fn-deferred.md)
 - [Watcher `send(...).await` end-to-end backpressure (no `send_timeout`) — DESIGN-TRADEOFF](intentional-design/watcher-send-await-backpressure-no-timeout.md)
 - [Webhook active health task is abort-only (no cooperative watch signal) — DESIGN-TRADEOFF](intentional-design/webhook-active-health-abort-only.md)

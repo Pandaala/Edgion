@@ -214,7 +214,7 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 | Service | Selector | Purpose |
 |---------|----------|---------|
 | `edgion-controller` | `app: edgion-controller` | Gateway gRPC, health checks, metrics |
-| `edgion-controller-leader` | `app: edgion-controller` + `edgion.io/leader: "true"` | Admin API reload, ACME callback |
+| `edgion-controller-leader` | `app: edgion-controller` + `edgion.io/leader: "true"` | Leader-only Admin API writes, ACME callback |
 
 ## /ready Endpoint Semantics
 

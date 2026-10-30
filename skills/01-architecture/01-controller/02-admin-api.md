@@ -42,9 +42,6 @@ All handlers share state through Axum's `State<Arc<AdminState>>`:
 pub struct AdminState {
     pub conf_mgr: Arc<ConfMgr>,
     pub schema_validator: Arc<SchemaValidator>,
-    pub config_file: Option<String>,
-    pub authorizer: Arc<Authorizer>,
-    pub center_reload_tx: watch::Sender<CenterClientConfig>,
 }
 ```
 
@@ -77,7 +74,7 @@ The following endpoints are served on the **probe listener** (`:12100`, `probe_l
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
+| GET | `/api/v1/server-info` | Get the current `server_id` and ready state. A process restart or resource-epoch replacement changes `server_id` |
 | GET | `/api/v1/access` | Return the **caller's own** effective access snapshot. Authenticated-only; see below |
 
 #### `GET /api/v1/access` — effective access introspection
@@ -104,19 +101,13 @@ Response `data` shape:
   `authz/access.rs`.
 - **`revision`** is a SHA-256 over the canonical `(schemaVersion, resources, operations)`
   serialization — stable for identical access, and it changes when the policy is
-  hot-reloaded, so a client can cheaply detect that its permissions moved.
+  changed at process restart, so a client can cheaply detect that its permissions moved.
 - **Self-only**: it reports the `Role` already attached to *this* request. There
   is no way to ask about another identity.
 - **Auth**: missing/unknown token → `401` (the route is not in the public
   skip-set). It carries the inherent `access-self` verb, which no RBAC rule can
   grant or revoke — see
   [11-authentication-authorization.md](11-authentication-authorization.md).
-
-### Reload
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/reload` | Request asynchronous lifecycle rebuild: stop controllers, clear the current ConfigSyncServer, call `ControllerRuntime::reset()`, build a new server, and replay initialization. **The 200 is an initiation acknowledgement only** — `request_reload()` is fire-and-forget, so a reload that starts and then wedges still answers 200. The new `server_id` is the completion signal: observe it via conf_sync re-list (Gateway), the federation watch stream (Center — see `EdgionCenter/crates/center-app/src/api/reload_ops.rs`), or by polling `GET /api/v1/server-info`. Returns `Retry-After: 5` on 503 (reload already in progress) |
 
 ### Namespaced Resource CRUD
 
@@ -426,13 +417,12 @@ The router applies `require_ready_middleware` (in `edgion-controller/src/api/mod
 - `POST /api/v1/cluster/{kind}` / `PUT /api/v1/cluster/{kind}/{name}` / `DELETE /api/v1/cluster/{kind}/{name}`
 - `POST /api/v1/namespaced/{kind}/{namespace}` / `PUT /api/v1/namespaced/{kind}/{namespace}/{name}` / `DELETE /api/v1/namespaced/{kind}/{namespace}/{name}`
 
-While the controller is in init or reload (`is_ready() == false`), these endpoints respond with `503 Service Unavailable` instead of entering `parse_resource_and_update_version` and `ConfCenter::create_one / update_one / delete_one`. Without this gate, writes accepted during the LIST + cache-build window bypass cache consistency and (in non-K8s mode) race `update_resource_version` against the init flow's `resourceVersion` sequencing.
+While the controller is initializing or recovering (`is_ready() == false`), these endpoints respond with `503 Service Unavailable` instead of entering `parse_resource_and_update_version` and `ConfCenter::create_one / update_one / delete_one`. Without this gate, writes accepted during the LIST + cache-build window bypass cache consistency and (in non-K8s mode) race `update_resource_version` against the init flow's `resourceVersion` sequencing.
 
 Endpoints intentionally not gated:
 
 - `GET` endpoints on `/api/v1/...` (reads may return partial data during init — explicit operator/debug choice).
 - `/api/v1/auth/*` — auth must stay reachable. (`/health`, `/ready`, `/metrics` are on separate listeners and are not routed through the Admin API router at all.)
-- `/api/v1/reload` — `request_reload` itself returns an error when the center is not started, and reload is the mechanism for recovering from a stuck init.
 - `/api/v1/services/acme/.../trigger` — notify-only, does not touch the storage layer.
 - `/api/v1/diagnostics/...` and `/api/v1/server-info` — read-only diagnostic surface.
 - `/configserver/...` — read-only cache surface; already returns 503 via `config_sync_server()` when not ready.
@@ -507,7 +497,7 @@ The token is read from the following sources (highest precedence first):
 1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
 2. **`admin_token`** config field (a Secret-mounted config file).
 
-A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and survives reloads (re-merged by `Authorizer::apply`). When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
+A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and is installed at startup by `Authorizer::apply`. When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
 
 See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 

@@ -17,14 +17,9 @@ async fn make_test_state(tmp_dir: &std::path::Path) -> Arc<AdminState> {
             .expect("ConfMgr::create failed"),
     );
     let schema_validator = Arc::new(SchemaValidator::empty());
-    let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
-    let authorizer = std::sync::Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all()));
     Arc::new(AdminState {
         conf_mgr,
         schema_validator,
-        config_file: None,
-        authorizer,
-        center_reload_tx: tx,
     })
 }
 

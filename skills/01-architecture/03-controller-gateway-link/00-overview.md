@@ -58,17 +58,17 @@ startup and after a watch retry/reconnect; it does not resume from a Gateway-ret
 reconnects. `InitStart`/`InitAdd`/`InitDone` are Controller-side `ServerCache` construction events,
 not frames in the List RPC.
 
-### Controller reload flow
+### Controller resource-epoch replacement
 
 ```
-Controller reload:
+Controller resource-epoch replacement:
   1. Controller generates a new server_id
   2. Existing Watch detects the provider/server_id change and ends with reload metadata
   3. Gateway detects the server_id change
   4. Gateway re-runs List for all kinds (full re-sync)
 ```
 
-When Controller performs a reload (for example, reconnecting to the K8s API Server in K8s mode), it generates a new `server_id` and notifies all Gateway instances via the Watch stream. After receiving the error, Gateway triggers a full relist to ensure configuration consistency.
+When leadership transitions or terminal resource-controller failures replace the serving resource epoch, Controller generates a new `server_id` and notifies existing Gateway watchers. Gateway then performs a full relist. Ordinary Kubernetes relists retain the current epoch. A process restart also creates a new `server_id`; the disconnected Gateway reconnects and lists the current resources. There is no administrative full-reload API.
 
 ### server_id mismatch detection
 
@@ -81,14 +81,14 @@ List and Watch validate a non-empty `expected_server_id` and return gRPC
 | Concept | Type | Description |
 |------|------|------|
 | `sync_version` | `u64` | Globally monotonically increasing version number, generated via `utils::next_resource_version()`; a new value is allocated on every write operation |
-| `server_id` | `String` | Controller instance ID (millisecond timestamp), regenerated on every startup or reload |
+| `server_id` | `String` | Controller instance ID (millisecond timestamp), regenerated on startup and each serving resource-epoch replacement |
 | `from_version` | `u64` | The last sync version recorded on the Gateway side, used for Watch resumption |
 | `expected_server_id` | `String` | Carried by Gateway in List/Watch requests, used to detect Controller restarts |
 
 The version-tracking mechanism guarantees:
 - **Incremental sync**: Watch starts pushing events from after `from_version`, avoiding redundant transmissions
 - **Stale detection**: when `from_version` is too old (events have been overwritten in the ring buffer), a `TooOldVersion` error is returned, triggering a full re-sync
-- **Instance identification**: a `server_id` change indicates a Controller restart or reload, after which Gateway must re-sync in full
+- **Instance identification**: a `server_id` change indicates a Controller restart or resource-epoch replacement, after which Gateway must re-sync in full
 
 ## Resource change events
 

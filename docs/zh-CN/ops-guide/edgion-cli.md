@@ -37,7 +37,7 @@ edgion-cli [OPTIONS] <COMMAND>
 
 | Target | 组件 | 默认端口 | 支持的命令 | 说明 |
 |--------|------|----------|------------|------|
-| `center` | Controller/ConfCenter | 12101 | get, apply, delete, reload | 完整 CRUD 操作 |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete | 完整 CRUD 操作 |
 | `server` | Controller/ConfigServer | 12101 | get (只读) | 查看 ConfigServer 缓存 |
 | `client` | Gateway/ConfigClient | 12001 | get (只读) | 查看 Gateway 缓存 |
 
@@ -217,14 +217,6 @@ edgion-cli delete httproute my-route -n default
 edgion-cli delete -f route.yaml
 ```
 
-### reload - 重新加载
-
-从存储重新加载所有资源。**仅 center target 支持此命令。**
-
-```bash
-edgion-cli reload
-```
-
 ### gen-certs - 生成 mTLS 证书
 
 生成 conf_sync gRPC 通道 mTLS 所需的自签证书束。此命令不依赖运行中的 Controller 或 Gateway。
@@ -298,7 +290,7 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 
 1. 运行 `edgion-cli gen-token` 生成 Token。
 2. 将 SHA-256 行粘贴到 Controller 配置文件的 `cli_tokens[].token_sha256` 中。
-3. 热重载：`edgion-cli reload`（或 `POST /api/v1/reload`）。
+3. 重启使用此配置的每个 Controller 实例。
 4. 通过 Secret 管理器或环境变量将 `edg_...` Token 分发给消费方——切勿以明文存储于文件或 shell 历史记录中。
 5. 消费方通过 `--token edg_...` 或 `export EDGION_TOKEN=edg_...` 使用 Token。
 
@@ -397,7 +389,7 @@ Hint: edgion-cli is trying to connect to: http://localhost:12101
 
 1. **"apply command only supported for 'center' target"**
    
-   `apply`、`delete`、`reload` 命令只能在 `center` target 下使用。`server` 和 `client` target 仅支持只读操作。
+   `apply`、`delete` 命令只能在 `center` target 下使用。`server` 和 `client` target 仅支持只读操作。
 
 2. **资源未找到**
    

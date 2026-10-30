@@ -150,9 +150,6 @@ edgion-cli get httproute my-route -n default -o yaml
 edgion-cli delete httproute my-route -n default
 edgion-cli delete -f route.yaml
 
-# Reload
-edgion-cli reload
-
 # Inspect Gateway-side cache
 edgion-cli -t client --server http://localhost:12001 get httproute
 

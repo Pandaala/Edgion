@@ -15,9 +15,8 @@
 #       pushed via it reaches the gateway (spec §10 test 4). Budget: election
 #       (2x lease) + successor startup (Phase-1 stall + registry-ready) + one
 #       gateway rotation lap;
-#   (4) a controller RELOAD on the live leader does NOT rotate the gateway away
-#       (spec §10 test 6, §7.4 H2) — asserted by a config change landing after
-#       the reload AND by the gateway log showing no new rotation events.
+#   (4) the live Controller restarts while the Gateway process survives,
+#       reconnects to its new generation and receives another config change.
 #
 # SAN note (spec §7.6): both controllers share one cert set and both addresses
 # are 127.0.0.1 (different ports), so the localhost SAN covers both. A real
@@ -245,12 +244,14 @@ route_yaml route-three > "${FIXTURES}/route-three.yaml"
 # Start controllers; find the leader
 # ---------------------------------------------------------------------------
 log_section "Start controller-a and controller-b (etcd mode)"
-"$CONTROLLER_BIN" --config-file "${WORK_ROOT}/controller-a/config/edgion-controller.yaml" \
-    > "${WORK_ROOT}/controller-a/logs/stdout.log" 2> "${WORK_ROOT}/controller-a/logs/stderr.log" &
-A_PID=$!
-"$CONTROLLER_BIN" --config-file "${WORK_ROOT}/controller-b/config/edgion-controller.yaml" \
-    > "${WORK_ROOT}/controller-b/logs/stdout.log" 2> "${WORK_ROOT}/controller-b/logs/stderr.log" &
-B_PID=$!
+start_controller() {
+    local name="$1"
+    "$CONTROLLER_BIN" --config-file "${WORK_ROOT}/${name}/config/edgion-controller.yaml" \
+        >> "${WORK_ROOT}/${name}/logs/stdout.log" 2>> "${WORK_ROOT}/${name}/logs/stderr.log" &
+    if [[ "$name" == "controller-a" ]]; then A_PID=$!; else B_PID=$!; fi
+}
+start_controller controller-a
+start_controller controller-b
 
 LEADER=""
 for _ in $(seq 1 40); do
@@ -319,6 +320,7 @@ log_success "route-one synced to the gateway"
 FAILOVER_BUDGET=75
 log_section "(3) kill -9 the leader; gateway must follow the new leader (budget ${FAILOVER_BUDGET}s)"
 kill -9 "$LEADER_PID"
+wait "$LEADER_PID" 2>/dev/null || true
 if [[ "$LEADER" == "A" ]]; then A_PID=""; else B_PID=""; fi
 T0=$(date +%s)
 
@@ -350,53 +352,40 @@ TOOK=$(( $(date +%s) - T0 ))
 log_success "gateway followed the new leader and received route-two ${TOOK}s after kill -9 (< ${FAILOVER_BUDGET}s)"
 
 # ---------------------------------------------------------------------------
-# (4) a controller reload must NOT rotate the gateway away
+# (4) restart the active Controller and reconnect the existing Gateway
 # ---------------------------------------------------------------------------
-log_section "(4) leader reload does not rotate the gateway away"
-# Channel installation cancels the old generation and wakes the resource
-# watchers. Controller reload only sends switch_event on the same channel, so
-# these installation events must not increase. Keep the nonzero failover guard.
-# Tracing output goes to the file logger (console: false), not stdout.
-gw_installations() { cat "${GW_WD}"/logs/edgion-gateway*.log 2>/dev/null | grep -c "channel reinstalled" || true; }
-
-# Settle first: (3) proves config sync via the per-kind loops, but the meta
-# coordinator may still be finishing its own failover laps. Measuring the
-# reload against a still-rotating baseline would attribute failover tail
-# notifications to the reload. Wait until their count is stable for 10s.
-SETTLED=0
-STABLE_SINCE=$(date +%s)
-LAST_COUNT=$(gw_installations)
-for _ in $(seq 1 60); do
-    sleep 2
-    NOW_COUNT=$(gw_installations)
-    if [[ "$NOW_COUNT" != "$LAST_COUNT" ]]; then
-        LAST_COUNT=$NOW_COUNT
-        STABLE_SINCE=$(date +%s)
-    elif [[ $(( $(date +%s) - STABLE_SINCE )) -ge 10 ]]; then
-        SETTLED=1
-        break
-    fi
-done
-[[ "$SETTLED" -eq 1 ]] || { log_error "gateway channel installation events never settled after the failover (count still moving: ${LAST_COUNT})"; exit 1; }
-log_info "coordinator settled (${LAST_COUNT} channel installation notifications during failover)"
-
-INSTALLATIONS_BEFORE=$(gw_installations)
-# Sanity: the failover in (3) must have produced installation notifications —
-# if this is 0 the log path is wrong and the (4) assertion would be vacuous.
-[[ "${INSTALLATIONS_BEFORE:-0}" -ge 1 ]] \
-    || { log_error "expected >=1 channel installation notification during the failover, found ${INSTALLATIONS_BEFORE} (log path wrong?)"; exit 1; }
-RELOAD_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST \
-    -H "Authorization: Bearer ${EDGION_ADMIN_TOKEN}" "http://127.0.0.1:${STANDBY_ADMIN}/api/v1/reload")
-[[ "$RELOAD_CODE" == "200" || "$RELOAD_CODE" == "202" ]] \
-    || { log_error "reload on the live leader returned ${RELOAD_CODE}"; exit 1; }
-
-# Wait for the leader to come back (reload rebuilds the CSS; /ready may blip).
-RECOVERED=0
-for _ in $(seq 1 45); do
-    if [[ "$(ready_code "$STANDBY_PROBE")" == "200" ]]; then RECOVERED=1; break; fi
+log_section "(4) Controller-only restart reconnects the Gateway"
+controller_server_id() {
+    curl -fsS --max-time 3 -H "Authorization: Bearer ${EDGION_ADMIN_TOKEN}" \
+        "http://127.0.0.1:${STANDBY_ADMIN}/api/v1/server-info" 2>/dev/null \
+        | jq -r '.data.server_id // .server_id // "unknown"' || echo unknown
+}
+SERVER_ID_BEFORE=$(controller_server_id)
+[[ -n "$SERVER_ID_BEFORE" && "$SERVER_ID_BEFORE" != "unknown" ]] || { log_error "controller server_id unresolved"; exit 1; }
+if [[ "$STANDBY_NAME" == "controller-a" ]]; then ACTIVE_PID=$A_PID; else ACTIVE_PID=$B_PID; fi
+kill -TERM "$ACTIVE_PID"
+STOPPED=0
+for _ in $(seq 1 30); do
+    if ! kill -0 "$ACTIVE_PID" 2>/dev/null; then STOPPED=1; break; fi
     sleep 1
 done
-[[ "$RECOVERED" -eq 1 ]] || { log_error "leader did not become ready again after reload"; exit 1; }
+[[ "$STOPPED" -eq 1 ]] || { log_error "active Controller failed to stop; refusing overlapping restart"; exit 1; }
+wait "$ACTIVE_PID" 2>/dev/null || true
+start_controller "$STANDBY_NAME"
+RECOVERED=0
+for _ in $(seq 1 75); do
+    kill -0 "$GW_PID" 2>/dev/null || { log_error "Gateway exited during Controller restart"; exit 1; }
+    SERVER_ID_AFTER=$(controller_server_id)
+    GATEWAY_SERVER_ID=$(gw_api "/api/v1/server-info" | jq -r '.data.server_id // .server_id // "unknown"')
+    if [[ "$(ready_code "$STANDBY_PROBE")" == "200" && -n "$SERVER_ID_AFTER" \
+        && "$SERVER_ID_AFTER" != "unknown" && "$SERVER_ID_AFTER" != "$SERVER_ID_BEFORE" \
+        && "$SERVER_ID_AFTER" == "$GATEWAY_SERVER_ID" ]]; then
+        RECOVERED=1
+        break
+    fi
+    sleep 1
+done
+[[ "$RECOVERED" -eq 1 ]] || { log_error "Gateway did not reconnect to the restarted Controller"; exit 1; }
 
 apply_via "$STANDBY_ADMIN" "${FIXTURES}/route-three.yaml" > /dev/null
 SYNCED=0
@@ -405,16 +394,11 @@ for _ in $(seq 1 30); do
     [[ "$(echo "$RESP" | jq -r '.success')" == "true" ]] && { SYNCED=1; break; }
     sleep 1
 done
-[[ "$SYNCED" -eq 1 ]] || { log_error "route-three did not reach the gateway after the reload"; exit 1; }
+[[ "$SYNCED" -eq 1 ]] || { log_error "route-three did not reach the gateway after the restart"; exit 1; }
 
-INSTALLATIONS_AFTER=$(gw_installations)
-[[ "${INSTALLATIONS_AFTER:-0}" -eq "${INSTALLATIONS_BEFORE:-0}" ]] || {
-    log_error "the gateway rotated during a reload (before=${INSTALLATIONS_BEFORE} after=${INSTALLATIONS_AFTER}) — reload must be a same-address reconnect (spec §7.4 H2)"
-    exit 1
-}
 # The dead ex-leader must still be dead-and-not-leader (no flap back).
 [[ "$(ready_code "$LEADER_PROBE")" != "200" ]] || { log_error "killed ex-leader reports ready"; exit 1; }
-log_success "reload stayed on the same controller (installation notifications ${INSTALLATIONS_BEFORE:-0} -> ${INSTALLATIONS_AFTER:-0}); route-three synced"
+log_success "Gateway survived Controller restart, reconnected to the new generation, and synced route-three"
 
 log_section "All assertions passed"
 TEST_PASSED=1

@@ -97,7 +97,7 @@ pub struct KubernetesConfig {
     /// Deadline (seconds) for a started watcher set to reach CachesReady.
     /// Covers the readiness poll (internally budgeted at 30 s) plus the
     /// post-ready tail (WatchObj registration, cross-namespace revalidations,
-    /// leader-job start). Restart-bound: a reload re-arms the deadline but
+    /// leader-job start). Restart-bound: a recovery iteration re-arms the deadline but
     /// always with the boot-time value. Raise this when a single resource
     /// kind's count approaches the per-kind workqueue capacity (5000) —
     /// a too-small value is a permanent restart loop, which is why values

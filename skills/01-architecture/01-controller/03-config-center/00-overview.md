@@ -22,7 +22,7 @@ Trait composition:
 | Trait | Responsibility | Key methods |
 |-------|----------------|-------------|
 | `CenterApi` | CRUD operations | `set_one`, `create_one`, `update_one`, `delete_one`, `get_one`, `get_list_by_kind`, `get_list_by_kind_ns`, `cnt_by_kind`, `cnt_by_kind_ns`, `list_all` |
-| `CenterLifeCycle` | Lifecycle management | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `request_reload` |
+| `CenterLifeCycle` | Lifecycle management | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `leadership_status` |
 | `ConfCenter` | Full interface | `= CenterApi + CenterLifeCycle` (blanket impl: any type that implements both automatically gets `ConfCenter`) |
 
 `CenterApi` is implemented at the storage layer: `FileSystemStorage` (local file I/O), `KubernetesStorage` (K8s API calls), `EtcdStorage` (etcd KV I/O).
@@ -215,7 +215,7 @@ runtime.processor_registry
 | `is_all_ready()` | Check whether all caches are ready |
 | `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to finish initialization |
 | `all_watch_objs(no_sync)` | Collect WatchObjs for the ConfigSyncServer |
-| `ControllerRuntime::reset()` | Selectively reset processors and reload-scoped stores |
+| `ControllerRuntime::reset()` | Selectively reset processors and resource-epoch-scoped stores |
 
 ## Key Files
 

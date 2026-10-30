@@ -360,13 +360,6 @@ impl EdgionClient {
         let request = self.client.delete(&url);
         self.send_request(request, &url).await
     }
-
-    /// POST request - reload all resources (center target only)
-    pub async fn reload(&self) -> Result<Response> {
-        let url = self.build_url("/api/v1/reload");
-        let request = self.client.post(&url);
-        self.send_request(request, &url).await
-    }
 }
 
 /// Project an endpoint to its HTTP(S) origin without credentials or request data.

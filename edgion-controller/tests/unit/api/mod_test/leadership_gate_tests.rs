@@ -11,7 +11,7 @@ fn follower_rejects_business_paths_with_leader_addr() {
     for path in [
         "/api/v1/cluster/EdgionTls",
         "/api/v1/namespaced/HTTPRoute/default",
-        "/api/v1/reload",
+        "/api/v1/server-info",
         "/configserver/HTTPRoute/list",
     ] {
         let (code, body) = not_leader_rejection(&status, path).expect("business path must be rejected");
@@ -26,7 +26,7 @@ fn follower_without_known_leader_rejects_with_null_leader() {
     let status = LeadershipStatus::Follower {
         leader_admin_addr: None,
     };
-    let (code, body) = not_leader_rejection(&status, "/api/v1/reload").expect("rejected");
+    let (code, body) = not_leader_rejection(&status, "/api/v1/server-info").expect("rejected");
     assert_eq!(code, StatusCode::CONFLICT);
     assert!(body["leader"].is_null(), "unknown leader must serialize as null");
 }
@@ -47,7 +47,7 @@ fn follower_keeps_public_paths_open() {
 #[test]
 fn leader_and_not_applicable_pass_everything() {
     for status in [LeadershipStatus::Leader, LeadershipStatus::NotApplicable] {
-        assert!(not_leader_rejection(&status, "/api/v1/reload").is_none());
+        assert!(not_leader_rejection(&status, "/api/v1/server-info").is_none());
         assert!(not_leader_rejection(&status, "/api/v1/cluster/EdgionTls").is_none());
     }
 }
@@ -66,14 +66,20 @@ async fn gate_is_passthrough_when_not_applicable() {
     );
     assert_eq!(conf_mgr.leadership_status(), LeadershipStatus::NotApplicable);
 
-    let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
-    let router = create_admin_router(
-        conf_mgr,
-        Arc::new(SchemaValidator::empty()),
-        None,
-        Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all())),
-        tx,
-    );
+    let router = create_admin_router(conf_mgr, Arc::new(SchemaValidator::empty()));
+
+    let removed = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v1/reload")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), StatusCode::NOT_FOUND);
 
     let resp = router
         .oneshot(

@@ -294,7 +294,7 @@ async fn http_proxy_oversized_body_rejected_413() {
     let status = run_http_proxy(crate::fed_sync::proto::HttpProxyRequest {
         request_id: "t1".to_string(),
         method: "POST".to_string(),
-        path: "/api/v1/reload".to_string(),
+        path: "/api/v1/services/conf-sync-ca/rotate".to_string(),
         headers: Default::default(),
         body: vec![0u8; MAX_PROXY_REQUEST_BODY + 1],
     })
@@ -308,7 +308,7 @@ async fn http_proxy_invalid_method_rejected_400() {
     let status = run_http_proxy(crate::fed_sync::proto::HttpProxyRequest {
         request_id: "t2".to_string(),
         method: "BAD METHOD".to_string(),
-        path: "/api/v1/reload".to_string(),
+        path: "/api/v1/services/conf-sync-ca/rotate".to_string(),
         headers: Default::default(),
         body: Vec::new(),
     })
@@ -330,25 +330,28 @@ async fn http_proxy_disallowed_path_rejected_404() {
     assert_eq!(status, 404);
 }
 
-/// Reload now arrives as an ordinary proxied POST. The tunnel must let
-/// `POST /api/v1/reload` through the path allowlist, reach a registered
+/// Certificate rotation arrives as an ordinary proxied POST. The tunnel must let
+/// `POST /api/v1/services/conf-sync-ca/rotate` through the path allowlist, reach a registered
 /// handler, and carry that handler's body back.
 #[tokio::test]
-async fn http_proxy_reload_post_reaches_router() {
+async fn http_proxy_rotation_post_reaches_router() {
     let resp = run_http_proxy_with_router(
         crate::fed_sync::proto::HttpProxyRequest {
             request_id: "t4".to_string(),
             method: "POST".to_string(),
-            path: "/api/v1/reload".to_string(),
+            path: "/api/v1/services/conf-sync-ca/rotate".to_string(),
             headers: Default::default(),
             body: Vec::new(),
         },
-        axum::Router::new().route("/api/v1/reload", axum::routing::post(|| async { "reload-ok" })),
+        axum::Router::new().route(
+            "/api/v1/services/conf-sync-ca/rotate",
+            axum::routing::post(|| async { "rotate-ok" }),
+        ),
     )
     .await;
 
     assert_eq!(resp.status_code, 200);
-    assert_eq!(String::from_utf8(resp.body).expect("utf8"), "reload-ok");
+    assert_eq!(String::from_utf8(resp.body).expect("utf8"), "rotate-ok");
 }
 
 /// ARCH-082: successful forwarding must not create spelling-dependent metric series.
@@ -711,10 +714,10 @@ async fn shutdown_cancels_blocked_watch_send_without_draining() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn shutdown_cancels_blocked_reload_send_without_draining() {
+async fn shutdown_cancels_blocked_generation_change_send_without_draining() {
     let mut fixture = SessionFixture::new().await;
     let mut session = TestSession::new(fixture.manager.clone(), false);
-    session.watch("reload").await;
+    session.watch("generation-change").await;
     let producer = fixture.watches.recv().await.unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
@@ -726,7 +729,17 @@ async fn shutdown_cancels_blocked_reload_send_without_draining() {
     ));
     session.outbound.try_send(ControllerMessage { payload: None }).unwrap();
     let old_id = fixture.manager.config_sync_server().unwrap().server_id();
-    fixture.manager.request_reload().unwrap();
+    // Exercise a fresh lifecycle after orderly shutdown, not an administrative reload.
+    fixture.shutdown.shutdown();
+    tokio::time::timeout(Duration::from_secs(5), &mut fixture.lifecycle)
+        .await
+        .expect("old lifecycle drained")
+        .unwrap()
+        .unwrap();
+    fixture.shutdown = crate::conf_mgr::ShutdownHandle::new();
+    let manager = fixture.manager.clone();
+    let shutdown = fixture.shutdown.clone();
+    fixture.lifecycle = tokio::spawn(async move { manager.start_with_shutdown(shutdown).await });
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if fixture.manager.is_ready()
@@ -741,7 +754,7 @@ async fn shutdown_cancels_blocked_reload_send_without_draining() {
         }
     })
     .await
-    .expect("reload completes");
+    .expect("replacement lifecycle completes");
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(1)).await;
     for _ in 0..8 {
@@ -750,7 +763,7 @@ async fn shutdown_cancels_blocked_reload_send_without_draining() {
     session.stop_without_waiting().await;
     tokio::time::timeout(Duration::from_secs(2), producer.closed())
         .await
-        .expect("reload watch producer must release without draining outbound");
+        .expect("old generation watch producer must release without draining outbound");
     tokio::time::resume();
     session.descendants_released().await;
     assert!(session.receiver.try_recv().unwrap().payload.is_none());

@@ -6,7 +6,7 @@ Edgion has three distinct configuration surfaces. Decide which one you need to c
 
 | Surface | Carrier | Scope | How to Apply |
 |---------|---------|-------|--------------|
-| Controller process config | YAML file (`config/edgion-controller.yaml`) | Single Controller instance | Restart process (some sections hot-reload via `POST /api/v1/reload`) |
+| Controller process config | YAML file (`config/edgion-controller.yaml`) | Single Controller instance | Restart process |
 | Gateway process config | YAML file (`config/edgion-gateway.yaml`) | Single Gateway instance | Restart process |
 | Runtime config | `EdgionGatewayConfig` CRD (`edgion.io/v1alpha1`) | Entire GatewayClass | Takes effect dynamically (no restart) |
 

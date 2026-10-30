@@ -94,9 +94,7 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_controller_resources_watched | Gauge | controller | kind | self | Resources currently watched, per kind | - |
 | edgion_controller_leader | Gauge | controller | none | self | Leader election status: 1 = leader, 0 = standby | - |
 | edgion_controller_leader_transitions_total | Counter | controller | none | self | Total leadership transitions (elected or demoted) — a double-leader bug or flapping election is invisible on the boolean gauge and obvious in this rate | - |
-| edgion_controller_reload_total | Counter | controller | none | self | Total reload operations triggered | - |
-| edgion_controller_reload_duration_seconds_last | Gauge | controller | none | self | Duration of the last reload | - |
-| edgion_controller_reload_client_notifications_total | Counter | controller | none | self | Client (Gateway) notifications sent for a reload | - |
+| edgion_controller_reload_client_notifications_total | Counter | controller | none | self | Client (Gateway) notifications sent for a ConfigSyncServer generation change | - |
 | edgion_controller_status_writes_total | Counter | controller | kind, backend (kubernetes/filesystem), result (success/error) | self | Status writes attempted by the Controller. Steady state is flat (writes are gated by a status_changed diff) | `{result="error"}` sustained (SSA 409 conflict loop) |
 | edgion_controller_status_writes_skipped_total | Counter | controller | kind | self | Status writes skipped because a semantic diff detected no meaningful change | - |
 | edgion_controller_status_conditions_max | Gauge | controller | kind, namespace, name | self | Largest single `.status.conditions` array length on a resource, hand-rendered off the resource_abnormal snapshot. Emitted ONLY for resources at/above `metrics.resource_abnormal.status_conditions_threshold` (default 20), so healthy fleets emit nothing — a bloated array is a status-write loop or cross-controller condition pollution | `edgion_controller_status_conditions_max > 0` |
