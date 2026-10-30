@@ -1,5 +1,72 @@
 use super::*;
 
+#[tokio::test]
+async fn rejected_root_renewal_stops_before_leaf_publication() {
+    use crate::services::conf_sync_ca::{build_secret, Ca, CA_SECRET};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    for status in [404, 409, 422] {
+        let root = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let mut source = build_secret(
+            CA_SECRET,
+            "test",
+            BTreeMap::from([
+                ("ca.crt".into(), root.ca_cert_pem().as_bytes().to_vec()),
+                ("ca.key".into(), root.ca_key_pem().as_bytes().to_vec()),
+            ]),
+        );
+        source.metadata.uid = Some("old-root".into());
+        source.metadata.resource_version = Some("10".into());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = calls.clone();
+        let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let step = captured.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(
+                request.uri().path(),
+                format!("/api/v1/namespaces/test/secrets/{CA_SECRET}"),
+                "rejected root renewal must never write the leaf Secret"
+            );
+            let (code, response) = match step {
+                0 => {
+                    assert_eq!(request.method(), http::Method::GET);
+                    (200, serde_json::to_value(&source).unwrap())
+                }
+                1 => {
+                    assert_eq!(request.method(), http::Method::PATCH);
+                    (
+                        status,
+                        serde_json::json!({"apiVersion":"v1", "kind":"Status",
+                        "status":"Failure", "code":status, "reason":"Rejected", "message":"source changed"}),
+                    )
+                }
+                _ => panic!("unexpected request after renewal rejection"),
+            };
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    http::Response::builder()
+                        .status(code)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(kube::client::Body::from(serde_json::to_vec(&response).unwrap()))
+                        .unwrap(),
+                )
+            }
+        });
+        let api = Api::namespaced(Client::new(transport, "test"), "test");
+        let params = Params {
+            ns: "test".into(),
+            sans: vec!["localhost".into()],
+            rotation: ConfSyncRotationConfig::default(),
+        };
+        let error = rotate(&api, &params, RotateScope::Ca, "test", current_generation())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "conditionally renew CA secret");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+}
+
 // ================================================================
 // decide_trigger — full 2^3 truth table (8 cases → 4 outcomes)
 // ================================================================
@@ -237,7 +304,7 @@ fn out_of_sync_reason_table() {
     )
     .is_none());
 
-    // ARM 3 — TORN WRITE: `write_ca` landed (root is now the renewed cert) but
+    // ARM 3 — TORN WRITE: `renew_ca` landed (root is now the renewed cert) but
     // `write_leaf` did not, so the leaf Secret still carries the OLD ca.crt. Both
     // leaves still chain (same key!), the CA was just renewed so `ca_renewal_due`
     // is false, and the policy is not due — arms 1/2 see nothing. Arm 3 is the

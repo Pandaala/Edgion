@@ -166,6 +166,12 @@ credentials) to the data plane, so its transport must be chosen explicitly.
 
 #### [conf_sync_security.certs]
 
+With Kubernetes `auto_ca`, routine CA renewal keeps the same private key and does
+not revoke existing client certificates. Emergency root replacement requires a
+new key. An in-flight renewal cannot restore a deleted CA Secret or overwrite a
+replacement generation. Allow replicas to converge and verify that old client
+certificates are rejected before treating revocation as complete.
+
 `certs` is a list of certificate sets. `active` selects an entry by `name`; it may be
 omitted when exactly one entry exists. Duplicate names and unmatched selectors are
 rejected. Replace any old singular `tls` block with a `certs` entry.

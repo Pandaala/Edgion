@@ -23,6 +23,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [CA renewal binds its source Secret generation](regression-guards/ca-renewal-source-generation.md)
+
 - [Installed certificate expiry and shared validity](regression-guards/installed-certificate-expiry.md)
 
 - [Bounded List and Watch payload compression](regression-guards/bounded-payload-compression.md)

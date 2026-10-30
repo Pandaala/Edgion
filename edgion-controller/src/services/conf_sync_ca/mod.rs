@@ -11,4 +11,4 @@ mod secret_io;
 pub use ca::{Ca, LeafPem};
 pub use identity_sync::start_identity_sync;
 pub use provision::{leaf_needs_rewrite, provision, server_sans_for, ServerIdentityPem};
-pub use secret_io::{build_secret, ensure_ca, load_ca, read_leaf, write_ca, write_leaf, CA_SECRET, LEAF_SECRET};
+pub use secret_io::{build_secret, ensure_ca, load_ca, read_leaf, write_leaf, CA_SECRET, LEAF_SECRET};

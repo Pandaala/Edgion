@@ -193,6 +193,12 @@ a pod. The leader-only CA bootstrap is split-brain-safe by construction: `ensure
 POST-creates and adopts on a 409, so two replicas racing at cold start converge on one
 root.
 
+Root renewal reads the CA Secret and submits a Merge patch carrying that same
+Secret's UID and resourceVersion. Missing or changed source generations reject
+the rotation before leaf publication; a later tick rereads current state. Unlike
+SSA, this patch cannot recreate a root deleted for emergency re-key. See the
+[renewal regression guard](../../04-review/conf-sync/regression-guards/ca-renewal-source-generation.md).
+
 Per-replica identity sync retains the installed identity before its CA GET
 (ARCH-130). After signing and validating outside the publication lock, it installs
 only if that same retained identity still owns the slot. The comparison and

@@ -463,6 +463,12 @@ division of labor — do not page on everything just because a signal exists:
 still verify against it. A full root **re-key** (new key pair, not just a new
 window) is the only true revocation.
 
+An in-flight renewal cannot restore a deleted root or overwrite a replacement
+generation: renewal is conditional on the source Secret's UID/resourceVersion.
+A rejected renewal stops before publishing leaves and the reconciler retries
+from current state on a later tick. Revocation still requires replica convergence
+and the negative checks below; deleting Secrets is not instantaneous revocation.
+
 - **Kubernetes auto-CA procedure** — use the script. It performs the steps below and then
   asserts the post-conditions, proving **both halves** of a revocation — that the NEW root
   works everywhere, *and* that the OLD key no longer does — on **every controller and

@@ -32,7 +32,8 @@ use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity}
 use crate::services::conf_sync_ca::cert_util::{
     ca_renewal_due, last_firing, parse_cert_window, rotation_due, PolicyInputs, RotationDecision,
 };
-use crate::services::conf_sync_ca::{ensure_ca, read_leaf, write_ca, write_leaf};
+use crate::services::conf_sync_ca::secret_io::renew_ca;
+use crate::services::conf_sync_ca::{ensure_ca, read_leaf, write_leaf};
 
 // ============================================================================
 // Public surface (Task 11 consumes these — exact names matter)
@@ -391,7 +392,7 @@ async fn run(mut rx: mpsc::Receiver<RotateScope>, client: Client, generation: u6
 /// 2. this replica's served server identity does not chain to the current root,
 /// 3. the leaf Secret's OWN `ca.crt` is not the current root cert. This is the
 ///    torn-write repair arm: a CA renewal writes the CA Secret
-///    (`write_ca`) and then the leaf Secret (`write_leaf`); a crash in between
+///    (`renew_ca`) and then the leaf Secret (`write_leaf`); a crash in between
 ///    leaves the gateway's mounted trust anchor permanently stale. Nothing else
 ///    catches it — `ca_renewal_due` is false (the root was just renewed), arms 1
 ///    and 2 are false (a same-key renewal keeps old leaves chaining), and the
@@ -444,7 +445,7 @@ async fn check_and_rotate(
     // Fresh GET every tick — NO caching (spec §6 T2). Missing/unparsable leaf =
     // immediately due. ALL THREE Secret fields are kept: the key and the Secret's
     // own ca.crt feed the extra `out_of_sync_reason` arms below (a torn
-    // write_ca/write_leaf pair, or a key that does not match its cert, is
+    // renew_ca/write_leaf pair, or a key that does not match its cert, is
     // otherwise invisible to every other check).
     let (client_leaf_pem, client_key_pem, leaf_secret_ca_pem, client_leaf) = match read_leaf(secret_api).await? {
         Some((cert, key, secret_ca)) => match parse_cert_window(&cert) {
@@ -479,8 +480,8 @@ async fn check_and_rotate(
 
     // `ensure_ca` runs ONCE after the handle-ready check: honors an out-of-band
     // BYO-root replacement, and its result feeds both the chain-consistency
-    // check below and the CA-renewal due-check at the end. `rotate()` still
-    // re-reads it internally for its own consistency window.
+    // check below and the CA-renewal due-check at the end. `rotate()` reads a
+    // fresh root through ensure_ca (leaf) or conditional renew_ca (root).
     let ca = ensure_ca(secret_api, &p.ns, p.rotation.ca_ttl.as_time()).await?;
 
     // Trust-root chain-consistency self-heal: leader failover after an emergency
@@ -554,9 +555,9 @@ async fn check_and_rotate(
     Ok(())
 }
 
-/// Perform a rotation. Re-reads `ensure_ca` on EVERY call (spec §6 T2: honors an
-/// out-of-band BYO-root replacement). For `RotateScope::Ca`, renews the root
-/// (same key, new window) and persists it FIRST, then rotates both leaves.
+/// Perform a rotation against a freshly read root. Leaf rotation uses `ensure_ca`;
+/// CA renewal uses `renew_ca` to condition persistence on the source generation.
+/// Only successful root persistence permits subsequent leaf publication.
 ///
 /// Order: gateway leaf Secret write FIRST (the more-widely-consumed artifact),
 /// then the in-process server identity store.
@@ -574,14 +575,13 @@ async fn rotate(secret_api: &Api<Secret>, p: &Params, scope: RotateScope, reason
         return Ok(());
     }
 
-    let mut ca = ensure_ca(secret_api, &p.ns, p.rotation.ca_ttl.as_time()).await?;
-
-    if matches!(scope, RotateScope::Ca) {
-        ca = ca.renew_root_same_key(p.rotation.ca_ttl.as_time())?;
-        // Persist renewed root (same key, new cert) — MUST preserve ca.key.
-        write_ca(secret_api, &p.ns, &ca).await?;
+    let ca = if matches!(scope, RotateScope::Ca) {
+        let ca = renew_ca(secret_api, p.rotation.ca_ttl.as_time()).await?;
         tracing::info!(component = "conf_sync_ca", "conf_sync_ca_renewed");
-    }
+        ca
+    } else {
+        ensure_ca(secret_api, &p.ns, p.rotation.ca_ttl.as_time()).await?
+    };
 
     // Client leaf → Secret FIRST.
     let client_leaf = ca.sign_client(p.rotation.leaf_ttl.as_time())?;

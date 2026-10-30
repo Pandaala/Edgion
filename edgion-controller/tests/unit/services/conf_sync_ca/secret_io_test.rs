@@ -2,8 +2,8 @@ use super::*;
 use std::collections::BTreeMap;
 
 /// Regression (found in cluster verification): an unforced apply 409s against
-/// the POST-created CA Secret, wedging CA renewal forever. Both Secrets this
-/// module writes must be force-applied.
+/// the POST-created CA Secret, wedging CA renewal forever. Remaining SSA writes
+/// must stay forced; root renewal now uses a conditional Merge patch.
 #[test]
 fn apply_params_force_and_field_manager() {
     let pp = apply_params();
@@ -56,4 +56,104 @@ fn build_secret_sets_name_ns_label_and_data() {
     assert!(s.metadata.labels.as_ref().unwrap().contains_key("edgion.io/managed-by"));
     assert!(s.data.as_ref().unwrap().contains_key("ca.crt"));
     assert_eq!(s.type_.as_deref(), Some("Opaque"));
+}
+
+/// Exercise the actual kube client wire contract. The transport supplies API
+/// outcomes; it does not substitute for Kubernetes storage integration coverage.
+#[tokio::test]
+async fn renewal_binds_source_and_propagates_rejection() {
+    for status in [200, 404, 409, 422, 500] {
+        let original = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let mut source = build_secret(CA_SECRET, "test", ca_secret_data(&original));
+        source.metadata.uid = Some("root-generation-0".into());
+        source.metadata.resource_version = Some("123".into());
+        let expected_data = source.data.clone().unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let captured_calls = calls.clone();
+        let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let source = source.clone();
+            let expected_data = expected_data.clone();
+            let call = captured_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                assert_eq!(
+                    request.uri().path(),
+                    format!("/api/v1/namespaces/test/secrets/{CA_SECRET}")
+                );
+                let (code, response) = if call == 0 {
+                    assert_eq!(request.method(), http::Method::GET);
+                    (200, serde_json::to_value(source).unwrap())
+                } else {
+                    assert_eq!(call, 1, "a failed candidate must not be retried or publish leaves");
+                    assert_eq!(request.method(), http::Method::PATCH);
+                    assert_eq!(
+                        request.headers()[http::header::CONTENT_TYPE],
+                        "application/merge-patch+json"
+                    );
+                    let bytes = request.into_body().collect_bytes().await.unwrap();
+                    let patch: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(patch["metadata"]["uid"], "root-generation-0");
+                    assert_eq!(patch["metadata"]["resourceVersion"], "123");
+                    let data: BTreeMap<String, ByteString> = serde_json::from_value(patch["data"].clone()).unwrap();
+                    assert_eq!(data["ca.key"], expected_data["ca.key"]);
+                    assert_ne!(data["ca.crt"], expected_data["ca.crt"]);
+                    if status == 200 {
+                        let mut updated = source;
+                        updated.data = Some(data);
+                        (200, serde_json::to_value(updated).unwrap())
+                    } else {
+                        (
+                            status,
+                            serde_json::json!({
+                                "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                                "code": status, "reason": "Rejected", "message": "renewal rejected"
+                            }),
+                        )
+                    }
+                };
+                Ok::<_, std::convert::Infallible>(
+                    http::Response::builder()
+                        .status(code)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(kube::client::Body::from(serde_json::to_vec(&response).unwrap()))
+                        .unwrap(),
+                )
+            }
+        });
+        let api = Api::namespaced(kube::Client::new(transport, "test"), "test");
+        let result = renew_ca(&api, time::Duration::days(365)).await;
+        assert_eq!(result.is_ok(), status == 200);
+        if let Ok(renewed) = result {
+            assert_eq!(renewed.ca_key_pem(), original.ca_key_pem());
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+}
+
+#[tokio::test]
+async fn renewal_rejects_missing_source_identity_without_writing() {
+    for missing in ["uid", "resourceVersion"] {
+        let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let mut source = build_secret(CA_SECRET, "test", ca_secret_data(&ca));
+        source.metadata.uid = (missing != "uid").then(|| "root-0".into());
+        source.metadata.resource_version = (missing != "resourceVersion").then(|| "123".into());
+        let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            assert_eq!(
+                request.method(),
+                http::Method::GET,
+                "must not write without source identity"
+            );
+            let response = serde_json::to_vec(&source).unwrap();
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    http::Response::builder()
+                        .status(200)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(kube::client::Body::from(response))
+                        .unwrap(),
+                )
+            }
+        });
+        let api = Api::namespaced(kube::Client::new(transport, "test"), "test");
+        assert!(renew_ca(&api, time::Duration::days(365)).await.is_err());
+    }
 }
