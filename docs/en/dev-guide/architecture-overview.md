@@ -96,6 +96,11 @@ The current gateway-side processing model is:
    - backend selection and load balancing
    - access logging
 
+An initially empty resource kind can return List version `0`. Watch uses that
+version normally. If changes after the snapshot have already been evicted from
+the Controller's bounded event history, Watch returns `TooOldVersion` and the
+Gateway automatically repeats List to recover the complete current resource set.
+
 ## Practical Debugging Entry Points
 
 - Controller CRUD and server cache:

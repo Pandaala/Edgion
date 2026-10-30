@@ -239,7 +239,7 @@ impl<T: Clone> EventStore<T> {
             return Ok((self.sync_version, None));
         }
 
-        if from_version != 0 && from_version < self.expire_sync_version {
+        if from_version < self.expire_sync_version {
             return Err(WATCH_ERR_TOO_OLD_VERSION.to_owned());
         }
 

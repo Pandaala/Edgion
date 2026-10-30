@@ -610,7 +610,10 @@ impl RedisRateLimiter {
     /// retries are no-ops; stale revisions are ignored. A final update may lower
     /// the target, making authoritative reconciliation a signed correction.
     ///
-    /// `bucket_ttl` is the remaining window lifetime plus cleanup grace.
+    /// `bucket_ttl` is the minimum aggregate retention requested by this update;
+    /// it must cover the remaining window plus cleanup grace and `marker_ttl`.
+    /// Updates preserve a longer existing bucket TTL so another request's final
+    /// settlement cannot expire charges still referenced by an active marker.
     /// `marker_ttl` bounds idempotency and must cover the maximum request
     /// duration plus retry grace. A retry after marker expiry is a new charge.
     #[allow(clippy::too_many_arguments)]
