@@ -1,0 +1,9 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: dns-flap-egc
+spec:
+  dnsResolver:
+    cacheTtl: 5m
+  securityProtect:
+    allowLoopbackUpstream: true

@@ -229,3 +229,23 @@ async fn owned_reset_paths_exist_in_both_tracked_topologies_and_preserve_phase_o
         assert!(!value["stringData"]["password"].as_str().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn dns_family_scenario_restores_all_owners_after_any_transition_or_reset_failure() {
+    let scenario = crate::dynamic::scenarios::dns_resolution_flap::SCENARIO;
+    let root = fixture_root(false);
+    let (result, baseline) = execute(scenario, &root, &[]).await;
+    result.unwrap();
+    let start = baseline.len() - 5;
+    let resets = &baseline[start..start + 4];
+    for failure in 0..baseline.len() {
+        let (result, calls) = execute(scenario, &root, &[failure]).await;
+        assert!(result.is_err());
+        let cleanup = if failure < start { failure + 1 } else { start };
+        assert_eq!(&calls[cleanup..cleanup + 4], resets, "failure at {failure}");
+    }
+    let (result, calls) = execute(scenario, &root, &[0, 1]).await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("injected operation 0") && error.contains("injected operation 1"));
+    assert_eq!(&calls[1..5], resets);
+}

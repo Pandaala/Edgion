@@ -180,3 +180,30 @@ EGC typed object references do not inherit the annotation string grammar. Its
 minimum raw-key winner remains authoritative even if its owner/reference is
 invalid; no later EGC or same-config inline fallback replaces that configured
 reference. Independent inline-only values and TTL remain outside reference checks.
+
+## Backend address-family completeness
+
+ISSUE-008 requires complete family-aware answers before treating a disappeared
+family as authoritative. PreparedQuery compiles response interpretation, custom
+`{recordType}` capability and the primary timeout at generation preparation.
+Typed All queries issue A then AAAA under one primary deadline and release each
+raw body before the next fetch. Empty typed containers are completed absence;
+malformed values, missing/wrong containers and wrong-family values fail the whole
+primary query. One nonempty plus one completed empty family succeeds; both empty
+fail. Built-in presets without custom URLs have no verified IPv6 query contract
+and use fallback for IPv6/All. Custom URLs without the token are operator-declared
+complete combined answers, without independent wire-family proof.
+
+Family-aware parsing canonicalizes and deduplicates, rejecting more than 256
+unique addresses before filtering or after typed-answer merging. Prefix truncation
+cannot publish false family absence. Infrastructure Native queries retain their
+existing permissive/truncated parsing and transport timeout semantics. Fallback
+runs once for the logical query with the same family policy; bootstrap remains
+Native System DNS. Family changes do not rebuild a prepared transport or retain
+extra TLS material. No new query-path tracing or background tasks are introduced.
+
+Fresh focused verification: Common DNS 76 unit tests, Resources family 2 unit
+tests and HTTPDNS/Standard transport 18 tests passed during initial implementation,
+including NODATA versus SERVFAIL and shared primary deadline. Further tests and
+full integration validation are separate gates; historical results elsewhere on
+this page are not evidence for the new family contract.

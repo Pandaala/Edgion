@@ -596,3 +596,17 @@ For the full `center.rbac` model, default policy, and security notes, see [Feder
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
 - [Working Directory Behavior](../../dev-guide/work-directory.md)
 - [Federation RBAC](../federation-rbac.md)
+
+## ExternalName DNS family default
+
+```yaml
+dns_resolver:
+  lookup_family: ipv4Only
+```
+
+`lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all`. It controls
+Controller-owned ExternalName EndpointSlice publication and requires a Controller
+restart to change. A Service `edgion.io/dns-lookup-family` annotation overrides it
+live. Gateway/EGC defaults do not alter this publication. Narrowing withdraws
+forbidden owned family slices even during DNS failure; errors never justify
+continuing to serve a forbidden family. See the [backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).

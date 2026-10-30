@@ -40,6 +40,7 @@ fn test_gateway_index_for(
                 None,
                 Vec::new(),
                 None,
+                None,
             )),
             gateway_proof: proof,
             hostname: hostname.map(str::to_string),

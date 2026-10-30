@@ -21,7 +21,7 @@ use crate::plugins::http::common::outbound::egress::{default_block_private, filt
 use crate::routes::http::proxy_http::{backfill_upstream_addr, configure_peer_timeouts, EdgionHttpProxy};
 use crate::{end_response_500, end_response_503, EdgionHttpContext, PeerTimeoutSource};
 use bytes::Bytes;
-use edgion_common::dns::resolve;
+use edgion_common::dns::{resolve, DnsQueryPolicy};
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -254,8 +254,9 @@ async fn resolve_ai_endpoint(
     domain: &str,
     port: u16,
 ) -> Result<std::net::SocketAddr, AiPeerPredispatchFailure> {
-    let spec = crate::backends::compute_routed_external_resolver(ctx);
-    let addrs = resolve(&spec, domain)
+    let (spec, family) =
+        crate::backends::compute_routed_external_resolver(ctx).map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
+    let addrs = resolve(&spec, domain, DnsQueryPolicy::Family(family))
         .await
         .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
     filter_resolved_addrs(

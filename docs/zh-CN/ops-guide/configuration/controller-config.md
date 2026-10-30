@@ -561,3 +561,15 @@ gateway:
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
 - [工作目录行为](../../dev-guide/work-directory.md)
 - [联邦 RBAC](../federation-rbac.md)
+
+## ExternalName DNS 地址族默认值
+
+```yaml
+dns_resolver:
+  lookup_family: ipv4Only
+```
+
+可选值为 `ipv4Only`（默认）、`ipv6Only`、`all`。该进程配置控制 Controller 发布的
+ExternalName EndpointSlice，修改后需要重启。Service 的 `edgion.io/dns-lookup-family`
+注解可热更新覆盖；Gateway/EGC 默认值不改变 Controller 发布策略。收窄策略时，即使
+DNS 解析失败也会撤下禁止的地址族。`all` 不启用连接竞速，IPv6 需要可用的上游网络。

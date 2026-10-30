@@ -3,7 +3,7 @@
 //! This model defines the EdgionGatewayConfig custom resource, which is used
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
-use super::common::Condition;
+use super::common::{Condition, DnsLookupFamily};
 use super::edgion_plugins::plugin_configs::LinkSysRef;
 use super::edgion_plugins::{LogExtSource, RealIpConfig};
 use super::plugin_policy::PluginPolicyConfig;
@@ -131,6 +131,9 @@ pub struct GatewayWafConfig {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DnsResolverConfig {
+    /// Backend DNS address families; independent of resolver selection.
+    #[serde(default)]
+    pub lookup_family: DnsLookupFamily,
     /// httpdns LinkSys reference (`namespace` + `name`). Namespace is required
     /// because EdgionGatewayConfig is cluster-scoped.
     #[serde(default, skip_serializing_if = "Option::is_none")]

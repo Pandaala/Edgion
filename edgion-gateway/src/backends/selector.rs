@@ -253,6 +253,10 @@ impl CapturedServiceSelection {
         self.available.dns_resolution_mode
     }
 
+    pub(crate) fn dns_lookup_family(&self) -> Option<Result<edgion_common::dns::DnsLookupFamily, &'static str>> {
+        self.available.dns_lookup_family
+    }
+
     pub(crate) fn source(&self) -> &Service {
         &self.available.raw.service
     }

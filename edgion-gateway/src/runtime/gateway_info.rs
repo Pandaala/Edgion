@@ -7,6 +7,7 @@
 use crate::observe::metrics::TestType;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use edgion_common::dns::resolver_select::ResolverCandidate;
+use edgion_common::dns::DnsLookupFamily;
 use std::fmt;
 
 /// Gateway information for route matching context
@@ -53,6 +54,8 @@ pub struct GatewayInfo {
     /// (Service → Gateway → EGC → system) when self-resolving an `ExternalName`
     /// backend. `None` when the Gateway sets neither annotation.
     pub dns_resolver_candidate: Option<ResolverCandidate>,
+    /// Cold-parsed override: absence inherits; invalid values fail DNS resolution.
+    pub dns_lookup_family: Option<Result<DnsLookupFamily, &'static str>>,
 }
 
 impl GatewayInfo {
@@ -67,6 +70,7 @@ impl GatewayInfo {
         require_sni_host_match: Option<bool>,
         plugin_store_keys: Vec<String>,
         dns_resolver_candidate: Option<ResolverCandidate>,
+        dns_lookup_family: Option<Result<DnsLookupFamily, &'static str>>,
     ) -> Self {
         let gateway_key = format_gateway_key(namespace.as_deref().unwrap_or(""), &name);
         Self {
@@ -79,6 +83,7 @@ impl GatewayInfo {
             require_sni_host_match,
             plugin_store_keys,
             dns_resolver_candidate,
+            dns_lookup_family,
         }
     }
 

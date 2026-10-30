@@ -488,3 +488,22 @@ spec:
 - [Gateway Configuration](./gateway-config.md)
 - [GatewayClass Configuration](../gateway/gateway-class.md)
 - [Preflight Policy](../gateway/preflight-policy.md)
+
+## Backend DNS family default
+
+```yaml
+spec:
+  dnsResolver:
+    lookupFamily: ipv4Only
+    cacheTtl: 5s
+```
+
+`lookupFamily` accepts `ipv4Only` (default), `ipv6Only`, or `all`. It may be set
+without `servers` or `linkSysRef`. The existing selected global EGC owner publishes
+this setting live together with its resolver candidate and TTL. Service then
+Gateway annotations override it independently of resolver choice. AI external
+hostnames use the Gateway override, then this default. Controller-owned slices use
+the Controller/Service policy instead; no connection racing is introduced.
+See the [backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).
+
+The DNS default owner is the existing deterministic minimum store-key winner across EGC resources defining DNS settings, not the current GatewayClass alone. A family-only DNS block participates in that selection.

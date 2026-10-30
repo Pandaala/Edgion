@@ -22,6 +22,7 @@ use crate::observe::metrics::TestType;
 use crate::runtime::matching::route::hostname_matches_listener;
 use arc_swap::ArcSwap;
 use edgion_common::dns::resolver_select::candidate_from_dns_owner;
+use edgion_common::dns::DnsLookupFamily;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
@@ -251,6 +252,19 @@ pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, L
     // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
     // self-resolution path reads it off GatewayInfo without re-parsing.
     let dns_resolver_candidate = candidate_from_dns_owner(DnsResolverOwner::Gateway(gateway));
+    let dns_lookup_family = DnsLookupFamily::from_annotation(
+        gateway
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|values| values.get(annotations::DNS_LOOKUP_FAMILY))
+            .map(String::as_str),
+    )
+    .transpose();
+    if let Some(Err(error)) = dns_lookup_family {
+        tracing::warn!(component = "listener_gateway_info", gateway = %gateway_name, error,
+            "Invalid DNS family annotation; affected DNS queries will fail");
+    }
 
     for listener in listeners {
         if gateway_listener_is_explicitly_ineligible(gateway, &listener.name) {
@@ -268,6 +282,7 @@ pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, L
             require_sni_host_match,
             plugin_store_keys.clone(),
             dns_resolver_candidate.clone(),
+            dns_lookup_family,
         ));
 
         let entry = ListenerEntry {

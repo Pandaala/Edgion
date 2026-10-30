@@ -374,6 +374,7 @@ fn id_gateway(keys: &[&str]) -> Arc<crate::runtime::GatewayInfo> {
         None,
         keys.iter().map(|key| (*key).to_owned()).collect(),
         None,
+        None,
     ))
 }
 
@@ -501,6 +502,7 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
         None,
         None,
         Vec::new(),
+        None,
         None,
     )));
     assert!(
@@ -785,6 +787,7 @@ async fn shared_listener_captures_owner_policy_before_owner_is_selected() {
         None,
         None,
         Vec::new(),
+        None,
         None,
     )));
     assert!(

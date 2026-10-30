@@ -1,4 +1,69 @@
 use super::*;
+
+#[test]
+fn external_name_family_publication_retires_disallowed_slots_and_preserves_cluster_ip() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let mut source = (*service(Some("service"), IntOrString::Int(8080))).clone();
+    source.spec.as_mut().unwrap().type_ = Some("ExternalName".into());
+    source.spec.as_mut().unwrap().external_name = Some("backend.test".into());
+    let v4 = slice("v4", Some("v4"), true);
+    let mut v6 = (*slice("v6", Some("v6"), true)).clone();
+    v6.address_type = "IPv6".into();
+    v6.endpoints[0].addresses = vec!["2001:db8::1".into()];
+    coordinator.replace_endpoint_slices(&HashMap::from([
+        ("default/v4".into(), v4),
+        ("default/v6".into(), Arc::new(v6)),
+    ]));
+    for (annotation, expected) in [
+        (None, 2),
+        (Some("ipv4Only"), 1),
+        (Some("ipv6Only"), 1),
+        (Some("all"), 2),
+        (Some(""), 0),
+        (Some("typo"), 0),
+    ] {
+        source.metadata.annotations =
+            annotation.map(|value| BTreeMap::from([(DNS_LOOKUP_FAMILY.into(), value.into())]));
+        coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(source.clone()))]));
+        let generation = coordinator.load_generation();
+        let published = generation.available("default/backend").unwrap();
+        let section = published
+            .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+            .unwrap();
+        assert_eq!(section.all_slots.len(), expected, "{annotation:?}");
+        assert_eq!(section.ready_slots.len(), expected);
+        if let Some(family) = annotation
+            .and_then(|value| DnsLookupFamily::from_annotation(Some(value)).ok())
+            .flatten()
+        {
+            assert!(section
+                .all_slots
+                .iter()
+                .all(|slot| family.allows(slot.backend.addr.as_inet().unwrap().ip())));
+        }
+        if expected == 0 {
+            assert!(section
+                .direct_endpoint_addr("10.0.0.1".parse().unwrap(), Some(8080))
+                .is_none());
+            assert!(section
+                .direct_endpoint_addr("2001:db8::1".parse().unwrap(), Some(8080))
+                .is_none());
+        }
+    }
+    source.spec.as_mut().unwrap().type_ = Some("ClusterIP".into());
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(source))]));
+    let generation = coordinator.load_generation();
+    let section = generation
+        .available("default/backend")
+        .unwrap()
+        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+        .unwrap();
+    assert_eq!(
+        section.all_slots.len(),
+        2,
+        "ordinary Services ignore DNS-family annotations"
+    );
+}
 use crate::backends::outlier_detection::{FailureClass, OutlierDetectionStore};
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
 use k8s_openapi::api::core::v1::ServiceSpec;

@@ -1,6 +1,9 @@
 use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
-use edgion_resources::constants::annotations::edgion::{DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF};
+use edgion_common::dns::DnsLookupFamily;
+use edgion_resources::constants::annotations::edgion::{
+    DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF,
+};
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
 use k8s_openapi::api::core::v1::{Service, ServicePort};
 use k8s_openapi::api::discovery::v1::{EndpointPort, EndpointSlice};
@@ -181,6 +184,7 @@ pub struct LegacyRawProjection {
 pub struct AvailableServiceProjection {
     pub(crate) dns_resolver_candidate: Option<edgion_common::dns::resolver_select::ResolverCandidate>,
     pub(crate) dns_resolution_mode: super::DnsResolutionMode,
+    pub(crate) dns_lookup_family: Option<Result<DnsLookupFamily, &'static str>>,
     content_fingerprint: [u8; 32],
     pub membership_identity: u64,
     pub runtime_cell: Arc<ServiceRuntimeCell>,
@@ -1324,7 +1328,7 @@ fn strip_non_routing_metadata(metadata: &mut k8s_openapi::apimachinery::pkg::api
 fn routing_service_annotations(service: &Service) -> Option<BTreeMap<String, String>> {
     let annotations = service.metadata.annotations.as_ref()?;
     let mut kept = BTreeMap::new();
-    for key in [DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF] {
+    for key in [DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF, DNS_LOOKUP_FAMILY] {
         if let Some(value) = annotations.get(key) {
             kept.insert(key.to_string(), value.clone());
         }
@@ -1440,7 +1444,17 @@ fn build_service_projection(
             .collect::<Vec<_>>()
             .into(),
     });
+    let dns_lookup_family = service_lookup_family(&service_record.resource);
+    if let Some(Err(error)) = dns_lookup_family {
+        tracing::warn!(
+            component = "service_discovery",
+            service = service_key,
+            error,
+            "Invalid DNS family annotation; ExternalName endpoints are unavailable"
+        );
+    }
     Some(ServicePublishedState::Available(Arc::new(AvailableServiceProjection {
+        dns_lookup_family,
         dns_resolution_mode: super::DnsResolutionMode::parse(
             raw.service
                 .metadata
@@ -1506,6 +1520,7 @@ fn normalize_sections(
 ) -> BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>> {
     let mut aliases: BTreeMap<ServiceSectionKey, Vec<Arc<NormalizedSectionOutcome>>> = BTreeMap::new();
     let mut sections = HashMap::<ServicePortIdentity, Arc<NormalizedSectionOutcome>>::new();
+    let family = service_lookup_family(&service.resource);
     let ports = service
         .resource
         .spec
@@ -1518,7 +1533,7 @@ fn normalize_sections(
         let outcome = match identity.as_ref() {
             Some(identity) => sections
                 .entry(identity.clone())
-                .or_insert_with(|| Arc::new(normalize_section(service, identity, slices)))
+                .or_insert_with(|| Arc::new(normalize_section(service, identity, slices, family)))
                 .clone(),
             None => Arc::new(NormalizedSectionOutcome::Invalid(
                 ServiceSectionInvalid::InvalidServicePort,
@@ -1577,9 +1592,15 @@ fn normalize_section(
     service: &LiveSourceRecord<Service>,
     identity: &ServicePortIdentity,
     slices: &[(&str, &LiveSourceRecord<EndpointSlice>)],
+    family: Option<Result<DnsLookupFamily, &'static str>>,
 ) -> NormalizedSectionOutcome {
     let mut grouped: BTreeMap<SocketAddr, BTreeSet<EndpointOrigin>> = BTreeMap::new();
     for (slice_key, slice) in slices {
+        // Invalid explicit policy admits no endpoints. A valid Service override
+        // also constrains L4, direct endpoint authorization and health targets.
+        if matches!(family, Some(Err(_))) {
+            continue;
+        }
         let ports = slice.resource.ports.as_deref().unwrap_or(&[]);
         let matching = match matching_endpoint_port(ports, identity) {
             Ok(Some(port)) => port,
@@ -1614,6 +1635,9 @@ fn normalize_section(
                 if ip.is_ipv6() != expected_v6 {
                     return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict);
                 }
+                if family.is_some_and(|family| family.is_ok_and(|family| !family.allows(ip))) {
+                    continue;
+                }
                 let socket = SocketAddr::new(ip, port.get());
                 grouped.entry(socket).or_default().insert(EndpointOrigin {
                     slice_key: Arc::clone(origin_slice_key.get_or_insert_with(|| Arc::from(*slice_key))),
@@ -1642,6 +1666,21 @@ fn normalize_section(
         identity: identity.clone(),
         slots: all,
     }))
+}
+
+fn service_lookup_family(service: &Service) -> Option<Result<DnsLookupFamily, &'static str>> {
+    if service.spec.as_ref().and_then(|spec| spec.type_.as_deref()) != Some("ExternalName") {
+        return None;
+    }
+    DnsLookupFamily::from_annotation(
+        service
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|values| values.get(DNS_LOOKUP_FAMILY))
+            .map(String::as_str),
+    )
+    .transpose()
 }
 
 fn matching_endpoint_port<'a>(

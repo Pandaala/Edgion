@@ -343,6 +343,7 @@ Hostname/SAN pinning remains rejected by the existing Phase1 validation guard.
 |-------|------|---------|-------------|
 | `linkSysRef` | `LinkSysRef?` | — | Namespaced httpdns LinkSys reference. |
 | `servers` | `Vec<String>?` | — | Inline `ip[:port]` DNS servers. |
+| `lookupFamily` | `DnsLookupFamily` | `ipv4Only` | Backend DNS family: `ipv4Only`, `ipv6Only`, or `all`; independent of resolver selection. |
 | `cacheTtl` | `Duration` | `5s` | Data-plane ExternalName resolution cache TTL. |
 
 `linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
@@ -518,3 +519,7 @@ Do not use `EdgionGatewayConfig` to solve these problems:
   and require restart. They are not CRD fields; adding them here would be pruned by the
   Kubernetes structural schema.
 - Whether the Controller uses file_system, etcd, or kubernetes: that is `conf_center` in the Controller YAML.
+
+`spec.dnsResolver.lookupFamily` is the typed live Gateway DNS default: `ipv4Only` (default), `ipv6Only`, or `all`. A family-only EGC is valid and participates in the existing global-owner selection. Service > Gateway > selected EGC family inheritance is independent of resolver selection. AI external-hostname dispatch uses Gateway > EGC.
+
+DNS defaults use the deterministic minimum store-key owner across configured EGCs, not only the active GatewayClass parametersRef. A family-only DNS block participates in this existing global selection.

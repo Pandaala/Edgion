@@ -558,3 +558,19 @@ fn shipped_controller_bare_auto_ca_configs_keep_provisioning_choice() {
         assert!(security.resolve_active_tls().is_none(), "{path}");
     }
 }
+
+#[test]
+fn dns_lookup_family_defaults_and_strict_yaml_values() {
+    assert_eq!(DnsResolverConfig::default().lookup_family, DnsLookupFamily::Ipv4Only);
+    for (value, family) in [
+        ("ipv4Only", DnsLookupFamily::Ipv4Only),
+        ("ipv6Only", DnsLookupFamily::Ipv6Only),
+        ("all", DnsLookupFamily::All),
+    ] {
+        let config: DnsResolverConfig = serde_yaml::from_str(&format!("lookup_family: {value}")).unwrap();
+        assert_eq!(config.lookup_family, family);
+    }
+    for value in ["ipv4", "ALL", "true", "''"] {
+        assert!(serde_yaml::from_str::<DnsResolverConfig>(&format!("lookup_family: {value}")).is_err());
+    }
+}

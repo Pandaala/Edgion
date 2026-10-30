@@ -1,4 +1,33 @@
 use super::*;
+
+#[test]
+fn dns_family_cold_publication_pins_old_gateway_and_preserves_invalid_override() {
+    let store = ListenerGatewayInfoStore::new();
+    let mut gateway = make_gateway("https", vec![]);
+    let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+    gateway.metadata.annotations = Some(BTreeMap::from([(
+        annotations::DNS_LOOKUP_FAMILY.into(),
+        "ipv6Only".into(),
+    )]));
+    store.rebuild(&[gateway.clone()]);
+    let old = store.get(&key)[0].clone();
+    assert_eq!(old.dns_lookup_family, Some(Ok(DnsLookupFamily::Ipv6Only)));
+    for token in ["all", "", "invalid"] {
+        gateway
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(annotations::DNS_LOOKUP_FAMILY.into(), token.into());
+        store.rebuild(&[gateway.clone()]);
+        let current = store.get(&key);
+        assert_eq!(
+            current[0].dns_lookup_family,
+            DnsLookupFamily::from_annotation(Some(token)).transpose()
+        );
+        assert_eq!(old.dns_lookup_family, Some(Ok(DnsLookupFamily::Ipv6Only)));
+    }
+}
 use edgion_common::dns::resolver_select::{LinkSysKey, ResolverCandidate};
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};

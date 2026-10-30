@@ -74,9 +74,18 @@ The independent raw Kubernetes Service DNS loop checks the same current Grant
 permission before LinkSys GET. Denial drops only the tenant reference candidate:
 inline servers and administrative defaults retain their existing precedence.
 
-An unchanged successful content fingerprint skips SSA only if every required
-IPv4/IPv6 slice has the expected name, namespace, addressType, Service label and
-current v1/Service owner UID. Missing families and same-name Service replacement
-therefore repair normally. Forced SSA, resolution-error last-good output and
-full-success-only fingerprint updates remain. No new mid-await revocation fence
-or obsolete-family deletion is supplied by this check.
+A successful content fingerprint includes the effective family, canonical addresses
+and projected ports. Skip requires the complete expected current-UID family set,
+with no obsolete owned sibling. The Controller patches desired slices first and
+then deletes obsolete proven-owned siblings; any failure keeps convergence pending.
+Policy narrowing withdraws forbidden families before DNS, so a timeout cannot
+preserve now-forbidden last-good output. The Service's explicit family also gates
+canonical Gateway ExternalName membership, including L4; ordinary Services are
+unchanged. Gateway/EGC family defaults do not filter shared Controller publications.
+
+Deletion proves generated name/namespace, managed-by and synthetic labels, Service
+label, and a v1/Service owner name with nonempty UID. A previous incarnation's owner
+UID is allowed for obsolete siblings. The observed slice UID/resourceVersion are
+delete preconditions; 404 completes absence, conflicts remain retryable. Foreign or
+unproven slices are preserved and prevent claiming convergence. See the
+[family convergence guard](../../04-review/controller/regression-guards/dns-owned-family-slice-convergence.md).

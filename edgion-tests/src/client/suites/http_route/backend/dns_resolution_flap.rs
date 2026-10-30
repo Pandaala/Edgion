@@ -223,3 +223,70 @@ impl TestSuite for DnsFlapWorkingTestSuite {
         vec![Self::test_resolver_switched_live()]
     }
 }
+
+/// Local dual-stack traffic and cache isolation, using the existing shared backend.
+pub struct DnsFlapFamilyTestSuite(pub bool);
+
+#[async_trait]
+impl TestSuite for DnsFlapFamilyTestSuite {
+    fn name(&self) -> &str {
+        if self.0 {
+            "DnsFlapFamilyV6"
+        } else {
+            "DnsFlapFamilyV4"
+        }
+    }
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+    fn test_cases(&self) -> Vec<TestCase> {
+        let ipv6 = self.0;
+        vec![TestCase::new(
+            "family_and_cache",
+            "the selected family reaches its actual listener and reuses its DNS cache",
+            move |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let result = async {
+                        let expected = if ipv6 {
+                            "Server: [::1]:30001"
+                        } else {
+                            "Server: 0.0.0.0:30001"
+                        };
+                        let request = async || -> Result<(), String> {
+                            let response = ctx
+                                .http_client
+                                .get(format!("http://{}:{FLAP_GATEWAY_PORT}/echo", ctx.target_host))
+                                .header("Host", FLAP_HOST)
+                                .timeout(Duration::from_secs(10))
+                                .send()
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if response.status().as_u16() != 200 {
+                                return Err(format!("expected 200, got {}", response.status()));
+                            }
+                            let body = response.text().await.map_err(|e| e.to_string())?;
+                            if !body.lines().any(|line| line == expected) {
+                                return Err(format!("expected backend identity {expected}; got {body}"));
+                            }
+                            Ok(())
+                        };
+                        request().await?;
+                        let hits = live_resolver_hits(&ctx).await?;
+                        request().await?;
+                        let after = live_resolver_hits(&ctx).await?;
+                        if after != hits {
+                            return Err(format!("second request missed DNS cache: {hits} -> {after}"));
+                        }
+                        Ok::<(), String>(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => TestResult::passed(start.elapsed()),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )]
+    }
+}

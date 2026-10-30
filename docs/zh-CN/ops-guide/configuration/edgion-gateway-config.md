@@ -391,3 +391,21 @@ spec:
 - [Gateway 配置](./gateway-config.md)
 - [GatewayClass 配置](../gateway/gateway-class.md)
 - [Preflight Policy](../gateway/preflight-policy.md)
+
+## 后端 DNS 地址族默认值
+
+```yaml
+spec:
+  dnsResolver:
+    lookupFamily: ipv4Only
+    cacheTtl: 5s
+```
+
+`lookupFamily` 可选 `ipv4Only`（默认）、`ipv6Only`、`all`，无需同时配置服务器或
+`linkSysRef`。现有全局 EGC 选择规则决定发布者，地址族、解析器和 TTL 一起热更新。
+Service、Gateway 同名注解依次优先覆盖，地址族继承不改变解析器选择。AI 外部域名
+使用 Gateway 覆盖再继承 EGC。Controller 已发布端点仍由 Controller/Service 策略控制。
+`all` 不提供连接竞速，IPv6 需要实际可用的上游网络。
+
+DNS 默认值沿用现有全局规则：在定义 DNS 配置的 EGC 中选择 store key 最小者，
+并非当前 GatewayClass 独占的配置。只有 `lookupFamily` 的 DNS 配置块也参与选择。

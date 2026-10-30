@@ -1,4 +1,25 @@
 use super::*;
+
+#[test]
+fn family_only_dns_default_pins_family_with_its_owner_snapshot() {
+    let _g = TEST_MUTEX.lock();
+    clear_store();
+    let handler = EdgionGatewayConfigHandler::new();
+    let mut owner = make_config("family-only");
+    owner.spec.dns_resolver = Some(serde_json::from_value(serde_json::json!({"lookupFamily":"ipv6Only"})).unwrap());
+    handler.full_set(&HashMap::from([("family-only".to_owned(), Arc::new(owner.clone()))]));
+    let old = get_egc_dns_resolver_default().unwrap();
+    assert!(old.candidate().is_none());
+    assert_eq!(old.lookup_family(), DnsLookupFamily::Ipv6Only);
+    owner.spec.dns_resolver.as_mut().unwrap().lookup_family = DnsLookupFamily::All;
+    handler.full_set(&HashMap::from([("family-only".to_owned(), Arc::new(owner))]));
+    assert_eq!(
+        get_egc_dns_resolver_default().unwrap().lookup_family(),
+        DnsLookupFamily::All
+    );
+    assert_eq!(old.lookup_family(), DnsLookupFamily::Ipv6Only);
+    clear_store();
+}
 use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightMode;
 use edgion_resources::resources::edgion_gateway_config::{
     DnsResolverConfig, EdgionGatewayConfigSpec, PreflightMode, PreflightPolicy, TcpTimeout, DEFAULT_TCP_CONNECT,
@@ -686,12 +707,14 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
 
     let mut key_b = make_config("metadata-first");
     key_b.spec.dns_resolver = Some(DnsResolverConfig {
+        lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: Some(vec!["192.0.2.2:53".to_string()]),
         cache_ttl: "20s".to_string(),
     });
     let mut key_a = make_config("metadata-second");
     key_a.spec.dns_resolver = Some(DnsResolverConfig {
+        lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: Some(vec!["192.0.2.1:53".to_string()]),
         cache_ttl: "10s".to_string(),
@@ -734,6 +757,7 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
 
     let mut invalid_system = make_config("metadata-first");
     invalid_system.spec.dns_resolver = Some(DnsResolverConfig {
+        lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: None,
         cache_ttl: "invalid".to_string(),
@@ -749,6 +773,7 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
 
     let mut zero_ttl = make_config("metadata-first");
     zero_ttl.spec.dns_resolver = Some(DnsResolverConfig {
+        lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: Some(vec!["192.0.2.3:53".to_string()]),
         cache_ttl: "0s".to_string(),

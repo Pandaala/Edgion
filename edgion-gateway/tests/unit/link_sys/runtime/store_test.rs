@@ -820,7 +820,8 @@ async fn httpdns_same_rv_actual_owner_failure_replaces_ready_reuses_failed_and_r
     assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed));
     assert!(edgion_common::dns::resolve(
         &edgion_common::dns::ResolverSpec::HttpDns(Arc::clone(&failed)),
-        "localhost"
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native,
     )
     .await
     .is_err());
@@ -900,11 +901,13 @@ async fn httpdns_relist_reuses_but_changes_even_with_same_rv_publish_latest_fall
     let failed = httpdns_handle(&registry);
     assert!(!failed.is_ready());
     assert!(!Arc::ptr_eq(&first, &failed));
-    assert!(
-        edgion_common::dns::resolve(&edgion_common::dns::ResolverSpec::HttpDns(failed.clone()), "localhost")
-            .await
-            .is_err()
-    );
+    assert!(edgion_common::dns::resolve(
+        &edgion_common::dns::ResolverSpec::HttpDns(failed.clone()),
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native
+    )
+    .await
+    .is_err());
     registry.apply(&invalid, &HashSet::new(), &invalid, true, false);
     assert!(
         Arc::ptr_eq(&failed, &httpdns_handle(&registry)),

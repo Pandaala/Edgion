@@ -30,12 +30,19 @@ fn seed_dns_cache(service_key: &str) {
         vec!["10.20.0.1".parse().expect("valid IPv4")],
         std::time::Duration::from_secs(60),
         std::time::Instant::now(),
+        edgion_common::dns::DnsLookupFamily::All,
     );
 }
 
 fn dns_cache_has(service_key: &str) -> bool {
     get_global_dns_cache()
-        .get(service_key, "seed.example.test", "fp-test", std::time::Instant::now())
+        .get(
+            service_key,
+            "seed.example.test",
+            "fp-test",
+            std::time::Instant::now(),
+            edgion_common::dns::DnsLookupFamily::All,
+        )
         .is_some()
 }
 

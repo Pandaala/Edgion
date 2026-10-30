@@ -772,3 +772,7 @@ Path normalization configuration is read on the Gateway side (`edgion-resources/
 - Select a K8s deployment's owned classes: configure their `spec.controllerName` to match its resolved identity
 - Control cache caps for different kinds: change `conf_sync.capacity_overrides`
 - Tune observability noise: change `logging.log_level`
+
+## DNS family policy
+
+Controller `dns_resolver.lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all`; process-start only. An explicit Service `edgion.io/dns-lookup-family` overrides it live. Invalid annotations withdraw proven owned slices without querying; narrowing removes forbidden families before the query, including when it fails. Gateway/EGC settings do not rewrite Controller publications.

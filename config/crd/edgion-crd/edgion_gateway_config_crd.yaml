@@ -474,8 +474,13 @@ spec:
                       required: [name, namespace]
                 dnsResolver:
                   type: object
-                  description: "Data-plane default DNS resolver for ServiceExternalName backends"
+                  description: "Data-plane default DNS policy for ExternalName and AI hostname backends"
                   properties:
+                    lookupFamily:
+                      type: string
+                      enum: [ipv4Only, ipv6Only, all]
+                      default: ipv4Only
+                      description: "Requested backend address families, independently inherited from resolver selection"
                     linkSysRef:
                       type: object
                       description: "Reference to an httpdns LinkSys resource (namespace required; cluster-scoped EGC)"

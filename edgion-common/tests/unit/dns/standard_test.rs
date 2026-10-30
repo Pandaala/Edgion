@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn empty_servers_falls_back_to_system() {
     // No servers configured ⇒ behave exactly like the system resolver.
-    let addrs = resolve_standard(&[], "localhost")
+    let addrs = resolve_standard(&[], "localhost", crate::dns::DnsQueryPolicy::Native)
         .await
         .expect("system fallback resolves");
     assert!(addrs.iter().any(|ip| ip.is_loopback()));

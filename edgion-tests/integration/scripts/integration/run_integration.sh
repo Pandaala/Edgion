@@ -3004,9 +3004,11 @@ main() {
 
     # These explicitly selected suites use only 127.0.0.1. Do not require the
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
+    # The two exact DNS fixture sets additionally use ::1, never those aliases.
     if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ] || [ "$G_ITEM" = "MetricsLifetime" ]; }; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/DnsResolution" ] && { [ "$suites" = "base,HTTPRoute/Basic,HTTPRoute/Backend/DnsResolution" ] || [ "$suites" = "base,HTTPRoute/Basic,HTTPRoute/Backend/DnsResolution,HTTPRoute/Backend/DnsResolutionFlap/DynamicTest" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ] && [ "$suites" = "base,HTTPRoute/Basic,EdgionPlugins/base,EdgionPlugins/LdapAuthTls" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ] || [ "$G_ITEM" = "ProxyRewrite" ]; }; }; then

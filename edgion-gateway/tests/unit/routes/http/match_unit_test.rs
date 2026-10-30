@@ -16,6 +16,7 @@ fn query_matchers_read_current_owner_while_entry_and_transport_remain_original()
                 None,
                 Vec::new(),
                 None,
+                None,
             )),
             gateway_proof: None,
             hostname: None,

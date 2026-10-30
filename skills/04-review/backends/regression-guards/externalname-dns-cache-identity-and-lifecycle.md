@@ -18,24 +18,25 @@ expiry — a window whose length is operator-controlled (`EdgionGatewayConfig.sp
 is a free-form duration, not capped at the 5s default). The backing store was also an unbounded
 `HashMap` with no removal path for deleted Services.
 
-The key is now the complete identity `(service_key, external_name, fingerprint)`, the store is a
+The key is now the complete identity `(service_key, external_name, fingerprint, family)`, the store is a
 capacity-bounded `ShardedLruCache`, and the Service conf-handler invalidates on removal.
 
 Native HTTP/gRPC now capture the actual Service source, checked section and
 membership-matched runtime once per attempt. The hostname and resolver inputs
 remain borrowed from that capture through DNS completion. Current cache identity
-does not require a resourceVersion component because hostname and resolver
+does not require a resourceVersion component because hostname, resolver and family
 identity describe the address answer; new evidence can change that conclusion.
 
 ## Core Rationale
 
 **1. The key must name every input that can change the resolved address set**
 
-Three inputs, all now in `DnsCacheKey`:
+Four inputs, all now in `DnsCacheKey`:
 
 - `service_key` — ownership, and the unit of invalidation on Service removal.
 - `external_name` — the hostname actually handed to the resolver. This was the defect: it varied
   per Service generation while the key did not.
+- `family` — the captured `DnsLookupFamily`; a live family change cannot reuse the old policy answer, even with a long TTL.
 - `fingerprint` — `ResolverSpec::fingerprint()`, so a resolver change cannot serve addresses
   resolved by a different resolver.
 
@@ -46,7 +47,7 @@ would have to actively pass the wrong value.
 
 **2. A Service *update* needs no explicit invalidation; only *deletion* does**
 
-When hostname or resolver changes, a new attempt uses a different key. An in-flight
+When hostname, resolver or family changes, a new attempt uses a different key. An in-flight
 old attempt may still complete and populate its old key, including after deletion;
 that bounded entry cannot answer the new hostname/resolver. Unchanged content may
 reuse the cache across Service generations. Old entries expire or leave by capacity. Adding
@@ -103,7 +104,7 @@ other; only the shared capacity bound applies.
 ## Previously considered alternatives
 
 - **Add a Service generation / `resourceVersion` to the key** — redundant. The generation is only
-  observable through the fields that actually affect resolution, and both are already in the key;
+  observable through the fields that actually affect resolution, and all are already in the key;
   adding it would additionally invalidate on spec changes that cannot change the answer.
 - **Invalidate on Service update as well as delete** — no correctness benefit (the old entry is
   already unreachable), and it converts any unrelated Service spec change into a forced DNS
@@ -151,3 +152,16 @@ Re-evaluate against current source and new evidence, including:
 ## Resolution references
 
 - `task-externalname-dns-cache-identity-and-lifecycle` — 2026-09-03.
+
+## Address-family policy extension
+
+ISSUE-008 introduced the shared family policy while fixing Controller owned-slice
+convergence. Resolver choice and family are captured together before a DNS await.
+The cache key uses that captured family for both lookup and insertion; an old
+in-flight completion populates only its old bounded key. Deletion still invalidates
+all Service keys. Family changes do not alter prepared HTTPDNS TLS/client identity.
+Service explicit family gates only ExternalName canonical membership; ordinary
+Service slices remain unfiltered. Gateway/EGC defaults belong to self-resolution
+and AI, not shared Controller-produced slices. Historical verification above is
+not fresh evidence for this extension; current targeted family tests and final
+verification are recorded in the active implementation task.

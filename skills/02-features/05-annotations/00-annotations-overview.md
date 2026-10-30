@@ -23,6 +23,7 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | `edgion.io/edgion-stream-plugins` | `name` | Same-namespace StreamPlugins binding; slash-containing values are rejected |
 | `edgion.io/edgion-plugins` | comma/space-separated refs | Ordered global HTTP plugins; bare names use the Gateway namespace |
 | `edgion.io/require-sni-host-match` | `"true"\|"false"` | Per-Gateway override of `spec.securityProtect.requireSniHostMatch` |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | DNS backend family override; missing inherits, invalid fails closed; Service applies to both planes, Gateway to self-resolution/AI only |
 | `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Data-plane DNS servers; mutually exclusive with `dns-resolver-ref` |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | Data-plane httpdns LinkSys reference; mutually exclusive with `dns-resolver` |
 | `edgion.io/metrics-test-key` | `string` | Metrics label key for testing |
@@ -108,6 +109,7 @@ layer has no plugin chain to attach a declaration to.
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/dns-resolution-mode` | `controller\|gateway\|per-request` | ExternalName resolution authority/cache mode; default `controller` |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | DNS backend family override; missing inherits, invalid fails closed; Service applies to both planes, Gateway to self-resolution/AI only |
 | `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Service resolver override for both planes |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | Service httpdns LinkSys override for both planes |
 

@@ -27,7 +27,22 @@ fn bounded() -> Box<dyn TestSuite> {
     Box::new(suites::DnsFlapBoundedTestSuite)
 }
 
+fn family_v4() -> Box<dyn TestSuite> {
+    Box::new(suites::DnsFlapFamilyTestSuite(false))
+}
+fn family_v6() -> Box<dyn TestSuite> {
+    Box::new(suites::DnsFlapFamilyTestSuite(true))
+}
+
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "family-v4",
+        factory: family_v4,
+    },
+    PhaseSuite {
+        name: "family-v6",
+        factory: family_v6,
+    },
     PhaseSuite {
         name: "failing",
         factory: failing,
@@ -45,29 +60,74 @@ static PHASES: &[PhaseSuite] = &[
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
         let scenario = SCENARIO;
-        // Initial state: dead resolver + fallback:none → resolution fails.
-        ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
-        // Hot-reload the Service's resolver-ref annotation to a live httpdns.
-        ctx.apply_dir("updates/to_working").await?;
-        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
-        // A LinkSys update must also replace the endpoint policy generation.
-        // Link-local remains denied even with an explicit loopback exception.
-        ctx.apply_dir("updates/to_blocked").await?;
-        ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
-        ctx.apply_dir("updates/to_restored").await?;
-        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
-        // Tightening the body cap must reach the prepared transport generation.
-        ctx.apply_dir("updates/to_small_response").await?;
-        ctx.wait_phase(scenario, "bounded", Duration::from_secs(15)).await?;
-        ctx.apply_dir("updates/to_restored").await?;
-        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
-        // Advisory admission must not preserve an old usable client or silently
-        // use System DNS when the latest connection cannot be prepared.
-        ctx.apply_dir("updates/to_invalid_connection").await?;
-        ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
-        ctx.apply_dir("updates/to_restored").await?;
-        ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
-        Ok(())
+        let result = async {
+            // Initial state: dead resolver + fallback:none → resolution fails.
+            ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
+            // Hot-reload the Service's resolver-ref annotation to a live httpdns.
+            ctx.apply_dir("updates/to_working").await?;
+            ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+            // A LinkSys update must also replace the endpoint policy generation.
+            // Link-local remains denied even with an explicit loopback exception.
+            ctx.apply_dir("updates/to_blocked").await?;
+            ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/to_restored").await?;
+            ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+            // Tightening the body cap must reach the prepared transport generation.
+            ctx.apply_dir("updates/to_small_response").await?;
+            ctx.wait_phase(scenario, "bounded", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/to_restored").await?;
+            ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+            // Advisory admission must not preserve an old usable client or silently
+            // use System DNS when the latest connection cannot be prepared.
+            ctx.apply_dir("updates/to_invalid_connection").await?;
+            ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/to_restored").await?;
+            ctx.wait_phase(scenario, "working", Duration::from_secs(15)).await?;
+            // The local backend has both loopback listeners; Kubernetes has a separate driver.
+            if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+                for (update, phase) in [
+                    ("family_default", "family-v4"),
+                    ("family_service_v6", "family-v6"),
+                    // Observe inherited IPv4 before testing the Gateway override;
+                    // an old Service IPv6 snapshot cannot satisfy the next phase.
+                    ("family_default", "family-v4"),
+                    ("family_gateway_v6", "family-v6"),
+                    ("family_service_v4", "family-v4"),
+                    ("family_egc_v6", "family-v6"),
+                    ("family_egc_v4", "family-v4"),
+                    ("family_invalid", "failing"),
+                    ("family_restore", "family-v4"),
+                ] {
+                    ctx.apply_dir(&format!("updates/{update}")).await?;
+                    ctx.wait_phase(scenario, phase, Duration::from_secs(15)).await?;
+                }
+            } else {
+                println!("DEFERRED: DNS family/cache phases require the local dual-stack backend; Kubernetes keeps its existing DNS recovery phases");
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let mut errors = Vec::new();
+        for fixture in [
+            "00_EdgionGatewayConfig_dns-flap-egc.yaml",
+            "02_Gateway_edgion-test_dns-flap-gateway.yaml",
+            "01_Service_edgion-default_dns-flap.yaml",
+            "00_LinkSys_edgion-default_dns-flap-local.yaml",
+        ] {
+            if let Err(error) = ctx.apply_dir(&format!("initial/{fixture}")).await {
+                errors.push(format!("restore {fixture}: {error:#}"));
+            }
+        }
+        if errors.is_empty() {
+            if let Err(error) = ctx.wait_phase(scenario, "failing", Duration::from_secs(15)).await {
+                errors.push(format!("verify restored state: {error:#}"));
+            }
+        }
+        match (result, errors.is_empty()) {
+            (Ok(()), true) => Ok(()),
+            (Err(error), true) => Err(error),
+            (result, false) => anyhow::bail!("transition: {result:?}; restoration: {}", errors.join("; ")),
+        }
     })
 }
 

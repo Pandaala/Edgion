@@ -2,6 +2,7 @@ use crate::config::conf_center::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_common::conf_sync::config::{ConfSyncConfig, ConfSyncSecurityConfig};
+use edgion_resources::resources::common::DnsLookupFamily;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -187,6 +188,8 @@ pub struct EdgionControllerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DnsResolverConfig {
+    /// Backend address family; loaded at process startup.
+    pub lookup_family: DnsLookupFamily,
     /// Control-plane resolution on/off.
     pub enabled: bool,
     /// Background refresh interval (duration string, e.g. "15s").
@@ -202,6 +205,7 @@ pub struct DnsResolverConfig {
 impl Default for DnsResolverConfig {
     fn default() -> Self {
         Self {
+            lookup_family: DnsLookupFamily::default(),
             enabled: true,
             refresh_interval: "15s".to_string(),
             link_sys_ref: None,
