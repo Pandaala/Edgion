@@ -131,7 +131,7 @@ whole-authentication throughput, allocator RSS or secret erasure.
 
 ## Session persistence projection ownership (oidc-07)
 
-OidcSessionCookie retains one six-field serde schema with a default String text
+OidcSessionCookie retains one shared serde schema with a default String text
 parameter. Decoded cookies and refresh-cache entries remain owned. Persistence uses
 the same schema with borrowed str fields through for_persistence, avoiding temporary
 reference and optional-token copies. A missing reference still has one local generated
@@ -153,3 +153,78 @@ synthetic generated-reference owner case. The savings concern temporary projecti
 fields, not cache-owned tokens, JSON, crypto or output buffers. Allocator totals and
 logical copied bytes do not establish peak RSS, secret erasure or publisher-wide
 zero allocation; scoped timing must not be presented as authentication throughput.
+
+## Absolute session lifetime (OIDC-01)
+
+The Gateway enforces an absolute session deadline, independently of access-token
+expiry. The login callback computes mandatory session_expires_at with checked
+addition of its issue time and sessionLifetime. Both created_at and
+session_expires_at are authenticated inside the encrypted cookie. Missing or
+malformed deadlines, future/zero issue times, deadlines at or before issue time,
+and now >= session_expires_at cannot authenticate a session. Token skew/leeway
+never extends this boundary. This extends the earlier persistence schema; the
+owned-vs-borrowed serialization oracle now explicitly includes the deadline.
+
+The root cause was treating outgoing browser Max-Age as the only lifetime gate.
+A retained legitimate cookie could still resolve a live token or refresh after
+that browser lifetime. request_filter_impl now checks before token resolution,
+then checks again after asynchronous verification/userinfo before publishing
+identity. Refresh checks before work, after singleflight wait/cache reuse,
+after discovery, and after the token response. Refresh preserves the original
+session deadline; cookie publication uses remaining seconds, never a new full
+sessionLifetime. The token's expires_at continues to describe only token expiry.
+
+The user selected fixed-at-login absolute expiry after reviewing the login,
+refresh, clock and hot-reload costs. New sessionLifetime settings affect new
+logins only; existing deadlines cannot be extended or shortened by that setting.
+Old cookies lacking a deadline require login again; no legacy compatibility
+fallback is provided. Complete the binary rollout before relying on enforcement.
+The selected contract is not attributed to Envoy: its OAuth2 token-window renewal
+does not establish an independent absolute session maximum.
+
+Expiry uses the existing unauthAction contract (including unauthenticated Pass),
+not a new failure policy. Bearer authentication is independent. The shared cookie
+decoder intentionally does not reject elapsed deadlines: logout still reads an
+expired new-format cookie to clear caches and perform configured revocation and
+IdP logout. Gateway-owned cookie stripping is unchanged. This introduces neither
+a session store nor live-stream termination, global revocation or forced IdP
+password entry. Strict issue-time checks require synchronized Gateway clocks.
+
+Source: session_cookie.rs (remaining_lifetime, session_deadline), callback.rs,
+request_filter_impl.rs and token_exchange.rs under
+edgion-gateway/src/plugins/http/openid_connect/.
+
+Clock-controlled regressions live in
+edgion-gateway/tests/unit/plugins/http/openid_connect/plugin_test/session_expiry_tests.rs:
+expiry boundaries, overflow, malformed/old cookies, live cache and refresh results,
+refresh wait crossing expiry, post-verification checks, remaining cookie Max-Age,
+generation changes, logout and bearer isolation. The per-instance test clock is
+compiled out of production and has exact source-local entries in the unit-layout
+guard; test bodies are mounted from plugin.rs without widening production visibility.
+
+Fresh verification for OIDC-01:
+
+- `cargo test -p edgion-gateway --lib plugins::http::openid_connect::plugin`:
+  148 passed, 16 existing local-provider tests remained ignored.
+- `cargo test -p edgion-tests --lib dynamic::scenarios::oidc_session_expiry::tests`:
+  1 passed (local and Kubernetes fixture Secret agreement).
+- `target/debug/test_client -g --dynamic-scenario OidcSessionExpiry` passed twice
+  on one shared local topology loaded with `base,HTTPRoute/Basic,EdgionPlugins/base`.
+  The same retained ciphertexts survived each `60 -> 3600 -> 60` configuration
+  cycle: live sessions stayed usable, expired/future/missing-deadline sessions
+  were denied, bearer authentication stayed independent, and Gateway cookies
+  were stripped upstream. Owned resources and processes were cleaned afterward.
+  An earlier invocation without HTTPRoute/Basic failed because the shared
+  test-http backend was absent; loading that prerequisite resolved the failure
+  without a production change. Kubernetes fixtures were not executed.
+- `cargo fmt --all`, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets` passed. Clippy retains unrelated
+  existing warnings; the OIDC changes introduce none.
+- Agent-doc, SSA-force, metrics-inventory, Pingora-source-policy,
+  Gateway-API-transform and unit-layout guards passed. The unit-layout guard
+  mounted 1118 files across 9 crates. The full workspace test suite was not run.
+
+Earlier performance evidence above is historical. These unit regressions do not
+claim a live authorization-code callback or network token-refresh reproduction.
+Re-evaluate if sliding sessions, cookie schema, clock tolerance, authentication
+completion, refresh coordination or configuration-change semantics change.

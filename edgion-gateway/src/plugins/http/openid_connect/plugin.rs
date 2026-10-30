@@ -207,6 +207,8 @@ struct OidcSessionCookie<S: AsRef<str> = String> {
     #[serde(default, skip_serializing_if = "cookie_text_is_empty")]
     access_token: S,
     created_at: u64,
+    // Absolute session deadline, independent of the renewable access token.
+    session_expires_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +223,7 @@ impl OidcSessionCookie {
             session_ref,
             access_token: if cache_token { "" } else { &self.access_token },
             created_at: self.created_at,
+            session_expires_at: self.session_expires_at,
             expires_at: self.expires_at,
             id_token: self.id_token.as_deref(),
             refresh_token: self.refresh_token.as_deref(),
@@ -309,6 +312,8 @@ pub struct OpenidConnect {
     access_token_cache: ShardedLruCache<String, AccessTokenCacheEntry>,
     refresh_singleflight: RefreshFlightRegistry,
     refresh_singleflight_results: ShardedLruCache<String, OidcSessionCookie>,
+    #[cfg(test)]
+    session_clock: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl OpenidConnect {
@@ -501,6 +506,8 @@ impl OpenidConnect {
             access_token_cache: ShardedLruCache::new(access_token_capacity, access_token_shards),
             refresh_singleflight: RefreshFlightRegistry::new(get_refresh_singleflight_max_registered_keys())?,
             refresh_singleflight_results: ShardedLruCache::new(shared_lru_capacity, shared_lru_shards),
+            #[cfg(test)]
+            session_clock: None,
         })
     }
 }
@@ -583,6 +590,10 @@ mod userinfo;
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test/session_expiry_tests.rs"]
+mod session_expiry_tests;
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/openid_connect/plugin_test/auth_response_caps_integration.rs"]

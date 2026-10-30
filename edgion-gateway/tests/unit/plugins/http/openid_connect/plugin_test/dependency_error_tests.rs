@@ -213,6 +213,7 @@ async fn missing_refresh_endpoint_preserves_all_session_unauth_actions() {
             session_ref: "private-missing-cache-entry".into(),
             access_token: String::new(),
             created_at: OpenidConnect::now_unix_secs(),
+            session_expires_at: OpenidConnect::now_unix_secs() + 3600,
             expires_at: None,
             id_token: None,
             refresh_token: Some("private-refresh-token".into()),

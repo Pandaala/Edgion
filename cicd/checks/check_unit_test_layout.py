@@ -173,6 +173,14 @@ GATEWAY_SOURCE_LOCAL = {
         'scripted_http: ScriptMutex<Option<Arc<ScriptedHttp>>>,',
         '{ let script = self.scripted_http.lock().clone();',
     ),
+    # Per-instance session clock injection; no clock field or branch in production builds.
+    Path('plugins/http/openid_connect/plugin.rs'): (
+        'session_clock: Option<Arc<std::sync::atomic::AtomicU64>>,',
+        'session_clock: None,',
+    ),
+    Path('plugins/http/openid_connect/session_cookie.rs'): (
+        'if let Some(clock) = &self.session_clock {',
+    ),
     Path('plugins/http/request_mirror/plugin.rs'): (
         'let send = arming_tests::consume_without_network(',
         'let writer_events = self',

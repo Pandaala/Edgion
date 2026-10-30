@@ -287,11 +287,17 @@ impl OpenidConnect {
         }
 
         let expires_at = token_response.expires_in.map(|ttl| now.saturating_add(ttl));
+        let created_at = self.session_now();
+        let session_expires_at = match Self::session_deadline(created_at, self.config.session_lifetime) {
+            Ok(deadline) => deadline,
+            Err(err) => return self.send_oidc_error(session, &err).await,
+        };
         let should_persist_id_token = self.should_persist_id_token(&discovery);
         let mut session_cookie_payload = OidcSessionCookie {
             session_ref: Self::generate_session_ref(),
             access_token: token_response.access_token,
-            created_at: now,
+            created_at,
+            session_expires_at,
             expires_at,
             id_token: if should_persist_id_token {
                 token_response.id_token.filter(|v| !v.is_empty())
@@ -315,7 +321,12 @@ impl OpenidConnect {
                 Err(())
             }
         };
+        let remaining_lifetime = session_cookie_payload.remaining_lifetime(self.session_now());
         drop(session_cookie_payload);
+        let remaining_lifetime = match remaining_lifetime {
+            Ok(remaining) => remaining,
+            Err(err) => return self.send_oidc_error(session, &err).await,
+        };
         let session_cookie_value = match encoded_session {
             Ok(v) => v,
             Err(()) if self.session_cipher().is_none() => {
@@ -331,7 +342,7 @@ impl OpenidConnect {
         let session_cookie = self.build_cookie_header_value(
             self.session_cookie_name(),
             &session_cookie_value,
-            self.config.session_lifetime,
+            remaining_lifetime,
             "/",
         );
         if self.ensure_session_cookie_size_limit(&session_cookie).is_err() {

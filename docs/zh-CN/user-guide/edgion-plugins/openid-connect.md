@@ -56,13 +56,31 @@
 |------|------|--------|------|
 | `sessionSecretRef` | Object | 无 | 引用包含 session 加密密钥的 K8s Secret（`unauthAction=Auth` 时必填） |
 | `sessionCookieName` | String | `"edgion_oidc_session"` | Session Cookie 名称。该 Cookie 与 `edgion_oidc_state` 由 Gateway 持有，代理到上游前始终从请求中移除；应用自己的 Cookie 保持不变。 |
-| `sessionLifetime` | Integer | `3600` | Session 有效期（秒） |
+| `sessionLifetime` | Integer | `3600` | 登录时固定、由 Gateway 强制执行的会话绝对有效期（秒） |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite 属性。可选值：`Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly 属性 |
 | `sessionCookieSecure` | Boolean | `true` | Cookie Secure 属性（`SameSite=None` 时必须为 `true`） |
 | `maxSessionCookieBytes` | Integer | `3800` | Session Cookie 最大字节数 |
 | `renewAccessTokenOnExpiry` | Boolean | `true` | Access Token 过期时是否自动刷新 |
 | `accessTokenExpiresLeeway` | Integer | `0` | Access Token 过期容差（秒） |
+
+会话到达经过认证保护的截止时间即失效，即使保留的 Cookie 含有可用的刷新令牌，
+或缓存的访问令牌仍然有效。刷新令牌不会延长会话截止时间；刷新后的 Cookie
+仅以会话剩余时间设置 `Max-Age`。访问令牌过期和会话过期分别判断。
+有效期为零或截止时间计算溢出时，不能建立会话。
+
+修改 `sessionLifetime` 仅影响新的登录。已有会话保留原截止时间，因此延长配置
+不会让过期 Cookie 恢复有效，缩短配置也不会立即终止已有会话。过期后按照
+`unauthAction` 处理：`Deny` 返回 401，`Auth` 重新发起登录，`Pass` 则不以该会话
+认证身份并继续处理。若 IdP 仍保有登录状态，重新登录可能无需再次输入密码。
+
+各 Gateway 的时钟必须同步：未来的签发时间会被拒绝，令牌的时钟偏差或宽限配置
+不会延长会话截止时间。异步校验或刷新完成后，接受会话前会再次检查有效期。
+该机制不会主动断开已经通过认证的流。退出登录仍可清理过期会话，并使用其中的
+令牌执行配置的登出或撤销流程。Bearer 认证独立于会话截止时间。
+
+引入服务端截止时间之前签发的 Cookie 缺少必填截止时间，升级后需要重新登录。
+只有完成 Gateway 实例升级后才能依赖服务端过期限制；旧二进制不会执行该限制。
 
 ### Token 验证参数
 

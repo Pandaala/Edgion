@@ -53,6 +53,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "ConditionRefsDynamic",
     "CredentialInjectorDynamic",
     "CsrfSecretRotation",
+    "OidcSessionExpiry",
     "JsonSchemaValidationDynamic",
     "GrpcJsonTranscoderDynamic",
     "GraphqlRateLimitDynamic",
@@ -2052,6 +2053,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CorsValidation"
         | "CredentialInjectorDynamic"
         | "CsrfSecretRotation"
+        | "OidcSessionExpiry"
         | "DslDynamic"
         | "ProxyRewriteHostDynamic"
         | "DslXmlDynamic"

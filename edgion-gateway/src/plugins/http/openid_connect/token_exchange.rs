@@ -82,6 +82,9 @@ impl OpenidConnect {
         session: &mut dyn PluginSession,
         payload: &OidcSessionCookie,
     ) {
+        if payload.remaining_lifetime(self.session_now()).is_err() {
+            return;
+        }
         let cache_token = !payload.access_token.trim().is_empty();
         let generated_ref = payload.session_ref.is_empty().then(Self::generate_session_ref);
         let session_ref = generated_ref.as_deref().unwrap_or(&payload.session_ref);
@@ -101,8 +104,10 @@ impl OpenidConnect {
         let Ok(value) = Self::encode_signed_cookie_payload(&persisted_payload, cipher) else {
             return;
         };
-        let cookie =
-            self.build_cookie_header_value(self.session_cookie_name(), &value, self.config.session_lifetime, "/");
+        let Ok(remaining_lifetime) = payload.remaining_lifetime(self.session_now()) else {
+            return;
+        };
+        let cookie = self.build_cookie_header_value(self.session_cookie_name(), &value, remaining_lifetime, "/");
         if self.ensure_session_cookie_size_limit(&cookie).is_err() {
             return;
         }
@@ -335,6 +340,7 @@ impl OpenidConnect {
     }
 
     pub(super) async fn try_refresh_session_token(&self, session_cookie: &mut OidcSessionCookie) -> VerifyResult<()> {
+        session_cookie.remaining_lifetime(self.session_now())?;
         if session_cookie.session_ref.is_empty() {
             session_cookie.session_ref = Self::generate_session_ref();
         }
@@ -343,7 +349,9 @@ impl OpenidConnect {
             .as_deref()
             .ok_or(OidcVerifyError::Auth(AuthFailure::MissingRefreshToken))?;
         let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
+        session_cookie.remaining_lifetime(self.session_now())?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
+        session_cookie.remaining_lifetime(self.session_now())?;
 
         let now = Self::now_unix_secs();
         let should_persist_id_token = self.should_persist_id_token(&discovery);
@@ -375,17 +383,21 @@ impl OpenidConnect {
         lock_key: &str,
         session_cookie: &mut OidcSessionCookie,
     ) -> VerifyResult<()> {
+        session_cookie.remaining_lifetime(self.session_now())?;
         let flight = self.refresh_singleflight.get_or_create(lock_key);
         let wait_timeout = Duration::from_secs(self.config.timeout);
         let Ok(_guard) = tokio::time::timeout(wait_timeout, flight.lock().lock()).await else {
             if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
+                cached_payload.remaining_lifetime(self.session_now())?;
                 *session_cookie = cached_payload;
                 return Ok(());
             }
             return Err(OidcVerifyError::RefreshSingleflightTimeout);
         };
 
+        session_cookie.remaining_lifetime(self.session_now())?;
         if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
+            cached_payload.remaining_lifetime(self.session_now())?;
             *session_cookie = cached_payload;
             return Ok(());
         }

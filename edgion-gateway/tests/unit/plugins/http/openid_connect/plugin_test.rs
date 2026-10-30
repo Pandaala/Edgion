@@ -54,7 +54,7 @@ fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     }))
     .unwrap();
     let session: OidcSessionCookie = serde_json::from_value(json!({
-        "session_ref": "private-session", "access_token": "private-access", "created_at": 1,
+        "session_ref": "private-session", "access_token": "private-access", "created_at": 1, "session_expires_at": 3601,
         "id_token": "private-id", "refresh_token": "private-refresh"
     }))
     .unwrap();
@@ -90,7 +90,7 @@ fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     assert_eq!(response.access_token, "private-access");
 }
 
-fn base_config() -> OpenidConnectConfig {
+pub(super) fn base_config() -> OpenidConnectConfig {
     OpenidConnectConfig {
         discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
         client_id: "client".to_string(),
@@ -100,7 +100,7 @@ fn base_config() -> OpenidConnectConfig {
     }
 }
 
-fn plugin_log_entries(plugin_log: &PluginLog) -> Vec<String> {
+pub(super) fn plugin_log_entries(plugin_log: &PluginLog) -> Vec<String> {
     serde_json::to_value(plugin_log)
         .expect("plugin log must serialize")
         .get("log")
@@ -197,7 +197,10 @@ async fn authenticated_bearer_claim_cleanup_failure_prevents_upstream_continuati
 }
 
 /// Shared Cookie header for `get_cookie` and `strip_cookie` on a mock session.
-fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str) -> Arc<Mutex<Option<String>>> {
+pub(super) fn install_request_cookies(
+    session: &mut MockPluginSession,
+    cookie_header: &str,
+) -> Arc<Mutex<Option<String>>> {
     let cookie = Arc::new(Mutex::new(
         (!cookie_header.is_empty()).then(|| cookie_header.to_string()),
     ));
@@ -1282,6 +1285,7 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: Some("id-token-hint".to_string()),
         refresh_token: Some("refresh-token".to_string()),
@@ -1529,7 +1533,7 @@ fn cookie_nonce_decoding_preserves_length_and_error_boundaries() {
     assert_eq!(decode(&tampered), Err(invalid_signature));
 }
 
-// Frozen pre-refactor schema: intentionally independent of the generic production type.
+// Independent persistence oracle, extended with the required OIDC-01 session deadline.
 #[derive(serde::Serialize)]
 struct OriginalPersistedCookie {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1537,6 +1541,7 @@ struct OriginalPersistedCookie {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     access_token: String,
     created_at: u64,
+    session_expires_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1554,6 +1559,7 @@ fn original_persistence_projection(payload: &OidcSessionCookie, session_ref: &st
             String::new()
         },
         created_at: payload.created_at,
+        session_expires_at: payload.session_expires_at,
         expires_at: payload.expires_at,
         id_token: payload.id_token.clone(),
         refresh_token: payload.refresh_token.clone(),
@@ -1571,6 +1577,7 @@ fn persistence_projection_preserves_exact_json_and_owned_decode() {
                             session_ref: session_ref.to_owned(),
                             access_token: token.to_owned(),
                             created_at: 7,
+                            session_expires_at: 7 + 3600,
                             expires_at,
                             id_token: id_token.map(str::to_owned),
                             refresh_token: refresh_token.map(str::to_owned),
@@ -1586,6 +1593,7 @@ fn persistence_projection_preserves_exact_json_and_owned_decode() {
                         assert_eq!(owned.id_token.as_deref(), id_token);
                         assert_eq!(owned.refresh_token.as_deref(), refresh_token);
                         assert_eq!(owned.created_at, 7);
+                        assert_eq!(owned.session_expires_at, 3607);
                         assert_eq!(owned.expires_at, expires_at);
                         assert_eq!(format!("{source:?}"), "OidcSessionCookie { .. }");
                         assert_eq!(format!("{borrowed:?}"), "OidcSessionCookie { .. }");
@@ -1594,18 +1602,21 @@ fn persistence_projection_preserves_exact_json_and_owned_decode() {
             }
         }
     }
-    let minimal: OidcSessionCookie = serde_json::from_str(r#"{"created_at":7}"#).unwrap();
-    assert_eq!(serde_json::to_string(&minimal).unwrap(), r#"{"created_at":7}"#);
+    let minimal: OidcSessionCookie = serde_json::from_str(r#"{"created_at":7,"session_expires_at":3607}"#).unwrap();
+    assert_eq!(
+        serde_json::to_string(&minimal).unwrap(),
+        r#"{"created_at":7,"session_expires_at":3607}"#
+    );
     assert!(minimal.session_ref.is_empty());
     assert!(minimal.access_token.is_empty());
     assert!(minimal.id_token.is_none());
     let full: OidcSessionCookie = serde_json::from_str(
-        r#"{"session_ref":"ref","access_token":"legacy","created_at":7,"expires_at":42,"id_token":"","refresh_token":""}"#,
+        r#"{"session_ref":"ref","access_token":"legacy","created_at":7,"session_expires_at":3607,"expires_at":42,"id_token":"","refresh_token":""}"#,
     ).unwrap();
     assert_eq!(full.access_token, "legacy");
     assert_eq!(
         serde_json::to_string(&full.for_persistence("ref", true)).unwrap(),
-        r#"{"session_ref":"ref","created_at":7,"expires_at":42,"id_token":"","refresh_token":""}"#,
+        r#"{"session_ref":"ref","created_at":7,"session_expires_at":3607,"expires_at":42,"id_token":"","refresh_token":""}"#,
     );
 }
 
@@ -1626,6 +1637,7 @@ fn persistence_projection_allocation_comparison() {
             },
             access_token: token.into(),
             created_at: 7,
+            session_expires_at: 7 + 3600,
             expires_at: Some(42),
             id_token: Some("i".repeat(optional_len)),
             refresh_token: Some("r".repeat(optional_len)),
@@ -1668,6 +1680,7 @@ async fn persistence_caches_before_skipped_publication() {
             session_ref: " \t".into(),
             access_token: "exact-access-token".into(),
             created_at: OpenidConnect::now_unix_secs(),
+            session_expires_at: OpenidConnect::now_unix_secs() + 3600,
             expires_at: Some(OpenidConnect::now_unix_secs() + 3600),
             id_token: Some("i".repeat(config.max_session_cookie_bytes as usize + 1)),
             refresh_token: Some(String::new()),
@@ -1702,6 +1715,7 @@ async fn persisted_session_cookie_preserves_fields_and_source() {
                 },
                 access_token: token.to_string(),
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 60),
                 id_token: Some("id-token".to_string()),
                 refresh_token: Some("refresh-token".to_string()),
@@ -1762,6 +1776,7 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
         session_ref: "session-ref".to_string(),
         access_token: "access-token".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -1810,6 +1825,7 @@ async fn test_resolve_access_token_from_session_prefers_cache_when_cookie_token_
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -1863,6 +1879,7 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -1880,6 +1897,7 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
                 session_ref: "session-ref".to_string(),
                 access_token: token.to_string(),
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 60),
                 id_token: None,
                 refresh_token: Some("refresh-token".to_string()),
@@ -1948,6 +1966,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -1965,6 +1984,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
                 session_ref: "session-ref".to_string(),
                 access_token: refreshed_token.to_string(),
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 1),
                 id_token: None,
                 refresh_token: Some("refresh-token".to_string()),
@@ -2038,6 +2058,7 @@ async fn test_run_request_expired_refresh_publishes_updated_session_token() {
         session_ref: "expiry-session".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         // Keep preemptive refresh out of this verification-expiry scenario.
         expires_at: Some(now + 3600),
         id_token: None,
@@ -2086,6 +2107,7 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -2170,6 +2192,7 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
         session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some(String::new()),
@@ -2294,6 +2317,7 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
                 session_ref: "dye-session".to_string(),
                 access_token: token,
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 3600),
                 id_token: None,
                 refresh_token: Some("refresh-token".to_string()),
@@ -2648,6 +2672,7 @@ fn test_should_preemptive_refresh() {
         session_ref: "session-ref".to_string(),
         access_token: "a".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 10),
         id_token: None,
         refresh_token: Some("r".to_string()),
@@ -2656,6 +2681,7 @@ fn test_should_preemptive_refresh() {
         session_ref: "session-ref".to_string(),
         access_token: "a".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 1000),
         id_token: None,
         refresh_token: Some("r".to_string()),
@@ -2910,6 +2936,7 @@ async fn test_refresh_singleflight_wait_timeout() {
         session_ref: "session-ref".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 10),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -2937,6 +2964,7 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
                 session_ref: "session-ref".to_string(),
                 access_token: "cached-token".to_string(),
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 30),
                 id_token: Some("id-token".to_string()),
                 refresh_token: Some("refresh-token".to_string()),
@@ -2951,6 +2979,7 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
         session_ref: "session-ref".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 10),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -2975,6 +3004,7 @@ async fn test_try_get_recent_refresh_result_returns_none_after_ttl() {
         session_ref: "session-ref".to_string(),
         access_token: "cached-token".to_string(),
         created_at: now,
+        session_expires_at: now + 3600,
         expires_at: Some(now + 30),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
@@ -4554,6 +4584,7 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
                 session_ref: format!("cleanup-{scenario}"),
                 access_token: token.clone(),
                 created_at: now,
+                session_expires_at: now + 3600,
                 expires_at: Some(now + 3600),
                 id_token: None,
                 refresh_token: Some("refresh-token".into()),

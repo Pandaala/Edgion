@@ -5,7 +5,35 @@ use crate::plugins::http::common::auth_common::strip_cookies;
 use edgion_common::secret::get_secret;
 use edgion_resources::resources::gateway::SecretObjectReference;
 
+impl<S: AsRef<str>> OidcSessionCookie<S> {
+    /// Return only the remaining absolute session lifetime, never token lifetime.
+    pub(super) fn remaining_lifetime(&self, now: u64) -> VerifyResult<u64> {
+        if self.created_at == 0 || self.created_at > now || self.session_expires_at <= self.created_at {
+            return Err(OpenidConnect::credential_failure());
+        }
+        self.session_expires_at
+            .checked_sub(now)
+            .filter(|remaining| *remaining > 0)
+            .ok_or_else(OpenidConnect::credential_failure)
+    }
+}
+
 impl OpenidConnect {
+    pub(super) fn session_now(&self) -> u64 {
+        #[cfg(test)]
+        if let Some(clock) = &self.session_clock {
+            return clock.load(std::sync::atomic::Ordering::SeqCst);
+        }
+        Self::now_unix_secs()
+    }
+
+    pub(super) fn session_deadline(created_at: u64, lifetime: u64) -> VerifyResult<u64> {
+        created_at
+            .checked_add(lifetime)
+            .filter(|deadline| created_at > 0 && *deadline > created_at)
+            .ok_or_else(Self::credential_failure)
+    }
+
     pub(super) fn random_urlsafe<const N: usize>() -> String {
         let mut bytes = [0u8; N];
         rand::rng().fill_bytes(&mut bytes);

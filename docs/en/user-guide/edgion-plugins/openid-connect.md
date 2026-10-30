@@ -56,13 +56,37 @@
 |-----------|------|---------|-------------|
 | `sessionSecretRef` | Object | none | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
 | `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name. This cookie and `edgion_oidc_state` are Gateway-owned and are always removed from the request before proxying upstream. Application cookies are left unchanged. |
-| `sessionLifetime` | Integer | `3600` | Session lifetime (seconds) |
+| `sessionLifetime` | Integer | `3600` | Absolute session lifetime in seconds, fixed at login and enforced by the Gateway |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite attribute. Values: `Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly attribute |
 | `sessionCookieSecure` | Boolean | `true` | Cookie Secure attribute (must be `true` when `SameSite=None`) |
 | `maxSessionCookieBytes` | Integer | `3800` | Maximum session cookie size in bytes |
 | `renewAccessTokenOnExpiry` | Boolean | `true` | Whether to auto-refresh access token on expiry |
 | `accessTokenExpiresLeeway` | Integer | `0` | Access token expiry leeway (seconds) |
+
+The Gateway rejects a session at its authenticated deadline, even when a retained
+cookie contains a usable refresh token or its cached access token is still valid.
+Token refresh does not extend that deadline; refreshed cookies use only the remaining
+session lifetime as `Max-Age`. Access-token expiration and session expiration are
+independent. A zero or unrepresentable session lifetime cannot establish a session.
+
+Changing `sessionLifetime` affects new logins only. Existing sessions retain their
+original deadline, so increasing the value cannot revive an expired cookie and
+decreasing it does not immediately terminate existing sessions. Expired sessions
+follow `unauthAction`: `Deny` returns 401, `Auth` starts login again, and `Pass`
+continues without authenticating the session. An existing IdP login may complete
+the new login without prompting for a password.
+
+Gateway clocks must be synchronized: future issue times are rejected, and token
+clock-skew/leeway settings do not extend session deadlines. Authentication is
+checked again after asynchronous verification/refresh work before accepting the
+session. This does not disconnect streams already admitted. Logout can still clear
+an expired session and use its tokens for the configured logout/revocation flow.
+Bearer authentication is independent of the session deadline.
+
+Cookies issued before server-side deadlines were introduced lack the required
+deadline and require a new login after upgrading. Complete the Gateway rollout
+before relying on server-side enforcement; older binaries do not enforce it.
 
 ### Token Verification Parameters
 

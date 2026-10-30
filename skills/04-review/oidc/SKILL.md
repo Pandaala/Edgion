@@ -32,3 +32,4 @@ before applying a decision to current code.
 - [OIDC Path Redirect URIs Ignore Untrusted `X-Forwarded-Host` — FIXED](regression-guards/redirect-uri-ignores-untrusted-forwarded-host.md)
 - [OIDC Path Redirect URIs Derive the Scheme From the Connection — FIXED](regression-guards/redirect-uri-scheme-from-connection-not-forwarded-proto.md)
 - [OpenID Connect session/state cookies are Gateway-owned — FIXED](regression-guards/session-cookie-upstream-ownership.md)
+- [Absolute session deadlines and refresh boundaries](regression-guards/session-cookie-upstream-ownership.md#absolute-session-lifetime-oidc-01)

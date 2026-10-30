@@ -85,3 +85,4 @@ pub mod proxy_rewrite_host;
 pub mod downstream_ecdh_curves;
 
 pub mod auth_claim_headers;
+pub mod oidc_session_expiry;

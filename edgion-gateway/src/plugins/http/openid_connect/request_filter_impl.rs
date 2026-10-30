@@ -61,7 +61,11 @@ impl RequestFilter for OpenidConnect {
             }
 
             match self.extract_session_cookie_from_request(session) {
-                Ok(Some((mut session_cookie, raw_session_cookie_value))) => {
+                Ok(Some((mut session_cookie, raw_session_cookie_value))) => 'session_auth: {
+                    // Logout decodes independently; only authentication requires a live session.
+                    if session_cookie.remaining_lifetime(self.session_now()).is_err() {
+                        break 'session_auth;
+                    }
                     let mut token = self
                         .resolve_access_token_from_session(&session_cookie)
                         .await
@@ -115,6 +119,9 @@ impl RequestFilter for OpenidConnect {
                         match self.verify_token(session, &token).await {
                             Ok(claims) => {
                                 let userinfo_json = self.fetch_userinfo_json(&token, plugin_log).await;
+                                if session_cookie.remaining_lifetime(self.session_now()).is_err() {
+                                    break 'session_auth;
+                                }
                                 if self
                                     .apply_upstream_headers(
                                         session,
@@ -161,6 +168,9 @@ impl RequestFilter for OpenidConnect {
                                                         .await;
                                                     let userinfo_json =
                                                         self.fetch_userinfo_json(new_token, plugin_log).await;
+                                                    if session_cookie.remaining_lifetime(self.session_now()).is_err() {
+                                                        break 'session_auth;
+                                                    }
                                                     if self
                                                         .apply_upstream_headers(
                                                             session,
@@ -194,6 +204,12 @@ impl RequestFilter for OpenidConnect {
                                                     Ok(claims) if self.is_expired_within_leeway(&claims) => {
                                                         let userinfo_json =
                                                             self.fetch_userinfo_json(&token, plugin_log).await;
+                                                        if session_cookie
+                                                            .remaining_lifetime(self.session_now())
+                                                            .is_err()
+                                                        {
+                                                            break 'session_auth;
+                                                        }
                                                         if self
                                                             .apply_upstream_headers(
                                                                 session,

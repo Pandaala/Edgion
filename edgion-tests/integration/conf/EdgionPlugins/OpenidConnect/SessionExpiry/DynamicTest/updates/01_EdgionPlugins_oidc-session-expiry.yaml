@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: oidc-session-expiry
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: OpenidConnect
+      config:
+        discovery: "http://127.0.0.1:30040/oidc/.well-known/openid-configuration"
+        clientId: test-client
+        clientSecretRef:
+          name: oidc-session-expiry
+        sessionSecretRef:
+          name: oidc-session-expiry
+        bearerOnly: false
+        unauthAction: Deny
+        verificationMode: IntrospectionOnly
+        useJwks: false
+        sessionLifetime: 3600
+        claimsToHeaders:
+          sub: X-Oidc-Generation-two
+        timeout: 3
