@@ -10,7 +10,7 @@
 //! | Policy data | `RequestAccessUrlAllowList` | URL allow candidates bound by RequestAccessPolicy |
 //! | Security policy | `ProxyProtocolTrust` | Strict inbound PROXY sender trust policy |
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
-//! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
+//! | Regional settings | `ClusterRegionSetting` | Required local identity and destination table via `clusterRegionRef` |
 //! | Executable policy data | `WafRuleBundle` | Strict WAF inputs with optional content pins |
 //! | WAF policy | `WafPolicy` | Named bundle combinations selected by a consuming plugin |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
@@ -32,7 +32,7 @@ pub use waf_tags::{inspect_local_waf_tags, WafTagQuery, WafTagReport, MAX_WAF_TA
 pub use ip_group::IpGroup;
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
-pub use region_route::{validate_regions, RegionRouteOverride, RegionTableValidation};
+pub use region_route::{validate_regions, ClusterRegionSetting, RegionTableValidation};
 pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 pub use waf_policy::{
@@ -243,11 +243,10 @@ pub enum ConfigEntry {
     /// profiles; fail-to-base on absent/unknown/type-mismatch.
     Selector(Selector),
 
-    /// Typed overlay for RegionRoute. All fields are optional; `regions` (if `Some`)
-    /// whole-replaces the base region table. Logic fields are not overridable.
-    /// Referenced via `overrideRef` in `RegionRouteConfig` (EdgionPlugins).
-    /// Fail-to-base applies on absent/invalid/type-mismatch.
-    RegionRouteOverride(RegionRouteOverride),
+    /// Local cluster/region identity and the complete RegionRoute destination table.
+    /// Referenced via required `clusterRegionRef` in RegionRouteConfig.
+    /// Unavailable settings follow the consumer's failOpen/statusOnError policy.
+    ClusterRegionSetting(ClusterRegionSetting),
 
     /// Strict, non-overlay WAF rule and phrase-asset bundle. Standalone
     /// validation checks structure and integrity; the consumer compiles it.
@@ -292,8 +291,8 @@ impl Serialize for ConfigEntry {
                 config,
             }
             .serialize(serializer),
-            Self::RegionRouteOverride(config) => ExtensionEnvelope {
-                kind: "RegionRouteOverride",
+            Self::ClusterRegionSetting(config) => ExtensionEnvelope {
+                kind: "ClusterRegionSetting",
                 config,
             }
             .serialize(serializer),
@@ -326,7 +325,7 @@ impl EdgionConfigData {
             ConfigEntry::RequestAccessUrlAllowList(_) => "RequestAccessUrlAllowList",
             ConfigEntry::ProxyProtocolTrust(_) => "ProxyProtocolTrust",
             ConfigEntry::Selector(_) => "Selector",
-            ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
+            ConfigEntry::ClusterRegionSetting(_) => "ClusterRegionSetting",
             ConfigEntry::WafRuleBundle(_) => "WafRuleBundle",
             ConfigEntry::WafPolicy(_) => "WafPolicy",
             ConfigEntry::Misc(_) => "Misc",
@@ -344,7 +343,7 @@ impl EdgionConfigData {
         match &self.spec.data {
             // IpList compilation is partial-good (see the partial-good spec): bad entries are
             // skipped at index-build time and surfaced via the PartiallyInvalid status condition,
-            // NOT rejected here. KeyList/RegionRouteOverride remain all-or-nothing.
+            // NOT rejected here. KeyList/ClusterRegionSetting remain all-or-nothing.
             ConfigEntry::IpList(_) => {}
             ConfigEntry::RequestAccessUrlAllowList(data) => {
                 if let Err(error) = data.validate() {
@@ -371,10 +370,10 @@ impl EdgionConfigData {
             // Selector is always structurally valid; the active-name ↔ profile check is a
             // consumer-side concern (done at connection time against the plugin's profiles).
             ConfigEntry::Selector(_) => {}
-            ConfigEntry::RegionRouteOverride(ov) => {
-                // Standalone validation of the overlay (only validates present fields).
+            ConfigEntry::ClusterRegionSetting(ov) => {
+                // Validate identity, local membership and the complete destination table.
                 if let Err(e) = ov.validate_and_init() {
-                    errors.push(format!("RegionRouteOverride invalid: {}", e));
+                    errors.push(format!("ClusterRegionSetting invalid: {}", e));
                 }
             }
             ConfigEntry::WafPolicy(policy) => {

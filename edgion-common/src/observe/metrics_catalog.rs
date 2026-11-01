@@ -1350,16 +1350,18 @@ pub static DEFINITIONS: &[Definition] = &[
         contribution: false,
     },
     Definition {
-        name: "edgion_region_route_overlay_events_total",
+        name: "edgion_region_route_config_events_total",
         kind: MetricType::Counter,
         class: MetricClass::Fixed,
         labels: &[LabelDefinition {
             key: "result",
             domain: LabelDomain::Closed(&[
-                "overlay_missing",
-                "overlay_disabled",
-                "overlay_type_mismatch",
-                "overlay_invalid",
+                "setting_reference_unavailable",
+                "setting_missing",
+                "setting_disabled",
+                "setting_type_mismatch",
+                "setting_invalid",
+                "hash_modulo_invalid",
             ]),
             required: true,
         }],
@@ -1478,7 +1480,7 @@ pub fn definition(name: &str) -> Option<&'static Definition> {
         "edgion_gateway_circuit_breaker_shed_total" => Some(&DEFINITIONS[95]),
         "edgion_lb_degrade_selections_total" => Some(&DEFINITIONS[96]),
         "edgion_rr_selector_truncated_total" => Some(&DEFINITIONS[97]),
-        "edgion_region_route_overlay_events_total" => Some(&DEFINITIONS[98]),
+        "edgion_region_route_config_events_total" => Some(&DEFINITIONS[98]),
         "edgion_acme_challenge_lookup_total" => Some(&DEFINITIONS[99]),
         _ => None,
     }

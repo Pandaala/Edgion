@@ -8,9 +8,9 @@ spec:
     type: IpList
     config:
       items:
-        - name: loopback
-          cidrs:
-            - 127.0.0.0/8
+      - name: loopback
+        cidrs:
+        - 127.0.0.0/8
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -23,9 +23,9 @@ spec:
     type: IpList
     config:
       items:
-        - name: loopback
-          cidrs:
-            - 127.0.0.0/8
+      - name: loopback
+        cidrs:
+        - 127.0.0.0/8
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -37,9 +37,9 @@ spec:
     type: IpList
     config:
       items:
-        - name: loopback
-          cidrs:
-            - 127.0.0.0/8
+      - name: loopback
+        cidrs:
+        - 127.0.0.0/8
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -48,14 +48,14 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        defaultAction: allow
-        denyRefs:
-          - name: ecd-refgrant-blocklist
-            namespace: edgion-default
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      defaultAction: allow
+      denyRefs:
+      - name: ecd-refgrant-blocklist
+        namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -64,16 +64,16 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        defaultAction: allow
-        denyRefs:
-          - name: acl-ecd-allow-refs-cross-ns-deny-4e9f106305
-        allowRefs:
-          - name: ecd-refgrant-blocklist
-            namespace: edgion-default
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      defaultAction: allow
+      denyRefs:
+      - name: acl-ecd-allow-refs-cross-ns-deny-4e9f106305
+      allowRefs:
+      - name: ecd-refgrant-blocklist
+        namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -82,14 +82,14 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        defaultAction: allow
-        denyRefs:
-          - name: ecd-refgrant-cluster-data
-            namespace: edgion-default
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      defaultAction: allow
+      denyRefs:
+      - name: ecd-refgrant-cluster-data
+        namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -98,13 +98,13 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        defaultAction: allow
-        denyRefs:
-          - name: ecd-same-ns-data
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      defaultAction: allow
+      denyRefs:
+      - name: ecd-same-ns-data
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -113,13 +113,17 @@ metadata:
   namespace: edgion-default
 spec:
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
       regions:
-        - name: us
-          hashRange: [0, 999]
-          backendEndpoint: us-backend:8080
-          tls: false
+      - name: us
+        hashRange:
+        - 0
+        - 999
+        backendEndpoint: us-backend:8080
+        tls: false
+      clusterName: integration
+      regionName: us
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -131,7 +135,8 @@ spec:
     type: Selector
     config:
       active: lockdown
-      description: cross-ns activeProfileRef target for reference-grant integration test
+      description: cross-ns activeProfileRef target for reference-grant integration
+        test
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -140,19 +145,13 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: RegionRoute
-      config:
-        myRegion: us
-        regions:
-          - name: us
-            hashRange: [0, 999]
-            backendEndpoint: us-backend:8080
-            tls: false
-        routeRules: []
-        overrideRef:
-          name: ecd-region-override
-          namespace: edgion-default
+  - enable: true
+    type: RegionRoute
+    config:
+      routeRules: []
+      clusterRegionRef:
+        name: ecd-region-override
+        namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -161,23 +160,23 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: RequestAccessPolicy
-      config:
-        defaultProfile: normal
-        profiles:
-          normal:
-            requiredRuleGroups:
-              - name: source
-                anyOfRules:
-                  - name: internal
-                    type: directPeerIp
-                    config:
-                      ipRefs:
-                        - name: condition-source-ips
-        activeProfileRef:
-          name: ecd-active-selector
-          namespace: edgion-default
+  - enable: true
+    type: RequestAccessPolicy
+    config:
+      defaultProfile: normal
+      profiles:
+        normal:
+          requiredRuleGroups:
+          - name: source
+            anyOfRules:
+            - name: internal
+              type: directPeerIp
+              config:
+                ipRefs:
+                - name: condition-source-ips
+      activeProfileRef:
+        name: ecd-active-selector
+        namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -186,11 +185,11 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        defaultAction: allow
-        allowRefs:
-          - name: ecd-does-not-exist
-            namespace: edgion-test
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      defaultAction: allow
+      allowRefs:
+      - name: ecd-does-not-exist
+        namespace: edgion-test

@@ -12,7 +12,7 @@ fn deny_all_has_fixed_cardinality_and_canonical_serialization() {
     let access = snapshot(&role(Vec::new())).unwrap();
     assert_eq!(access.resources.len(), 22);
     assert!(access.resources.iter().all(|row| row.verbs.is_empty()));
-    assert_eq!(access.operations.len(), 8);
+    assert_eq!(access.operations.len(), 9);
     assert!(access.operations.iter().all(|operation| !operation.allowed));
     assert_eq!(access.resources[0].kind, "GatewayClass");
     assert_eq!(access.resources[0].scope, "cluster");
@@ -63,7 +63,7 @@ fn default_center_policy_expands_expected_secret_and_operation_boundaries() {
     assert!(secret.verbs.is_empty());
     assert_eq!(
         config_data.verbs,
-        vec!["get", "list", "list-keys", "watch", "create", "update", "delete"]
+        vec!["get", "list", "list-keys", "create", "update", "delete"]
     );
     assert!(
         snapshot

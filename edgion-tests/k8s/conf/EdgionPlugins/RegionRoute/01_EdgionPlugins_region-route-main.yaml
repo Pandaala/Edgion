@@ -7,19 +7,6 @@ spec:
   requestPlugins:
   - type: RegionRoute
     config:
-      regions:
-      - name: virginia
-        hashRange:
-        - 0
-        - 599
-        backendEndpoint: 127.0.0.1:30001
-        tls: false
-      - name: ohio
-        hashRange:
-        - 600
-        - 999
-        backendEndpoint: 127.0.0.1:30002
-        tls: false
       keyGet:
       - type: header
         name: X-Account-Id
@@ -48,3 +35,5 @@ spec:
         matchMap:
           vip-va: virginia
           vip-oh: ohio
+      clusterRegionRef:
+        name: region-route-main-setting

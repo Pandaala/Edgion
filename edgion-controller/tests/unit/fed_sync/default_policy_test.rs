@@ -23,8 +23,10 @@ fn default_allows_list_gateway() {
 }
 
 #[test]
-fn default_allows_watch_edgionconfigdata() {
-    assert!(allows(&az(), Verb::Watch, "EdgionConfigData"));
+fn default_watch_is_dedicated_regionroute_only() {
+    assert!(!allows(&az(), Verb::Watch, "EdgionConfigData"));
+    assert!(!allows(&az(), Verb::Watch, "EdgionTls"));
+    assert!(allows(&az(), Verb::Watch, "RegionRoute"));
 }
 
 #[test]

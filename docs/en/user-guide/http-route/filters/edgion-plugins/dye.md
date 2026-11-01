@@ -76,7 +76,7 @@ An unsupported outcome reports a configuration error and disables that entry's
 | `Canary` | Request: `success` plus the configured `onInvalid` outcome. |
 | `DynamicInternalUpstream` | Request: `success`, configured `onMissing`/`onInvalid` outcomes; `onNoMatch` only in rules mode. |
 | `DynamicExternalUpstream`, `DirectEndpoint` | Request: selection success and the outcomes selected by applicable fallback/reject policies. |
-| `RegionRoute` | Request: success with routing rules and a region source; fallback only with an applicable `overrideRef`; never reject. |
+| `RegionRoute` | Request: success with nonempty routing rules; fallback when failOpen=true, reject when failOpen=false. |
 | `RateLimitRedis` | Request: `onRedisFailure: Allow` permits `fail-open`; `Deny` permits `fail-close`. |
 | `ExtProc` | Request entry, including attached callbacks before response headers commit: the outcome selected by `failureModeAllow`. |
 | `Wasm` | Request or upstream response filter: the outcome selected by `failOpen`. No response-body dye. |

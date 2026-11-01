@@ -5,28 +5,22 @@ fn failover_request_rejects_unknown_fields() {
     // Any unknown field must be rejected to keep the contract
     // "failover endpoint can only change failoverTo".
     let json = r#"{
-            "namespace": "default",
-            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": "west",
             "myRegion": "evil"
         }"#;
-    let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
+    let result: Result<SettingFailoverRequest, _> = serde_json::from_str(json);
     assert!(result.is_err(), "unknown field 'myRegion' must be rejected");
 }
 
 #[test]
 fn failover_request_accepts_canonical_payload() {
     let json = r#"{
-            "namespace": "default",
-            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": "west"
         }"#;
-    let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
-    let req = result.expect("canonical 4-field payload must be accepted");
-    assert_eq!(req.namespace, "default");
-    assert_eq!(req.name, "test-override-route");
+    let result: Result<SettingFailoverRequest, _> = serde_json::from_str(json);
+    let req = result.expect("canonical target payload must be accepted");
     assert_eq!(req.region_name, "east");
     assert_eq!(req.failover_to, "west");
 }
@@ -34,12 +28,10 @@ fn failover_request_accepts_canonical_payload() {
 #[test]
 fn failover_request_accepts_empty_failover_to() {
     let json = r#"{
-            "namespace": "default",
-            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": ""
         }"#;
-    let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
+    let result: Result<SettingFailoverRequest, _> = serde_json::from_str(json);
     assert!(result.is_ok());
     assert_eq!(result.unwrap().failover_to, "");
 }
@@ -167,7 +159,7 @@ fn route_usage_discovers_rule_and_backend_extension_refs() {
             }
         ]}
     })];
-    let usages = collect_route_usages("shop", "region", &http_routes, &[]);
+    let usages = collect_route_usages("shop", "region", &http_routes, &[], &mut ProjectionBudget::new()).unwrap();
     assert_eq!(usages.len(), 2);
     assert_eq!(usages[0]["routeKind"], "HTTPRoute");
     assert_eq!(usages[0]["backendServices"][0]["name"], "checkout-api");
@@ -185,7 +177,11 @@ fn route_usage_rejects_other_namespaces_and_reference_kinds() {
             }}]
         }]}
     })];
-    assert!(collect_route_usages("shop", "region", &routes, &[]).is_empty());
+    assert!(
+        collect_route_usages("shop", "region", &routes, &[], &mut ProjectionBudget::new())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -207,132 +203,90 @@ fn route_usage_uses_delegation_resolved_rules() {
             }]
         }
     })];
-    let usages = collect_route_usages("shop", "region", &routes, &[]);
+    let usages = collect_route_usages("shop", "region", &routes, &[], &mut ProjectionBudget::new()).unwrap();
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0]["backendServices"][0]["name"], "child-service");
 }
 
 #[test]
-fn override_ref_keeps_namespace_and_applies_effective_regions() {
-    let reference = parse_override_ref(
-        &serde_json::json!({"namespace": "operations", "name": "region-overlay"}),
-        "shop",
-    )
-    .expect("structured reference");
-    assert_eq!(reference["namespace"], "operations");
-    let base = serde_json::json!([{
-        "name": "base", "hashRange": [0, 999], "backendEndpoint": "base.example.test"
-    }]);
-    let config = RegionRouteConfig {
-        regions: serde_json::from_value(base.clone()).unwrap(),
-        ..Default::default()
-    };
-    let resources = vec![serde_json::json!({
-        "metadata": {"namespace": "operations", "name": "region-overlay"},
-        "spec": {"enable": true, "data": {"type": "RegionRouteOverride", "config": {
-            "regions": [{
-                "name": "effective",
-                "hashRange": [0, 499],
-                "backendEndpoint": "effective.example.test:443",
-                "tls": true,
-                "failoverTo": "backup"
-            }, {
-                "name": "backup",
-                "hashRange": [500, 999],
-                "backendEndpoint": "backup.example.test"
-            }]
+fn setting_lookup_preserves_exact_source_and_consumer_validation() {
+    let config: RegionRouteConfig = serde_json::from_value(serde_json::json!({
+        "clusterRegionRef":{"namespace":"operations","name":"local"}
+    }))
+    .unwrap();
+    let resource = serde_json::json!({
+        "metadata":{"namespace":"operations","name":"local"},
+        "spec":{"data":{"type":"ClusterRegionSetting","config":{
+            "clusterName":"prod","regionName":"east","regions":[
+                {"name":"east","hashRange":[0,999],"backendEndpoint":"east:80"}
+            ]
         }}}
-    })];
-    let (regions, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
-    assert!(applied);
-    assert_eq!(regions[0]["name"], "effective");
-    assert_eq!(regions[0]["failoverTo"], "backup");
-}
-
-#[test]
-fn invalid_region_override_falls_back_to_base() {
-    let reference = serde_json::json!({
-        "namespace": "operations",
-        "name": "region-overlay",
-        "permitted": true
     });
-    let base = serde_json::json!([{
-        "name": "base",
-        "hashRange": [0, 999],
-        "backendEndpoint": "base.example.test:443",
-        "tls": true
-    }]);
-    let resources = vec![serde_json::json!({
-        "metadata": {"namespace": "operations", "name": "region-overlay"},
-        "spec": {"enable": true, "data": {"type": "RegionRouteOverride", "config": {
-            "regions": [{
-                "name": "broken",
-                "hashRange": [999, 0],
-                "backendEndpoint": "broken.example.test:443",
-                "tls": true
-            }]
-        }}}
-    })];
-    let config = RegionRouteConfig {
-        regions: serde_json::from_value(base.clone()).unwrap(),
-        ..Default::default()
-    };
-    let (regions, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
-    assert!(!applied);
-    assert_eq!(regions, base);
-}
-
-#[test]
-fn region_override_is_validated_for_each_consumers_modulo() {
-    use edgion_resources::resources::edgion_plugins::plugin_configs::HashCalcConfig;
-
-    let reference = serde_json::json!({"namespace": "default", "name": "overlay"});
-    let base = serde_json::json!([
-        {"name": "base", "hashRange": [0, 99], "backendEndpoint": "base.example.test"}
-    ]);
-    let resources = vec![serde_json::json!({
-        "metadata": {"namespace": "default", "name": "overlay"},
-        "spec": {"data": {"type": "RegionRouteOverride", "config": {"regions": [
-            {"name": "overlay", "hashRange": [0, 999], "backendEndpoint": "overlay.example.test"}
-        ]}}}
-    })];
-    for (modulo, expected_applied) in [(100, false), (1000, true)] {
-        let config = RegionRouteConfig {
-            regions: serde_json::from_value(base.clone()).unwrap(),
-            hash_calc: Some(HashCalcConfig {
-                modulo,
-                algorithm: Default::default(),
-                write_back: Vec::new(),
-            }),
-            ..Default::default()
-        };
-        let (effective, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
-        assert_eq!(applied, expected_applied);
-        assert_eq!(effective[0]["name"], if expected_applied { "overlay" } else { "base" });
-    }
-}
-
-#[test]
-fn disabled_and_absent_region_overrides_inherit_base() {
-    let reference = serde_json::json!({"namespace": "default", "name": "overlay"});
-    let base = serde_json::json!([
-        {"name": "base", "hashRange": [0, 999], "backendEndpoint": "base.example.test"}
-    ]);
-    let config = RegionRouteConfig {
-        regions: serde_json::from_value(base.clone()).unwrap(),
-        ..Default::default()
-    };
-    for overlay in [
-        serde_json::json!({}),
-        serde_json::json!({"regions": null}),
-        serde_json::json!({"regions": []}),
+    let setting = read_region_setting(&config, "shop", std::slice::from_ref(&resource)).unwrap();
+    assert_eq!(setting.region_name, "east");
+    let proof = setting.validation_proof().unwrap();
+    assert!(proof.accepts_modulo(1000));
+    assert!(!proof.accepts_modulo(100));
+    assert!(read_region_setting(&config, "shop", &[]).is_none());
+    for (pointer, value) in [
+        ("/spec/enable", serde_json::json!(false)),
+        ("/spec/data/type", serde_json::json!("Misc")),
+        ("/metadata/name", serde_json::json!("other")),
     ] {
-        let resources = vec![serde_json::json!({
-            "metadata": {"namespace": "default", "name": "overlay"},
-            "spec": {"data": {"type": "RegionRouteOverride", "config": overlay}}
-        })];
-        let (effective, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
-        assert!(!applied);
-        assert_eq!(effective, base);
+        let mut changed = resource.clone();
+        if pointer == "/spec/enable" {
+            changed["spec"]["enable"] = value;
+        } else {
+            *changed.pointer_mut(pointer).unwrap() = value;
+        }
+        assert!(read_region_setting(&config, "shop", &[changed]).is_none());
     }
+    let mut invalid = resource;
+    invalid["spec"]["data"]["config"]["regionName"] = serde_json::json!("missing");
+    assert!(read_region_setting(&config, "shop", &[invalid])
+        .unwrap()
+        .validation_proof()
+        .is_err());
+}
+
+#[test]
+fn fresh_resource_version_skips_an_external_version_equal_to_next_allocation() {
+    let mut next = 42;
+    let version = distinct_resource_version(Some("42"), || {
+        let value = next;
+        next += 1;
+        value
+    });
+    assert_eq!(version, "43");
+    assert_eq!(next, 44);
+    assert_eq!(distinct_resource_version(None, || 7), "7");
+}
+
+#[test]
+fn usage_projection_shares_nested_row_budget_and_rejects_large_identity() {
+    let backends = vec![serde_json::json!({"name":"backend","port":80}); 1001];
+    assert_eq!(
+        route_usage(
+            "HTTPRoute",
+            "ns",
+            "route",
+            0,
+            backends.iter(),
+            &mut ProjectionBudget::new()
+        ),
+        Err(StatusCode::PAYLOAD_TOO_LARGE)
+    );
+    let name = "x".repeat(8 * 1024 * 1024);
+    assert_eq!(
+        route_usage("HTTPRoute", "ns", &name, 0, [].iter(), &mut ProjectionBudget::new()),
+        Err(StatusCode::PAYLOAD_TOO_LARGE)
+    );
+    // A second parent shares the same ledger rather than resetting child budgets.
+    let mut budget = ProjectionBudget::new();
+    let backends = vec![serde_json::json!({"name":"backend"}); 600];
+    route_usage("HTTPRoute", "ns", "first", 0, backends.iter(), &mut budget).unwrap();
+    assert_eq!(
+        route_usage("HTTPRoute", "ns", "second", 1, backends.iter(), &mut budget),
+        Err(StatusCode::PAYLOAD_TOO_LARGE)
+    );
 }

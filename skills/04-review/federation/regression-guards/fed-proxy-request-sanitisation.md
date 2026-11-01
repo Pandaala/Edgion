@@ -13,7 +13,8 @@ knowledge_type: regression-guards
 
 **FIXED (controller-06, 2026-06-14).** The Controller federation client's
 `CenterPayload::HttpProxy` arm
-(`edgion-controller/src/fed_sync/fed_client/mod.rs`) now sanitises the
+(`edgion-controller/src/fed_sync/fed_client/mod.rs`, with execution in
+`fed_client/proxy.rs`) sanitises the
 Center-supplied request envelope before building the `http::Request` it feeds to
 the admin router via `oneshot`. This is defence-in-depth: the mTLS channel +
 injected `CenterRestricted` RBAC role already authenticate and authorize the peer
@@ -28,16 +29,48 @@ misconfigured. Four narrow checks now run inside the spawned task:
    falling back to `http::Method::GET` (a malformed payload must not become a
    side-effecting GET).
 3. **Path** — `proxy_req.path` (query/fragment stripped) must start with one of
-   `ALLOWED_PROXY_PATH_PREFIXES` (`/api/v1/`, `/configserver/`, `/health`,
+   `ALLOWED_PROXY_PATH_PREFIXES` (`/api/v1/`, `/health`,
    `/ready`, `/metrics`) → otherwise 404 before the router is touched.
 4. **Headers** — only `ALLOWED_PROXY_HEADERS` (`accept`, `content-type`,
-   `user-agent`, case-insensitive) are forwarded; everything else
+   `if-match`, `user-agent`, case-insensitive) are forwarded; everything else
    (`Authorization`, `Cookie`, `X-Forwarded-*`, hop-by-hop, ...) is dropped.
 
 Fix suggestions of the form "centralise the allowlist as a tower middleware on
 the cloned fed router", "forward an `x-edgion-federation-client-id` header so the
 handler can identify the Center", or "drop the local checks because mTLS + RBAC
 already cover this" are **not accepted** (see below).
+
+The source-browsing migration removed `/configserver/` from federation reachability.
+Local diagnostics keep their existing embedded-credential redaction; their
+exclusion is distinct from the old unredacted generic Watch leak. `if-match`
+preserves source CAS preconditions. Bounded proxy envelopes, response serialization
+and execution deadlines additionally constrain the request task; these are not
+permission to expose processed resource bodies.
+
+### Processed resource boundary (ISSUE-009)
+
+`ISSUE-009` from `important_issue/run-e6cbd068` identified an unredacted generic
+federation Watch of processed EdgionTls resources, including resolved TLS private
+keys. Excluding Secret from RBAC did not exclude credentials embedded in another
+resource. The correction removes generic processed List/Watch from federation:
+`fed_client/center_watch.rs` accepts only the exact synthetic `RegionRoute` view,
+including under a wildcard policy, and reads only allowlisted lightweight
+`CenterWatchStore` projections. Adding a future view requires separate projection
+and authorization review; granting a generic kind must never expose ServerCache.
+
+This is distinct from local `/configserver` redaction, which already existed.
+Federation proxy rejection of `/configserver/` establishes the source-resource
+boundary; it is not the fix for the historical unredacted Watch itself. Gateway
+conf_sync still carries real credentials through its trusted channel.
+
+Evidence includes `generic_kinds_are_denied_even_with_wildcard_policy_and_faulted_store`,
+dedicated List/update/delete and revocation tests, strict projection fixtures,
+`configserver_redacts_resolved_secrets`, and
+`sync_cached_path_ships_real_secrets_and_stays_unpoisoned`. Cross-repository live
+acceptance exercised directory deltas and the processed proxy denial; real Gateway
+`CredentialInjectorDynamic` exercised initial credentials, rotation, deletion,
+and recovery. Re-evaluate if a projection gains payload fields, a generic Watch
+kind is accepted, or a processed diagnostic endpoint becomes federation-reachable.
 
 ## Core Rationale
 
@@ -59,7 +92,7 @@ arm-local form is a single-file, cold-path change that cannot perturb the
 authn/authz onion.
 
 **3. The header allowlist is positive, not a denylist.**
-Center legitimately needs only `accept` / `content-type` / `user-agent` for the
+Center forwards `accept` / `content-type` / `if-match` / `user-agent` for the
 admin REST calls it drives. `content-length` / `host` are recomputed by the
 in-process `oneshot` and must not be forwarded. A denylist of "bad" headers would
 silently let future smuggling vectors through; the positive allowlist fails safe.
@@ -85,10 +118,10 @@ silently let future smuggling vectors through; the positive allowlist fails safe
 
 Re-open only if:
 
-- An admin endpoint legitimately reachable over federation moves outside the five
+- An admin endpoint legitimately reachable over federation moves outside the four
   allowlisted path prefixes (extend `ALLOWED_PROXY_PATH_PREFIXES`).
 - A federation admin call legitimately needs a request header outside
-  `accept`/`content-type`/`user-agent` (extend `ALLOWED_PROXY_HEADERS`, never
+  `accept`/`content-type`/`if-match`/`user-agent` (extend `ALLOWED_PROXY_HEADERS`, never
   re-add `Authorization`/`Cookie`/`X-Forwarded-*`).
 - The 1 MB inbound body cap proves too small for a legitimate admin payload
   (raise `MAX_PROXY_REQUEST_BODY`, keep it ≤ the 10 MB response cap).

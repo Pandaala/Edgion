@@ -1,21 +1,21 @@
 // EdgionConfigDataManagedRegionRoute Integration Test Suite
 //
-// Tests the EdgionConfigData overlay architecture where RegionRouteOverride EdgionConfigDatas are pre-created
-// by administrators and referenced via EdgionPlugins.overrideRef.
+// Tests the EdgionConfigData overlay architecture where ClusterRegionSetting EdgionConfigDatas are pre-created
+// by administrators and referenced via EdgionPlugins.clusterRegionRef.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataManaged/):
-//   01_EdgionConfigData_data-managed.yaml          — RegionRouteOverride EdgionConfigData for data-managed test
-//   01_EdgionConfigData_data-validated.yaml        — RegionRouteOverride EdgionConfigData for data-validated test
-//   01_EdgionPlugins_data-managed.yaml           — EdgionPlugins with overrideRef → data-managed
-//   01_EdgionPlugins_data-validated.yaml         — EdgionPlugins with overrideRef → data-validated
+//   01_EdgionConfigData_data-managed.yaml          — ClusterRegionSetting EdgionConfigData for data-managed test
+//   01_EdgionConfigData_data-validated.yaml        — ClusterRegionSetting EdgionConfigData for data-validated test
+//   01_EdgionPlugins_data-managed.yaml           — EdgionPlugins with clusterRegionRef → data-managed
+//   01_EdgionPlugins_data-validated.yaml         — EdgionPlugins with clusterRegionRef → data-validated
 //   02_HTTPRoute_data-managed-test.yaml
 //
 // Scenarios:
-//   1. override_data_exists: Verify that the pre-created RegionRouteOverride EdgionConfigData "data-managed"
+//   1. override_data_exists: Verify that the pre-created ClusterRegionSetting EdgionConfigData "data-managed"
 //      exists with correct regions via the configserver API.
-//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "data-managed" has current Accepted and ResolvedRefs observations for its overrideRef.
+//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "data-managed" has current Accepted and ResolvedRefs observations for its clusterRegionRef.
 //   3. pm_validated_accepted: Verify that EdgionPlugins "data-validated" also resolves its declared override
-//      when its pre-created RegionRouteOverride EdgionConfigData is present.
+//      when its pre-created ClusterRegionSetting EdgionConfigData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers::controller_local_conditions;
@@ -39,7 +39,7 @@ fn validate_overlay_resolution(resource: &serde_json::Value, expected: &str) -> 
         None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(true)) => {}
         _ => return Err("RegionRoute entry is not enabled"),
     }
-    let reference = &entry["config"]["overrideRef"];
+    let reference = &entry["config"]["clusterRegionRef"];
     let namespace = match reference.get("namespace") {
         None | Some(serde_json::Value::Null) => PM_MANAGED_NS,
         Some(value) => value.as_str().ok_or("Invalid override namespace")?,
@@ -84,12 +84,12 @@ impl EdgionConfigDataManagedTestSuite {
     // Test 1: override_data_exists
     // =========================================================================
 
-    /// Verify that the pre-created RegionRouteOverride EdgionConfigData "data-managed" exists with the correct
+    /// Verify that the pre-created ClusterRegionSetting EdgionConfigData "data-managed" exists with the correct
     /// regions. Administrators must create this EdgionConfigData before the EP is applied.
     fn override_data_exists() -> TestCase {
         TestCase::new(
             "override_data_exists",
-            "Pre-created RegionRouteOverride EdgionConfigData 'data-managed' exists with correct regions",
+            "Pre-created ClusterRegionSetting EdgionConfigData 'data-managed' exists with correct regions",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -115,7 +115,7 @@ impl EdgionConfigDataManagedTestSuite {
                                     let data = &body["data"];
                                     let ed_data = &data["spec"]["data"];
                                     let ed_type = ed_data["type"].as_str().unwrap_or("");
-                                    if ed_type == "RegionRouteOverride" {
+                                    if ed_type == "ClusterRegionSetting" {
                                         let config = &ed_data["config"];
                                         let regions = &config["regions"];
                                         let has_regions = regions.as_array().map(|r| !r.is_empty()).unwrap_or(false);
@@ -125,11 +125,11 @@ impl EdgionConfigDataManagedTestSuite {
                                             break;
                                         } else {
                                             last_err =
-                                                "RegionRouteOverride found but regions list is empty".to_string();
+                                                "ClusterRegionSetting found but regions list is empty".to_string();
                                         }
                                     } else {
                                         last_err = format!(
-                                            "EdgionConfigData found but data type is not RegionRouteOverride: {}",
+                                            "EdgionConfigData found but data type is not ClusterRegionSetting: {}",
                                             ed_type
                                         );
                                     }
@@ -155,14 +155,14 @@ impl EdgionConfigDataManagedTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "RegionRouteOverride EdgionConfigData 'data-managed' exists with correct regions"
+                            "ClusterRegionSetting EdgionConfigData 'data-managed' exists with correct regions"
                                 .to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "RegionRouteOverride EdgionConfigData 'data-managed' not found or invalid within timeout. Last error: {}",
+                                "ClusterRegionSetting EdgionConfigData 'data-managed' not found or invalid within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -233,7 +233,7 @@ impl EdgionConfigDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'data-managed' accepted — overrideRef resolved correctly".to_string(),
+                            "EdgionPlugins 'data-managed' accepted — clusterRegionRef resolved correctly".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -254,7 +254,7 @@ impl EdgionConfigDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "data-validated" also resolves its declared override when its pre-created
-    /// RegionRouteOverride EdgionConfigData "data-validated" is present.
+    /// ClusterRegionSetting EdgionConfigData "data-validated" is present.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",
@@ -263,7 +263,7 @@ impl EdgionConfigDataManagedTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // First ensure the RegionRouteOverride EdgionConfigData "data-validated" is visible via configserver
+                    // First ensure the ClusterRegionSetting EdgionConfigData "data-validated" is visible via configserver
                     let pm_url = format!(
                         "{}/configserver/EdgionConfigData?namespace={}&name=data-validated",
                         ctx.admin_api_url(),
@@ -279,7 +279,7 @@ impl EdgionConfigDataManagedTestSuite {
                             if resp.status().is_success() {
                                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                                     if body["success"].as_bool().unwrap_or(false)
-                                        && body["data"]["spec"]["data"]["type"].as_str() == Some("RegionRouteOverride")
+                                        && body["data"]["spec"]["data"]["type"].as_str() == Some("ClusterRegionSetting")
                                     {
                                         pm_exists = true;
                                         break;
@@ -292,7 +292,7 @@ impl EdgionConfigDataManagedTestSuite {
                     if !pm_exists {
                         return TestResult::failed(
                             start.elapsed(),
-                            "Pre-created RegionRouteOverride EdgionConfigData 'data-validated' not found via configserver within timeout"
+                            "Pre-created ClusterRegionSetting EdgionConfigData 'data-validated' not found via configserver within timeout"
                                 .to_string(),
                         );
                     }
@@ -345,7 +345,7 @@ impl EdgionConfigDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'data-validated' accepted with pre-created RegionRouteOverride EdgionConfigData"
+                            "EdgionPlugins 'data-validated' accepted with pre-created ClusterRegionSetting EdgionConfigData"
                                 .to_string(),
                         )
                     } else {
@@ -370,11 +370,11 @@ impl TestSuite for EdgionConfigDataManagedTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Test 1: Pre-created RegionRouteOverride EdgionConfigData exists with correct structure
+            // Test 1: Pre-created ClusterRegionSetting EdgionConfigData exists with correct structure
             Self::override_data_exists(),
-            // Test 2: EdgionPlugins resolves overrideRef and is accepted
+            // Test 2: EdgionPlugins resolves clusterRegionRef and is accepted
             Self::ep_resolves_pm_chain(),
-            // Test 3: data-validated EdgionPlugins also resolves its declared override with its pre-created RegionRouteOverride EdgionConfigData
+            // Test 3: data-validated EdgionPlugins also resolves its declared override with its pre-created ClusterRegionSetting EdgionConfigData
             Self::pm_validated_accepted(),
         ]
     }
@@ -387,7 +387,7 @@ mod overlay_resolution_tests {
 
     fn healthy() -> serde_json::Value {
         json!({"metadata": {"namespace": PM_MANAGED_NS, "name": "data-managed"},
-            "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"overrideRef": {"name": "data-managed"}}}]},
+            "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"clusterRegionRef": {"name": "data-managed"}}}]},
             "status": {"conditions": [{"type": "Accepted", "status": "True"}, {"type": "ResolvedRefs", "status": "True"}]}})
     }
 
@@ -416,7 +416,7 @@ mod overlay_resolution_tests {
             ("/status/conditions/0/status", json!("Unknown")),
             ("/status/conditions", json!([])),
             (
-                "/spec/requestPlugins/0/config/overrideRef/name",
+                "/spec/requestPlugins/0/config/clusterRegionRef/name",
                 json!("missing-target"),
             ),
             ("/metadata/namespace", json!("wrong-namespace")),
@@ -429,7 +429,7 @@ mod overlay_resolution_tests {
         resource["spec"]["requestPlugins"][0]["enable"] = json!(false);
         assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
         let mut resource = healthy();
-        resource["spec"]["requestPlugins"][0]["config"]["overrideRef"]["namespace"] = json!(17);
+        resource["spec"]["requestPlugins"][0]["config"]["clusterRegionRef"]["namespace"] = json!(17);
         assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
         for generation in [json!("bad"), json!(4)] {
             let mut resource = healthy();

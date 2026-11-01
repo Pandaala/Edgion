@@ -15,7 +15,7 @@ fn response_header_policy_config_consumers_reject_all_protected_fields() {
             json!({"type":"Mock", "config":{"headers":{&name:"value"}}}),
             json!({"type":"FaultInjection", "config":{"abort":{"statusCode":503,"headers":[{"name":name,"value":"value"}]}}}),
             json!({"type":"ForwardAuth", "config":{"target":{"name":"auth","port":8080},"decision":{"clientHeaders":[name]}}}),
-            json!({"type":"RegionRoute", "config":{"hashCalc":{"writeBack":[{"type":"responseHeader","name":name}]}}}),
+            json!({"type":"RegionRoute", "config":{"clusterRegionRef":{"name":"local"},"hashCalc":{"writeBack":[{"type":"responseHeader","name":name}]}}}),
         ];
         for action in ["set", "add", "remove"] {
             let values = if action == "remove" {
@@ -43,7 +43,7 @@ fn response_header_policy_config_consumers_preserve_ordinary_headers() {
             json!({"type":"Mock", "config":{"headers":{name:"value"}}}),
             json!({"type":"FaultInjection", "config":{"abort":{"statusCode":503,"headers":[{"name":name,"value":"value"}]}}}),
             json!({"type":"ForwardAuth", "config":{"target":{"name":"auth","port":8080},"decision":{"clientHeaders":[name]}}}),
-            json!({"type":"RegionRoute", "config":{"hashCalc":{"writeBack":[{"type":"responseHeader","name":name}]}}}),
+            json!({"type":"RegionRoute", "config":{"clusterRegionRef":{"name":"local"},"hashCalc":{"writeBack":[{"type":"responseHeader","name":name}]}}}),
             json!({"type":"ResponseHeaderModifier","config":{"set":[{"name":name,"value":"value"}]}}),
             json!({"type":"ResponseRewrite","config":{"headers":{"rename":[{"from":name,"to":"x-ordinary"}]}}}),
         ] {

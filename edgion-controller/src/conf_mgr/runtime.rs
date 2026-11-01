@@ -42,6 +42,8 @@ use crate::services::credential_manager::memory::CredentialMemoryStore;
 /// All fields are plain (non-Arc) values; the struct itself is shared as
 /// `Arc<ControllerRuntime>` so cloning is cheap and all owners see the same data.
 pub struct ControllerRuntime {
+    /// Dedicated, credential-free Center projections; never a Gateway cache alias.
+    pub center_watch: crate::fed_sync::center_watch::CenterWatchStore,
     status_identity: RwLock<Option<KubernetesStatusIdentity>>,
     pub(crate) processor_registry: ProcessorRegistry,
     pub(crate) namespace_store: NamespaceStore,
@@ -113,6 +115,7 @@ pub struct ControllerRuntime {
 impl ControllerRuntime {
     pub fn new() -> Self {
         Self {
+            center_watch: Default::default(),
             status_identity: RwLock::new(None),
             processor_registry: ProcessorRegistry::new(),
             namespace_store: NamespaceStore::new(),
@@ -207,6 +210,7 @@ impl ControllerRuntime {
     /// is process-scoped and never dropped. `clear_processors()` breaks the first cycle
     /// on each restart; dispatcher listeners are left alive by design (see above).
     pub fn reset(&self) {
+        self.center_watch.reset();
         self.listener_port_manager.clear();
         *self.status_identity.write() = None;
         self.processor_registry.clear_processors();

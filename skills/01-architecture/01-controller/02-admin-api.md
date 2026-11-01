@@ -248,7 +248,11 @@ Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). R
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/region-routes/effective` | Effective region-route view |
-| POST | `/api/v1/cluster-region-routes/failover` | Patch region failover state |
+| GET | `/api/v1/cluster-region-settings/keys` | Bounded source identity projection |
+| GET | `/api/v1/cluster-region-settings/{namespace}/{name}` | Fresh bounded source setting |
+| GET | `/api/v1/cluster-region-settings/{namespace}/{name}/consumers` | Source table compatibility with observed consumers |
+| POST | `/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview` | Preview one validated source change |
+| POST | `/api/v1/cluster-region-settings/{namespace}/{name}/failover` | Apply with a required source precondition; readiness gated |
 | POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Trigger ACME processing |
 | POST | `/api/v1/services/conf-sync-ca/rotate` | Trigger conf_sync CA rotation |
 | GET | `/api/v1/diagnostics/nested_ext_ref_usage` | ExtensionRef usage diagnostics |
@@ -429,7 +433,12 @@ Endpoints intentionally not gated:
 
 **Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
 
-- `POST /api/v1/cluster-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+The former failover readiness gap is closed by the setting-scoped apply route.
+It requires a canonical source fingerprint and uses `update_one_if_source`.
+Preview and apply have a complete deadline; timeout leaves persistence unknown.
+Filesystem replacement/unlink tasks retain the existing resource lock through
+actual completion. This does not fence external file editors.
+
 - `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli
@@ -522,3 +531,22 @@ api::serve_with_shutdown(conf_mgr, schema_validator, addr, shutdown_signal).awai
 ```
 
 `serve_with_shutdown` uses Axum's `with_graceful_shutdown` to stop accepting new connections after a shutdown signal is received and wait for in-flight requests to complete.
+
+## Federation HTTP transport limits
+
+The reverse HTTP proxy has a 12-second deadline covering dispatch, body collection
+and response-channel waiting. It accepts at most a 1 MiB request body, 10 MiB
+response body, 16 KiB path, 32-byte method, 128-byte request identifier, and 64
+headers totaling 32 KiB. Federation protobuf encode/decode limits are explicitly
+16 MiB on both peers. Final response statuses must be 200..599. Body read failure
+returns a fixed 502; size overflow returns a fixed 413, without the original
+entity headers. No raw path/query or body-read error enters proxy diagnostics.
+A timeout can leave a started blocking mutation persisted; read back rather than
+replaying automatically. Source list/get/key/count and dedicated setting/RegionRoute responses use the
+shared capped JSON writer: serialization stops before exceeding 10 MiB and never
+publishes a partial body. DTO projection has an 8 MiB measured-output ledger and
+1,000 total rows shared across parent observations, service usages and backends;
+nested rows count conservatively again when enclosed in their parent. Measurement
+includes JSON escaping and happens before retaining projected values. Source
+objects and internal runtime snapshots have separate input/work budgets; these
+output limits do not bound the complete internal runtime snapshot allocation.

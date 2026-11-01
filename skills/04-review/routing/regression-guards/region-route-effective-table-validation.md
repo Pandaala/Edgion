@@ -1,84 +1,38 @@
 ---
 name: region-route-effective-table-validation
-description: Use when reviewing RegionRoute table validation, overlay fail-to-base, consumer modulo checks, or failover edits.
+description: RegionRoute required setting validation, atomic identity/table publication, unavailable-setting policies and failover edits.
 knowledge_type: regression-guards
 ---
 
 # RegionRoute validates complete tables before request selection
 
-## Conclusion and scope
+## Current contract (2026-10-30 migration)
 
-`RegionRouteConfig.regions` is the safe base table for an EdgionPlugins routing
-entry. `RegionRouteOverride.regions` in EdgionConfigData optionally replaces that
-table whole; `None` inherits and `Some([])` is invalid. A non-empty `route_rules`
-requires a non-empty base table even with `override_ref`; no-rule configurations
-may have an empty base and remain no-ops. Non-empty tables are always validated.
+ClusterRegionSetting replaces the optional regional override. Its required
+clusterName/regionName/regions define identity and the complete table. regionName
+must name a row. RegionRoute requires clusterRegionRef and owns no base table.
+The shared RegionTableValidation still checks unique nonblank names, strict
+endpoint syntax, disjoint closed ranges and an acyclic failover graph. Each
+consumer checks the proof against its modulo; gaps and one-hop failover remain.
 
-The shared resources-layer `RegionTableValidation::new` validates nonblank unique
-names, endpoint syntax, ordered disjoint closed intervals, existing nonself
-failover targets, and an acyclic failover graph. An interval ending at `65535`
-cannot fit any supported u16 modulo and is invalid even without a consumer.
-`validate_modulo` / `accepts_modulo` check the compact maximum-bound proof against
-each consumer's domain. The effective modulo is `1000` without `hash_calc` and
-otherwise must be at least `2`. Gaps remain valid and preserve pass-through.
+Raw setting, local identity and proof publish atomically. Requests borrow one
+resource generation without cloning or validating the full table. Missing,
+disabled, denied, wrong-type or invalid settings execute failOpen (default true)
+or statusOnError (default 503) before any request mutation. Operational errors
+must not cause compilation to discard a Reject owner. Structural/policy errors
+remain generic rejection; owner identity, conditions, body and dye safety gates
+are preserved. Dependency and grant changes use existing requeue/bindings.
 
-Endpoints accept hostnames, IPv4, and bracketed IPv6 with optional ports in
-`1..=65535`; URLs, empty hosts, and malformed ports are invalid. Hostname spelling
-and trailing dots are preserved, IPv6 brackets are removed for the host value,
-and absent ports use the existing TLS-based defaults. Syntax validation performs
-no DNS or address-policy work; canonical upstream address safety remains
-required after DNS resolution.
+The effective API returns explicit Controller observation fields, including
+configuration availability. It must not expose arbitrary processed config or
+claim Gateway application. Dedicated mutation validates the full setting before
+writing. Source paging and the dedicated CenterWatch directory are implemented. Center
+reads lightweight identities and declared references; details and preview/CAS
+remain fresh Controller operations. See the CenterWatchStore architecture guide.
 
-Failover execution remains one hop. Acyclic `a -> b -> c` is valid: selecting `a`
-redirects to `b`, not `c`. Every region, including failover sources, owns a
-disjoint hash interval; failover is not a reason to exempt its interval.
-
-## Rationale and evidence
-
-Source `D0065` identified inconsistent base, overlay, and effective validation;
-`B0099` had already handled the separate modulo-zero panic. The user approved the
-complete decision matrix and cross-component implementation on 2026-09-08.
-The base-plus-overlay authority is
-`skills/01-architecture/05-resources/15-edgion-config-data.md`; request-path cost,
-shared validation, and atomic publication follow `skills/00-design-rules.md`.
-
-Decisive owners and call chains:
-
-- `edgion-resources/src/resources/edgion_config_data/region_route.rs` owns the
-  table validator and proof; plugin configuration validation and overlay
-  standalone validation delegate to it.
-- `edgion-resources/src/resources/edgion_plugins/plugin_configs/region_route.rs`
-  owns `RegionDef::parse_endpoint`, base validation, and consumer modulo checks.
-- Controller EdgionPlugins handling keeps invalid-base `Accepted` separate from
-  invalid-overlay `ResolvedRefs`. Generic ingest remains advisory; those status
-  conditions alone do not establish Gateway enforcement.
-- `edgion-controller/src/api/region_route_handlers.rs` excludes invalid bases
-  from the effective view and checks an overlay for each consumer. Dedicated
-  failover edits validate the candidate table before persistence; table errors
-  return `422` without writing.
-- Gateway `EdgionConfigDataStore` publishes the raw entry and compact table proof
-  in one snapshot. `RegionRoute::create` validates base configuration;
-  `compute_effective_regions` borrows the raw overlay and checks its proof's
-  modulo in constant work. Full-table graph/endpoint/range checks do not run per
-  request. The selected endpoint is still parsed by the shared strict parser
-  before constructing the existing external jump.
-
-## Alternatives and limits
-
-Missing, disabled, wrong-type, or invalid overlays fall back to the valid base,
-without retaining a last-good overlay or adding TTL semantics. A table can be
-standalone-valid yet invalid for a consumer with a smaller modulo. Generic
-resource admission is not converted into hard rejection; the dedicated failover
-mutation gate is deliberately narrower.
-
-The
-[atomic publication rule](../../plugin-runtime/regression-guards/edgion-config-data-incremental-atomic-publication.md)
-previously stated that overlays needed no derived work. That claim is superseded
-by the useful compact proof, not by reintroducing a duplicate region table.
-The
-[retained management API decision](../../admin-api/intentional-design/controller-region-route-endpoints-retained-for-drill-in.md)
-still requires covering effective/failover endpoints. Its historical external
-Center caller evidence is not a fresh audit of that separate repository.
+Current implementation and checks are tracked in the source-browsing task; the
+historical test counts below are not fresh verification. Prior references below
+to base tables, optional overlays and their fallback are superseded by this section.
 
 ## Verification and re-evaluation
 

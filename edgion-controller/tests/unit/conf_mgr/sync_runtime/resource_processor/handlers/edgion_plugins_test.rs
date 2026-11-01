@@ -4,7 +4,7 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::common::CustomCACertificateRef;
 use edgion_resources::resources::edgion_config_data::{
-    ConfigEntry, EdgionConfigDataRef, EdgionConfigDataSpec, RegionRouteOverride,
+    ClusterRegionSetting, ConfigEntry, EdgionConfigDataRef, EdgionConfigDataSpec,
 };
 use edgion_resources::resources::edgion_plugins::plugin_configs::KeyAuthSecretGroup;
 use edgion_resources::resources::edgion_plugins::{
@@ -2397,7 +2397,7 @@ fn test_wasm_tls_refs_same_ns_report_no_error() {
     assert!(wasm_status_errors_for_test(&ep, &ctx).is_empty());
 }
 
-// ── RegionRoute + overrideRef resolution tests ────────────────────────
+// ── RegionRoute + clusterRegionRef resolution tests ────────────────────────
 
 /// Helper: build an EdgionConfigData with namespace and name set.
 fn build_edgion_config_data(namespace: &str, name: &str, spec: EdgionConfigDataSpec) -> EdgionConfigData {
@@ -3057,8 +3057,8 @@ async fn waf_bundle_reference_limit_stops_subscription_and_source_capture() {
 }
 
 #[tokio::test]
-async fn test_validate_region_route_override_ref_ok() {
-    // RegionRouteOverride EdgionConfigData exists → resolve_override_refs returns no error
+async fn test_validate_region_route_cluster_region_ref_ok() {
+    // ClusterRegionSetting EdgionConfigData exists → resolve_cluster_region_refs returns no error
     let override_ed = build_edgion_config_data(
         "default",
         "rr-override",
@@ -3068,10 +3068,13 @@ async fn test_validate_region_route_override_ref_ok() {
             enable: true,
             active: None,
             visibility: Default::default(),
-            data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                enable: None,
-                active: None,
-                regions: None,
+            data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+                cluster_name: "prod".into(),
+                region_name: "local".into(),
+                regions: serde_json::from_value(serde_json::json!([{
+                    "name":"local","hashRange":[0,999],"backendEndpoint":"local:80"
+                }]))
+                .unwrap(),
             }),
         },
     );
@@ -3085,11 +3088,11 @@ async fn test_validate_region_route_override_ref_ok() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
         RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "rr-override".to_string(),
                 namespace: None,
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         },
     ))]);
@@ -3100,13 +3103,13 @@ async fn test_validate_region_route_override_ref_ok() {
         ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
     };
 
-    let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+    let ref_errors = super::resolve_cluster_region_refs(&parsed, &ctx);
     assert!(ref_errors.is_empty(), "expected no errors; got: {:?}", ref_errors);
 }
 
 #[tokio::test]
-async fn test_parse_registers_override_ref_for_requeue() {
-    // Two RegionRoute plugins each with a different overrideRef.
+async fn test_parse_registers_cluster_region_ref_for_requeue() {
+    // Two RegionRoute plugins each with a different clusterRegionRef.
     // Both must be registered in edgion_config_data_refs so that an update to
     // either EdgionConfigData triggers a requeue of this EdgionPlugins.
     let make_override_ed = |name: &str| {
@@ -3119,10 +3122,13 @@ async fn test_parse_registers_override_ref_for_requeue() {
                 active: None,
                 visibility: Default::default(),
                 unknown_fields: Vec::new(),
-                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                    enable: None,
-                    active: None,
-                    regions: None,
+                data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+                    cluster_name: "prod".into(),
+                    region_name: "local".into(),
+                    regions: serde_json::from_value(serde_json::json!([{
+                        "name":"local","hashRange":[0,999],"backendEndpoint":"local:80"
+                    }]))
+                    .unwrap(),
                 }),
             },
         )
@@ -3138,19 +3144,19 @@ async fn test_parse_registers_override_ref_for_requeue() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![
         RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "override-a".to_string(),
                 namespace: None,
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         })),
         RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "override-b".to_string(),
                 namespace: None,
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         })),
     ]);
@@ -3177,19 +3183,19 @@ async fn test_parse_registers_override_ref_for_requeue() {
 }
 
 #[tokio::test]
-async fn test_validate_region_route_override_ref_missing() {
-    // Empty EdgionConfigData store → resolve_override_refs() reports the missing reference.
+async fn test_validate_region_route_cluster_region_ref_missing() {
+    // Empty EdgionConfigData store → resolve_cluster_region_refs() reports the missing reference.
     let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
     let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
         RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "missing-override".to_string(),
                 namespace: None,
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         },
     ))]);
@@ -3210,23 +3216,23 @@ async fn test_validate_region_route_override_ref_missing() {
         ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
     };
 
-    // resolve_override_refs() is the path that surfaces the missing EdgionConfigData.
-    let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+    // resolve_cluster_region_refs() is the path that surfaces the missing EdgionConfigData.
+    let ref_errors = super::resolve_cluster_region_refs(&parsed, &ctx);
     assert_eq!(ref_errors.len(), 1, "expected one EdgionConfigDataNotFound error");
     match &ref_errors[0] {
             crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
                 EdgionConfigDataNotFound { namespace, name, expected_type } => {
                 assert_eq!(namespace, "default");
                 assert_eq!(name, "missing-override");
-                assert_eq!(expected_type, "RegionRouteOverride");
+                assert_eq!(expected_type, "ClusterRegionSetting");
             }
             other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
         }
 }
 
 #[tokio::test]
-async fn test_validate_region_route_override_ref_type_mismatch() {
-    // EdgionConfigData exists but has wrong type → resolve_override_refs reports error.
+async fn test_validate_region_route_cluster_region_ref_type_mismatch() {
+    // EdgionConfigData exists but has wrong type → resolve_cluster_region_refs reports error.
     let wrong_type_ed = build_edgion_config_data(
         "default",
         "not-a-rr-override",
@@ -3252,11 +3258,11 @@ async fn test_validate_region_route_override_ref_type_mismatch() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
         RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "not-a-rr-override".to_string(),
                 namespace: None,
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         },
     ))]);
@@ -3267,7 +3273,7 @@ async fn test_validate_region_route_override_ref_type_mismatch() {
         ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
     };
 
-    let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+    let ref_errors = super::resolve_cluster_region_refs(&parsed, &ctx);
     assert_eq!(
         ref_errors.len(),
         1,
@@ -3276,7 +3282,7 @@ async fn test_validate_region_route_override_ref_type_mismatch() {
     match &ref_errors[0] {
             crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
                 EdgionConfigDataNotFound { expected_type, .. } => {
-                assert_eq!(expected_type, "RegionRouteOverride");
+                assert_eq!(expected_type, "ClusterRegionSetting");
             }
             other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
         }
@@ -3298,16 +3304,15 @@ fn test_region_route_invalid_overlay_keeps_base_accepted_and_recovers() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
         RegionRouteConfig {
-            regions: vec![base.clone()],
             hash_calc: Some(HashCalcConfig {
                 modulo: 100,
                 algorithm: Default::default(),
                 write_back: Vec::new(),
             }),
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "overlay".to_string(),
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         },
     ))]);
@@ -3325,10 +3330,10 @@ fn test_region_route_invalid_overlay_keeps_base_accepted_and_recovers() {
                 active: None,
                 visibility: Default::default(),
                 unknown_fields: Vec::new(),
-                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                    regions: Some(vec![region]),
-                    enable: None,
-                    active: None,
+                data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+                    regions: vec![region],
+                    cluster_name: "prod".into(),
+                    region_name: "base".into(),
                 }),
             },
         );
@@ -3364,14 +3369,14 @@ fn test_region_route_disabled_overlay_and_disabled_consumer() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
         RegionRouteConfig {
-            override_ref: Some(EdgionConfigDataRef {
+            cluster_region_ref: EdgionConfigDataRef {
                 name: "overlay".into(),
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         },
     ))]);
-    for (envelope_enable, variant_enable) in [(false, None), (true, Some(false))] {
+    for envelope_enable in [false, true] {
         let overlay = build_edgion_config_data(
             "default",
             "overlay",
@@ -3381,17 +3386,20 @@ fn test_region_route_disabled_overlay_and_disabled_consumer() {
                 active: None,
                 visibility: Default::default(),
                 unknown_fields: Vec::new(),
-                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                    enable: variant_enable,
-                    active: None,
-                    regions: None,
+                data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+                    cluster_name: "prod".into(),
+                    region_name: "local".into(),
+                    regions: serde_json::from_value(serde_json::json!([{
+                        "name":"local","hashRange":[0,999],"backendEndpoint":"local:80"
+                    }]))
+                    .unwrap(),
                 }),
             },
         );
         runtime
             .edgion_config_data_store
             .replace_all(HashMap::from([("default/overlay".to_string(), overlay)]));
-        let errors = super::resolve_override_refs(&ep, &ctx);
+        let errors = super::resolve_cluster_region_refs(&ep, &ctx);
         if envelope_enable {
             assert!(errors.is_empty(), "variant enable remains inert");
         } else {
@@ -3402,11 +3410,11 @@ fn test_region_route_disabled_overlay_and_disabled_consumer() {
     }
     runtime.edgion_config_data_store.replace_all(HashMap::new());
     ep.spec.request_plugins.as_mut().unwrap()[0].enable = false;
-    assert!(super::resolve_override_refs(&ep, &ctx).is_empty());
+    assert!(super::resolve_cluster_region_refs(&ep, &ctx).is_empty());
     let entry = &mut ep.spec.request_plugins.as_mut().unwrap()[0];
     entry.enable = true;
     assert!(
-        !super::resolve_override_refs(&ep, &ctx).is_empty(),
+        !super::resolve_cluster_region_refs(&ep, &ctx).is_empty(),
         "enabled source references are resolved independently of Gateway policy"
     );
 }
@@ -8347,9 +8355,9 @@ async fn remaining_config_data_roles_validate_identity_and_recompute_current_gra
         ),
         (
             "RegionRoute",
-            "overrideRef",
-            "RegionRouteOverride",
-            serde_json::json!({}),
+            "clusterRegionRef",
+            "ClusterRegionSetting",
+            serde_json::json!({"clusterName":"prod","regionName":"local","regions":[{"name":"local","hashRange":[0,999],"backendEndpoint":"local:80"}]}),
         ),
     ] {
         let mut owner: EdgionPlugins = serde_json::from_value(
@@ -8381,7 +8389,7 @@ async fn remaining_config_data_roles_validate_identity_and_recompute_current_gra
             let current_errors = match kind {
                 "RequestAccessPolicy" => super::resolve_active_profile_refs(&parsed, &ctx),
                 "Canary" => super::resolve_canary_active_profile_refs(&parsed, &ctx),
-                _ => super::resolve_override_refs(&parsed, &ctx),
+                _ => super::resolve_cluster_region_refs(&parsed, &ctx),
             };
             assert_eq!(current_errors.is_empty(), source == Some("EdgionPlugins"));
             assert!(runtime
@@ -8393,7 +8401,7 @@ async fn remaining_config_data_roles_validate_identity_and_recompute_current_gra
             let reference = match entry {
                 EdgionPlugin::RequestAccessPolicy(c) => c.active_profile_ref.as_mut().unwrap(),
                 EdgionPlugin::Canary(c) => c.active_profile_ref.as_mut().unwrap(),
-                EdgionPlugin::RegionRoute(c) => c.override_ref.as_mut().unwrap(),
+                EdgionPlugin::RegionRoute(c) => &mut c.cluster_region_ref,
                 _ => unreachable!(),
             };
             reference.ref_denied = if source == Some("EdgionPlugins") {
@@ -8408,7 +8416,7 @@ async fn remaining_config_data_roles_validate_identity_and_recompute_current_gra
             let errors = match kind {
                 "RequestAccessPolicy" => super::resolve_active_profile_refs(&parsed, &ctx),
                 "Canary" => super::resolve_canary_active_profile_refs(&parsed, &ctx),
-                _ => super::resolve_override_refs(&parsed, &ctx),
+                _ => super::resolve_cluster_region_refs(&parsed, &ctx),
             };
             assert_eq!(errors.is_empty(), source == Some("EdgionPlugins"));
             EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
@@ -8429,7 +8437,7 @@ async fn remaining_config_data_roles_validate_identity_and_recompute_current_gra
                 resolve_field(&loan, &ctx).error,
                 Some(ResolvedRefsError::InvalidReference { .. })
             ));
-            assert!(EdgionPluginsHandler::get_region_route_override_keys(&owner).is_empty());
+            assert!(EdgionPluginsHandler::get_cluster_region_setting_keys(&owner).is_empty());
             assert!(EdgionPluginsHandler::get_active_profile_ref_keys(&owner).is_empty());
             assert!(EdgionPluginsHandler::get_canary_active_profile_ref_keys(&owner).is_empty());
         }

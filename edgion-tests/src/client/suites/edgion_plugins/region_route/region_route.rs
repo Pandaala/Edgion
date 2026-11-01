@@ -1,16 +1,17 @@
 // RegionRoute Integration Test Suite
 //
-// Tests the base + overlay model: EdgionPlugins holds all routing logic + default region table;
-// an optional overrideRef points to a RegionRouteOverride EdgionConfigData (fail-to-base on error).
+// EdgionPlugins owns request extraction and routing rules. Its required clusterRegionRef
+// selects the ClusterRegionSetting local identity and region table; unusable settings
+// default to Continue without changing the request.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/RegionRoute/):
-//   01_EdgionPlugins_region-route-main.yaml      — full inline config: regions, keyGet,
+//   01_EdgionPlugins_region-route-main.yaml      — plugin config: clusterRegionRef, keyGet,
 //                                                   hashKeyGet, hashCalc, routeRules,
 //                                                   routeByKeyConfMatch (vip-va/vip-oh)
 //   01_EdgionPlugins_region-route-norules.yaml    — inline config with no routeRules (no-op)
-//   01_EdgionPlugins_region-route-myregion.yaml   — inline config: myRegion + failoverTo per region
-//   01_EdgionPlugins_region-route-broken-ref.yaml — inline base + overrideRef to nonexistent
-//                                                   EdgionConfigData (overlay_missing -> fail-to-base)
+//   01_EdgionPlugins_region-route-myregion.yaml   — setting reference with local regionName and one-hop failover
+//   01_EdgionPlugins_region-route-broken-ref.yaml — clusterRegionRef to nonexistent
+//                                                   EdgionConfigData (setting_missing -> Continue)
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
 //   02_HTTPRoute_region-route-myregion-test.yaml
@@ -116,14 +117,13 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// overrideRef points at a nonexistent EdgionConfigData -> overlay_missing -> fail-to-base.
-    /// Base regions are used; a routed request reaches a loopback backend -> 502.
-    /// Access log must contain "overlay_missing" confirming the signal was recorded.
-    fn broken_overlay_ref_uses_base() -> TestCase {
+    /// A missing clusterRegionRef target triggers Continue and normal proxying.
+    /// The original backend returns 200 without RegionRoute request changes.
+    /// Access log must contain "setting_missing" confirming the signal was recorded.
+    fn broken_setting_ref_continues() -> TestCase {
         TestCase::new(
-            "broken_overlay_ref_uses_base",
-            "Broken overrideRef (nonexistent EdgionConfigData): overlay_missing -> fail-to-base; \
-             base routes request to loopback -> 502; access log contains overlay_missing",
+            "broken_setting_ref_continues",
+            "Broken clusterRegionRef (nonexistent EdgionConfigData): setting_missing -> continue normal proxy -> 200; access log contains setting_missing",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -144,27 +144,26 @@ impl RegionRouteTestSuite {
                     {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            // Base regions route to loopback -> 502 (not 500: no gateway error,
-                            // the overlay is simply absent and the base is used as fallback).
-                            if status != 502 && status != 500 {
+                            // An unavailable setting leaves normal backend selection unchanged.
+                            if status != 200 {
                                 return TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected 502 (routed via base to loopback) or 500, got {}", status),
+                                    format!("Expected normal proxy response 200, got {}", status),
                                 );
                             }
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains(log_t::OVERLAY_MISSING) {
+                                    if log_str.contains(log_t::SETTING_MISSING) {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
-                                            format!("overlay_missing logged as expected; status={}", status),
+                                            format!("setting_missing logged as expected; status={}", status),
                                         )
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected 'overlay_missing' in access log. log: {}", log_str),
+                                            format!("Expected 'setting_missing' in access log. log: {}", log_str),
                                         )
                                     }
                                 }
@@ -836,14 +835,14 @@ impl RegionRouteTestSuite {
     }
 
     // =========================================================================
-    // myRegion + failoverTo tests (MYREGION_HOST)
+    // local regionName + failoverTo tests (MYREGION_HOST)
     // =========================================================================
 
-    /// X-Direct-Region: virginia → myRegion match → local pass-through → 200
+    /// X-Direct-Region: virginia → local regionName match → local pass-through → 200
     fn my_region_direct_local() -> TestCase {
         TestCase::new(
             "my_region_direct_local",
-            "X-Direct-Region: virginia (=myRegion) → local pass-through, backend returns 200",
+            "X-Direct-Region: virginia (=local regionName) → local pass-through, backend returns 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -875,7 +874,7 @@ impl RegionRouteTestSuite {
     }
 
     /// Local-region pass-through still dyes: the request was routed to a
-    /// region (virginia == myRegion), so X-Region must reach the backend.
+    /// region (virginia == local regionName), so X-Region must reach the backend.
     fn myregion_local_pass_sets_dye_header() -> TestCase {
         TestCase::new(
             "myregion_local_pass_sets_dye_header",
@@ -914,11 +913,11 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// X-Direct-Region: ohio (failoverTo=virginia=myRegion) → redirect ohio→virginia → local pass → 200
+    /// X-Direct-Region: ohio (failoverTo=virginia=local regionName) → redirect ohio→virginia → local pass → 200
     fn my_region_failover_to_local() -> TestCase {
         TestCase::new(
             "my_region_failover_to_local",
-            "X-Direct-Region: ohio (failoverTo=virginia=myRegion) → redirect→local pass, 200 + log check",
+            "X-Direct-Region: ohio (failoverTo=virginia=local regionName) → redirect→local pass, 200 + log check",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -972,11 +971,11 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// X-Direct-Region: europe (failoverTo=ohio, ohio≠myRegion) → redirect europe→ohio → jump → 502
+    /// X-Direct-Region: europe (failoverTo=ohio, ohio≠local regionName) → redirect europe→ohio → jump → 502
     fn my_region_failover_to_nonlocal() -> TestCase {
         TestCase::new(
             "my_region_failover_to_nonlocal",
-            "X-Direct-Region: europe (failoverTo=ohio≠myRegion) → redirect→jump to loopback → 502 + log check",
+            "X-Direct-Region: europe (failoverTo=ohio≠local regionName) → redirect→jump to loopback → 502 + log check",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1094,8 +1093,8 @@ impl TestSuite for RegionRouteTestSuite {
             // Pass-through (200)
             Self::no_route_rules_passes_through(),
             Self::missing_key_passes_through(),
-            // Broken overrideRef -> overlay_missing -> fail-to-base (502 + access log)
-            Self::broken_overlay_ref_uses_base(),
+            // Missing setting -> Continue (200 + access log)
+            Self::broken_setting_ref_continues(),
             // Hash routing (502 + access log)
             Self::hash_routing_logged(),
             Self::hash_routing_deterministic(),
@@ -1113,7 +1112,7 @@ impl TestSuite for RegionRouteTestSuite {
             Self::hash_passthrough_out_of_range_falls_to_compute(),
             // hashCalc writeBack (response header)
             Self::hash_writeback_logged(),
-            // myRegion + failoverTo (MYREGION_HOST)
+            // local regionName + failoverTo (MYREGION_HOST)
             Self::my_region_direct_local(),
             Self::myregion_local_pass_sets_dye_header(),
             Self::my_region_failover_to_local(),

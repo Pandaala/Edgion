@@ -119,6 +119,9 @@ pub fn validate_http_route_transforms(route: &edgion_resources::HTTPRoute) -> Re
 /// Map ConfWriterError to HTTP StatusCode.
 pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
     match e {
+        ConfWriterError::SourceBudget => StatusCode::PAYLOAD_TOO_LARGE,
+        ConfWriterError::SourceTimeout => StatusCode::GATEWAY_TIMEOUT,
+        ConfWriterError::SourceBusy => StatusCode::TOO_MANY_REQUESTS,
         ConfWriterError::NotFound(msg) => {
             tracing::warn!(
                 component = "unified_api",

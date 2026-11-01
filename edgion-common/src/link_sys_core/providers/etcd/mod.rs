@@ -13,6 +13,8 @@ pub mod client;
 pub mod config_mapping;
 pub mod election;
 pub mod ops;
+mod source_range;
+pub use source_range::{SourceRangeError, SourceRangePage, SOURCE_RANGE_BYTES, SOURCE_RANGE_LIMIT};
 
 pub use client::{EtcdBootstrapConfig, EtcdLinkClient};
 pub use election::{ElectionSession, LeaderKey};

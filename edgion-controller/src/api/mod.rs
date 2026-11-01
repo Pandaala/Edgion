@@ -3,10 +3,13 @@ pub(crate) mod authz_classifier;
 // pub(crate): authz_layer and inject_center_identity are used at the federation spawn site.
 mod access_handlers;
 pub(crate) mod authz_middleware;
+mod bounded_json;
 pub(crate) mod cli_token_middleware;
 mod cluster_handlers;
+mod cluster_region_setting_handlers;
 mod common;
 mod configserver_handlers;
+mod count_handlers;
 mod debug_handlers;
 mod diagnostics_handlers;
 pub(crate) mod ip_allowlist;
@@ -411,6 +414,10 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             "/api/v1/namespaced/{kind}/{namespace}/{name}",
             delete(namespaced_handlers::delete_namespaced),
         )
+        .route(
+            "/api/v1/cluster-region-settings/{namespace}/{name}/failover",
+            post(region_route_handlers::apply_setting_failover),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             admin_state.clone(),
             require_ready_middleware,
@@ -435,6 +442,12 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             get(namespaced_handlers::get_namespaced),
         )
         // Metadata-only keys list routes (Card 01 of list-keys-api series)
+        .route("/api/v1/count/namespaced/{kind}", get(count_handlers::namespaced))
+        .route(
+            "/api/v1/count/namespaced/{kind}/{namespace}",
+            get(count_handlers::namespace),
+        )
+        .route("/api/v1/count/cluster/{kind}", get(count_handlers::cluster))
         .route("/api/v1/keys/cluster/{kind}", get(cluster_handlers::list_cluster_keys))
         .route(
             "/api/v1/keys/namespaced/{kind}",
@@ -450,13 +463,24 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/api/v1/server-info", get(get_server_info))
         // Effective resolved views for Center dashboard polling.
         .route(
+            "/api/v1/cluster-region-settings/keys",
+            get(cluster_region_setting_handlers::keys),
+        )
+        .route(
+            "/api/v1/cluster-region-settings/{namespace}/{name}",
+            get(cluster_region_setting_handlers::detail),
+        )
+        .route(
             "/api/v1/region-routes/effective",
             get(region_route_handlers::list_region_routes_effective),
         )
-        // RegionRoute failover
         .route(
-            "/api/v1/cluster-region-routes/failover",
-            post(region_route_handlers::cluster_edgion_config_data_failover),
+            "/api/v1/cluster-region-settings/{namespace}/{name}/consumers",
+            get(region_route_handlers::list_setting_consumers),
+        )
+        .route(
+            "/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview",
+            post(region_route_handlers::preview_setting_failover),
         )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))

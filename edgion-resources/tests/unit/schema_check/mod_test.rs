@@ -508,10 +508,6 @@ fn config_data_typed_variants_report_exact_nested_paths() {
             json!({"data":{"type":"Selector","config":{"active":"lockdown","descriptin":"x"}}}),
             "data.config.descriptin",
         ),
-        (
-            json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regionz":[]}}}),
-            "data.config.regionz",
-        ),
     ];
 
     for (value, expected) in cases {
@@ -531,7 +527,7 @@ fn config_data_clean_typed_variants_have_no_findings() {
         json!({"data":{"type":"IpList","config":{"items":[{"name":"g","cidrs":["10.0.0.0/8"]}]}}}),
         json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health"}],"conditions":{"allOf":[]}}]}}}),
         json!({"data":{"type":"Selector","config":{"active":"lockdown","description":"x"}}}),
-        json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regions":null}}}),
+        json!({"data":{"type":"ClusterRegionSetting","config":{"clusterName":"prod","regionName":"local","regions":[]}}}),
     ];
 
     for value in cases {

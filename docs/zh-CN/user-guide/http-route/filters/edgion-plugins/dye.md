@@ -56,7 +56,7 @@ Controller 和 Gateway 共用 `EdgionPlugin::dye_capabilities(DyeStage)`。
 | `Canary` | 请求阶段：`success`，以及 `onInvalid` 配置的结果。 |
 | `DynamicInternalUpstream` | 请求阶段：`success`、`onMissing`/`onInvalid` 配置的结果；仅 rules 模式包含 `onNoMatch`。 |
 | `DynamicExternalUpstream`、`DirectEndpoint` | 请求阶段：选择成功，以及适用的 fallback/reject 策略所指定的结果。 |
-| `RegionRoute` | 请求阶段：有路由规则和区域来源时支持 success；有适用的 `overrideRef` 才支持 fallback；不支持 reject。 |
+| `RegionRoute` | 请求阶段：规则非空时支持 success；failOpen=true 支持 fallback，failOpen=false 支持 reject。 |
 | `RateLimitRedis` | 请求阶段：`onRedisFailure: Allow` 支持 `fail-open`，`Deny` 支持 `fail-close`。 |
 | `ExtProc` | 请求条目及其挂载的响应头提交前回调：由 `failureModeAllow` 决定失败结果。 |
 | `Wasm` | 请求阶段或上游响应头过滤阶段：由 `failOpen` 决定失败结果；响应体阶段不支持染色。 |

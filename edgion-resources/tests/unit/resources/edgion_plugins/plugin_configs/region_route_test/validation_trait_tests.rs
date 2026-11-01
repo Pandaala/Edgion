@@ -55,22 +55,33 @@ fn endpoint_grammar_and_default_ports() {
 }
 
 #[test]
-fn base_table_cannot_depend_on_an_overlay_for_safety() {
-    let mut config = RegionRouteConfig::default();
+fn failure_policy_defaults_and_strict_structure() {
+    let config: RegionRouteConfig = serde_json::from_value(serde_json::json!({
+        "clusterRegionRef": {"name":"local"}
+    }))
+    .unwrap();
+    assert!(config.fail_open);
+    assert_eq!(config.status_on_error, 503);
     assert!(config.validation_error().is_none());
-    config.route_rules = vec![RouteRule::RouteByHashRange];
-    assert!(config.validation_error().unwrap().contains("empty"));
-    config.override_ref = Some(serde_json::from_str(r#"{"name":"overlay"}"#).unwrap());
-    assert!(config.validation_error().unwrap().contains("empty"));
-    config.regions = vec![region("backend")];
-    assert!(config.validation_error().is_none());
-    config.regions[0].hash_range = [0, 1000];
-    assert!(config.validation_error().unwrap().contains("modulo 1000"));
-    config.route_rules.clear();
-    assert!(
-        config.validation_error().is_some(),
-        "a non-empty inert table still must be structurally valid"
-    );
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"clusterRegionRef":{"name":"local"},"failOpen":"yes"}),
+        serde_json::json!({"clusterRegionRef":{"name":"local"},"onConfigError":{}}),
+        serde_json::json!({"clusterRegionRef":{"name":"local"},"myRegion":"local"}),
+        serde_json::json!({"clusterRegionRef":{"name":"local"},"regions":[]}),
+    ] {
+        assert!(serde_json::from_value::<RegionRouteConfig>(value).is_err());
+    }
+    for status in [0, 200, 399, 600] {
+        let mut config = config.clone();
+        config.status_on_error = status;
+        assert!(config.structural_validation_error().is_some());
+    }
+    for status in [400, 500, 599] {
+        let mut config = config.clone();
+        config.status_on_error = status;
+        assert!(config.structural_validation_error().is_none());
+    }
 }
 
 #[test]

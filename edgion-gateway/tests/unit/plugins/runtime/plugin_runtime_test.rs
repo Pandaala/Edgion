@@ -2189,7 +2189,10 @@ fn config_data_owner_and_target_guards_precede_populated_cache() {
             "Canary",
             serde_json::json!({"enable":true,"activeProfile":"base","profiles":{"base":{"name":"backend"}},"activeProfileRef":{"name":"selector"}}),
         ),
-        ("RegionRoute", serde_json::json!({"overrideRef":{"name":"overlay"}})),
+        (
+            "RegionRoute",
+            serde_json::json!({"clusterRegionRef":{"name":"overlay"}}),
+        ),
     ] {
         let owner:EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"cache-owner","namespace":"default"},"spec":{"requestPlugins":[{"type":kind,"config":config}]}})).unwrap();
         let mut cache = EntryCache::default();
@@ -2200,7 +2203,7 @@ fn config_data_owner_and_target_guards_precede_populated_cache() {
         let reference = match &mut invalid.spec.request_plugins.as_mut().unwrap()[0].plugin {
             EdgionPlugin::RequestAccessPolicy(c) => c.active_profile_ref.as_mut().unwrap(),
             EdgionPlugin::Canary(c) => c.active_profile_ref.as_mut().unwrap(),
-            EdgionPlugin::RegionRoute(c) => c.override_ref.as_mut().unwrap(),
+            EdgionPlugin::RegionRoute(c) => &mut c.cluster_region_ref,
             _ => unreachable!(),
         };
         reference.namespace = Some(String::new());
@@ -3911,6 +3914,65 @@ async fn cookie_cleanup_errors_stop_runtime_and_use_canonical_http_grpc_replies(
             }
             assert!(!text.contains("accepted-cookie-key"));
             assert!(!text.contains("opaque"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn region_route_unavailable_policy_survives_compilation_and_real_dispatch() {
+    use crate::plugins::http::compile_plugins;
+    for unavailable in ["missing", "modulo", "denied"] {
+        for fail_open in [true, false] {
+            for gate in ["enabled", "disabled", "condition"] {
+                let mut entry = serde_json::json!({"type":"RegionRoute","config":{
+                    "clusterRegionRef":{"name":"missing-dispatch-setting"},
+                    "failOpen":fail_open,"statusOnError":500,
+                    "hashCalc":{"modulo":1000,"writeBack":[{"type":"header","name":"X-Hash"}]},
+                    "routeRules":[{"type":"RouteByHashRange"}],
+                    "keyGet":[{"type":"header","name":"Host"}]
+                }});
+                if unavailable == "modulo" {
+                    entry["config"]["hashCalc"]["modulo"] = 1.into();
+                }
+                if unavailable == "denied" {
+                    entry["config"]["clusterRegionRef"]["refDenied"] =
+                        serde_json::json!({"targetNamespace":"default","targetName":"missing-dispatch-setting"});
+                }
+                if gate == "disabled" {
+                    entry["enable"] = false.into();
+                }
+                if gate == "condition" {
+                    entry["conditions"] = serde_json::json!({"skip":{"allOf":[
+                        {"type":"keyExist","key":{"type":"header","name":"host"}}
+                    ]}});
+                }
+                let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                    "metadata":{"name":"policy-dispatch","namespace":"default"},
+                    "spec":{"requestPlugins":[entry,{"type":"CtxSet","config":{"vars":[
+                        {"name":"continued","value":"yes"}
+                    ]}}]}
+                }))
+                .unwrap();
+                let compiled = compile_plugins(&resource);
+                let mut schema_errors = resource.validate_plugins();
+                let mut runtime_errors = compiled.preparse_errors.clone();
+                schema_errors.sort();
+                runtime_errors.sort();
+                assert_eq!(schema_errors, runtime_errors, "{unavailable}/{gate}");
+                assert!(compiled.is_activatable);
+                let (mut session, _client) = plugin_test_session().await;
+                let original_headers = session.req_header().headers.clone();
+                let mut ctx = EdgionHttpContext::new();
+                compiled
+                    .plugin_runtime
+                    .run_request_plugins(&mut session, &mut ctx)
+                    .await;
+                let rejects = !fail_open && gate == "enabled";
+                assert_eq!(ctx.plugin_terminated(), rejects, "{unavailable}/{gate}");
+                assert_eq!(ctx.get_ctx_var("continued"), if rejects { None } else { Some("yes") });
+                assert_eq!(session.req_header().headers, original_headers);
+                assert_eq!(ctx.final_downstream_status(), if rejects { Some(500) } else { None });
+            }
         }
     }
 }

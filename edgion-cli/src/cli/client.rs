@@ -14,6 +14,15 @@ use super::TargetType;
 /// base64-url-safe per K8s spec, but be defensive).
 fn build_list_url_with_pagination(base: &str, limit: Option<u32>, continue_token: Option<&str>) -> Result<String> {
     let mut url = reqwest::Url::parse(base)?;
+    let limit = if url.path().starts_with("/api/v1/") {
+        let value = limit.unwrap_or(10);
+        if !(1..=100).contains(&value) {
+            bail!("Source page size must be between 1 and 100");
+        }
+        Some(value)
+    } else {
+        limit
+    };
     {
         let mut q = url.query_pairs_mut();
         if let Some(n) = limit {
@@ -468,3 +477,7 @@ pub async fn parse_json_response(resp: Response) -> Result<Value> {
 #[cfg(test)]
 #[path = "../../tests/unit/cli/client_test/ensure_auth_tests.rs"]
 mod ensure_auth_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/cli/client_test/source_paging_tests.rs"]
+mod source_paging_tests;

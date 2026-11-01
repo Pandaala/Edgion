@@ -367,6 +367,9 @@ where
     /// Shared controller runtime (stores, registries, etc.)
     runtime: Arc<ControllerRuntime>,
 
+    /// Immutable publication epoch; late old workers cannot repopulate a reset view.
+    center_watch_generation: String,
+
     /// Set whenever cache content changes; consumed by fed_sync stats push.
     /// Initialized to `true` so the first stats coalescing tick after
     /// fed_client startup emits an initial report.
@@ -395,6 +398,7 @@ where
         );
 
         Self {
+            center_watch_generation: runtime.center_watch.generation(),
             kind,
             cache,
             workqueue,
@@ -554,6 +558,15 @@ where
         let ctx = self.create_context(extended_chain);
         let cache_obj = self.get(key);
 
+        if store_obj.is_none() {
+            crate::fed_sync::center_watch::publication::delete(
+                &self.runtime.center_watch,
+                &self.center_watch_generation,
+                self.kind,
+                key,
+            );
+        }
+
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
@@ -643,7 +656,14 @@ where
         let namespace_eligible = ctx
             .namespace_filter()
             .is_none_or(|allowed_ns| namespace.is_empty() || allowed_ns.iter().any(|n| n == &namespace));
-        if !namespace_eligible || !self.handler.filter(&obj, ctx) {
+        let eligible = namespace_eligible && self.handler.filter(&obj, ctx);
+        crate::fed_sync::center_watch::publication::apply(
+            &self.runtime.center_watch,
+            &self.center_watch_generation,
+            &obj,
+            eligible,
+        );
+        if !eligible {
             if let Some(cached) = self.cache.get_by_key(&make_resource_key(&obj)) {
                 self.process_delete(&cached, ctx).await;
                 return WorkItemResult::Deleted {

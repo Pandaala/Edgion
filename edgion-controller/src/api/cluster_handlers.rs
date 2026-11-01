@@ -1,8 +1,8 @@
+use super::bounded_json::BoundedJson as Json;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
-    response::Json,
 };
 use edgion_resources::prelude_resources::*;
 use std::sync::Arc;
@@ -18,6 +18,7 @@ use edgion_resources::resource::is_kind_cluster_scoped;
 pub async fn list_cluster(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
+    Query(pagination): Query<super::namespaced_handlers::PaginationQuery>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -25,7 +26,9 @@ pub async fn list_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let (data, continue_token) = state.center_list_resources(kind, None).await?;
+    let (data, continue_token) = state
+        .center_list_resources(kind, pagination.into_list_options()?)
+        .await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
@@ -237,7 +240,7 @@ pub async fn list_cluster_keys(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
+    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()?).await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 

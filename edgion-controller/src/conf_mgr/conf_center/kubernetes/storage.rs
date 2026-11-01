@@ -17,13 +17,10 @@ use crate::conf_mgr::conf_center::traits::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, Preconditions};
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::discovery::Scope;
 use kube::{Api, Client};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -33,7 +30,11 @@ use tokio::sync::OnceCell;
 ///
 /// Implements ConfWriter by calling K8s API server.
 /// Uses dynamic client to support any resource type.
+#[path = "source_query.rs"]
+mod source_query;
+
 pub struct KubernetesStorage {
+    source_generation: String,
     client: Client,
     allowed_namespaces: BTreeSet<String>,
     reference_grant_version: Arc<OnceCell<ReferenceGrantVersion>>,
@@ -65,11 +66,18 @@ impl LegacySelections {
     }
 }
 
+fn source_selection_error(error: anyhow::Error) -> ConfWriterError {
+    error
+        .downcast::<ConfWriterError>()
+        .unwrap_or_else(|_| super::super::source_query::source_error())
+}
+
 impl KubernetesStorage {
     /// Create a new KubernetesStorage with default client
     pub async fn new(allowed_namespaces: Vec<String>) -> Result<Self> {
         let client = Client::try_default().await?;
         Ok(Self {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client,
             allowed_namespaces: allowed_namespaces.into_iter().collect(),
             reference_grant_version: Arc::new(OnceCell::new()),
@@ -88,9 +96,11 @@ impl KubernetesStorage {
     pub(super) async fn selected_gateway_version(&self) -> Result<GatewayVersion> {
         self.gateway_version
             .get_or_try_init(|| async {
-                probe_gateway_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("Gateway CRD not found (expected v1 or v1beta1)"))
+                probe_gateway_version(&self.client).await?.ok_or_else(|| {
+                    anyhow::Error::from(ConfWriterError::NotFound(
+                        "Gateway API resource is not installed".into(),
+                    ))
+                })
             })
             .await
             .copied()
@@ -103,9 +113,11 @@ impl KubernetesStorage {
     pub(super) async fn selected_http_route_version(&self) -> Result<HTTPRouteVersion> {
         self.http_route_version
             .get_or_try_init(|| async {
-                probe_http_route_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("HTTPRoute CRD not found (expected v1 or v1beta1)"))
+                probe_http_route_version(&self.client).await?.ok_or_else(|| {
+                    anyhow::Error::from(ConfWriterError::NotFound(
+                        "Gateway API resource is not installed".into(),
+                    ))
+                })
             })
             .await
             .copied()
@@ -118,9 +130,11 @@ impl KubernetesStorage {
     pub(super) async fn selected_gateway_class_version(&self) -> Result<GatewayClassVersion> {
         self.gateway_class_version
             .get_or_try_init(|| async {
-                probe_gateway_class_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("GatewayClass CRD not found (expected v1 or v1beta1)"))
+                probe_gateway_class_version(&self.client).await?.ok_or_else(|| {
+                    anyhow::Error::from(ConfWriterError::NotFound(
+                        "Gateway API resource is not installed".into(),
+                    ))
+                })
             })
             .await
             .copied()
@@ -133,9 +147,11 @@ impl KubernetesStorage {
     pub(super) async fn selected_reference_grant_version(&self) -> Result<ReferenceGrantVersion> {
         self.reference_grant_version
             .get_or_try_init(|| async {
-                probe_reference_grant_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("ReferenceGrant CRD not found (expected v1 or v1beta1)"))
+                probe_reference_grant_version(&self.client).await?.ok_or_else(|| {
+                    anyhow::Error::from(ConfWriterError::NotFound(
+                        "Gateway API resource is not installed".into(),
+                    ))
+                })
             })
             .await
             .copied()
@@ -174,170 +190,168 @@ impl KubernetesStorage {
 
         // Static mapping of resource kinds to their ApiResource and Scope
         // This avoids expensive Discovery calls on every API operation
-        let (ar, scope) =
-            match kind {
-                // Gateway API resources (namespaced)
-                "Gateway" => {
-                    let version = self.selected_gateway_version().await.map_err(|e| {
-                        ConfWriterError::InternalError(format!("Failed to select Gateway version: {e}"))
-                    })?;
-                    let version = match version {
-                        GatewayVersion::V1 => "v1",
-                        GatewayVersion::V1Beta1 => "v1beta1",
-                    };
-                    (
-                        ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", version, "Gateway")),
-                        Scope::Namespaced,
-                    )
-                }
-                "GatewayClass" => {
-                    let version = self.selected_gateway_class_version().await.map_err(|e| {
-                        ConfWriterError::InternalError(format!("Failed to select GatewayClass version: {e}"))
-                    })?;
-                    let version = match version {
-                        GatewayClassVersion::V1 => "v1",
-                        GatewayClassVersion::V1Beta1 => "v1beta1",
-                    };
-                    (
-                        ApiResource::from_gvk(&GroupVersionKind::gvk(
-                            "gateway.networking.k8s.io",
-                            version,
-                            "GatewayClass",
-                        )),
-                        Scope::Cluster,
-                    )
-                }
-                "HTTPRoute" => {
-                    let version = self.selected_http_route_version().await.map_err(|e| {
-                        ConfWriterError::InternalError(format!("Failed to select HTTPRoute version: {e}"))
-                    })?;
-                    let version = match version {
-                        HTTPRouteVersion::V1 => "v1",
-                        HTTPRouteVersion::V1Beta1 => "v1beta1",
-                    };
-                    (
-                        ApiResource::from_gvk(&GroupVersionKind::gvk(
-                            "gateway.networking.k8s.io",
-                            version,
-                            "HTTPRoute",
-                        )),
-                        Scope::Namespaced,
-                    )
-                }
-                "GRPCRoute" | "TCPRoute" | "UDPRoute" | "TLSRoute" | "BackendTLSPolicy" => {
-                    let version = self
-                        .selected_legacy_version(kind)
-                        .await
-                        .map_err(|error| {
-                            ConfWriterError::InternalError(format!("Failed to select {kind} version: {error}"))
-                        })?
-                        .ok_or_else(|| ConfWriterError::InternalError(format!("{kind} CRD is not installed")))?;
-                    (
-                        ApiResource::from_gvk(&GroupVersionKind::gvk(
-                            "gateway.networking.k8s.io",
-                            version.as_str(),
-                            kind,
-                        )),
-                        Scope::Namespaced,
-                    )
-                }
-                "ReferenceGrant" => {
-                    let version = self.selected_reference_grant_version().await.map_err(|e| {
-                        ConfWriterError::InternalError(format!("Failed to select ReferenceGrant version: {e}"))
-                    })?;
-                    let version = match version {
-                        ReferenceGrantVersion::V1 => "v1",
-                        ReferenceGrantVersion::V1Beta1 => "v1beta1",
-                    };
-                    (
-                        ApiResource::from_gvk(&GroupVersionKind::gvk(
-                            "gateway.networking.k8s.io",
-                            version,
-                            "ReferenceGrant",
-                        )),
-                        Scope::Namespaced,
-                    )
-                }
-                // Core resources
-                "Secret" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
+        let (ar, scope) = match kind {
+            // Gateway API resources (namespaced)
+            "Gateway" => {
+                let version = self.selected_gateway_version().await.map_err(source_selection_error)?;
+                let version = match version {
+                    GatewayVersion::V1 => "v1",
+                    GatewayVersion::V1Beta1 => "v1beta1",
+                };
+                (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", version, "Gateway")),
                     Scope::Namespaced,
-                ),
-                "ConfigMap" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap")),
-                    Scope::Namespaced,
-                ),
-                "Service" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
-                    Scope::Namespaced,
-                ),
-                "EndpointSlice" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
-                    Scope::Namespaced,
-                ),
-                // Edgion CRDs.
-                //
-                // These CRDs declare non-conventional plurals (e.g. EdgionPlugins ->
-                // "edgionplugins", LinkSys -> "linksys"). `api_resource` pins the
-                // CRD-declared plural so admin list/get hits the correct resource;
-                // the conventional plural inferred by `from_gvk` ("edgionpluginses" /
-                // "linksyses") would not match the CRD, and the K8s API server would
-                // reject the request (403 from RBAC, since the ClusterRole grants
-                // only the real plural).
-                "EdgionTls" => (
-                    api_resource("edgion.io", "v1", "EdgionTls", "edgiontls"),
-                    Scope::Namespaced,
-                ),
-                "EdgionGatewayConfig" => (
-                    api_resource(
-                        "edgion.io",
-                        "v1alpha1",
-                        "EdgionGatewayConfig",
-                        "edgiongatewayclassconfigs",
-                    ),
+                )
+            }
+            "GatewayClass" => {
+                let version = self
+                    .selected_gateway_class_version()
+                    .await
+                    .map_err(source_selection_error)?;
+                let version = match version {
+                    GatewayClassVersion::V1 => "v1",
+                    GatewayClassVersion::V1Beta1 => "v1beta1",
+                };
+                (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        version,
+                        "GatewayClass",
+                    )),
                     Scope::Cluster,
-                ),
-                "EdgionPlugins" => (
-                    api_resource("edgion.io", "v1", "EdgionPlugins", "edgionplugins"),
+                )
+            }
+            "HTTPRoute" => {
+                let version = self
+                    .selected_http_route_version()
+                    .await
+                    .map_err(source_selection_error)?;
+                let version = match version {
+                    HTTPRouteVersion::V1 => "v1",
+                    HTTPRouteVersion::V1Beta1 => "v1beta1",
+                };
+                (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        version,
+                        "HTTPRoute",
+                    )),
                     Scope::Namespaced,
-                ),
-                "EdgionStreamPlugins" => (
-                    api_resource("edgion.io", "v1", "EdgionStreamPlugins", "edgionstreamplugins"),
+                )
+            }
+            "GRPCRoute" | "TCPRoute" | "UDPRoute" | "TLSRoute" | "BackendTLSPolicy" => {
+                let version = self
+                    .selected_legacy_version(kind)
+                    .await
+                    .map_err(source_selection_error)?
+                    .ok_or_else(|| ConfWriterError::NotFound("Gateway API resource is not installed".into()))?;
+                (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        version.as_str(),
+                        kind,
+                    )),
                     Scope::Namespaced,
-                ),
-                "EdgionConfigData" => (
-                    api_resource("edgion.io", "v1", "EdgionConfigData", "edgionconfigdata"),
+                )
+            }
+            "ReferenceGrant" => {
+                let version = self
+                    .selected_reference_grant_version()
+                    .await
+                    .map_err(source_selection_error)?;
+                let version = match version {
+                    ReferenceGrantVersion::V1 => "v1",
+                    ReferenceGrantVersion::V1Beta1 => "v1beta1",
+                };
+                (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        version,
+                        "ReferenceGrant",
+                    )),
                     Scope::Namespaced,
+                )
+            }
+            // Core resources
+            "Secret" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
+                Scope::Namespaced,
+            ),
+            "ConfigMap" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap")),
+                Scope::Namespaced,
+            ),
+            "Service" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
+                Scope::Namespaced,
+            ),
+            "EndpointSlice" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
+                Scope::Namespaced,
+            ),
+            // Edgion CRDs.
+            //
+            // These CRDs declare non-conventional plurals (e.g. EdgionPlugins ->
+            // "edgionplugins", LinkSys -> "linksys"). `api_resource` pins the
+            // CRD-declared plural so admin list/get hits the correct resource;
+            // the conventional plural inferred by `from_gvk` ("edgionpluginses" /
+            // "linksyses") would not match the CRD, and the K8s API server would
+            // reject the request (403 from RBAC, since the ClusterRole grants
+            // only the real plural).
+            "EdgionTls" => (
+                api_resource("edgion.io", "v1", "EdgionTls", "edgiontls"),
+                Scope::Namespaced,
+            ),
+            "EdgionGatewayConfig" => (
+                api_resource(
+                    "edgion.io",
+                    "v1alpha1",
+                    "EdgionGatewayConfig",
+                    "edgiongatewayclassconfigs",
                 ),
-                "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
-                "EdgionBackend" => (
-                    api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
-                    Scope::Namespaced,
+                Scope::Cluster,
+            ),
+            "EdgionPlugins" => (
+                api_resource("edgion.io", "v1", "EdgionPlugins", "edgionplugins"),
+                Scope::Namespaced,
+            ),
+            "EdgionStreamPlugins" => (
+                api_resource("edgion.io", "v1", "EdgionStreamPlugins", "edgionstreamplugins"),
+                Scope::Namespaced,
+            ),
+            "EdgionConfigData" => (
+                api_resource("edgion.io", "v1", "EdgionConfigData", "edgionconfigdata"),
+                Scope::Namespaced,
+            ),
+            "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
+            "EdgionBackend" => (
+                api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
+                Scope::Namespaced,
+            ),
+            // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
+            // so `from_gvk` resolves correctly without a plural override.
+            "EdgionAcme" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
+                Scope::Namespaced,
+            ),
+            // Non-conventional plural: naive pluralization would yield
+            // "edgionbackendtrafficpolicys", so an explicit plural is required.
+            "EdgionBackendTrafficPolicy" => (
+                api_resource(
+                    "edgion.io",
+                    "v1",
+                    "EdgionBackendTrafficPolicy",
+                    "edgionbackendtrafficpolicies",
                 ),
-                // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
-                // so `from_gvk` resolves correctly without a plural override.
-                "EdgionAcme" => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
-                    Scope::Namespaced,
-                ),
-                // Non-conventional plural: naive pluralization would yield
-                // "edgionbackendtrafficpolicys", so an explicit plural is required.
-                "EdgionBackendTrafficPolicy" => (
-                    api_resource(
-                        "edgion.io",
-                        "v1",
-                        "EdgionBackendTrafficPolicy",
-                        "edgionbackendtrafficpolicies",
-                    ),
-                    Scope::Namespaced,
-                ),
-                _ => {
-                    return Err(ConfWriterError::InternalError(format!(
-                        "Unknown resource kind: {}",
-                        kind
-                    )))
-                }
-            };
+                Scope::Namespaced,
+            ),
+            _ => {
+                return Err(ConfWriterError::InternalError(format!(
+                    "Unknown resource kind: {}",
+                    kind
+                )))
+            }
+        };
         Ok((ar, scope))
     }
 
@@ -624,77 +638,6 @@ fn project_partial_meta_to_key<K>(kind: &str, part: kube::core::PartialObjectMet
     }
 }
 
-const NAMESPACE_PAGE_TOKEN_PREFIX: &str = "edgion-ns-v2:";
-
-#[derive(Deserialize, Serialize)]
-struct NamespacePageToken {
-    kind: String,
-    namespaces: Vec<String>,
-    resource_version: String,
-    offset: usize,
-}
-
-fn paginate_namespaced<T>(
-    items: Vec<T>,
-    opts: Option<ListOptions>,
-    kind: &str,
-    allowed_namespaces: &BTreeSet<String>,
-    resource_version: Option<&str>,
-) -> Result<ListResult<T>, ConfWriterError> {
-    let Some(options) = opts else {
-        return Ok(ListResult {
-            items,
-            continue_token: None,
-        });
-    };
-    let namespaces = allowed_namespaces.iter().cloned().collect::<Vec<_>>();
-    let resource_version = resource_version.unwrap_or_default();
-    let offset = match options.continue_token {
-        Some(token) => {
-            let encoded = token.strip_prefix(NAMESPACE_PAGE_TOKEN_PREFIX).ok_or_else(|| {
-                ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string())
-            })?;
-            let decoded = URL_SAFE_NO_PAD
-                .decode(encoded)
-                .map_err(|_| ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string()))?;
-            let token: NamespacePageToken = serde_json::from_slice(&decoded)
-                .map_err(|_| ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string()))?;
-            if token.kind != kind
-                || token.namespaces != namespaces
-                || token.resource_version != resource_version
-                || token.offset > items.len()
-            {
-                return Err(ConfWriterError::StalePagination(
-                    "Namespace-scoped result set changed while paginating".to_string(),
-                ));
-            }
-            token.offset
-        }
-        None => 0,
-    };
-    if options.limit == 0 {
-        return Ok(ListResult {
-            items: items.into_iter().skip(offset).collect(),
-            continue_token: None,
-        });
-    }
-    let end = offset.saturating_add(options.limit as usize).min(items.len());
-    let continue_token = (end < items.len()).then(|| {
-        let token = NamespacePageToken {
-            kind: kind.to_string(),
-            namespaces,
-            resource_version: resource_version.to_string(),
-            offset: end,
-        };
-        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&token).expect("page token serialization cannot fail"));
-        format!("{NAMESPACE_PAGE_TOKEN_PREFIX}{encoded}")
-    });
-    Ok(ListResult {
-        items: items.into_iter().skip(offset).take(end - offset).collect(),
-        continue_token,
-    })
-}
-
 #[async_trait]
 impl CenterApi for KubernetesStorage {
     async fn set_one(
@@ -796,6 +739,21 @@ impl CenterApi for KubernetesStorage {
         );
 
         Ok(())
+    }
+
+    async fn update_one_if_source(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+        expected: &crate::conf_mgr::conf_center::source_query::SourcePrecondition,
+    ) -> Result<(), ConfWriterError> {
+        self.replace_source(kind, namespace, name, content, expected).await
+    }
+
+    async fn get_source_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
+        self.source_one(kind, namespace, name).await
     }
 
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
@@ -923,23 +881,29 @@ impl CenterApi for KubernetesStorage {
         Ok(ListResult { items, continue_token })
     }
 
+    async fn count_by_kind(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+    ) -> Result<crate::conf_mgr::conf_center::traits::SourceCount, ConfWriterError> {
+        self.source_count(kind, namespace).await
+    }
+
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_page(kind, None, options).await;
+        }
         let (api_resource, scope) = self.resolve_api_resource(kind).await?;
         let restrict_namespaces = scope == Scope::Namespaced && !self.allowed_namespaces.is_empty();
 
         if restrict_namespaces {
             let mut items = Vec::new();
-            let mut snapshot = Vec::new();
             for namespace in &self.allowed_namespaces {
                 let api: Api<DynamicObject> = Api::namespaced_with(self.client.clone(), namespace, &api_resource);
                 let list = api
                     .list(&ListParams::default())
                     .await
                     .map_err(|e| self.map_kube_error(e))?;
-                snapshot.push(format!(
-                    "{namespace}={}",
-                    list.metadata.resource_version.as_deref().unwrap_or_default()
-                ));
                 items.extend(list.items.into_iter().map(|obj| {
                     let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
                         tracing::error!(
@@ -960,7 +924,10 @@ impl CenterApi for KubernetesStorage {
                 }));
             }
             items.sort_by(|a, b| (&a.namespace, &a.name).cmp(&(&b.namespace, &b.name)));
-            return paginate_namespaced(items, opts, kind, &self.allowed_namespaces, Some(&snapshot.join(",")));
+            return Ok(ListResult {
+                items,
+                continue_token: None,
+            });
         }
 
         let api: Api<DynamicObject> = Api::all_with(self.client.clone(), &api_resource);
@@ -1019,6 +986,9 @@ impl CenterApi for KubernetesStorage {
         namespace: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_page(kind, Some(namespace), options).await;
+        }
         let api = self.dynamic_api(kind, Some(namespace)).await?;
 
         let mut lp = ListParams::default();
@@ -1077,22 +1047,20 @@ impl CenterApi for KubernetesStorage {
         kind: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_keys(kind, None, options).await;
+        }
         let (api_resource, scope) = self.resolve_api_resource(kind).await?;
         let restrict_namespaces = scope == Scope::Namespaced && !self.allowed_namespaces.is_empty();
 
         if restrict_namespaces {
             let mut items = Vec::new();
-            let mut snapshot = Vec::new();
             for namespace in &self.allowed_namespaces {
                 let api: Api<DynamicObject> = Api::namespaced_with(self.client.clone(), namespace, &api_resource);
                 let list = api
                     .list_metadata(&ListParams::default())
                     .await
                     .map_err(|e| self.map_kube_error(e))?;
-                snapshot.push(format!(
-                    "{namespace}={}",
-                    list.metadata.resource_version.as_deref().unwrap_or_default()
-                ));
                 items.extend(
                     list.items
                         .into_iter()
@@ -1102,7 +1070,10 @@ impl CenterApi for KubernetesStorage {
             items.sort_by(|a, b| {
                 (&a.metadata.namespace, &a.metadata.name).cmp(&(&b.metadata.namespace, &b.metadata.name))
             });
-            return paginate_namespaced(items, opts, kind, &self.allowed_namespaces, Some(&snapshot.join(",")));
+            return Ok(ListResult {
+                items,
+                continue_token: None,
+            });
         }
 
         let api: Api<DynamicObject> = Api::all_with(self.client.clone(), &api_resource);
@@ -1144,6 +1115,9 @@ impl CenterApi for KubernetesStorage {
         namespace: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_keys(kind, Some(namespace), options).await;
+        }
         let api = self.dynamic_api(kind, Some(namespace)).await?;
 
         let mut lp = ListParams::default();

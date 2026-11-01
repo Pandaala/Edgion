@@ -1419,7 +1419,7 @@ impl PluginRuntime {
                 let data_ref_bearing = match &entry.plugin {
                     EdgionPlugin::RequestAccessPolicy(config) => request_access_has_external_data(config),
                     EdgionPlugin::Canary(config) => config.active_profile_ref.is_some(),
-                    EdgionPlugin::RegionRoute(config) => config.override_ref.is_some(),
+                    EdgionPlugin::RegionRoute(_) => true,
                     _ => false,
                 };
                 if data_ref_bearing && data_entry.is_none_or(|entry| entry.validate_owner().is_err()) {
@@ -1454,6 +1454,12 @@ impl PluginRuntime {
                         errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                         entry_runtime.invalid_plugins.record(&entry.plugin);
                         break 'build_entry;
+                    }
+
+                    if let EdgionPlugin::RegionRoute(config) = &entry.plugin {
+                        if let Some(error) = config.operational_validation_error() {
+                            errors.push(format!("requestPlugins[{index}] (RegionRoute): {error}"));
+                        }
                     }
 
                     // A Deny restriction with any unresolved condition reference
@@ -2508,7 +2514,10 @@ impl PluginRuntime {
     /// resolved-key guard below). DSL VM init remains covered by
     /// `seal_fail_closed` at construction time.
     fn response_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
-        if matches!(plugin, EdgionPlugin::GrpcJsonTranscoder(_)) {
+        if matches!(
+            plugin,
+            EdgionPlugin::GrpcJsonTranscoder(_) | EdgionPlugin::RegionRoute(_)
+        ) {
             return edgion_resources::resources::edgion_plugins::validate::response_stage_plugin_validation_error(
                 plugin,
             );
@@ -2517,6 +2526,9 @@ impl PluginRuntime {
     }
 
     fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+        if let EdgionPlugin::RegionRoute(config) = plugin {
+            return config.structural_validation_error();
+        }
         if let Some(e) = plugin.validation_error() {
             return Some(e);
         }

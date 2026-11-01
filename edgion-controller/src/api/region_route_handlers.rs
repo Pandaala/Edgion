@@ -1,47 +1,74 @@
-//! Region Route API handlers.
-//!
-//! The region-route base table lives in `EdgionPlugins.RegionRouteConfig.regions`; dynamic
-//! overrides use `RegionRouteOverride` EdgionConfigData. `GET /api/v1/region-routes/effective`
-//! serves the merged view and `POST /api/v1/cluster-region-routes/failover` patches a single
-//! region's `failoverTo`. Center reaches both by drilling into one controller through the
-//! federation proxy tunnel; it does not aggregate them fleet-wide.
+//! Controller-owned RegionRoute observation and validated setting mutations.
+//! Effective observations describe Controller state, not Gateway acknowledgment.
 
 use axum::{extract::State, http::StatusCode, response::Json};
-use edgion_resources::resources::edgion_config_data::validate_regions;
+use edgion_resources::resources::edgion_config_data::ClusterRegionSetting;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{RegionDef, RegionRouteConfig};
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::ResourceKind;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
+use super::bounded_json::{self, BoundedJson, ProjectionBudget};
 use super::types::AdminState;
 
 // ============= Types =============
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EdgionConfigDataFailoverRequest {
-    pub namespace: String,
-    pub name: String,
+pub struct SettingFailoverRequest {
     pub region_name: String,
-    /// Empty string = clear failover.
+    /// Empty string clears the one-hop failover target.
     pub failover_to: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingFailoverApplyRequest {
+    pub region_name: String,
+    pub failover_to: String,
+    pub precondition: crate::conf_mgr::conf_center::source_query::SourcePrecondition,
+}
+
+/// Narrow observation contract; no internal resource or plugin config is serialized.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegionRouteObservation<'a> {
+    namespace: &'a str,
+    plugin_name: &'a str,
+    alias: Option<&'a str>,
+    entry_index: usize,
+    cluster_name: Option<&'a str>,
+    region_name: Option<&'a str>,
+    regions: Option<&'a [RegionDef]>,
+    cluster_region_ref: RegionSettingReference<'a>,
+    configuration_available: bool,
+    fail_open: bool,
+    status_on_error: u16,
+    observation: &'static str,
+    service_usages: Vec<Value>,
+}
+#[derive(Serialize)]
+struct RegionSettingReference<'a> {
+    namespace: &'a str,
+    name: &'a str,
+    permitted: bool,
 }
 
 // ============= Handlers =============
 
 /// `GET /api/v1/region-routes/effective`
 ///
-/// Returns the local controller's effective RegionRoute view for Center's
-/// background poller. S3 moved the RegionRoute base table into EdgionPlugins, so
-/// this view is derived from every enabled `requestPlugins[].RegionRoute` entry.
-pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, StatusCode> {
+/// On-demand Controller observations for enabled RegionRoute consumers.
+pub async fn list_region_routes_effective(
+    State(state): State<Arc<AdminState>>,
+) -> Result<BoundedJson<Value>, StatusCode> {
     let plugins = state.runtime_list_resources(ResourceKind::EdgionPlugins)?;
     let http_routes = list_usage_resources(&state, ResourceKind::HTTPRoute)?;
     let grpc_routes = list_usage_resources(&state, ResourceKind::GRPCRoute)?;
     let config_data = state.runtime_list_resources(ResourceKind::EdgionConfigData)?;
     let mut data = Vec::new();
+    let mut budget = ProjectionBudget::new();
 
     for plugin_resource in plugins {
         let namespace = plugin_resource
@@ -71,53 +98,70 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
             let Some(config) = entry.get("config") else {
                 continue;
             };
-            let Ok(region_config) = serde_json::from_value::<RegionRouteConfig>(config.clone()) else {
+            let Ok(region_config) = RegionRouteConfig::deserialize(config) else {
                 continue;
             };
-            // Match the Gateway compile boundary: an invalid base cannot be
-            // rescued by an overlay and is not an effective routing entry.
-            if region_config.validation_error().is_some() {
-                continue;
-            }
+            let reference = &region_config.cluster_region_ref;
+            let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
+            let setting = read_region_setting(&region_config, namespace, &config_data);
+            let available = region_config.validation_error().is_none()
+                && setting.as_ref().is_some_and(|setting| {
+                    setting
+                        .validation_proof()
+                        .is_ok_and(|proof| proof.accepts_modulo(region_config.effective_modulo()))
+                });
+            let usages = collect_route_usages(namespace, plugin_name, &http_routes, &grpc_routes, &mut budget)?;
 
-            let base_regions = config
-                .get("regions")
-                .or_else(|| config.pointer("/baseInfo/regions"))
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new()));
-            let my_region = config
-                .get("myRegion")
-                .or_else(|| config.pointer("/baseInfo/myRegion"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let override_ref = config
-                .get("overrideRef")
-                .and_then(|value| parse_override_ref(value, namespace));
-            let (regions, override_applied) =
-                apply_region_override(&region_config, &base_regions, override_ref.as_ref(), &config_data);
-            let usages = collect_route_usages(namespace, plugin_name, &http_routes, &grpc_routes);
-
-            data.push(serde_json::json!({
-                "namespace": namespace,
-                "pluginName": plugin_name,
-                "alias": entry.get("alias").and_then(Value::as_str),
-                "entryIndex": entry_index,
-                "myRegion": my_region,
-                "regions": regions,
-                "keyGet": config.get("keyGet").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-                "hashKeyGet": config.get("hashKeyGet").cloned(),
-                "hashCalc": config.get("hashCalc").cloned(),
-                "routeRules": config.get("routeRules").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-                "routeByKeyConfMatch": config.get("routeByKeyConfMatch").cloned(),
-                "dye": entry.get("dye").cloned(),
-                "overrideRef": override_ref,
-                "overrideApplied": override_applied,
-                "serviceUsages": usages,
-            }));
+            let row = RegionRouteObservation {
+                namespace,
+                plugin_name,
+                alias: entry.get("alias").and_then(Value::as_str),
+                entry_index,
+                cluster_name: setting.as_ref().map(|setting| setting.cluster_name.as_str()),
+                region_name: setting.as_ref().map(|setting| setting.region_name.as_str()),
+                regions: setting
+                    .as_ref()
+                    .filter(|_| available)
+                    .map(|setting| setting.regions.as_slice()),
+                cluster_region_ref: RegionSettingReference {
+                    namespace: target_namespace,
+                    name: &reference.name,
+                    permitted: reference.ref_denied.is_none(),
+                },
+                configuration_available: available,
+                fail_open: region_config.fail_open,
+                status_on_error: region_config.status_on_error,
+                observation: "controller",
+                service_usages: usages,
+            };
+            budget.reserve(&row)?;
+            data.push(serde_json::to_value(row).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
         }
     }
 
-    Ok(Json(serde_json::json!({ "success": true, "data": data })))
+    Ok(BoundedJson(serde_json::json!({ "success": true, "data": data })))
+}
+
+fn read_region_setting(
+    config: &RegionRouteConfig,
+    namespace: &str,
+    resources: &[Value],
+) -> Option<ClusterRegionSetting> {
+    let reference = &config.cluster_region_ref;
+    let target_namespace = reference.namespace.as_deref().unwrap_or(namespace);
+    if reference.ref_denied.is_some() {
+        return None;
+    }
+    resources
+        .iter()
+        .find(|resource| {
+            resource.pointer("/metadata/namespace").and_then(Value::as_str) == Some(target_namespace)
+                && resource.pointer("/metadata/name").and_then(Value::as_str) == Some(reference.name.as_str())
+                && resource.pointer("/spec/enable").and_then(Value::as_bool) != Some(false)
+                && resource.pointer("/spec/data/type").and_then(Value::as_str) == Some("ClusterRegionSetting")
+        })
+        .and_then(|resource| resource.pointer("/spec/data/config"))
+        .and_then(|value| ClusterRegionSetting::deserialize(value).ok())
 }
 
 fn list_usage_resources(state: &AdminState, kind: ResourceKind) -> Result<Vec<Value>, StatusCode> {
@@ -135,7 +179,8 @@ fn collect_route_usages(
     plugin_name: &str,
     http_routes: &[Value],
     grpc_routes: &[Value],
-) -> Vec<Value> {
+    budget: &mut ProjectionBudget,
+) -> Result<Vec<Value>, StatusCode> {
     let mut usages = Vec::new();
     for (kind, routes) in [("HTTPRoute", http_routes), ("GRPCRoute", grpc_routes)] {
         for route in routes {
@@ -160,24 +205,50 @@ fn collect_route_usages(
                 let backends = rule
                     .get("backendRefs")
                     .and_then(Value::as_array)
-                    .cloned()
+                    .map(Vec::as_slice)
                     .unwrap_or_default();
                 if filters_reference_plugin(rule.get("filters"), plugin_name) {
-                    usages.push(route_usage(kind, namespace, route_name, rule_index, &backends));
+                    usages.push(route_usage(
+                        kind,
+                        namespace,
+                        route_name,
+                        rule_index,
+                        backends.iter(),
+                        budget,
+                    )?);
                     continue;
                 }
-                let matching_backends: Vec<Value> = backends
-                    .into_iter()
-                    .filter(|backend| filters_reference_plugin(backend.get("filters"), plugin_name))
-                    .collect();
-                if !matching_backends.is_empty() {
-                    usages.push(route_usage(kind, namespace, route_name, rule_index, &matching_backends));
+                let matching_backends = backends
+                    .iter()
+                    .filter(|backend| filters_reference_plugin(backend.get("filters"), plugin_name));
+                if matching_backends.clone().next().is_some() {
+                    usages.push(route_usage(
+                        kind,
+                        namespace,
+                        route_name,
+                        rule_index,
+                        matching_backends,
+                        budget,
+                    )?);
                 }
             }
         }
     }
-    usages.sort_by_key(|left| left.to_string());
-    usages
+    usages.sort_by(|left, right| {
+        (
+            left["routeKind"].as_str(),
+            left["routeNamespace"].as_str(),
+            left["routeName"].as_str(),
+            left["ruleIndex"].as_u64(),
+        )
+            .cmp(&(
+                right["routeKind"].as_str(),
+                right["routeNamespace"].as_str(),
+                right["routeName"].as_str(),
+                right["ruleIndex"].as_u64(),
+            ))
+    });
+    Ok(usages)
 }
 
 fn filters_reference_plugin(filters: Option<&Value>, plugin_name: &str) -> bool {
@@ -191,231 +262,296 @@ fn filters_reference_plugin(filters: Option<&Value>, plugin_name: &str) -> bool 
     })
 }
 
-fn route_usage(kind: &str, namespace: &str, name: &str, rule_index: usize, backends: &[Value]) -> Value {
-    let backend_services: Vec<Value> = backends
-        .iter()
-        .filter(|backend| {
-            backend.get("group").and_then(Value::as_str).is_none_or(str::is_empty)
-                && backend
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .is_none_or(|kind| kind == "Service")
-        })
-        .filter_map(|backend| {
-            let backend_name = backend.get("name").and_then(Value::as_str)?;
-            Some(serde_json::json!({
-                "namespace": backend.get("namespace").and_then(Value::as_str).unwrap_or(namespace),
-                "name": backend_name,
-                "port": backend.get("port").cloned(),
-            }))
-        })
-        .collect();
-    serde_json::json!({
-        "routeKind": kind,
-        "routeNamespace": namespace,
-        "routeName": name,
-        "ruleIndex": rule_index,
-        "backendServices": backend_services,
-    })
+fn route_usage<'a>(
+    kind: &str,
+    namespace: &str,
+    name: &str,
+    rule_index: usize,
+    backends: impl Iterator<Item = &'a Value>,
+    budget: &mut ProjectionBudget,
+) -> Result<Value, StatusCode> {
+    #[derive(Serialize)]
+    struct Backend<'a> {
+        namespace: &'a str,
+        name: &'a str,
+        port: Option<u64>,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Usage<'a> {
+        route_kind: &'a str,
+        route_namespace: &'a str,
+        route_name: &'a str,
+        rule_index: usize,
+        backend_services: Vec<Value>,
+    }
+    let mut backend_services = Vec::new();
+    for backend in backends {
+        if !backend.get("group").and_then(Value::as_str).is_none_or(str::is_empty)
+            || backend
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "Service")
+        {
+            continue;
+        }
+        let Some(backend_name) = backend.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let row = Backend {
+            namespace: backend.get("namespace").and_then(Value::as_str).unwrap_or(namespace),
+            name: backend_name,
+            port: backend.get("port").and_then(Value::as_u64),
+        };
+        budget.reserve(&row)?;
+        backend_services.push(serde_json::to_value(row).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
+    }
+    let row = Usage {
+        route_kind: kind,
+        route_namespace: namespace,
+        route_name: name,
+        rule_index,
+        backend_services,
+    };
+    budget.reserve(&row)?;
+    serde_json::to_value(row).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-/// `POST /api/v1/cluster-region-routes/failover`
-///
-/// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
-/// The `name` field must refer to a `RegionRouteOverride` EdgionConfigData.
-pub async fn cluster_edgion_config_data_failover(
-    State(state): State<Arc<AdminState>>,
-    Json(body): Json<EdgionConfigDataFailoverRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_edgion_config_data_failover(
-        &state,
-        &body.namespace,
-        &body.name,
-        "RegionRouteOverride",
-        &body.region_name,
-        &body.failover_to,
-    )
-    .await
-    {
-        Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(FailoverError::InvalidTable(_)) => Err(StatusCode::UNPROCESSABLE_ENTITY),
-        Err(FailoverError::Storage(_)) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingConsumer<T = String> {
+    namespace: T,
+    plugin_name: T,
+    entry_index: usize,
+    enabled: bool,
+    reference_permitted: Option<bool>,
+    compatible_with_table: bool,
+    diagnostic: Option<&'static str>,
 }
 
-// ============= Helpers =============
-
-fn parse_override_ref(value: &Value, default_namespace: &str) -> Option<Value> {
-    if let Some(s) = value.as_str() {
-        let (namespace, name) = s
-            .split_once('/')
-            .map_or((default_namespace, s), |(namespace, name)| (namespace, name));
-        return Some(serde_json::json!({ "namespace": namespace, "name": name, "permitted": true }));
-    }
-    let name = value.get("name").and_then(Value::as_str)?;
-    let namespace = value
-        .get("namespace")
-        .and_then(Value::as_str)
-        .filter(|namespace| !namespace.is_empty())
-        .unwrap_or(default_namespace);
-    let permitted = value.get("refDenied").is_none();
-    Some(serde_json::json!({ "namespace": namespace, "name": name, "permitted": permitted }))
-}
-
-fn apply_region_override(
-    config: &RegionRouteConfig,
-    base_regions: &Value,
-    override_ref: Option<&Value>,
-    resources: &[Value],
-) -> (Value, bool) {
-    let Some(reference) = override_ref else {
-        return (base_regions.clone(), false);
-    };
-    let Some(namespace) = reference.get("namespace").and_then(Value::as_str) else {
-        return (base_regions.clone(), false);
-    };
-    let Some(name) = reference.get("name").and_then(Value::as_str) else {
-        return (base_regions.clone(), false);
-    };
-    if reference.get("permitted").and_then(Value::as_bool) == Some(false) {
-        return (base_regions.clone(), false);
-    }
-    let Some(resource) = resources.iter().find(|resource| {
-        resource.pointer("/metadata/namespace").and_then(Value::as_str) == Some(namespace)
-            && resource.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
-    }) else {
-        return (base_regions.clone(), false);
-    };
-    if resource.pointer("/spec/enable").and_then(Value::as_bool) == Some(false)
-        || resource.pointer("/spec/data/type").and_then(Value::as_str) != Some("RegionRouteOverride")
-    {
-        return (base_regions.clone(), false);
-    }
-    let Some(regions_value) = resource.pointer("/spec/data/config/regions").cloned() else {
-        return (base_regions.clone(), false);
-    };
-    let Ok(regions) = serde_json::from_value::<Vec<RegionDef>>(regions_value) else {
-        return (base_regions.clone(), false);
-    };
-    if config.validate_effective_regions(&regions).is_err() {
-        return (base_regions.clone(), false);
-    }
-    match serde_json::to_value(regions) {
-        Ok(regions) => (regions, true),
-        Err(_) => (base_regions.clone(), false),
-    }
-}
-
-/// GET the EdgionConfigData from local storage, modify the region's failoverTo, then PUT back.
-async fn patch_edgion_config_data_failover(
+fn setting_consumers(
     state: &AdminState,
     namespace: &str,
-    edgion_config_data_name: &str,
-    plugin_type: &str,
-    region_name: &str,
-    failover_to: &str,
-) -> Result<bool, FailoverError> {
-    use crate::conf_mgr::conf_center::traits::ConfWriterError;
-    use edgion_resources::ResourceKind;
-
-    // Serialize the whole get -> patch -> write below against other writers to the
-    // same resource so concurrent failover requests and a concurrent generic
-    // `update_namespaced` PUT cannot interleave and silently lose an update.
-    let _resource_guard = super::resource_locks::lock_resource(
-        ResourceKind::EdgionConfigData.as_str(),
-        namespace,
-        edgion_config_data_name,
-    )
-    .await;
-
-    let api = state.conf_center();
-    for attempt in 0..3 {
-        let mut resource = state
-            .center_get_resource(ResourceKind::EdgionConfigData, namespace, edgion_config_data_name)
-            .await
-            .map_err(|e| format!("failed to get EdgionConfigData: {e}"))?
-            .ok_or_else(|| format!("EdgionConfigData {}/{} not found", namespace, edgion_config_data_name))?;
-        let resource_version = resource
-            .pointer("/metadata/resourceVersion")
+    name: &str,
+    setting: &ClusterRegionSetting,
+) -> Result<Vec<SettingConsumer>, StatusCode> {
+    let plugins = state.runtime_list_resources(ResourceKind::EdgionPlugins)?;
+    let proof = setting.validation_proof();
+    let mut consumers = Vec::new();
+    let mut budget = ProjectionBudget::new();
+    for resource in plugins {
+        let owner_ns = resource
+            .pointer("/metadata/namespace")
             .and_then(Value::as_str)
-            .map(str::to_string);
-
-        let patch_result = patch_failover_resource(&mut resource, plugin_type, region_name, failover_to);
-        if patch_result != FailoverPatch::Missing {
-            validate_failover_resource(&resource).map_err(FailoverError::InvalidTable)?;
-        }
-        match patch_result {
-            FailoverPatch::Missing => return Ok(false),
-            // A concurrent writer may already have established the requested
-            // state. Treat that as success instead of issuing a redundant PUT.
-            FailoverPatch::AlreadyApplied => return Ok(true),
-            FailoverPatch::Changed => {}
-        }
-
-        // Non-Kubernetes backends persist the request's resourceVersion verbatim,
-        // so this write must carry a freshly allocated one exactly like
-        // `update_namespaced` does. Writing the object back with the version it
-        // was read at would leave the stored version unchanged across a failover,
-        // and a client holding that same version could then satisfy an `If-Match`
-        // precondition and silently overwrite this failover. Kubernetes assigns
-        // the version server-side on replace, so it must not be touched there.
-        if !state.is_k8s_mode() {
-            set_fresh_resource_version(&mut resource)?;
-        }
-
-        let json_content = serde_json::to_string(&resource).map_err(|e| format!("JSON serialize failed: {e}"))?;
-        match api
-            .update_one_if_version(
-                ResourceKind::EdgionConfigData.as_str(),
-                Some(namespace),
-                edgion_config_data_name,
-                json_content,
-                resource_version.as_deref(),
-            )
-            .await
-        {
-            Ok(()) => return Ok(true),
-            Err(ConfWriterError::Conflict(_)) if attempt < 2 => {
-                tracing::debug!(
-                    namespace,
-                    name = edgion_config_data_name,
-                    attempt = attempt + 1,
-                    "RegionRouteOverride changed concurrently; retrying failover update"
-                );
+            .unwrap_or("default");
+        let owner_name = resource.pointer("/metadata/name").and_then(Value::as_str).unwrap_or("");
+        let Some(entries) = resource.pointer("/spec/requestPlugins").and_then(Value::as_array) else {
+            continue;
+        };
+        for (entry_index, entry) in entries.iter().enumerate() {
+            if entry.get("type").and_then(Value::as_str) != Some("RegionRoute") {
+                continue;
             }
-            Err(error) => return Err(FailoverError::Storage(format!("update_one failed: {error}"))),
+            let Some(config) = entry.get("config") else {
+                continue;
+            };
+            let target_ns = config
+                .pointer("/clusterRegionRef/namespace")
+                .and_then(Value::as_str)
+                .unwrap_or(owner_ns);
+            if target_ns != namespace || config.pointer("/clusterRegionRef/name").and_then(Value::as_str) != Some(name)
+            {
+                continue;
+            }
+            let parsed = RegionRouteConfig::deserialize(config);
+            let (permitted, diagnostic) = match parsed {
+                Err(_) => (None, Some("invalid-consumer-config")),
+                Ok(config) if config.cluster_region_ref.ref_denied.is_some() => (Some(false), Some("reference-denied")),
+                Ok(config) if config.validation_error().is_some() => (Some(true), Some("invalid-consumer-config")),
+                Ok(config)
+                    if !proof
+                        .as_ref()
+                        .is_ok_and(|p| p.accepts_modulo(config.effective_modulo())) =>
+                {
+                    (Some(true), Some("incompatible-region-table"))
+                }
+                Ok(_) => (Some(true), None),
+            };
+            if consumers.len() >= 1000 {
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            let row = SettingConsumer {
+                namespace: owner_ns,
+                plugin_name: owner_name,
+                entry_index,
+                enabled: entry.get("enable").and_then(Value::as_bool).unwrap_or(true),
+                reference_permitted: permitted,
+                compatible_with_table: diagnostic.is_none(),
+                diagnostic,
+            };
+            budget.reserve(&row)?;
+            consumers.push(SettingConsumer {
+                namespace: row.namespace.to_owned(),
+                plugin_name: row.plugin_name.to_owned(),
+                entry_index: row.entry_index,
+                enabled: row.enabled,
+                reference_permitted: row.reference_permitted,
+                compatible_with_table: row.compatible_with_table,
+                diagnostic: row.diagnostic,
+            });
         }
     }
-
-    Err(FailoverError::Storage(
-        "RegionRouteOverride update retries exhausted".to_string(),
-    ))
+    Ok(consumers)
 }
 
-#[derive(Debug, thiserror::Error)]
-enum FailoverError {
-    #[error("invalid region table: {0}")]
-    InvalidTable(String),
-    #[error("{0}")]
-    Storage(String),
-}
-
-impl From<String> for FailoverError {
-    fn from(value: String) -> Self {
-        Self::Storage(value)
+async fn setting_source(state: &AdminState, namespace: &str, name: &str) -> Result<Value, StatusCode> {
+    let value = state
+        .center_get_resource(ResourceKind::EdgionConfigData, namespace, name)
+        .await?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if value.pointer("/spec/data/type").and_then(Value::as_str) != Some("ClusterRegionSetting") {
+        return Err(StatusCode::NOT_FOUND);
     }
+    Ok(value)
+}
+fn parsed_setting(value: &Value) -> Result<ClusterRegionSetting, StatusCode> {
+    ClusterRegionSetting::deserialize(
+        value
+            .pointer("/spec/data/config")
+            .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?,
+    )
+    .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)
+}
+
+pub async fn list_setting_consumers(
+    State(state): State<Arc<AdminState>>,
+    axum::extract::Path((namespace, name)): axum::extract::Path<(String, String)>,
+) -> Result<BoundedJson<Value>, StatusCode> {
+    tokio::time::timeout(crate::conf_mgr::conf_center::source_query::SOURCE_TIMEOUT,async {
+        let source=setting_source(&state,&namespace,&name).await?;
+        let setting=parsed_setting(&source)?;
+        let consumers=setting_consumers(&state,&namespace,&name,&setting)?;
+        Ok(BoundedJson(serde_json::json!({"success":true,"data":consumers,"settingEnabled":source.pointer("/spec/enable").and_then(Value::as_bool).unwrap_or(true),"tableObservation":"source","consumerObservation":"controller","gatewayApplication":"not-confirmed"})))
+    }).await.map_err(|_|StatusCode::GATEWAY_TIMEOUT)?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingPreview {
+    namespace: String,
+    name: String,
+    precondition: crate::conf_mgr::conf_center::source_query::SourcePrecondition,
+    region_name: String,
+    before: Option<String>,
+    after: Option<String>,
+    modified: bool,
+    consumers: Vec<SettingConsumer>,
+    observation: &'static str,
+}
+fn prepare_failover(
+    source: &Value,
+    request: &SettingFailoverRequest,
+) -> Result<(Value, bool, Option<String>), StatusCode> {
+    if source.pointer("/spec/enable").and_then(Value::as_bool) == Some(false) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let mut preview_budget = ProjectionBudget::new();
+    preview_budget.reserve(&(&request.region_name, &request.failover_to))?;
+    let before = source
+        .pointer("/spec/data/config/regions")
+        .and_then(Value::as_array)
+        .and_then(|regions| {
+            regions
+                .iter()
+                .find(|region| region.get("name").and_then(Value::as_str) == Some(request.region_name.as_str()))
+        })
+        .and_then(|region| region.get("failoverTo"))
+        .and_then(Value::as_str);
+    preview_budget.reserve(&before)?;
+    let before = before.map(str::to_owned);
+    let mut proposed = source.clone();
+    let patch = patch_failover_resource(
+        &mut proposed,
+        "ClusterRegionSetting",
+        &request.region_name,
+        &request.failover_to,
+    );
+    if patch == FailoverPatch::Missing {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    validate_failover_resource(&proposed).map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
+    Ok((proposed, patch == FailoverPatch::Changed, before))
+}
+
+pub async fn preview_setting_failover(
+    State(state): State<Arc<AdminState>>,
+    axum::extract::Path((namespace, name)): axum::extract::Path<(String, String)>,
+    Json(request): Json<SettingFailoverRequest>,
+) -> Result<BoundedJson<Value>, StatusCode> {
+    use crate::conf_mgr::conf_center::source_query::{SourcePrecondition, SOURCE_TIMEOUT};
+    tokio::time::timeout(SOURCE_TIMEOUT, async {
+        let source = setting_source(&state, &namespace, &name).await?;
+        let precondition = SourcePrecondition::from_value(&source).map_err(super::common::map_writer_error)?;
+        let (proposed, modified, before) = prepare_failover(&source, &request)?;
+        let consumers = setting_consumers(&state, &namespace, &name, &parsed_setting(&proposed)?)?;
+        let preview = SettingPreview {
+            namespace,
+            name,
+            precondition,
+            region_name: request.region_name,
+            before,
+            after: (!request.failover_to.is_empty()).then_some(request.failover_to),
+            modified,
+            consumers,
+            observation: "source-preview",
+        };
+        #[derive(Serialize)]
+        struct PreviewEnvelope<'a> {
+            success: bool,
+            data: &'a SettingPreview,
+        }
+        bounded_json::check(&PreviewEnvelope {
+            success: true,
+            data: &preview,
+        })?;
+        Ok(BoundedJson(serde_json::json!({"success":true,"data":preview})))
+    })
+    .await
+    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
+}
+
+pub async fn apply_setting_failover(
+    State(state): State<Arc<AdminState>>,
+    axum::extract::Path((namespace, name)): axum::extract::Path<(String, String)>,
+    Json(request): Json<SettingFailoverApplyRequest>,
+) -> Result<BoundedJson<Value>, StatusCode> {
+    use crate::conf_mgr::conf_center::source_query::SOURCE_TIMEOUT;
+    tokio::time::timeout(SOURCE_TIMEOUT,async {
+        let _guard=super::resource_locks::lock_resource(ResourceKind::EdgionConfigData.as_str(),&namespace,&name).await;
+        let source=setting_source(&state,&namespace,&name).await?;
+        request.precondition.verify(&source.to_string()).map_err(super::common::map_writer_error)?;
+        let (mut proposed,modified,_)=prepare_failover(&source,&SettingFailoverRequest {region_name:request.region_name,failover_to:request.failover_to})?;
+        let consumers=setting_consumers(&state,&namespace,&name,&parsed_setting(&proposed)?)?;
+        bounded_json::check(&serde_json::json!({"success":true,"modified":modified,"persistence":if modified {"persisted"} else {"unchanged"},"controllerObservation":"not-confirmed","gatewayApplication":"not-confirmed","consumers":&consumers}))?;
+        if modified {
+            if !state.is_k8s_mode() {set_fresh_resource_version(&mut proposed).map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;}
+            state.conf_center().update_one_if_source("EdgionConfigData",Some(&namespace),&name,proposed.to_string(),&request.precondition).await.map_err(super::common::map_writer_error)?;
+        }
+        // A timeout is an unknown persistence outcome. Callers must read back
+        // and create a new preview, never automatically replay this command.
+        Ok(BoundedJson(serde_json::json!({"success":true,"modified":modified,"persistence":if modified {"persisted"} else {"unchanged"},"controllerObservation":"not-confirmed","gatewayApplication":"not-confirmed","consumers":consumers})))
+    }).await.map_err(|_|StatusCode::GATEWAY_TIMEOUT)?
 }
 
 /// The dedicated failover command validates the complete proposed table, even
 /// for an idempotent request. Generic resource ingest remains advisory.
 fn validate_failover_resource(resource: &Value) -> Result<(), String> {
     let value = resource
-        .pointer("/spec/data/config/regions")
-        .ok_or_else(|| "RegionRouteOverride regions are missing".to_string())?;
-    let regions: Vec<RegionDef> =
-        serde_json::from_value(value.clone()).map_err(|error| format!("invalid regions: {error}"))?;
-    validate_regions(&regions)
+        .pointer("/spec/data/config")
+        .ok_or_else(|| "ClusterRegionSetting config is missing".to_string())?;
+    let setting: ClusterRegionSetting =
+        serde_json::from_value(value.clone()).map_err(|_| "invalid ClusterRegionSetting".to_string())?;
+    setting.validate_and_init()
 }
 
 /// Assign a newly allocated `metadata.resourceVersion` to a resource that is
@@ -425,9 +561,21 @@ fn set_fresh_resource_version(resource: &mut Value) -> Result<(), String> {
         .pointer_mut("/metadata")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| "resource metadata must be an object".to_string())?;
-    let version = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
-    metadata.insert("resourceVersion".to_string(), Value::String(version.to_string()));
+    let version = distinct_resource_version(
+        metadata.get("resourceVersion").and_then(Value::as_str),
+        crate::conf_mgr::sync_runtime::resource_version::next_resource_version,
+    );
+    metadata.insert("resourceVersion".to_string(), Value::String(version));
     Ok(())
+}
+
+fn distinct_resource_version(current: Option<&str>, mut allocate: impl FnMut() -> u64) -> String {
+    let first = allocate().to_string();
+    if current == Some(first.as_str()) {
+        allocate().to_string()
+    } else {
+        first
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

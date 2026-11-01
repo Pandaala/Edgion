@@ -1,21 +1,7 @@
-//! RegionRoute HTTP plugin — base + overlay region routing.
-//!
-//! # Base + overlay model (S3)
-//! `RegionRouteConfig` (in EdgionPlugins) holds ALL routing logic plus the default region table.
-//! At request time, if `override_ref` is set, the plugin looks up a `RegionRouteOverride`
-//! EdgionConfigData and its validation proof from one global store snapshot (ArcSwap, lock-free).
-//! `EffectiveRegions` holds the accepted generation and borrows its whole replacement table.
-//!
-//! # Fail-to-base semantics
-//! - **`overlay_missing`**: key not found in the EdgionConfigData store → base regions used.
-//! - **`overlay_type_mismatch`**: entry found but wrong `ConfigEntry` variant → base regions used.
-//!
-//! Both cases are recorded via `record_region_route_overlay_event`. No data-plane tracing
-//! (warn/error) is used; PluginLog and DyeOutcome carry request-level fallback evidence.
-//!
-//! # Request-time resolution
-//! `compute_effective_regions` is called per request: one ArcSwap load with paired raw/proof lookups.
-//! The plugin retains the base config, optional overlay key and fixed writeback log targets.
+//! RegionRoute resolves its local identity and complete routing table from one
+//! immutable ClusterRegionSetting generation. Unavailable operational config
+//! skips this plugin by default; failOpen=false returns statusOnError.
+//! Reference ownership and structural safety remain enforced by the compiler.
 
 use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
@@ -23,7 +9,7 @@ use std::{borrow::Cow, num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::observe::metrics::record_region_route_overlay_event;
+use crate::observe::metrics::record_region_route_config_event;
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive, sensitive_u64};
 use crate::plugins::runtime::session_adapter::key_value;
@@ -31,29 +17,27 @@ use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessio
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData};
-use edgion_resources::resources::edgion_plugins::{
-    HashAlgorithm, PluginValidation, RegionDef, RegionRouteConfig, RouteRule,
-};
+use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
 
-/// Own the overlay generation while borrowing its table; never clone a table
-/// just to inspect it on the request path.
-struct EffectiveRegions<'a> {
-    base: &'a [RegionDef],
-    overlay: Option<Arc<EdgionConfigData>>,
+/// Retains one validated generation for both local identity and routing data.
+struct EffectiveRegions {
+    resource: Arc<EdgionConfigData>,
 }
-
-impl std::ops::Deref for EffectiveRegions<'_> {
+impl EffectiveRegions {
+    fn setting(&self) -> &edgion_resources::resources::edgion_config_data::ClusterRegionSetting {
+        let ConfigEntry::ClusterRegionSetting(setting) = &self.resource.spec.data else {
+            unreachable!("effective generation is type-checked before construction")
+        };
+        setting
+    }
+    fn region_name(&self) -> &str {
+        &self.setting().region_name
+    }
+}
+impl std::ops::Deref for EffectiveRegions {
     type Target = [RegionDef];
-
     fn deref(&self) -> &Self::Target {
-        if let Some(resource) = &self.overlay {
-            if let ConfigEntry::RegionRouteOverride(overlay) = &resource.spec.data {
-                if let Some(regions) = &overlay.regions {
-                    return regions;
-                }
-            }
-        }
-        self.base
+        &self.setting().regions
     }
 }
 
@@ -85,16 +69,14 @@ fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: NonZeroU16) -> u16
 
 /// HTTP plugin: routes requests to a region based on ordered route rules.
 ///
-/// Holds a clone of the base `RegionRouteConfig` from EdgionPlugins, plus an optional
-/// EdgionConfigData store key ("namespace/name") for a `RegionRouteOverride` overlay.
+/// Holds immutable routing rules and an authorized setting key.
 pub struct RegionRoute {
     name: String,
-    /// Full base config: all routing logic + default region table.
+    /// Routing rules and configuration-error policy.
     /// `Arc` avoids a clone per request; the config is read-only after creation.
     base: Arc<RegionRouteConfig>,
-    /// Optional EdgionConfigData store key ("namespace/name") for a `RegionRouteOverride`.
-    /// `None` means no overlay is configured; base regions are used directly.
-    override_key: Option<String>,
+    /// Authorized setting key; unavailable or denied references have no key.
+    setting_key: Option<String>,
     init_error: Option<&'static str>,
     /// Fixed diagnostic targets; sensitivity is applied when each request logs.
     writeback_log_targets: String,
@@ -105,6 +87,9 @@ impl RegionRoute {
         let EdgionPlugin::RegionRoute(config) = entry.plugin() else {
             return None;
         };
+        if config.structural_validation_error().is_some() {
+            return None;
+        }
         if entry.has_references() {
             entry.validate_owner().ok()?;
         }
@@ -112,26 +97,18 @@ impl RegionRoute {
         Some(Self::build(config, key))
     }
 
-    pub(crate) fn create_inline(config: &RegionRouteConfig) -> Option<Box<dyn RequestFilter>> {
-        if config.override_ref.is_some() {
-            return None;
-        }
-        Some(Self::build(config, None))
+    pub(crate) fn create_inline(_config: &RegionRouteConfig) -> Option<Box<dyn RequestFilter>> {
+        // A required reference needs an actual owning resource loan.
+        None
     }
 
-    fn build(ep_config: &RegionRouteConfig, override_key: Option<String>) -> Box<dyn RequestFilter> {
+    fn build(ep_config: &RegionRouteConfig, setting_key: Option<String>) -> Box<dyn RequestFilter> {
         Box::new(Self {
             name: "RegionRoute".to_string(),
-            init_error: ep_config.validation_error().map(|_| {
-                if ep_config.effective_modulo() < 2 {
-                    "hash_modulo_invalid"
-                } else {
-                    "region_table_invalid"
-                }
-            }),
+            init_error: ep_config.operational_validation_error().map(|_| "hash_modulo_invalid"),
             writeback_log_targets: Self::prepare_writeback_log_targets(ep_config),
             base: Arc::new(ep_config.clone()),
-            override_key,
+            setting_key,
         })
     }
 
@@ -149,57 +126,43 @@ impl RegionRoute {
         targets
     }
 
-    /// Resolve the effective region table for this request (per-request, lock-free).
-    ///
-    /// Control flow:
-    /// 1. **No overlay configured** (`override_key` is `None`) → return base regions directly.
-    /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
-    /// 3. Type-guard the raw entry and read its config-time validation proof from
-    ///    the same immutable snapshot.
-    /// 4. Check only the consumer's modulo; invalid overlays return base.
-    /// 5. Hold the valid overlay generation for whole-table replacement.
-    ///
-    /// All non-`Applied` paths emit a Prometheus counter; no `tracing::warn!/error!`.
-    fn compute_effective_regions(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> EffectiveRegions<'_> {
-        let base = EffectiveRegions {
-            base: &self.base.regions,
-            overlay: None,
-        };
-        let Some(ref key) = self.override_key else {
-            return base;
-        };
-        let store = get_global_edgion_config_data_store();
-        let signal = match store.get_region_route_by_key(key) {
-            None => {
-                log.push_fmt("overlay_missing (key={}), using base", la![sensitive(key)]);
-                "overlay_missing"
+    /// Check availability before any request mutation; the proof and raw data
+    /// are retrieved from one immutable publication.
+    fn compute_effective_regions(&self) -> Result<EffectiveRegions, &'static str> {
+        let key = self.setting_key.as_deref().ok_or("setting_reference_unavailable")?;
+        let (resource, proof) = get_global_edgion_config_data_store()
+            .get_region_route_by_key(key)
+            .ok_or("setting_missing")?;
+        if !resource.spec.enable {
+            return Err("setting_disabled");
+        }
+        if !matches!(resource.spec.data, ConfigEntry::ClusterRegionSetting(_)) {
+            return Err("setting_type_mismatch");
+        }
+        if !proof.is_some_and(|proof| proof.accepts_modulo(self.base.effective_modulo())) {
+            return Err("setting_invalid");
+        }
+        Ok(EffectiveRegions { resource })
+    }
+
+    fn configuration_error(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        error: &'static str,
+    ) -> PluginRunningResult {
+        record_region_route_config_event(error);
+        log.push_err(error);
+        if self.base.fail_open {
+            session.record_outcome(DyeOutcome::Fallback, "configuration-unavailable");
+            PluginRunningResult::GoodNext
+        } else {
+            session.record_outcome(DyeOutcome::Reject, "configuration-unavailable");
+            PluginRunningResult::ErrResponse {
+                status: self.base.status_on_error,
+                body: None,
             }
-            Some((resource, _)) if !resource.spec.enable => {
-                log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
-                "overlay_disabled"
-            }
-            Some((resource, proof)) => {
-                if let ConfigEntry::RegionRouteOverride(overlay) = &resource.spec.data {
-                    if overlay.regions.is_none() {
-                        return base;
-                    }
-                    if proof.is_some_and(|proof| proof.accepts_modulo(self.base.effective_modulo())) {
-                        return EffectiveRegions {
-                            base: &self.base.regions,
-                            overlay: Some(resource),
-                        };
-                    }
-                    log.push_fmt("overlay_invalid (key={}), using base", la![sensitive(key)]);
-                    "overlay_invalid"
-                } else {
-                    log.push_fmt("overlay_type_mismatch (key={}), using base", la![sensitive(key)]);
-                    "overlay_type_mismatch"
-                }
-            }
-        };
-        record_region_route_overlay_event(signal);
-        session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
-        base
+        }
     }
 
     // ── Key extraction ────────────────────────────────────────────────────────
@@ -273,16 +236,17 @@ impl RegionRoute {
 
     /// Route the request to the given region by setting an external upstream jump.
     ///
-    /// If this gateway's own region (`my_region`) matches the target, passes through
+    /// If this gateway's own region from the captured setting matches the target, passes through
     /// without redirecting (local handling).
     async fn route_to(
         &self,
         session: &mut dyn PluginSession,
         region: &RegionDef,
+        local_region: &str,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         // Pass through when the target region is this gateway's own region.
-        if !self.base.my_region.is_empty() && self.base.my_region == region.name {
+        if local_region == region.name {
             log.push("local_region, pass");
             session.record_outcome(DyeOutcome::Success, &region.name);
             return PluginRunningResult::GoodNext;
@@ -415,22 +379,12 @@ impl RequestFilter for RegionRoute {
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(error) = self.init_error {
-            log.push_err(error);
-            return PluginRunningResult::GoodNext;
+            return self.configuration_error(session, log, error);
         }
-        // Short-circuit: nothing configured at all.
-        if self.base.route_rules.is_empty() && self.base.regions.is_empty() {
-            log.push("no_region_route_config, pass");
-            return PluginRunningResult::GoodNext;
-        }
-
-        // Resolve the effective region table: base + optional overlay (fail-to-base on error).
-        let effective_regions = self.compute_effective_regions(session, log);
-
-        if effective_regions.is_empty() {
-            log.push("no_regions, pass");
-            return PluginRunningResult::GoodNext;
-        }
+        let effective_regions = match self.compute_effective_regions() {
+            Ok(regions) => regions,
+            Err(error) => return self.configuration_error(session, log, error),
+        };
 
         // Evaluate route rules in order — first match wins.
         for rule in &self.base.route_rules {
@@ -444,7 +398,9 @@ impl RequestFilter for RegionRoute {
                         Some((idx, region)) => {
                             log.push_fmt("direct={} src={}", la![sensitive(&name), sensitive(&src.as_log_str())]);
                             let (_, region) = Self::apply_failover_redirect(&effective_regions, idx, region, log);
-                            return self.route_to(session, region, log).await;
+                            return self
+                                .route_to(session, region, effective_regions.region_name(), log)
+                                .await;
                         }
                         None => {
                             log.push_fmt("direct={} unknown, fallthrough", la![sensitive(&name)]);
@@ -495,7 +451,9 @@ impl RequestFilter for RegionRoute {
                                     la![sensitive(&value), sensitive(&src.as_log_str()), sensitive(&region.name)],
                                 );
                                 let (_, region) = Self::apply_failover_redirect(&effective_regions, idx, region, log);
-                                return self.route_to(session, region, log).await;
+                                return self
+                                    .route_to(session, region, effective_regions.region_name(), log)
+                                    .await;
                             }
                             None => {
                                 log.push_fmt(
@@ -522,7 +480,9 @@ impl RequestFilter for RegionRoute {
                     match self.exec_hash_range(session, log, &effective_regions).await {
                         Some((idx, region)) => {
                             let (_, region) = Self::apply_failover_redirect(&effective_regions, idx, region, log);
-                            return self.route_to(session, region, log).await;
+                            return self
+                                .route_to(session, region, effective_regions.region_name(), log)
+                                .await;
                         }
                         None => {
                             return PluginRunningResult::GoodNext;

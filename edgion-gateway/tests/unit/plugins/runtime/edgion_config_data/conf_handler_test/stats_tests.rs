@@ -3,7 +3,7 @@ use crate::plugins::runtime::conditions::ip_refs::{compile_keys, IpListReadKey};
 use edgion_resources::refs::condition_fields::IpExecutionRole;
 use edgion_resources::refs::ip_list_fields::IpListSide;
 use edgion_resources::resources::edgion_config_data::{
-    EdgionConfigDataSpec, IpGroup, IpListData, KeyGroup, RegionRouteOverride, Selector,
+    ClusterRegionSetting, EdgionConfigDataSpec, IpGroup, IpListData, KeyGroup, Selector,
 };
 use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
 use smallvec::SmallVec;
@@ -13,14 +13,14 @@ fn region_validation_proofs_follow_full_partial_and_removed_generations() {
     use edgion_resources::resources::edgion_plugins::RegionDef;
     fn table(high: u16) -> Arc<EdgionConfigData> {
         let mut data = region_route_resource("proof", None);
-        if let ConfigEntry::RegionRouteOverride(overlay) = &mut Arc::make_mut(&mut data).spec.data {
-            overlay.regions = Some(vec![RegionDef {
+        if let ConfigEntry::ClusterRegionSetting(overlay) = &mut Arc::make_mut(&mut data).spec.data {
+            overlay.regions = vec![RegionDef {
                 name: "region".to_string(),
                 hash_range: [0, high],
                 backend_endpoint: "backend:80".to_string(),
                 tls: false,
                 failover_to: None,
-            }]);
+            }];
         }
         data
     }
@@ -122,10 +122,10 @@ fn region_route_resource(name: &str, active: Option<&str>) -> Arc<EdgionConfigDa
         active: None,
         visibility: Default::default(),
         unknown_fields: Vec::new(),
-        data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-            enable: None,
-            active: active.map(str::to_string),
-            regions: None,
+        data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+            cluster_name: active.unwrap_or("prod").into(),
+            region_name: "region".into(),
+            regions: Vec::new(),
         }),
     };
     let mut resource = EdgionConfigData::new(name, spec);
@@ -411,10 +411,10 @@ fn region_route_override_is_available_from_raw_snapshot() {
             active: None,
             visibility: Default::default(),
             unknown_fields: Vec::new(),
-            data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                enable: None,
-                active: None,
-                regions: None,
+            data: ConfigEntry::ClusterRegionSetting(ClusterRegionSetting {
+                cluster_name: "prod".into(),
+                region_name: "region".into(),
+                regions: Vec::new(),
             }),
         };
         let mut ed = EdgionConfigData::new("rr-override", spec);
@@ -430,7 +430,7 @@ fn region_route_override_is_available_from_raw_snapshot() {
     let found = store.get_raw_by_key("ns-test/rr-override").unwrap();
     assert!(matches!(
         &found.spec.data,
-        ConfigEntry::RegionRouteOverride(overlay) if overlay.regions.is_none()
+        ConfigEntry::ClusterRegionSetting(overlay) if overlay.regions.is_empty()
     ));
 }
 
@@ -672,7 +672,7 @@ fn variant_transitions_and_removal_leave_no_stale_typed_entry() {
     assert!(snapshot_matcher(&region_snapshot, "ns/shared").is_none());
     assert!(matches!(
         &store.get_raw_by_key("ns/shared").unwrap().spec.data,
-        ConfigEntry::RegionRouteOverride(_)
+        ConfigEntry::ClusterRegionSetting(_)
     ));
 
     let selector = {
@@ -776,8 +776,8 @@ fn full_and_partial_publication_produce_equivalent_effective_snapshots() {
         let route = store.get_raw_by_key("ns/route").unwrap();
         assert!(matches!(
             &route.spec.data,
-            ConfigEntry::RegionRouteOverride(overlay)
-                if overlay.active.as_deref() == Some("secondary")
+            ConfigEntry::ClusterRegionSetting(overlay)
+                if overlay.cluster_name == "secondary"
         ));
     }
 
@@ -912,14 +912,14 @@ fn unsupported_extension_removes_indexes_and_recovers_full_and_partial() {
     use edgion_resources::resources::edgion_plugins::RegionDef;
     let ip = ip_list_resource("shared", true, None, "10.0.0.0/8");
     let mut region = region_route_resource("shared", None);
-    if let ConfigEntry::RegionRouteOverride(overlay) = &mut Arc::make_mut(&mut region).spec.data {
-        overlay.regions = Some(vec![RegionDef {
+    if let ConfigEntry::ClusterRegionSetting(overlay) = &mut Arc::make_mut(&mut region).spec.data {
+        overlay.regions = vec![RegionDef {
             name: "region".into(),
             hash_range: [0, 9],
             backend_endpoint: "backend:80".into(),
             tls: false,
             failover_to: None,
-        }]);
+        }];
     }
     for full in [true, false] {
         for valid in [&ip, &region] {

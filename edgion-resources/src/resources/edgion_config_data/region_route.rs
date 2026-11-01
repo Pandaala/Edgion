@@ -1,7 +1,4 @@
-//! RegionRoute overlay EdgionConfigData type
-//!
-//! `RegionRouteOverride` — all-Optional typed overlay referenced via `overrideRef`
-//! from a `RegionRouteConfig` in EdgionPlugins.
+//! Cluster and local-region settings for reference-bound RegionRoute consumers.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -9,49 +6,39 @@ use std::collections::HashMap;
 
 use crate::resources::edgion_plugins::plugin_configs::RegionDef;
 
-/// All-Optional typed overlay for RegionRoute.
-///
-/// Referenced via `overrideRef` from a `RegionRouteConfig` in `EdgionPlugins`.
-/// Only `Some` fields replace the corresponding base field; `None` keeps the base value.
-/// The `regions` collection (if `Some`) is replaced **whole** — no element merge.
-///
-/// Logic fields (`route_rules`, `hash_calc`, `key_get`, etc.) are **not** present here —
-/// logic is exclusively in the base `RegionRouteConfig` and cannot be overridden.
-///
-/// # Security invariant
-/// `RegionRouteConfig.regions` in `EdgionPlugins` MUST be authored as the safe default.
-/// On any overlay error, the base `regions` are used (fail-to-base).
+/// Complete regional identity and routing table, published as one generation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RegionRouteOverride {
-    /// Reserved and currently inert. Use the envelope `spec.enable` to disable
-    /// the overlay and fall back to the base table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable: Option<bool>,
-
-    /// Override the active profile selector (future use; reserved for profile-based routing).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active: Option<String>,
-
-    /// Whole-replace the region table. When `Some`, completely substitutes the base regions.
-    /// No element-wise merge — the entire table is replaced.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regions: Option<Vec<RegionDef>>,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClusterRegionSetting {
+    pub cluster_name: String,
+    pub region_name: String,
+    pub regions: Vec<RegionDef>,
 }
 
-impl RegionRouteOverride {
-    /// Standalone validation — checks only the fields that are present.
-    ///
-    /// Called by the controller at EdgionConfigData ingest time (via `validate_pre_parse`).
-    /// Delegates to [`validate_regions`] when `regions: Some` so controller and gateway
-    /// share endpoint, name, range, overlap and failover-graph rules. Modulo
-    /// compatibility is checked separately for each referring plugin.
-    pub fn validate_and_init(&self) -> Result<(), String> {
-        if let Some(regions) = &self.regions {
-            validate_regions(regions).map_err(|e| format!("RegionRouteOverride: {}", e))?;
+impl ClusterRegionSetting {
+    /// Validate identity and the entire table before publishing its proof.
+    pub fn validation_proof(&self) -> Result<RegionTableValidation, String> {
+        validate_setting_identity(&self.cluster_name, &self.region_name)?;
+        let proof = RegionTableValidation::new(&self.regions)?;
+        if !self.regions.iter().any(|region| region.name == self.region_name) {
+            return Err("regionName must identify a region in regions".to_string());
         }
-        Ok(())
+        Ok(proof)
     }
+
+    pub fn validate_and_init(&self) -> Result<(), String> {
+        self.validation_proof().map(|_| ())
+    }
+}
+
+/// Validate directory identity independently of enable state and routing-table health.
+pub fn validate_setting_identity(cluster_name: &str, region_name: &str) -> Result<(), String> {
+    for (field, value) in [("clusterName", cluster_name), ("regionName", region_name)] {
+        if value.trim().is_empty() || value.len() > 63 || value.chars().any(char::is_control) {
+            return Err(format!("{field} must be nonblank, control-free and at most 63 bytes"));
+        }
+    }
+    Ok(())
 }
 
 /// Validate a slice of [`RegionDef`] for use as an effective region table.

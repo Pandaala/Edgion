@@ -41,9 +41,9 @@ Do not infer that every `EdgionConfigDataRef` needs a Gateway typed index.
   configuration time and looked up dynamically by request and stream IP
   restriction consumers. Deny and allow keys are resolved from the same captured
   handle and preserve their configured order.
-- Region-route overlay consumers borrow the table from the live raw resource.
+- Region-route setting consumers borrow the local identity and table from the live raw resource.
   `TypedIndexes.region_tables` stores only a compact `RegionTableValidation`
-  proof for each standalone-valid table, not a cloned `RegionRouteOverride`.
+  proof for each standalone-valid table, not a cloned `ClusterRegionSetting`.
   `get_region_route_by_key` returns the raw resource and proof from one snapshot;
   the consumer then checks its modulo without repeating whole-table validation.
   The former duplicate-overlay index had no production caller and was removed;
@@ -74,7 +74,7 @@ equality:
   ordered CIDR strings. `IpGroup.description`, resource metadata, `active`, and
   `visibility` do not affect `build_grouped_matcher_partial` and do not trigger a
   recompile or repeated warning.
-- Selector changes need no derived rebuild. RegionRouteOverride table changes
+- Selector changes need no derived rebuild. ClusterRegionSetting table changes
   rebuild the compact validation proof at publication time. The raw table and
   proof remain atomic; invalid, disabled, or different-type generations must not
   retain a previous proof. See the
@@ -186,7 +186,7 @@ ConfigData target roles are not migrated by this change.
 
 ### Bound remaining plugin fields
 
-RAP/Canary/GCIR Selector and RegionRoute keys are built from actual EP/ESP field loans before cache reuse. Invalid target slots rebuild each consumer's established denial/base outcome; invalid owners cannot reuse a prior external executable. Fresh valid retarget generations retain the existing fresh-cache contract. GCIR still captures Selector and IpLists together, and Region raw value/proof publication remains paired. RAP URL documents are expanded in Controller and introduce no live Gateway document lookup. Unit coverage proves bounded constructor/cache/generation behavior, not live cross-process requeue traffic.
+RAP/Canary/GCIR Selector and RegionRoute keys are built from actual EP/ESP field loans before cache reuse. Invalid target slots rebuild each consumer's established denial/base outcome; invalid owners cannot reuse a prior external executable. RegionRoute specifically executes its failOpen/statusOnError policy for an unusable target; it has no base-table fallback. Fresh valid retarget generations retain the existing fresh-cache contract. GCIR still captures Selector and IpLists together, and Region raw value/proof publication remains paired. RAP URL documents are expanded in Controller and introduce no live Gateway document lookup. Unit coverage proves bounded constructor/cache/generation behavior, not live cross-process requeue traffic.
 
 ### ARCH-028 B2 condition consumers
 

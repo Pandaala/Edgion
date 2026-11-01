@@ -151,3 +151,49 @@ async fn e2e_token_authn_then_authz() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn source_count_authorization_runs_before_the_source_handler() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (verb, kind, expected) in [
+        ("list", "HTTPRoute", StatusCode::OK),
+        ("list", "Secret", StatusCode::FORBIDDEN),
+        ("list-keys", "HTTPRoute", StatusCode::FORBIDDEN),
+    ] {
+        let az = Arc::new(Authorizer::new(CenterPolicy::from_config(&FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec![verb.into()],
+                kinds: vec!["HTTPRoute".into()],
+            }],
+        })));
+        let role = az.center_role();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let handler_hits = hits.clone();
+        let router = Router::new()
+            .route(
+                "/api/v1/count/namespaced/{kind}",
+                get(move || {
+                    let hits = handler_hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::Relaxed);
+                        "count"
+                    }
+                }),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(az, authz_layer))
+            .layer(axum::middleware::from_fn(
+                move |mut request: Request<Body>, next: axum::middleware::Next| {
+                    let role = role.clone();
+                    async move {
+                        request.extensions_mut().insert(role);
+                        next.run(request).await
+                    }
+                },
+            ));
+        assert_eq!(
+            status_of(router, "GET", &format!("/api/v1/count/namespaced/{kind}"), None).await,
+            expected
+        );
+        assert_eq!(hits.load(Ordering::Relaxed), usize::from(expected == StatusCode::OK));
+    }
+}

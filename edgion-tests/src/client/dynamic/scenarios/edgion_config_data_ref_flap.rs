@@ -1,8 +1,8 @@
 // PmdRefFlap dynamic scenario.
 //
-// Applies an EdgionPlugins resource that switches its overrideRef (RegionRouteOverride EdgionConfigData):
-//   initial:  overrideRef → existing EdgionConfigData data-flap-good   → Accepted=True, ResolvedRefs=True
-//   invalid:  overrideRef → missing EdgionConfigData data-flap-missing  → ResolvedRefs=False (InvalidEdgionConfigDataRef)
+// Applies an EdgionPlugins resource that switches its clusterRegionRef (ClusterRegionSetting EdgionConfigData):
+//   initial:  clusterRegionRef → existing EdgionConfigData data-flap-good   → Accepted=True, ResolvedRefs=True
+//   invalid:  clusterRegionRef → missing EdgionConfigData data-flap-missing  → ResolvedRefs=False (InvalidEdgionConfigDataRef)
 //   valid:    restored to data-flap-good                          → Accepted=True, ResolvedRefs=True
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};

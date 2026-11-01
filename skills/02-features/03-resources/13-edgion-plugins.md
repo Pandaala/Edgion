@@ -142,7 +142,7 @@ Backend address selection and TLS SNI are unchanged. See the [ProxyRewrite guide
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
-| `RegionRoute` | Multi-region traffic routing. The complete routing logic and safe default `regions` table live inline in EdgionPlugins; optional `overrideRef` targets a `RegionRouteOverride` EdgionConfigData for hot-swappable failover state. The Controller effective API resolves permitted/enabled overlays, preserves the reference namespace, and exposes the entry-level `dye` suite (request/response header rules keyed on outcome via `on`) plus a stable request-plugin entry index. Center service-usage views derive consumers from HTTPRoute/GRPCRoute ExtensionRefs targeting the containing EdgionPlugins resource, using `resolvedRules` when delegation is present so inherited filters reach the actual Service backends. See `05-resources/15-edgion-config-data.md`. |
+| `RegionRoute` | Ordered regional routing using required clusterRegionRef to ClusterRegionSetting. The plugin owns logic and failOpen/statusOnError; the setting owns clusterName, regionName and regions. The Controller returns a limited effective observation DTO; HTTPRoute/GRPCRoute usages retain resolved-rule attribution. |
 
 > Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 

@@ -3,10 +3,10 @@
 //! Performs preflight checks for Gateway API CRD availability and probes
 //! API versions for ReferenceGrant.
 
+use crate::conf_mgr::conf_center::{source_query as query, traits::ConfWriterError};
 use anyhow::Result;
 use edgion_resources::gateway_api_support::{canonical_sources, GROUP};
 use kube::core::GroupVersionKind;
-use kube::error::DiscoveryError;
 use kube::Client;
 use std::collections::HashSet;
 
@@ -56,7 +56,7 @@ pub async fn probe_legacy_route_version(client: &Client, kind: &str) -> Result<O
         match is_kind_served(client, &gvk).await {
             Ok(true) => return Ok(Some(selected)),
             Ok(false) => continue,
-            Err(error) => return Err(anyhow::anyhow!("Failed to probe {kind} {version}: {error}")),
+            Err(error) => return Err(error.into()),
         }
     }
     Ok(None)
@@ -87,7 +87,7 @@ pub async fn probe_http_route_version(client: &Client) -> Result<Option<HTTPRout
         match is_kind_served(client, &gvk).await {
             Ok(true) => return Ok(Some(selected)),
             Ok(false) => continue,
-            Err(error) => return Err(anyhow::anyhow!("Failed to probe HTTPRoute {version}: {error}")),
+            Err(error) => return Err(error.into()),
         }
     }
     Ok(None)
@@ -105,7 +105,7 @@ pub async fn probe_gateway_version(client: &Client) -> Result<Option<GatewayVers
         match is_kind_served(client, &gvk).await {
             Ok(true) => return Ok(Some(selected)),
             Ok(false) => continue,
-            Err(error) => return Err(anyhow::anyhow!("Failed to probe Gateway {version}: {error}")),
+            Err(error) => return Err(error.into()),
         }
     }
     Ok(None)
@@ -120,34 +120,44 @@ pub async fn probe_gateway_class_version(client: &Client) -> Result<Option<Gatew
         match is_kind_served(client, &gvk).await {
             Ok(true) => return Ok(Some(selected)),
             Ok(false) => continue,
-            Err(error) => return Err(anyhow::anyhow!("Failed to probe GatewayClass {version}: {error}")),
+            Err(error) => return Err(error.into()),
         }
     }
     Ok(None)
 }
 
-fn is_api_unavailable(error: &kube::Error) -> bool {
-    matches!(error, kube::Error::Api(response) if response.code == 404)
-        || matches!(
-            error,
-            kube::Error::Discovery(
-                DiscoveryError::MissingKind(_)
-                    | DiscoveryError::MissingApiGroup(_)
-                    | DiscoveryError::MissingResource(_)
-                    | DiscoveryError::EmptyApiGroup(_)
-            )
-        )
-}
-
-/// Check whether a GVK is served through Kubernetes API discovery.
-///
-/// Discovery avoids listing namespaced objects at cluster scope, so startup
-/// remains compatible with controllers restricted to explicit namespaces.
-async fn is_kind_served(client: &Client, gvk: &GroupVersionKind) -> Result<bool, kube::Error> {
-    match kube::discovery::pinned_kind(client, gvk).await {
-        Ok(_) => Ok(true),
-        Err(error) if is_api_unavailable(&error) => Ok(false),
-        Err(error) => Err(error),
+/// Probe the same pinned group/version as kube discovery without collecting an
+/// unbounded response or forwarding an upstream error body.
+async fn is_kind_served(client: &Client, gvk: &GroupVersionKind) -> Result<bool, ConfWriterError> {
+    let api_version = gvk.api_version();
+    let path = if gvk.group.is_empty() {
+        format!("/api/{api_version}")
+    } else {
+        format!("/apis/{api_version}")
+    };
+    let request = http::Request::get(path)
+        .body(Vec::new())
+        .map_err(|_| query::source_error())?;
+    let list: k8s_openapi::apimachinery::pkg::apis::meta::v1::APIResourceList =
+        match super::source_transport::json(client, request).await {
+            Ok(list) => list,
+            Err(ConfWriterError::NotFound(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+    if list
+        .resources
+        .iter()
+        .any(|resource| resource.kind == gvk.kind && !resource.name.contains('/'))
+    {
+        if list.group_version != api_version {
+            return Err(query::source_error());
+        }
+        list.group_version
+            .parse::<kube::core::GroupVersion>()
+            .map_err(|_| query::source_error())?;
+        Ok(true)
+    } else {
+        Ok(false)
     }
 }
 
@@ -187,13 +197,7 @@ pub async fn probe_reference_grant_version(client: &Client) -> Result<Option<Ref
                 return Ok(Some(detected));
             }
             Ok(false) => continue,
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to probe ReferenceGrant API version {}: {}. Check RBAC permissions and network connectivity.",
-                    version,
-                    error
-                ));
-            }
+            Err(error) => return Err(error.into()),
         }
     }
 

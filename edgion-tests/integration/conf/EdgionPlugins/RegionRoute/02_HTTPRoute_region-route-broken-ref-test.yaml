@@ -1,5 +1,5 @@
 # HTTPRoute for RegionRoute broken-ref test.
-# The referenced EdgionPlugins "region-route-broken-ref" has an overrideRef
+# The referenced EdgionPlugins "region-route-broken-ref" has an clusterRegionRef
 # pointing at a non-existent EdgionConfigData, so the gateway uses the base regions
 # (fail-to-base) and logs "overlay_missing". The base route hits loopback → 502.
 apiVersion: gateway.networking.k8s.io/v1

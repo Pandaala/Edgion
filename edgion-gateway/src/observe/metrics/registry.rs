@@ -71,8 +71,8 @@ pub mod names {
     pub const CONFIG_CONFLICT_TOTAL: &str = "edgion_config_conflict_total";
     // Outbound: a caller-injected header was dropped for an invalid name/value (silent no-op)
     pub const OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL: &str = "edgion_outbound_injected_header_skipped_total";
-    // HTTP plugin: RegionRoute overlay resolution events (overlay_missing / overlay_type_mismatch)
-    pub const REGION_ROUTE_OVERLAY_EVENTS_TOTAL: &str = "edgion_region_route_overlay_events_total";
+    // HTTP plugin: RegionRoute configuration availability outcomes.
+    pub const REGION_ROUTE_CONFIG_EVENTS_TOTAL: &str = "edgion_region_route_config_events_total";
     // Stream plugin: ConnectionRateLimit rejections
     pub const CONNECTION_RATE_LIMIT_REJECTED_TOTAL: &str = "edgion_connection_rate_limit_rejected_total";
     // Stream plugin: ConnectionRateLimit Redis failure (fired on both fail-open and fail-close)
@@ -773,21 +773,13 @@ pub fn record_config_event_parse_error(kind: &'static str) {
     fixed_counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
 }
 
-/// Record a RegionRoute overlay resolution event.
-///
-/// `result` must be one of:
-/// - `"overlay_missing"` — `overrideRef` set but the EdgionConfigData key is not found in the store;
-///   base regions used (fail-to-base).
-/// - `"overlay_disabled"` — EdgionConfigData found but `spec.enable=false` (envelope kill-switch);
-///   base regions used without consulting the overlay variant (H1).
-/// - `"overlay_type_mismatch"` — EdgionConfigData found but its variant is not `RegionRouteOverride`
-///   (D6 type guard rejected it); base regions used.
-/// - `"overlay_invalid"` — overlay applied but the merged effective region table failed
-///   `validate_regions` (e.g. duplicate name, reversed hash range); base regions used (H2).
-///
-/// Low, fixed cardinality — safe as a label.
-pub fn record_region_route_overlay_event(result: &'static str) {
-    fixed_counter!(names::REGION_ROUTE_OVERLAY_EVENTS_TOTAL, "result" => result).increment(1);
+/// Record one RegionRoute configuration failure. Fixed reasons are
+/// setting_reference_unavailable, setting_missing, setting_disabled,
+/// setting_type_mismatch, setting_invalid and hash_modulo_invalid.
+/// setting_invalid includes consumer/table incompatibility; hash_modulo_invalid
+/// identifies an invalid plugin hash domain before dependency selection.
+pub fn record_region_route_config_event(result: &'static str) {
+    fixed_counter!(names::REGION_ROUTE_CONFIG_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.

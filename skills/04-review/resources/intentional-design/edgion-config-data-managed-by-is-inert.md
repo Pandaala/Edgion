@@ -57,16 +57,14 @@ The label-based ownership design that would have consumed `center` — Center st
 `unowned-conflict` drift state — lived in EdgionCenter's
 `tasks/pending/global-resource-management/` package. That package was **superseded and rejected on
 2026-07-26** in favour of `tasks/pending/center-controller-interaction-convergence/`, and its own
-header says "do not execute its task ledger". The current program authority,
-`EdgionCenter/docs/superpowers/specs/2026-07-26-center-controller-write-model-convergence-design.md`,
-declares no `managed-by` mechanism at all. Center's cross-cluster `GlobalResources` view is
-read-only; Center's two *dedicated* write paths are RegionRouteOverride failover and row-level
-copy — the only production callers of `config_data_ops::write_config_data`, whose shared core is
-what distinguishes them (the dashboard's generic CRUD sends `If-Match` too, so CAS is not the
-difference) — while general EdgionConfigData create / update / delete stays available through the
-generic Controller Admin proxy, which is exactly what the default federation policy grants. Correctness throughout
-rests on `If-Match` against `metadata.resourceVersion` with explicit `converged` / `superseded` /
-`conflict` outcomes. Reintroducing a label-based owner would add a second, coarser concurrency
+header says "do not execute its task ledger". The historical convergence plan did not establish a managed-by mechanism. The
+current CenterWatch directory carries only typed identities and references.
+Generic full-resource federation inventory and multi-target fan-out/copy APIs
+are retired. Center reads fresh source detail and submits one resource mutation
+with a fresh preview precondition (source hash, UID and resourceVersion); general
+EdgionConfigData CRUD remains available through the authorized Controller proxy.
+Persistence, Controller observation and Gateway application remain separate.
+Reintroducing a label-based owner would add a second, coarser concurrency
 model beside a CAS model that already works.
 
 **4. There is no cheap enforcement point even if one were wanted.**

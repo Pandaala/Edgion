@@ -1,9 +1,4 @@
-# RegionRoute - no routeRules -> plugin is always a no-op (passes through)
-#
-# Base config has regions and hashCalc but NO routeRules.
-# The plugin short-circuits with no_region_route_config when route_rules is empty,
-# or simply passes through since no rule evaluates.
-# The norules test verifies that traffic passes through unchanged (normal backend returns 200).
+# ClusterRegionSetting fixtures; routing logic references a separate setting.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -11,20 +6,13 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    - type: RegionRoute
-      config:
-        regions:
-          - name: virginia
-            hashRange: [0, 599]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: ohio
-            hashRange: [600, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
+  - type: RegionRoute
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+      clusterRegionRef:
+        name: region-route-norules-setting

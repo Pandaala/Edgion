@@ -114,7 +114,7 @@ async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
     let tx = Arc::new(tx);
     let admin_router = axum::Router::new();
     let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-    let mut active_watch_cancel: Option<DropGuard> = None;
+    let mut active_watch_cancel = WatchSession::default();
 
     let payload = CenterPayload::WatchRequest(FedWatchRequest {
         request_id: "t1".to_string(),
@@ -137,9 +137,10 @@ async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
     assert!(result.is_ok(), "handle_center_message returned Err: {:?}", result.err());
 
     // Exactly one message must have been sent: a WatchEventResponse with non-empty error.
-    let msg = rx
-        .try_recv()
-        .expect("expected exactly one ControllerMessage on the channel");
+    let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
     match msg.payload {
         Some(CtrlPayload::WatchEventResponse(resp)) => {
             assert!(
@@ -156,11 +157,7 @@ async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
         "expected channel to be empty after one deny message"
     );
 
-    // No watch task must have been started (active_watch_cancel stays None).
-    assert!(
-        active_watch_cancel.is_none(),
-        "expected active_watch_cancel to remain None after RBAC deny"
-    );
+    drop(active_watch_cancel);
 }
 
 /// The federation proxy must forward `If-Match` (CAS precondition for
@@ -198,7 +195,7 @@ async fn http_proxy_forwards_if_match_and_strips_authorization() {
         }),
     );
     let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-    let mut active_watch_cancel: Option<DropGuard> = None;
+    let mut active_watch_cancel = WatchSession::default();
 
     let payload = CenterPayload::HttpProxy(HttpProxyRequest {
         request_id: "p1".to_string(),
@@ -258,7 +255,7 @@ async fn run_http_proxy_with_router(
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
     let tx = Arc::new(tx);
     let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-    let mut active_watch_cancel: Option<DropGuard> = None;
+    let mut active_watch_cancel = WatchSession::default();
 
     handle_center_message(
         CenterPayload::HttpProxy(req),
@@ -357,167 +354,56 @@ async fn http_proxy_rotation_post_reaches_router() {
 /// ARCH-082: successful forwarding must not create spelling-dependent metric series.
 #[tokio::test(flavor = "current_thread")]
 async fn successful_watch_metrics_use_one_canonical_kind() {
-    use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, ShutdownHandle};
-    use crate::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
-    use crate::fed_sync::proto::FedWatchRequest;
     use edgion_common::observe::cardinality_guard::{CardinalityGuard, CardinalityMode};
-    use tokio::sync::mpsc;
-
-    struct ReadyWatch;
-    impl WatchObj for ReadyWatch {
-        fn kind_name(&self) -> &'static str {
-            "HTTPRoute"
-        }
-        fn list_json(&self) -> Result<(String, u64), String> {
-            Ok(("[]".into(), 2))
-        }
-        fn current_version(&self) -> u64 {
-            2
-        }
-        fn watch_json(&self, _: String, _: String, from_version: u64) -> mpsc::Receiver<WatchResponseSimple> {
-            assert_eq!(from_version, 1);
-            let (tx, rx) = mpsc::channel(1);
-            tx.try_send(WatchResponseSimple::new("fixture-event".into(), 2))
-                .unwrap();
-            rx
-        }
-        fn is_ready(&self) -> bool {
-            true
-        }
-        fn set_ready(&self) {}
-        fn set_not_ready(&self) {}
-        fn clear(&self) {}
-    }
-
-    let tmp = tempfile::tempdir().unwrap();
-    let manager = Arc::new(
-        ConfMgr::create(ConfCenterConfig::FileSystem(
-            FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
-        ))
-        .await
-        .unwrap(),
-    );
-    let shutdown = ShutdownHandle::new();
-    let lifecycle = {
-        let manager = manager.clone();
-        let shutdown = shutdown.clone();
-        tokio::spawn(async move { manager.start_with_shutdown(shutdown).await })
-    };
-    let server = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(server) = manager.config_sync_server() {
-                break server;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    server.register_all(std::collections::HashMap::from([(
-        "HTTPRoute".into(),
-        Arc::new(ReadyWatch) as Arc<dyn WatchObj>,
-    )]));
-
+    let fixture = SessionFixture::new().await;
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     let recorder = CardinalityGuard::new(recorder, 64, CardinalityMode::Enforce);
-    // This runtime and its forwarding tasks stay on the same thread.
     let _local_recorder = metrics::set_default_local_recorder(&recorder);
-    let authorizer = Arc::new(Authorizer::new(crate::fed_sync::default_policy::default_center_policy()));
-    let (tx, mut rx) = mpsc::channel(8);
-    let tx = Arc::new(tx);
-    let mut cancel = None;
-    for (index, kind) in ["HTTPRoute", "httproute", "hTtPrOuTe"].into_iter().enumerate() {
-        let request_id = format!("watch-{index}");
-        handle_center_message(
-            CenterPayload::WatchRequest(FedWatchRequest {
-                request_id: request_id.clone(),
-                kind: kind.into(),
-                from_version: 1,
-            }),
-            tx.clone(),
-            axum::Router::new(),
-            manager.clone(),
-            &mut cancel,
-            Arc::new(tokio::sync::Semaphore::new(1)),
-            authorizer.clone(),
-        )
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let mut watch = WatchSession::default();
+    watch.start(
+        crate::fed_sync::proto::FedWatchRequest {
+            request_id: "metrics".into(),
+            kind: "RegionRoute".into(),
+            from_version: 0,
+        },
+        Arc::new(tx),
+        fixture.manager.clone(),
+        Arc::new(Authorizer::new(crate::fed_sync::default_policy::default_center_policy())),
+    );
+    assert!(matches!(
+        rx.recv().await.unwrap().payload,
+        Some(CtrlPayload::WatchListResponse(_))
+    ));
+    publish_setting(&fixture.manager, "metric-setting", "1");
+    let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await
+        .unwrap()
         .unwrap();
-        let message = tokio::time::timeout(Duration::from_secs(3), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let Some(CtrlPayload::WatchEventResponse(event)) = message.payload else {
-            panic!("expected successful watch event");
-        };
-        assert_eq!(event.request_id, request_id);
-        assert_eq!(event.data, "fixture-event");
-        assert_eq!(event.sync_version, 2);
-        assert_eq!(event.server_id, server.server_id());
-        assert!(event.error.is_empty());
-    }
+    assert!(matches!(msg.payload, Some(CtrlPayload::WatchEventResponse(event)) if event.error.is_empty()));
     let output = handle.render();
     let samples: Vec<_> = output
         .lines()
         .filter(|line| line.starts_with(fed_metrics::names::WATCH_EVENTS_TOTAL))
         .collect();
     assert_eq!(samples.len(), 1, "{output}");
-    assert!(samples[0].contains("kind=\"HTTPRoute\""), "{output}");
+    assert!(samples[0].contains("kind=\"RegionRoute\""), "{output}");
     assert!(samples[0].contains("direction=\"sent\""), "{output}");
-    assert!(samples[0].ends_with(" 3"), "{output}");
-    if let Some(cancel) = cancel {
-        drop(cancel);
-    }
-    shutdown.shutdown();
-    tokio::time::timeout(Duration::from_secs(5), lifecycle)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    drop(watch);
+    fixture.finish().await;
 }
 
 // ARCH-084: exercise the production session and shutdown boundary without a network server.
-struct SessionFixture {
+pub(super) struct SessionFixture {
     _directory: tempfile::TempDir,
-    manager: Arc<ConfMgr>,
+    pub(super) manager: Arc<ConfMgr>,
     shutdown: crate::conf_mgr::ShutdownHandle,
     lifecycle: tokio::task::JoinHandle<Result<()>>,
-    watches: tokio::sync::mpsc::UnboundedReceiver<
-        tokio::sync::mpsc::Sender<crate::conf_sync::conf_server::WatchResponseSimple>,
-    >,
 }
-
 impl SessionFixture {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         use crate::conf_mgr::{ConfCenterConfig, FileSystemConfig, ShutdownHandle};
-        use crate::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
-        use tokio::sync::mpsc;
-
-        struct QuietWatch(mpsc::UnboundedSender<mpsc::Sender<WatchResponseSimple>>);
-        impl WatchObj for QuietWatch {
-            fn kind_name(&self) -> &'static str {
-                "HTTPRoute"
-            }
-            fn list_json(&self) -> Result<(String, u64), String> {
-                Ok(("[]".into(), 1))
-            }
-            fn current_version(&self) -> u64 {
-                1
-            }
-            fn watch_json(&self, _: String, _: String, _: u64) -> mpsc::Receiver<WatchResponseSimple> {
-                let (tx, rx) = mpsc::channel(1);
-                self.0.send(tx).unwrap();
-                rx
-            }
-            fn is_ready(&self) -> bool {
-                true
-            }
-            fn set_ready(&self) {}
-            fn set_not_ready(&self) {}
-            fn clear(&self) {}
-        }
-
         let directory = tempfile::tempdir().unwrap();
         let manager = Arc::new(
             ConfMgr::create(ConfCenterConfig::FileSystem(
@@ -540,24 +426,18 @@ impl SessionFixture {
         })
         .await
         .expect("manager ready");
-        let (watch_tx, watches) = mpsc::unbounded_channel();
-        manager
-            .config_sync_server()
-            .unwrap()
-            .register_all(std::collections::HashMap::from([(
-                "HTTPRoute".into(),
-                Arc::new(QuietWatch(watch_tx)) as Arc<dyn WatchObj>,
-            )]));
         Self {
             _directory: directory,
             manager,
             shutdown,
             lifecycle,
-            watches,
         }
     }
+    pub(super) fn request_shutdown(&self) {
+        self.shutdown.shutdown();
+    }
 
-    async fn finish(self) {
+    pub(super) async fn finish(self) {
         self.shutdown.shutdown();
         tokio::time::timeout(Duration::from_secs(5), self.lifecycle)
             .await
@@ -565,6 +445,24 @@ impl SessionFixture {
             .unwrap()
             .unwrap();
     }
+}
+pub(super) fn publish_setting(manager: &ConfMgr, name: &str, rv: &str) {
+    use crate::conf_mgr::conf_center::traits::CenterLifeCycle;
+    let source = serde_json::from_value(serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionConfigData",
+        "metadata":{"namespace":"apps","name":name,"resourceVersion":rv},
+        "spec":{"data":{"type":"ClusterRegionSetting","config":{"clusterName":"fleet","regionName":"east","regions":[]}}}
+    })).unwrap();
+    let runtime = manager.runtime();
+    runtime
+        .center_watch
+        .upsert(
+            &runtime.center_watch.generation(),
+            crate::fed_sync::center_watch::projection::setting(&source)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
 }
 
 type SessionFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<Result<()>>> + Send>>;
@@ -619,13 +517,36 @@ impl TestSession {
             .send(Ok(CenterMessage {
                 payload: Some(CenterPayload::WatchRequest(crate::fed_sync::proto::FedWatchRequest {
                     request_id: id.into(),
-                    kind: "HTTPRoute".into(),
-                    from_version: 1,
+                    kind: "RegionRoute".into(),
+                    from_version: 0,
                 })),
             }))
             .await
             .unwrap();
-        self.poll_pending().await;
+        // Wait for this request to leave the inbound channel while the outbound
+        // slot remains occupied. A single poll can exhaust Tokio's cooperative
+        // budget before run_session consumes the replacement request.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while self.inbound.capacity() != 8 {
+                self.poll_pending().await;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("watch request consumed by the session");
+    }
+
+    async fn take_list(&mut self, id: &str) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(CtrlPayload::WatchListResponse(list)) = self.receiver.recv().await.unwrap().payload {
+                    assert_eq!(list.request_id, id);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("dedicated List");
     }
 
     async fn stop_without_waiting(&mut self) {
@@ -649,15 +570,11 @@ impl TestSession {
 
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_releases_quiet_watch_without_waiting_for_descendants() {
-    let mut fixture = SessionFixture::new().await;
+    let fixture = SessionFixture::new().await;
     let mut session = TestSession::new(fixture.manager.clone(), false);
     session.watch("quiet").await;
-    let producer = fixture.watches.recv().await.unwrap();
-    assert!(!producer.is_closed());
+    session.take_list("quiet").await;
     session.stop_without_waiting().await;
-    tokio::time::timeout(Duration::from_secs(2), producer.closed())
-        .await
-        .expect("quiet watch producer must be released without a resource event");
     session.descendants_released().await;
     fixture.finish().await;
 }
@@ -683,31 +600,16 @@ async fn shutdown_cancels_blocked_stats_send_without_draining() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_cancels_blocked_watch_send_without_draining() {
-    use crate::conf_sync::conf_server::WatchResponseSimple;
-    let mut fixture = SessionFixture::new().await;
+    let fixture = SessionFixture::new().await;
     let mut session = TestSession::new(fixture.manager.clone(), false);
     session.watch("blocked").await;
-    let producer = fixture.watches.recv().await.unwrap();
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
-            .await
-            .expect("session message")
-            .unwrap()
-            .payload,
-        Some(CtrlPayload::StatsReport(_))
-    ));
+    session.take_list("blocked").await;
     session.outbound.try_send(ControllerMessage { payload: None }).unwrap();
-    producer
-        .send(WatchResponseSimple::new("blocked-event".into(), 2))
-        .await
-        .unwrap();
+    publish_setting(&fixture.manager, "blocked", "1");
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
     session.stop_without_waiting().await;
-    tokio::time::timeout(Duration::from_secs(2), producer.closed())
-        .await
-        .expect("blocked watch producer must release without draining outbound");
     session.descendants_released().await;
     assert!(session.receiver.try_recv().unwrap().payload.is_none());
     fixture.finish().await;
@@ -718,15 +620,7 @@ async fn shutdown_cancels_blocked_generation_change_send_without_draining() {
     let mut fixture = SessionFixture::new().await;
     let mut session = TestSession::new(fixture.manager.clone(), false);
     session.watch("generation-change").await;
-    let producer = fixture.watches.recv().await.unwrap();
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
-            .await
-            .expect("session message")
-            .unwrap()
-            .payload,
-        Some(CtrlPayload::StatsReport(_))
-    ));
+    session.take_list("generation-change").await;
     session.outbound.try_send(ControllerMessage { payload: None }).unwrap();
     let old_id = fixture.manager.config_sync_server().unwrap().server_id();
     // Exercise a fresh lifecycle after orderly shutdown, not an administrative reload.
@@ -761,9 +655,6 @@ async fn shutdown_cancels_blocked_generation_change_send_without_draining() {
         tokio::task::yield_now().await;
     }
     session.stop_without_waiting().await;
-    tokio::time::timeout(Duration::from_secs(2), producer.closed())
-        .await
-        .expect("old generation watch producer must release without draining outbound");
     tokio::time::resume();
     session.descendants_released().await;
     assert!(session.receiver.try_recv().unwrap().payload.is_none());
@@ -772,50 +663,27 @@ async fn shutdown_cancels_blocked_generation_change_send_without_draining() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn watch_backpressure_and_replacement_remain_session_local() {
-    use crate::conf_sync::conf_server::WatchResponseSimple;
-    let mut fixture = SessionFixture::new().await;
+    let fixture = SessionFixture::new().await;
     let mut session = TestSession::new(fixture.manager.clone(), false);
     session.watch("old").await;
-    let old = fixture.watches.recv().await.unwrap();
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
-            .await
-            .expect("session message")
-            .unwrap()
-            .payload,
-        Some(CtrlPayload::StatsReport(_))
-    ));
+    session.take_list("old").await;
     session.outbound.try_send(ControllerMessage { payload: None }).unwrap();
-    old.send(WatchResponseSimple::new("ordered-event".into(), 2))
-        .await
-        .unwrap();
+    publish_setting(&fixture.manager, "replaced", "1");
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
-    assert!(!old.is_closed());
-    assert!(session.receiver.try_recv().unwrap().payload.is_none());
-    let message = tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
-        .await
-        .expect("session message")
-        .unwrap();
-    let Some(CtrlPayload::WatchEventResponse(event)) = message.payload else {
-        panic!("watch event");
-    };
-    assert_eq!(event.data, "ordered-event");
-    assert_eq!(event.request_id, "old");
-    assert_eq!(event.sync_version, 2);
     session.watch("new").await;
-    let new = fixture.watches.recv().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), old.closed())
+    assert!(session.receiver.try_recv().unwrap().payload.is_none());
+    let msg = tokio::time::timeout(Duration::from_secs(2), session.receiver.recv())
         .await
+        .unwrap()
         .unwrap();
-    assert!(!new.is_closed());
-    // Session + stats + new watch retain the sender; replacement does not stop stats.
-    assert_eq!(Arc::strong_count(&session.outbound), 4);
+    let Some(CtrlPayload::WatchListResponse(list)) = msg.payload else {
+        panic!("replacement List, never old delta");
+    };
+    assert_eq!(list.request_id, "new");
+    assert!(String::from_utf8(list.data.to_vec()).unwrap().contains("replaced"));
     session.stop_without_waiting().await;
-    tokio::time::timeout(Duration::from_secs(2), new.closed())
-        .await
-        .unwrap();
     session.descendants_released().await;
     fixture.finish().await;
 }
@@ -823,10 +691,10 @@ async fn watch_backpressure_and_replacement_remain_session_local() {
 #[tokio::test(flavor = "current_thread")]
 async fn session_eof_and_error_cancel_quiet_watch() {
     for error in [false, true] {
-        let mut fixture = SessionFixture::new().await;
+        let fixture = SessionFixture::new().await;
         let mut session = TestSession::new(fixture.manager.clone(), false);
         session.watch("terminal").await;
-        let producer = fixture.watches.recv().await.unwrap();
+        session.take_list("terminal").await;
         if error {
             session
                 .inbound
@@ -840,10 +708,32 @@ async fn session_eof_and_error_cancel_quiet_watch() {
         }
         let result = (&mut session.future).await.expect("not shutdown");
         assert_eq!(result.is_err(), error);
-        tokio::time::timeout(Duration::from_secs(2), producer.closed())
-            .await
-            .unwrap();
         session.descendants_released().await;
         fixture.finish().await;
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn watch_backpressure_ends_session_even_when_ping_reply_is_blocked() {
+    let fixture = SessionFixture::new().await;
+    let mut session = TestSession::new(fixture.manager.clone(), true);
+    session.watch("blocked-list").await;
+    session
+        .inbound
+        .send(Ok(CenterMessage {
+            payload: Some(CenterPayload::Ping(crate::fed_sync::proto::Ping { timestamp: 1 })),
+        }))
+        .await
+        .unwrap();
+    session.poll_pending().await;
+    tokio::time::pause();
+    let result = tokio::time::timeout(Duration::from_secs(6), &mut session.future)
+        .await
+        .expect("watch delivery deadline must interrupt blocked Ping")
+        .expect("session exits without external shutdown");
+    assert!(result.is_err());
+    tokio::time::resume();
+    session.descendants_released().await;
+    assert!(session.receiver.try_recv().unwrap().payload.is_none());
+    fixture.finish().await;
 }

@@ -427,22 +427,22 @@ impl EdgionConfigDataRefGrantTestSuite {
     }
 
     // =========================================================================
-    // Scenario I-2a: overrideRef cross-namespace without grant
+    // Scenario I-2a: clusterRegionRef cross-namespace without grant
     //
     // EdgionPlugins 'ecd-override-ref-cross-ns' (ns=edgion-test) has a RegionRoute
-    // plugin with an overrideRef pointing to EdgionConfigData 'ecd-region-override'
+    // plugin with a clusterRegionRef pointing to EdgionConfigData 'ecd-region-override'
     // in edgion-default.  No ReferenceGrant is present.
     // Expected: ResolvedRefs=False(RefNotPermitted) on the controller status.
     //
-    // Data-plane fail-to-base behavior (base regions used when overrideRef is denied)
-    // is verified by Task 7 gateway unit tests; this scenario asserts controller
+    // A denied setting executes failOpen/statusOnError without a base-table fallback.
+    // Gateway tests verify that runtime policy; this scenario asserts Controller
     // status (RefNotPermitted) only.
     // =========================================================================
 
-    fn test_override_ref_no_grant_ref_not_permitted() -> TestCase {
+    fn test_cluster_region_ref_no_grant_ref_not_permitted() -> TestCase {
         TestCase::new(
-            "override_ref_no_grant_ref_not_permitted",
-            "Cross-ns RegionRoute overrideRef without ReferenceGrant → ResolvedRefs=False(RefNotPermitted)",
+            "cluster_region_ref_no_grant_ref_not_permitted",
+            "Cross-ns RegionRoute clusterRegionRef without ReferenceGrant → ResolvedRefs=False(RefNotPermitted)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -453,14 +453,14 @@ impl EdgionConfigDataRefGrantTestSuite {
                             if is_ref_not_permitted(&conditions) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "ResolvedRefs=False(RefNotPermitted) as expected for denied overrideRef"
+                                    "ResolvedRefs=False(RefNotPermitted) as expected for denied clusterRegionRef"
                                         .to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected ResolvedRefs=False(RefNotPermitted) for denied overrideRef, got: {:?}",
+                                        "Expected ResolvedRefs=False(RefNotPermitted) for denied clusterRegionRef, got: {:?}",
                                         conditions
                                     ),
                                 )
@@ -592,8 +592,8 @@ impl TestSuite for EdgionConfigDataRefGrantTestSuite {
             Self::test_allow_refs_no_grant_ref_not_permitted(),
             Self::test_visibility_cluster_bypasses_grant(),
             Self::test_same_ns_ref_always_resolves(),
-            // I-2: overrideRef / activeProfileRef cross-ns without grant.
-            Self::test_override_ref_no_grant_ref_not_permitted(),
+            // I-2: clusterRegionRef / activeProfileRef cross-ns without grant.
+            Self::test_cluster_region_ref_no_grant_ref_not_permitted(),
             Self::test_active_profile_ref_no_grant_ref_not_permitted(),
             // I-3: missing EdgionConfigData target.
             Self::test_missing_ref_invalid_edgion_config_data_ref(),

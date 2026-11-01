@@ -535,7 +535,11 @@ impl EdgionPlugins {
             .flatten()
             .map(|entry| {
                 if entry.is_enabled() && !matches!(entry.plugin, EdgionPlugin::Unsupported) {
-                    entry.plugin.validation_error()
+                    if let EdgionPlugin::RegionRoute(config) = &entry.plugin {
+                        config.structural_validation_error()
+                    } else {
+                        entry.plugin.validation_error()
+                    }
                 } else {
                     None
                 }
@@ -615,6 +619,13 @@ impl EdgionPlugins {
                         //     an alias, and the uniqueness rule below would drift.
                         if matches!($stage_word, "request") && bounded_structured_invalid.contains(&i) {
                             continue;
+                        }
+                        if matches!($stage_word, "request") {
+                            if let EdgionPlugin::RegionRoute(config) = &entry.plugin {
+                                if let Some(error) = config.operational_validation_error() {
+                                    errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
+                                }
+                            }
                         }
                         if !matches!($stage_word, "request") {
                             if let EdgionPlugin::Dsl(config) = &entry.plugin {

@@ -566,7 +566,7 @@ The category tables below are a conceptual guide, not an exhaustive registry.
 | DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
 | DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
-| RegionRoute | `region_route` | Multi-region traffic routing. All logic AND the base `regions` table live in the plugin config: ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). An optional `overrideRef` names a `RegionRouteOverride` EdgionConfigData, looked up in EdgionConfigDataGatewayStore per request; it is data-only and never carries logic — the type declares `enable`/`active`/`regions` but only `regions` is consumed (whole-replace); the envelope `spec.enable` is what takes an overlay out of service. Fail-to-base on disabled/missing/type-mismatched/invalid overlay. No auto failover. |
+| RegionRoute | `region_route` | Request extraction, hashing and ordered region rules. Required clusterRegionRef names ClusterRegionSetting, the sole owner of local identity and destination table. One raw/proof snapshot per request; unavailable configuration follows failOpen/statusOnError. See the resource knowledge for authorization, publication and status. |
 
 ### Other (8)
 

@@ -15,7 +15,7 @@
 # next plugin from silently skipping one of the four signals.
 #
 # Currently registered overlay consumers (extend ENTRIES when adding a new one):
-#   record_region_route_overlay_event       (RegionRoute HTTP plugin)
+# RegionRoute uses the separate required-setting contract checked below.
 #   record_conn_ip_restriction_event        (GlobalConnIpRestriction stream plugin)
 #
 # Note: record_conn_ip_restriction_event ALSO emits non-overlay labels (denied,
@@ -35,7 +35,6 @@ cd "${REPO_ROOT}"
 
 # (recorder_fn:file_glob)
 ENTRIES=(
-    "record_region_route_overlay_event:edgion-gateway/src/plugins/http/region_route/plugin.rs"
     "record_conn_ip_restriction_event:edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs"
 )
 
@@ -86,6 +85,22 @@ PY
         violations=$((violations + 1))
     fi
 done
+
+# RegionRoute has no base fallback. Its single error-policy dispatcher records
+# every bounded configuration failure once before applying continue/reject.
+if ! python3 - <<'PY_CHECK'
+from pathlib import Path
+s = Path("edgion-gateway/src/plugins/http/region_route/plugin.rs").read_text()
+required = ("setting_reference_unavailable", "setting_missing", "setting_disabled",
+            "setting_type_mismatch", "setting_invalid", "hash_modulo_invalid")
+assert all('"' + reason + '"' in s for reason in required)
+assert s.count("record_region_route_config_event(error);") == 1
+assert s.count("self.configuration_error(session, log, error)") == 2
+PY_CHECK
+then
+    echo "ERROR: RegionRoute configuration-error signal contract is incomplete" >&2
+    violations=$((violations + 1))
+fi
 
 if [ "$violations" -gt 0 ]; then
     echo "Found $violations consumer(s) missing required overlay signals. See above." >&2

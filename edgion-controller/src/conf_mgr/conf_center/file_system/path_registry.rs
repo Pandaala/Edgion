@@ -63,6 +63,7 @@ pub struct ConflictReport {
 
 #[derive(Clone, Default)]
 struct RegistryInner {
+    revision: u64,
     by_key: HashMap<ResourceKey, Vec<PathBuf>>,
     by_path: HashMap<PathBuf, ResourceKey>,
     // Paths removed by the storage DELETE API before the fs_watcher has fired
@@ -89,7 +90,15 @@ impl PathRegistry {
     /// readers keep seeing the complete previous generation instead of a
     /// partially rebuilt registry during reload.
     pub fn replace_from(&self, next: &Self) {
-        *self.inner.write() = next.inner.read().clone();
+        let mut replacement = next.inner.read().clone();
+        let mut current = self.inner.write();
+        replacement.revision = current.revision.wrapping_add(1);
+        *current = replacement;
+    }
+
+    /// Changes to canonical winner selection invalidate an in-flight source scan.
+    pub fn revision(&self) -> u64 {
+        self.inner.read().revision
     }
 
     pub fn record(&self, key: ResourceKey, path: PathBuf) -> RecordOutcome {
@@ -103,6 +112,7 @@ impl PathRegistry {
                 .unwrap_or(false);
             return RecordOutcome::AlreadyKnown { is_winner };
         }
+        inner.revision = inner.revision.wrapping_add(1);
         let was_empty = inner.by_key.get(&key).map(|v| v.is_empty()).unwrap_or(true);
         inner.by_key.entry(key.clone()).or_default().push(path.clone());
         inner.by_path.insert(path.clone(), key.clone());
@@ -124,8 +134,8 @@ impl PathRegistry {
     /// Only has effect if the path is currently tracked; silently ignored otherwise.
     pub fn mark_api_deleted(&self, path: &Path) {
         let mut inner = self.inner.write();
-        if inner.by_path.contains_key(path) {
-            inner.pending_api_delete.insert(path.to_path_buf());
+        if inner.by_path.contains_key(path) && inner.pending_api_delete.insert(path.to_path_buf()) {
+            inner.revision = inner.revision.wrapping_add(1);
         }
     }
 
@@ -133,7 +143,9 @@ impl PathRegistry {
         let mut inner = self.inner.write();
         // Clear the pending-delete marker unconditionally; forget() is the
         // authoritative removal driven by the fs_watcher.
-        inner.pending_api_delete.remove(path);
+        if inner.pending_api_delete.remove(path) || inner.by_path.contains_key(path) {
+            inner.revision = inner.revision.wrapping_add(1);
+        }
         let Some(key) = inner.by_path.remove(path) else {
             return ForgetOutcome::Unknown;
         };

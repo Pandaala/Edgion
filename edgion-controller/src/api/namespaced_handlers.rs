@@ -1,9 +1,9 @@
+use super::bounded_json::BoundedJson as Json;
 use crate::conf_mgr::ListOptions;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
-    response::Json,
 };
 use edgion_resources::prelude_resources::*;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
@@ -19,8 +19,9 @@ use super::types::*;
 
 /// Pagination query parameters for list endpoints.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PaginationQuery {
-    /// Maximum number of items to return (0 or absent = no limit).
+    /// Maximum returned items, default 10 and hard maximum 100.
     pub limit: Option<u32>,
     /// Continue token from a previous list response.
     #[serde(rename = "continue")]
@@ -28,15 +29,22 @@ pub struct PaginationQuery {
 }
 
 impl PaginationQuery {
-    pub(super) fn into_list_options(self) -> Option<ListOptions> {
-        if self.limit.is_some() || self.continue_token.is_some() {
-            Some(ListOptions {
-                limit: self.limit.unwrap_or(0),
-                continue_token: self.continue_token,
-            })
-        } else {
-            None
+    pub(super) fn into_list_options(self) -> Result<Option<ListOptions>, StatusCode> {
+        use crate::conf_mgr::conf_center::source_query::{DEFAULT_PAGE_SIZE, MAX_CURSOR_BYTES, MAX_PAGE_SIZE};
+        let limit = self.limit.unwrap_or(DEFAULT_PAGE_SIZE);
+        if limit == 0
+            || limit > MAX_PAGE_SIZE
+            || self
+                .continue_token
+                .as_ref()
+                .is_some_and(|t| t.is_empty() || t.len() > MAX_CURSOR_BYTES)
+        {
+            return Err(StatusCode::BAD_REQUEST);
         }
+        Ok(Some(ListOptions {
+            limit,
+            continue_token: self.continue_token,
+        }))
     }
 }
 
@@ -48,7 +56,7 @@ pub async fn list_all_namespaces(
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let (data, continue_token) = state
-        .center_list_resources(kind, pagination.into_list_options())
+        .center_list_resources(kind, pagination.into_list_options()?)
         .await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
@@ -61,7 +69,7 @@ pub async fn list_namespaced(
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let (data, continue_token) = state
-        .center_list_resources_namespaced(kind, &ns, pagination.into_list_options())
+        .center_list_resources_namespaced(kind, &ns, pagination.into_list_options()?)
         .await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
@@ -876,7 +884,7 @@ pub async fn list_all_namespaces_keys(
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<Json<ListResponse<crate::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
+    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()?).await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
@@ -888,7 +896,7 @@ pub async fn list_namespaced_keys(
 ) -> Result<Json<ListResponse<crate::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let (data, continue_token) = state
-        .center_list_keys_namespaced(kind, &ns, pagination.into_list_options())
+        .center_list_keys_namespaced(kind, &ns, pagination.into_list_options()?)
         .await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
@@ -906,3 +914,7 @@ mod unknown_field_warning_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/api/namespaced_handlers_test/namespace_admission_tests.rs"]
 mod namespace_admission_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/api/namespaced_handlers_test/source_paging_tests.rs"]
+mod source_paging_tests;

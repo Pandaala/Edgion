@@ -104,8 +104,8 @@ pub enum Commands {
         #[arg(long)]
         metadata_only: bool,
 
-        /// Maximum number of items to return per request (K8s-style pagination).
-        /// Has no effect on FS / Etcd backends (architectural no-op).
+        /// Source API page size: default 10, maximum 100. Use --all to follow
+        /// continuation tokens. Processed diagnostic targets retain their own contract.
         #[arg(long)]
         limit: Option<u32>,
 

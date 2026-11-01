@@ -35,6 +35,7 @@
 
 pub mod common;
 mod config;
+pub(crate) mod source_query;
 pub mod traits;
 
 // These macros are defined here (rather than in non_kube_common.rs) so that

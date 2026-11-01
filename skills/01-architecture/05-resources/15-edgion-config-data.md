@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-config-data
-description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, borrowed table selection, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), ownership (Center-controlled; the managed-by label is inert here), and controller/gateway processing.
+description: EdgionConfigData typed data, ClusterRegionSetting identity and table ownership, consumer failure policies, reference authorization and atomic publication.
 ---
 
 # EdgionConfigData Resource
@@ -22,88 +22,50 @@ and others later) may reference it via a generic `dataRef`.
 - `RequestAccessUrlAllowList` shape: `edgion-resources/src/resources/edgion_config_data/request_access_url_allow_list.rs`
 - `IpGroup` (shared primitive): `edgion-resources/src/resources/edgion_config_data/ip_group.rs`
 - `Selector` shape: `edgion-resources/src/resources/edgion_config_data/selector.rs`
-- First-party overlay shape: `edgion-resources/src/resources/edgion_config_data/region_route.rs` (`RegionRouteOverride`)
+- Regional setting shape: `edgion-resources/src/resources/edgion_config_data/region_route.rs` (`ClusterRegionSetting`)
 - Native WAF bundle shape: `edgion-resources/src/resources/edgion_config_data/waf_rule_bundle.rs` (`WafRuleBundleData`)
 - GlobalConnectionIpRestriction plugin config (consumes `Selector` via `activeProfileRef`):
   `edgion-resources/src/resources/edgion_stream_plugins/global_connection_ip_restriction.rs` (`GlobalConnectionIpRestrictionConfig`)
-- Live overlay selection: `edgion-gateway/src/plugins/http/region_route/plugin.rs` (`compute_effective_regions`, `EffectiveRegions`)
+- Live setting selection: `edgion-gateway/src/plugins/http/region_route/plugin.rs` (`compute_effective_regions`, `EffectiveRegions`)
 - Controller handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs`
 - Gateway store + index: `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs`
 - Gateway store module: `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs`
 
 ## Overlay Model
 
-### Roles
+EdgionConfigData supplies typed data to consumers; it does not impose a universal
+merge or failure policy. Selector consumers retain their own validated base/profile
+behavior. Required regional settings use the distinct contract below.
 
-```
-              git / operator (declarative, complete)
-                           │
-                ┌──────────▼───────────┐
-                │  EdgionPlugins (base) │   logic + default data + enable/active
-                │   overrideRef: <md>?  │   (later: EdgionTls and others too)
-                └──────────┬───────────┘
-                           │ resolve at runtime
-     ┌─────────────────────▼─────────────────────┐
-     │  effective = select_table(base, overlay)    │
-     │  overlay absent  → base                     │
-     │  overlay present & valid → base ⊕ overlay   │  (field-level REPLACE)
-     │  overlay present & invalid → base + signal  │  (fail-to-base)
-     └─────────────────────▲─────────────────────┘
-                           │ generic dataRef (ECDS-style)
-                ┌──────────┴───────────┐
-                │     EdgionConfigData        │  general-purpose, hot-swappable
-                │  (overlay / data)     │  KeyList/IpList + typed overlays + Misc
-                └──────────────────────┘
-           Center-controlled data; not an ops-repo artifact (see Ownership)
-```
+### ClusterRegionSetting
 
-- **Base** (`EdgionPlugins` / `EdgionStreamPlugins`, git-owned): holds complete, safe default config — decision
-  logic + default data + default `enable`/`active`. Opt-in `overrideRef` → EdgionConfigData.
-- **Overlay** (`EdgionConfigData`): hot-swappable, origin-agnostic. Body is a typed `ConfigEntry` variant. Top-level
-  `enable: bool` (default true) + `active: Option<String>`.
+The required `clusterRegionRef` of RegionRoute names a ClusterRegionSetting with
+required clusterName, regionName and regions. Local identity is derived only from
+regionName, which must name a row. There is no plugin-local base table or override
+model. Names are exact, nonblank, control-free and at most 63 UTF-8 bytes.
 
-### Five Guardrails
+The Gateway reads raw data and its compact validation proof from one immutable
+snapshot. EffectiveRegions holds that resource Arc and borrows both identity and
+table. Full endpoint/interval/graph validation happens at publication; request-time
+work checks the proof against the consumer modulo without copying the table.
 
-1. **Strict replace, never deep-merge.** Field present in overlay → replaces base; collection → whole-table replace.
-2. **Only data is overridable; logic never is.** Override shapes are all-Optional, logic fields physically absent.
-3. **Effective config is observable.** Admin dump shows base+overlay + per-field source.
-4. **Switch unification.** Use the consuming feature's switch contract. RegionRoute consumes only envelope `spec.enable`; its variant `enable` and `active` fields are currently inert.
-5. **Fail-to-base.** Base is the complete safe default. Overlay absent → base. Overlay invalid → base + signal.
+Missing, denied, disabled, invalid or wrong-type settings follow the plugin's
+failOpen (default true) and statusOnError (default 503, 400..599). Continue performs
+no partial key extraction/writeback/upstream mutation and runs subsequent plugins.
+Reject remains executable even when operational configuration is invalid. Invalid
+YAML/policy/structural safety errors retain generic rejection. No last-good setting
+or base table is retained. A valid later generation restores routing.
 
-> **Security invariant:** fail-to-base means the base must be the conservative/safe value. If the base
-> `default_action` is `Allow`, an overlay error silently allows all traffic — document and validate this.
+Standalone invalid settings report Accepted=False. Referring plugins report
+ResolvedRefs errors and consumer hash errors report Accepted=False. These statuses
+are observations, not proof of Gateway application. The Controller effective API
+returns an explicit observation DTO; it must not serialize arbitrary processed
+plugin config. Required reference identity and grants use the canonical binding
+and dependency requeue paths.
 
-### Overlay Selection Contract
-
-The base/overlay model is conceptual, not a generic merge API. RegionRoute's
-`compute_effective_regions` resolves the raw resource and compact validation proof
-from one immutable snapshot, checks the envelope/type/consumer modulo, and returns
-`EffectiveRegions`. That view borrows the base or holds the accepted overlay Arc
-and borrows its whole table. No request-time table clone or generic owned merge
-runs. The Controller's effective-view API independently retains its validated
-JSON projection for management requests.
-
-- Signature (conceptual): `fn select(base: &Base, overlay: Option<&Override>) -> Effective`
-- **Type guard first (D6):** verify the EdgionConfigData `type` matches the expected override variant before applying.
-  Mismatch → fail-to-base + signal (`overlay_type_mismatch`). Never coerce across types.
-- For each field in `Override` (all `Option`): `Some(v)` → use `v`; `None` → use base value.
-- Collections are replaced **whole** (no element merge).
-- Invalid RegionRoute overlay → controller `Accepted=False` for standalone table errors; generic ingest still continues through parse/status and conf_sync. The Gateway independently validates and uses base + emits signal. Consumer-specific modulo failures belong to the referring plugin's `ResolvedRefs`.
-
-### Fail-Behavior Matrix
-
-| Situation | Behavior |
-|-----------|----------|
-| No `overrideRef` set | Base used |
-| `overrideRef` set, EdgionConfigData absent | **Base** + `overlay_missing` signal (metric + access log) |
-| EdgionConfigData present, **type mismatch** | **Base** + `overlay_type_mismatch` signal |
-| RegionRoute EdgionConfigData present, invalid (controller) | `Accepted=False` for standalone errors; still synced by generic ingest; independent Gateway validation uses **base** |
-| EdgionConfigData present, valid | `base ⊕ overlay` (field-level replace) |
-| RegionRoute envelope `spec.enable=false` | **Base** + `overlay_disabled`; variant `enable`/`active` do not affect RegionRoute |
-
-Signals: gateway uses an access-log `EdgionErrorCode` diagnostic + Prometheus counter. No `tracing::error!` on the data plane.
-
-> Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionConfigData overlay gates". In short: forbidden-legacy-refs grep, open extension discriminator contracts, and overlay-consumer signal completeness (all four signals above).
+Signals use canonical PluginLog and six bounded reasons in
+edgion_region_route_config_events_total. See the [user reference](../../../docs/en/user-guide/http-route/filters/edgion-plugins/region-route.md)
+and [validation guard](../../04-review/routing/regression-guards/region-route-effective-table-validation.md).
 
 ## Variant Taxonomy
 
@@ -116,7 +78,7 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 | std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher; consumed by IpRestriction (HTTP/L4/TLS-route) and GCIR per-profile via `allowRefs`/`denyRefs` |
 | typed policy data | `RequestAccessUrlAllowList` | `{ items: [UrlAccessCandidate] }` | URL allow candidates expanded into RequestAccessPolicy by the Controller |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
-| first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
+| regional setting | `ClusterRegionSetting` | `{ clusterName, regionName, regions }` | Required local identity and complete table; strict payload |
 | security policy | `ProxyProtocolTrust` | `{ mode: required }` or `{ mode: trustedSources, trustedCidrs: [...] }` | Non-overlay, all-or-nothing Gateway listener trust policy. Requires envelope `enable=true` and `active` absent. Unknown config fields are fatal rather than advisory. |
 | executable policy data | `WafRuleBundle` | `{ version, profile, provenance, digest?, roots, rules, phraseAssets? }` | Non-overlay WAF rule and phrase-asset inputs. Structural validation is strict; an optional digest self-checks contents. A WAF profile aggregates ordered references with optional `expectedDigest` pins and strictly compiles the selected generation. Requires `enable=true`, `active` absent, and no unknown config fields. |
 | WAF policy | `WafPolicy` | `{ profiles, defaultProfile }` | Shared aggregation of ordered bundle references. EdgionPlugins fixes one `policyRef` and may select a profile with `activeProfile` or `activeProfileRef`; the Controller transports the selected profile's accepted bundles for Gateway compilation. Requires `enable=true`, `active` absent, and no unknown config fields. |
@@ -137,15 +99,15 @@ upgrading the consuming binaries.
 Controller validation sets `Accepted=False/Invalid`, even when `enable=false`.
 The resource still replaces the raw store entry, clears outgoing WAF references,
 requeues dependents, and reaches the Gateway. Both full and incremental publication
-remove stale IpList matchers and RegionRoute proofs. Overlay/Selector consumers use
-their base behavior; strict PROXY trust and required WAF references reject the wrong
+remove stale IpList matchers and RegionRoute proofs. Selector consumers use their base behavior; RegionRoute uses its configured
+unavailable-setting policy; strict PROXY trust and required WAF references reject the wrong
 type. Existing IP allow/deny reference semantics remain in force. A supported
 replacement restores normal validation and runtime publication.
 
 ## Unknown Config Fields
 
 The Controller applies the shared advisory schema walk to the typed `KeyList`, `IpList`,
-`RequestAccessUrlAllowList`, `Selector`, and `RegionRouteOverride` payloads. A key that serde would otherwise ignore is
+`RequestAccessUrlAllowList` and `Selector` payloads. A key that serde would otherwise ignore is
 reported through the `UnknownConfigFields=True` condition, a bounded Controller warning,
 `GET /api/v1/diagnostics/unknown-fields`, Admin write warnings, and
 `POST /api/v1/validate/EdgionConfigData`. It does not change `Accepted` or block conf_sync.
@@ -194,7 +156,7 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 ### preparse
 
 - Calls `EdgionConfigData::validate_pre_parse()` for per-variant validation (invalid regex for `KeyList`,
-  invalid regions for `RegionRouteOverride`, invalid structure or digest for `WafRuleBundle`) → `Vec<String>`.
+  invalid regions for `ClusterRegionSetting`, invalid structure or digest for `WafRuleBundle`) → `Vec<String>`.
   Non-empty → `Accepted=False/Invalid`.
   `Selector` is always structurally valid (the active-name ↔ profile check is a consumer-side,
   connection-time concern, not a controller preparse check).
@@ -210,7 +172,7 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 ### on_change
 
 - Looks up resources referencing this EdgionConfigData via `EdgionConfigDataRefManager` and requeues them.
-  Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `overrideRef` in `RegionRouteConfig`
+  Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `clusterRegionRef` in `RegionRouteConfig`
   and `WafConfig.policyRef`, plugin `activeProfileRef`, and WafPolicy bundle refs) and EdgionStreamPlugins
   (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`). Also requeues EdgionPlugins and
   EdgionStreamPlugins that reference this object as an `IpList` via `allowRefs`/`denyRefs` in
@@ -238,9 +200,9 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 ## Gateway-Side Processing
 
 Gateway stores EdgionConfigData in `EdgionConfigDataStore` (ArcSwap + variant-keyed indexes). Live reference resolution is
-performed **at request time** (lock-free ArcSwap load). RegionRoute borrows the current raw overlay table;
+performed **at request time** (lock-free ArcSwap load). RegionRoute borrows the current raw setting identity and table;
 configuration publication builds a compact `RegionTableValidation` proof in the same snapshot.
-The request checks only that proof's maximum hash bound against its base modulo, without repeating
+The request checks only that proof's maximum hash bound against its configured modulo, without repeating
 full endpoint, interval, or failover-graph validation or copying the region table.
 
 HTTP, connection, TLS-route and global-connection IpRestriction capture one
@@ -250,9 +212,9 @@ GCIR Selector and selected profile matchers use that same snapshot. Matcher borr
 belong to the snapshot generation; key slices are needed only during iteration.
 This removes union projections, not all allocations from the surrounding plugin path.
 
-- **Overlay absent or type-mismatch:** base used; metric counter incremented (`overlay_missing` /
-  `overlay_type_mismatch` label on the relevant plugin's event counter).
-- **RegionRoute envelope enable=false:** overlay ignored and base table used; the plugin is not disabled.
+- RegionRoute unavailable settings follow failOpen/statusOnError; disabling the
+  setting invokes that policy rather than disabling the plugin entry.
+- ClusterRegionSetting rejects unknown payload fields during deserialization.
 
 ## Ownership
 
@@ -298,7 +260,7 @@ rejected on 2026-07-26** in favour of
 `EdgionCenter/docs/superpowers/specs/2026-07-26-center-controller-write-model-convergence-design.md`,
 declares no `managed-by` mechanism at all. Center's cross-cluster `GlobalResources` view is
 read-only; Center's two *dedicated* write paths — the pair sharing its convergence-outcome write
-core — are RegionRouteOverride failover and row-level copy, while general EdgionConfigData
+core — are ClusterRegionSetting failover and row-level copy, while general EdgionConfigData
 create / update / delete stays available through the generic Controller Admin proxy, which is what
 the default federation policy grants. Write safety throughout is a CAS property — `If-Match` on
 `metadata.resourceVersion`, with explicit `converged` / `superseded` / `conflict` outcomes — not an
@@ -311,7 +273,7 @@ Full analysis and the decision to keep it that way:
 
 | Direction | Mechanism |
 |-----------|-----------|
-| EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | `clusterRegionRef` in `RegionRouteConfig` → `ClusterRegionSetting`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← EdgionPlugins | `WafConfig.policyRef` → `WafPolicy`; plugin `activeProfileRef` → `Selector`; policy profile `bundleRefs` → `WafRuleBundle`. Controller tracks every reference, chooses one profile from the selector, fixed `activeProfile`, or policy default, and embeds its accepted uncompiled bundles for Gateway revalidation. Required bundle failures invalidate a profile; explicit optional references may be skipped with `PartiallyInvalid`. Selector failures fall back to the validated default profile. |
 | EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`; IP rules/conditions → `IpList`; URL rules → `RequestAccessUrlAllowList` | Selector failures affect `ResolvedRefs`; optional IP/URL data failures, including cross-ns denial, are omitted individually and reported through `PartiallyInvalid`. All refs use the shared reverse index and cross-namespace requeue path. |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
@@ -324,7 +286,7 @@ Full analysis and the decision to keep it that way:
 ## Cross-Namespace Reference Grants
 
 Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
-`overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
+`clusterRegionRef` (ClusterRegionSetting), `activeProfileRef` (Selector, including
 `RequestAccessPolicy.activeProfileRef`, `WafConfig.activeProfileRef`), and WafPolicy profile
 `bundleRefs` (WafRuleBundle) — are gated by two complementary controls.
 
@@ -370,7 +332,7 @@ withholds that ref at runtime:
 |----------|-----------------|
 | `allowRefs` (IpList) | **Deny-all fail-closed**: `allow_mode` stays true but the referenced allow set is withheld — no IP is permitted through that ref. Whitelist intent is preserved; this is the safe fail direction. |
 | `denyRefs` (IpList) | **Under-block**: the denied deny set is not applied. The plugin continues with remaining permitted deny references, but the denied external deny set is missing (possible security gap). |
-| `overrideRef` (RegionRouteOverride) | **No override**: RegionRoute falls back to the base inline region table. Traffic continues (fail-to-base, not fail-closed). |
+| `clusterRegionRef` (ClusterRegionSetting) | Required setting unavailable: execute failOpen/statusOnError before request mutation. |
 | `activeProfileRef` (Selector) | Consumer-specific: Canary and GlobalConnectionIpRestriction use their validated base profile on invalid, denied or unavailable targets; WAF uses its validated default profile. RequestAccessPolicy fails closed: invalid or denied configured selectors produce an initialization-failed filter, and missing, disabled, wrong-type or unknown selections deny. An absent RAP selector, or an enabled Selector with no active value, uses its default profile. |
 
 ### Status Conditions on the Referrer
@@ -429,54 +391,17 @@ spec:
       name: corp-allowlist
 ```
 
-## RegionRoute with EdgionConfigData Overlay
+## RegionRoute with ClusterRegionSetting
 
-The RegionRoute plugin in `EdgionPlugins` now carries all routing logic inline (base) with an optional
-`overrideRef` pointing to a `RegionRouteOverride` EdgionConfigData for dynamic region-table updates:
-
-Base and overlay tables share resources-layer validation: nonblank unique names, strict host/port
-syntax, disjoint closed ranges within the consumer modulo, and existing nonself acyclic failover
-targets. Gaps remain pass-through and failover execution remains one hop even for legal chains.
-The default modulo is 1000 without `hashCalc`. Non-empty `routeRules` require a non-empty base,
-regardless of `overrideRef`; only no-rule no-ops may have an empty base. Overlay `regions: None`
-inherits, while an explicit empty replacement is invalid. Missing/disabled/wrong-type/invalid
-overlays use the valid base; there is no TTL or last-good overlay retention. See
-[the RegionRoute regression boundary](../../04-review/routing/regression-guards/region-route-effective-table-validation.md)
-for source evidence, management API alignment, and verification limits.
-
-```yaml
-# EdgionPlugins base config (git-owned, logic + default regions)
-- type: RegionRoute
-  config:
-    myRegion: virginia
-    keyGet: [{ type: header, name: X-Account-Id }]
-    hashCalc: { algorithm: crc32, modulo: 1000 }
-    routeRules: [{ type: RouteByHashRange }]
-    regions:                    # safe default region table
-      - { name: virginia, hashRange: [0, 599], backendEndpoint: virginia.example.com:8443, tls: true }
-      - { name: ohio, hashRange: [600, 999], backendEndpoint: ohio.example.com:8443, tls: true }
-    overrideRef: { name: region-overlay, namespace: edgion-system }  # optional
-
----
-# EdgionConfigData overlay (hot-swappable region table)
-apiVersion: edgion.io/v1
-kind: EdgionConfigData
-metadata:
-  name: region-overlay
-  namespace: edgion-system
-spec:
-  enable: true
-  data:
-    type: RegionRouteOverride
-    config:
-      regions:                  # whole-replace of region table
-        - { name: virginia, hashRange: [0, 499], backendEndpoint: virginia-v2.example.com:8443, tls: true }
-        - { name: ohio, hashRange: [500, 999], backendEndpoint: ohio-v2.example.com:8443, tls: true, failoverTo: virginia }
-```
+See [the configuration reference](../../../docs/en/user-guide/http-route/filters/edgion-plugins/region-route.md)
+for a complete setting and plugin example. The required reference preserves exact
+namespace/name identity. regions belongs only to the setting; key extraction and
+routing rules belong only to the plugin. regionName and regions are read from the
+same generation.
 
 ## GlobalConnectionIpRestriction with a Selector
 
-Unlike RegionRoute (whole-table overlay), the L4 `GlobalConnectionIpRestriction` stream plugin carries
+Unlike RegionRoute (required regional setting), the L4 `GlobalConnectionIpRestriction` stream plugin carries
 named reference-only profiles (git-owned). Their IpList content updates independently; the *active profile* is selected via `activeProfileRef` → a `Selector` EdgionConfigData. The selector can only
 switch among the plugin's own `profiles`; it can never inject rules or disable filtering.
 
@@ -558,8 +483,8 @@ spec:
 There is no operator-reachable allow-all switch via the selector: to widen access the operator must
 author a permissive profile in git and select it by name (explicit, reviewable, auditable).
 
-**Fail-to-base:** if the overlay is absent or invalid, the gateway uses the default `regions` from the base
-config — traffic continues to flow (no BrokenRef fail-closed).
+RegionRoute uses the required-setting failure policy described above; Selector
+fallback does not imply a regional base table.
 
 ## Standalone IpList owning references
 

@@ -8,7 +8,7 @@
 //! - parse: Register every EdgionConfigData dependency for cascading requeue
 //! - parse: Expand RequestAccessPolicy IP/URL data and then bind its Secret/HMAC conditions
 //! - on_delete: Clear SecretRefManager references + EdgionConfigData refs
-//! - update_status: Validate `overrideRef` resolves to a `RegionRouteOverride` EdgionConfigData
+//! - update_status: Validate `clusterRegionRef` resolves to a `ClusterRegionSetting` EdgionConfigData
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, partially_invalid_condition, pick_resolved_refs_reason,
@@ -69,7 +69,7 @@ impl Default for EdgionPluginsHandler {
 }
 
 // ============================================================================
-// RegionRoute overrideRef helpers
+// RegionRoute clusterRegionRef helpers
 // ============================================================================
 
 impl EdgionPluginsHandler {
@@ -84,9 +84,9 @@ impl EdgionPluginsHandler {
         ctx.runtime().edgion_config_data_refs.clear_refs_from(&ep_key);
     }
 
-    /// Collect all `overrideRef` EdgionConfigData keys from RegionRoute plugins.
+    /// Collect all `clusterRegionRef` EdgionConfigData keys from RegionRoute plugins.
     /// Returns "namespace/name" keys (namespace defaults to EP's namespace when absent).
-    fn get_region_route_override_keys(ep: &EdgionPlugins) -> Vec<String> {
+    fn get_cluster_region_setting_keys(ep: &EdgionPlugins) -> Vec<String> {
         ep.spec
             .request_plugins
             .iter()
@@ -113,7 +113,7 @@ impl EdgionPluginsHandler {
 
     /// Collect "namespace/name" keys for every `RequestAccessPolicy` plugin's
     /// `active_profile_ref` in `request_plugins`. Namespace defaults to the EP namespace.
-    /// Mirrors `get_region_route_override_keys` for the policy ref site.
+    /// Mirrors `get_cluster_region_setting_keys` for the policy ref site.
     fn get_active_profile_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
         ep.spec
             .request_plugins
@@ -163,7 +163,7 @@ impl EdgionPluginsHandler {
             let denied = denial_marker(&field, ctx);
             let entry = &mut ep.spec.request_plugins.as_mut().expect("current entry")[index];
             let reference = match &mut entry.plugin {
-                EdgionPlugin::RegionRoute(config) => config.override_ref.as_mut(),
+                EdgionPlugin::RegionRoute(config) => Some(&mut config.cluster_region_ref),
                 EdgionPlugin::RequestAccessPolicy(config) => config.active_profile_ref.as_mut(),
                 EdgionPlugin::Canary(config) => config.active_profile_ref.as_mut(),
                 _ => unreachable!("actual field variant"),
@@ -275,9 +275,9 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let ep_key = format!("{}:{}", resource_ref.kind_str(), resource_ref.resource_key());
 
-        // Register requeue watcher: EP → EdgionConfigData(overrideRef).
+        // Register requeue watcher: EP → EdgionConfigData(clusterRegionRef).
         // When the referenced EdgionConfigData changes, the EdgionConfigDataHandler requeues this EP.
-        for override_key in Self::get_region_route_override_keys(&ep) {
+        for override_key in Self::get_cluster_region_setting_keys(&ep) {
             ctx.runtime()
                 .edgion_config_data_refs
                 .add_ref(override_key, ep_key.clone());
@@ -322,7 +322,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // When a ReferenceGrant in a target namespace changes, the CrossNsRevalidationListener
         // requeues this EP so ref_denied markers and status are recomputed.
         let cross_mgr = &ctx.runtime().cross_ns_ref_mgr;
-        for key in Self::get_region_route_override_keys(&ep)
+        for key in Self::get_cluster_region_setting_keys(&ep)
             .into_iter()
             .chain(Self::get_ip_list_ref_keys(&ep))
             .chain(Self::get_active_profile_ref_keys(&ep))
@@ -492,7 +492,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ctx,
         ));
         resolved_errors.extend(cred::wasm_status_errors(ep, &resource_ref, ctx));
-        resolved_errors.extend(resolve_override_refs(ep, ctx));
+        resolved_errors.extend(resolve_cluster_region_refs(ep, ctx));
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
         resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
@@ -1036,12 +1036,12 @@ fn resolve_waf_policy_ref(ep: &EdgionPlugins) -> Vec<ResolvedRefsError> {
     }
 }
 
-/// Check each RegionRoute plugin's `overrideRef` against the EdgionConfigData store.
+/// Check each RegionRoute plugin's `clusterRegionRef` against the EdgionConfigData store.
 /// Recomputes current identity and permission without trusting stored denial markers. Returns
 /// or one missing/type/content error per unusable reference. Content validation
 /// includes this consumer's modulo and does not invalidate its accepted base.
 /// Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
-pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+pub fn resolve_cluster_region_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
     for (index, entry) in ep.spec.request_plugins.iter().flatten().enumerate() {
         if !entry.is_enabled() {
@@ -1059,13 +1059,13 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
             continue;
         }
         if let Some(target) = resolution.target {
-            let ConfigEntry::RegionRouteOverride(overlay) = &target.spec.data else {
+            let ConfigEntry::ClusterRegionSetting(overlay) = &target.spec.data else {
                 unreachable!("fixed target role")
             };
             if let Some(detail) = overlay
-                .regions
-                .as_deref()
-                .and_then(|regions| config.validate_effective_regions(regions).err())
+                .validation_proof()
+                .and_then(|proof| proof.validate_modulo(config.effective_modulo()))
+                .err()
             {
                 let query = field.query().expect("validated field");
                 errors.push(ResolvedRefsError::EdgionConfigDataInvalid {

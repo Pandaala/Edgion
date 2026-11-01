@@ -21,10 +21,10 @@ pub const DIRECT_UNKNOWN: &str = "unknown, fallthrough";
 // and similar error-suffix substrings.
 pub const FAILOVER_REDIRECT: &str = "failover ";
 pub const LOCAL_REGION_PASS: &str = "local_region, pass";
-pub const OVERLAY_DISABLED: &str = "overlay_disabled";
-pub const OVERLAY_MISSING: &str = "overlay_missing";
-pub const OVERLAY_TYPE_MISMATCH: &str = "overlay_type_mismatch";
-pub const OVERLAY_INVALID: &str = "overlay_invalid";
+pub const SETTING_DISABLED: &str = "setting_disabled";
+pub const SETTING_MISSING: &str = "setting_missing";
+pub const SETTING_TYPE_MISMATCH: &str = "setting_type_mismatch";
+pub const SETTING_INVALID: &str = "setting_invalid";
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/region_route/log_consts_test.rs"]

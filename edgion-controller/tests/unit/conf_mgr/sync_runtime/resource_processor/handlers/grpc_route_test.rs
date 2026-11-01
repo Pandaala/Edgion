@@ -206,7 +206,7 @@ async fn backend_jump_invalidates_only_its_rule() {
     let plugins: EdgionPlugins = serde_json::from_value(json!({
         "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
         "metadata": {"namespace": "default", "name": "jump"},
-        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {}}]}
+        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"clusterRegionRef":{"name":"setting"}}}]}
     }))
     .unwrap();
     raw.upsert("default/jump".to_string(), Arc::new(plugins));

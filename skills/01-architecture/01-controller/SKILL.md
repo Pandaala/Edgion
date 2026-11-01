@@ -24,6 +24,7 @@ description: edgion-controller control plane architecture — overall design, st
 | [09-add-new-resource/](09-add-new-resource/00-guide.md) | Add-new-resource workflow + 4 template categories | When you need to add a new ResourceKind |
 | [10-status-management.md](10-status-management.md) | update_status implementation rules and pitfalls | Implementing or modifying CRD status writeback |
 | [11-authentication-authorization.md](11-authentication-authorization.md) | Authentication + authorization architecture (token-only admin authn / CLI token / federation mTLS, authz engine, middleware onion, default federation policy) | Understanding or extending Controller auth/authz, adding CLI tokens, debugging 401/403/503 |
+| [12-center-watch-store.md](12-center-watch-store.md) | Dedicated Center projection store | Publication, snapshot/history bounds, failure recovery and epoch isolation |
 
 ## Architecture Overview
 

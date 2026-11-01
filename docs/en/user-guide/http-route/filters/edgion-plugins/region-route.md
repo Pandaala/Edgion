@@ -1,320 +1,194 @@
-# RegionRoute Plugin
+# RegionRoute
 
-> **🔌 Edgion extension**
-> 
-> RegionRoute is a multi-region traffic routing plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
+RegionRoute selects a region using request keys and ordered routing rules. It is an
+EdgionPlugins extension. A required `clusterRegionRef` references an EdgionConfigData
+whose `spec.data.type` is `ClusterRegionSetting`.
 
-## Overview
+## Resource ownership
 
-RegionRoute routes traffic across multiple regions (clusters) using ordered route rules: direct region override, key-to-region mapping, and consistent hash-range routing with optional failover.
-
-All routing logic — the route rules, key extraction, hash computation — **and** the default region table live in the `EdgionPlugins` plugin config itself. That config is self-sufficient: a RegionRoute plugin with no external reference at all is a complete, working configuration.
-
-An optional `overrideRef` points at an `EdgionConfigData` of type `RegionRouteOverride`. It is a **data-only overlay**: it can replace the region table, but it can never change routing logic. The Gateway resolves it **at request time**, so an operator (or Center) can swap the region table without touching the `EdgionPlugins` resource:
-
-```text
-EdgionPlugins.requestPlugins[].config.overrideRef
-  → EdgionConfigData (spec.data.type: RegionRouteOverride)
-      regions?      # data only — never route rules
-```
-
-If the overlay is absent, disabled, of the wrong type, or produces an invalid region table, the plugin uses the base `regions` from `EdgionPlugins` — **fail-to-base**, never fail-closed. See [Overlay resolution and fail-to-base](#overlay-resolution-and-fail-to-base).
-
-> **Security invariant**: because every overlay failure falls back to it, the base `regions` in `EdgionPlugins` must be authored as the **safe default**.
-
-## Quick Start
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: example-route
-  namespace: production
-spec:
-  parentRefs:
-    - name: main-gateway
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api/
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: my-region-route-plugin
-      backendRefs:
-        - name: api-service
-          port: 8080
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: my-region-route-plugin
-  namespace: production
-spec:
-  requestPlugins:
-    - type: RegionRoute
-      config:
-        myRegion: us-east
-        keyGet:
-          - type: header
-            name: X-Tenant-Id
-        routeRules:
-          - type: RouteByKeyConfMatch
-            matchMap:
-              tenant-a: us-east
-              tenant-b: eu-west
-          - type: RouteByHashRange
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-        # Base region table — the safe default every overlay failure falls back to
-        regions:
-          - name: us-east
-            hashRange: [0, 499]
-            backendEndpoint: api.us-east.example.com
-          - name: eu-west
-            hashRange: [500, 999]
-            backendEndpoint: api.eu-west.example.com
-        # Optional: hot-swappable region table
-        overrideRef:
-          name: my-region-override
-```
-
----
-
-## Configuration Parameters
-
-### Plugin config (`EdgionPlugins`)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `myRegion` | String | `""` | This gateway instance's own region name. When a rule resolves to this region, the request passes through the gateway's own chain instead of jumping to a remote region |
-| `keyGet` | Array | `[]` | Shared key extraction sources for `RouteByKeyConfMatch` and `RouteByHashRange`. The first non-empty extracted value wins |
-| `hashKeyGet` | Array | none | Pre-computed hash sources, tried before computing a hash |
-| `hashCalc` | Object | none | Hash computation config — see [Hash computation](#hash-computation) |
-| `routeRules` | Array | `[]` | Ordered route rules, evaluated top to bottom, first match wins — see [Route rules](#route-rules) |
-| `routeByKeyConfMatch` | Object | none | Cluster-level override for `RouteByKeyConfMatch`: `matchMap` (key → region) plus `bypassClusterKeys` (keys that ignore the override and fall back to the rule's own `matchMap`) |
-| `regions` | Array | `[]` | **Base region table — the safe default.** Used directly when no overlay is configured, and on every overlay failure — see [Region definition](#region-definition) |
-| `overrideRef` | Object | none | `{ name, namespace? }` reference to an `EdgionConfigData` of type `RegionRouteOverride`. Omitting `namespace` means the `EdgionPlugins` resource's own namespace. A cross-namespace reference requires a permitting `ReferenceGrant` or a target with `visibility: Cluster` |
-
-`dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `dye` | Object | none | Traffic-tagging headers keyed on outcome (separate `on: [success]` and `on: [fallback]` rules, subject to the configured routing rules and overlay reference; RegionRoute has no `reject` capability). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the final region name (post-`failoverTo`) on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
-
-Controller and Gateway use the same region-table validation rules. Invalid base configuration is reflected in the `EdgionPlugins` `Accepted` condition; overlay resolution or effective-table validation failures are reflected in `ResolvedRefs` and fall back to the valid base table. Generic resource writes retain status-based validation feedback; not every invalid write is rejected at ingestion.
-
-When `routeRules` is non-empty, base `regions` must be non-empty, even with `overrideRef`. An empty base table is allowed only with `routeRules: []`, which makes the plugin a no-op; any supplied non-empty table must still pass validation.
-
-### Route rules
-
-Evaluated **in order — first match wins**:
-
-| Rule type | Behavior |
-|-----------|----------|
-| `RouteByDirectRegion` | Extracts a region name directly from the request via this rule's own `keyFrom` sources, in order; the first value matching a region in the effective table is used. Non-matching values fall through |
-| `RouteByKeyConfMatch` | Extracts a key via the shared `keyGet` and looks it up in a `matchMap` (key → region). The cluster-level `routeByKeyConfMatch.matchMap` takes precedence when non-empty, unless the extracted key is listed in `bypassClusterKeys`, in which case the rule's own `matchMap` is used. On match, routes to the mapped region; otherwise falls through |
-| `RouteByHashRange` | Consistent hash-range routing. Reads a pre-computed hash from `hashKeyGet` if present and valid (in `[0, modulo)`), otherwise computes it via `hashCalc`. This rule is **terminal** — it never falls through to later rules |
-
-### Region definition
-
-Each region (cluster) in `regions` defines:
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | String | — | Cluster identifier (used in direct-region matching and failover). Must be non-empty and unique within the table |
-| `hashRange` | `[Integer, Integer]` | — | Closed hash interval `[low, high]`; must satisfy `0 ≤ low ≤ high < modulo` |
-| `backendEndpoint` | String | — | Hostname, IPv4, or bracketed IPv6 with an optional port, such as `api.example.com:8443`, `10.0.0.1:8080`, or `[2001:db8::1]:443`. URLs are invalid; ports must be `1–65535`. Original SNI and request headers are preserved |
-| `tls` | Boolean | `true` | Whether the upstream connection uses TLS (port defaults to `443` when `true`, `80` when `false`) |
-| `failoverTo` | String | none | Redirect traffic for this cluster to the named cluster; must be a valid cluster in the same list and cannot be itself |
-
-Names cannot be whitespace-only. All closed intervals must be disjoint, including regions with `failoverTo`; gaps are allowed and hashes in a gap pass through to the normal upstream. Without `hashCalc`, table bounds and pre-computed hashes still use the default modulo `1000`. Hostnames retain their original case and trailing dot; endpoint syntax validation does not replace post-DNS address safety checks.
-
-### Hash computation
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `algorithm` | Enum | `crc32` | Hash algorithm: `crc32` (fast, hardware-accelerated) or `sha256` |
-| `modulo` | Integer | `1000` | Hash value domain `[0, modulo-1]`; must be at least `2`, and every region's `hashRange[1]` must be `< modulo` |
-| `writeBack` | Array | none | Targets to which the computed hash is written back (empty = no write-back) |
-
----
-
-## Overlay resolution and fail-to-base
-
-### The overlay resource
+The setting owns `clusterName`, `regionName` and the complete `regions` table.
+`regionName` is the sole local-region identity; it must name a row in that table.
+The plugin owns request extraction, hashing, route rules and failure policy.
+`clusterName` and `regionName` are nonblank, case-sensitive identities of at most
+63 UTF-8 bytes, with no control characters. They are not normalized.
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
-  name: my-region-override
+  name: local-region
   namespace: production
 spec:
-  enable: true            # envelope kill-switch
+  enable: true
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
-      # every field is optional; an omitted field keeps the base value
-      regions:            # when present, WHOLE-REPLACES the base table (no element merge)
+      clusterName: production
+      regionName: us-east
+      regions:
         - name: us-east
           hashRange: [0, 499]
-          backendEndpoint: api.us-east.example.com
+          backendEndpoint: api.us-east.example.com:443
+          tls: true
         - name: eu-west
           hashRange: [500, 999]
-          backendEndpoint: api.eu-west.example.com
-          failoverTo: us-east
-```
-
-| Overlay field | Effect |
-|---------------|--------|
-| `regions` | **Whole-replaces** the base region table. There is no element-wise merge — the table you supply is the table in effect |
-
-Omitting `regions` keeps the base table; an explicit `regions: []` is invalid. Overlay tables obey the same name, endpoint, range, and failover rules as base tables and are checked against each referring plugin's modulo. A shared overlay may therefore be valid for one plugin and invalid for another.
-
-`regions` is the only field with an effect. The `RegionRouteOverride` type also declares `enable` and `active`, but the Gateway consumes neither today — setting them changes nothing. To take an overlay out of service, set the **envelope** switch `spec.enable: false` on the `EdgionConfigData` (not `spec.data.config.enable`); the plugin then falls back to the base `regions`, as described below.
-
-Routing **logic** (`routeRules`, `keyGet`, `hashCalc`, `routeByKeyConfMatch`, `myRegion`) is deliberately absent from the overlay. Logic lives only in `EdgionPlugins` and cannot be overridden remotely.
-
-### Fail-to-base
-
-The overlay is resolved on every request. All four failure paths fall back to the base `regions` — traffic continues, it is never rejected — and each records a `fallback` dye outcome with cause `overlay-fail-to-base` plus a Prometheus counter:
-
-| Situation | Counter |
-|-----------|---------|
-| Referenced `EdgionConfigData` has `spec.enable: false` | `overlay_disabled` |
-| Referenced `EdgionConfigData` does not exist | `overlay_missing` |
-| It exists but `spec.data.type` is not `RegionRouteOverride` | `overlay_type_mismatch` |
-| The overlay table fails validation (empty table, invalid names or endpoints, reversed/overlapping/out-of-modulo ranges, invalid failover targets or cycles) | `overlay_invalid` |
-
-Complete table validation happens on configuration updates; requests use the current published result and check the consuming plugin's modulo. After deletion or an invalid update, the next request observing that configuration uses the base table. There is no retained last-good overlay or time-based expiry mechanism.
-
+          backendEndpoint: api.eu-west.example.com:443
+          tls: true
 ---
-
-## Common Configuration Scenarios
-
-### 1. Pin Specific Tenants to a Region (direct mapping)
-
-Use a `RouteByKeyConfMatch` rule that maps a header value to a region, so named tenants always land in the same cluster:
-
-```yaml
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: tenant-region-route
+  name: regional-routing
   namespace: production
 spec:
   requestPlugins:
     - type: RegionRoute
       config:
+        clusterRegionRef:
+          name: local-region
+        failOpen: true
+        statusOnError: 503
         keyGet:
           - type: header
-            name: X-Tenant-Id
-        routeRules:
-          - type: RouteByKeyConfMatch
-            matchMap:
-              tenant-a: us-east
-              tenant-b: eu-west
-        regions:
-          - name: us-east
-            hashRange: [0, 499]
-            backendEndpoint: api.us-east.example.com
-          - name: eu-west
-            hashRange: [500, 999]
-            backendEndpoint: api.eu-west.example.com
-```
-
-### 2. Consistent Hash-Range Distribution
-
-Give each region a `hashRange` slice over `modulo` (e.g. `0–499` and `500–999` for a 50/50 split) and add `RouteByHashRange`. A request whose computed hash falls in a region's range is routed there. Because `RouteByHashRange` is terminal, place it last.
-
-### 3. Region Failover
-
-Set `failoverTo` on a region and traffic destined for that region is transparently redirected to the named healthy region — the HTTPRoute does not change.
-
-Two ways to drive it:
-
-- **Statically**, on a region in the `EdgionPlugins` base `regions`.
-- **Dynamically**, by giving the plugin an `overrideRef` and writing `failoverTo` into the `RegionRouteOverride` EdgionConfigData. This is the path Center uses for multi-cluster failover, and it takes effect on the next request with no `EdgionPlugins` edit.
-
-Targets must exist; self-references and cycles are invalid. Acyclic chains are allowed, but execution follows only one hop: with `a → b → c`, a request initially selecting `a` goes to `b`, while one initially selecting `b` goes to `c`. The dedicated failover API validates the candidate table before writing; an invalid table returns `422` without persisting the change.
-
----
-
-## Dye Headers
-
-See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs for active entries even when conditions skip execution; outer `enable: false` entries are inert), header-name validation, and security guidance. This section covers only what is specific to RegionRoute.
-
-`dye` is default-off: when omitted, the plugin sets no headers and strips nothing. When configured, it tags the request (or, on `response`-direction rules, the response) with operator-chosen HTTP headers:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: my-region-route-plugin
-  namespace: production
-spec:
-  requestPlugins:
-    - type: RegionRoute
-      dye:
-        request:
-          - name: X-Served-Region     # value omitted => final region name (on: [success] by default)
-        response:
-          - name: X-Edgion-Outcome
-            on: [fallback]            # value omitted => region_route:fallback:overlay-fail-to-base
-      config:
+            name: X-Account-Id
+        hashCalc:
+          algorithm: crc32
+          modulo: 1000
+          writeBack:
+            - type: responseHeader
+              name: X-Region-Hash
         routeRules:
           - type: RouteByDirectRegion
             keyFrom:
               - type: header
                 name: X-Region
-        regions:
-          - name: us-east
-            hashRange: [0, 999]
-            backendEndpoint: api.us-east.example.com
-        overrideRef:
-          name: my-region-override
+          - type: RouteByKeyConfMatch
+            matchMap:
+              priority-account: us-east
+          - type: RouteByHashRange
 ```
 
-- `request` entries are set on the request forwarded to the upstream (or, for a local-region pass, on the request continuing through the gateway's own chain); `response` entries are set on the response returned to the client.
-- An omitted `value` on `success` carries the **final region name** — that is the region *after* any `failoverTo` redirect is applied, not the originally-matched region.
-- `success` dyeing applies whenever a rule (`RouteByDirectRegion`, `RouteByKeyConfMatch`, or the terminal `RouteByHashRange`) actually selects a region, including the **local-region pass** case — when the resolved region is this gateway's own region, no cross-region jump happens, but the request was still routed to a region, so it is dyed with that region's name.
-- RegionRoute declares `success` and `fallback` — **not** `reject` — dye capabilities: its only failure-shaped branch is the overlay fail-to-base path (`RegionRouteOverride` resolution failing back to the base routing rules), recorded as `fallback` with cause `overlay-fail-to-base`. Dyeing does not happen when another plugin has already locked the upstream jump, or when no rule matches at all — neither is a recorded outcome today. A rejected jump does not record a dye outcome. Success requires nonempty `routeRules` and a region source (`regions` or `overrideRef`); fallback requires an `overrideRef` and nonempty `routeRules` or `regions`. The base configuration must also pass the region-table validation described above. Unsupported subscriptions invalidate the entire dye plan.
+The reference namespace defaults to the plugin namespace. Cross-namespace references
+require a ReferenceGrant in the target namespace unless the target has
+`spec.visibility: Cluster` (with reference-grant validation enabled). Missing or denied references are
+configuration-unavailable outcomes. Invalid owning resource identity remains a
+structural rejection. Settings use the existing EdgionConfigData kind; no separate
+ClusterRegionSetting CRD exists.
 
----
+## Plugin fields
 
-## FAQ
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `clusterRegionRef` | Required | Setting name and optional namespace |
+| `failOpen` | `true` | Continue when operational configuration is unavailable |
+| `statusOnError` | `503` | HTTP status, 400–599, when failOpen is false |
+| `keyGet` | `[]` | Ordered shared key sources |
+| `hashKeyGet` | Absent | Ordered sources of a precomputed hash |
+| `hashCalc` | Absent | Hash algorithm, modulo and writeback targets |
+| `routeRules` | `[]` | Ordered routing rules |
+| `routeByKeyConfMatch` | Absent | Shared matchMap and bypassClusterKeys |
 
-### Q1: Do I need an EdgionConfigData to use RegionRoute?
+There is no plugin-local region table or local-region field. Legacy configuration
+fields and the previous setting variant are not compatibility aliases.
 
-**A**: No. The `EdgionPlugins` config is complete on its own — routing logic and the base region table both live there. Add an `overrideRef` only when you want the region table to be swappable at runtime without editing `EdgionPlugins`, which is how Center drives multi-cluster failover.
+## Routing and validation
 
-### Q2: What is the order of rule evaluation?
+Rules run in order. Direct-region rules try their own `keyFrom` sources for the first
+known region. Key-map rules use the shared `keyGet`; a nonempty shared
+`routeByKeyConfMatch.matchMap` takes precedence unless the key is in
+`bypassClusterKeys`. Otherwise the rule's own map applies. Hash-range routing is
+terminal, including when it passes through without a match.
 
-**A**: Rules are evaluated top to bottom, first match wins. `RouteByDirectRegion` and `RouteByKeyConfMatch` fall through when they do not match, so put more specific rules first. `RouteByHashRange` is terminal and should be last.
+Hash routing first reads a valid precomputed integer in `[0, modulo)` from
+`hashKeyGet`. Otherwise it computes CRC32 or SHA-256 from `keyGet` when `hashCalc`
+is configured, then writes the computed value to `writeBack`. The default algorithm
+is `crc32`; modulo defaults to 1000 and must be at least 2. Response-header
+writeback obeys the shared response-header policy.
 
-### Q3: I updated the override but routing did not change. Why?
+Each table row has `name`, `hashRange: [low, high]`, `backendEndpoint`, optional
+`tls` (default true), and optional `failoverTo`. Names are nonblank and unique;
+the complete table must be nonempty. Closed intervals must be disjoint with
+`0 <= low <= high < modulo`; gaps are allowed and pass through. Consumers without
+hashCalc still use modulo 1000 for table bounds and precomputed hashes.
 
-**A**: The overlay silently falls back to the base `regions` on any resolution problem — that is by design (fail-to-base, not fail-closed). Check, in order: the `EdgionPlugins` `ResolvedRefs` status condition (does the ref resolve at all, and is the cross-namespace reference permitted?), the referenced resource's `spec.enable` and its `spec.data.type`, and the gateway's plugin log, which records which of `overlay_disabled` / `overlay_missing` / `overlay_type_mismatch` / `overlay_invalid` applied.
+Endpoints accept a hostname, IPv4 or bracketed IPv6 with an optional port in
+1–65535. URLs and empty hosts are invalid. Omitted ports default to 443 for TLS
+and 80 otherwise. Endpoint validation does not bypass post-DNS address checks.
+Remote routing preserves the original Host, SNI, path and body. A target equal
+to the setting's regionName continues through the normal local upstream.
 
-### Q4: Can an override change the route rules?
+`failoverTo` must name another row. Cycles and self-references are invalid.
+Execution follows one hop: for `a -> b -> c`, selecting a routes to b.
 
-**A**: No, and that is deliberate. `RegionRouteOverride` carries data only, and in practice only `regions` has any effect. Routing logic is exclusively in `EdgionPlugins`, so a remote writer can retarget traffic but cannot rewrite how traffic is classified.
+## Unavailable configuration and recovery
 
----
+Missing, disabled, denied, wrong-type or invalid settings, and unusable consumer
+hash configuration, invoke the plugin's failure policy before request extraction,
+hash writeback or upstream selection. With the default failOpen=true, the plugin
+continues to later plugins and normal proxying. With failOpen=false it terminates
+with statusOnError. There is no base-table fallback or retained last-good table.
+Empty rules still require an available setting, then perform no routing.
 
-## Related Documentation
+This policy applies to readable operational configuration. Invalid YAML, malformed
+policy values, missing required fields and structural plugin safety violations do
+not become a permissive policy execution. Controller status reports configuration
+and reference failures; Gateway independently enforces the runtime contract.
 
-- [Dynamic Upstream](./dynamic-upstream.md) — Request-driven upstream selection
-- [Direct Endpoint](./direct-endpoint.md) — Bypass load balancing to a specific endpoint
-- [Filters Overview](../overview.md) — All HTTPRoute filters
+Updates publish the raw setting and validation proof atomically. Each request uses
+regionName and regions from the same generation. Full table validation happens
+on configuration updates, not on the request path. A subsequent valid update
+restores routing without recreating the plugin. A persisted write, Controller
+observation and Gateway application are distinct states.
 
-## Response header policy
+## Diagnostics and dye
 
-`writeBack` destinations of type `ResponseHeader` must use an allowed response name.
+Canonical plugin access logs report `setting_reference_unavailable`, `setting_missing`,
+`setting_disabled`, `setting_type_mismatch`, `setting_invalid`, or
+`hash_modulo_invalid`. The bounded reason label is also recorded in
+`edgion_region_route_config_events_total`.
 
-[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).
+Optional [dye](dye.md) can report success with the final selected region, including
+local pass-through. Unavailable configuration records fallback when failOpen=true
+or reject otherwise, with cause `configuration-unavailable`. Success requires
+nonempty rules. No matching rule or an already-owned upstream jump records no
+selection outcome. Dye is disabled by default and follows the shared anti-spoof
+and header-mutation policy when explicitly configured.
+
+## Source browsing and single-setting failover
+
+The Controller exposes source-backed setting discovery:
+
+- `GET /api/v1/cluster-region-settings/keys?limit=10&continue=...` returns only
+  locators and Cluster/Region identities. An empty matching page can still have
+  a continuation token. Disabled settings and readable identities with invalid
+  tables remain discoverable; membership comes from `regionName`.
+- `GET /api/v1/cluster-region-settings/{namespace}/{name}` reads the current raw
+  source, preserving unknown fields. It does not return a processed store object.
+- `GET /api/v1/cluster-region-settings/{namespace}/{name}/consumers` evaluates the
+  source table against Controller-observed consumer references. `compatibleWithTable`
+  is a compatibility result, not a Gateway acknowledgment. `settingEnabled`,
+  `tableObservation` and `consumerObservation` identify the separate inputs.
+
+For a single target, POST `{regionName, failoverTo}` to
+`/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview`. An empty
+`failoverTo` clears the target. The preview includes the intended change, consumer
+compatibility and a source `precondition`. Submit the same target fields plus
+that precondition to `/api/v1/cluster-region-settings/{namespace}/{name}/failover`.
+Changing the intended target should invalidate the UI preview.
+
+The precondition binds canonical source content, UID and resourceVersion, including
+unknown fields. It is an equality witness, not an authorization token or a signed
+approval of intent. Changed source returns 409; obtain a new preview. An already
+matching request returns `modified: false` without writing. Missing, disabled or
+invalid settings are not created, enabled or repaired by this operation. The full
+proposed table must validate; existing consumer-specific failures are reported
+individually and do not introduce a global consumer-health requirement.
+
+A successful write reports `persistence: persisted`; an unchanged result reports
+`unchanged`. Controller observation and Gateway application remain `not-confirmed`.
+A timeout can occur after persistence: read back before creating another preview,
+and do not automatically replay. Filesystem mode serializes in-process mutations
+through actual filesystem completion, including cancellation, but does not provide
+an atomic compare-and-swap against external file editors. Kubernetes uses native
+resourceVersion replacement and etcd uses its modification revision transaction.
+Multi-target failover is outside this single-setting operation.

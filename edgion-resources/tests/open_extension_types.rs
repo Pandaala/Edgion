@@ -230,9 +230,9 @@ fn known_extension_serializers_preserve_every_tag_and_concrete_config() {
     check!(ConfigEntry, Selector, "Selector", json!({"active":"blue"}), data_tags);
     check!(
         ConfigEntry,
-        RegionRouteOverride,
-        "RegionRouteOverride",
-        json!({}),
+        ClusterRegionSetting,
+        "ClusterRegionSetting",
+        json!({"clusterName":"prod","regionName":"local","regions":[]}),
         data_tags
     );
     check!(

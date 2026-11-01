@@ -54,7 +54,26 @@ async fn federation_deny_all_role_can_introspect_itself() {
     let body = json_body(response).await;
     assert_eq!(body["success"], true);
     assert_eq!(body["data"]["resources"].as_array().unwrap().len(), 22);
-    assert_eq!(body["data"]["operations"].as_array().unwrap().len(), 8);
+    let operations = body["data"]["operations"].as_array().unwrap();
+    let names: Vec<_> = operations
+        .iter()
+        .map(|operation| operation["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "regionRoute.list",
+            "regionRoute.watch",
+            "regionRoute.failover",
+            "acme.trigger",
+            "confSync.rotate",
+            "serverInfo",
+            "diagnostics",
+            "wipeAll",
+            "debug",
+        ]
+    );
+    assert!(operations.iter().all(|operation| operation["allowed"] == false));
 }
 
 #[tokio::test]
