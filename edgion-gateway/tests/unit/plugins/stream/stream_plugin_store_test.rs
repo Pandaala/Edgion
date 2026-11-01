@@ -17,7 +17,7 @@ spec:
         perListener: {{rate: {rate}, interval: 1h}}
 "#
     );
-    Arc::new(serde_yaml::from_str(&yaml).unwrap())
+    Arc::new(yaml_serde::from_str(&yaml).unwrap())
 }
 
 #[tokio::test]
@@ -111,7 +111,7 @@ metadata:
 spec: {{}}
 "#,
     );
-    Arc::new(serde_yaml::from_str(&yaml).expect("minimal EdgionStreamPlugins fixture must parse"))
+    Arc::new(yaml_serde::from_str(&yaml).expect("minimal EdgionStreamPlugins fixture must parse"))
 }
 
 #[test]

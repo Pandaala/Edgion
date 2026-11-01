@@ -63,13 +63,13 @@ fn http_dns_connection_roundtrips_without_target() {
     // The lean HttpDnsConnection must parse with only tls/timeout and NO
     // `target` field (unlike the webhook ExternalHttpConnection it replaced).
     let yaml = "timeoutMs: 1500\n";
-    let conn: HttpDnsConnection = serde_yaml::from_str(yaml).expect("parse lean connection");
+    let conn: HttpDnsConnection = yaml_serde::from_str(yaml).expect("parse lean connection");
     assert_eq!(conn.timeout_ms, Some(1500));
     assert!(conn.tls.is_none());
     assert!(!conn.allow_loopback);
 
     // Round-trip: serialized form must not contain a `target` key.
-    let out = serde_yaml::to_string(&conn).unwrap();
+    let out = yaml_serde::to_string(&conn).unwrap();
     assert!(
         !out.contains("target"),
         "lean connection must not carry a target, got: {out}"
@@ -129,8 +129,8 @@ fn http_dns_config_with_lean_connection_roundtrips() {
             ..Default::default()
         }),
     };
-    let out = serde_yaml::to_string(&cfg).unwrap();
-    let back: HttpDnsResolverConfig = serde_yaml::from_str(&out).unwrap();
+    let out = yaml_serde::to_string(&cfg).unwrap();
+    let back: HttpDnsResolverConfig = yaml_serde::from_str(&out).unwrap();
     assert_eq!(back.connection.and_then(|c| c.timeout_ms), Some(2000));
 }
 

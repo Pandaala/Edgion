@@ -3,8 +3,8 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use serde_yaml::Value;
 use std::time::Instant;
+use yaml_serde::Value;
 
 pub struct HeaderCertAuthTestSuite;
 
@@ -21,7 +21,7 @@ const K8S_MOUNTED_CERT_PATH: &str = "/usr/local/edgion/edgion-tests/certs/mtls/v
 const REPO_CERT_PATH: &str = "edgion-tests/certs/mtls/valid-client.crt";
 
 fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
-    let value: Value = serde_yaml::from_str(yaml).ok()?;
+    let value: Value = yaml_serde::from_str(yaml).ok()?;
     let data = value.get("data")?.as_mapping()?;
     data.get(Value::String(key.to_string()))?
         .as_str()

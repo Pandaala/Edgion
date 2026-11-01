@@ -466,8 +466,8 @@ impl EdgionControllerConfig {
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
             {
-                let de = serde_yaml::Deserializer::from_str(&content);
-                serde_yaml::with::singleton_map_recursive::deserialize(de)
+                let de = yaml_serde::Deserializer::from_str(&content);
+                yaml_serde::with::singleton_map_recursive::deserialize(de)
                     .context(format!("Failed to parse config file: {}", config_path))?
             }
         } else {

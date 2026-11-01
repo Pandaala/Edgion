@@ -15,7 +15,7 @@ use crate::conf_mgr::ControllerRuntime;
 use super::*;
 
 fn credential_source_config() -> CredentialSourceConfig {
-    serde_yaml::from_str(
+    yaml_serde::from_str(
         r#"
 provider:
   type: oauth2ClientCredentials

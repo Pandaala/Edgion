@@ -1162,7 +1162,7 @@ mod tests {
 
     #[test]
     fn status_barriers_use_the_resolved_gateway_for_routes_and_both_policy_families() {
-        let mut route: Value = serde_yaml::from_str(&route_yaml(true)).unwrap();
+        let mut route: Value = yaml_serde::from_str(&route_yaml(true)).unwrap();
         let gateway = gateway_name();
         route["status"] = json!({"parents": [{
             "controllerName": "edgion.io/gateway-controller", "parentRef": route["spec"]["parentRefs"][0],
@@ -1223,9 +1223,9 @@ mod tests {
             denied_backend_yaml(&format!("{}/ai/prefix", bases.https)),
             denied_secret_yaml(),
         ] {
-            serde_yaml::from_str::<Value>(&yaml).unwrap_or_else(|error| panic!("invalid policy YAML: {error}\n{yaml}"));
+            yaml_serde::from_str::<Value>(&yaml).unwrap_or_else(|error| panic!("invalid policy YAML: {error}\n{yaml}"));
         }
-        let route: Value = serde_yaml::from_str(&route_yaml(true)).unwrap();
+        let route: Value = yaml_serde::from_str(&route_yaml(true)).unwrap();
         assert_eq!(
             route.pointer("/spec/rules/0/backendRefs/0/weight"),
             Some(&Value::Number(1.into()))
@@ -1234,14 +1234,14 @@ mod tests {
             route.pointer("/spec/rules/0/backendRefs/1/weight"),
             Some(&Value::Number(3.into()))
         );
-        let policy: Value = serde_yaml::from_str(&traffic_policy_yaml(3)).unwrap();
+        let policy: Value = yaml_serde::from_str(&traffic_policy_yaml(3)).unwrap();
         assert!(policy
             .pointer("/spec/targetRefs")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
             .all(|target| target["kind"] == "EdgionBackend"));
-        let http_backend: Value = serde_yaml::from_str(&backend_yaml(
+        let http_backend: Value = yaml_serde::from_str(&backend_yaml(
             BACKEND_B,
             CREDENTIAL_B,
             "http://127.0.0.1:30001/ai/policy-b",

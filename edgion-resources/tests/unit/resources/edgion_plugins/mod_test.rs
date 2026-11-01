@@ -51,7 +51,7 @@ waf:
     name: application-waf
   mode: detectionOnly
 "#;
-    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).expect("WAF configuration parses");
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(yaml).expect("WAF configuration parses");
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec,
@@ -80,7 +80,7 @@ waf:
     name: application-waf
   unexpected: true
 "#;
-    assert!(serde_yaml::from_str::<EdgionPluginsSpec>(yaml).is_err());
+    assert!(yaml_serde::from_str::<EdgionPluginsSpec>(yaml).is_err());
 }
 
 #[test]
@@ -198,7 +198,7 @@ accessLogExtern:
     from: header
     name: user-agent
 "#;
-    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(yaml).unwrap();
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec,
@@ -216,7 +216,7 @@ accessLogExtern:
     from: header
     name: Authorization
 "#;
-    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(yaml).unwrap();
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec,
@@ -240,7 +240,7 @@ accessLogExtern:
     from: header
     name: x-tenant
 "#;
-    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(yaml).unwrap();
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec,
@@ -257,7 +257,7 @@ fn access_log_extern_over_count_cap_is_reported_at_ingest() {
     for i in 0..(LOG_LABEL_MAX_COUNT + 1) {
         yaml.push_str(&format!("  - key: k{i}\n    from: ctx\n    name: n{i}\n"));
     }
-    let spec: EdgionPluginsSpec = serde_yaml::from_str(&yaml).unwrap();
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(&yaml).unwrap();
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec,

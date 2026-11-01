@@ -76,7 +76,7 @@ creation or log delivery by a running Pingora server.
 ## Configuration format history
 
 Gateway and Controller process configuration files are YAML, not TOML. The
-Gateway loader uses `serde_yaml` with `singleton_map_recursive`. Historical
+Gateway loader uses `yaml_serde` with `singleton_map_recursive`. Historical
 documentation and examples were corrected under `types-misc-02`; Cargo feature
 tables, `deny.toml`, and `rust-toolchain.toml` remain genuine TOML.
 

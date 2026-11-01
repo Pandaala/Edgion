@@ -161,28 +161,28 @@ fn resolve_policy_auto_follows_the_host_and_unknown_does_not_tighten() {
 fn policy_mode_deserializes_tristate_strings() {
     // Bare unquoted `on`/`off` resolve to YAML 1.1 booleans, so they must be
     // quoted here to reach the string parser at all.
-    let auto: FipsPolicyMode = serde_yaml::from_str("auto").unwrap();
+    let auto: FipsPolicyMode = yaml_serde::from_str("auto").unwrap();
     assert_eq!(auto, FipsPolicyMode::Auto);
-    let on_str: FipsPolicyMode = serde_yaml::from_str("\"on\"").unwrap();
+    let on_str: FipsPolicyMode = yaml_serde::from_str("\"on\"").unwrap();
     assert_eq!(on_str, FipsPolicyMode::On);
-    let off_str: FipsPolicyMode = serde_yaml::from_str("\"OFF\"").unwrap();
+    let off_str: FipsPolicyMode = yaml_serde::from_str("\"OFF\"").unwrap();
     assert_eq!(off_str, FipsPolicyMode::Off);
 
     // A YAML boolean is no longer accepted (no compatibility layer).
-    assert!(serde_yaml::from_str::<FipsPolicyMode>("true").is_err());
+    assert!(yaml_serde::from_str::<FipsPolicyMode>("true").is_err());
     // An unrecognized token is still rejected.
-    assert!(serde_yaml::from_str::<FipsPolicyMode>("nonsense").is_err());
+    assert!(yaml_serde::from_str::<FipsPolicyMode>("nonsense").is_err());
 }
 
 #[test]
 fn policy_mode_serialize_round_trips() {
     // The struct-level `#[derive(Serialize)]` on GatewayConfig forces a
     // Serialize impl. Assert on the round-trip, not the exact bytes: YAML
-    // 1.1 treats `on`/`off` as booleans, so serde_yaml's emitter may quote
+    // 1.1 treats `on`/`off` as booleans, so yaml_serde's emitter may quote
     // them (`'on'`). Either spelling must deserialize back to the same mode.
     for mode in [FipsPolicyMode::Auto, FipsPolicyMode::On, FipsPolicyMode::Off] {
-        let yaml = serde_yaml::to_string(&mode).unwrap();
-        let back: FipsPolicyMode = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = yaml_serde::to_string(&mode).unwrap();
+        let back: FipsPolicyMode = yaml_serde::from_str(&yaml).unwrap();
         assert_eq!(back, mode, "round-trip failed for {yaml:?}");
     }
 }

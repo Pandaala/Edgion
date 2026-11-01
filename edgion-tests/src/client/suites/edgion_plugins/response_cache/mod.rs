@@ -851,7 +851,7 @@ mod tests {
             "DynamicTest/updates/body-filter/10_EdgionPlugins.yaml",
         ] {
             let text = std::fs::read_to_string(root.join(path)).unwrap();
-            let plugins: edgion_resources::EdgionPlugins = serde_yaml::from_str(&text).unwrap();
+            let plugins: edgion_resources::EdgionPlugins = yaml_serde::from_str(&text).unwrap();
             assert!(plugins.validate_plugins().is_empty(), "invalid typed fixture {path}");
             assert!(plugins.spec.request_plugins.as_ref().unwrap().iter().any(|entry| {
                 matches!(&entry.plugin, edgion_resources::EdgionPlugin::KeyAuth(config)

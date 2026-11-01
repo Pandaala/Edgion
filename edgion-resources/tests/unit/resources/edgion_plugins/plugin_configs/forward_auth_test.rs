@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn forward_auth_new_schema_parses() {
     let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 503\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     assert_eq!(cfg.conn.target.service.port, Some(8080));
     assert!(cfg.request.headers.forward_all); // forward_auth Default sets true
     assert!(cfg.validation_error().is_none());
@@ -15,7 +15,7 @@ fn forward_auth_new_schema_parses() {
 #[test]
 fn forward_auth_rejects_missing_port() {
     let y = "target:\n  name: auth\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     assert!(cfg.validation_error().is_some());
 }
 
@@ -23,7 +23,7 @@ fn forward_auth_rejects_missing_port() {
 #[test]
 fn forward_auth_failure_policy_is_top_level() {
     let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 502\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     assert_eq!(cfg.conn.status_on_error, 502);
     assert!(cfg.validation_error().is_none());
 }
@@ -34,7 +34,7 @@ fn forward_auth_failure_policy_is_top_level() {
 #[test]
 fn forward_auth_rejects_stale_decision_allow_degradation() {
     let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  allowDegradation: true\n";
-    let err = serde_yaml::from_str::<ForwardAuthConfig>(y)
+    let err = yaml_serde::from_str::<ForwardAuthConfig>(y)
         .expect_err("stale decision.allowDegradation must fail to deserialize");
     assert!(
         err.to_string().contains("allowDegradation") || err.to_string().contains("unknown field"),
@@ -47,7 +47,7 @@ fn forward_auth_rejects_stale_decision_allow_degradation() {
 #[test]
 fn forward_auth_rejects_stale_decision_status_on_error() {
     let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  statusOnError: 500\n";
-    let err = serde_yaml::from_str::<ForwardAuthConfig>(y)
+    let err = yaml_serde::from_str::<ForwardAuthConfig>(y)
         .expect_err("stale decision.statusOnError must fail to deserialize");
     assert!(
         err.to_string().contains("statusOnError") || err.to_string().contains("unknown field"),
@@ -59,7 +59,7 @@ fn forward_auth_rejects_stale_decision_status_on_error() {
 #[test]
 fn forward_auth_rejects_status_on_error_600() {
     let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 600\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     let err = cfg.validation_error().expect("600 should fail validation");
     assert!(
         err.contains("statusOnError"),
@@ -96,7 +96,7 @@ fn forward_auth_default_passes_own_validation() {
 #[test]
 fn forward_auth_rejects_zero_timeout_ms() {
     let y = "target:\n  name: auth\n  port: 8080\ntimeoutMs: 0\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     let err = cfg.validation_error().expect("timeoutMs: 0 must be rejected");
     assert!(err.contains("timeoutMs"), "got: {err}");
 }
@@ -107,7 +107,7 @@ fn forward_auth_rejects_zero_timeout_ms() {
 #[test]
 fn forward_auth_rejects_zero_max_response_bytes() {
     let y = "target:\n  name: auth\n  port: 8080\nmaxResponseBytes: 0\ndecision: {}\n";
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     let err = cfg.validation_error().expect("maxResponseBytes: 0 must be rejected");
     assert!(err.contains("maxResponseBytes"), "got: {err}");
 }
@@ -116,7 +116,7 @@ fn forward_auth_rejects_zero_max_response_bytes() {
 fn forward_auth_inherits_body_content_type_conflict() {
     use crate::resources::common::outbound_request::{BodySpec, CustomField, CustomSource};
     let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 503\ndecision: {}\n";
-    let mut cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+    let mut cfg: ForwardAuthConfig = yaml_serde::from_str(y).unwrap();
     cfg.request.body = Some(BodySpec::Json {
         template: r#"{"user": "${ctx:user}"}"#.to_string(),
     });

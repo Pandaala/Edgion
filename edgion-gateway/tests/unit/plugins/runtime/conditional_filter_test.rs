@@ -485,7 +485,7 @@ fn conditional_request_filter_carries_dye_plan() {
     use crate::plugins::runtime::dye_plan::CompiledDyePlan;
     use edgion_resources::resources::edgion_plugins::DyeSuite;
 
-    let suite: DyeSuite = serde_yaml::from_str("request:\n  - name: X-T\n").unwrap();
+    let suite: DyeSuite = yaml_serde::from_str("request:\n  - name: X-T\n").unwrap();
     let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();
     let (inner, _) = CountingFilter::new("Canary");
     let filter = ConditionalRequestFilter::with_alias_and_dye(Box::new(inner), None, None, Some(plan.clone()));

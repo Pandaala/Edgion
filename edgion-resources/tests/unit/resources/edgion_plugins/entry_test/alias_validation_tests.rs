@@ -50,7 +50,7 @@ alias: auth-internal
 type: Cors
 config: {}
 "#;
-    let entry: PluginEntry = serde_yaml::from_str(yaml).expect("yaml parse");
+    let entry: PluginEntry = yaml_serde::from_str(yaml).expect("yaml parse");
     assert_eq!(entry.alias.as_deref(), Some("auth-internal"));
     assert!(matches!(entry.plugin, EdgionPlugin::Cors(_)));
 

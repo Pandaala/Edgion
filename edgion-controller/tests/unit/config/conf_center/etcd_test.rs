@@ -61,7 +61,7 @@ fn test_deserialize_minimal() {
     let yaml = r#"
 endpoints: ["http://127.0.0.1:2379"]
 "#;
-    let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: EtcdConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.endpoints, vec!["http://127.0.0.1:2379"]);
     assert_eq!(config.key_prefix, "/edgion");
     assert!(config.auth.is_none());
@@ -81,7 +81,7 @@ auth:
   username: root
   password: changeme
 "#;
-    let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: EtcdConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.endpoints.len(), 2);
     assert_eq!(config.key_prefix, "/my-app");
     assert_eq!(config.connect_timeout_ms, Some(3000));

@@ -1,7 +1,7 @@
 use crate::resources::edgion_plugins::EdgionPlugins;
 
 fn validate(yaml: &str) -> Vec<String> {
-    let plugins: EdgionPlugins = serde_yaml::from_str(yaml).expect("deserialize EdgionPlugins");
+    let plugins: EdgionPlugins = yaml_serde::from_str(yaml).expect("deserialize EdgionPlugins");
     plugins.validate_plugins()
 }
 

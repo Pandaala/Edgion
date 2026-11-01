@@ -1323,7 +1323,7 @@ mod tests {
             "QueryLookup/DynamicTest/updates/recovered/11_EdgionPlugins_executor.yaml",
         ] {
             let plugins: edgion_resources::EdgionPlugins =
-                serde_yaml::from_str(&std::fs::read_to_string(root.join(path)).unwrap()).unwrap();
+                yaml_serde::from_str(&std::fs::read_to_string(root.join(path)).unwrap()).unwrap();
             assert!(
                 plugins.validate_plugins().is_empty(),
                 "{path}: {:?}",
@@ -1337,7 +1337,7 @@ mod tests {
                 }
             }
         }
-        let bad: edgion_resources::EdgionPlugins = serde_yaml::from_str(
+        let bad: edgion_resources::EdgionPlugins = yaml_serde::from_str(
             &std::fs::read_to_string(
                 root.join("QueryLookup/DynamicTest/updates/invalid/11_EdgionPlugins_executor.yaml"),
             )
@@ -1358,12 +1358,12 @@ mod tests {
             let text = std::fs::read_to_string(path).unwrap();
             let yaml = text.split_once("```yaml\n").unwrap().1.split_once("\n```").unwrap().0;
             let mut plugin_count = 0;
-            for document in serde_yaml::Deserializer::from_str(yaml) {
-                let value = <serde_yaml::Value as serde::Deserialize>::deserialize(document).unwrap();
+            for document in yaml_serde::Deserializer::from_str(yaml) {
+                let value = <yaml_serde::Value as serde::Deserialize>::deserialize(document).unwrap();
                 if value["kind"].as_str() != Some("EdgionPlugins") {
                     continue;
                 }
-                let plugin: edgion_resources::EdgionPlugins = serde_yaml::from_value(value).unwrap();
+                let plugin: edgion_resources::EdgionPlugins = yaml_serde::from_value(value).unwrap();
                 assert!(
                     plugin.validate_plugins().is_empty(),
                     "{language}: {:?}",

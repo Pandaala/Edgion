@@ -75,7 +75,7 @@ async fn capture_original(ctx: &TestContext, kind: &str, ns: &str, name: &str) -
 }
 
 async fn apply_value(ctx: &TestContext, value: &serde_json::Value) -> Result<(), String> {
-    ctx.apply_yaml(&serde_yaml::to_string(value).map_err(|e| e.to_string())?)
+    ctx.apply_yaml(&yaml_serde::to_string(value).map_err(|e| e.to_string())?)
         .await
 }
 

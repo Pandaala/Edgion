@@ -180,9 +180,9 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
         "edgion-tests/k8s/conf/TLSRoute/StreamPlugins/DynamicTest/updates/empty/EdgionStreamPlugins.yaml",
         "edgion-tests/k8s/conf/TLSRoute/StreamPlugins/DynamicTest/updates/stage1_only/EdgionStreamPlugins.yaml",
     ];
-    fn assert_reference_shapes(value: &serde_yaml::Value) {
+    fn assert_reference_shapes(value: &yaml_serde::Value) {
         match value {
-            serde_yaml::Value::Mapping(fields) => {
+            yaml_serde::Value::Mapping(fields) => {
                 for (key, child) in fields {
                     if matches!(key.as_str(), Some("allowRefs" | "denyRefs")) {
                         for reference in child.as_sequence().expect("ACL references must be an object array") {
@@ -194,7 +194,7 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
                     assert_reference_shapes(child);
                 }
             }
-            serde_yaml::Value::Sequence(values) => {
+            yaml_serde::Value::Sequence(values) => {
                 for child in values {
                     assert_reference_shapes(child);
                 }
@@ -208,8 +208,8 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
     for path in paths {
         let input =
             std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(path)).unwrap();
-        for document in serde_yaml::Deserializer::from_str(&input) {
-            let value = serde_yaml::Value::deserialize(document).unwrap();
+        for document in yaml_serde::Deserializer::from_str(&input) {
+            let value = yaml_serde::Value::deserialize(document).unwrap();
             if value.is_null() {
                 continue;
             }
@@ -217,12 +217,12 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
             macro_rules! decode {
                 ($ty:ty) => {{
                     let _: $ty =
-                        serde_yaml::from_value(value.clone()).unwrap_or_else(|error| panic!("{path}: {error}"));
+                        yaml_serde::from_value(value.clone()).unwrap_or_else(|error| panic!("{path}: {error}"));
                 }};
             }
             match value["kind"].as_str().expect("resource kind") {
                 "EdgionConfigData" => {
-                    let owner: EdgionConfigData = serde_yaml::from_value(value.clone()).unwrap();
+                    let owner: EdgionConfigData = yaml_serde::from_value(value.clone()).unwrap();
                     if let crate::resources::edgion_config_data::ConfigEntry::IpList(data) = &owner.spec.data {
                         let (matcher, errors) =
                             crate::matcher::ip_cidr_helpers::build_grouped_matcher_partial(&data.items);
@@ -244,7 +244,7 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
                     }
                 }
                 "EdgionPlugins" => {
-                    let owner: EdgionPlugins = serde_yaml::from_value(value.clone()).unwrap();
+                    let owner: EdgionPlugins = yaml_serde::from_value(value.clone()).unwrap();
                     let errors = owner.validate_plugins();
                     if !errors.is_empty() {
                         invalid_policies.push((path, owner.metadata.name.unwrap(), errors));
@@ -253,7 +253,7 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
                 "EdgionStreamPlugins" => {
                     use crate::resources::edgion_plugins::PluginValidation;
                     use crate::resources::edgion_stream_plugins::EdgionStreamPlugin;
-                    let owner: EdgionStreamPlugins = serde_yaml::from_value(value.clone()).unwrap();
+                    let owner: EdgionStreamPlugins = yaml_serde::from_value(value.clone()).unwrap();
                     for entry in owner.spec.plugins.iter().flatten() {
                         let error = match &entry.plugin {
                             EdgionStreamPlugin::IpRestriction(cfg) => cfg.validation_error(),

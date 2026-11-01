@@ -66,7 +66,7 @@ fn test_gateway(proof_epoch: &str) -> Gateway {
 }
 
 fn test_acme() -> EdgionAcme {
-    serde_yaml::from_str(
+    yaml_serde::from_str(
         r#"
 apiVersion: edgion.io/v1
 kind: EdgionAcme

@@ -28,7 +28,7 @@ fn header_matches_decode_first_equivalent_name_in_order() {
         duplicates.push(serde_json::json!({"name": "X-Mode", "value": "ignored"}));
         let input = serde_json::json!({"headers": duplicates});
         let json: super::HTTPRouteMatch = serde_json::from_value(input.clone()).unwrap();
-        let yaml: super::HTTPRouteMatch = serde_yaml::from_str(&serde_yaml::to_string(&input).unwrap()).unwrap();
+        let yaml: super::HTTPRouteMatch = yaml_serde::from_str(&yaml_serde::to_string(&input).unwrap()).unwrap();
         for parsed in [json, yaml] {
             let headers = parsed.headers.as_ref().unwrap();
             assert_eq!(headers.len(), 2);

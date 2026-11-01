@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn defaults_leave_geoip_unconfigured_and_safe() {
-    let cfg: GeoIpConfig = serde_yaml::from_str("{}").unwrap();
+    let cfg: GeoIpConfig = yaml_serde::from_str("{}").unwrap();
     assert!(cfg.db_path.is_none());
     assert!(cfg.update_url.is_none());
     assert_eq!(cfg.update_interval_sec, 86400);
@@ -17,7 +17,7 @@ db_path: /var/lib/edgion/geoip/db.mmdb
 update_url: https://mirror.internal/geo.mmdb
 max_db_bytes: 1024
 "#;
-    let cfg: GeoIpConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: GeoIpConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(cfg.db_path, Some(PathBuf::from("/var/lib/edgion/geoip/db.mmdb")));
     assert_eq!(cfg.max_db_bytes, 1024);
 }
@@ -86,7 +86,7 @@ fn disabled_updater_leaves_updater_only_values_inert() {
 #[test]
 fn camel_case_key_is_rejected() {
     let yaml = "dbPath: /tmp/x.mmdb\n";
-    let err = serde_yaml::from_str::<GeoIpConfig>(yaml).unwrap_err();
+    let err = yaml_serde::from_str::<GeoIpConfig>(yaml).unwrap_err();
     assert!(err.to_string().contains("dbPath"), "got: {err}");
 }
 

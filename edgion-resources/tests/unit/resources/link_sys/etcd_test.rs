@@ -16,7 +16,7 @@ spec:
       - "http://etcd-server:2379"
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     assert_eq!(link_sys.metadata.name.as_deref(), Some("etcd-simple"));
     assert_eq!(link_sys.metadata.namespace.as_deref(), Some("test"));
     assert_eq!(link_sys.spec.config.system_type(), SystemType::Etcd);
@@ -47,7 +47,7 @@ spec:
         namespace: credentials
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     let auth = etcd_config.auth.as_ref().expect("Auth should be present");
@@ -75,7 +75,7 @@ spec:
         name: etcd-client-tls
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     let tls = etcd_config.tls.as_ref().expect("TLS should be present");
@@ -108,7 +108,7 @@ spec:
       enabled: true
       clientKey: "INLINE_PRIVATE_KEY_SHOULD_FAIL"
 "#;
-    let r: Result<LinkSys, _> = serde_yaml::from_str(yaml);
+    let r: Result<LinkSys, _> = yaml_serde::from_str(yaml);
     assert!(
         r.is_err(),
         "unknown TLS field must be rejected by TlsConfig's deny_unknown_fields"
@@ -133,7 +133,7 @@ spec:
       request: 10000
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     let timeout = etcd_config.timeout.as_ref().expect("Timeout should be present");
@@ -160,7 +160,7 @@ spec:
       permitWithoutStream: true
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     let keep_alive = etcd_config.keep_alive.as_ref().expect("KeepAlive should be present");
@@ -197,7 +197,7 @@ spec:
     namespace: "/my-app/"
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     assert_eq!(etcd_config.endpoints.len(), 2);
@@ -240,7 +240,7 @@ fn test_serialize_etcd_config() {
         status: None,
     };
 
-    let yaml = serde_yaml::to_string(&link_sys).expect("Failed to serialize");
+    let yaml = yaml_serde::to_string(&link_sys).expect("Failed to serialize");
     assert!(yaml.contains("type: etcd"));
     assert!(yaml.contains("endpoints:"));
     assert!(yaml.contains("http://etcd:2379"));
@@ -270,7 +270,7 @@ spec:
       enabled: true
 "#;
 
-    let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+    let link_sys: LinkSys = yaml_serde::from_str(yaml).expect("Failed to deserialize");
     let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
     let auth = etcd_config.auth.as_ref().expect("Auth should be present");
@@ -285,21 +285,21 @@ spec:
 #[test]
 fn etcd_auth_rejects_inline_password() {
     let yaml = "secretRef:\n  name: e\npassword: leaked";
-    let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<EtcdAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn etcd_auth_rejects_inline_username() {
     let yaml = "secretRef:\n  name: e\nusername: admin";
-    let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<EtcdAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn etcd_auth_yaml_roundtrip_unchanged() {
     let yaml = "secretRef:\n  name: etcd-creds\n  namespace: default";
-    let auth: super::EtcdAuth = serde_yaml::from_str(yaml).unwrap();
+    let auth: super::EtcdAuth = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(auth.slot.secret_ref.name, "etcd-creds");
     assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("default"));
     assert!(auth.slot.secret.is_none());
@@ -308,7 +308,7 @@ fn etcd_auth_yaml_roundtrip_unchanged() {
 #[test]
 fn etcd_auth_rejects_unknown_field() {
     let yaml = "secretRef:\n  name: x\nbogus: 1";
-    let r: Result<super::EtcdAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<super::EtcdAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err());
 }
 

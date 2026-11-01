@@ -30,7 +30,7 @@ fn bundle(source: &str) -> EdgionConfigData {
 fn local_inventory_reports_root_membership_and_strict_failure_separately() {
     let resource =
         bundle("SecAction \"id:3,phase:1,pass,tag:php,tag:php\"\nSecAction \"id:1,phase:2,pass,tag:java\"\n");
-    let selected: WafRuleSelection = serde_yaml::from_str("include: {tag: php}\nexclude: {tag: unknown}\n").unwrap();
+    let selected: WafRuleSelection = yaml_serde::from_str("include: {tag: php}\nexclude: {tag: unknown}\n").unwrap();
     let inputs = [resource];
     let report = WafConfig::inspect_local_bundles(&inputs, &selected, WafTagQuery::Catalog, 0).unwrap();
     assert!(report.inventory_complete);
@@ -98,7 +98,7 @@ fn pagination_reuses_id_order_and_output_truncation_does_not_change_selection() 
 #[test]
 fn incomplete_inventory_never_reports_zero_matches_as_known() {
     let inputs = [bundle("SecRule private-bad-source")];
-    let selection: WafRuleSelection = serde_yaml::from_str("include: {tag: unknown}").unwrap();
+    let selection: WafRuleSelection = yaml_serde::from_str("include: {tag: unknown}").unwrap();
     let report = WafConfig::inspect_local_bundles(&inputs, &selection, WafTagQuery::Selected, 0).unwrap();
     assert!(!report.inventory_complete);
     assert_eq!(report.total_ids, None);

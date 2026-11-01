@@ -14,7 +14,7 @@ fn health_check_port_validation_preserves_inheritance_and_checks_all_protocols()
             active["type"] = serde_json::json!(protocol);
             let document = serde_json::json!({"active": active});
             let json: ServiceHealthCheck = serde_json::from_value(document.clone()).unwrap();
-            let yaml: ServiceHealthCheck = serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
+            let yaml: ServiceHealthCheck = yaml_serde::from_str(&yaml_serde::to_string(&document).unwrap()).unwrap();
             for config in [json, yaml] {
                 assert_eq!(config.active.as_ref().unwrap().port, expected_port, "{document}");
                 assert_eq!(config.get_validation_error(), expected_error, "{document}");
@@ -29,7 +29,7 @@ fn health_check_port_rejects_values_outside_the_unsigned_representation() {
     for port in [serde_json::json!(-1), serde_json::json!(65536)] {
         let document = serde_json::json!({"active": {"port": port}});
         assert!(serde_json::from_value::<ServiceHealthCheck>(document.clone()).is_err());
-        assert!(serde_yaml::from_str::<ServiceHealthCheck>(&serde_yaml::to_string(&document).unwrap()).is_err());
+        assert!(yaml_serde::from_str::<ServiceHealthCheck>(&yaml_serde::to_string(&document).unwrap()).is_err());
     }
 }
 
@@ -41,7 +41,7 @@ active:
   path: /healthz
 "#;
 
-    let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize minimal config");
+    let cfg: ServiceHealthCheck = yaml_serde::from_str(yaml).expect("deserialize minimal config");
     let active = cfg.active.expect("active config");
     assert_eq!(active.r#type, HealthCheckType::Http);
     assert_eq!(active.path.as_deref(), Some("/healthz"));
@@ -67,7 +67,7 @@ active:
   host: backend.internal
 "#;
 
-    let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize full config");
+    let cfg: ServiceHealthCheck = yaml_serde::from_str(yaml).expect("deserialize full config");
     let active = cfg.active.expect("active config");
     assert_eq!(active.r#type, HealthCheckType::Tcp);
     assert_eq!(active.port, Some(9090));
@@ -104,7 +104,7 @@ active:
   grpcServiceName: "my.package.MyService"
 "#;
 
-    let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize grpc config");
+    let cfg: ServiceHealthCheck = yaml_serde::from_str(yaml).expect("deserialize grpc config");
     assert!(cfg.get_validation_error().is_none());
     let active = cfg.active.expect("active config");
     assert_eq!(active.r#type, HealthCheckType::Grpc);
@@ -120,7 +120,7 @@ active:
   port: 9090
 "#;
 
-    let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize grpc config");
+    let cfg: ServiceHealthCheck = yaml_serde::from_str(yaml).expect("deserialize grpc config");
     assert!(cfg.get_validation_error().is_none());
     let active = cfg.active.expect("active config");
     assert_eq!(active.r#type, HealthCheckType::Grpc);
@@ -138,7 +138,7 @@ active:
   healthyThreshold: 0
 "#;
 
-    let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize invalid config");
+    let cfg: ServiceHealthCheck = yaml_serde::from_str(yaml).expect("deserialize invalid config");
     assert!(cfg.get_validation_error().is_some());
 }
 
@@ -163,8 +163,8 @@ fn test_serde_roundtrip() {
         }),
     };
 
-    let yaml = serde_yaml::to_string(&original).expect("serialize");
-    let decoded: ServiceHealthCheck = serde_yaml::from_str(&yaml).expect("deserialize");
+    let yaml = yaml_serde::to_string(&original).expect("serialize");
+    let decoded: ServiceHealthCheck = yaml_serde::from_str(&yaml).expect("deserialize");
     assert_eq!(decoded.active, original.active);
 }
 #[test]

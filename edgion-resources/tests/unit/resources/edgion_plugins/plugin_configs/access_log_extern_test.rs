@@ -101,6 +101,6 @@ fn blocklist_does_not_leak_across_sources() {
 
 #[test]
 fn source_deserializes_from_camel_case() {
-    let f: AccessLogExternField = serde_yaml::from_str("key: ua\nfrom: respHeader\nname: content-type\n").unwrap();
+    let f: AccessLogExternField = yaml_serde::from_str("key: ua\nfrom: respHeader\nname: content-type\n").unwrap();
     assert_eq!(f.from, LogExtSource::RespHeader);
 }

@@ -76,7 +76,7 @@ impl BackendTlsStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let resource = serde_yaml::from_str::<serde_json::Value>(include_str!(concat!(
+                    let resource = yaml_serde::from_str::<serde_json::Value>(include_str!(concat!(
                         env!("CARGO_MANIFEST_DIR"),
                         "/integration/fixtures/status-admission/BackendTLSPolicy_edgion-test_both-invalid.yaml"
                     )))
@@ -100,7 +100,7 @@ impl BackendTlsStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let resource = serde_yaml::from_str::<serde_json::Value>(include_str!(concat!(
+                    let resource = yaml_serde::from_str::<serde_json::Value>(include_str!(concat!(
                         env!("CARGO_MANIFEST_DIR"),
                         "/integration/fixtures/status-admission/BackendTLSPolicy_edgion-test_neither-invalid.yaml"
                     )))

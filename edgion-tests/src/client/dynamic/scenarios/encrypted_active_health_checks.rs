@@ -115,7 +115,7 @@ async fn apply(ctx: &ScenarioCtx, document: Value) -> Result<()> {
     crate::dynamic::apply::apply_yaml_documents(
         &client,
         Path::new("encrypted-active-health-runtime.yaml"),
-        &serde_yaml::to_string(&document)?,
+        &yaml_serde::to_string(&document)?,
     )
     .await
 }

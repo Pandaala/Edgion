@@ -530,7 +530,7 @@ async fn egc_bad_max_body_size_rejected() {
 fn egc_plugin_policy_invalid_names_surface_in_preparse() {
     let ctx = make_ctx_with_secrets(HashMap::new());
     let spec: EdgionGatewayConfigSpec =
-        serde_yaml::from_str("pluginPolicy:\n  deny:\n    - name: http/Unknown").unwrap();
+        yaml_serde::from_str("pluginPolicy:\n  deny:\n    - name: http/Unknown").unwrap();
     let mut egc = EdgionGatewayConfig::new("cluster-egc-policy", spec);
     let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
     assert!(errors
@@ -541,7 +541,7 @@ fn egc_plugin_policy_invalid_names_surface_in_preparse() {
         "advisory validation must retain policy input"
     );
 
-    egc.spec.plugin_policy = Some(serde_yaml::from_str("allow: []").unwrap());
+    egc.spec.plugin_policy = Some(yaml_serde::from_str("allow: []").unwrap());
     assert!(EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx).is_empty());
 }
 

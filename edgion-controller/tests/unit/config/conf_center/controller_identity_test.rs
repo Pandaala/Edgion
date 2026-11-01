@@ -58,8 +58,8 @@ fn missing_or_invalid_identity_never_falls_back() {
 
 #[test]
 fn deserialization_preserves_explicit_empty_identity() {
-    let omitted: super::super::KubernetesConfig = serde_yaml::from_str("{}").unwrap();
-    let empty: super::super::KubernetesConfig = serde_yaml::from_str("controller_name: ''").unwrap();
+    let omitted: super::super::KubernetesConfig = yaml_serde::from_str("{}").unwrap();
+    let empty: super::super::KubernetesConfig = yaml_serde::from_str("controller_name: ''").unwrap();
     assert_eq!(omitted.controller_name, None);
     assert_eq!(empty.controller_name.as_deref(), Some(""));
 }

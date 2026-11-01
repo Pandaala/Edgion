@@ -1,7 +1,7 @@
 use super::*;
 
 fn parse(extra: &str) -> GuardrailConfig {
-    serde_yaml::from_str(&format!(
+    yaml_serde::from_str(&format!(
         "target:\n  url: https://guard.example\nrequest:\n  path:\n    template: /v1/decision\n{extra}"
     ))
     .unwrap()
@@ -21,7 +21,7 @@ fn valid_minimal_config_and_defaults() {
 
 #[test]
 fn plugin_variant_is_request_only() {
-    let plugin: crate::resources::edgion_plugins::EdgionPlugin = serde_yaml::from_str(
+    let plugin: crate::resources::edgion_plugins::EdgionPlugin = yaml_serde::from_str(
             "type: Guardrail\nconfig:\n  target:\n    url: https://guard.example\n  request:\n    path:\n      template: /v1/decision\n",
         )
         .unwrap();

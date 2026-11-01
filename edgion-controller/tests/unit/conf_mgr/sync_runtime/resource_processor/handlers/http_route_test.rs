@@ -497,7 +497,7 @@ spec:
 {origins_yaml}
 "#
     );
-    serde_yaml::from_str(&yaml).expect("HTTPRoute yaml must parse")
+    yaml_serde::from_str(&yaml).expect("HTTPRoute yaml must parse")
 }
 
 fn indices_only(details: Vec<(usize, String)>) -> Vec<usize> {
@@ -535,7 +535,7 @@ spec:
         attempts: 8
 {second_rule}"#
     );
-    serde_yaml::from_str(&yaml).expect("HTTPRoute yaml must parse")
+    yaml_serde::from_str(&yaml).expect("HTTPRoute yaml must parse")
 }
 
 #[tokio::test]
@@ -740,7 +740,7 @@ fn model_route_positive_override_promotes_zero_weight_slot_for_admission() {
             "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"}
         }]),
     );
-    let config: AiProxyConfig = serde_yaml::from_str(
+    let config: AiProxyConfig = yaml_serde::from_str(
         r#"
 api: openaiChat
 modelRoutes:
@@ -1423,7 +1423,7 @@ spec:
     - filters:
         - type: CORS
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(indices_only(details.clone()), vec![0]);
     assert!(
@@ -1485,7 +1485,7 @@ spec:
               - name: x-test
                 value: "1"
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     assert!(find_invalid_rule_details(&route, "default").is_empty());
 }
 
@@ -1508,7 +1508,7 @@ spec:
                 allowOrigins:
                   - "no-scheme.example.com"
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(indices_only(details.clone()), vec![0]);
     assert!(
@@ -1539,7 +1539,7 @@ spec:
           cors:
             allowOrigins: ["https://good.example.com"]
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
 }
 
@@ -1698,7 +1698,7 @@ spec:
         cookieConfig:
           lifetimeType: Permanent
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(indices_only(details.clone()), vec![0]);
     assert!(
@@ -1721,7 +1721,7 @@ spec:
     - sessionPersistence:
         absoluteTimeout: 1d
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(indices_only(details.clone()), vec![0]);
     assert!(details[0].1.contains("sessionPersistence"), "got: {}", details[0].1);
@@ -1757,7 +1757,7 @@ spec:
                 value: "1"
 "#;
     let handler = HttpRouteHandler::default();
-    let mut route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let mut route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     handler.update_status(&mut route, &make_ctx(), &[]);
 
     let parents = &route.status.as_ref().expect("status").parents;
@@ -1824,7 +1824,7 @@ fn external_auth_response_header_policy_status_and_recovery() {
             "spec": {"parentRefs": [{"name": "gw"}], "rules": [invalid, {}]}
         });
         // Exercise the common FileSystem/etcd decoding boundary.
-        let mut route: HTTPRoute = parse_resource_content(&serde_yaml::to_string(&input).unwrap()).unwrap();
+        let mut route: HTTPRoute = parse_resource_content(&yaml_serde::to_string(&input).unwrap()).unwrap();
         let handler = HttpRouteHandler::default();
         let ctx = make_ctx();
         handler.update_status(&mut route, &ctx, &[]);
@@ -2033,7 +2033,7 @@ spec:
             kind: NotAPlugin
             name: x
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(
         indices_only(details.clone()),
@@ -2065,7 +2065,7 @@ spec:
             kind: EdgionPlugins
             name: my-plugins
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     assert!(find_invalid_rule_details(&route, "default").is_empty());
 }
 
@@ -2145,7 +2145,7 @@ spec:
                 kind: NotAPlugin
                 name: x
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(
         indices_only(details.clone()),
@@ -2178,7 +2178,7 @@ spec:
             kind: EdgionPlugins
             name: my-plugins
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(
         indices_only(details.clone()),
@@ -2218,7 +2218,7 @@ spec:
                 kind: LBPolicyConsistentHash
                 name: header.x-user-id
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(
         indices_only(details.clone()),
@@ -2254,7 +2254,7 @@ spec:
         - name: svc
           port: 80
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(
         indices_only(details.clone()),
@@ -2291,7 +2291,7 @@ spec:
           requestRedirect:
             scheme: https
 "#;
-    let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+    let route: HTTPRoute = yaml_serde::from_str(yaml).unwrap();
     let details = find_invalid_rule_details(&route, "default");
     assert_eq!(indices_only(details.clone()), vec![0]);
     assert!(details[0].1.contains("httpRouteFilterRequestRedirect"));

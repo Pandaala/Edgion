@@ -26,8 +26,8 @@ static CREATE_SEQ: AtomicU64 = AtomicU64::new(0);
 ///
 /// If parsing fails, returns the original content unchanged.
 fn format_yaml_pretty(content: &str) -> String {
-    match serde_yaml::from_str::<serde_yaml::Value>(content) {
-        Ok(value) => serde_yaml::to_string(&value).unwrap_or_else(|_| content.to_string()),
+    match yaml_serde::from_str::<yaml_serde::Value>(content) {
+        Ok(value) => yaml_serde::to_string(&value).unwrap_or_else(|_| content.to_string()),
         Err(_) => content.to_string(),
     }
 }

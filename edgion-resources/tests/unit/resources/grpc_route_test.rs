@@ -58,7 +58,7 @@ fn method_match_compile_policy_survives_json_and_yaml_roundtrip() {
         assert_eq!(matcher.compile_method().is_ok(), valid, "{source}");
         let wire = serde_json::to_value(&matcher).unwrap();
         let json_copy: GRPCRouteMatch = serde_json::from_value(wire.clone()).unwrap();
-        let yaml_copy: GRPCRouteMatch = serde_yaml::from_str(&serde_yaml::to_string(&matcher).unwrap()).unwrap();
+        let yaml_copy: GRPCRouteMatch = yaml_serde::from_str(&yaml_serde::to_string(&matcher).unwrap()).unwrap();
         assert_eq!(json_copy.compile_method().is_ok(), valid, "{source}");
         assert_eq!(yaml_copy.compile_method().is_ok(), valid, "{source}");
         assert_eq!(serde_json::to_value(yaml_copy).unwrap(), wire);

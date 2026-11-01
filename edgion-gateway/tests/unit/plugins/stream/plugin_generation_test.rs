@@ -9,7 +9,7 @@ const CONNECTION: StreamStages = StreamStages {
 
 fn source() -> Arc<EdgionStreamPlugins> {
     Arc::new(
-        serde_yaml::from_str(
+        yaml_serde::from_str(
             r#"
 apiVersion: edgion.io/v1alpha1
 kind: EdgionStreamPlugins
@@ -29,7 +29,7 @@ spec:
 }
 
 fn policy(action: &str) -> CompiledPluginPolicy {
-    serde_yaml::from_str::<PluginPolicyConfig>(&format!(
+    yaml_serde::from_str::<PluginPolicyConfig>(&format!(
         "deny:\n  - name: stream/ConnectionRateLimit\n    action: {action}"
     ))
     .unwrap()
@@ -122,7 +122,7 @@ async fn denied_and_unreferenced_stages_never_construct_entries() {
 async fn failed_entries_stay_fail_closed_and_do_not_pollute_bypassed_scope() {
     let mut source = (*source()).clone();
     source.spec.plugins = Some(
-        serde_yaml::from_str(
+        yaml_serde::from_str(
             r#"
 - type: GeoIpLocation
   config: {}
@@ -143,7 +143,7 @@ async fn failed_entries_stay_fail_closed_and_do_not_pollute_bypassed_scope() {
         StreamPluginResult::Deny(_)
     ));
     let bypass =
-        serde_yaml::from_str::<PluginPolicyConfig>("deny:\n  - name: stream/GeoIpLocation\n    action: bypass")
+        yaml_serde::from_str::<PluginPolicyConfig>("deny:\n  - name: stream/GeoIpLocation\n    action: bypass")
             .unwrap()
             .compile()
             .unwrap();

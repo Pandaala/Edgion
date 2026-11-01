@@ -126,7 +126,7 @@ vars:
       path: "data.tier"
     default: "free"
 "#;
-    let config: WebhookKeyGetConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: WebhookKeyGetConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.vars.len(), 1);
     assert_eq!(config.vars[0].name, "tenant_tier");
     assert_eq!(config.vars[0].webhook_ref, "edgion-default/tenant-resolver");
@@ -145,7 +145,7 @@ vars:
 fn test_webhook_extract_serde() {
     let yaml = r#"source: header
 name: "X-Key""#;
-    let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
+    let extract: WebhookExtract = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         extract,
         WebhookExtract::Header {
@@ -155,7 +155,7 @@ name: "X-Key""#;
 
     let yaml = r#"source: body
 path: "result.value""#;
-    let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
+    let extract: WebhookExtract = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         extract,
         WebhookExtract::Body {
@@ -164,12 +164,12 @@ path: "result.value""#;
     );
 
     let yaml = "source: bodyText";
-    let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
+    let extract: WebhookExtract = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(extract, WebhookExtract::BodyText);
 
     let yaml = r#"source: cookie
 name: "sess""#;
-    let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
+    let extract: WebhookExtract = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         extract,
         WebhookExtract::Cookie {

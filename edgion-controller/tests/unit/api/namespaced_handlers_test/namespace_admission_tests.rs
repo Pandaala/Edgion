@@ -22,7 +22,7 @@ fn document(kind: &str) -> Value {
 
 fn encode(value: &Value, yaml: bool) -> String {
     if yaml {
-        serde_yaml::to_string(value).unwrap()
+        yaml_serde::to_string(value).unwrap()
     } else {
         value.to_string()
     }
@@ -102,7 +102,7 @@ async fn admitted_create_and_update_persist_url_identity_for_json_and_yaml() {
                     assert_eq!(created["metadata"]["namespace"], ns);
                     assert_eq!(created["metadata"]["uid"], "original-uid");
                     let path = tmp.path().join(ns).join(format!("{kind}_{ns}_sample.yaml"));
-                    let stored: Value = serde_yaml::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+                    let stored: Value = yaml_serde::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
                     assert_eq!(stored["metadata"], created["metadata"]);
                     assert!(!tmp.path().join("cluster").join(format!("{kind}__sample.yaml")).exists());
 
@@ -139,7 +139,7 @@ async fn admitted_create_and_update_persist_url_identity_for_json_and_yaml() {
                         updated["metadata"]["resourceVersion"],
                         created["metadata"]["resourceVersion"]
                     );
-                    let stored: Value = serde_yaml::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+                    let stored: Value = yaml_serde::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
                     assert_eq!(stored["metadata"], updated["metadata"]);
                 }
             }

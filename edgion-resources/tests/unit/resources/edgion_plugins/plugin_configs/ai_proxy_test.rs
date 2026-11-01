@@ -56,7 +56,7 @@ fn ai_proxy_defaults_are_stable() {
 
 #[test]
 fn model_routes_validate_wildcards_headers_selectors_and_ambiguity() {
-    let valid: AiProxyConfig = serde_yaml::from_str(
+    let valid: AiProxyConfig = yaml_serde::from_str(
         r#"
 api: openaiChat
 modelRoutes:
@@ -87,11 +87,11 @@ modelRoutes:
         r#"modelRoutes: [{match: {model: a}, action: {candidates: []}}]"#,
         r#"modelRoutes: [{match: {model: a}, action: {rewrite: "alias*"}}]"#,
     ] {
-        let value: AiProxyConfig = serde_yaml::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
+        let value: AiProxyConfig = yaml_serde::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
         assert!(value.validation_error().is_some(), "accepted {yaml}");
     }
 
-    let ambiguous: AiProxyConfig = serde_yaml::from_str(
+    let ambiguous: AiProxyConfig = yaml_serde::from_str(
         r#"
 api: openaiChat
 modelRoutes:
@@ -117,7 +117,7 @@ fn model_route_headers_require_bounded_visible_ascii() {
         "modelRoutes: [{match: {model: a, headers: [{name: x-tier, value: \"bad\\nvalue\"}]}, action: {}}]".to_string(),
         "modelRoutes: [{match: {model: a, headers: [{name: x-tier, value: \"é\"}]}, action: {}}]".to_string(),
     ] {
-        let value: AiProxyConfig = serde_yaml::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
+        let value: AiProxyConfig = yaml_serde::from_str(&format!("api: openaiChat\n{yaml}")).unwrap();
         assert!(value.validation_error().is_some(), "accepted {yaml}");
     }
 
@@ -126,7 +126,7 @@ fn model_route_headers_require_bounded_visible_ascii() {
         "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize)
     );
     assert!(
-        serde_yaml::from_str::<AiProxyConfig>(&format!("api: openaiChat\n{boundary}"))
+        yaml_serde::from_str::<AiProxyConfig>(&format!("api: openaiChat\n{boundary}"))
             .unwrap()
             .validation_error()
             .is_none()
@@ -135,7 +135,7 @@ fn model_route_headers_require_bounded_visible_ascii() {
 
 #[test]
 fn backend_selection_has_no_inline_candidates_and_gates_passthrough() {
-    let error = serde_yaml::from_str::<AiProxyConfig>(
+    let error = yaml_serde::from_str::<AiProxyConfig>(
         r#"
 api: openaiChat
 backendSelection:
@@ -176,7 +176,7 @@ backendSelection:
 
 #[test]
 fn token_quota_defaults_fail_closed_and_are_bounded() {
-    let config: AiProxyConfig = serde_yaml::from_str(
+    let config: AiProxyConfig = yaml_serde::from_str(
         r#"
 api: openaiChat
 usageObservation: provider
@@ -243,7 +243,7 @@ fn token_quota_exceeded_actions_are_tagged_and_validated() {
         assert!(config(Some(throttle.clone())).validation_error().is_some());
     }
 
-    let parsed: AiTokenQuotaOnExceeded = serde_yaml::from_str("type: Downgrade\nmodel: chat-economy\n").unwrap();
+    let parsed: AiTokenQuotaOnExceeded = yaml_serde::from_str("type: Downgrade\nmodel: chat-economy\n").unwrap();
     assert_eq!(
         parsed,
         AiTokenQuotaOnExceeded::Downgrade {

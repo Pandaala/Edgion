@@ -108,7 +108,7 @@ pub static SCENARIO: &Scenario = &Scenario {
 
 #[cfg(test)]
 mod tests {
-    use serde_yaml::Value;
+    use yaml_serde::Value;
 
     const INITIAL_SECRET: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -120,7 +120,7 @@ mod tests {
     ));
 
     fn api_key(manifest: &str) -> String {
-        let value: Value = serde_yaml::from_str(manifest).unwrap();
+        let value: Value = yaml_serde::from_str(manifest).unwrap();
         value["stringData"]["api-key"].as_str().unwrap().to_string()
     }
 

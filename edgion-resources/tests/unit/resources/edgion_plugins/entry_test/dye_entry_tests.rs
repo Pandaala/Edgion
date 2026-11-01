@@ -18,7 +18,7 @@ fn dye_response(name: &str, on: &[DyeOutcome]) -> DyeSuite {
 #[test]
 fn entry_dye_serde_roundtrip() {
     let yaml = "type: Cors\nconfig: {}\ndye:\n  response:\n    - name: X-O\n      on: [success]\n";
-    let entry: RequestFilterEntry = serde_yaml::from_str(yaml).unwrap();
+    let entry: RequestFilterEntry = yaml_serde::from_str(yaml).unwrap();
     assert!(entry.dye.is_some());
     let json = serde_json::to_value(&entry).unwrap();
     assert_eq!(json["dye"]["response"][0]["name"], "X-O");

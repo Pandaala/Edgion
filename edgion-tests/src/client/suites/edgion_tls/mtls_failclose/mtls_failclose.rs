@@ -467,12 +467,12 @@ mod tests {
         assert!(!invalid_listener_conditions(&json!({}), "selected"));
     }
 
-    fn fixture(tree: &str, name: &str) -> serde_yaml::Value {
+    fn fixture(tree: &str, name: &str) -> yaml_serde::Value {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(tree)
             .join("conf/EdgionTls/mtls_failclose")
             .join(name);
-        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
     #[test]

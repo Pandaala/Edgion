@@ -145,7 +145,7 @@ async fn apply_phase(
     };
     let client =
         apply::build_client(&ctx.controller_url).map_err(|_| anyhow!("Credential phase client setup failed"))?;
-    let yaml = serde_yaml::to_string(&next).map_err(|_| anyhow!("Credential phase serialization failed"))?;
+    let yaml = yaml_serde::to_string(&next).map_err(|_| anyhow!("Credential phase serialization failed"))?;
     timeout(
         PHASE_TIMEOUT,
         apply::apply_yaml_documents(&client, &ctx.resolve(PLUGIN_FIXTURE), &yaml),
@@ -229,7 +229,7 @@ async fn check_secret_groups(ctx: &ScenarioCtx) -> Result<()> {
         .await
         .map_err(|_| anyhow!("Credential plugin fixture read failed"))?;
     let original: Value =
-        serde_yaml::from_str(&bytes).map_err(|_| anyhow!("Credential plugin fixture parse failed"))?;
+        yaml_serde::from_str(&bytes).map_err(|_| anyhow!("Credential plugin fixture parse failed"))?;
     ensure!(
         original["metadata"]["name"] == PLUGIN_NAME
             && original["metadata"]["namespace"] == PLUGIN_NAMESPACE

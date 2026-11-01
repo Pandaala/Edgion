@@ -114,7 +114,7 @@ fn sweep() -> SweepResult {
             let text =
                 std::fs::read_to_string(file).unwrap_or_else(|e| panic!("failed to read {}: {e}", file.display()));
 
-            for doc in serde_yaml::Deserializer::from_str(&text) {
+            for doc in yaml_serde::Deserializer::from_str(&text) {
                 let value: serde_json::Value = match serde::Deserialize::deserialize(doc) {
                     Ok(v) => v,
                     // Non-resource / non-YAML-object documents (e.g. an empty `---` separator) are

@@ -4,7 +4,7 @@ use crate::EdgionHttpContext;
 use edgion_resources::resources::edgion_plugins::DyeSuite;
 
 fn plan_declaring(name: &str) -> Arc<CompiledDyePlan> {
-    let suite: DyeSuite = serde_yaml::from_str(&format!("request:\n  - name: {name}\n")).unwrap();
+    let suite: DyeSuite = yaml_serde::from_str(&format!("request:\n  - name: {name}\n")).unwrap();
     CompiledDyePlan::compile(&suite, "canary").unwrap()
 }
 
@@ -85,7 +85,7 @@ fn strip_request_dye_once_ignores_response_direction_rules() {
     let mut req = RequestHeader::build("GET", b"/", None).unwrap();
     req.insert_header("X-O", "client-forged").unwrap();
 
-    let suite: DyeSuite = serde_yaml::from_str("response:\n  - name: X-O\n").unwrap();
+    let suite: DyeSuite = yaml_serde::from_str("response:\n  - name: X-O\n").unwrap();
     ctx.install_current_dye_plan(Some(CompiledDyePlan::compile(&suite, "canary").unwrap()));
     strip_once(&mut ctx, &mut req);
     // Response-direction rules never drive the request-side strip.

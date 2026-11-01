@@ -64,14 +64,14 @@ fn empty_values_is_rejected_for_cidr_too() {
 /// into an empty `values`, silently neutering the rule.
 #[test]
 fn unknown_field_in_rule_is_rejected() {
-    let rule = serde_yaml::from_str::<GeoRule>("source: DirectPeerIp\nkey: country\nvaluez: [\"RU\"]\n").unwrap();
+    let rule = yaml_serde::from_str::<GeoRule>("source: DirectPeerIp\nkey: country\nvaluez: [\"RU\"]\n").unwrap();
     assert!(rule.field_error(false).is_some());
     assert!(rule.values.is_empty());
 }
 
 #[test]
 fn unknown_field_in_group_is_rejected() {
-    let group = serde_yaml::from_str::<GeoRuleGroup>("name: g\nrulez: []\n").unwrap();
+    let group = yaml_serde::from_str::<GeoRuleGroup>("name: g\nrulez: []\n").unwrap();
     assert!(group.check_fields(false).is_some());
 }
 

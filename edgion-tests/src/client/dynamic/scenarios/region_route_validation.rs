@@ -492,7 +492,7 @@ async fn check_traffic(ctx: &TestContext, name: &str, phase: Phase, small: bool)
 async fn publish(ctx: &ScenarioCtx, phase: Phase, name: &str) -> Result<()> {
     if let Some(resource) = phase.resource() {
         ctx.test_ctx
-            .apply_yaml(&serde_yaml::to_string(&resource)?)
+            .apply_yaml(&yaml_serde::to_string(&resource)?)
             .await
             .map_err(anyhow::Error::msg)?;
     } else {
@@ -587,7 +587,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     // Consumers are applied once. Every subsequent mutation targets only the overlay.
     let initial = Phase::Initial.resource().context("initial overlay missing")?;
     ctx.test_ctx
-        .apply_yaml(&serde_yaml::to_string(&initial)?)
+        .apply_yaml(&yaml_serde::to_string(&initial)?)
         .await
         .map_err(anyhow::Error::msg)?;
     if k8s_mode() {
@@ -679,7 +679,7 @@ pub static SCENARIO: &Scenario = &Scenario {
 mod tests {
     use super::condition;
     use serde::Deserialize;
-    use serde_yaml::Value;
+    use yaml_serde::Value;
 
     #[test]
     fn status_checks_use_current_projection_and_reject_stale_generation() {
@@ -701,7 +701,7 @@ mod tests {
     }
 
     fn documents(content: &str) -> Vec<Value> {
-        serde_yaml::Deserializer::from_str(content)
+        yaml_serde::Deserializer::from_str(content)
             .map(|document| Value::deserialize(document).unwrap())
             .collect()
     }

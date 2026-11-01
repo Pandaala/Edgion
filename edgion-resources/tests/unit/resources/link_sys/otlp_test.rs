@@ -177,8 +177,8 @@ fn rejects_inline_fields_and_validates_resource_identity() {
     assert!(resource.validate_config().is_empty());
     resource.metadata.namespace = Some("private/invalid".into());
     assert_eq!(resource.validate_config(), ["invalid LinkSys reference"]);
-    let crd: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
+    let crd: yaml_serde::Value =
+        yaml_serde::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
     let discriminator =
         &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["type"];
     assert_eq!(discriminator["type"].as_str(), Some("string"));

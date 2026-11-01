@@ -271,7 +271,7 @@ key:
   - type: header
     name: "X-API-Key"
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.rate, 100);
     assert_eq!(
         config.key,
@@ -289,7 +289,7 @@ rate: 50
 key:
   - type: remoteIp
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.key, vec![KeyGet::RemoteIp]);
 }
 
@@ -301,7 +301,7 @@ rate: 50
 key:
   - type: remoteIpAndPath
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.key, vec![KeyGet::RemoteIpAndPath]);
 }
 
@@ -317,7 +317,7 @@ key:
     name: "X-API-Key"
   - type: path
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.rate, 100);
     assert_eq!(
         config.key,
@@ -340,7 +340,7 @@ fn test_yaml_omitted_key_defaults_to_remote_ip() {
     let yaml = r#"
 rate: 50
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.key, vec![KeyGet::RemoteIp]);
 }
 
@@ -352,7 +352,7 @@ fn test_yaml_explicit_empty_key_is_preserved() {
 rate: 50
 key: []
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(config.key.is_empty());
 }
 
@@ -519,7 +519,7 @@ skewTolerance: 1.5
 key:
   - type: remoteIp
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.scope, RateLimitLocalScope::Cluster);
     assert_eq!(config.rate, 1000);
     assert_eq!(config.skew_tolerance, 1.5);
@@ -531,7 +531,7 @@ fn test_yaml_scope_cluster_default_skew() {
 rate: 1000
 scope: Cluster
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.scope, RateLimitLocalScope::Cluster);
     assert_eq!(config.skew_tolerance, 1.2); // default
 }
@@ -541,7 +541,7 @@ fn test_yaml_scope_default_instance() {
     let yaml = r#"
 rate: 100
 "#;
-    let config: RateLimitLocalConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitLocalConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.scope, RateLimitLocalScope::Instance);
 }
 

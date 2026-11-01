@@ -26,13 +26,13 @@ fn supported_package_is_reproducible_and_keeps_exact_original_order() {
             "detectionOnly",
         ),
     ] {
-        let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+        let value: serde_json::Value = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(value["spec"]["waf"]["mode"], expected_mode);
         if expected_mode == "on" {
             assert_eq!(yaml.lines().filter(|line| *line == "    mode: \"on\"").count(), 1);
             assert_eq!(yaml.lines().filter(|line| *line == "    mode: on").count(), 0);
         } else {
-            assert_eq!(*yaml, serde_yaml::to_string(&value).unwrap());
+            assert_eq!(*yaml, yaml_serde::to_string(&value).unwrap());
         }
     }
     for name in ["standard", "strict"] {

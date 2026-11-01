@@ -82,7 +82,7 @@ async fn gateway_class_beta_create_and_get_share_selected_endpoint() {
         .create_one("GatewayClass", None, "edge", source.to_string())
         .await
         .unwrap();
-    let fetched: Value = serde_yaml::from_str(&storage.get_one("GatewayClass", None, "edge").await.unwrap()).unwrap();
+    let fetched: Value = yaml_serde::from_str(&storage.get_one("GatewayClass", None, "edge").await.unwrap()).unwrap();
     assert_eq!(fetched["apiVersion"], source["apiVersion"]);
     let requests = requests.lock();
     assert_eq!(requests.len(), 2);
@@ -330,7 +330,7 @@ async fn http_route_beta_create_and_get_use_selected_namespaced_endpoint() {
         .await
         .unwrap();
     let fetched: Value =
-        serde_yaml::from_str(&storage.get_one("HTTPRoute", Some("demo"), "route").await.unwrap()).unwrap();
+        yaml_serde::from_str(&storage.get_one("HTTPRoute", Some("demo"), "route").await.unwrap()).unwrap();
     assert_eq!(fetched["apiVersion"], source["apiVersion"]);
     let requests = captured.lock();
     assert_eq!(requests.len(), 2);
@@ -393,7 +393,7 @@ async fn gateway_beta_create_and_get_use_selected_namespaced_endpoint() {
         .await
         .unwrap();
     let fetched: Value =
-        serde_yaml::from_str(&storage.get_one("Gateway", Some("demo"), "edge").await.unwrap()).unwrap();
+        yaml_serde::from_str(&storage.get_one("Gateway", Some("demo"), "edge").await.unwrap()).unwrap();
     assert_eq!(fetched["apiVersion"], source["apiVersion"]);
     let requests = captured.lock();
     assert_eq!(requests.len(), 2);
@@ -1552,7 +1552,7 @@ async fn unconditional_update_surfaces_replace_conflict_without_server_retry() {
             "ConfigMap",
             Some("default"),
             "hot-config",
-            serde_yaml::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
+            yaml_serde::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
             None,
         )
         .await
@@ -1607,7 +1607,7 @@ async fn conditional_update_does_not_retry_replace_conflict() {
             "ConfigMap",
             Some("default"),
             "hot-config",
-            serde_yaml::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
+            yaml_serde::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
             Some("42"),
         )
         .await
@@ -1661,7 +1661,7 @@ async fn unconditional_update_does_not_retry_non_conflict_replace_error() {
             "ConfigMap",
             Some("default"),
             "hot-config",
-            serde_yaml::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
+            yaml_serde::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
             None,
         )
         .await
@@ -1704,7 +1704,7 @@ async fn unconditional_update_does_not_retry_a_persistent_conflict() {
             "ConfigMap",
             Some("default"),
             "hot-config",
-            serde_yaml::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
+            yaml_serde::to_string(&config_map_value(None, None, "requested")).expect("fixture must serialize"),
             None,
         )
         .await
@@ -1758,7 +1758,7 @@ async fn create_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
             "ReferenceGrant",
             Some("backend"),
             "allow-route",
-            serde_yaml::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
+            yaml_serde::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
         )
         .await
         .expect("v1beta1 create must succeed");
@@ -1841,7 +1841,7 @@ async fn update_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
             "ReferenceGrant",
             Some("backend"),
             "allow-route",
-            serde_yaml::to_string(&requested).expect("fixture must serialize"),
+            yaml_serde::to_string(&requested).expect("fixture must serialize"),
             Some("42"),
         )
         .await
@@ -1904,7 +1904,7 @@ async fn reference_grant_probe_propagates_forbidden_without_fallback() {
             "ReferenceGrant",
             Some("backend"),
             "allow-route",
-            serde_yaml::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
+            yaml_serde::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
         )
         .await
         .expect_err("forbidden probe must fail");

@@ -332,12 +332,12 @@ pub static SCENARIO: &Scenario = &Scenario {
 mod tests {
     #[test]
     fn k8s_unready_fixture_keeps_a_running_backend_out_of_ready_inventory() {
-        let deployment: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let deployment: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/bootstrap/01_Deployment_unready.yaml"
         )))
         .unwrap();
-        let service: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let service: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/unready.yaml"
         )))

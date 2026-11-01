@@ -841,10 +841,10 @@ async fn restore_geo_fixture(ctx: &TestContext) -> Result<(), String> {
     };
     let yaml = {
         let mut selected = None;
-        for document in serde_yaml::Deserializer::from_str(source) {
-            let value = serde_yaml::Value::deserialize(document).map_err(|error| error.to_string())?;
+        for document in yaml_serde::Deserializer::from_str(source) {
+            let value = yaml_serde::Value::deserialize(document).map_err(|error| error.to_string())?;
             if value["kind"].as_str() == Some("EdgionPlugins") && value["metadata"]["name"].as_str() == Some("geo-rr") {
-                selected = Some(serde_yaml::to_string(&value).map_err(|error| error.to_string())?);
+                selected = Some(yaml_serde::to_string(&value).map_err(|error| error.to_string())?);
                 break;
             }
         }

@@ -217,7 +217,7 @@ fn crd_section(file: &str, section: &str) -> Value {
         .join("../config/crd/edgion-crd")
         .join(file);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let doc: Value = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+    let doc: Value = yaml_serde::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
     let result = doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"][section].clone();
     assert!(
         result.is_object(),
@@ -345,7 +345,7 @@ fn served_schemas(file: &str) -> Vec<(String, Value)> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../config/crd/edgion-crd")
         .join(file);
-    let doc: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let doc: Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let schemas: Vec<_> = doc["spec"]["versions"]
         .as_array()
         .unwrap()
@@ -989,7 +989,7 @@ fn assert_declared_objects_are_structural(node: &Value, path: &str) {
 fn edgion_backend_crd_is_recursively_structural_and_secret_free() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_backend_crd.yaml");
     let text = std::fs::read_to_string(&path).unwrap();
-    let crd: Value = serde_yaml::from_str(&text).unwrap();
+    let crd: Value = yaml_serde::from_str(&text).unwrap();
     let schema = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"];
     assert_declared_objects_are_structural(schema, "openAPIV3Schema");
     assert!(!contains_property_named(schema, "secret"));

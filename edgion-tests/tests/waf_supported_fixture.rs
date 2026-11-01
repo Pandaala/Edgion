@@ -6,7 +6,7 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let package = root.join("config/waf/crs-4.25.1-supported-v1/generated");
     let product: WafRuleBundleData = serde_json::from_value(
-        serde_yaml::from_str::<serde_json::Value>(
+        yaml_serde::from_str::<serde_json::Value>(
             &std::fs::read_to_string(package.join("EdgionConfigData_crs-supported-core.yaml")).unwrap(),
         )
         .unwrap()["spec"]["data"]["config"]
@@ -37,7 +37,7 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
         std::fs::read(k8s.join("delete/supported_resources.txt")).unwrap()
     );
     let policy: WafPolicyData = serde_json::from_value(
-        serde_yaml::from_str::<serde_json::Value>(&outputs["updates/to_supported_on/EdgionConfigData_waf-policy.yaml"])
+        yaml_serde::from_str::<serde_json::Value>(&outputs["updates/to_supported_on/EdgionConfigData_waf-policy.yaml"])
             .unwrap()["spec"]["data"]["config"]
             .clone(),
     )
@@ -48,7 +48,7 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
         ("to_supported_standard", "standard"),
     ] {
         let value: serde_json::Value =
-            serde_yaml::from_str(&outputs[&format!("updates/{phase}/EdgionPlugins_waf-dynamic.yaml")]).unwrap();
+            yaml_serde::from_str(&outputs[&format!("updates/{phase}/EdgionPlugins_waf-dynamic.yaml")]).unwrap();
         let mut config: WafConfig = serde_json::from_value(value["spec"]["waf"].clone()).unwrap();
         config.owner_namespace = Some("edgion-default".into());
         config.selected_profile = Some(p.into());
@@ -58,7 +58,7 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
         for reference in &policy.profiles[p].bundle_refs {
             let name = &reference.target.name;
             let value: serde_json::Value =
-                serde_yaml::from_str(&outputs[&format!("updates/to_supported_on/EdgionConfigData_{name}.yaml")])
+                yaml_serde::from_str(&outputs[&format!("updates/to_supported_on/EdgionConfigData_{name}.yaml")])
                     .unwrap();
             let data: WafRuleBundleData = serde_json::from_value(value["spec"]["data"]["config"].clone()).unwrap();
             assert!(!reference.optional);
@@ -73,7 +73,7 @@ fn supported_wire_keeps_product_digests_and_only_adds_declared_guard() {
                 assert_eq!(
                     data.compute_digest(),
                     serde_json::from_value::<WafRuleBundleData>(
-                        serde_yaml::from_str::<serde_json::Value>(
+                        yaml_serde::from_str::<serde_json::Value>(
                             &std::fs::read_to_string(package.join(format!("EdgionConfigData_crs-supported-{p}.yaml")))
                                 .unwrap()
                         )

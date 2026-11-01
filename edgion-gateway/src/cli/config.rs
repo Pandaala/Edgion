@@ -1414,7 +1414,7 @@ impl EdgionGatewayConfig {
 
 fn deserialize_process_config(
     content: &str,
-) -> std::result::Result<(EdgionGatewayConfig, UnknownConfigFields), serde_yaml::Error> {
+) -> std::result::Result<(EdgionGatewayConfig, UnknownConfigFields), yaml_serde::Error> {
     struct ProcessConfigInput(EdgionGatewayConfig);
 
     impl<'de> Deserialize<'de> for ProcessConfigInput {
@@ -1422,11 +1422,11 @@ fn deserialize_process_config(
         where
             D: serde::Deserializer<'de>,
         {
-            serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map(Self)
+            yaml_serde::with::singleton_map_recursive::deserialize(deserializer).map(Self)
         }
     }
 
-    let de = serde_yaml::Deserializer::from_str(content);
+    let de = yaml_serde::Deserializer::from_str(content);
     let mut unknown_fields = UnknownConfigFields::default();
     let ProcessConfigInput(config) = serde_ignored::deserialize(de, |path| unknown_fields.record(&path.to_string()))?;
     Ok((config, unknown_fields))

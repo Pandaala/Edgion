@@ -82,7 +82,7 @@ pub async fn validate_kind(
     let gateway_source =
         edgion_resources::gateway_api_support::canonical_sources().find(|source| source.kind == kind.as_str());
     let gateway_schema_errors = if let Some(source) = gateway_source {
-        let raw_yaml: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let raw_yaml: yaml_serde::Value = yaml_serde::from_str(&content).map_err(|_| StatusCode::BAD_REQUEST)?;
         crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw_yaml)
             .map_err(|_| StatusCode::BAD_REQUEST)?;
         let raw_json: serde_json::Value = crate::api::common::parse_resource(&content)?;

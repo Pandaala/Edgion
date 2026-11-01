@@ -57,7 +57,7 @@ outlierDetection:
 
 #[test]
 fn deserialize_full_spec() {
-    let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(minimal_spec_yaml()).expect("deserialize");
+    let spec: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(minimal_spec_yaml()).expect("deserialize");
     assert_eq!(spec.target_refs[0].name, "payments");
     let lb = spec.load_balancer.as_ref().expect("lb");
     assert_eq!(lb.r#type, LoadBalancerType::ConsistentHash);
@@ -71,7 +71,7 @@ fn deserialize_full_spec() {
 #[test]
 fn resolved_target_class_is_transport_only_and_not_schema_visible() {
     let forged: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: payments\nresolvedTargetClass: ai\n")
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: payments\nresolvedTargetClass: ai\n")
             .expect("transport-shaped input can carry the marker for controller clearing tests");
     assert_eq!(forged.resolved_target_class, Some(ResolvedPolicyTargetClass::Ai));
     assert_eq!(serde_json::to_value(&forged).unwrap()["resolvedTargetClass"], "ai");
@@ -106,7 +106,7 @@ fn canonical_target_keys_preserve_target_type() {
 
 #[test]
 fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
-    let empty: EdgionBackendTrafficPolicySpec = serde_yaml::from_str("targetRefs: []").unwrap();
+    let empty: EdgionBackendTrafficPolicySpec = yaml_serde::from_str("targetRefs: []").unwrap();
     assert!(empty
         .get_validation_errors()
         .iter()
@@ -114,10 +114,10 @@ fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
 
     let service_refs = (0..17).map(|index| format!("  - kind: Service\n    name: svc-{index}"));
     let many_services: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str(&format!("targetRefs:\n{}", service_refs.collect::<Vec<_>>().join("\n"))).unwrap();
+        yaml_serde::from_str(&format!("targetRefs:\n{}", service_refs.collect::<Vec<_>>().join("\n"))).unwrap();
     assert!(many_services.get_validation_errors().is_empty());
 
-    let duplicate_service: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let duplicate_service: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - group: core\n    kind: Service\n    name: shared\n  - group: \"\"\n    kind: Service\n    name: shared",
         )
         .unwrap();
@@ -125,13 +125,13 @@ fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
 
     let ai_refs = (0..17).map(|index| format!("  - group: edgion.io\n    kind: EdgionBackend\n    name: ai-{index}"));
     let too_many_ai: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str(&format!("targetRefs:\n{}", ai_refs.collect::<Vec<_>>().join("\n"))).unwrap();
+        yaml_serde::from_str(&format!("targetRefs:\n{}", ai_refs.collect::<Vec<_>>().join("\n"))).unwrap();
     assert!(too_many_ai
         .get_validation_errors()
         .iter()
         .any(|error| error.contains("at most 16")));
 
-    let duplicate_ai: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let duplicate_ai: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: shared\n  - group: edgion.io\n    kind: EdgionBackend\n    name: shared",
         )
         .unwrap();
@@ -140,7 +140,7 @@ fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
         .iter()
         .any(|error| error.contains("duplicate target")));
 
-    let mixed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let mixed: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - kind: Service\n    name: backend\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider",
         )
         .unwrap();
@@ -152,7 +152,7 @@ fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
 
 #[test]
 fn edgion_backend_targets_enforce_static_policy_fields() {
-    let allowed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let allowed: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\nconnection:\n  connectTimeout: 2s\nretryConstraint: {}\ncircuitBreaker:\n  maxParallelRequests: 20\noutlierDetection:\n  consecutiveErrors: 5",
         )
         .unwrap();
@@ -160,7 +160,7 @@ fn edgion_backend_targets_enforce_static_policy_fields() {
 
     let forbidden = "healthCheck:\n  active: {}";
     let yaml = format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{forbidden}");
-    let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
+    let spec: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(&yaml).unwrap();
     assert!(
         spec.get_validation_errors()
             .iter()
@@ -176,7 +176,7 @@ fn edgion_backend_targets_enforce_static_policy_fields() {
     ] {
         let yaml =
             format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{deferred}");
-        let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
+        let spec: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(&yaml).unwrap();
         assert!(
             spec.get_validation_errors().is_empty(),
             "field is capability-resolved: {deferred}"
@@ -241,7 +241,7 @@ fn to_parsed_mapping() {
 
 #[test]
 fn source_ip_hash_accepts_absent_key() {
-    let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let spec: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash\n  consistentHash:\n    hashOn: sourceIp",
         )
         .unwrap();
@@ -258,7 +258,7 @@ fn source_ip_hash_accepts_absent_key() {
 
 #[test]
 fn source_ip_hash_rejects_present_key() {
-    let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let spec: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash\n  consistentHash:\n    hashOn: sourceIp\n    key: x-user-id",
         )
         .unwrap();
@@ -273,26 +273,26 @@ fn source_ip_hash_rejects_present_key() {
 #[test]
 fn validation_rejects_bad_specs() {
     // empty targetRefs
-    let empty: EdgionBackendTrafficPolicySpec = serde_yaml::from_str("targetRefs: []").unwrap();
+    let empty: EdgionBackendTrafficPolicySpec = yaml_serde::from_str("targetRefs: []").unwrap();
     assert!(!empty.get_validation_errors().is_empty());
     // non-Service kind
     let bad_kind: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Deployment\n    name: x").unwrap();
+        yaml_serde::from_str("targetRefs:\n  - kind: Deployment\n    name: x").unwrap();
     assert!(!bad_kind.get_validation_errors().is_empty());
     // ConsistentHash without consistentHash section
     let no_ch: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash")
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash")
             .unwrap();
     assert!(!no_ch.get_validation_errors().is_empty());
     // degradeThreshold > 100
-    let big_pt: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let big_pt: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
         "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: RoundRobin\n  degradeThreshold: 101",
     )
     .unwrap();
     assert!(!big_pt.get_validation_errors().is_empty());
     // empty targetRef name
     let empty_name: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: \"\"").unwrap();
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: \"\"").unwrap();
     assert!(
         empty_name
             .get_validation_errors()
@@ -301,7 +301,7 @@ fn validation_rejects_bad_specs() {
         "empty targetRef name must be rejected"
     );
     // consistentHash present with a non-ConsistentHash type
-    let ch_wrong_type: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let ch_wrong_type: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: RoundRobin\n  consistentHash:\n    hashOn: header\n    key: x-user-id",
         )
         .unwrap();
@@ -313,7 +313,7 @@ fn validation_rejects_bad_specs() {
         "consistentHash with a non-ConsistentHash type must be rejected"
     );
     // consistentHash present but key is empty
-    let ch_empty_key: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let ch_empty_key: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
             "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash\n  consistentHash:\n    hashOn: header\n    key: \"\"",
         )
         .unwrap();
@@ -325,7 +325,7 @@ fn validation_rejects_bad_specs() {
         "empty consistentHash.key must be rejected"
     );
     // invalid nested healthCheck — the `healthCheck: {err}` prefix is exercised
-    let bad_hc: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+    let bad_hc: EdgionBackendTrafficPolicySpec = yaml_serde::from_str(
         "targetRefs:\n  - kind: Service\n    name: x\nhealthCheck:\n  active:\n    healthyThreshold: 0",
     )
     .unwrap();
@@ -338,7 +338,7 @@ fn validation_rejects_bad_specs() {
     );
     // invalid nested outlierDetection — the `outlierDetection: {err}` prefix is exercised
     let bad_od: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\noutlierDetection:\n  consecutiveErrors: 0")
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\noutlierDetection:\n  consecutiveErrors: 0")
             .unwrap();
     assert!(
         bad_od
@@ -349,7 +349,7 @@ fn validation_rejects_bad_specs() {
     );
     // invalid nested circuitBreaker — the `circuitBreaker: {err}` prefix is exercised
     let bad_cb: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\ncircuitBreaker:\n  maxParallelRequests: 0")
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\ncircuitBreaker:\n  maxParallelRequests: 0")
             .unwrap();
     assert!(
         bad_cb
@@ -432,7 +432,7 @@ fn upstream_authority_validation_flows_through_spec() {
 #[test]
 fn retry_constraint_empty_object_uses_upstream_defaults() {
     let spec: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint: {}").unwrap();
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint: {}").unwrap();
     let rc = spec.retry_constraint.as_ref().expect("present");
     assert_eq!(rc.budget.percent, 20);
     assert_eq!(rc.budget.interval, "10s");
@@ -445,7 +445,7 @@ fn retry_constraint_empty_object_uses_upstream_defaults() {
 #[test]
 fn retry_constraint_validation_rejects_bad_values() {
     let bad = |y: &str| -> Vec<String> {
-        serde_yaml::from_str::<EdgionBackendTrafficPolicySpec>(y)
+        yaml_serde::from_str::<EdgionBackendTrafficPolicySpec>(y)
             .unwrap()
             .get_validation_errors()
     };
@@ -475,7 +475,7 @@ fn retry_constraint_validation_rejects_bad_values() {
 #[test]
 fn connection_connect_timeout_deserializes_and_validates() {
     let spec: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: 250ms")
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: 250ms")
             .unwrap();
     assert_eq!(
         spec.connection.as_ref().unwrap().connect_timeout.as_deref(),
@@ -485,7 +485,7 @@ fn connection_connect_timeout_deserializes_and_validates() {
 
     // Empty connection object is valid (no override).
     let empty: EdgionBackendTrafficPolicySpec =
-        serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection: {}").unwrap();
+        yaml_serde::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection: {}").unwrap();
     assert!(empty.connection.as_ref().unwrap().connect_timeout.is_none());
     assert!(empty.get_validation_errors().is_empty());
 }
@@ -493,7 +493,7 @@ fn connection_connect_timeout_deserializes_and_validates() {
 #[test]
 fn connection_connect_timeout_validation_rejects_bad_values() {
     let bad = |y: &str| -> Vec<String> {
-        serde_yaml::from_str::<EdgionBackendTrafficPolicySpec>(y)
+        yaml_serde::from_str::<EdgionBackendTrafficPolicySpec>(y)
             .unwrap()
             .get_validation_errors()
     };

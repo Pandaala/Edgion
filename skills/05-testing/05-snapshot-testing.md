@@ -113,7 +113,7 @@ Use for YAML/JSON round-trips or `Debug` output.
 `r#"..."#` preserves whitespace exactly; indentation matches actual output, not source indentation.
 
 ```rust
-let yaml = serde_yaml::to_string(&config).unwrap();
+let yaml = yaml_serde::to_string(&config).unwrap();
 expect![[r#"
     apiVersion: edgion.io/v1
     kind: EdgionPlugin

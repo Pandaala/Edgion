@@ -112,7 +112,7 @@ impl FileSystemStatusHandler {
     pub async fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
         let yaml =
-            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            yaml_serde::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if let Some(parent) = status_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -136,7 +136,7 @@ impl FileSystemStatusHandler {
     pub async fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
         let yaml =
-            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            yaml_serde::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if let Some(parent) = status_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -184,7 +184,7 @@ impl FileSystemStatusHandler {
         match tokio::fs::read_to_string(&status_path).await {
             Ok(yaml_content) => {
                 // Parse YAML and convert to JSON for consistent comparison
-                match serde_yaml::from_str::<serde_json::Value>(&yaml_content) {
+                match yaml_serde::from_str::<serde_json::Value>(&yaml_content) {
                     Ok(value) => serde_json::to_string(&value).ok(),
                     Err(e) => {
                         tracing::warn!(

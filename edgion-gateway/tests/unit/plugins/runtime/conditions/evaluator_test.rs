@@ -575,7 +575,7 @@ fn test_key_match_exact() {
 fn match_core_default_case_sensitive_and_unnegated_matches_today() {
     // YAML without caseSensitive / negate must keep today's verdicts:
     // exact match is case-sensitive; missing key is base false for KeyMatch.
-    let key_match: KeyMatchCondition = serde_yaml::from_str(
+    let key_match: KeyMatchCondition = yaml_serde::from_str(
         r#"
 key:
   type: header

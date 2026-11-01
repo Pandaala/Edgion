@@ -83,7 +83,7 @@ spec:
 "#;
 
     let merged = merge_operator_update_yaml(current, requested).expect("etcd update merge must succeed");
-    let merged: serde_yaml::Value = serde_yaml::from_str(&merged).expect("merged resource must be valid YAML");
+    let merged: yaml_serde::Value = yaml_serde::from_str(&merged).expect("merged resource must be valid YAML");
     assert_eq!(merged["metadata"]["resourceVersion"], "18");
     assert_eq!(merged["metadata"]["uid"], "uid-1");
     assert_eq!(merged["spec"]["data"]["config"]["new"], true);

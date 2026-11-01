@@ -254,7 +254,7 @@ fn allow_group_miss_denies_even_under_default_allow() {
 #[test]
 fn mistyped_rule_group_key_is_rejected_not_degraded_to_parse_only() {
     let yaml = "defaultAction: allow\nfailOpen: false\ndenyRuleGroup:\n  - name: g\n    rules:\n      - source: DirectPeerIp\n        key: country\n        values: [\"RU\"]\n";
-    let config = serde_yaml::from_str::<GeoIpLocationConfig>(yaml).unwrap();
+    let config = yaml_serde::from_str::<GeoIpLocationConfig>(yaml).unwrap();
     assert!(config.check_fields(false).is_some());
     assert!(config.invalid_input);
 }
@@ -263,7 +263,7 @@ fn mistyped_rule_group_key_is_rejected_not_degraded_to_parse_only() {
 /// writing an empty config.
 #[test]
 fn explicitly_empty_config_is_still_parse_only() {
-    let cfg = serde_yaml::from_str::<GeoIpLocationConfig>("{}").expect("an empty config stays valid");
+    let cfg = yaml_serde::from_str::<GeoIpLocationConfig>("{}").expect("an empty config stays valid");
     assert!(cfg.is_parse_only());
     assert!(cfg.check_fields(false).is_none());
 }

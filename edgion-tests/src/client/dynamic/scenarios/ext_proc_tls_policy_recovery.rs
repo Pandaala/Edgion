@@ -501,7 +501,7 @@ async fn apply(ctx: &TestContext, value: Value) -> Result<()> {
     crate::dynamic::apply::apply_yaml_documents(
         &client,
         std::path::Path::new("ext-proc-tls-recovery-phase.yaml"),
-        &serde_yaml::to_string(&value)?,
+        &yaml_serde::to_string(&value)?,
     )
     .await
 }
@@ -510,7 +510,7 @@ async fn publish_plugins(ctx: &ScenarioCtx, phase: Phase, target: &str) -> Resul
     let previous = generations(&runtime_stats(ctx).await?)?;
     let template = std::fs::read_to_string(ctx.resolve("plugin.yaml.tmpl"))?;
     for name in NAMES {
-        let mut value: Value = serde_yaml::from_str(&template)?;
+        let mut value: Value = yaml_serde::from_str(&template)?;
         value["metadata"]["name"] = json!(name);
         value["metadata"]["annotations"] = json!({MARKER: phase.name()});
         let config = &mut value["spec"]["requestPlugins"][0]["config"];
@@ -673,7 +673,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let result: Result<()> = async {
             let route_template = std::fs::read_to_string(ctx.resolve("route.yaml.tmpl"))?;
             for name in NAMES {
-                let mut route: Value = serde_yaml::from_str(&route_template)?;
+                let mut route: Value = yaml_serde::from_str(&route_template)?;
                 route["metadata"]["name"] = json!(name);
                 route["spec"]["hostnames"] = json!([format!("{name}.example.com")]);
                 route["spec"]["rules"][0]["filters"][0]["extensionRef"]["name"] = json!(name);

@@ -223,20 +223,20 @@ fn run(manifest_path: &Path, report_path: &Path) -> Result<(), String> {
         if sha256(&bytes) != profile.sha256 {
             return Err(format!("profile digest changed: {}", profile.path));
         }
-        let mut document: PluginDocument = serde_yaml::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let mut document: PluginDocument = yaml_serde::from_slice(&bytes).map_err(|error| error.to_string())?;
         let policy_bytes =
             fs::read(root.join(&profile.policy.path)).map_err(|error| format!("{}: {error}", profile.policy.path))?;
         if sha256(&policy_bytes) != profile.policy.sha256 {
             return Err(format!("policy file digest changed: {}", profile.policy.path));
         }
-        let policy_value: serde_yaml::Value =
-            serde_yaml::from_slice(&policy_bytes).map_err(|error| error.to_string())?;
+        let policy_value: yaml_serde::Value =
+            yaml_serde::from_slice(&policy_bytes).map_err(|error| error.to_string())?;
         if policy_value["spec"]["data"]["type"].as_str() != Some("WafPolicy")
             || policy_value["metadata"]["name"].as_str() != Some(document.spec.waf.policy_ref.name.as_str())
         {
             return Err(format!("policy reference changed: {}", profile.policy.path));
         }
-        let policy: WafPolicyData = serde_yaml::from_value(policy_value["spec"]["data"]["config"].clone())
+        let policy: WafPolicyData = yaml_serde::from_value(policy_value["spec"]["data"]["config"].clone())
             .map_err(|error| error.to_string())?;
         policy.validate_shape()?;
         let selected = policy.default_profile.clone();
@@ -251,9 +251,9 @@ fn run(manifest_path: &Path, report_path: &Path) -> Result<(), String> {
             if sha256(&bytes) != bundle_file.sha256 {
                 return Err(format!("bundle file digest changed: {}", bundle_file.path));
             }
-            let value: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|error| error.to_string())?;
+            let value: yaml_serde::Value = yaml_serde::from_slice(&bytes).map_err(|error| error.to_string())?;
             let data: WafRuleBundleData =
-                serde_yaml::from_value(value["spec"]["data"]["config"].clone()).map_err(|error| error.to_string())?;
+                yaml_serde::from_value(value["spec"]["data"]["config"].clone()).map_err(|error| error.to_string())?;
             data.validate()?;
             let computed_digest = data.compute_digest();
             if reference.expected_digest.as_deref() != Some(computed_digest.as_str()) {

@@ -61,7 +61,7 @@ pub fn validate_gateway_api_raw(
         return Ok(());
     };
     let value: serde_json::Value = parse_resource(content)?;
-    let raw: serde_yaml::Value = serde_yaml::from_str(content).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let raw: yaml_serde::Value = yaml_serde::from_str(content).map_err(|_| StatusCode::BAD_REQUEST)?;
     crate::conf_mgr::conf_center::common::validate_gateway_api_source(kind, &raw)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     validate_gateway_rule_count(kind, &value)?;
@@ -82,9 +82,9 @@ pub fn validate_gateway_api_raw(
         })
 }
 
-pub fn gateway_source_version(raw: &serde_yaml::Value) -> Option<&str> {
+pub fn gateway_source_version(raw: &yaml_serde::Value) -> Option<&str> {
     raw.get("apiVersion")
-        .and_then(serde_yaml::Value::as_str)
+        .and_then(yaml_serde::Value::as_str)
         .and_then(|api_version| api_version.strip_prefix("gateway.networking.k8s.io/"))
 }
 
@@ -232,7 +232,7 @@ where
     }
 
     // Fall back to YAML
-    serde_yaml::from_str::<T>(body).map_err(|e| {
+    yaml_serde::from_str::<T>(body).map_err(|e| {
         let location = e.location();
         tracing::warn!(
             component = "unified_api",
@@ -335,11 +335,11 @@ pub fn expected_resource_version(headers: &HeaderMap, body: &str) -> Result<Opti
         return Ok(Some(value.to_string()));
     }
 
-    let resource: serde_yaml::Value = serde_yaml::from_str(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let resource: yaml_serde::Value = yaml_serde::from_str(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     Ok(resource
         .get("metadata")
         .and_then(|metadata| metadata.get("resourceVersion"))
-        .and_then(serde_yaml::Value::as_str)
+        .and_then(yaml_serde::Value::as_str)
         .map(str::to_string))
 }
 

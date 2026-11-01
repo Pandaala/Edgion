@@ -67,7 +67,7 @@ impl EtcdStatusHandler {
         self.ensure_leader()?;
         let status_key = self.build_status_key(kind, key);
         let yaml =
-            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            yaml_serde::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         self.client
             .put_string(&status_key, &yaml)
@@ -88,7 +88,7 @@ impl EtcdStatusHandler {
         self.ensure_leader()?;
         let status_key = self.build_status_key(kind, key);
         let yaml =
-            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            yaml_serde::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         self.client
             .put_string(&status_key, &yaml)
@@ -132,7 +132,7 @@ impl EtcdStatusHandler {
         match self.client.get_string(&status_key).await {
             Ok(Some(yaml_content)) => {
                 // Parse YAML → JSON for consistent comparison (same as FileSystem handler)
-                match serde_yaml::from_str::<serde_json::Value>(&yaml_content) {
+                match yaml_serde::from_str::<serde_json::Value>(&yaml_content) {
                     Ok(value) => serde_json::to_string(&value).ok(),
                     Err(e) => {
                         tracing::warn!(

@@ -99,7 +99,7 @@ impl AdminState {
             .items
             .into_iter()
             .filter_map(|entry| {
-                serde_yaml::from_str(&entry.content)
+                yaml_serde::from_str(&entry.content)
                     .or_else(|_| serde_json::from_str(&entry.content))
                     .ok()
             })
@@ -136,7 +136,7 @@ impl AdminState {
             .items
             .into_iter()
             .filter_map(|entry| {
-                serde_yaml::from_str(&entry.content)
+                yaml_serde::from_str(&entry.content)
                     .or_else(|_| serde_json::from_str(&entry.content))
                     .ok()
             })
@@ -207,7 +207,7 @@ impl AdminState {
 
         match api.get_one(kind_str, Some(namespace), name).await {
             Ok(content) => {
-                let value: serde_json::Value = serde_yaml::from_str(&content)
+                let value: serde_json::Value = yaml_serde::from_str(&content)
                     .or_else(|_| serde_json::from_str(&content))
                     .map_err(|e| {
                         tracing::warn!(
@@ -248,7 +248,7 @@ impl AdminState {
 
         match api.get_one(kind_str, None, name).await {
             Ok(content) => {
-                let value: serde_json::Value = serde_yaml::from_str(&content)
+                let value: serde_json::Value = yaml_serde::from_str(&content)
                     .or_else(|_| serde_json::from_str(&content))
                     .map_err(|e| {
                         tracing::warn!(

@@ -3,7 +3,7 @@ use super::SecretObjectReference;
 #[test]
 fn deserialize_minimal() {
     let yaml = "name: my-secret";
-    let s: SecretObjectReference = serde_yaml::from_str(yaml).unwrap();
+    let s: SecretObjectReference = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(s.name, "my-secret");
     assert_eq!(s.namespace, None);
     assert_eq!(s.group, None);
@@ -13,7 +13,7 @@ fn deserialize_minimal() {
 #[test]
 fn deserialize_with_group_kind() {
     let yaml = "name: my-secret\ngroup: \"\"\nkind: Secret\nnamespace: credentials";
-    let s: SecretObjectReference = serde_yaml::from_str(yaml).unwrap();
+    let s: SecretObjectReference = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(s.group.as_deref(), Some(""));
     assert_eq!(s.kind.as_deref(), Some("Secret"));
     assert_eq!(s.namespace.as_deref(), Some("credentials"));
@@ -22,13 +22,13 @@ fn deserialize_with_group_kind() {
 #[test]
 fn name_required() {
     let yaml = "namespace: credentials";
-    assert!(serde_yaml::from_str::<SecretObjectReference>(yaml).is_err());
+    assert!(yaml_serde::from_str::<SecretObjectReference>(yaml).is_err());
 }
 
 #[test]
 fn rejects_unknown_fields() {
     let yaml = "name: my-secret\nunknownField: forbidden";
-    assert!(serde_yaml::from_str::<SecretObjectReference>(yaml).is_err());
+    assert!(yaml_serde::from_str::<SecretObjectReference>(yaml).is_err());
 }
 
 #[test]

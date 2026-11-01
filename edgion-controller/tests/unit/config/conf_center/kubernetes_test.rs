@@ -24,7 +24,7 @@ fn test_kubernetes_config_builder() {
 fn test_kubernetes_config_serialize() {
     let config = KubernetesConfig::default().with_watch_namespaces(vec!["default".to_string()]);
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = yaml_serde::to_string(&config).unwrap();
     assert!(!yaml.contains("gateway_class"));
     assert!(!yaml.contains("controller_name:"));
     assert!(yaml.contains("watch_namespaces:"));
@@ -38,7 +38,7 @@ watch_namespaces:
   - prod
 label_selector: app=edgion
 "#;
-    let config: KubernetesConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: KubernetesConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.controller_name, None);
     assert_eq!(config.watch_namespaces, vec!["default", "prod"]);
     assert_eq!(config.label_selector, Some("app=edgion".to_string()));
@@ -79,7 +79,7 @@ fn test_leader_election_config_serialize() {
         retry_period_secs: 5,
     };
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = yaml_serde::to_string(&config).unwrap();
     assert!(yaml.contains("lease_name: my-lease"));
     assert!(yaml.contains("lease_namespace: my-namespace"));
 }
@@ -91,7 +91,7 @@ blocked_annotations:
   - "custom.annotation/to-remove"
 remove_managed_fields: false
 "#;
-    let filter: MetadataFilterConfig = serde_yaml::from_str(yaml).unwrap();
+    let filter: MetadataFilterConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(!filter.remove_managed_fields);
     assert_eq!(filter.blocked_annotations.len(), 1);
     assert_eq!(filter.blocked_annotations[0], "custom.annotation/to-remove");
@@ -107,18 +107,18 @@ fn test_ha_mode_serde() {
     let yaml_str = r#"
 ha_mode: all-serve
 "#;
-    let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
+    let config: KubernetesConfig = yaml_serde::from_str(yaml_str).unwrap();
     assert_eq!(config.ha_mode, HaMode::AllServe);
 
     let yaml_str = r#"
 ha_mode: leader-only
 "#;
-    let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
+    let config: KubernetesConfig = yaml_serde::from_str(yaml_str).unwrap();
     assert_eq!(config.ha_mode, HaMode::LeaderOnly);
 
     // Default (no ha_mode specified) should be LeaderOnly
     let yaml_str = "{}";
-    let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
+    let config: KubernetesConfig = yaml_serde::from_str(yaml_str).unwrap();
     assert_eq!(config.ha_mode, HaMode::LeaderOnly);
 }
 

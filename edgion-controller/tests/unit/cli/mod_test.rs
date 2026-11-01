@@ -1,7 +1,7 @@
 use super::*;
 
 fn security(yaml: &str) -> ConfSyncSecurityConfig {
-    serde_yaml::from_str(yaml).unwrap()
+    yaml_serde::from_str(yaml).unwrap()
 }
 
 fn prepare_without_rotation(config: &ConfSyncSecurityConfig) -> Result<ConfSyncTransport> {

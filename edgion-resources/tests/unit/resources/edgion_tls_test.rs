@@ -48,7 +48,7 @@ spec:
     namespace: default
 "#;
 
-    let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+    let tls: Result<EdgionTls, _> = yaml_serde::from_str(yaml);
     assert!(tls.is_ok(), "Failed to deserialize YAML: {:?}", tls.err());
 
     let tls = tls.unwrap();
@@ -85,23 +85,23 @@ fn operator_attachment_dimensions_decode_then_validate_with_owner_namespace() {
     let max_hosts = (0..MAX_EDGION_TLS_HOSTS)
         .map(|index| format!("    - host-{index}.example.com\n"))
         .collect::<String>();
-    let at_limit = serde_yaml::from_str::<EdgionTls>(&base(max_parents.clone(), max_hosts.clone())).unwrap();
+    let at_limit = yaml_serde::from_str::<EdgionTls>(&base(max_parents.clone(), max_hosts.clone())).unwrap();
     assert!(validate_operator_attachment_dimensions(&at_limit.spec, "default").is_ok());
 
     let too_many_parents = format!("{max_parents}    - name: gateway-overflow\n");
-    let decoded = serde_yaml::from_str::<EdgionTls>(&base(too_many_parents, max_hosts.clone())).unwrap();
+    let decoded = yaml_serde::from_str::<EdgionTls>(&base(too_many_parents, max_hosts.clone())).unwrap();
     assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
     let too_many_hosts = format!("{max_hosts}    - host-overflow.example.com\n");
-    let decoded = serde_yaml::from_str::<EdgionTls>(&base(max_parents, too_many_hosts)).unwrap();
+    let decoded = yaml_serde::from_str::<EdgionTls>(&base(max_parents, too_many_hosts)).unwrap();
     assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
 
     let duplicate_parent = "    - name: gateway\n    - name: gateway\n      namespace: default\n".to_string();
     let decoded =
-        serde_yaml::from_str::<EdgionTls>(&base(duplicate_parent, "    - example.com\n".to_string())).unwrap();
+        yaml_serde::from_str::<EdgionTls>(&base(duplicate_parent, "    - example.com\n".to_string())).unwrap();
     assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
     let duplicate_host = "    - Example.com\n    - example.com\n".to_string();
     let decoded =
-        serde_yaml::from_str::<EdgionTls>(&base("    - name: gateway\n".to_string(), duplicate_host)).unwrap();
+        yaml_serde::from_str::<EdgionTls>(&base("    - name: gateway\n".to_string(), duplicate_host)).unwrap();
     assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
 }
 
@@ -143,7 +143,7 @@ fn test_yaml_serialization_produces_camel_case() {
         status: None,
     };
 
-    let yaml = serde_yaml::to_string(&tls).expect("Failed to serialize to YAML");
+    let yaml = yaml_serde::to_string(&tls).expect("Failed to serialize to YAML");
 
     // Verify camelCase field names in serialized YAML
     assert!(
@@ -187,11 +187,11 @@ spec:
     namespace: default
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(original_yaml).expect("Failed to deserialize original YAML");
+    let tls: EdgionTls = yaml_serde::from_str(original_yaml).expect("Failed to deserialize original YAML");
 
-    let serialized = serde_yaml::to_string(&tls).expect("Failed to serialize back to YAML");
+    let serialized = yaml_serde::to_string(&tls).expect("Failed to serialize back to YAML");
 
-    let tls2: EdgionTls = serde_yaml::from_str(&serialized).expect("Failed to deserialize serialized YAML");
+    let tls2: EdgionTls = yaml_serde::from_str(&serialized).expect("Failed to deserialize serialized YAML");
 
     // Verify data integrity
     assert_eq!(tls.metadata.name, tls2.metadata.name);
@@ -226,7 +226,7 @@ spec:
     namespace: default
 "#;
 
-    let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml_with_snake_case);
+    let tls: Result<EdgionTls, _> = yaml_serde::from_str(yaml_with_snake_case);
 
     // Should succeed in parsing (because parent_refs and secret_ref have defaults)
     // but the fields should be None/default because they don't match_engine the expected camelCase names
@@ -269,14 +269,14 @@ spec:
     name: my-secret
 "#;
 
-    let result: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+    let result: Result<EdgionTls, _> = yaml_serde::from_str(yaml);
     assert!(
         result.is_ok(),
         "Kubernetes API convention compliant YAML should deserialize successfully"
     );
 
     let tls = result.unwrap();
-    let serialized = serde_yaml::to_string(&tls).unwrap();
+    let serialized = yaml_serde::to_string(&tls).unwrap();
 
     // Verify all conventions are maintained in serialized output
     assert!(serialized.contains("parentRefs:"), "Should use parentRefs (camelCase)");
@@ -320,7 +320,7 @@ spec:
       - "AdminClient"
 "#;
 
-    let tls: Result<EdgionTls, _> = serde_yaml::from_str(yaml);
+    let tls: Result<EdgionTls, _> = yaml_serde::from_str(yaml);
     assert!(tls.is_ok(), "Failed to deserialize mTLS YAML: {:?}", tls.err());
 
     let tls = tls.unwrap();
@@ -354,7 +354,7 @@ spec:
       name: client-ca
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+    let tls: EdgionTls = yaml_serde::from_str(yaml).unwrap();
     let client_auth = tls.spec.client_auth.as_ref().unwrap();
 
     // Default mode should be Terminate
@@ -380,14 +380,14 @@ spec:
       name: client-ca
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+    let tls: EdgionTls = yaml_serde::from_str(yaml).unwrap();
     let client_auth = tls.spec.client_auth.as_ref().unwrap();
 
     // Default verify_depth should be 1
     assert_eq!(client_auth.verify_depth, 1);
 
     // Test serialization - default verify_depth should be omitted
-    let serialized = serde_yaml::to_string(&tls).unwrap();
+    let serialized = yaml_serde::to_string(&tls).unwrap();
     assert!(
         !serialized.contains("verifyDepth"),
         "Default verifyDepth should be omitted in serialization"
@@ -413,7 +413,7 @@ spec:
       name: client-ca
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+    let tls: EdgionTls = yaml_serde::from_str(yaml).unwrap();
     let client_auth = tls.spec.client_auth.as_ref().unwrap();
 
     assert_eq!(client_auth.mode, ClientAuthMode::OptionalMutual);
@@ -441,7 +441,7 @@ spec:
       name: client-ca
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+    let tls: EdgionTls = yaml_serde::from_str(yaml).unwrap();
 
     assert_eq!(tls.client_auth_mode(), ClientAuthMode::Mutual);
     assert!(tls.is_mtls_enabled());
@@ -462,7 +462,7 @@ spec:
     name: test-secret
 "#;
 
-    let tls: EdgionTls = serde_yaml::from_str(yaml).unwrap();
+    let tls: EdgionTls = yaml_serde::from_str(yaml).unwrap();
 
     assert!(tls.spec.client_auth.is_none());
     assert_eq!(tls.client_auth_mode(), ClientAuthMode::Terminate);

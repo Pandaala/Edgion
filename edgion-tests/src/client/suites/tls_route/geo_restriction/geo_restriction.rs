@@ -357,12 +357,12 @@ async fn restore_geo_fixture(ctx: &TestContext) -> Result<(), String> {
     };
     let yaml = {
         let mut selected = None;
-        for document in serde_yaml::Deserializer::from_str(source) {
-            let value = serde_yaml::Value::deserialize(document).map_err(|error| error.to_string())?;
+        for document in yaml_serde::Deserializer::from_str(source) {
+            let value = yaml_serde::Value::deserialize(document).map_err(|error| error.to_string())?;
             if value["kind"].as_str() == Some("EdgionStreamPlugins")
                 && value["metadata"]["name"].as_str() == Some("tls-geo-deny")
             {
-                selected = Some(serde_yaml::to_string(&value).map_err(|error| error.to_string())?);
+                selected = Some(yaml_serde::to_string(&value).map_err(|error| error.to_string())?);
                 break;
             }
         }
@@ -439,7 +439,7 @@ mod tests {
 
         for country in ["RU", "US"] {
             let yaml = geo_chain_yaml(country);
-            let policy: edgion_resources::EdgionStreamPlugins = serde_yaml::from_str(&yaml).unwrap();
+            let policy: edgion_resources::EdgionStreamPlugins = yaml_serde::from_str(&yaml).unwrap();
             assert_eq!(policy.metadata.name.as_deref(), Some("tls-geo-deny"));
             assert_eq!(policy.metadata.namespace.as_deref(), Some("edgion-test"));
             let entries = policy.spec.plugins.as_ref().unwrap();
@@ -454,7 +454,7 @@ mod tests {
                 EdgionStreamPlugin::GeoIpLocation(config) => assert!(config.validation_error().is_none()),
                 _ => panic!("expected Geo second"),
             }
-            let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+            let value: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
             let rules = &value["spec"]["plugins"][0]["config"]["profiles"]["default"];
             assert_eq!(rules["defaultAction"].as_str(), Some("allow"));
             assert_eq!(

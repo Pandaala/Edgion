@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn deserializes_compact_dns_exact() {
-    let entry: AllowedSan = serde_yaml::from_str("type: DNS\nvalue: client1.example.com\n").unwrap();
+    let entry: AllowedSan = yaml_serde::from_str("type: DNS\nvalue: client1.example.com\n").unwrap();
     assert_eq!(entry.san_type, AllowedSanType::Dns);
     assert_eq!(entry.match_kind, AllowedSanMatch::Exact);
     assert!(!entry.ignore_case);
@@ -12,7 +12,7 @@ fn deserializes_compact_dns_exact() {
 
 #[test]
 fn rejects_unknown_field() {
-    let err = serde_yaml::from_str::<AllowedSan>("type: DNS\nvalue: a.example.com\nextra: 1\n").unwrap_err();
+    let err = yaml_serde::from_str::<AllowedSan>("type: DNS\nvalue: a.example.com\nextra: 1\n").unwrap_err();
     assert!(err.to_string().contains("unknown field"));
 }
 
@@ -28,7 +28,7 @@ fn oid_forbidden_on_dns() {
     entry.oid = Some("1.2.3".to_string());
     assert!(allowed_san_config_error(&entry).unwrap().contains("only valid"));
 
-    let empty_oid: AllowedSan = serde_yaml::from_str("type: DNS\nvalue: client.example.com\noid: \"\"\n").unwrap();
+    let empty_oid: AllowedSan = yaml_serde::from_str("type: DNS\nvalue: client.example.com\noid: \"\"\n").unwrap();
     assert!(allowed_san_config_error(&empty_oid).unwrap().contains("only valid"));
 }
 

@@ -46,7 +46,7 @@ fn test_serde_simple_config() {
 endpoints:
   - "http://127.0.0.1:9200"
 "#;
-    let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ElasticsearchClientConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.endpoints.len(), 1);
     assert!(config.auth.is_none());
 }
@@ -80,7 +80,7 @@ index:
   prefix: "edgion-logs"
   datePattern: "%Y.%m.%d"
 "#;
-    let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ElasticsearchClientConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.endpoints.len(), 2);
     match config.auth.as_ref().unwrap() {
         ElasticsearchAuth::Basic { slot } => {
@@ -105,7 +105,7 @@ auth:
   secretRef:
     name: es-api-key
 "#;
-    let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ElasticsearchClientConfig = yaml_serde::from_str(yaml).unwrap();
     match config.auth.unwrap() {
         ElasticsearchAuth::ApiKey { slot } => {
             assert_eq!(slot.secret_ref.name, "es-api-key");
@@ -124,7 +124,7 @@ auth:
   secretRef:
     name: es-bearer-token
 "#;
-    let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ElasticsearchClientConfig = yaml_serde::from_str(yaml).unwrap();
     match config.auth.unwrap() {
         ElasticsearchAuth::Bearer { slot } => {
             assert_eq!(slot.secret_ref.name, "es-bearer-token");
@@ -158,35 +158,35 @@ fn test_serde_roundtrip_json() {
 #[test]
 fn es_auth_rejects_inline_username() {
     let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
-    let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<ElasticsearchAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn es_auth_rejects_inline_password() {
     let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
-    let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<ElasticsearchAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn es_auth_rejects_inline_api_key() {
     let yaml = "type: apiKey\nsecretRef:\n  name: s\napiKeyId: leaked";
-    let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<ElasticsearchAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline apiKeyId must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn es_auth_rejects_inline_bearer_token() {
     let yaml = "type: bearer\nsecretRef:\n  name: s\nbearerToken: leaked";
-    let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<ElasticsearchAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline bearerToken must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn es_auth_basic_yaml_roundtrip() {
     let yaml = "type: basic\nsecretRef:\n  name: es-creds";
-    let a: super::ElasticsearchAuth = serde_yaml::from_str(yaml).unwrap();
+    let a: super::ElasticsearchAuth = yaml_serde::from_str(yaml).unwrap();
     match a {
         super::ElasticsearchAuth::Basic { slot } => assert_eq!(slot.secret_ref.name, "es-creds"),
         _ => panic!("expected Basic"),
@@ -196,14 +196,14 @@ fn es_auth_basic_yaml_roundtrip() {
 #[test]
 fn es_auth_apikey_yaml_roundtrip() {
     let yaml = "type: apiKey\nsecretRef:\n  name: es-creds";
-    let a: super::ElasticsearchAuth = serde_yaml::from_str(yaml).unwrap();
+    let a: super::ElasticsearchAuth = yaml_serde::from_str(yaml).unwrap();
     assert!(matches!(a, super::ElasticsearchAuth::ApiKey { .. }));
 }
 
 #[test]
 fn es_auth_rejects_unknown_field() {
     let yaml = "type: basic\nsecretRef:\n  name: x\nbogus: 1";
-    assert!(serde_yaml::from_str::<super::ElasticsearchAuth>(yaml).is_err());
+    assert!(yaml_serde::from_str::<super::ElasticsearchAuth>(yaml).is_err());
 }
 
 #[test]
@@ -212,14 +212,14 @@ fn bulk_response_limit_is_serialized_and_preserved_in_crd_config() {
     assert_eq!(absent.max_response_bytes, None);
     assert!(serde_json::to_value(absent).unwrap().get("maxResponseBytes").is_none());
     let config: ElasticsearchClientConfig =
-        serde_yaml::from_str("endpoints: [http://es.example:9200]\nbulk:\n  maxResponseBytes: 2097152\n").unwrap();
+        yaml_serde::from_str("endpoints: [http://es.example:9200]\nbulk:\n  maxResponseBytes: 2097152\n").unwrap();
     assert_eq!(config.bulk.as_ref().unwrap().max_response_bytes, Some(2097152));
     let wire = serde_json::to_value(&config).unwrap();
     assert_eq!(wire["bulk"]["maxResponseBytes"], 2097152);
     let roundtrip: ElasticsearchClientConfig = serde_json::from_value(wire).unwrap();
     assert_eq!(roundtrip.bulk.unwrap().max_response_bytes, Some(2097152));
-    let crd: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
+    let crd: yaml_serde::Value =
+        yaml_serde::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
     for version in crd["spec"]["versions"].as_sequence().unwrap() {
         if version["served"].as_bool() == Some(true) {
             assert_eq!(

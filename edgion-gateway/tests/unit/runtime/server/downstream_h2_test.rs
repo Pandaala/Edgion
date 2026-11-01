@@ -47,7 +47,7 @@ fn combined_stream_credit_budget_accepts_the_boundary_and_rejects_excess() {
 
 #[test]
 fn cli_overrides_only_explicit_h2_fields() {
-    let mut config: EdgionGatewayConfig = serde_yaml::from_str(
+    let mut config: EdgionGatewayConfig = yaml_serde::from_str(
         "server:\n  downstream_h2_stream_window_size: 262144\n  downstream_h2_connection_window_size: 1048576\n  downstream_h2_max_concurrent_streams: 100\n",
     )
     .unwrap();

@@ -241,7 +241,7 @@ mod tests {
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/OpenidConnect/SessionExpiry/DynamicTest/initial/00_Secret_oidc-session-expiry.yaml")),
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/k8s/conf/EdgionPlugins/OpenidConnect/SessionExpiry/DynamicTest/initial/00_Secret_oidc-session-expiry.yaml")),
         ] {
-            let secret: Value = serde_yaml::from_str(yaml).unwrap();
+            let secret: Value = yaml_serde::from_str(yaml).unwrap();
             assert_eq!(secret["stringData"]["sessionSecret"], SESSION_SECRET);
         }
     }

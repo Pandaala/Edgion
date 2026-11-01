@@ -67,13 +67,13 @@ fn explicit_header_names_accept_token_punctuation_and_exact_maximum() {
 
 #[test]
 fn list_fields_forward_all_defaults_false() {
-    let lf: ListFields = serde_yaml::from_str("origin: []\ncustom: []").unwrap();
+    let lf: ListFields = yaml_serde::from_str("origin: []\ncustom: []").unwrap();
     assert!(!lf.forward_all);
 }
 
 #[test]
 fn list_fields_parses_forward_all_true() {
-    let lf: ListFields = serde_yaml::from_str("forwardAll: true").unwrap();
+    let lf: ListFields = yaml_serde::from_str("forwardAll: true").unwrap();
     assert!(lf.forward_all);
     assert!(lf.origin.is_empty());
 }
@@ -135,7 +135,7 @@ fn headers_forward_all_passes_validation() {
 #[test]
 fn body_spec_parses_json_type() {
     let spec: OutboundRequestSpec =
-        serde_yaml::from_str("body:\n  type: json\n  template: '{\"userId\": \"${ctx:userId}\"}'").unwrap();
+        yaml_serde::from_str("body:\n  type: json\n  template: '{\"userId\": \"${ctx:userId}\"}'").unwrap();
     match spec.body {
         Some(BodySpec::Json { ref template }) => {
             assert!(template.contains("${ctx:userId}"));
@@ -155,7 +155,7 @@ body:
     - name: source
       value: edgion
 "#;
-    let spec: OutboundRequestSpec = serde_yaml::from_str(yaml).unwrap();
+    let spec: OutboundRequestSpec = yaml_serde::from_str(yaml).unwrap();
     match spec.body {
         Some(BodySpec::Form { ref fields }) => {
             assert_eq!(fields.len(), 2);
@@ -167,26 +167,26 @@ body:
 
 #[test]
 fn body_spec_parses_raw_type() {
-    let spec: OutboundRequestSpec = serde_yaml::from_str("body:\n  type: raw\n  template: 'plain ${ctx:x}'").unwrap();
+    let spec: OutboundRequestSpec = yaml_serde::from_str("body:\n  type: raw\n  template: 'plain ${ctx:x}'").unwrap();
     assert!(matches!(spec.body, Some(BodySpec::Raw { .. })));
 }
 
 #[test]
 fn body_spec_rejects_unknown_type() {
-    let r: Result<OutboundRequestSpec, _> = serde_yaml::from_str("body:\n  type: xml\n  template: '<a/>'");
+    let r: Result<OutboundRequestSpec, _> = yaml_serde::from_str("body:\n  type: xml\n  template: '<a/>'");
     assert!(r.is_err(), "unknown body type must be rejected");
 }
 
 #[test]
 fn body_spec_rejects_unknown_field() {
     let r: Result<OutboundRequestSpec, _> =
-        serde_yaml::from_str("body:\n  type: json\n  template: '{}'\n  extra: nope");
+        yaml_serde::from_str("body:\n  type: json\n  template: '{}'\n  extra: nope");
     assert!(r.is_err(), "unknown field on body must be rejected");
 }
 
 #[test]
 fn body_defaults_to_none() {
-    let spec: OutboundRequestSpec = serde_yaml::from_str("args: {}").unwrap();
+    let spec: OutboundRequestSpec = yaml_serde::from_str("args: {}").unwrap();
     assert!(spec.body.is_none());
 }
 
@@ -350,21 +350,21 @@ fn custom_field_requires_exactly_one_visible_string_source() {
         r#"{"value":"a"}"#,
     ] {
         assert!(serde_json::from_str::<CustomField>(input).is_err(), "{input}");
-        assert!(serde_yaml::from_str::<CustomField>(input).is_err(), "{input}");
+        assert!(yaml_serde::from_str::<CustomField>(input).is_err(), "{input}");
     }
     for source in ["value", "template"] {
         for operand in ["null", "true", "42", "1.5", "[]", "{}"] {
             let input = format!(r#"{{"name":"X-Test","{source}":{operand}}}"#);
             assert!(serde_json::from_str::<CustomField>(&input).is_err(), "{input}");
             let yaml = format!("name: X-Test\n{source}: {operand}\n");
-            assert!(serde_yaml::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
+            assert!(yaml_serde::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
         }
         let other = if source == "value" { "template" } else { "value" };
         let input = format!(r#"{{"name":"X-Test","{source}":null,"{other}":"valid"}}"#);
         assert!(serde_json::from_str::<CustomField>(&input).is_err(), "{input}");
-        assert!(serde_yaml::from_str::<CustomField>(&input).is_err(), "{input}");
+        assert!(yaml_serde::from_str::<CustomField>(&input).is_err(), "{input}");
         let yaml = format!("name: X-Test\n{source}: a\n{source}: b\n");
-        assert!(serde_yaml::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
+        assert!(yaml_serde::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
     }
 }
 
@@ -375,8 +375,8 @@ fn custom_field_valid_sources_preserve_wire_shape_and_yaml_string_types() {
             let wire = serde_json::json!({"name": "X-Test", source: value});
             let field: CustomField = serde_json::from_value(wire.clone()).unwrap();
             assert_eq!(serde_json::to_value(&field).unwrap(), wire);
-            let yaml = serde_yaml::to_string(&field).unwrap();
-            let decoded: CustomField = serde_yaml::from_str(&yaml).unwrap();
+            let yaml = yaml_serde::to_string(&field).unwrap();
+            let decoded: CustomField = yaml_serde::from_str(&yaml).unwrap();
             assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
         }
         for (yaml_value, expected) in [
@@ -386,12 +386,12 @@ fn custom_field_valid_sources_preserve_wire_shape_and_yaml_string_types() {
             ("!!str null", "null"),
         ] {
             let yaml = format!("name: X-Test\n{source}: {yaml_value}\n");
-            let field: CustomField = serde_yaml::from_str(&yaml).unwrap();
+            let field: CustomField = yaml_serde::from_str(&yaml).unwrap();
             assert_eq!(serde_json::to_value(field).unwrap()[source], expected);
         }
     }
     // Required-name decoding keeps its pre-existing YAML String policy.
-    let field: CustomField = serde_yaml::from_str("name: 42\nvalue: 'literal'\n").unwrap();
+    let field: CustomField = yaml_serde::from_str("name: 42\nvalue: 'literal'\n").unwrap();
     assert_eq!(field.name, "42");
 }
 
@@ -409,7 +409,7 @@ fn custom_source_arity_is_enforced_in_all_outbound_placements() {
                 format!(r#"{{"{placement}":{{"custom":[{field}]}}}}"#)
             };
             assert!(serde_json::from_str::<OutboundRequestSpec>(&request).is_err());
-            assert!(serde_yaml::from_str::<OutboundRequestSpec>(&request).is_err());
+            assert!(yaml_serde::from_str::<OutboundRequestSpec>(&request).is_err());
             let request: serde_json::Value = serde_json::from_str(&request).unwrap();
             let resource = serde_json::json!({
                 "type": "webhook", "config": {
@@ -449,10 +449,10 @@ fn custom_sources_preserve_advisory_unknown_fields_and_secret_collection() {
 fn custom_fields_reject_sequence_wire_shapes() {
     for input in [r#"["X-Test","literal"]"#, r#"["X-Test","literal",null]"#] {
         assert!(serde_json::from_str::<CustomField>(input).is_err(), "{input}");
-        assert!(serde_yaml::from_str::<CustomField>(input).is_err(), "{input}");
+        assert!(yaml_serde::from_str::<CustomField>(input).is_err(), "{input}");
         let request = format!(r#"{{"headers":{{"custom":[{input}]}}}}"#);
         assert!(serde_json::from_str::<OutboundRequestSpec>(&request).is_err());
-        assert!(serde_yaml::from_str::<OutboundRequestSpec>(&request).is_err());
+        assert!(yaml_serde::from_str::<OutboundRequestSpec>(&request).is_err());
         let request: serde_json::Value = serde_json::from_str(&request).unwrap();
         assert!(serde_json::from_value::<OutboundRequestSpec>(request.clone()).is_err());
         let resource = serde_json::json!({

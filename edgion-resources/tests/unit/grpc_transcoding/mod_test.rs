@@ -829,10 +829,10 @@ fn correction_owner_fixture_plugins_pass_shared_validation() {
     let fixture = include_str!(
         "../../../../edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/60_correction_owners.yaml"
     );
-    for doc in serde_yaml::Deserializer::from_str(fixture) {
-        let value = serde_yaml::Value::deserialize(doc).unwrap();
+    for doc in yaml_serde::Deserializer::from_str(fixture) {
+        let value = yaml_serde::Value::deserialize(doc).unwrap();
         if value["kind"].as_str() == Some("EdgionPlugins") {
-            let resource: EdgionPlugins = serde_yaml::from_value(value).unwrap();
+            let resource: EdgionPlugins = yaml_serde::from_value(value).unwrap();
             assert!(
                 resource.validate_plugins().is_empty(),
                 "{:?}",

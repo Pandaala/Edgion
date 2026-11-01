@@ -88,7 +88,7 @@ spec:
 "#;
 
     let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
-    let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+    let merged: Value = yaml_serde::from_str(&merged).expect("merged resource must remain valid YAML");
     assert_eq!(merged["metadata"]["resourceVersion"], "43");
     assert_eq!(merged["metadata"]["uid"], "uid-1");
     assert_eq!(merged["spec"]["hostnames"][0], "new.example");
@@ -119,7 +119,7 @@ spec:
 "#;
 
     let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
-    let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+    let merged: Value = yaml_serde::from_str(&merged).expect("merged resource must remain valid YAML");
     assert_eq!(merged["metadata"]["generation"], 11);
     assert_eq!(merged["metadata"]["uid"], "uid-1");
     assert_eq!(merged["spec"]["listeners"][0]["name"], "http-v10");
@@ -148,6 +148,6 @@ spec:
 "#;
 
     let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
-    let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+    let merged: Value = yaml_serde::from_str(&merged).expect("merged resource must remain valid YAML");
     assert_eq!(merged["metadata"]["generation"], 7);
 }

@@ -215,7 +215,7 @@ fn test_key_get_yaml_format() {
 type: header
 name: X-Api-Key
 "#;
-    let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+    let key: KeyGet = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         key,
         KeyGet::Header {
@@ -229,7 +229,7 @@ fn test_key_get_yaml_no_name() {
     let yaml = r#"
 type: remoteIp
 "#;
-    let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+    let key: KeyGet = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(key, KeyGet::RemoteIp);
 }
 
@@ -237,7 +237,7 @@ type: remoteIp
 fn old_client_ip_key_types_are_rejected() {
     for old in ["clientIp", "clientIpAndPath"] {
         let yaml = format!("type: {old}\n");
-        assert!(serde_yaml::from_str::<KeyGet>(&yaml).is_err(), "{old} must be rejected");
+        assert!(yaml_serde::from_str::<KeyGet>(&yaml).is_err(), "{old} must be rejected");
     }
 }
 
@@ -247,7 +247,7 @@ fn test_key_set_yaml_format() {
 type: ctx
 name: user_id
 "#;
-    let key: KeySet = serde_yaml::from_str(yaml).unwrap();
+    let key: KeySet = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         key,
         KeySet::Ctx {

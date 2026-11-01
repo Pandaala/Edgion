@@ -256,7 +256,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 crate::dynamic::apply::apply_yaml_documents(
                     &client,
                     &ctx.resolve("phase.yaml"),
-                    &serde_yaml::to_string(&plugin(phase))?,
+                    &yaml_serde::to_string(&plugin(phase))?,
                 )
                 .await?;
                 ctx.wait_phase(SCENARIO, name, Duration::from_secs(20)).await?;

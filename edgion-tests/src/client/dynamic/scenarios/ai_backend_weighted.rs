@@ -297,7 +297,7 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
 async fn check_header_modifier_updates(ctx: &ScenarioCtx) -> Result<()> {
     // Change the first equivalent operation, restore it, then remove the filter.
     for first in [Some("first"), Some("updated"), Some("first"), None] {
-        let mut route: Value = serde_yaml::from_str(&route_yaml())?;
+        let mut route: Value = yaml_serde::from_str(&route_yaml())?;
         if let Some(first) = first {
             for index in 0..2 {
                 route["spec"]["rules"][0]["backendRefs"][index]["filters"] = json!([{
@@ -316,7 +316,7 @@ async fn check_header_modifier_updates(ctx: &ScenarioCtx) -> Result<()> {
                 }]);
             }
         }
-        apply(ctx, serde_yaml::to_string(&route)?).await?;
+        apply(ctx, yaml_serde::to_string(&route)?).await?;
         let expected = match first {
             Some(first) => json!({"set": [first], "add": ["client-a", "client-b", first], "remove": []}),
             None => json!({"set": ["client"], "add": ["client-a", "client-b"], "remove": ["client"]}),
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn status_barrier_rejects_another_gateway_or_controllers_condition() {
-        let mut route: Value = serde_yaml::from_str(&route_yaml()).unwrap();
+        let mut route: Value = yaml_serde::from_str(&route_yaml()).unwrap();
         let parent = route["spec"]["parentRefs"][0].clone();
         route["status"] = json!({"parents": [
             {"controllerName": "foreign/controller", "parentRef": parent, "conditions": [
@@ -479,11 +479,11 @@ mod tests {
             child_route_yaml(),
             delegated_parent_yaml(),
         ] {
-            serde_yaml::from_str::<Value>(&yaml)
+            yaml_serde::from_str::<Value>(&yaml)
                 .unwrap_or_else(|error| panic!("invalid weighted AI YAML: {error}\n{yaml}"));
         }
 
-        let route: Value = serde_yaml::from_str(&child_route_yaml()).unwrap();
+        let route: Value = yaml_serde::from_str(&child_route_yaml()).unwrap();
         let refs = route
             .pointer("/spec/rules/0/backendRefs")
             .and_then(Value::as_array)
@@ -493,19 +493,19 @@ mod tests {
         assert_eq!(refs[2]["kind"], "Service");
         assert_eq!(refs[2]["weight"], 0);
 
-        let child: Value = serde_yaml::from_str(&child_route_yaml()).unwrap();
+        let child: Value = yaml_serde::from_str(&child_route_yaml()).unwrap();
         assert_eq!(
             child.pointer("/spec/rules/0/backendRefs"),
             Some(&Value::Array(refs.clone()))
         );
-        let parent: Value = serde_yaml::from_str(&delegated_parent_yaml()).unwrap();
+        let parent: Value = yaml_serde::from_str(&delegated_parent_yaml()).unwrap();
         assert_eq!(
             parent.pointer("/spec/rules/0/backendRefs/0/kind"),
             Some(&Value::String("HTTPRoute".into()))
         );
 
-        let denied: Value = serde_yaml::from_str(&route_grant_yaml(false)).unwrap();
-        let allowed: Value = serde_yaml::from_str(&route_grant_yaml(true)).unwrap();
+        let denied: Value = yaml_serde::from_str(&route_grant_yaml(false)).unwrap();
+        let allowed: Value = yaml_serde::from_str(&route_grant_yaml(true)).unwrap();
         assert_eq!(denied.pointer("/spec/to").and_then(Value::as_array).unwrap().len(), 1);
         assert_eq!(allowed.pointer("/spec/to").and_then(Value::as_array).unwrap().len(), 2);
     }

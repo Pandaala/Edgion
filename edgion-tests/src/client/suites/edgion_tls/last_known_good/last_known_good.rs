@@ -198,8 +198,8 @@ impl LastKnownGoodInitialTestSuite {
 
         let content =
             std::fs::read_to_string(fixture).map_err(|_| "failed to read the valid TLS Secret fixture".to_string())?;
-        let secret: serde_yaml::Value =
-            serde_yaml::from_str(&content).map_err(|_| "failed to parse the valid TLS Secret fixture".to_string())?;
+        let secret: yaml_serde::Value =
+            yaml_serde::from_str(&content).map_err(|_| "failed to parse the valid TLS Secret fixture".to_string())?;
         let encoded = secret["data"]["tls.crt"]
             .as_str()
             .ok_or_else(|| "valid TLS Secret fixture has no data.tls.crt".to_string())?;

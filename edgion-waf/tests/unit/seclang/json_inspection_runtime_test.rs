@@ -3142,8 +3142,8 @@ fn supported_oracle_bundle(profile: &str) -> SupportedOracleBundle {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
         "../config/waf/crs-4.25.1-supported-v1/generated/EdgionConfigData_crs-supported-{profile}.yaml"
     ));
-    let value: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    serde_yaml::from_value(value["spec"]["data"]["config"].clone()).unwrap()
+    let value: yaml_serde::Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    yaml_serde::from_value(value["spec"]["data"]["config"].clone()).unwrap()
 }
 fn supported_oracle_generation(profile: &str) -> CompiledGeneration {
     use crate::seclang::{compile_rule_bundles, FrontendLimits, RuleBundleMember, RuleBundleSource};

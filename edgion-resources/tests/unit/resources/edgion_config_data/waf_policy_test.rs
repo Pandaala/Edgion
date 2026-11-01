@@ -91,7 +91,7 @@ fn selection_transport_defaults_and_exact_prepared_binding() {
         invalid_wire["profiles"]["low"]["ruleSelection"] = invalid;
         assert!(serde_json::from_value::<WafPolicyData>(invalid_wire).is_err());
     }
-    value.profiles.get_mut("low").unwrap().rule_selection = serde_yaml::from_str("include: {tag: php}").unwrap();
+    value.profiles.get_mut("low").unwrap().rule_selection = yaml_serde::from_str("include: {tag: php}").unwrap();
     let prepared = value.prepare_selections().unwrap();
     assert!(prepared.live_bytes() > 0);
     assert!(prepared.selection("low", &value.profiles["low"]).unwrap().is_some());
@@ -100,7 +100,7 @@ fn selection_transport_defaults_and_exact_prepared_binding() {
         decoded.profiles["low"].rule_selection,
         value.profiles["low"].rule_selection
     );
-    value.profiles.get_mut("low").unwrap().rule_selection = serde_yaml::from_str("include: {tag: java}").unwrap();
+    value.profiles.get_mut("low").unwrap().rule_selection = yaml_serde::from_str("include: {tag: java}").unwrap();
     assert!(prepared.selection("low", &value.profiles["low"]).is_err());
     let schema = serde_json::to_value(schemars::schema_for!(WafProfile)).unwrap();
     assert!(schema["properties"].get("ruleSelection").is_some());
@@ -110,12 +110,12 @@ fn selection_transport_defaults_and_exact_prepared_binding() {
 fn mixed_policy_empty_profile_is_one_pass_and_stale_sibling_binding_is_rejected() {
     let mut value = policy();
     let mut sibling = value.profiles["low"].clone();
-    sibling.rule_selection = serde_yaml::from_str("include: {tag: php}").unwrap();
+    sibling.rule_selection = yaml_serde::from_str("include: {tag: php}").unwrap();
     value.profiles.insert("other".into(), sibling);
     let owner = value.prepare_selections().unwrap();
     assert!(owner.validate_binding(&value).is_ok());
     assert!(owner.selection("low", &value.profiles["low"]).unwrap().is_none());
     value.profiles.get_mut("other").unwrap().rule_selection =
-        serde_yaml::from_str("include: {anyOf: [{tag: php}, {tag: java}]}").unwrap();
+        yaml_serde::from_str("include: {anyOf: [{tag: php}, {tag: java}]}").unwrap();
     assert!(owner.validate_binding(&value).is_err());
 }

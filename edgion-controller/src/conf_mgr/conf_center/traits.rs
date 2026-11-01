@@ -90,7 +90,7 @@ pub(super) fn project_conf_entry_to_key(kind: &str, entry: &ConfEntry) -> Option
         metadata: Option<ResourceKeyMeta>,
     }
 
-    let partial: Partial = serde_yaml::from_str(&entry.content)
+    let partial: Partial = yaml_serde::from_str(&entry.content)
         .or_else(|_| serde_json::from_str(&entry.content))
         .ok()?;
 
@@ -191,7 +191,7 @@ pub enum ConfWriterError {
     },
 
     /// Parse / serialization error. `context` must be a `'static` string
-    /// literal; the underlying error (serde_yaml, serde_json, …) is boxed.
+    /// literal; the underlying error (yaml_serde, serde_json, …) is boxed.
     #[error("Parse error: {context}")]
     ParseError {
         context: &'static str,

@@ -213,7 +213,7 @@ items:
     items:
       - key: alice
 "#;
-    let data: KeyListData = serde_yaml::from_str(yaml).unwrap();
+    let data: KeyListData = yaml_serde::from_str(yaml).unwrap();
     assert!(matches!(data.match_mode, KeyMatchMode::Exact));
 }
 
@@ -232,7 +232,7 @@ items:
     items:
       - key: carol
 "#;
-    let data: KeyListData = serde_yaml::from_str(yaml).unwrap();
+    let data: KeyListData = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(data.items.len(), 2);
     assert_eq!(data.items[0].name, "partner-a");
     assert_eq!(data.items[0].items.len(), 2);

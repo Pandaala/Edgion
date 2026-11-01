@@ -1231,12 +1231,12 @@ mod tests {
 
     #[test]
     fn fixture_aliases_and_exclusion_polarity_match_in_both_trees() {
-        let local: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let local: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml"
         )))
         .unwrap();
-        let kubernetes: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let kubernetes: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/k8s/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml"
         )))

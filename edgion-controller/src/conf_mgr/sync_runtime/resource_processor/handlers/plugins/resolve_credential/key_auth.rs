@@ -94,7 +94,7 @@ fn resolve_group(
             }
         };
 
-        let keys_list: Vec<HashMap<String, String>> = match serde_yaml::from_str(keys_yaml_str) {
+        let keys_list: Vec<HashMap<String, String>> = match yaml_serde::from_str(keys_yaml_str) {
             Ok(list) => list,
             Err(e) => {
                 tracing::warn!(

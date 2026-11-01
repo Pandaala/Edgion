@@ -32,7 +32,7 @@ fn original_supported_bundle_keeps_logical_rules_with_shared_physical_regexes() 
         let path = root.join(format!(
             "config/waf/crs-4.25.1-supported-v1/generated/EdgionConfigData_crs-supported-{profile}.yaml"
         ));
-        let value: serde_yaml::Value = serde_yaml::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let value: yaml_serde::Value = yaml_serde::from_slice(&std::fs::read(path).unwrap()).unwrap();
         value["spec"]["data"]["config"].clone()
     });
     let roots = bundles.each_ref().map(|bundle| {
@@ -2286,7 +2286,7 @@ fn static_selection_prunes_exclusive_plans_but_preserves_shared_target_regex() {
     let baseline = with_validated(source, |validated| {
         compile_validated(validated, None, CompilerLimits::default()).unwrap()
     });
-    let program = serde_yaml::from_str::<WafRuleSelection>("exclude: {tag: drop}")
+    let program = yaml_serde::from_str::<WafRuleSelection>("exclude: {tag: drop}")
         .unwrap()
         .prepare()
         .unwrap();

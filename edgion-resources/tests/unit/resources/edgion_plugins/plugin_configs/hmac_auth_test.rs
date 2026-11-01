@@ -173,18 +173,18 @@ fn test_validate_secret_groups_empty_refs() {
 #[test]
 fn standalone_wire_stays_flat_and_round_trips() {
     let config: HmacAuthConfig =
-        serde_yaml::from_str("anonymous: guest\nrealm: edge\nvalidateRequestBody: true\nhideCredentials: true\n")
+        yaml_serde::from_str("anonymous: guest\nrealm: edge\nvalidateRequestBody: true\nhideCredentials: true\n")
             .unwrap();
     assert_eq!(config.anonymous.as_deref(), Some("guest"));
     assert!(config.match_config.validate_request_body);
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = yaml_serde::to_string(&config).unwrap();
     assert!(yaml.contains("validateRequestBody: true"), "{yaml}");
     assert!(!yaml.contains("matchConfig"), "{yaml}");
 }
 
 #[test]
 fn standalone_wire_keeps_lenient_unknown_field_behavior() {
-    let config: HmacAuthConfig = serde_yaml::from_str("anonymous: guest\nfutureField: ignored\n").unwrap();
+    let config: HmacAuthConfig = yaml_serde::from_str("anonymous: guest\nfutureField: ignored\n").unwrap();
     assert_eq!(config.anonymous.as_deref(), Some("guest"));
 }
 

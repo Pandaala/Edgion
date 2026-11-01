@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn mirror_global_defaults_and_partial_override() {
-    let default: RequestMirrorGlobalConfig = serde_yaml::from_str("{}").unwrap();
+    let default: RequestMirrorGlobalConfig = yaml_serde::from_str("{}").unwrap();
     assert_eq!(
         default.resolve().unwrap(),
         ResolvedRequestMirrorGlobalConfig {
@@ -10,7 +10,7 @@ fn mirror_global_defaults_and_partial_override() {
             max_buffered_bytes: 64 * 1024 * 1024,
         }
     );
-    let partial: RequestMirrorGlobalConfig = serde_yaml::from_str("max_buffered_bytes: 2MiB").unwrap();
+    let partial: RequestMirrorGlobalConfig = yaml_serde::from_str("max_buffered_bytes: 2MiB").unwrap();
     assert_eq!(partial.resolve().unwrap().max_concurrent, 1024);
     assert_eq!(partial.resolve().unwrap().max_buffered_bytes, 2 * 1024 * 1024);
 }
@@ -54,5 +54,5 @@ fn mirror_global_limits_accept_boundaries_and_reject_unbounded_values() {
 
 #[test]
 fn mirror_global_unknown_knob_is_rejected() {
-    assert!(serde_yaml::from_str::<RequestMirrorGlobalConfig>("max_concurent: 12").is_err());
+    assert!(yaml_serde::from_str::<RequestMirrorGlobalConfig>("max_concurent: 12").is_err());
 }

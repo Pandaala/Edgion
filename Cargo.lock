@@ -1623,7 +1623,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2",
  "tabled",
  "tempfile",
@@ -1633,6 +1632,7 @@ dependencies = [
  "url",
  "wat",
  "wiremock",
+ "yaml_serde",
  "zeroize",
 ]
 
@@ -1733,7 +1733,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2",
  "smallvec",
  "tempfile",
@@ -1755,6 +1754,7 @@ dependencies = [
  "walkdir",
  "wiremock",
  "x509-parser 0.18.1",
+ "yaml_serde",
  "zeroize",
 ]
 
@@ -1852,7 +1852,6 @@ dependencies = [
  "serde",
  "serde_ignored",
  "serde_json",
- "serde_yaml",
  "sha1",
  "sha2",
  "smallvec",
@@ -1879,6 +1878,7 @@ dependencies = [
  "webpki-roots 1.0.10",
  "wiremock",
  "x509-parser 0.18.1",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1910,13 +1910,13 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2",
  "smallvec",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "url",
+ "yaml_serde",
  "zeroize",
 ]
 
@@ -1967,7 +1967,6 @@ dependencies = [
  "rustls-native-certs 0.8.4",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha1",
  "sha2",
  "tempfile",
@@ -1986,6 +1985,7 @@ dependencies = [
  "uuid",
  "wiremock",
  "x509-parser 0.18.1",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -2000,11 +2000,11 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha1",
  "sha2",
  "smallvec",
  "thiserror 2.0.20",
+ "yaml_serde",
  "zmij",
 ]
 
@@ -3673,6 +3673,12 @@ checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
 dependencies = [
  "cc",
 ]
+
+[[package]]
+name = "libyaml-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
 
 [[package]]
 name = "libz-ng-sys"
@@ -8078,6 +8084,19 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
+name = "yaml_serde"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
+dependencies = [
+ "indexmap 2.14.0",
+ "itoa",
+ "libyaml-rs",
+ "ryu",
+ "serde",
+]
 
 [[package]]
 name = "yansi"

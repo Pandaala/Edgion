@@ -181,14 +181,14 @@ spec:
     );
 }
 
-/// The non-fatal guarantee: a document parsed as a `serde_yaml::Value`
+/// The non-fatal guarantee: a document parsed as a `yaml_serde::Value`
 /// but cannot convert to `serde_json::Value` (a non-string mapping key, which
 /// JSON has no representation for) must still load successfully via the normal
 /// typed parse — the diagnostic just skips itself instead of failing the load.
 /// This guarantee is tested directly against the seam helper
 /// rather than through `parse_resource_content`'s full round trip: a
 /// document with a mapping key that is itself a YAML sequence (`? [a, b]`)
-/// parses fine into `serde_yaml::Value` (YAML permits non-scalar keys),
+/// parses fine into `yaml_serde::Value` (YAML permits non-scalar keys),
 /// but JSON has no representation for a non-string object key, so
 /// `serde_json::to_value` fails on it — the exact failure shape this
 /// non-fatal seam guards against.
@@ -197,7 +197,7 @@ spec:
 /// entry point: a struct field's key deserializer requires a string
 /// identifier regardless of whether the field is recognized, so any
 /// document with a non-scalar top-level key fails the typed parse itself
-/// (`serde_yaml::from_str::<K>`) before this seam ever runs — i.e. the
+/// (`yaml_serde::from_str::<K>`) before this seam ever runs — i.e. the
 /// class of document that breaks the JSON round-trip is already rejected
 /// upstream, and the seam's non-fatal skip is defense-in-depth for that
 /// gap rather than something reachable end-to-end today. Calling the
@@ -211,7 +211,7 @@ fn json_conversion_failure_is_skipped_and_leaves_object_untouched() {
 
     super::populate_unknown_fields_non_fatal(
         edgion_resources::ResourceKind::EdgionPlugins,
-        &serde_yaml::from_str(unconvertible_content).unwrap(),
+        &yaml_serde::from_str(unconvertible_content).unwrap(),
         &mut parsed,
     );
 
@@ -241,13 +241,13 @@ spec:
 #[test]
 fn advisory_kinds_preserve_raw_failure_precedence_and_text_type_errors() {
     let duplicate = CLEAN_PLUGINS.replace("name: clean-plugins", "name: first\n  name: second");
-    let expected = serde_yaml::from_str::<serde_yaml::Value>(&duplicate).unwrap_err();
+    let expected = yaml_serde::from_str::<yaml_serde::Value>(&duplicate).unwrap_err();
     let actual = parse_resource_content::<EdgionPlugins>(&duplicate).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
 
     let invalid = CLEAN_PLUGINS.replace("requestPlugins:", "requestPlugins: invalid\n  ignored:");
-    assert!(serde_yaml::from_str::<serde_yaml::Value>(&invalid).is_ok());
-    let expected = serde_yaml::from_str::<EdgionPlugins>(&invalid).unwrap_err();
+    assert!(yaml_serde::from_str::<yaml_serde::Value>(&invalid).is_ok());
+    let expected = yaml_serde::from_str::<EdgionPlugins>(&invalid).unwrap_err();
     let actual = parse_resource_content::<EdgionPlugins>(&invalid).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(

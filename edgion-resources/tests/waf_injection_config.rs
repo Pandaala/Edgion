@@ -9,7 +9,7 @@ const FIXTURE_DIR: &str = concat!(
 
 fn config_data(file: &str) -> EdgionConfigData {
     let path = format!("{FIXTURE_DIR}/{file}");
-    serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    yaml_serde::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
 /// Mirror the Controller's policyRef resolution for the fixture's single profile.
@@ -40,11 +40,11 @@ fn resolve(config: &mut WafConfig) {
 
 #[test]
 fn gateway_injection_hot_reload_config_strictly_compiles() {
-    let document: serde_yaml::Value = serde_yaml::from_str(
+    let document: yaml_serde::Value = yaml_serde::from_str(
         &std::fs::read_to_string(format!("{FIXTURE_DIR}/EdgionPlugins_waf-dynamic.yaml")).unwrap(),
     )
     .unwrap();
-    let mut config: WafConfig = serde_yaml::from_value(document["spec"]["waf"].clone()).unwrap();
+    let mut config: WafConfig = yaml_serde::from_value(document["spec"]["waf"].clone()).unwrap();
     resolve(&mut config);
     // Support inspection covers inline rules only; inspect the resolved bundle text.
     let bundle = &config.resolved_bundles.as_ref().unwrap()[0].data;

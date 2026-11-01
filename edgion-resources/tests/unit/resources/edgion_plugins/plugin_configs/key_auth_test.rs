@@ -85,7 +85,7 @@ keySources:
 hideCredentials: true
 realm: "Production API"
 "#;
-    let config: KeyAuthConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: KeyAuthConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.key_sources.len(), 2);
     assert!(config.hide_credentials);
     assert_eq!(config.realm, "Production API");

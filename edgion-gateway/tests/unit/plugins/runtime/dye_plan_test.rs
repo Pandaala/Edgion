@@ -143,7 +143,7 @@ fn dye_producer_inventory_matches_declared_capability_union() {
 
 #[test]
 fn compile_plan_splits_directions_and_compiles_templates() {
-    let suite: DyeSuite = serde_yaml::from_str(
+    let suite: DyeSuite = yaml_serde::from_str(
         "request:\n  - name: X-T\nresponse:\n  - name: X-O\n    on: [fail-open]\n    value: 'v ${header:X-Id}'\n",
     )
     .unwrap();
@@ -156,7 +156,7 @@ fn compile_plan_splits_directions_and_compiles_templates() {
 
 #[test]
 fn compile_plan_leaves_omitted_value_as_recorded_value() {
-    let suite: DyeSuite = serde_yaml::from_str("response:\n  - name: X-O\n").unwrap();
+    let suite: DyeSuite = yaml_serde::from_str("response:\n  - name: X-O\n").unwrap();
     let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();
     assert_eq!(plan.response.len(), 1);
     assert!(plan.response[0].value.is_none());
@@ -166,7 +166,7 @@ fn compile_plan_leaves_omitted_value_as_recorded_value() {
 
 #[test]
 fn compile_plan_carries_rule_conditions() {
-    let suite: DyeSuite = serde_yaml::from_str(
+    let suite: DyeSuite = yaml_serde::from_str(
             "response:\n  - name: X-O\n    conditions:\n      run:\n        allOf:\n          - type: keyExist\n            key:\n              type: header\n              name: X-Debug\n",
         )
         .unwrap();

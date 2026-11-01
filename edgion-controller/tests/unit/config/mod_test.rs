@@ -3,7 +3,7 @@ use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 
 #[test]
 fn validation_rejects_removed_controller_plugin_policy() {
-    let error = serde_yaml::from_str::<EdgionControllerConfig>(
+    let error = yaml_serde::from_str::<EdgionControllerConfig>(
         "validation:\n  plugin_policy:\n    mode: denylist\n    plugins: []\n",
     )
     .unwrap_err()
@@ -15,9 +15,9 @@ fn validation_rejects_removed_controller_plugin_policy() {
 
 #[test]
 fn validation_preserves_reference_grant_configuration() {
-    let defaults: ValidationConfig = serde_yaml::from_str("{}").unwrap();
+    let defaults: ValidationConfig = yaml_serde::from_str("{}").unwrap();
     assert!(defaults.enable_reference_grant_validation);
-    let explicit: ValidationConfig = serde_yaml::from_str("enable_reference_grant_validation: false").unwrap();
+    let explicit: ValidationConfig = yaml_serde::from_str("enable_reference_grant_validation: false").unwrap();
     assert!(!explicit.enable_reference_grant_validation);
     let wire = serde_json::to_value(defaults).unwrap();
     assert_eq!(wire.as_object().unwrap().len(), 1);
@@ -36,7 +36,7 @@ fn dns_resolver_defaults_enabled_15s() {
 #[test]
 fn dns_resolver_parses_from_yaml() {
     let yaml = "enabled: false\nrefresh_interval: 30s\nservers:\n  - 1.1.1.1\n  - 8.8.8.8:5353\n";
-    let cfg: DnsResolverConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: DnsResolverConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(!cfg.enabled);
     assert_eq!(cfg.refresh_interval, "30s");
     assert_eq!(cfg.servers, vec!["1.1.1.1".to_string(), "8.8.8.8:5353".to_string()]);
@@ -45,7 +45,7 @@ fn dns_resolver_parses_from_yaml() {
 #[test]
 fn dns_resolver_omitted_fields_take_defaults() {
     // `#[serde(default)]` on the struct → an empty map yields the full default.
-    let cfg: DnsResolverConfig = serde_yaml::from_str("{}").unwrap();
+    let cfg: DnsResolverConfig = yaml_serde::from_str("{}").unwrap();
     assert!(cfg.enabled);
     assert_eq!(cfg.refresh_interval, "15s");
 }
@@ -152,7 +152,7 @@ center:
   env: [production]
   tag: [team-infra]
 "#;
-    let config: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: EdgionControllerConfig = yaml_serde::from_str(yaml).unwrap();
     let center = config.center.unwrap();
     assert_eq!(center.address, "http://center.example.com:50052");
     assert_eq!(center.name, "ctrl-01");
@@ -165,7 +165,7 @@ center:
 #[test]
 fn test_metrics_resource_abnormal_defaults() {
     let yaml = "work_dir: /tmp\n";
-    let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: EdgionControllerConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(cfg.metrics.resource_abnormal.enabled);
     assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 300);
 }
@@ -178,7 +178,7 @@ metrics:
     enabled: false
     tick_secs: 60
 "#;
-    let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: EdgionControllerConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(!cfg.metrics.resource_abnormal.enabled);
     assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 60);
 }
@@ -300,7 +300,7 @@ fn test_metrics_resource_abnormal_hard_cap_scenarios() {
 
 #[test]
 fn cli_tokens_parse_and_validate() {
-    let cfg: EdgionControllerConfig = serde_yaml::from_str(
+    let cfg: EdgionControllerConfig = yaml_serde::from_str(
             "cli_tokens:\n  - name: bot\n    token_sha256: \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n    rbac:\n      allow:\n        - verbs: [get, list]\n          kinds: [EdgionConfigData]\n",
         )
         .unwrap();
@@ -367,14 +367,14 @@ fn cli_tokens_validate_rejects_bad_hash_dup_name_dup_hash() {
 
 #[test]
 fn center_enabled_defaults_to_true() {
-    let cfg: CenterClientConfig = serde_yaml::from_str("address: \"https://c:12251\"\nname: n\ncluster: c\n").unwrap();
+    let cfg: CenterClientConfig = yaml_serde::from_str("address: \"https://c:12251\"\nname: n\ncluster: c\n").unwrap();
     assert!(cfg.enabled, "enabled must default to true (backward compatible)");
     assert!(cfg.rbac.is_none(), "absent rbac => None => deny-all downstream");
 }
 
 #[test]
 fn center_rbac_parses_allow_rules() {
-    let cfg: CenterClientConfig = serde_yaml::from_str(
+    let cfg: CenterClientConfig = yaml_serde::from_str(
         r#"
 address: a
 name: n
@@ -438,12 +438,12 @@ fn channel_fixture_yaml(path: &str) -> String {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let yaml = std::fs::read_to_string(root.join(path)).unwrap();
     if path.ends_with("configmap.yaml") {
-        let configmap: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let configmap: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         configmap["data"]
             .as_mapping()
             .unwrap()
             .values()
-            .filter_map(serde_yaml::Value::as_str)
+            .filter_map(yaml_serde::Value::as_str)
             .find(|value| value.contains("conf_sync_security:"))
             .expect("ConfigMap must contain the binary configuration")
             .to_string()

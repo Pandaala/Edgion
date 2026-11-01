@@ -155,7 +155,7 @@ secretGroups:
         namespace: edgion-default
 realm: "Dynamic Partner API"
 "#;
-    let cfg: BasicAuthConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: BasicAuthConfig = yaml_serde::from_str(yaml).unwrap();
     let groups = cfg.secret_groups.unwrap();
     assert_eq!(groups.len(), 2, "should parse 2 groups, got {}", groups.len());
     assert_eq!(groups[0].name, "partner-a");

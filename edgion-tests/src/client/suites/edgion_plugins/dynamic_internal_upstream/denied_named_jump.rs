@@ -60,7 +60,7 @@ impl TestSuite for DeniedNamedJumpTestSuite {
 
 async fn run(ctx: &TestContext) -> Result<()> {
     for yaml in FIXTURES {
-        let fixture: Value = serde_yaml::from_str(yaml)?;
+        let fixture: Value = yaml_serde::from_str(yaml)?;
         let kind = fixture["kind"].as_str().context("fixture kind")?;
         let ns = fixture["metadata"]["namespace"].as_str().context("fixture namespace")?;
         let name = fixture["metadata"]["name"].as_str().context("fixture name")?;
@@ -115,7 +115,7 @@ async fn run(ctx: &TestContext) -> Result<()> {
     // Wait for the exact processed specs, including refDenied, at the Gateway.
     // This is state polling, independent of the behavior assertions below.
     for yaml in FIXTURES {
-        let fixture: Value = serde_yaml::from_str(yaml)?;
+        let fixture: Value = yaml_serde::from_str(yaml)?;
         let kind = fixture["kind"].as_str().context("fixture kind")?;
         let ns = fixture["metadata"]["namespace"].as_str().context("fixture namespace")?;
         let name = fixture["metadata"]["name"].as_str().context("fixture name")?;
@@ -365,11 +365,11 @@ mod tests {
     fn named_jump_fixtures_validate_and_compile_dye_plans() {
         let mut checked = 0;
         for yaml in FIXTURES {
-            let fixture: Value = serde_yaml::from_str(yaml).expect("valid fixture YAML");
+            let fixture: Value = yaml_serde::from_str(yaml).expect("valid fixture YAML");
             if fixture["kind"] != "EdgionPlugins" {
                 continue;
             }
-            let plugin: EdgionPlugins = serde_yaml::from_str(yaml).expect("valid plugin resource");
+            let plugin: EdgionPlugins = yaml_serde::from_str(yaml).expect("valid plugin resource");
             let name = plugin.metadata.name.as_deref().expect("fixture name");
             let errors = plugin.validate_plugins();
             assert!(errors.is_empty(), "{name}: resource validation failed: {errors:?}");

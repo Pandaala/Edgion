@@ -434,7 +434,7 @@ fn dye_policy_update_replaces_plan_and_recovers_without_retaining_old_rules() {
 
 #[test]
 fn dye_canary_internal_kill_switch_keeps_anti_spoof_plan() {
-    let mut resource: EdgionPlugins = serde_yaml::from_str(include_str!(
+    let mut resource: EdgionPlugins = yaml_serde::from_str(include_str!(
             "../../../../../../edgion-tests/integration/conf/EdgionPlugins/Canary/20_EdgionPlugins_default_canary-kill-switch-strip.yaml"
         )).unwrap();
     let compiled = compile_plugins(&resource);
@@ -465,7 +465,7 @@ fn dye_named_jump_fixtures_reject_unreachable_subscriptions_consistently() {
             (true, include_str!("../../../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml")),
         ];
     for (valid, yaml) in fixtures {
-        let mut resource: EdgionPlugins = serde_yaml::from_str(yaml).unwrap();
+        let mut resource: EdgionPlugins = yaml_serde::from_str(yaml).unwrap();
         let fixture = compile_plugins(&resource);
         assert!(resource.validate_plugins().is_empty());
         assert!(fixture.preparse_errors.is_empty());
@@ -2000,7 +2000,7 @@ fn validate_plugins_matches_compile_plugins_error_set() {
     }
 
     let ai_guard = || {
-        let config: edgion_resources::resources::edgion_plugins::AiGuardConfig = serde_yaml::from_str(
+        let config: edgion_resources::resources::edgion_plugins::AiGuardConfig = yaml_serde::from_str(
             "rules:\n  - name: r\n    match: { type: regex, pattern: \"x\" }\n    action: reject\n",
         )
         .expect("configuration parses");
@@ -2008,7 +2008,7 @@ fn validate_plugins_matches_compile_plugins_error_set() {
     };
     let ai_proxy = || {
         let config: edgion_resources::resources::edgion_plugins::AiProxyConfig =
-            serde_yaml::from_str("api: openaiChat").expect("configuration parses");
+            yaml_serde::from_str("api: openaiChat").expect("configuration parses");
         RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
     };
 

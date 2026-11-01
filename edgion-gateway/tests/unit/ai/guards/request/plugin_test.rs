@@ -44,7 +44,7 @@ fn refusal_facts_preserve_json_types_defaults_and_duplicate_keys() {
 }
 
 fn config(rules: &str, extra: &str) -> AiGuardConfig {
-    serde_yaml::from_str(&format!("rules:\n{rules}{extra}")).expect("configuration parses")
+    yaml_serde::from_str(&format!("rules:\n{rules}{extra}")).expect("configuration parses")
 }
 
 fn reject_rule() -> &'static str {

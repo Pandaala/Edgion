@@ -463,7 +463,7 @@ mod capability_tests {
 
     #[test]
     fn tls_geo_stage1_uses_supported_passthrough_without_weakening_terminate_gates() {
-        let gateway: edgion_resources::Gateway = serde_yaml::from_str(include_str!(concat!(
+        let gateway: edgion_resources::Gateway = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/TLSRoute/GeoRestriction/02_Gateway.yaml"
         )))
@@ -471,7 +471,7 @@ mod capability_tests {
         let value: serde_json::Value = serde_json::to_value(gateway).unwrap();
         assert_eq!(value["spec"]["listeners"][0]["tls"]["mode"], "Passthrough");
         assert!(value["spec"]["listeners"][0]["tls"].get("certificateRefs").is_none());
-        let route: edgion_resources::TLSRoute = serde_yaml::from_str(include_str!(concat!(
+        let route: edgion_resources::TLSRoute = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/TLSRoute/GeoRestriction/04_TLSRoute.yaml"
         )))
@@ -518,8 +518,8 @@ mod capability_tests {
         let mut count = 0;
         for path in paths {
             let yaml = std::fs::read_to_string(root.join(path)).unwrap();
-            for document in serde_yaml::Deserializer::from_str(&yaml) {
-                let value = serde_yaml::Value::deserialize(document).unwrap();
+            for document in yaml_serde::Deserializer::from_str(&yaml) {
+                let value = yaml_serde::Value::deserialize(document).unwrap();
                 let expected_namespace = if path.starts_with("integration/conf/EdgionPlugins/ResponseCache/") {
                     "edgion-default"
                 } else {
@@ -532,22 +532,22 @@ mod capability_tests {
                 );
                 match value["kind"].as_str().unwrap() {
                     "EdgionConfigData" => {
-                        let _: edgion_resources::EdgionConfigData = serde_yaml::from_value(value).unwrap();
+                        let _: edgion_resources::EdgionConfigData = yaml_serde::from_value(value).unwrap();
                     }
                     "EdgionStreamPlugins" => {
-                        let _: edgion_resources::EdgionStreamPlugins = serde_yaml::from_value(value).unwrap();
+                        let _: edgion_resources::EdgionStreamPlugins = yaml_serde::from_value(value).unwrap();
                     }
                     "Gateway" => {
-                        let _: edgion_resources::Gateway = serde_yaml::from_value(value).unwrap();
+                        let _: edgion_resources::Gateway = yaml_serde::from_value(value).unwrap();
                     }
                     "TLSRoute" => {
-                        let _: edgion_resources::TLSRoute = serde_yaml::from_value(value).unwrap();
+                        let _: edgion_resources::TLSRoute = yaml_serde::from_value(value).unwrap();
                     }
                     "Service" => {
-                        let _: k8s_openapi::api::core::v1::Service = serde_yaml::from_value(value).unwrap();
+                        let _: k8s_openapi::api::core::v1::Service = yaml_serde::from_value(value).unwrap();
                     }
                     "EndpointSlice" => {
-                        let _: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_value(value).unwrap();
+                        let _: k8s_openapi::api::discovery::v1::EndpointSlice = yaml_serde::from_value(value).unwrap();
                     }
                     other => panic!("unexpected fixture kind {other}"),
                 }
@@ -562,12 +562,12 @@ mod capability_tests {
 
     #[test]
     fn response_cache_target_update_only_replaces_origin_port() {
-        let initial: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_str(include_str!(concat!(
+        let initial: k8s_openapi::api::discovery::v1::EndpointSlice = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/EdgionPlugins/ResponseCache/DynamicTest/initial/02_EndpointSlice.yaml"
         )))
         .unwrap();
-        let target: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_str(include_str!(concat!(
+        let target: k8s_openapi::api::discovery::v1::EndpointSlice = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/EdgionPlugins/ResponseCache/DynamicTest/updates/target/02_EndpointSlice.yaml"
         )))
@@ -738,7 +738,7 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         assert_eq!(kind, edgion_tests::port_config::PortKind::Http);
         let port = config.require_port(key, kind).unwrap();
         assert_eq!(port, 31149);
-        let gateway: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let gateway: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/integration/conf/HTTPRoute/MetricsLifetime/Gateway_default_metrics-lifetime.yaml"
         )))
@@ -984,7 +984,7 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/DslBody/DynamicTest/initial/EdgionPlugins_dsl-xml-dynamic.yaml")),
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/conf/EdgionPlugins/DslBody/DynamicTest/updates/to_updated/EdgionPlugins_dsl-xml-dynamic.yaml")),
         ] {
-            let plugin: edgion_resources::EdgionPlugins = serde_yaml::from_str(source).unwrap();
+            let plugin: edgion_resources::EdgionPlugins = yaml_serde::from_str(source).unwrap();
             let errors = plugin.validate_plugins();
             assert!(errors.is_empty(), "XML fixture {}: {errors:?}", plugin.metadata.name.unwrap());
         }

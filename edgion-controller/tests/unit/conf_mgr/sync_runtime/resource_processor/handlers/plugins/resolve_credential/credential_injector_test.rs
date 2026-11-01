@@ -317,7 +317,7 @@ async fn malformed_and_oversized_material_remain_unresolved_and_surface_status()
 }
 
 fn credential_source_config() -> edgion_resources::resources::link_sys::CredentialSourceConfig {
-    serde_yaml::from_str(
+    yaml_serde::from_str(
         r#"
 provider:
   type: oauth2ClientCredentials

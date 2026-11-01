@@ -506,28 +506,28 @@ mod tests {
             (fixture!("updates/redis.yaml"), "redis"),
             (fixture!("updates/webhook-v2.yaml"), "webhook"),
         ] {
-            let resource: LinkSys = serde_yaml::from_str(source).expect("tracked LinkSys fixture must deserialize");
+            let resource: LinkSys = yaml_serde::from_str(source).expect("tracked LinkSys fixture must deserialize");
             let errors = resource.validate_config();
             assert!(errors.is_empty(), "invalid LinkSys fixture: {errors:?}");
-            let value: Value = serde_yaml::from_str(source).unwrap();
+            let value: Value = yaml_serde::from_str(source).unwrap();
             assert_eq!(value["metadata"]["name"], NAME);
             assert_eq!(value["metadata"]["namespace"], NS);
             assert_eq!(value["spec"]["type"], provider);
         }
-        let plugins: EdgionPlugins = serde_yaml::from_str(fixture!("initial/02_EdgionPlugins.yaml")).unwrap();
+        let plugins: EdgionPlugins = yaml_serde::from_str(fixture!("initial/02_EdgionPlugins.yaml")).unwrap();
         let errors = plugins.validate_plugins();
         assert!(errors.is_empty(), "invalid replacement consumer: {errors:?}");
-        let plugin: Value = serde_yaml::from_str(fixture!("initial/02_EdgionPlugins.yaml")).unwrap();
+        let plugin: Value = yaml_serde::from_str(fixture!("initial/02_EdgionPlugins.yaml")).unwrap();
         assert_eq!(
             plugin["spec"]["requestPlugins"][0]["config"]["vars"][0]["webhookRef"],
             KEY
         );
-        let route: HTTPRoute = serde_yaml::from_str(fixture!("initial/03_HTTPRoute.yaml")).unwrap();
+        let route: HTTPRoute = yaml_serde::from_str(fixture!("initial/03_HTTPRoute.yaml")).unwrap();
         assert_eq!(route.metadata.name.as_deref(), Some(NAME));
-        let secret: Value = serde_yaml::from_str(fixture!("initial/00_Secret.yaml")).unwrap();
+        let secret: Value = yaml_serde::from_str(fixture!("initial/00_Secret.yaml")).unwrap();
         assert_eq!(secret["metadata"]["name"], AUTH);
         assert_eq!(secret["stringData"]["password"], "edgion-test-pwd");
-        let redis: Value = serde_yaml::from_str(fixture!("updates/redis.yaml")).unwrap();
+        let redis: Value = yaml_serde::from_str(fixture!("updates/redis.yaml")).unwrap();
         assert_eq!(redis["spec"]["config"]["endpoints"][0], "redis://127.0.0.1:16379");
         assert_eq!(redis["spec"]["config"]["auth"]["secretRef"]["name"], AUTH);
     }

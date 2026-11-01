@@ -131,7 +131,7 @@ fn generated_target_is_derived_and_valid_binding_hash_encoding_is_preserved() {
 }
 
 fn source() -> DesiredCredentialSource {
-    let owner: LinkSys = serde_yaml::from_str(
+    let owner: LinkSys = yaml_serde::from_str(
         r#"
 apiVersion: edgion.io/v1
 kind: LinkSys

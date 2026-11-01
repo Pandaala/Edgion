@@ -251,21 +251,21 @@ fn test_admin_listen_defaults_to_loopback() {
 #[test]
 fn request_mirror_process_limits_survive_cli_merge() {
     let yaml = "request_mirror:\n  max_concurrent: 17\n  max_buffered_bytes: 8MiB\n";
-    let de = serde_yaml::Deserializer::from_str(yaml);
-    let mut file: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
+    let de = yaml_serde::Deserializer::from_str(yaml);
+    let mut file: EdgionGatewayConfig = yaml_serde::with::singleton_map_recursive::deserialize(de).unwrap();
     EdgionGatewayConfig::merge(&mut file, &EdgionGatewayConfig::default());
     let resolved = file.request_mirror.resolve().unwrap();
     assert_eq!(resolved.max_concurrent, 17);
     assert_eq!(resolved.max_buffered_bytes, 8 * 1024 * 1024);
-    assert!(serde_yaml::from_str::<EdgionGatewayConfig>("request_mirror:\n  max_concurent: 17\n").is_err());
+    assert!(yaml_serde::from_str::<EdgionGatewayConfig>("request_mirror:\n  max_concurent: 17\n").is_err());
 }
 
 #[test]
 fn access_log_options_use_the_canonical_key_in_root_gateway_yaml() {
-    let canonical: EdgionGatewayConfig = serde_yaml::from_str("access_log_options:\n  includeRawUri: true\n").unwrap();
+    let canonical: EdgionGatewayConfig = yaml_serde::from_str("access_log_options:\n  includeRawUri: true\n").unwrap();
     assert!(canonical.access_log_options.include_raw_uri);
 
-    assert!(serde_yaml::from_str::<EdgionGatewayConfig>("access_log_options:\n  include_raw_uri: true\n").is_err());
+    assert!(yaml_serde::from_str::<EdgionGatewayConfig>("access_log_options:\n  include_raw_uri: true\n").is_err());
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn test_access_log_sensitive_default_is_replace() {
     // Privacy-by-default: `ext` rendering (and the built-in sensitive
     // fields) follow this mode, so shipping `off` would leave the
     // EdgionGatewayConfig whitelist inert out of the box.
-    let cfg: EdgionGatewayConfig = serde_yaml::from_str("{}").unwrap();
+    let cfg: EdgionGatewayConfig = yaml_serde::from_str("{}").unwrap();
     assert!(matches!(
         cfg.access_log_sensitive.mode,
         edgion_resources::sensitive::SensitiveMode::Replace
@@ -337,7 +337,7 @@ access_log_sensitive:
   mode: replace
   replace_with: "{MSKED}"
 "#;
-    let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
+    let cfg: EdgionGatewayConfig = yaml_serde::from_str(yaml_str).unwrap();
     assert!(matches!(
         cfg.access_log_sensitive.mode,
         edgion_resources::sensitive::SensitiveMode::Replace
@@ -353,7 +353,7 @@ access_log_sensitive:
   wrap_prefix: "<E>"
   wrap_suffix: "</E>"
 "#;
-    let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
+    let cfg: EdgionGatewayConfig = yaml_serde::from_str(yaml_str).unwrap();
     assert!(matches!(
         cfg.access_log_sensitive.mode,
         edgion_resources::sensitive::SensitiveMode::Wrap
@@ -373,7 +373,7 @@ fn test_metrics_listen_defaults_to_management_block() {
 fn genai_token_metric_is_disabled_by_default_and_yaml_can_enable_it() {
     assert!(!MetricsConfig::default().genai_tokens.enabled);
 
-    let cfg: MetricsConfig = serde_yaml::from_str(
+    let cfg: MetricsConfig = yaml_serde::from_str(
         r#"
 genai_tokens:
   enabled: true
@@ -447,7 +447,7 @@ fn admin_token_is_not_serialized() {
         },
         ..Default::default()
     };
-    let serialized = serde_yaml::to_string(&cfg).unwrap();
+    let serialized = yaml_serde::to_string(&cfg).unwrap();
     assert!(
         !serialized.contains("must-not-leak"),
         "admin_token must not serialize out"
@@ -503,7 +503,7 @@ fn outbound_egress_defaults_are_permissive_and_short_lived() {
 
 #[test]
 fn outbound_egress_parses_from_yaml() {
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = yaml_serde::from_str(
         "outbound_egress_block_private: true\noutbound_egress_dns_cache_ttl_ms: 30000\n\
              outbound_http2_max_header_list_size: 65536\n",
     )
@@ -520,7 +520,7 @@ fn wasm_oci_cache_fields_parse_and_default() {
     assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 60);
     assert_eq!(cfg.wasm_oci_cache_max_bytes, 256 * 1024 * 1024);
     assert_eq!(cfg.wasm_oci_cache_max_entries, 256);
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = yaml_serde::from_str(
         "wasm_oci_cache_max_entries: 0\nwasm_oci_cache_ttl_secs: 60\n\
              wasm_oci_cache_purge_interval_secs: 30\nwasm_oci_cache_max_bytes: 0\n",
     )
@@ -532,13 +532,13 @@ fn wasm_oci_cache_fields_parse_and_default() {
     // A zero purge interval parses as-is (no "disable" semantics); the
     // busy-loop guard is a startup clamp in `configure_oci_memory_cache`,
     // not a parse-time rejection.
-    let cfg: GatewayConfig = serde_yaml::from_str("wasm_oci_cache_purge_interval_secs: 0\n").unwrap();
+    let cfg: GatewayConfig = yaml_serde::from_str("wasm_oci_cache_purge_interval_secs: 0\n").unwrap();
     assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 0);
     // Pull tuning defaults + YAML override.
     assert_eq!(GatewayConfig::default().wasm_oci_pull_timeout_secs, 60);
     assert_eq!(GatewayConfig::default().wasm_oci_pull_attempts, 3);
     let cfg: GatewayConfig =
-        serde_yaml::from_str("wasm_oci_pull_timeout_secs: 15\nwasm_oci_pull_attempts: 5\n").unwrap();
+        yaml_serde::from_str("wasm_oci_pull_timeout_secs: 15\nwasm_oci_pull_attempts: 5\n").unwrap();
     assert_eq!(cfg.wasm_oci_pull_timeout_secs, 15);
     assert_eq!(cfg.wasm_oci_pull_attempts, 5);
 }
@@ -552,7 +552,7 @@ fn outbound_egress_fields_come_from_config_file_not_cli() {
     // guards against a regression that re-adds a clap flag for these
     // fields without also wiring `merge()` to honor it.
     let yaml = "gateway:\n  outbound_egress_block_private: true\n  outbound_egress_dns_cache_ttl_ms: 30000\n";
-    let mut base: EdgionGatewayConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut base: EdgionGatewayConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(base.gateway.outbound_egress_block_private);
     assert_eq!(base.gateway.outbound_egress_dns_cache_ttl_ms, 30_000);
 
@@ -622,8 +622,8 @@ fn check_fips_requirement_err_when_required_but_missing() {
 #[test]
 fn otlp_reference_uses_production_yaml_deserialization() {
     let yaml = "access_log:\n  output:\n    otlp:\n      linkSysRef:\n        namespace: observability\n        name: collector\n";
-    let de = serde_yaml::Deserializer::from_str(yaml);
-    let cfg: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
+    let de = yaml_serde::Deserializer::from_str(yaml);
+    let cfg: EdgionGatewayConfig = yaml_serde::with::singleton_map_recursive::deserialize(de).unwrap();
     let edgion_resources::StringOutput::Otlp { link_sys_ref } = cfg.access_log.output else {
         panic!("expected OTLP reference output");
     };
@@ -643,10 +643,10 @@ fn otlp_invalid_references_fail_every_process_log_output_before_startup() {
                     let mut config = serde_json::json!({});
                     config[log] = serde_json::json!({"enabled": false});
                     config[log][position] = serde_json::json!({"otlp": {"linkSysRef": reference}});
-                    let yaml = serde_yaml::to_string(&config).unwrap();
-                    let de = serde_yaml::Deserializer::from_str(&yaml);
+                    let yaml = yaml_serde::to_string(&config).unwrap();
+                    let de = yaml_serde::Deserializer::from_str(&yaml);
                     let result: Result<EdgionGatewayConfig, _> =
-                        serde_yaml::with::singleton_map_recursive::deserialize(de);
+                        yaml_serde::with::singleton_map_recursive::deserialize(de);
                     let error = result
                         .expect_err("invalid OTLP reference must fail config loading")
                         .to_string();
@@ -672,8 +672,8 @@ fn otlp_inline_process_configuration_is_rejected() {
         let yaml = format!(
                 "access_log:\n  output:\n    otlp:\n      linkSysRef: {{namespace: default, name: collector}}\n      {inline}\n"
             );
-        let de = serde_yaml::Deserializer::from_str(&yaml);
-        let result: Result<EdgionGatewayConfig, _> = serde_yaml::with::singleton_map_recursive::deserialize(de);
+        let de = yaml_serde::Deserializer::from_str(&yaml);
+        let result: Result<EdgionGatewayConfig, _> = yaml_serde::with::singleton_map_recursive::deserialize(de);
         let error = result.expect_err("inline OTLP fields must be rejected").to_string();
         assert!(!error.contains("private-sentinel"));
     }
@@ -774,22 +774,22 @@ fn gateway_config_deserializes_fips_policy() {
     use crate::tls::fips_profile::FipsPolicyMode;
 
     let yaml = "fips_policy: auto\n";
-    let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+    let parsed: GatewayConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::Auto));
 
     // Bare `on` resolves to a YAML boolean, so it must be quoted to reach
     // the string parser.
     let yaml = "fips_policy: \"on\"\n";
-    let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+    let parsed: GatewayConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::On));
 
     // Omitted => None => the startup path applies Auto.
-    let parsed: GatewayConfig = serde_yaml::from_str("{}").unwrap();
+    let parsed: GatewayConfig = yaml_serde::from_str("{}").unwrap();
     assert_eq!(parsed.fips_policy, None);
 
     // No compatibility layer: a YAML boolean is rejected outright.
     let yaml = "fips_policy: true\n";
-    assert!(serde_yaml::from_str::<GatewayConfig>(yaml).is_err());
+    assert!(yaml_serde::from_str::<GatewayConfig>(yaml).is_err());
 }
 
 #[test]
@@ -825,12 +825,12 @@ fn response_cache_restart_limits_include_standing_epoch_and_reject_partial_popul
     reduced.max_body_bytes = 64;
     reduced.pending_bytes = usize::MAX;
     assert!(reduced.validate().is_err());
-    assert!(serde_yaml::from_str::<EdgionGatewayConfig>("response_cache:\n  unknown: 1\n").is_err());
+    assert!(yaml_serde::from_str::<EdgionGatewayConfig>("response_cache:\n  unknown: 1\n").is_err());
 }
 
 #[test]
 fn wasm_resource_limits_parse_strictly_and_keep_defaults() {
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = yaml_serde::from_str(
         "wasm_limits:\n  guest_memory_bytes: 1048576\n  max_idle_guest_memory_bytes: 65536\n  max_preparations: 2\n",
     )
     .unwrap();
@@ -849,7 +849,7 @@ fn wasm_resource_limits_parse_strictly_and_keep_defaults() {
         "wasm_limits: {guest_memory_bytes: -1}",
         "wasm_limits: {max_instances: null}",
     ] {
-        assert!(serde_yaml::from_str::<GatewayConfig>(invalid).is_err(), "{invalid}");
+        assert!(yaml_serde::from_str::<GatewayConfig>(invalid).is_err(), "{invalid}");
     }
 }
 
@@ -881,12 +881,12 @@ fn channel_fixture_yaml(path: &str) -> String {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let yaml = std::fs::read_to_string(root.join(path)).unwrap();
     if path.ends_with("configmap.yaml") {
-        let configmap: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let configmap: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         configmap["data"]
             .as_mapping()
             .unwrap()
             .values()
-            .filter_map(serde_yaml::Value::as_str)
+            .filter_map(yaml_serde::Value::as_str)
             .find(|value| value.contains("conf_sync_security:"))
             .expect("ConfigMap must contain the binary configuration")
             .to_string()

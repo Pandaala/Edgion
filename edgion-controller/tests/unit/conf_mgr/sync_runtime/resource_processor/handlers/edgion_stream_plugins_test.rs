@@ -31,7 +31,7 @@ spec:
               - name: blocklist
                 namespace: team-b
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
 
     // Seed the IpList in team-b (enabled, Namespace visibility -> requires grant).
@@ -117,7 +117,7 @@ spec:
       config:
         denyRefs: [{ name: tls-blk }]
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let refs = EdgionStreamPluginsHandler::iter_ip_list_refs(&esp);
     // Sorted by (ns, name): all default namespace.
     assert_eq!(
@@ -145,7 +145,7 @@ spec:
       config:
         denyRefs: [{ name: l4-blk }]
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx();
 
     // Missing IpList -> one error, expected_type IpList.
@@ -216,7 +216,7 @@ spec:
           - name: blocklist
             namespace: team-b
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
 
     // Seed the IpList in team-b so ref_denied is set on parse.
@@ -273,7 +273,7 @@ spec:
           - name: blocklist
             namespace: team-b
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
 
     // Seed the IpList in team-b so parse() registers the cross-ns ref.
@@ -348,8 +348,8 @@ spec:
         message: blocked
         status: 403
 "#;
-    let raw: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
-    let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let raw: serde_json::Value = yaml_serde::from_str(yaml).unwrap();
+    let mut esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     esp.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
         &raw["spec"],
         edgion_resources::resources::edgion_stream_plugins::edgion_stream_plugins_spec_schema(),
@@ -372,7 +372,7 @@ spec:
           - name: default
         defaultAction: deny
 "#;
-    serde_yaml::from_str(yaml).unwrap()
+    yaml_serde::from_str(yaml).unwrap()
 }
 
 #[test]
@@ -405,7 +405,7 @@ spec:
       config:
         defaultAction: deny
 "#;
-    serde_yaml::from_str(yaml).unwrap()
+    yaml_serde::from_str(yaml).unwrap()
 }
 
 #[test]
@@ -439,7 +439,7 @@ spec:
       config:
         defaultAction: deny
 "#;
-    let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let mut esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let handler = EdgionStreamPluginsHandler::new();
     let errors = handler.preparse(&mut esp, &make_ctx());
     assert_eq!(
@@ -473,7 +473,7 @@ spec:
       config:
         defaultAction: deny
 "#;
-    let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let mut esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let handler = EdgionStreamPluginsHandler::new();
     let errors = handler.preparse(&mut esp, &make_ctx());
     assert!(errors.is_empty(), "disabled plugins must be skipped; got: {errors:?}");
@@ -512,7 +512,7 @@ spec:
       config:
         redisRef: "default/redis"
 "#;
-    let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let mut esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let handler = EdgionStreamPluginsHandler::new();
     let errors = handler.preparse(&mut esp, &make_ctx());
     assert_eq!(errors.len(), 1, "expected one validation error; got: {errors:?}");
@@ -691,7 +691,7 @@ spec:
             cidrs: ["not-a-cidr"]
         defaultAction: allow
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let mut esp = esp;
     let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
@@ -723,7 +723,7 @@ spec:
               - name: bad
                 cidrs: ["256.0.0.1/32"]
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let mut esp = esp;
     let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
@@ -750,7 +750,7 @@ spec:
           - name: bad
             cidrs: ["not-a-cidr"]
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let mut esp = esp;
     let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
@@ -796,7 +796,7 @@ spec:
               - name: blocklist
                 namespace: team-b
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
 
     // Seed the IpList in team-b (enabled, Namespace visibility -> requires grant).
@@ -865,7 +865,7 @@ spec:
       config:
         denyRefs: [{ name: disabled-list }]
 "#;
-    let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    let esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
     let ctx = make_ctx();
 
     // Seed a disabled (enable: false) IpList -> must not resolve.

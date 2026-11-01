@@ -141,7 +141,7 @@ fn language_examples_have_exact_digest_bound_omissions_and_retained_attack_cover
         assert_eq!(baseline_ids.len(), 567);
         for (document, omissions) in [(JAVA, PHP_OMISSIONS), (PHP, JAVA_OMISSIONS)] {
             let mut configured = config.clone();
-            let selected = serde_yaml::from_str::<WafRuleSelection>(document).unwrap();
+            let selected = yaml_serde::from_str::<WafRuleSelection>(document).unwrap();
             configured
                 .resolved_policy
                 .as_mut()

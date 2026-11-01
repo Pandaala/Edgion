@@ -28,7 +28,7 @@ struct LocalBundleEnvelope {
 
 fn decode_local_bundle(bytes: &[u8]) -> Result<EdgionConfigData> {
     let input: LocalBundleEnvelope =
-        serde_yaml::from_slice(bytes).map_err(|_| anyhow::anyhow!("invalid local WafRuleBundle resource"))?;
+        yaml_serde::from_slice(bytes).map_err(|_| anyhow::anyhow!("invalid local WafRuleBundle resource"))?;
     let name = input
         .metadata
         .name
@@ -133,7 +133,7 @@ pub fn execute(args: &WafArgs) -> Result<()> {
                 None => None,
             };
             let selection = match &selection_bytes {
-                Some(bytes) => serde_yaml::from_slice::<WafRuleSelection>(bytes)
+                Some(bytes) => yaml_serde::from_slice::<WafRuleSelection>(bytes)
                     .map_err(|_| anyhow::anyhow!("invalid bounded WAF rule selection"))?,
                 None => WafRuleSelection::default(),
             };

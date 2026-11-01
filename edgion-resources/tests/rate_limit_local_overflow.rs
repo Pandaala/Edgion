@@ -144,7 +144,7 @@ fn overflow_predicate_has_one_permitted_placement() {
 
 #[test]
 fn overflow_redis_profile_keeps_hmac_body_restriction() {
-    let condition: Condition = serde_yaml::from_str("type: hmacAuth\nsecretGroups:\n  - name: default\n    secretRefs:\n      - name: credentials\nalgorithms: [hmac-sha256]\nvalidateRequestBody: true\n").unwrap();
+    let condition: Condition = yaml_serde::from_str("type: hmacAuth\nsecretGroups:\n  - name: default\n    secretRefs:\n      - name: credentials\nalgorithms: [hmac-sha256]\nvalidateRequestBody: true\n").unwrap();
     let errors = condition
         .validate_for_profile(ConditionValidationProfile::RateLimitRedisRun)
         .unwrap_err();

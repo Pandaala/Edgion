@@ -240,7 +240,7 @@ fn redis_auth_requires_secret_ref() {
 secretRef:
   name: redis-creds
 "#;
-    let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
+    let auth: RedisAuth = yaml_serde::from_str(yaml).expect("should deserialize");
     assert_eq!(auth.slot.secret_ref.name, "redis-creds");
     assert!(auth.slot.secret_ref.namespace.is_none());
 }
@@ -252,7 +252,7 @@ secretRef:
   name: redis-creds
   namespace: credentials
 "#;
-    let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
+    let auth: RedisAuth = yaml_serde::from_str(yaml).expect("should deserialize");
     assert_eq!(auth.slot.secret_ref.name, "redis-creds");
     assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("credentials"));
 }
@@ -260,21 +260,21 @@ secretRef:
 #[test]
 fn redis_auth_rejects_inline_password() {
     let yaml = "secretRef:\n  name: r\npassword: leaked";
-    let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<RedisAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn redis_auth_rejects_inline_username() {
     let yaml = "secretRef:\n  name: r\nusername: admin";
-    let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<RedisAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
 }
 
 #[test]
 fn redis_auth_rejects_missing_secret_ref() {
     let yaml = "{}";
-    let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<RedisAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err(), "secretRef is a required field");
 }
 
@@ -282,7 +282,7 @@ fn redis_auth_rejects_missing_secret_ref() {
 fn redis_auth_yaml_roundtrip_unchanged() {
     // Verify #[serde(flatten)] preserves the YAML shape at the parent level.
     let yaml = "secretRef:\n  name: redis-creds\n  namespace: default";
-    let auth: super::RedisAuth = serde_yaml::from_str(yaml).unwrap();
+    let auth: super::RedisAuth = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(auth.slot.secret_ref.name, "redis-creds");
     assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("default"));
     assert!(auth.slot.secret.is_none());
@@ -291,7 +291,7 @@ fn redis_auth_yaml_roundtrip_unchanged() {
 #[test]
 fn redis_auth_rejects_unknown_field() {
     let yaml = "secretRef:\n  name: x\nbogus: 1";
-    let r: Result<super::RedisAuth, _> = serde_yaml::from_str(yaml);
+    let r: Result<super::RedisAuth, _> = yaml_serde::from_str(yaml);
     assert!(r.is_err());
 }
 
@@ -300,7 +300,7 @@ fn redis_sentinel_ignores_stale_password() {
     // No deny_unknown_fields on RedisSentinel: a legacy `password:` from a
     // pre-upgrade CR must be silently ignored, not rejected (graceful upgrade).
     let yaml = "masterName: mymaster\nsentinels:\n  - redis://h:26379\npassword: legacy-no-op";
-    let s: super::RedisSentinel = serde_yaml::from_str(yaml).expect("stale password must be ignored");
+    let s: super::RedisSentinel = yaml_serde::from_str(yaml).expect("stale password must be ignored");
     assert_eq!(s.master_name, "mymaster");
     assert_eq!(s.sentinels.len(), 1);
 }

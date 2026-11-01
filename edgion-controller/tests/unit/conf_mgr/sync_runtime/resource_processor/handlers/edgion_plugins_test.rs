@@ -1020,7 +1020,7 @@ fn first_request_access_policy_condition(
 
 fn request_access_url_policy(config_refs_yaml: &str) -> EdgionPlugins {
     let config: edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig =
-        serde_yaml::from_str(&format!(
+        yaml_serde::from_str(&format!(
             r#"
 defaultProfile: lockdown
 profiles:
@@ -8602,7 +8602,7 @@ async fn waf_static_selection_reuses_optional_trials_and_refreshes_policy_only_u
         profiles: std::collections::BTreeMap::from([(
             "default".into(),
             WafProfile {
-                rule_selection: serde_yaml::from_str(expression).unwrap(),
+                rule_selection: yaml_serde::from_str(expression).unwrap(),
                 bundle_refs: vec![
                     WafBundleRef {
                         target: EdgionConfigDataRef {

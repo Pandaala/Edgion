@@ -87,6 +87,6 @@ fn envelope_requires_metadata_presence_without_validating_its_shape() {
 #[test]
 fn envelope_keeps_duplicate_key_parser_behavior() {
     assert!(extract_resource_metadata("kind: Service\nkind: HTTPRoute\nmetadata: {}").is_none());
-    // The JSON fallback also targets serde_yaml::Value and rejects duplicates.
+    // The JSON fallback also targets yaml_serde::Value and rejects duplicates.
     assert!(extract_resource_metadata(r#"{"kind":"Service","kind":"HTTPRoute","metadata":{}}"#).is_none());
 }

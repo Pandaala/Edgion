@@ -164,7 +164,7 @@ fn rejects_duplicate_rule_names_within_group() {
 
 #[test]
 fn serde_uses_required_groups_and_typed_rules() {
-    let yaml = serde_yaml::to_string(&config()).unwrap();
+    let yaml = yaml_serde::to_string(&config()).unwrap();
     assert!(yaml.contains("requiredRuleGroups:"), "{yaml}");
     assert!(yaml.contains("anyOfRules:"), "{yaml}");
     assert!(yaml.contains("type: remoteIp"), "{yaml}");
@@ -181,7 +181,7 @@ fn hmac_match_condition_rejects_standalone_only_fields() {
         "upstreamHeaderFields: [X-Consumer]",
     ] {
         let yaml = format!("type: hmacAuth\n{field}\n");
-        assert!(serde_yaml::from_str::<Condition>(&yaml).is_err(), "accepted: {field}");
+        assert!(yaml_serde::from_str::<Condition>(&yaml).is_err(), "accepted: {field}");
     }
 }
 

@@ -197,7 +197,7 @@ fn secondary_restored() -> Box<dyn TestSuite> {
 }
 
 fn secondary_spec_restored(resource: &serde_json::Value) -> bool {
-    let expected: serde_yaml::Value = serde_yaml::from_str(include_str!(
+    let expected: yaml_serde::Value = yaml_serde::from_str(include_str!(
         "../../../../integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/00_EdgionConfigData_realip-secondary.yaml"
     )).expect("tracked initial secondary fixture is valid YAML");
     let expected = serde_json::to_value(expected).expect("fixture contains JSON-compatible YAML");
@@ -264,8 +264,8 @@ mod restoration_spec_tests {
     use super::*;
     #[test]
     fn secondary_restoration_rejects_masked_updated_and_missing_spec() {
-        let initial: serde_yaml::Value = serde_yaml::from_str(include_str!("../../../../integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/00_EdgionConfigData_realip-secondary.yaml")).unwrap();
-        let updated: serde_yaml::Value = serde_yaml::from_str(include_str!("../../../../integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/updates/03_EdgionConfigData_realip-secondary.yaml")).unwrap();
+        let initial: yaml_serde::Value = yaml_serde::from_str(include_str!("../../../../integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/00_EdgionConfigData_realip-secondary.yaml")).unwrap();
+        let updated: yaml_serde::Value = yaml_serde::from_str(include_str!("../../../../integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/updates/03_EdgionConfigData_realip-secondary.yaml")).unwrap();
         let mut initial = serde_json::to_value(initial).unwrap();
         assert!(secondary_spec_restored(&initial));
         initial["spec"]["enable"] = serde_json::json!(true);

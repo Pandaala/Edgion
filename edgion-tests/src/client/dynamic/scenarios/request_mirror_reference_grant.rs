@@ -28,7 +28,7 @@ fn resource(kind: &str, ns: &str, spec: Value) -> Value {
 }
 
 async fn apply(ctx: &TestContext, value: Value) -> Result<()> {
-    ctx.apply_yaml(&serde_yaml::to_string(&value)?)
+    ctx.apply_yaml(&yaml_serde::to_string(&value)?)
         .await
         .map_err(anyhow::Error::msg)
 }
@@ -564,7 +564,7 @@ mod tests {
                 "{}/k8s/conf/EdgionPlugins/RequestMirror/DynamicTest/initial/{namespace}.yaml",
                 env!("CARGO_MANIFEST_DIR")
             );
-            let document: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let document: yaml_serde::Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             assert_eq!(document["kind"], "Service");
         }
     }

@@ -191,7 +191,7 @@ fn canonical_raw_guards_reject_missing_and_old_versions() {
 
 #[test]
 fn canonical_sources_reject_bad_type_meta_in_yaml_and_json() {
-    type Check = fn(&str) -> serde_yaml::Result<()>;
+    type Check = fn(&str) -> yaml_serde::Result<()>;
     for (kind, check) in [
         ("GatewayClass", validate_resource_api_version::<GatewayClass> as Check),
         ("Gateway", validate_resource_api_version::<Gateway> as Check),
@@ -228,11 +228,11 @@ fn tcp_and_udp_alpha_ingress_converts_to_v1() {
     for (kind, check) in [
         (
             "TCPRoute",
-            validate_resource_api_version::<TCPRoute> as fn(&str) -> serde_yaml::Result<()>,
+            validate_resource_api_version::<TCPRoute> as fn(&str) -> yaml_serde::Result<()>,
         ),
         (
             "UDPRoute",
-            validate_resource_api_version::<UDPRoute> as fn(&str) -> serde_yaml::Result<()>,
+            validate_resource_api_version::<UDPRoute> as fn(&str) -> yaml_serde::Result<()>,
         ),
     ] {
         let alpha = format!(
@@ -263,7 +263,7 @@ fn raw_yaml_failures_precede_source_and_typed_validation() {
         "kind: Wrong\napiVersion: unsupported\nspec: [unterminated\n",
         "kind: Wrong\napiVersion: unsupported\nmetadata: {name: one, name: two}\nspec: {}\n",
     ] {
-        let expected = serde_yaml::from_str::<serde_yaml::Value>(raw).unwrap_err();
+        let expected = yaml_serde::from_str::<yaml_serde::Value>(raw).unwrap_err();
         let actual = super::parse_resource_content::<GatewayClass>(raw).unwrap_err();
         assert_eq!(actual.to_string(), expected.to_string());
         assert_eq!(
@@ -272,7 +272,7 @@ fn raw_yaml_failures_precede_source_and_typed_validation() {
         );
     }
     let raw = "kind: Wrong\napiVersion: unsupported\nmetadata: []\nspec: []\n";
-    assert!(serde_yaml::from_str::<serde_yaml::Value>(raw).is_ok());
+    assert!(yaml_serde::from_str::<yaml_serde::Value>(raw).is_ok());
     let actual = super::parse_resource_content::<GatewayClass>(raw).unwrap_err();
     assert_eq!(actual.to_string(), "GatewayClass kind must be GatewayClass");
 }
@@ -288,11 +288,11 @@ fn canonical_and_beta_keep_original_text_deserializer_behavior() {
             let raw = format!(
                 "apiVersion: gateway.networking.k8s.io/{version}\nkind: GatewayClass\nmetadata:\n  name: edge\nspec:\n  controllerName: {value}\n"
             );
-            assert!(serde_yaml::from_str::<serde_yaml::Value>(&raw).is_ok());
+            assert!(yaml_serde::from_str::<yaml_serde::Value>(&raw).is_ok());
             let expected = if version == "v1beta1" {
-                serde_yaml::from_str::<edgion_resources::GatewayClassBeta>(&raw).map(GatewayClass::from)
+                yaml_serde::from_str::<edgion_resources::GatewayClassBeta>(&raw).map(GatewayClass::from)
             } else {
-                serde_yaml::from_str::<GatewayClass>(&raw)
+                yaml_serde::from_str::<GatewayClass>(&raw)
             };
             let actual = super::parse_resource_content::<GatewayClass>(&raw);
             match (expected, actual) {

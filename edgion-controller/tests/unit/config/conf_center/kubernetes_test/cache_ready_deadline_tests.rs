@@ -23,6 +23,6 @@ fn deadline_at_or_below_poll_budget_rejected() {
 #[test]
 fn deadline_deserializes_with_default() {
     let yaml = "{}";
-    let cfg: KubernetesConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: KubernetesConfig = yaml_serde::from_str(yaml).expect("parse");
     assert_eq!(cfg.cache_ready_deadline_secs, 90);
 }

@@ -59,7 +59,7 @@ status:
         .get_one("HTTPRoute", Some("default"), "route")
         .await
         .expect("updated resource must be readable");
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).expect("stored resource must be valid YAML");
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).expect("stored resource must be valid YAML");
     assert_eq!(stored["metadata"]["uid"], "uid-1");
     assert_eq!(stored["metadata"]["resourceVersion"], "43");
     assert_eq!(stored["metadata"]["generation"], 7);
@@ -128,7 +128,7 @@ status:
         .get_one("HTTPRoute", Some("default"), "route")
         .await
         .expect("updated resource must be readable");
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).expect("stored resource must be valid YAML");
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).expect("stored resource must be valid YAML");
     assert_eq!(stored["metadata"]["uid"], "uid-1");
     assert_eq!(stored["metadata"]["finalizers"][0], "edgion.io/finalizer");
     assert_eq!(stored["status"]["conditions"][0]["type"], "Accepted");
@@ -162,7 +162,7 @@ async fn stale_expected_resource_version_conflicts_without_writing() {
         .expect_err("stale update must conflict");
     assert!(matches!(error, ConfWriterError::Conflict(_)));
     let stored = storage.get_one("HTTPRoute", Some("default"), "route").await.unwrap();
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).unwrap();
     assert_eq!(stored["metadata"]["resourceVersion"], "42");
     assert_eq!(stored["spec"]["hostnames"][0], "current.example");
 }

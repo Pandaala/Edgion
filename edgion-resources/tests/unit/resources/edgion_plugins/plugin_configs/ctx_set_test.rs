@@ -9,7 +9,7 @@ vars:
       type: header
       name: X-User-Id
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     assert_eq!(config.vars.len(), 1);
     assert_eq!(config.vars[0].name, "user_id");
@@ -22,7 +22,7 @@ vars:
   - name: env
     value: production
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     assert_eq!(config.vars[0].value, Some("production".to_string()));
 }
@@ -34,7 +34,7 @@ vars:
   - name: rate_key
     template: "${header:X-Tenant}_${remoteIp}"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     assert_eq!(
         config.vars[0].template,
@@ -54,7 +54,7 @@ vars:
       regex: "Bearer .*\\.(.+)\\."
       group: 1
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     assert!(config.get_compiled_regex(0).is_some());
 }
@@ -71,7 +71,7 @@ vars:
         pattern: "^/api/v[0-9]+/"
         with: "/"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
 }
 
@@ -85,7 +85,7 @@ vars:
     transform:
       case: lower
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     let transform = config.vars[0].transform.as_ref().unwrap();
     assert!(matches!(transform.case, Some(CaseType::Lower)));
@@ -102,7 +102,7 @@ vars:
     transform:
       substring: [0, 8]
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     let transform = config.vars[0].transform.as_ref().unwrap();
     assert_eq!(transform.substring, Some((0, 8)));
@@ -125,7 +125,7 @@ vars:
     transform:
       suffix: "_v2"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     let t0 = config.vars[0].transform.as_ref().unwrap();
     let t1 = config.vars[1].transform.as_ref().unwrap();
@@ -148,7 +148,7 @@ vars:
         basic: tier_2
       default: tier_3
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     let mapping = config.vars[0].mapping.as_ref().unwrap();
     assert_eq!(mapping.values.get("premium"), Some(&"tier_1".to_string()));
@@ -175,7 +175,7 @@ vars:
       default: tenant_default
     default: unknown_tenant
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
 }
 
@@ -184,7 +184,7 @@ fn test_validation_empty_vars() {
     let yaml = r#"
 vars: []
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("vars list is empty"));
 }
@@ -196,7 +196,7 @@ vars:
   - name: ""
     value: test
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("name is empty"));
 }
@@ -207,7 +207,7 @@ fn test_validation_no_value_source() {
 vars:
   - name: test_var
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("must specify"));
 }
@@ -223,7 +223,7 @@ vars:
     extract:
       regex: "([invalid"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("invalid extract regex"));
 }
@@ -240,7 +240,7 @@ vars:
         pattern: "([invalid"
         with: ""
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("invalid transform.replace pattern"));
 }
@@ -256,13 +256,13 @@ vars:
     transform:
       substring: [10, 5]
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("substring start"));
 }
 
 fn parse_ctx_set(yaml: &str) -> CtxSetConfig {
-    serde_yaml::from_str(yaml).expect("ctx set yaml should deserialize")
+    yaml_serde::from_str(yaml).expect("ctx set yaml should deserialize")
 }
 
 fn single_transform_yaml(transform: &str) -> String {
@@ -384,7 +384,7 @@ vars:
   - name: bad_template
     template: "hello ${header:oops"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     let err = config.validate().unwrap_err();
     assert!(err.contains("invalid template"));
 }

@@ -466,7 +466,7 @@ async fn hit_runs_current_cors_trace_and_veto_once_then_next_request_misses() {
     {
         use crate::plugins::runtime::{traits::PluginSession, CompiledDyePlan, PingoraSessionAdapter};
         use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
-        let dye: DyeSuite = serde_yaml::from_str("response:\n  - name: x-current-dye\n    on: [fail-open]\n").unwrap();
+        let dye: DyeSuite = yaml_serde::from_str("response:\n  - name: x-current-dye\n    on: [fail-open]\n").unwrap();
         ctx.install_current_dye_plan(Some(CompiledDyePlan::compile(&dye, "rate_limit_redis").unwrap()));
         PingoraSessionAdapter::new(&mut session, &mut ctx).record_outcome(DyeOutcome::FailOpen, "current");
     }

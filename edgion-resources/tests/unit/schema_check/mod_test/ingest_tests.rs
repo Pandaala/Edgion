@@ -525,11 +525,11 @@ fn migrated_geo_fixtures_decode_through_canonical_resource_wire() {
     let mut plugin_count = 0;
     for file in files {
         let text = std::fs::read_to_string(root.join(file)).unwrap();
-        for document in serde_yaml::Deserializer::from_str(&text) {
-            let value = serde_yaml::Value::deserialize(document).unwrap();
+        for document in yaml_serde::Deserializer::from_str(&text) {
+            let value = yaml_serde::Value::deserialize(document).unwrap();
             match value["kind"].as_str() {
                 Some("EdgionConfigData") => {
-                    let data: crate::EdgionConfigData = serde_yaml::from_value(value).unwrap();
+                    let data: crate::EdgionConfigData = yaml_serde::from_value(value).unwrap();
                     let crate::resources::edgion_config_data::ConfigEntry::IpList(list) = data.spec.data else {
                         panic!("named Geo fixture must be an IpList")
                     };
@@ -546,11 +546,11 @@ fn migrated_geo_fixtures_decode_through_canonical_resource_wire() {
                     list_count += 1;
                 }
                 Some("EdgionPlugins") => {
-                    let _: crate::EdgionPlugins = serde_yaml::from_value(value).unwrap();
+                    let _: crate::EdgionPlugins = yaml_serde::from_value(value).unwrap();
                     plugin_count += 1;
                 }
                 Some("EdgionStreamPlugins") => {
-                    let _: crate::EdgionStreamPlugins = serde_yaml::from_value(value).unwrap();
+                    let _: crate::EdgionStreamPlugins = yaml_serde::from_value(value).unwrap();
                     plugin_count += 1;
                 }
                 _ => {}
@@ -564,8 +564,8 @@ fn migrated_geo_fixtures_decode_through_canonical_resource_wire() {
 #[test]
 fn generated_geo_cidr_literals_use_reference_objects_and_decode_canonically() {
     fn check(text: &str, is_stream: bool, expected_list: &str) {
-        let node: serde_yaml::Value = serde_yaml::from_str(text).expect("generated CIDR template YAML");
-        let configs: Vec<serde_yaml::Value> = if let Some(entries) = node.as_sequence() {
+        let node: yaml_serde::Value = yaml_serde::from_str(text).expect("generated CIDR template YAML");
+        let configs: Vec<yaml_serde::Value> = if let Some(entries) = node.as_sequence() {
             entries
                 .iter()
                 .filter(|entry| entry["type"].as_str() == Some("GeoIpLocation"))
@@ -586,7 +586,7 @@ fn generated_geo_cidr_literals_use_reference_objects_and_decode_canonically() {
         assert!(!configs.is_empty());
         for config in configs {
             let config: crate::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig =
-                serde_yaml::from_value(config).unwrap();
+                yaml_serde::from_value(config).unwrap();
             assert!(config.check_fields(is_stream).is_none(), "valid authored CIDR template");
             for rule in config
                 .deny_rule_groups
@@ -642,7 +642,7 @@ fn generated_geo_cidr_literals_use_reference_objects_and_decode_canonically() {
         if !text.contains("key: cidr\n") {
             continue;
         }
-        let node: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+        let node: yaml_serde::Value = yaml_serde::from_str(text).unwrap();
         let field = if node["kind"].as_str() == Some("EdgionStreamPlugins") {
             "plugins"
         } else {
@@ -650,7 +650,7 @@ fn generated_geo_cidr_literals_use_reference_objects_and_decode_canonically() {
         };
         for entry in node["spec"][field].as_sequence().unwrap() {
             let config: crate::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig =
-                serde_yaml::from_value(entry["config"].clone()).unwrap();
+                yaml_serde::from_value(entry["config"].clone()).unwrap();
             assert!(config.check_fields(field == "plugins").is_none());
             let rule = &config.deny_rule_groups[0].rules[0];
             assert!(rule.values.is_empty());

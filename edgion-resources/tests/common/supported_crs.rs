@@ -285,7 +285,7 @@ fn serialize_waf_plugin(plugin: &Value) -> Result<String> {
     ensure!(plugin["kind"] == "EdgionPlugins", "expected a WAF plugin resource");
     let mode = plugin["spec"]["waf"]["mode"].as_str().context("WAF mode string")?;
     ensure!(matches!(mode, "on" | "detectionOnly"), "unexpected WAF mode");
-    let mut yaml = serde_yaml::to_string(plugin)?;
+    let mut yaml = yaml_serde::to_string(plugin)?;
     if mode == "on" {
         ensure!(
             yaml.lines().filter(|line| *line == "    mode: on").count() == 1,
@@ -305,7 +305,7 @@ fn serialize_waf_plugin(plugin: &Value) -> Result<String> {
             + "\n";
     }
     ensure!(
-        serde_yaml::from_str::<Value>(&yaml)? == *plugin,
+        yaml_serde::from_str::<Value>(&yaml)? == *plugin,
         "WAF YAML rendering changed resource values"
     );
     Ok(yaml)
@@ -315,12 +315,12 @@ pub fn outputs(package: &Package) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
     files.insert(
         format!("EdgionConfigData_{CORE}.yaml"),
-        serde_yaml::to_string(&bundle_resource(CORE, &package.core))?,
+        yaml_serde::to_string(&bundle_resource(CORE, &package.core))?,
     );
     for p in ["standard", "strict"] {
         files.insert(
             format!("EdgionConfigData_crs-supported-{p}.yaml"),
-            serde_yaml::to_string(&bundle_resource(&format!("crs-supported-{p}"), &tuning(p)?))?,
+            yaml_serde::to_string(&bundle_resource(&format!("crs-supported-{p}"), &tuning(p)?))?,
         );
         let g = config(package, p)?.compile_generation().map_err(anyhow::Error::msg)?;
         let expected = [TUNING_ID, 900990]
@@ -356,7 +356,7 @@ pub fn outputs(package: &Package) -> Result<BTreeMap<String, String>> {
             "supported profile not strictly executable"
         );
     }
-    files.insert(format!("EdgionConfigData_{POLICY}.yaml"),serde_yaml::to_string(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":POLICY,"namespace":"edgion-default"},"spec":{"data":{"type":"WafPolicy","config":policy(package)?}}}))?);
+    files.insert(format!("EdgionConfigData_{POLICY}.yaml"),yaml_serde::to_string(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":POLICY,"namespace":"edgion-default"},"spec":{"data":{"type":"WafPolicy","config":policy(package)?}}}))?);
     files.insert("EdgionPlugins_crs-supported.yaml".into(),serialize_waf_plugin(&json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"crs-supported","namespace":"edgion-default"},"spec":{"waf":{"mode":"on","policyRef":{"name":POLICY},"activeProfile":"standard","requestBody":{"inspection":"full"}}}}))?);
     let record = json!({"version":"supported-v1","original_core_units":627,"retained_original_units":565,"original_setup_units":1,"product_tuning_units":1,"core_digest":package.core.compute_digest(),"setup_sha256":sha(package.setup.as_bytes()),"profiles":policy(package)?,"outputs_sha256":files.iter().map(|(n,c)|(n.clone(),sha(c.as_bytes()))).collect::<BTreeMap<_,_>>(),"excluded_units":package.manifest.units.iter().filter(|u|!u.excluded_capabilities.is_empty()).collect::<Vec<_>>()});
     files.insert("acceptance.json".into(), serde_json::to_string_pretty(&record)? + "\n");
@@ -412,17 +412,17 @@ pub fn wire_outputs(package: &Package) -> Result<BTreeMap<String, String>> {
     ] {
         files.insert(
             format!("updates/to_supported_on/EdgionConfigData_{name}.yaml"),
-            serde_yaml::to_string(&bundle_resource(name, &data))?,
+            yaml_serde::to_string(&bundle_resource(name, &data))?,
         );
     }
     files.insert(
         "updates/to_supported_on/EdgionConfigData_waf-policy.yaml".into(),
-        serde_yaml::to_string(&policy_value)?,
+        yaml_serde::to_string(&policy_value)?,
     );
     let route = json!({"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"waf-supported","namespace":"edgion-default"},"spec":{"parentRefs":[{"name":"edgion-plugins-gateway","namespace":"edgion-test"}],"hostnames":["waf-supported.example.com"],"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"waf-dynamic"}}],"backendRefs":[{"name":"test-http","namespace":"edgion-test","port":30001}]}]}});
     files.insert(
         "updates/to_supported_on/HTTPRoute_waf-supported.yaml".into(),
-        serde_yaml::to_string(&route)?,
+        yaml_serde::to_string(&route)?,
     );
     for (phase, profile, mode) in [
         ("to_supported_on", "strict", "on"),
@@ -439,7 +439,7 @@ pub fn wire_outputs(package: &Package) -> Result<BTreeMap<String, String>> {
     tampered.rules[0].content.push('\n');
     files.insert(
         format!("updates/to_supported_invalid/EdgionConfigData_{CORE}.yaml"),
-        serde_yaml::to_string(&bundle_resource(CORE, &tampered))?,
+        yaml_serde::to_string(&bundle_resource(CORE, &tampered))?,
     );
     files.insert("delete/supported_resources.txt".into(),format!("HTTPRoute/edgion-default/waf-supported\nEdgionConfigData/edgion-default/{CORE}\nEdgionConfigData/edgion-default/crs-supported-standard\nEdgionConfigData/edgion-default/crs-supported-strict\nEdgionConfigData/edgion-default/crs-supported-wire-guard\n"));
     Ok(files)

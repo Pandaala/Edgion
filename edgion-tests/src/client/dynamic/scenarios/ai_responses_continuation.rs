@@ -26,14 +26,14 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             .conf_root
             .join("EdgionBackend/Responses/03_EdgionBackend_responses.yaml");
         let original = tokio::fs::read_to_string(&source).await?;
-        let mut changed: serde_yaml::Value = serde_yaml::from_str(&original)?;
+        let mut changed: yaml_serde::Value = yaml_serde::from_str(&original)?;
         changed["spec"]["ai"]["credentialPool"]["credentials"]
             .as_sequence_mut()
             .ok_or_else(|| anyhow::anyhow!("missing credentials"))?
-            .push(serde_yaml::from_str(
+            .push(yaml_serde::from_str(
                 "name: unresolved\nsecretRef:\n  name: responses-missing-credential\n",
             )?);
-        let changed = serde_yaml::to_string(&changed)?;
+        let changed = yaml_serde::to_string(&changed)?;
         let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
         crate::dynamic::apply::apply_yaml_documents(&client, &source, &original).await?;
         ctx.wait_phase(SCENARIO, "allowed", Duration::from_secs(15)).await?;

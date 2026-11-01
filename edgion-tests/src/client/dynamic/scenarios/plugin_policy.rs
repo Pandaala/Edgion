@@ -96,14 +96,14 @@ async fn apply_value(ctx: &ScenarioCtx, value: serde_json::Value) -> Result<()> 
     crate::dynamic::apply::apply_yaml_documents(
         &client,
         &ctx.resolve("generated-phase.yaml"),
-        &serde_yaml::to_string(&value)?,
+        &yaml_serde::to_string(&value)?,
     )
     .await
 }
 
 async fn policy(ctx: &ScenarioCtx, action: Option<&str>, status: u16) -> Result<()> {
     let mut value: serde_json::Value =
-        serde_yaml::from_str(&tokio::fs::read_to_string(ctx.resolve("initial/EdgionGatewayConfig_pp-a.yaml")).await?)?;
+        yaml_serde::from_str(&tokio::fs::read_to_string(ctx.resolve("initial/EdgionGatewayConfig_pp-a.yaml")).await?)?;
     if let Some(action) = action {
         value["spec"]["pluginPolicy"] = json!({
             "blockStatus": status,
@@ -128,7 +128,7 @@ const INVALID_SOURCE_TARGETS: &[(&str, &str, &str)] = &[
 ];
 
 fn invalidate_source(input: &str, pointer: &str, invalid: &str) -> Result<serde_json::Value> {
-    let mut value: serde_json::Value = serde_yaml::from_str(input)?;
+    let mut value: serde_json::Value = yaml_serde::from_str(input)?;
     let target = value
         .pointer_mut(pointer)
         .with_context(|| format!("fixture missing {pointer}"))?;
@@ -260,7 +260,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             policy(&ctx, Some("block"), 451).await?;
             phase(&ctx, "recreated-egc").await?;
             let mut class: serde_json::Value =
-                serde_yaml::from_str(&tokio::fs::read_to_string(ctx.resolve("initial/GatewayClass_pp-a.yaml")).await?)?;
+                yaml_serde::from_str(&tokio::fs::read_to_string(ctx.resolve("initial/GatewayClass_pp-a.yaml")).await?)?;
             class["spec"]["parametersRef"]["name"] = json!("pp-b");
             apply_value(&ctx, class).await?;
             phase(&ctx, "rebound").await?;
@@ -295,7 +295,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/PluginPolicy/DynamicTest/initial");
         for (file, pointer, invalid) in super::INVALID_SOURCE_TARGETS {
             let input = std::fs::read_to_string(root.join(file)).unwrap();
-            let original: serde_json::Value = serde_yaml::from_str(&input).unwrap();
+            let original: serde_json::Value = yaml_serde::from_str(&input).unwrap();
             let changed = super::invalidate_source(&input, pointer, invalid).unwrap();
             assert_ne!(original.pointer(pointer), changed.pointer(pointer), "{file}");
             assert_eq!(
@@ -312,13 +312,13 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/PluginPolicy/DynamicTest/initial");
         for name in ["mock", "dsl", "waf", "response", "body", "async"] {
             let input = std::fs::read_to_string(root.join(format!("EdgionPlugins_pp-{name}.yaml"))).unwrap();
-            let mut resource: edgion_resources::EdgionPlugins = serde_yaml::from_str(&input).unwrap();
+            let mut resource: edgion_resources::EdgionPlugins = yaml_serde::from_str(&input).unwrap();
             if name == "waf" {
                 use edgion_resources::resources::edgion_config_data::{WafPolicyData, WafRuleBundleData};
                 use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedWafBundle;
 
                 let read_fixture = |name: &str| -> serde_json::Value {
-                    serde_yaml::from_str(&std::fs::read_to_string(root.join(name)).unwrap()).unwrap()
+                    yaml_serde::from_str(&std::fs::read_to_string(root.join(name)).unwrap()).unwrap()
                 };
                 let policy = read_fixture("EdgionConfigData_pp-waf-policy.yaml");
                 let bundle = read_fixture("EdgionConfigData_pp-waf-rules.yaml");

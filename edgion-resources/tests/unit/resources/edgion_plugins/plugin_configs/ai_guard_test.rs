@@ -2,7 +2,7 @@ use super::*;
 use crate::resources::edgion_plugins::validate::applicable_stages_by_name;
 
 fn parse(body: &str) -> AiGuardConfig {
-    serde_yaml::from_str(body).expect("configuration parses")
+    yaml_serde::from_str(body).expect("configuration parses")
 }
 
 #[test]

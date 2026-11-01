@@ -543,7 +543,7 @@ async fn secret_reference_targets_use_gateway_api_defaults_and_reject_other_type
                 reference.kind = kind.map(str::to_string);
                 // Exercise the same typed input after YAML and JSON decode (FS/etcd
                 // and Kubernetes inputs converge on this shared handler).
-                let input: EdgionAcme = serde_yaml::from_str(&serde_yaml::to_string(&input).unwrap()).unwrap();
+                let input: EdgionAcme = yaml_serde::from_str(&yaml_serde::to_string(&input).unwrap()).unwrap();
                 let input: EdgionAcme = serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
                 let errors = handler.validate(&input, &ctx);
                 assert_eq!(errors.is_empty(), valid, "{field}: {group:?}/{kind:?}");

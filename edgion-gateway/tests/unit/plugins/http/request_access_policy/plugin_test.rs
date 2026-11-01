@@ -14,7 +14,7 @@ use sha2::Sha256;
 const HMAC_SECRET: &[u8] = b"alice-super-secret-key";
 
 fn parse_config(yaml: &str) -> RequestAccessPolicyConfig {
-    serde_yaml::from_str(yaml).expect("valid policy fixture")
+    yaml_serde::from_str(yaml).expect("valid policy fixture")
 }
 
 #[test]

@@ -53,7 +53,7 @@ fn cookie_and_ctx_names_are_case_sensitive() {
 
 #[test]
 fn operator_overrides_only_the_named_list() {
-    let policy: AccessLogExternPolicy = serde_yaml::from_str("unmaskedKeys:\n  cookie: [tier]\n").unwrap();
+    let policy: AccessLogExternPolicy = yaml_serde::from_str("unmaskedKeys:\n  cookie: [tier]\n").unwrap();
     // The named list is replaced...
     assert!(policy.unmasked_keys.allows(LogExtSource::Cookie, "tier"));
     // ...and the unnamed ones keep their defaults.

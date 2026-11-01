@@ -73,7 +73,7 @@ anyhow.workspace = true
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+yaml_serde.workspace = true
 
 # HTTP / gRPC test origin + clients. This crate uses rustls directly and so
 # sidesteps the gateway's mutually-exclusive boringssl/rustls feature dance.

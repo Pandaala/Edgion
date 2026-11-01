@@ -214,7 +214,7 @@ async fn apply_backend(ctx: &ScenarioCtx) -> Result<()> {
     crate::dynamic::apply::apply_yaml_documents(
         &client,
         &ctx.resolve("generated-backend.yaml"),
-        &serde_yaml::to_string(&backend)?,
+        &yaml_serde::to_string(&backend)?,
     )
     .await
 }

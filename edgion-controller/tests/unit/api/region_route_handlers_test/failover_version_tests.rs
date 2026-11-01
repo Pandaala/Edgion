@@ -82,7 +82,7 @@ async fn failover_advances_stored_resource_version() {
         .get_one("EdgionConfigData", Some("default"), "override")
         .await
         .expect("resource must remain readable");
-    let stored: Value = serde_yaml::from_str(&stored).expect("stored resource must be valid YAML");
+    let stored: Value = yaml_serde::from_str(&stored).expect("stored resource must be valid YAML");
 
     assert_eq!(
         stored
@@ -137,7 +137,7 @@ async fn failover_rejects_self_dangling_and_cyclic_targets_without_writing() {
             .get_one("EdgionConfigData", Some("default"), "override")
             .await
             .unwrap();
-        let stored: Value = serde_yaml::from_str(&stored).unwrap();
+        let stored: Value = yaml_serde::from_str(&stored).unwrap();
         assert_eq!(stored["metadata"]["resourceVersion"], "42");
         assert_eq!(stored["spec"]["data"], seed["spec"]["data"]);
     }
@@ -174,7 +174,7 @@ async fn mixed_raw_failover_mutates_only_canonical_table_and_preserves_idempoten
     let (state, _tmp) = make_fs_state().await;
     let seed = mixed_override_body();
     seed_resource(&state, seed.to_string()).await;
-    let mut previous: Value = serde_yaml::from_str(
+    let mut previous: Value = yaml_serde::from_str(
         &state
             .conf_center()
             .get_one("EdgionConfigData", Some("default"), "override")
@@ -198,7 +198,7 @@ async fn mixed_raw_failover_mutates_only_canonical_table_and_preserves_idempoten
             .get_one("EdgionConfigData", Some("default"), "override")
             .await
             .unwrap();
-        let stored: Value = serde_yaml::from_str(&stored).unwrap();
+        let stored: Value = yaml_serde::from_str(&stored).unwrap();
         let region = &stored["spec"]["data"]["config"]["regions"][0];
         if target.is_empty() {
             assert!(region.get("failoverTo").is_none());

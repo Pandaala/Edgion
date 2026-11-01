@@ -8,7 +8,7 @@ fn default_has_no_timeout_template() {
 
 #[test]
 fn valid_template_passes_validation() {
-    let c: ExternalHttpConnection = serde_yaml::from_str(
+    let c: ExternalHttpConnection = yaml_serde::from_str(
         "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${ctx:desired_timeout_ms}\"\n",
     )
     .unwrap();
@@ -21,7 +21,7 @@ fn malformed_template_is_rejected_at_admission() {
     // Unclosed "${" must be caught by CompiledTemplate::compile at validation
     // time, not silently at runtime.
     let c: ExternalHttpConnection =
-        serde_yaml::from_str("target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${ctx:X-Test\"\n").unwrap();
+        yaml_serde::from_str("target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${ctx:X-Test\"\n").unwrap();
     let err = validate_connection_target(&c).expect("malformed template must be rejected");
     assert!(err.contains("timeoutMsTemplate"), "got: {err}");
 }
@@ -32,7 +32,7 @@ fn secret_ref_in_template_is_rejected_at_admission() {
     // collect_secret_ref_names nor the forward_auth credential resolver), so a
     // config that references one would silently fall back to the static
     // timeoutMs at runtime with no visible error. Reject it at admission instead.
-    let c: ExternalHttpConnection = serde_yaml::from_str(
+    let c: ExternalHttpConnection = yaml_serde::from_str(
         "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${secretRef:ns/name:key}\"\n",
     )
     .unwrap();
@@ -57,7 +57,7 @@ fn timeout_template_rejects_client_controlled_vars() {
         "${requestPath}",
         "${requestUri}",
     ] {
-        let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+        let c: ExternalHttpConnection = yaml_serde::from_str(&format!(
             "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"{expr}\"\n"
         ))
         .unwrap();
@@ -77,7 +77,7 @@ fn timeout_template_accepts_trusted_vars() {
         "${matchedHttpRoute:name}",
         "${matchedGrpcRoute:name}",
     ] {
-        let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+        let c: ExternalHttpConnection = yaml_serde::from_str(&format!(
             "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"{expr}\"\n"
         ))
         .unwrap();

@@ -7,9 +7,9 @@
 //! is byte-for-byte one of the shared constants. A legitimately new grammar
 //! must be added as a shared constant first, then listed here.
 
-use serde_yaml::Value;
 use std::fs;
 use std::path::PathBuf;
+use yaml_serde::Value;
 
 /// Recursively collect every string value stored under a `pattern` key.
 ///
@@ -67,7 +67,7 @@ fn edgion_crd_patterns_are_canonical() {
         }
         checked_files += 1;
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-        let doc: Value = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+        let doc: Value = yaml_serde::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
         let mut patterns = Vec::new();
         collect_patterns(&doc, &mut patterns);
         for pattern in patterns {

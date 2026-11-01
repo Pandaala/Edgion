@@ -11,7 +11,7 @@ const DIGEST: &str = "1eddcdfa0cbaa2299e1e2ddbdb44d2eb6a1c0c6f388226ecd4b6c07816
 const UNITS: &str = include_str!("../../edgion-waf/tests/fixtures/crs-structured-v4.25.1/units.json");
 
 fn yaml(path: &Path) -> Value {
-    serde_yaml::from_str(&std::fs::read_to_string(path).expect("fixture exists")).expect("typed YAML value")
+    yaml_serde::from_str(&std::fs::read_to_string(path).expect("fixture exists")).expect("typed YAML value")
 }
 
 #[test]

@@ -552,8 +552,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for tree in ["integration", "k8s"] {
             let base = root.join(tree).join("conf/EdgionTls/mTLS");
-            let read = |name: &str| -> serde_yaml::Value {
-                serde_yaml::from_str(&std::fs::read_to_string(base.join(name)).unwrap()).unwrap()
+            let read = |name: &str| -> yaml_serde::Value {
+                yaml_serde::from_str(&std::fs::read_to_string(base.join(name)).unwrap()).unwrap()
             };
             let mutual = read("EdgionTls_edge_mtls-test-mutual.yaml");
             let san = read(if tree == "k8s" {

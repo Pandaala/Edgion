@@ -1079,7 +1079,7 @@ async fn waf_prefix_rejects_a_declared_body_above_the_physical_cap_before_readin
 }
 
 fn compile_plan(yaml: &str, type_prefix: &'static str) -> Arc<CompiledDyePlan> {
-    let suite: DyeSuite = serde_yaml::from_str(yaml).unwrap();
+    let suite: DyeSuite = yaml_serde::from_str(yaml).unwrap();
     CompiledDyePlan::compile(&suite, type_prefix).unwrap()
 }
 

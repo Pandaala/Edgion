@@ -149,7 +149,7 @@ use std::fmt::Debug;
 
 /// Check a raw Gateway API document before typed serde can discard TypeMeta.
 /// Only explicitly inventoried source versions are admitted.
-pub fn validate_gateway_api_source(kind: ResourceKind, value: &serde_yaml::Value) -> Result<(), String> {
+pub fn validate_gateway_api_source(kind: ResourceKind, value: &yaml_serde::Value) -> Result<(), String> {
     use edgion_resources::gateway_api_support::{canonical_sources, source_for, GROUP};
 
     let mut sources = canonical_sources().filter(|source| source.kind == kind.as_str());
@@ -160,13 +160,13 @@ pub fn validate_gateway_api_source(kind: ResourceKind, value: &serde_yaml::Value
         return Err(format!("{} has ambiguous canonical source versions", kind.as_str()));
     }
 
-    let actual_kind = value.get("kind").and_then(serde_yaml::Value::as_str);
+    let actual_kind = value.get("kind").and_then(yaml_serde::Value::as_str);
     if actual_kind != Some(source.kind) {
         return Err(format!("{} kind must be {}", kind.as_str(), source.kind));
     }
     let actual_version = value
         .get("apiVersion")
-        .and_then(serde_yaml::Value::as_str)
+        .and_then(yaml_serde::Value::as_str)
         .and_then(|api_version| api_version.strip_prefix(&format!("{GROUP}/")));
     if actual_version.is_none_or(|version| source_for(source.kind, version).is_none()) {
         return Err(format!(
@@ -201,7 +201,7 @@ fn validate_registered_source_version(kind: &str, api_version: Option<&str>) -> 
 /// Parse YAML content into a resource.
 ///
 /// Gateway API sources are checked against the canonical inventory first.
-pub fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
+pub fn parse_resource_content<K>(content: &str) -> yaml_serde::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
@@ -209,22 +209,22 @@ where
 }
 
 /// Static backends validate selected alpha sources before canonical conversion.
-pub fn parse_resource_content_offline<K>(content: &str) -> serde_yaml::Result<K>
+pub fn parse_resource_content_offline<K>(content: &str) -> yaml_serde::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
     parse_resource_content_inner(content, true)
 }
 
-fn parse_resource_content_inner<K>(content: &str, validate_alpha_schema: bool) -> serde_yaml::Result<K>
+fn parse_resource_content_inner<K>(content: &str, validate_alpha_schema: bool) -> yaml_serde::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
     let kind = K::resource_kind();
 
-    let raw: serde_yaml::Value = serde_yaml::from_str(content)?;
-    validate_gateway_api_source(kind, &raw).map_err(serde_yaml::Error::custom)?;
-    let source_version = raw.get("apiVersion").and_then(serde_yaml::Value::as_str);
+    let raw: yaml_serde::Value = yaml_serde::from_str(content)?;
+    validate_gateway_api_source(kind, &raw).map_err(yaml_serde::Error::custom)?;
+    let source_version = raw.get("apiVersion").and_then(yaml_serde::Value::as_str);
     let beta_source = source_version == Some("gateway.networking.k8s.io/v1beta1");
 
     if matches!(
@@ -240,9 +240,9 @@ where
         if validate_alpha_schema {
             let version = source
                 .get("apiVersion")
-                .and_then(serde_yaml::Value::as_str)
+                .and_then(yaml_serde::Value::as_str)
                 .and_then(|value| value.strip_prefix("gateway.networking.k8s.io/"))
-                .ok_or_else(|| serde_yaml::Error::custom("Missing Gateway API source version"))?;
+                .ok_or_else(|| yaml_serde::Error::custom("Missing Gateway API source version"))?;
             static SOURCE_SCHEMAS: OnceLock<Result<crate::conf_mgr::SchemaValidator, String>> = OnceLock::new();
             let schemas = SOURCE_SCHEMAS.get_or_init(|| {
                 let crd_dir = edgion_resources::work_dir().resolve("config/crd");
@@ -256,14 +256,14 @@ where
             });
             let schemas = schemas
                 .as_ref()
-                .map_err(|error| serde_yaml::Error::custom(error.as_str()))?;
-            let source_json = serde_json::to_value(&source).map_err(serde_yaml::Error::custom)?;
+                .map_err(|error| yaml_serde::Error::custom(error.as_str()))?;
+            let source_json = serde_json::to_value(&source).map_err(yaml_serde::Error::custom)?;
             schemas
                 .validate_gateway_source("gateway.networking.k8s.io", version, kind.as_str(), &source_json)
-                .map_err(serde_yaml::Error::custom)?;
+                .map_err(yaml_serde::Error::custom)?;
         }
-        source["apiVersion"] = serde_yaml::Value::String("gateway.networking.k8s.io/v1".to_string());
-        return serde_yaml::from_value(source);
+        source["apiVersion"] = yaml_serde::Value::String("gateway.networking.k8s.io/v1".to_string());
+        return yaml_serde::from_value(source);
     }
 
     // Drop the raw view before text decoding unless advisory diagnostics need it.
@@ -276,23 +276,23 @@ where
     )
     .then_some(raw);
     let mut parsed = if kind == ResourceKind::Gateway && beta_source {
-        let beta: edgion_resources::GatewayBeta = serde_yaml::from_str(content)?;
+        let beta: edgion_resources::GatewayBeta = yaml_serde::from_str(content)?;
         let canonical: edgion_resources::Gateway = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+        yaml_serde::from_value(yaml_serde::to_value(canonical)?)?
     } else if kind == ResourceKind::HTTPRoute && beta_source {
-        let beta: edgion_resources::HTTPRouteBeta = serde_yaml::from_str(content)?;
+        let beta: edgion_resources::HTTPRouteBeta = yaml_serde::from_str(content)?;
         let canonical: edgion_resources::HTTPRoute = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+        yaml_serde::from_value(yaml_serde::to_value(canonical)?)?
     } else if kind == ResourceKind::GatewayClass && beta_source {
-        let beta: edgion_resources::GatewayClassBeta = serde_yaml::from_str(content)?;
+        let beta: edgion_resources::GatewayClassBeta = yaml_serde::from_str(content)?;
         let canonical: edgion_resources::GatewayClass = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+        yaml_serde::from_value(yaml_serde::to_value(canonical)?)?
     } else if kind == ResourceKind::ReferenceGrant && beta_source {
-        let beta: edgion_resources::ReferenceGrantBeta = serde_yaml::from_str(content)?;
+        let beta: edgion_resources::ReferenceGrantBeta = yaml_serde::from_str(content)?;
         let canonical: edgion_resources::ReferenceGrant = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+        yaml_serde::from_value(yaml_serde::to_value(canonical)?)?
     } else {
-        serde_yaml::from_str::<K>(content)?
+        yaml_serde::from_str::<K>(content)?
     };
 
     // FileSystem/etcd unknown-field diagnostic: the Kubernetes watcher
@@ -314,15 +314,15 @@ where
 /// This is shared by FileSystem/etcd ingestion and the Admin create, update,
 /// and validate endpoints so every ingress applies the same atomic API
 /// promotion boundary.
-pub fn validate_resource_api_version<K>(content: &str) -> serde_yaml::Result<()>
+pub fn validate_resource_api_version<K>(content: &str) -> yaml_serde::Result<()>
 where
     K: ResourceMeta,
 {
     if edgion_resources::gateway_api_support::canonical_sources()
         .any(|source| source.kind == K::resource_kind().as_str())
     {
-        let value: serde_yaml::Value = serde_yaml::from_str(content)?;
-        validate_gateway_api_source(K::resource_kind(), &value).map_err(serde_yaml::Error::custom)?;
+        let value: yaml_serde::Value = yaml_serde::from_str(content)?;
+        validate_gateway_api_source(K::resource_kind(), &value).map_err(yaml_serde::Error::custom)?;
     }
 
     Ok(())
@@ -348,7 +348,7 @@ mod gateway_api_version_guard_tests;
 /// for a diagnostic only four kinds need. The
 /// `K: 'static` bound `parse_resource_content` already carries makes this
 /// sound.
-fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, yaml_value: &serde_yaml::Value, parsed: &mut K) {
+fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, yaml_value: &yaml_serde::Value, parsed: &mut K) {
     let json_value: Value = match serde_json::to_value(yaml_value) {
         Ok(v) => v,
         Err(err) => {
@@ -492,11 +492,11 @@ pub(crate) fn merge_operator_update_values(current: Value, requested: Value) -> 
 /// `observedGeneration` reconciliation, and would diverge from the file-watcher
 /// path, which takes generation straight from the operator's YAML.
 pub(crate) fn merge_operator_update_yaml(current: &str, requested: &str) -> Result<String, ConfWriterError> {
-    let current: Value = serde_yaml::from_str(current).map_err(|source| ConfWriterError::ParseError {
+    let current: Value = yaml_serde::from_str(current).map_err(|source| ConfWriterError::ParseError {
         context: "Failed to parse current resource for update",
         source: source.into(),
     })?;
-    let requested: Value = serde_yaml::from_str(requested).map_err(|source| ConfWriterError::ParseError {
+    let requested: Value = yaml_serde::from_str(requested).map_err(|source| ConfWriterError::ParseError {
         context: "Failed to parse updated resource",
         source: source.into(),
     })?;
@@ -521,7 +521,7 @@ pub(crate) fn merge_operator_update_yaml(current: &str, requested: &str) -> Resu
             metadata.insert(key, value);
         }
     }
-    serde_yaml::to_string(&merged).map_err(|source| ConfWriterError::ParseError {
+    yaml_serde::to_string(&merged).map_err(|source| ConfWriterError::ParseError {
         context: "Failed to serialize merged resource update",
         source: source.into(),
     })
@@ -530,7 +530,7 @@ pub(crate) fn merge_operator_update_yaml(current: &str, requested: &str) -> Resu
 /// Enforce an optional client precondition against the resource read inside
 /// the backend's atomic update window.
 pub(crate) fn ensure_expected_resource_version(current: &str, expected: Option<&str>) -> Result<(), ConfWriterError> {
-    let current: Value = serde_yaml::from_str(current).map_err(|source| ConfWriterError::ParseError {
+    let current: Value = yaml_serde::from_str(current).map_err(|source| ConfWriterError::ParseError {
         context: "Failed to parse current resourceVersion",
         source: source.into(),
     })?;

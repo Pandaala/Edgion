@@ -17,7 +17,7 @@ const GATEWAY_CRD: &str = include_str!("../../config/crd/edgion-crd/edgion_gatew
 const BACKEND_POLICY_CRD: &str = include_str!("../../config/crd/edgion-crd/edgion_backend_traffic_policy_crd.yaml");
 
 fn served_specs(text: &str) -> Vec<(String, Value)> {
-    let crd: Value = serde_yaml::from_str(text).expect("committed CRD must parse");
+    let crd: Value = yaml_serde::from_str(text).expect("committed CRD must parse");
     let versions = crd["spec"]["versions"].as_array().expect("CRD versions must exist");
     let specs: Vec<_> = versions
         .iter()

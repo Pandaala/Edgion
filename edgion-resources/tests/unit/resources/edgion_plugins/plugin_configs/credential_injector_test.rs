@@ -16,7 +16,7 @@ fn config(target: CredentialInjectionTarget) -> CredentialInjectorConfig {
 
 #[test]
 fn omitted_target_defaults_to_bearer_and_round_trips_pascal_case() {
-    let parsed: CredentialInjectorConfig = serde_yaml::from_str("credentialRef:\n  name: provider-token\n").unwrap();
+    let parsed: CredentialInjectorConfig = yaml_serde::from_str("credentialRef:\n  name: provider-token\n").unwrap();
     assert_eq!(parsed.target, CredentialInjectionTarget::Bearer);
 
     let value = serde_json::to_value(parsed).unwrap();
@@ -25,7 +25,7 @@ fn omitted_target_defaults_to_bearer_and_round_trips_pascal_case() {
 
 #[test]
 fn header_target_uses_camel_case_variant_fields() {
-    let parsed: CredentialInjectorConfig = serde_yaml::from_str(
+    let parsed: CredentialInjectorConfig = yaml_serde::from_str(
             "credentialRef:\n  name: provider-token\ntarget:\n  type: Header\n  name: X-Provider-Token\n  valuePrefix: 'Token '\n",
         )
         .unwrap();

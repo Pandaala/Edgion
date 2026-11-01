@@ -23,11 +23,11 @@ const CONFLICT_RETRY_DEADLINE: Duration = Duration::from_secs(5);
 /// A string `metadata.resourceVersion` is the Admin API's compatibility CAS
 /// token. Those requests must surface 409 and are never safe to replay as an
 /// unconditional test update.
-pub fn has_explicit_resource_version(document: &serde_yaml::Value) -> bool {
+pub fn has_explicit_resource_version(document: &yaml_serde::Value) -> bool {
     document
         .get("metadata")
         .and_then(|metadata| metadata.get("resourceVersion"))
-        .and_then(serde_yaml::Value::as_str)
+        .and_then(yaml_serde::Value::as_str)
         .is_some()
 }
 
@@ -71,11 +71,11 @@ mod tests {
 
     #[test]
     fn detects_only_string_resource_version_as_explicit_cas() {
-        let absent: serde_yaml::Value = serde_yaml::from_str("metadata: {name: route}").unwrap();
-        let explicit: serde_yaml::Value =
-            serde_yaml::from_str("metadata: {name: route, resourceVersion: '42'}").unwrap();
-        let null_value: serde_yaml::Value =
-            serde_yaml::from_str("metadata: {name: route, resourceVersion: null}").unwrap();
+        let absent: yaml_serde::Value = yaml_serde::from_str("metadata: {name: route}").unwrap();
+        let explicit: yaml_serde::Value =
+            yaml_serde::from_str("metadata: {name: route, resourceVersion: '42'}").unwrap();
+        let null_value: yaml_serde::Value =
+            yaml_serde::from_str("metadata: {name: route, resourceVersion: null}").unwrap();
 
         assert!(!has_explicit_resource_version(&absent));
         assert!(has_explicit_resource_version(&explicit));

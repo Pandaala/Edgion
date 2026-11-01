@@ -62,7 +62,7 @@ fn stage_exception_table_has_no_request_only_entries() {
 #[test]
 fn plugin_crd_types_are_open_strings_in_every_stage() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_plugins_crd.yaml");
-    let doc: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let doc: Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let props = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"];
     for stage in [
         "requestPlugins",

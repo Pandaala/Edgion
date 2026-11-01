@@ -74,7 +74,7 @@ fn startup_configuration_rejects_zero_invalid_and_unknown_values() {
         ..Default::default()
     };
     assert!(config.resolve().is_err());
-    assert!(serde_yaml::from_str::<RequestBodyBudgetConfig>("unknown: 1").is_err());
+    assert!(yaml_serde::from_str::<RequestBodyBudgetConfig>("unknown: 1").is_err());
 }
 
 #[test]

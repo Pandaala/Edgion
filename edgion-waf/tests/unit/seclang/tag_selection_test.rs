@@ -96,11 +96,11 @@ fn structured_wire_is_strict_and_canonical_bytes_are_exact() {
             "accepted {value}"
         );
     }
-    assert!(serde_yaml::from_str::<WafRuleSelection>(
+    assert!(yaml_serde::from_str::<WafRuleSelection>(
         "include:\n  allOf:\n    - tag: language-php\n    - not: {phase: 1}\n"
     )
     .is_ok());
-    assert!(serde_yaml::from_str::<WafRuleSelection>("include: true\ninclude: false\n").is_err());
+    assert!(yaml_serde::from_str::<WafRuleSelection>("include: true\ninclude: false\n").is_err());
     // ConfigData's preexisting normalized DOM has already collapsed duplicate JSON keys.
     let normalized: serde_json::Value = serde_json::from_str(r#"{"include":true,"include":false}"#).unwrap();
     assert_eq!(
@@ -347,24 +347,24 @@ fn cumulative_budget_can_reject_after_the_baseline_was_admitted() {
 fn yaml_tag_scalars_preserve_types_without_coercion() {
     for value in ["123", "true", "false", "null", "~", "1.5", "[]", "{}"] {
         assert!(
-            serde_yaml::from_str::<WafRuleSelection>(&format!("include: {{tag: {value}}}")).is_err(),
+            yaml_serde::from_str::<WafRuleSelection>(&format!("include: {{tag: {value}}}")).is_err(),
             "{value}"
         );
     }
     for value in ["'123'", "'true'", "'null'", "language-php"] {
         assert!(
-            serde_yaml::from_str::<WafRuleSelection>(&format!("include: {{tag: {value}}}")).is_ok(),
+            yaml_serde::from_str::<WafRuleSelection>(&format!("include: {{tag: {value}}}")).is_ok(),
             "{value}"
         );
     }
     for value in ["'1'", "true", "null", "1.0"] {
         for field in ["ruleId", "phase"] {
             assert!(
-                serde_yaml::from_str::<WafRuleSelection>(&format!("include: {{{field}: {value}}}")).is_err(),
+                yaml_serde::from_str::<WafRuleSelection>(&format!("include: {{{field}: {value}}}")).is_err(),
                 "{field}: {value}"
             );
         }
-        assert!(serde_yaml::from_str::<WafRuleSelection>(&format!(
+        assert!(yaml_serde::from_str::<WafRuleSelection>(&format!(
             "include: {{ruleIdRange: {{start: {value}, end: 2}}}}"
         ))
         .is_err());

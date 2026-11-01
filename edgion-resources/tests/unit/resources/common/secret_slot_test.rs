@@ -3,7 +3,7 @@ use super::SecretSlot;
 #[test]
 fn deserialize_secret_ref_only() {
     let yaml = "secretRef:\n  name: creds";
-    let slot: SecretSlot = serde_yaml::from_str(yaml).unwrap();
+    let slot: SecretSlot = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(slot.secret_ref.name, "creds");
     assert!(slot.secret.is_none());
 }
@@ -11,11 +11,11 @@ fn deserialize_secret_ref_only() {
 #[test]
 fn rejects_unknown_field() {
     let yaml = "secretRef:\n  name: creds\nbogus: 1";
-    assert!(serde_yaml::from_str::<SecretSlot>(yaml).is_err());
+    assert!(yaml_serde::from_str::<SecretSlot>(yaml).is_err());
 }
 
 #[test]
 fn secret_ref_required() {
     let yaml = "{}";
-    assert!(serde_yaml::from_str::<SecretSlot>(yaml).is_err());
+    assert!(yaml_serde::from_str::<SecretSlot>(yaml).is_err());
 }

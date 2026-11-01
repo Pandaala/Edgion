@@ -84,7 +84,7 @@ fn inspect(path: &Path, format: InspectFormat) -> Result<()> {
     match format {
         InspectFormat::Text => print!("{}", inspect_text(&report)),
         InspectFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-        InspectFormat::Yaml => print!("{}", serde_yaml::to_string(&report)?),
+        InspectFormat::Yaml => print!("{}", yaml_serde::to_string(&report)?),
     }
     if !report.compatible {
         bail!("Wasm module is incompatible; see the report above");
@@ -141,7 +141,7 @@ fn convert_envoy_file(path: &Path, format: ConfigFormat, report_path: Option<&Pa
     let report_json = serde_json::to_vec_pretty(&outcome.report).context("failed to serialize conversion report")?;
     let output = match (&outcome.config, format) {
         (Some(config), ConfigFormat::Yaml) => {
-            Some(serde_yaml::to_string(config).context("failed to serialize generated WasmConfig")?)
+            Some(yaml_serde::to_string(config).context("failed to serialize generated WasmConfig")?)
         }
         (Some(config), ConfigFormat::Json) => {
             Some(serde_json::to_string_pretty(config).context("failed to serialize generated WasmConfig")?)
@@ -365,7 +365,7 @@ impl ReportBuilder {
 
 fn convert_envoy(input: &[u8]) -> ConversionOutcome {
     let mut report = ReportBuilder::new(input);
-    let value: Value = match serde_yaml::from_slice(input) {
+    let value: Value = match yaml_serde::from_slice(input) {
         Ok(value) => value,
         Err(_) => {
             report.blocker(

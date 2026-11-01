@@ -10,7 +10,7 @@ config:
     rate: 50
     interval: "1s"
 "#;
-    let p: EdgionStreamPlugin = serde_yaml::from_str(yaml).unwrap();
+    let p: EdgionStreamPlugin = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(p.type_name(), "ConnectionRateLimit");
 }
 
@@ -27,7 +27,7 @@ config:
       allowRefs:
         - name: office
 "#;
-    let p: EdgionStreamPlugin = serde_yaml::from_str(yaml).unwrap();
+    let p: EdgionStreamPlugin = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(p.type_name(), "GlobalConnectionIpRestriction");
     if let EdgionStreamPlugin::GlobalConnectionIpRestriction(cfg) = p {
         assert!(cfg.enable);
@@ -54,7 +54,7 @@ config:
     name: gcir-active
     namespace: edgion-test
 "#;
-    let p: EdgionStreamPlugin = serde_yaml::from_str(yaml).unwrap();
+    let p: EdgionStreamPlugin = yaml_serde::from_str(yaml).unwrap();
     if let EdgionStreamPlugin::GlobalConnectionIpRestriction(cfg) = p {
         assert!(cfg.active_profile_ref.is_some());
         let r = cfg.active_profile_ref.unwrap();

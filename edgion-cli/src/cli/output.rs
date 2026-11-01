@@ -109,7 +109,7 @@ pub fn print_resource_list(data: &Value, format: OutputFormat) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(data)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(data)?);
+            println!("{}", yaml_serde::to_string(data)?);
         }
         OutputFormat::Table => {
             let Some(items) = data.get("data").and_then(|d| d.as_array()) else {
@@ -178,7 +178,7 @@ pub fn print_resource_list_all(items: Vec<Value>, format: OutputFormat) -> Resul
             println!("{}", serde_json::to_string_pretty(&items)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&items)?);
+            println!("{}", yaml_serde::to_string(&items)?);
         }
         OutputFormat::Table | OutputFormat::Wide => {
             let n = items.len();
@@ -283,11 +283,11 @@ pub fn print_resource(data: &Value, format: OutputFormat) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(data)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(data)?);
+            println!("{}", yaml_serde::to_string(data)?);
         }
         _ => {
             // For table/wide, show as YAML for single resource
-            println!("{}", serde_yaml::to_string(data)?);
+            println!("{}", yaml_serde::to_string(data)?);
         }
     }
     Ok(())

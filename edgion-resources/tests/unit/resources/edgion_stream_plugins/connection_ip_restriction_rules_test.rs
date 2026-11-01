@@ -118,7 +118,7 @@ fn removed_http_fields_are_ignored_and_not_transported() {
         let raw = json!({"allowRefs":[{"name":"office"}],"ipSource":value,"message":value,"status":value,"legacyHttpFields":value});
         for c in [
             config(raw.clone()),
-            serde_yaml::from_str::<ConnectionIpRestrictionRules>(&serde_yaml::to_string(&raw).unwrap()).unwrap(),
+            yaml_serde::from_str::<ConnectionIpRestrictionRules>(&yaml_serde::to_string(&raw).unwrap()).unwrap(),
         ] {
             assert!(c.validation_error().is_none());
             assert!(matches!(c.default_action, DefaultAction::Allow));
@@ -139,7 +139,7 @@ fn inline_acl_invalidity_is_monotone_through_flattened_wire() {
         raw[field] = json!(null);
         for c in [
             config(raw.clone()),
-            serde_yaml::from_str::<ConnectionIpRestrictionRules>(&serde_yaml::to_string(&raw).unwrap()).unwrap(),
+            yaml_serde::from_str::<ConnectionIpRestrictionRules>(&yaml_serde::to_string(&raw).unwrap()).unwrap(),
         ] {
             assert!(c.refs.invalid_input);
             assert!(matches!(c.default_action, DefaultAction::Deny));

@@ -14,7 +14,7 @@ provider:
 
 #[test]
 fn minimal_config_parses_with_secure_defaults() {
-    let config: CredentialSourceConfig = serde_yaml::from_str(valid_yaml()).expect("valid config must parse");
+    let config: CredentialSourceConfig = yaml_serde::from_str(valid_yaml()).expect("valid config must parse");
     assert_eq!(config.rotation, CredentialRotationConfig::default());
     assert!(config.egress.block_private);
     let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &config.provider;
@@ -41,7 +41,7 @@ rotation:
   retryInitialBackoff: 1m
   retryMaxBackoff: 1s
 "#;
-    let config: CredentialSourceConfig = serde_yaml::from_str(yaml).expect("structurally valid config must parse");
+    let config: CredentialSourceConfig = yaml_serde::from_str(yaml).expect("structurally valid config must parse");
     let errors = config.validation_errors().join("; ");
     for expected in [
         "must use https",
@@ -56,7 +56,7 @@ rotation:
 
 #[test]
 fn provider_and_system_discriminators_round_trip_exactly() {
-    let config: CredentialSourceConfig = serde_yaml::from_str(valid_yaml()).expect("valid config must parse");
+    let config: CredentialSourceConfig = yaml_serde::from_str(valid_yaml()).expect("valid config must parse");
     let system = super::super::SystemConfig::CredentialSource(config);
     let value = serde_json::to_value(system).expect("system config must serialize");
     assert_eq!(value["type"], "credentialSource");
@@ -66,12 +66,12 @@ fn provider_and_system_discriminators_round_trip_exactly() {
 #[test]
 fn rejects_unknown_fields() {
     let yaml = format!("{}unknownField: ignored\n", valid_yaml());
-    assert!(serde_yaml::from_str::<CredentialSourceConfig>(&yaml).is_err());
+    assert!(yaml_serde::from_str::<CredentialSourceConfig>(&yaml).is_err());
 }
 
 #[test]
 fn omitted_publication_defaults_to_persist_on() {
-    let config: CredentialSourceConfig = serde_yaml::from_str(valid_yaml()).unwrap();
+    let config: CredentialSourceConfig = yaml_serde::from_str(valid_yaml()).unwrap();
     assert!(config.publication.persist);
     assert!(config.validation_errors().is_empty());
 }
@@ -79,7 +79,7 @@ fn omitted_publication_defaults_to_persist_on() {
 #[test]
 fn persist_false_is_accepted() {
     let ok: CredentialSourceConfig =
-        serde_yaml::from_str(&(valid_yaml().to_string() + "publication:\n  persist: false\n")).unwrap();
+        yaml_serde::from_str(&(valid_yaml().to_string() + "publication:\n  persist: false\n")).unwrap();
     assert!(!ok.publication.persist);
     assert!(ok.validation_errors().is_empty());
 }
@@ -91,7 +91,7 @@ fn removed_memory_cap_is_rejected_in_both_publication_modes() {
             "{}publication:\n  persist: {persist}\n  memoryMaxKeys: 1\n",
             valid_yaml()
         );
-        let error = serde_yaml::from_str::<CredentialSourceConfig>(&yaml).unwrap_err();
+        let error = yaml_serde::from_str::<CredentialSourceConfig>(&yaml).unwrap_err();
         assert!(error.to_string().contains("unknown field `memoryMaxKeys`"));
     }
 
@@ -107,7 +107,7 @@ fn removed_memory_cap_is_rejected_in_both_publication_modes() {
 
 #[test]
 fn publication_map_is_not_a_config_field() {
-    let config: CredentialSourceConfig = serde_yaml::from_str(valid_yaml()).unwrap();
+    let config: CredentialSourceConfig = yaml_serde::from_str(valid_yaml()).unwrap();
     let json = serde_json::to_value(&config).unwrap();
     assert!(json.get("generated").is_none());
     assert!(json.get("entries").is_none());

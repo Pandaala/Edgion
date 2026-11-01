@@ -33,7 +33,7 @@ including for a single user. Operators may author that list as a block scalar in
 it does not synthesize a credential list from top-level `username` / `secret` keys.
 
 `decode_group_secret` requires `data["credentials.yaml"]`, decodes UTF-8, and parses
-`Vec<serde_yaml::Value>`. `HmacMatchConfig.username_field` and `secret_field` select
+`Vec<yaml_serde::Value>`. `HmacMatchConfig.username_field` and `secret_field` select
 keys inside each mapping entry. The username becomes a `resolved_credentials` map
 key; `HmacCredential.secret` holds the trimmed secret bytes and `group` records
 the referring group's name. Custom entry field names do not change the outer key.
@@ -50,7 +50,7 @@ does not add another input format or change runtime authentication semantics.
 - The store retains its Secret until replacement/removal or store destruction.
 - The fetched Secret owns a separate snapshot until the loop iteration exits.
   The borrowed YAML view cannot outlive it; decoding and parsing do not await.
-- `Vec<serde_yaml::Value>` owns parsed entries; entries are consumed in the loop.
+- `Vec<yaml_serde::Value>` owns parsed entries; entries are consumed in the loop.
 - Retained `HmacCredential.secret`, `headers`, map keys, and `group` remain owned
   by the resolved configuration. Their downstream generations are outside this fix.
 - Invalid or incomplete UTF-8 still warns and skips the Secret before YAML parsing;

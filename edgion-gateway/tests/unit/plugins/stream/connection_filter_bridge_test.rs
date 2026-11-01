@@ -23,7 +23,7 @@ async fn unavailable_policy_denies_even_without_peer_or_attachment() {
 
 #[tokio::test]
 async fn pinned_connection_views_preserve_port_budgets_and_release() {
-    let source = Arc::new(serde_yaml::from_str(
+    let source = Arc::new(yaml_serde::from_str(
             "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: bridge-generation, namespace: default}\nspec:\n  plugins:\n    - type: ConnectionRateLimit\n      config:\n        perListener: {rate: 1, interval: 1h}\n"
         ).unwrap());
     let mut generation = StreamPluginGeneration::new(source);
@@ -147,7 +147,7 @@ fn logical_owner_and_policy_are_selected_from_one_publication() {
     use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
     use std::collections::{HashMap, HashSet};
     let publisher = PluginPublisher::new();
-    let class = Arc::new(serde_yaml::from_str(
+    let class = Arc::new(yaml_serde::from_str(
             "apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata: {name: ready}\nspec: {controllerName: edgion.io/gateway-controller}"
         ).unwrap());
     publisher.replace_gateway_classes(HashMap::from([("ready".into(), class)]));
@@ -218,11 +218,11 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
     use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
     use std::collections::{HashMap, HashSet};
     let publisher = PluginPublisher::new();
-    let gateway: edgion_resources::Gateway = serde_yaml::from_str(
+    let gateway: edgion_resources::Gateway = yaml_serde::from_str(
             "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata: {name: dynamic, namespace: default}\nspec:\n  gatewayClassName: dynamic\n  listeners: [{name: tcp, port: 18094, protocol: TCP}]"
         ).unwrap();
     let gateway = crate::test_current_status::processed(gateway);
-    let class = Arc::new(serde_yaml::from_str(
+    let class = Arc::new(yaml_serde::from_str(
             "apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata: {name: dynamic}\nspec: {controllerName: edgion.io/gateway-controller}"
         ).unwrap());
     publisher.replace_gateway_classes(HashMap::from([("dynamic".into(), class)]));
@@ -240,7 +240,7 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
     let list=serde_json::from_value(serde_json::json!({"metadata":{"name":"dynamic-bridge-blocklist","namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"blocked","cidrs":["10.0.0.0/8"]}]}}}})).unwrap();
     crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store()
         .insert_raw_for_test("default/dynamic-bridge-blocklist", Arc::new(list));
-    let source = Arc::new(serde_yaml::from_str(
+    let source = Arc::new(yaml_serde::from_str(
             "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: dynamic-policy, namespace: default}\nspec:\n  plugins:\n    - type: IpRestriction\n      config:\n        denyRefs: [{name: dynamic-bridge-blocklist}]"
         ).unwrap());
     publisher.replace_stream_plugins(HashMap::from([("default/dynamic-policy".into(), source)]));

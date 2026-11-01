@@ -92,7 +92,7 @@ fn supported_retained() -> Box<dyn TestSuite> {
 
 async fn assert_supported_publication(ctx: &ScenarioCtx, profile: &str, detection: bool) -> Result<()> {
     let path = ctx.resolve("updates/to_supported_on/EdgionConfigData_waf-policy.yaml");
-    let expected: Value = serde_yaml::from_str(&tokio::fs::read_to_string(path).await?)?;
+    let expected: Value = yaml_serde::from_str(&tokio::fs::read_to_string(path).await?)?;
     let expected_refs = &expected["spec"]["data"]["config"]["profiles"][profile]["bundleRefs"];
     for gateway in [false, true] {
         let resource = plugin_resource(ctx, gateway).await?;
@@ -915,7 +915,7 @@ async fn run_expensive_policy_updates(ctx: &ScenarioCtx, scenario: &'static Scen
             crate::dynamic::apply::apply_yaml_documents(
                 client,
                 &ctx.resolve("expensive-check-policy"),
-                &serde_yaml::to_string(&resource)?,
+                &yaml_serde::to_string(&resource)?,
             )
             .await
         }
@@ -1037,7 +1037,7 @@ async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Sce
             crate::dynamic::apply::apply_yaml_documents(
                 client,
                 &ctx.resolve("inspection-storage-policy"),
-                &serde_yaml::to_string(&resource)?,
+                &yaml_serde::to_string(&resource)?,
             )
             .await?;
             tokio::time::timeout(Duration::from_secs(30), async {

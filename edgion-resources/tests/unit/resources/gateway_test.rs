@@ -85,7 +85,7 @@ fn test_gateway_serialization() {
         status: None,
     };
 
-    let yaml = serde_yaml::to_string(&gateway).unwrap();
+    let yaml = yaml_serde::to_string(&gateway).unwrap();
     println!("{}", yaml);
     assert!(yaml.contains("gatewayClassName"));
 }
@@ -114,7 +114,7 @@ spec:
               kind: Secret
               group: ""
 "#;
-    let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+    let gw: Gateway = yaml_serde::from_str(yaml).unwrap();
     let json = serde_json::to_string_pretty(&gw).unwrap();
     println!("JSON:\n{}", json);
     assert!(
@@ -147,7 +147,7 @@ spec:
               kind: Secret
               group: ""
 "#;
-    let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+    let gw: Gateway = yaml_serde::from_str(yaml).unwrap();
     let fv = gw.spec.tls.unwrap().frontend.unwrap().default.validation.unwrap();
     let ca_refs = &fv.ca_certificate_refs;
     assert_eq!(ca_refs.len(), 1);
@@ -161,7 +161,7 @@ fn frontend_validation_mode_accepts_known_values() {
         ("AllowInsecureFallback", FrontendValidationMode::AllowInsecureFallback),
     ] {
         let yaml = format!("caCertificateRefs:\n  - group: \"\"\n    kind: ConfigMap\n    name: ca\nmode: {input}\n");
-        let fv: FrontendTLSValidation = serde_yaml::from_str(&yaml).unwrap();
+        let fv: FrontendTLSValidation = yaml_serde::from_str(&yaml).unwrap();
         assert_eq!(fv.mode, Some(expected));
     }
 }
@@ -169,7 +169,7 @@ fn frontend_validation_mode_accepts_known_values() {
 #[test]
 fn frontend_validation_mode_default_when_absent() {
     let fv: FrontendTLSValidation =
-        serde_yaml::from_str("caCertificateRefs:\n  - group: \"\"\n    kind: ConfigMap\n    name: ca\n").unwrap();
+        yaml_serde::from_str("caCertificateRefs:\n  - group: \"\"\n    kind: ConfigMap\n    name: ca\n").unwrap();
     assert!(fv.mode.is_none());
     // Consumers fall back to AllowValidOnly via Default when None.
     assert_eq!(
@@ -183,7 +183,7 @@ fn frontend_validation_mode_rejects_typo() {
     // Previous behavior silently mapped unknown strings to the strict default.
     // After typing the field, unknown values must fail deserialization so the
     // controller surfaces the error instead of silently overriding intent.
-    let err = serde_yaml::from_str::<FrontendTLSValidation>(
+    let err = yaml_serde::from_str::<FrontendTLSValidation>(
         "caCertificateRefs:\n  - group: \"\"\n    kind: ConfigMap\n    name: ca\nmode: AllowFoo\n",
     )
     .unwrap_err();
@@ -203,7 +203,7 @@ fn frontend_validation_requires_standard_reference_shape_and_nonempty_set() {
         "caCertificateRefs:\n  - group: \"\"\n    kind: ConfigMap\n    name: \"\"\n",
     ] {
         assert!(
-            serde_yaml::from_str::<FrontendTLSValidation>(yaml).is_err(),
+            yaml_serde::from_str::<FrontendTLSValidation>(yaml).is_err(),
             "accepted: {yaml}"
         );
     }
@@ -239,7 +239,7 @@ spec:
     frontend:
       perPort: []
 "#;
-    assert!(serde_yaml::from_str::<Gateway>(missing_default).is_err());
+    assert!(yaml_serde::from_str::<Gateway>(missing_default).is_err());
 
     let missing_per_port_tls = r#"
 apiVersion: gateway.networking.k8s.io/v1
@@ -253,7 +253,7 @@ spec:
       perPort:
       - port: 443
 "#;
-    assert!(serde_yaml::from_str::<Gateway>(missing_per_port_tls).is_err());
+    assert!(yaml_serde::from_str::<Gateway>(missing_per_port_tls).is_err());
 
     let empty_policies = r#"
 apiVersion: gateway.networking.k8s.io/v1
@@ -268,7 +268,7 @@ spec:
       - port: 443
         tls: {}
 "#;
-    let gateway = serde_yaml::from_str::<Gateway>(empty_policies).unwrap();
+    let gateway = yaml_serde::from_str::<Gateway>(empty_policies).unwrap();
     let frontend = gateway.spec.tls.unwrap().frontend.unwrap();
     assert!(frontend.default.validation.is_none());
     assert!(frontend.per_port.unwrap()[0].tls.validation.is_none());

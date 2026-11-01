@@ -13,7 +13,7 @@ fn region_route_dye_documentation_examples_validate() {
             .filter(|yaml| yaml.contains("name: X-Served-Region"))
             .collect();
         assert_eq!(examples.len(), 1, "expected one complete dye example per language");
-        let plugins: EdgionPlugins = serde_yaml::from_str(examples[0]).unwrap();
+        let plugins: EdgionPlugins = yaml_serde::from_str(examples[0]).unwrap();
         let errors = plugins.validate_plugins();
         assert!(errors.is_empty(), "documented dye must be usable: {errors:?}");
         let entry = &plugins.spec.request_plugins.as_ref().unwrap()[0];

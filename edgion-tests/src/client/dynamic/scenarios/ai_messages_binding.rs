@@ -36,14 +36,14 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let original_backend = tokio::fs::read_to_string(&backend).await?;
         let original_secret = tokio::fs::read_to_string(&secret).await?;
         let rotated_secret = original_secret.replace("messages-key-A", "messages-key-B");
-        let mut changed: serde_yaml::Value = serde_yaml::from_str(&original_backend)?;
+        let mut changed: yaml_serde::Value = yaml_serde::from_str(&original_backend)?;
         changed["spec"]["ai"]["credentialPool"]["credentials"]
             .as_sequence_mut()
             .ok_or_else(|| anyhow::anyhow!("missing credentials"))?
-            .push(serde_yaml::from_str(
+            .push(yaml_serde::from_str(
                 "name: unresolved\nsecretRef:\n  name: messages-missing-credential\n",
             )?);
-        let changed = serde_yaml::to_string(&changed)?;
+        let changed = yaml_serde::to_string(&changed)?;
         let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
         let update = async {
             ctx.wait_phase(SCENARIO, "allowed", Duration::from_secs(15)).await?;

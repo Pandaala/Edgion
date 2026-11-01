@@ -207,10 +207,10 @@ async fn owned_reset_paths_exist_in_both_tracked_topologies_and_preserve_phase_o
         }
     }
     let relative = "EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/00_EdgionConfigData_realip-secondary.yaml";
-    let local: serde_yaml::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(fixture_root(false).join(relative)).unwrap()).unwrap();
-    let k8s: serde_yaml::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(fixture_root(true).join(relative)).unwrap()).unwrap();
+    let local: yaml_serde::Value =
+        yaml_serde::from_str(&std::fs::read_to_string(fixture_root(false).join(relative)).unwrap()).unwrap();
+    let k8s: yaml_serde::Value =
+        yaml_serde::from_str(&std::fs::read_to_string(fixture_root(true).join(relative)).unwrap()).unwrap();
     assert_eq!(local, k8s);
     for fixture in [
         include_str!(
@@ -220,7 +220,7 @@ async fn owned_reset_paths_exist_in_both_tracked_topologies_and_preserve_phase_o
             "../../../../integration/conf/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/02_Secret_partner_b.yaml"
         ),
     ] {
-        let value: serde_yaml::Value = serde_yaml::from_str(fixture).unwrap();
+        let value: yaml_serde::Value = yaml_serde::from_str(fixture).unwrap();
         assert_eq!(value["kind"].as_str(), Some("Secret"));
         assert!(matches!(
             value["stringData"]["username"].as_str(),

@@ -1,7 +1,7 @@
 use super::*;
 
 fn spec(yaml: &str) -> SuccessSpec {
-    serde_yaml::from_str(yaml).unwrap()
+    yaml_serde::from_str(yaml).unwrap()
 }
 
 /// Test-only convenience wrapper: `classify_detail(..) == Success` as a bool.
@@ -94,7 +94,7 @@ fn classify_detail_non_json_with_body_predicates_is_body_fail() {
 /// Zero operators (just a bare `pointer`) must be rejected at deserialize time.
 #[test]
 fn body_predicate_zero_operators_rejected() {
-    let err = serde_yaml::from_str::<BodyPredicate>("pointer: /code\n")
+    let err = yaml_serde::from_str::<BodyPredicate>("pointer: /code\n")
         .expect_err("a predicate with no operator must fail to parse");
     assert!(err.to_string().contains("exactly one"), "got: {err}");
 }
@@ -105,7 +105,7 @@ fn body_predicate_zero_operators_rejected() {
 /// as success. Two operators on one entry must now be rejected outright.
 #[test]
 fn body_predicate_two_operators_rejected() {
-    let err = serde_yaml::from_str::<BodyPredicate>("pointer: /code\nexists: true\nequals: 0\n")
+    let err = yaml_serde::from_str::<BodyPredicate>("pointer: /code\nexists: true\nequals: 0\n")
         .expect_err("a predicate with two operators must fail to parse");
     assert!(err.to_string().contains("exactly one"), "got: {err}");
 }
@@ -113,17 +113,17 @@ fn body_predicate_two_operators_rejected() {
 /// Exactly one operator parses fine and round-trips to the right variant.
 #[test]
 fn body_predicate_one_operator_accepted() {
-    let p: BodyPredicate = serde_yaml::from_str("pointer: /code\nequals: 0\n").unwrap();
+    let p: BodyPredicate = yaml_serde::from_str("pointer: /code\nequals: 0\n").unwrap();
     assert_eq!(p.pointer, "/code");
     assert!(matches!(p.op, PredicateOp::Equals(v) if v == serde_json::json!(0)));
 
-    let p: BodyPredicate = serde_yaml::from_str("pointer: /code\nnotEquals: 0\n").unwrap();
+    let p: BodyPredicate = yaml_serde::from_str("pointer: /code\nnotEquals: 0\n").unwrap();
     assert!(matches!(p.op, PredicateOp::NotEquals(v) if v == serde_json::json!(0)));
 
-    let p: BodyPredicate = serde_yaml::from_str("pointer: /code\nexists: false\n").unwrap();
+    let p: BodyPredicate = yaml_serde::from_str("pointer: /code\nexists: false\n").unwrap();
     assert!(matches!(p.op, PredicateOp::Exists(false)));
 
-    let p: BodyPredicate = serde_yaml::from_str("pointer: /code\nin: [1, 2]\n").unwrap();
+    let p: BodyPredicate = yaml_serde::from_str("pointer: /code\nin: [1, 2]\n").unwrap();
     assert!(matches!(p.op, PredicateOp::In(v) if v.len() == 2));
 }
 
@@ -201,13 +201,13 @@ fn null_equality_operands_round_trip_and_classify_strictly() {
         let yaml = format!("pointer: /error\n{operator}: null\n");
         let predicates = [
             serde_json::from_value::<BodyPredicate>(wire.clone()).unwrap(),
-            serde_yaml::from_str::<BodyPredicate>(&yaml).unwrap(),
+            yaml_serde::from_str::<BodyPredicate>(&yaml).unwrap(),
         ];
         for predicate in predicates {
             let json_round_trip: BodyPredicate =
                 serde_json::from_str(&serde_json::to_string(&predicate).unwrap()).unwrap();
             let yaml_round_trip: BodyPredicate =
-                serde_yaml::from_str(&serde_yaml::to_string(&predicate).unwrap()).unwrap();
+                yaml_serde::from_str(&yaml_serde::to_string(&predicate).unwrap()).unwrap();
             assert_eq!(serde_json::to_value(json_round_trip).unwrap(), wire);
             assert_eq!(serde_json::to_value(yaml_round_trip).unwrap(), wire);
             let spec = SuccessSpec {
@@ -252,7 +252,7 @@ fn present_null_never_disappears_from_operator_arity() {
             ] {
                 let wire = format!("{{\"pointer\":\"/error\",{fields}}}");
                 assert!(serde_json::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
-                assert!(serde_yaml::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+                assert!(yaml_serde::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
             }
         }
     }
@@ -260,7 +260,7 @@ fn present_null_never_disappears_from_operator_arity() {
         for extra in ["", ",\"equals\":0", ",\"equals\":null"] {
             let wire = format!("{{\"pointer\":\"/error\",\"{operator}\":null{extra}}}");
             assert!(serde_json::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
-            assert!(serde_yaml::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+            assert!(yaml_serde::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
         }
     }
 }
@@ -276,6 +276,6 @@ fn null_predicates_retain_unknown_duplicate_and_missing_operator_rejection() {
         r#"{"pointer":"/error","in":[null],"in":[1]}"#,
     ] {
         assert!(serde_json::from_str::<BodyPredicate>(wire).is_err(), "{wire}");
-        assert!(serde_yaml::from_str::<BodyPredicate>(wire).is_err(), "{wire}");
+        assert!(yaml_serde::from_str::<BodyPredicate>(wire).is_err(), "{wire}");
     }
 }

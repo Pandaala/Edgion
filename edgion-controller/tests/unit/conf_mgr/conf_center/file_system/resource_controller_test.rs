@@ -91,7 +91,7 @@ fn make_policy() -> BackendTLSPolicy {
 
 #[test]
 fn parse_backend_tls_policy_converts_v1alpha3() {
-    let yaml = serde_yaml::to_string(&make_policy()).unwrap().replacen(
+    let yaml = yaml_serde::to_string(&make_policy()).unwrap().replacen(
         "gateway.networking.k8s.io/v1",
         "gateway.networking.k8s.io/v1alpha3",
         1,
@@ -107,7 +107,7 @@ fn parse_backend_tls_policy_converts_v1alpha3() {
 
 #[test]
 fn parse_backend_tls_policy_rejects_missing_api_version() {
-    let yaml = serde_yaml::to_string(&make_policy())
+    let yaml = yaml_serde::to_string(&make_policy())
         .unwrap()
         .lines()
         .filter(|line| !line.starts_with("apiVersion:"))
@@ -123,10 +123,10 @@ fn parse_backend_tls_policy_rejects_missing_api_version() {
 #[test]
 fn parse_backend_tls_policy_v1_keeps_canonical_type() {
     let policy = make_policy();
-    let yaml = serde_yaml::to_string(&policy).unwrap();
+    let yaml = yaml_serde::to_string(&policy).unwrap();
 
     let parsed: BackendTLSPolicy = parse_resource_content(&yaml).unwrap();
-    let serialized = serde_yaml::to_value(&parsed).unwrap();
+    let serialized = yaml_serde::to_value(&parsed).unwrap();
 
     assert_eq!(
         serialized.get("apiVersion").and_then(|v| v.as_str()),
@@ -189,7 +189,7 @@ fn parse_tls_route_rejects_noncanonical_versions() {
         }
         for body in [
             serde_json::to_string(&document).unwrap(),
-            serde_yaml::to_string(&document).unwrap(),
+            yaml_serde::to_string(&document).unwrap(),
         ] {
             let error = parse_resource_content::<TLSRoute>(&body).unwrap_err();
             assert!(error.to_string().contains("TLSRoute apiVersion must use a supported"));
@@ -200,10 +200,10 @@ fn parse_tls_route_rejects_noncanonical_versions() {
 #[test]
 fn parse_tls_route_v1_keeps_canonical_type() {
     let route = make_tls_route();
-    let yaml = serde_yaml::to_string(&route).unwrap();
+    let yaml = yaml_serde::to_string(&route).unwrap();
 
     let parsed: TLSRoute = parse_resource_content(&yaml).unwrap();
-    let serialized = serde_yaml::to_value(&parsed).unwrap();
+    let serialized = yaml_serde::to_value(&parsed).unwrap();
 
     assert_eq!(
         serialized.get("apiVersion").and_then(|v| v.as_str()),
@@ -278,7 +278,7 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
         }
         tx.send(FileSystemEvent::InitApply {
             path: tmp.path().join(format!("TLSRoute_default_invalid-{index}.yaml")),
-            content: serde_yaml::to_string(&document).unwrap(),
+            content: yaml_serde::to_string(&document).unwrap(),
         })
         .await
         .unwrap();
@@ -286,7 +286,7 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
     // A valid event after the invalid events proves the same stream can recover.
     tx.send(FileSystemEvent::InitApply {
         path: tmp.path().join("TLSRoute_default_tr.yaml"),
-        content: serde_yaml::to_string(&make_tls_route()).unwrap(),
+        content: yaml_serde::to_string(&make_tls_route()).unwrap(),
     })
     .await
     .unwrap();
@@ -512,7 +512,7 @@ async fn delete_then_recreate_before_dequeue_reapplies() {
     v2.spec.hostnames = Some(vec!["v2.example.com".to_string()]);
     let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
     tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
-    tokio::fs::write(&path, serde_yaml::to_string(&v2).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&v2).unwrap())
         .await
         .unwrap();
 
@@ -560,7 +560,7 @@ async fn handler_owned_status_survives_a_statusless_reconcile() {
         .unwrap();
 
     let route = make_route("default", "r1");
-    tokio::fs::write(&path, serde_yaml::to_string(&route).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&route).unwrap())
         .await
         .unwrap();
     raw_store.upsert(key.to_string(), Arc::new(route));
@@ -616,7 +616,7 @@ async fn imported_controller_envelope_status_is_never_cleared() {
         "spec": {}
     }))
     .unwrap();
-    tokio::fs::write(&path, serde_yaml::to_string(&plugins).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&plugins).unwrap())
         .await
         .unwrap();
     raw_store.upsert(key.to_string(), Arc::new(plugins));
@@ -672,7 +672,7 @@ async fn init_clears_error_status_of_a_resource_repaired_while_down() {
         .await
         .unwrap();
     let repaired = make_route("default", "r1");
-    let repaired_content = serde_yaml::to_string(&repaired).unwrap();
+    let repaired_content = yaml_serde::to_string(&repaired).unwrap();
     tokio::fs::write(&path, &repaired_content).await.unwrap();
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(16);
@@ -723,7 +723,7 @@ async fn valid_to_malformed_to_repair_revokes_then_recovers_via_worker() {
     tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
 
     let v1 = make_route("default", "r1");
-    tokio::fs::write(&path, serde_yaml::to_string(&v1).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&v1).unwrap())
         .await
         .unwrap();
     raw_store.upsert(key.to_string(), Arc::new(v1.clone()));
@@ -751,7 +751,7 @@ async fn valid_to_malformed_to_repair_revokes_then_recovers_via_worker() {
 
     let mut v2 = make_route("default", "r1");
     v2.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
-    tokio::fs::write(&path, serde_yaml::to_string(&v2).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&v2).unwrap())
         .await
         .unwrap();
     clear_runtime_invalid(&invalid, key);
@@ -804,14 +804,14 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     let controller_task = tokio::spawn(controller.run());
 
     let v1 = make_route("default", "r1");
-    tokio::fs::write(&path, serde_yaml::to_string(&v1).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&v1).unwrap())
         .await
         .unwrap();
     event_tx.send(FileSystemEvent::Init).await.unwrap();
     event_tx
         .send(FileSystemEvent::InitApply {
             path: path.clone(),
-            content: serde_yaml::to_string(&v1).unwrap(),
+            content: yaml_serde::to_string(&v1).unwrap(),
         })
         .await
         .unwrap();
@@ -827,7 +827,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     }
 
     let mismatched = make_route("default", "other");
-    let mismatched_content = serde_yaml::to_string(&mismatched).unwrap();
+    let mismatched_content = yaml_serde::to_string(&mismatched).unwrap();
     tokio::fs::write(&path, &mismatched_content).await.unwrap();
     // The watcher payload still describes the authoritative key, but the
     // file is replaced before the sole worker re-reads it. This exercises
@@ -838,7 +838,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     event_tx
         .send(FileSystemEvent::Apply {
             path: path.clone(),
-            content: serde_yaml::to_string(&queued).unwrap(),
+            content: yaml_serde::to_string(&queued).unwrap(),
         })
         .await
         .unwrap();
@@ -856,7 +856,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
 
     let mut repaired = make_route("default", "r1");
     repaired.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
-    let repaired_content = serde_yaml::to_string(&repaired).unwrap();
+    let repaired_content = yaml_serde::to_string(&repaired).unwrap();
     tokio::fs::write(&path, &repaired_content).await.unwrap();
     event_tx
         .send(FileSystemEvent::Apply {
@@ -899,7 +899,7 @@ async fn worker_read_failure_removes_raw_generation_and_plain_requeue_repairs_it
     tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
     registry.record(ResourceKey::new("HTTPRoute".to_string(), key.to_string()), path.clone());
     let prior = make_route("default", "r1");
-    tokio::fs::write(&path, serde_yaml::to_string(&prior).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&prior).unwrap())
         .await
         .unwrap();
     raw_store.upsert(key.to_string(), Arc::new(prior.clone()));
@@ -929,7 +929,7 @@ async fn worker_read_failure_removes_raw_generation_and_plain_requeue_repairs_it
 
     let mut repaired = make_route("default", "r1");
     repaired.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
-    tokio::fs::write(&path, serde_yaml::to_string(&repaired).unwrap())
+    tokio::fs::write(&path, yaml_serde::to_string(&repaired).unwrap())
         .await
         .unwrap();
     // No Apply, raw upsert or invalid-envelope clear: ordinary requeue must recover.
@@ -1005,7 +1005,7 @@ async fn readiness_waits_for_last_initial_document() {
     for name in ["first", "last"] {
         tx.send(FileSystemEvent::InitApply {
             path: dir.path().join(format!("HTTPRoute_default_{name}.yaml")),
-            content: serde_yaml::to_string(&make_route("default", name)).unwrap(),
+            content: yaml_serde::to_string(&make_route("default", name)).unwrap(),
         })
         .await
         .unwrap();

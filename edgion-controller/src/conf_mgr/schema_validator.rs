@@ -179,7 +179,7 @@ impl SchemaValidator {
     fn load_single_crd(path: &Path, validators: &mut HashMap<ResourceKind, Validator>) -> Result<()> {
         let content = fs::read_to_string(path).with_context(|| format!("Failed to read CRD file: {:?}", path))?;
         let crd: JsonValue =
-            serde_yaml::from_str(&content).with_context(|| format!("Failed to parse CRD YAML: {:?}", path))?;
+            yaml_serde::from_str(&content).with_context(|| format!("Failed to parse CRD YAML: {:?}", path))?;
         Self::try_register_crd(&crd, path, validators);
         Ok(())
     }
@@ -256,7 +256,7 @@ impl SchemaValidator {
             } else {
                 fs::read_to_string(&path).with_context(|| format!("Failed to read Gateway API CRD bundle: {path:?}"))?
             };
-            for doc in serde_yaml::Deserializer::from_str(&content) {
+            for doc in yaml_serde::Deserializer::from_str(&content) {
                 let crd =
                     JsonValue::deserialize(doc).with_context(|| format!("Invalid Gateway API CRD in {path:?}"))?;
                 Self::register_gateway_crd(&crd, profile, &mut validators)?;

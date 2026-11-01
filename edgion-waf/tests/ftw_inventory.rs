@@ -670,7 +670,7 @@ fn runtime_error_category(error: &RuntimeError) -> &'static str {
 
 #[test]
 fn normalized_defaults_and_encoded_request_are_exact() {
-    let input: FtwInput = serde_yaml::from_str(
+    let input: FtwInput = yaml_serde::from_str(
         "dest_addr: localhost\nport: 80\nautocomplete_headers: false\nheaders:\n  X-Count: 12\ndata: body\n",
     )
     .unwrap();
@@ -723,7 +723,7 @@ fn pinned_crs_ftw_inventory_and_schema_are_frozen_when_configured() {
             "FTW fixture file byte limit exceeded"
         );
         files += 1;
-        let Some(document) = serde_yaml::from_slice::<Option<FtwFile>>(&bytes).unwrap() else {
+        let Some(document) = yaml_serde::from_slice::<Option<FtwFile>>(&bytes).unwrap() else {
             empty_files += 1;
             continue;
         };
@@ -804,7 +804,7 @@ fn pinned_crs_ftw_offline_profile_is_deterministic_when_configured() {
 
     for path in fixture_paths(&tests_root) {
         let bytes = fs::read(&path).expect("enumerated FTW fixture must remain readable");
-        let Some(document) = serde_yaml::from_slice::<Option<FtwFile>>(&bytes).unwrap() else {
+        let Some(document) = yaml_serde::from_slice::<Option<FtwFile>>(&bytes).unwrap() else {
             continue;
         };
         let rule_id = document.rule_id.expect("nonempty FTW file must have a rule ID");

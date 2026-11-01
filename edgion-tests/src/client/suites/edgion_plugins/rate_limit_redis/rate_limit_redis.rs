@@ -80,12 +80,12 @@ impl RateLimitRedisTestSuite {
                         .split("\n---\n")
                         .next()
                         .ok_or("Missing multi-quota resource")?;
-                        let mut changed: serde_yaml::Value =
-                            serde_yaml::from_str(original).map_err(|e| e.to_string())?;
+                        let mut changed: yaml_serde::Value =
+                            yaml_serde::from_str(original).map_err(|e| e.to_string())?;
                         let config = &mut changed["spec"]["requestPlugins"][0]["config"];
                         config["quotas"].as_sequence_mut().ok_or("Missing quotas")?.reverse();
-                        config["responseQuota"] = serde_yaml::Value::String("tenant".into());
-                        ctx.apply_yaml(&serde_yaml::to_string(&changed).map_err(|e| e.to_string())?)
+                        config["responseQuota"] = yaml_serde::Value::String("tenant".into());
+                        ctx.apply_yaml(&yaml_serde::to_string(&changed).map_err(|e| e.to_string())?)
                             .await?;
                         let checked: Result<(), String> = async {
                             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);

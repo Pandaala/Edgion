@@ -27,12 +27,12 @@ fn open_extensions_decode_lists_watch_and_wire_with_both_ingest_modes() {
         let data_list = json!({"apiVersion":"edgion.io/v1","kind":"EdgionConfigDataList","metadata":{},"items":[resource("EdgionConfigData",json!({"data":{"type":"Selector","config":{"active":"base"}}})),data.clone()]});
         for yaml in [false, true] {
             let links: kube::core::ObjectList<LinkSys> = if yaml {
-                serde_yaml::from_str(&serde_yaml::to_string(&link_list).unwrap()).unwrap()
+                yaml_serde::from_str(&yaml_serde::to_string(&link_list).unwrap()).unwrap()
             } else {
                 serde_json::from_value(link_list.clone()).unwrap()
             };
             let datas: kube::core::ObjectList<EdgionConfigData> = if yaml {
-                serde_yaml::from_str(&serde_yaml::to_string(&data_list).unwrap()).unwrap()
+                yaml_serde::from_str(&yaml_serde::to_string(&data_list).unwrap()).unwrap()
             } else {
                 serde_json::from_value(data_list.clone()).unwrap()
             };
@@ -81,11 +81,11 @@ fn open_extensions_decode_lists_watch_and_wire_with_both_ingest_modes() {
             let event = json!({"type":event_type,"object":link});
             let _: kube::core::WatchEvent<LinkSys> = serde_json::from_value(event.clone()).unwrap();
             let _: kube::core::WatchEvent<LinkSys> =
-                serde_yaml::from_str(&serde_yaml::to_string(&event).unwrap()).unwrap();
+                yaml_serde::from_str(&yaml_serde::to_string(&event).unwrap()).unwrap();
             let event = json!({"type":event_type,"object":data});
             let _: kube::core::WatchEvent<EdgionConfigData> = serde_json::from_value(event.clone()).unwrap();
             let _: kube::core::WatchEvent<EdgionConfigData> =
-                serde_yaml::from_str(&serde_yaml::to_string(&event).unwrap()).unwrap();
+                yaml_serde::from_str(&yaml_serde::to_string(&event).unwrap()).unwrap();
         }
         for spec in [
             json!({"config":{}}),
@@ -126,7 +126,7 @@ fn extension_sentinels_are_schema_hidden_and_crds_preserve_open_contract() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../config/crd/edgion-crd")
             .join(filename);
-        let doc: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let doc: Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for version in doc["spec"]["versions"].as_array().unwrap() {
             let spec = &version["schema"]["openAPIV3Schema"]["properties"]["spec"];
             let parent = if nested { &spec["properties"]["data"] } else { spec };

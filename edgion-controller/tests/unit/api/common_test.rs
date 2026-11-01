@@ -97,7 +97,7 @@ fn admin_parser_tls_route_version_matrix() {
         }
         for body in [
             serde_json::to_string(&document).unwrap(),
-            serde_yaml::to_string(&document).unwrap(),
+            yaml_serde::to_string(&document).unwrap(),
         ] {
             for update_version in [false, true] {
                 let result = parse_resource_and_update_version::<TLSRoute>(&body, update_version);
@@ -131,7 +131,7 @@ fn admin_parser_rejects_missing_or_malformed_backend_tls_policy_version() {
         }
         for body in [
             serde_json::to_string(&document).unwrap(),
-            serde_yaml::to_string(&document).unwrap(),
+            yaml_serde::to_string(&document).unwrap(),
         ] {
             for update_version in [false, true] {
                 let result = parse_resource_and_update_version::<BackendTLSPolicy>(&body, update_version);
@@ -267,7 +267,7 @@ fn admin_parser_warns_without_authored_values_for_json_and_yaml() {
     for yaml in [false, true] {
         let encode = |value: &serde_json::Value| {
             if yaml {
-                serde_yaml::to_string(value).unwrap()
+                yaml_serde::to_string(value).unwrap()
             } else {
                 value.to_string()
             }

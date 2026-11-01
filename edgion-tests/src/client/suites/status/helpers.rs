@@ -310,7 +310,7 @@ mod tests {
             ] {
                 let path = root.join(tree).join("conf").join(route);
                 let yaml = std::fs::read_to_string(&path).unwrap();
-                let resource: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+                let resource: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
                 let namespace = resource["metadata"]["namespace"].as_str().unwrap();
                 assert_eq!(namespace, denied_backend_ref_namespace_for(k8s), "{}", path.display());
                 let backend = &resource["spec"]["rules"][0]["backendRefs"][0]["namespace"];
@@ -333,7 +333,7 @@ pub async fn expect_admin_admission_rejected(ctx: &TestContext, resource: &Value
 
 /// Preserve the authored YAML boundary while inspecting only untyped identity fields.
 pub async fn expect_admin_yaml_admission_rejected(ctx: &TestContext, yaml: &str) -> Result<(), String> {
-    let resource: Value = serde_yaml::from_str(yaml).map_err(|_| "Admission fixture is not valid YAML")?;
+    let resource: Value = yaml_serde::from_str(yaml).map_err(|_| "Admission fixture is not valid YAML")?;
     expect_admin_rejection(ctx, &resource, AdmissionPayload::Yaml(yaml)).await
 }
 

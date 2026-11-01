@@ -147,7 +147,7 @@ key: { type: header, name: X-Token }
 secretRef: { name: access-token }
 "#;
     assert!(
-        serde_yaml::from_str::<Condition>(missing).is_err(),
+        yaml_serde::from_str::<Condition>(missing).is_err(),
         "secretKey is a required operator field"
     );
 
@@ -157,7 +157,7 @@ key: { type: header, name: X-Token }
 secretKey: "  "
 secretRef: { name: access-token }
 "#;
-    let condition: Condition = serde_yaml::from_str(blank).expect("secretMatch shape deserializes");
+    let condition: Condition = yaml_serde::from_str(blank).expect("secretMatch shape deserializes");
     let error = condition.validate().expect_err("blank secretKey must be rejected");
     assert!(error.contains("secretMatch.secretKey cannot be empty"), "{error}");
 
@@ -167,9 +167,9 @@ key: { type: header, name: X-Token }
 secretKey: token
 secretRef: { name: access-token }
 "#;
-    let condition: Condition = serde_yaml::from_str(valid).expect("secretMatch with secretKey deserializes");
+    let condition: Condition = yaml_serde::from_str(valid).expect("secretMatch with secretKey deserializes");
     assert!(condition.validate().is_ok());
-    let yaml = serde_yaml::to_string(&condition).unwrap();
+    let yaml = yaml_serde::to_string(&condition).unwrap();
     assert!(yaml.contains("secretKey: token"), "{yaml}");
 }
 
@@ -193,8 +193,8 @@ fn test_serialize_deserialize() {
         )])),
     };
 
-    let yaml = serde_yaml::to_string(&conditions).unwrap();
-    let deserialized: PluginConditions = serde_yaml::from_str(&yaml).unwrap();
+    let yaml = yaml_serde::to_string(&conditions).unwrap();
+    let deserialized: PluginConditions = yaml_serde::from_str(&yaml).unwrap();
 
     assert_eq!(deserialized.skip.as_ref().unwrap().len(), 1);
     assert_eq!(deserialized.run.as_ref().unwrap().len(), 1);
@@ -595,7 +595,7 @@ fn hmac_match_condition_rejects_standalone_only_fields() {
         "upstreamHeaderFields: [X-Consumer]",
     ] {
         let yaml = format!("type: hmacAuth\n{field}\n");
-        assert!(serde_yaml::from_str::<Condition>(&yaml).is_err(), "accepted: {field}");
+        assert!(yaml_serde::from_str::<Condition>(&yaml).is_err(), "accepted: {field}");
     }
 }
 
@@ -637,7 +637,7 @@ fn hmac_match_condition_redacts_admin_output_and_round_trips_conf_sync() {
 
 #[test]
 fn entry_level_hmac_validate_request_body_is_rejected() {
-    let condition: Condition = serde_yaml::from_str(&hmac_body_yaml(true)).unwrap();
+    let condition: Condition = yaml_serde::from_str(&hmac_body_yaml(true)).unwrap();
     let err = condition
         .validate()
         .expect_err("entry-level HMAC body must be rejected");
@@ -653,7 +653,7 @@ fn entry_level_hmac_validate_request_body_is_rejected() {
 
 #[test]
 fn request_async_set_accepts_hmac_validate_request_body() {
-    let condition: Condition = serde_yaml::from_str(&hmac_body_yaml(true)).unwrap();
+    let condition: Condition = yaml_serde::from_str(&hmac_body_yaml(true)).unwrap();
     ConditionSet::all_of(vec![condition])
         .validate(ConditionValidationProfile::RequestAsync)
         .expect("request-async ConditionSet accepts validateRequestBody");
@@ -661,8 +661,8 @@ fn request_async_set_accepts_hmac_validate_request_body() {
 
 #[test]
 fn hmac_fields_stay_siblings_of_type() {
-    let condition: Condition = serde_yaml::from_str(&hmac_body_yaml(false)).unwrap();
-    let yaml = serde_yaml::to_string(&condition).unwrap();
+    let condition: Condition = yaml_serde::from_str(&hmac_body_yaml(false)).unwrap();
+    let yaml = yaml_serde::to_string(&condition).unwrap();
     assert!(yaml.contains("type: hmacAuth"), "{yaml}");
     assert!(yaml.contains("secretGroups:"), "{yaml}");
     assert!(!yaml.contains("hmac:"), "{yaml}");

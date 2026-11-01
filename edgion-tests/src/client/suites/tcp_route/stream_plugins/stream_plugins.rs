@@ -41,8 +41,8 @@ impl TcpStreamPluginsTestSuite {
                 "/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml"
             ))
         };
-        let fixture: serde_yaml::Value =
-            serde_yaml::from_str(fixture_yaml).map_err(|_| "Invalid Redis fixture YAML".to_string())?;
+        let fixture: yaml_serde::Value =
+            yaml_serde::from_str(fixture_yaml).map_err(|_| "Invalid Redis fixture YAML".to_string())?;
         let namespace = fixture["metadata"]["namespace"]
             .as_str()
             .ok_or_else(|| "Redis fixture must declare a namespace".to_string())?;

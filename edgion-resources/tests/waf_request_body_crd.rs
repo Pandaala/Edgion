@@ -6,7 +6,7 @@ use edgion_resources::resources::edgion_plugins::WafRequestBodyConfig;
 use serde_json::Value;
 
 fn crd() -> Value {
-    serde_yaml::from_str(include_str!("../../config/crd/edgion-crd/edgion_plugins_crd.yaml")).unwrap()
+    yaml_serde::from_str(include_str!("../../config/crd/edgion-crd/edgion_plugins_crd.yaml")).unwrap()
 }
 
 fn normalized<'a>(mut node: &'a Value, root: &'a Value) -> &'a Value {

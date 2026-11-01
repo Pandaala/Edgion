@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn tls_config_minimal_yaml_parses() {
     let yaml = "enabled: true";
-    let cfg: TlsConfig = serde_yaml::from_str(yaml).expect("should parse");
+    let cfg: TlsConfig = yaml_serde::from_str(yaml).expect("should parse");
     assert!(cfg.enabled);
     assert!(cfg.outbound.verify.is_none());
 }

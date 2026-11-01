@@ -1019,7 +1019,7 @@ mod tests {
 
     #[test]
     fn status_barriers_select_the_route_gateway_even_for_cross_namespace_policies() {
-        let mut route: Value = serde_yaml::from_str(&route_yaml()).unwrap();
+        let mut route: Value = yaml_serde::from_str(&route_yaml()).unwrap();
         let parent = route["spec"]["parentRefs"][0].clone();
         route["status"] = json!({"parents": [
             {"controllerName": "foreign/controller", "parentRef": parent, "conditions": [
@@ -1032,7 +1032,7 @@ mod tests {
         assert!(has_condition(&route, "HTTPRoute", "ResolvedRefs", "False", Some("RefNotPermitted")).unwrap());
         assert!(!has_condition(&route, "HTTPRoute", "ResolvedRefs", "True", None).unwrap());
 
-        let mut policy: Value = serde_yaml::from_str(&policy_yaml(WINNER_POLICY, BACKEND_B, 3)).unwrap();
+        let mut policy: Value = yaml_serde::from_str(&policy_yaml(WINNER_POLICY, BACKEND_B, 3)).unwrap();
         policy["status"] = json!({"ancestors": [{
             "controllerName": "edgion.io/gateway-controller",
             "ancestorRef": {"name": parent["name"], "namespace": ROUTE_NS},
@@ -1072,8 +1072,8 @@ mod tests {
 
     #[test]
     fn lifecycle_service_avoids_cluster_ip_allocation_only_in_k8s_mode() {
-        let filesystem: Value = serde_yaml::from_str(&service_yaml_for(false, BACKEND_A)).unwrap();
-        let kubernetes: Value = serde_yaml::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
+        let filesystem: Value = yaml_serde::from_str(&service_yaml_for(false, BACKEND_A)).unwrap();
+        let kubernetes: Value = yaml_serde::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
 
         assert!(filesystem.pointer("/spec/clusterIP").is_none());
         assert_eq!(
@@ -1100,20 +1100,20 @@ mod tests {
             mixed_policy_yaml(WINNER_POLICY),
             service_policy_yaml(SERVICE_POLICY, BACKEND_A),
         ] {
-            serde_yaml::from_str::<Value>(&yaml)
+            yaml_serde::from_str::<Value>(&yaml)
                 .unwrap_or_else(|error| panic!("invalid lifecycle YAML: {error}\n{yaml}"));
         }
-        let backend: Value = serde_yaml::from_str(&backend_yaml(BACKEND_A)).unwrap();
+        let backend: Value = yaml_serde::from_str(&backend_yaml(BACKEND_A)).unwrap();
         assert_eq!(
             backend.pointer("/spec/ai/credentialPool/credentials/0/secretRef/namespace"),
             Some(&Value::String(SECRET_NS.into()))
         );
-        let route: Value = serde_yaml::from_str(&route_yaml()).unwrap();
+        let route: Value = yaml_serde::from_str(&route_yaml()).unwrap();
         assert_eq!(
             route.pointer("/spec/rules/0/backendRefs/0/namespace"),
             Some(&Value::String(BACKEND_NS.into()))
         );
-        let service: Value = serde_yaml::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
+        let service: Value = yaml_serde::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
         assert_eq!(service.pointer("/spec/clusterIP"), Some(&Value::String("None".into())));
     }
 }

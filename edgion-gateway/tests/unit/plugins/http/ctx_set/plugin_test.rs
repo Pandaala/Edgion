@@ -2,11 +2,11 @@ use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 
 fn parse_config(yaml: &str) -> CtxSetConfig {
-    serde_yaml::from_str(yaml).expect("config should deserialize")
+    yaml_serde::from_str(yaml).expect("config should deserialize")
 }
 
 fn parse_transform(yaml: &str) -> TransformConfig {
-    serde_yaml::from_str(yaml).expect("transform should deserialize")
+    yaml_serde::from_str(yaml).expect("transform should deserialize")
 }
 
 #[test]
@@ -198,7 +198,7 @@ vars:
   - name: injected
     template: "${header:X-Inject}"
 "#;
-    let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut config: CtxSetConfig = yaml_serde::from_str(yaml).unwrap();
     config.validate().expect("validate should succeed");
     let plugin = CtxSet::create(&config);
 

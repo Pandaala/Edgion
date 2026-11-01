@@ -202,7 +202,7 @@ fn stage_acl_list(name: &str, cidr: &str) {
 }
 fn stage1_entry() -> StreamPluginEntry {
     stage_acl_list("stage1-blocked", "127.0.0.0/8");
-    serde_yaml::from_str("type: IpRestriction\nconfig:\n  denyRefs: [{name: stage1-blocked}]\n").unwrap()
+    yaml_serde::from_str("type: IpRestriction\nconfig:\n  denyRefs: [{name: stage1-blocked}]\n").unwrap()
 }
 fn stage2_entry(deny: bool) -> TlsRoutePluginEntry {
     let (name, cidr) = if deny {
@@ -211,7 +211,7 @@ fn stage2_entry(deny: bool) -> TlsRoutePluginEntry {
         ("stage2-miss", "192.0.2.0/24")
     };
     stage_acl_list(name, cidr);
-    serde_yaml::from_str(&format!(
+    yaml_serde::from_str(&format!(
         "type: IpRestriction\nconfig:\n  ipSource: DirectPeerIp\n  denyRefs: [{{name: {name}}}]\n"
     ))
     .unwrap()
@@ -258,7 +258,7 @@ fn compile_stage_view(
 
 #[tokio::test]
 async fn tls_route_stage_contract_survives_generations_and_scope_policy() {
-    let mut resource: EdgionStreamPlugins = serde_yaml::from_str(
+    let mut resource: EdgionStreamPlugins = yaml_serde::from_str(
         "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: policy, namespace: tls-stage-contract}\nspec: {}\n",
     ).unwrap();
     assert_dispatch(Some(&compile_stage_view(&resource, "stream", None)), true, None).await;
@@ -366,7 +366,7 @@ impl TlsRoutePlugin for SpyDenyTlsRoutePlugin {
 }
 
 fn compiled_spy_tls_route_resource(observed: Arc<Mutex<Option<ObservedTlsRouteContext>>>) -> CompiledStreamPlugins {
-    let mut spec: EdgionStreamPlugins = serde_yaml::from_str(
+    let mut spec: EdgionStreamPlugins = yaml_serde::from_str(
         "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: identity-spy, namespace: default}\nspec: {}\n",
     )
     .unwrap();

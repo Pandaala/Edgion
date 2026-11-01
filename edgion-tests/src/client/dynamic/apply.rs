@@ -127,8 +127,8 @@ async fn apply_document(client: &EdgionClient, file: &Path, content: &str) -> Re
         .as_deref()
         .context("Missing 'metadata.name' field in resource")?;
     let namespace = metadata.namespace.as_deref();
-    let document: serde_yaml::Value =
-        serde_yaml::from_str(content).with_context(|| format!("Failed to parse YAML from {}", file.display()))?;
+    let document: yaml_serde::Value =
+        yaml_serde::from_str(content).with_context(|| format!("Failed to parse YAML from {}", file.display()))?;
 
     let exists = match client.get(&kind, namespace, name).await {
         Ok(response) => response.status().is_success(),

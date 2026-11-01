@@ -99,7 +99,7 @@ fn inspect_formats_compatible_incompatible_and_malformed_reports() {
     assert!(serde_json::to_string(&compatible)
         .expect("JSON")
         .contains("\"reportVersion\":2"));
-    assert!(serde_yaml::to_string(&compatible)
+    assert!(yaml_serde::to_string(&compatible)
         .expect("YAML")
         .contains("reportVersion: 2"));
     assert!(inspect_text(&compatible).starts_with("reportVersion: 2\ncompatible: true\n"));

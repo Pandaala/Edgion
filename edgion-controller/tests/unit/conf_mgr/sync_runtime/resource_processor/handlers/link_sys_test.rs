@@ -120,7 +120,7 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
 }
 
 fn make_credential_source(ns: &str, name: &str, secret_name: &str) -> LinkSys {
-    let spec: LinkSysSpec = serde_yaml::from_str(&format!(
+    let spec: LinkSysSpec = yaml_serde::from_str(&format!(
         "type: credentialSource\nconfig:\n  provider:\n    type: oauth2ClientCredentials\n    tokenEndpoint: https://issuer.example.com/token\n    clientAuthentication:\n      activeSecretRef:\n        name: {secret_name}\n"
     ))
     .expect("credentialSource spec");

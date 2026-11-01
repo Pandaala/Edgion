@@ -266,7 +266,7 @@ fn extract_metadata(path: &Path, content: &str) -> Result<ConfigFile, String> {
     }
 
     // Parse YAML
-    let value: serde_yaml::Value = serde_yaml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))?;
+    let value: yaml_serde::Value = yaml_serde::from_str(content).map_err(|e| format!("YAML parse error: {}", e))?;
 
     // Extract kind
     let kind = value

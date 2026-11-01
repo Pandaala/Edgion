@@ -2,12 +2,12 @@ use super::*;
 use crate::resources::edgion_plugins::RequestFilterEntry;
 
 fn compile_yaml(yaml: &str) -> Result<CompiledPluginPolicy, String> {
-    serde_yaml::from_str::<PluginPolicyConfig>(yaml).unwrap().compile()
+    yaml_serde::from_str::<PluginPolicyConfig>(yaml).unwrap().compile()
 }
 
 #[test]
 fn gateway_policy_defaults_and_explicit_empty_allow_differ() {
-    let absent: crate::EdgionGatewayConfigSpec = serde_yaml::from_str("{}").unwrap();
+    let absent: crate::EdgionGatewayConfigSpec = yaml_serde::from_str("{}").unwrap();
     assert!(absent.plugin_policy.is_none());
     assert!(absent.validate_plugin_policy().is_empty());
     assert_eq!(compile_yaml("{}").unwrap(), CompiledPluginPolicy::default());
@@ -27,7 +27,7 @@ fn gateway_policy_defaults_and_explicit_empty_allow_differ() {
         empty_allow.action_for(PluginFamily::Http, "FutureType"),
         Some(PluginPolicyAction::Block { status: 503 })
     );
-    let roundtrip: PluginPolicyConfig = serde_yaml::from_str("allow: []").unwrap();
+    let roundtrip: PluginPolicyConfig = yaml_serde::from_str("allow: []").unwrap();
     assert_eq!(serde_json::to_value(roundtrip).unwrap()["allow"], serde_json::json!([]));
     assert!(serde_json::to_value(PluginPolicyConfig::default())
         .unwrap()
@@ -148,9 +148,9 @@ fn gateway_policy_serde_rejects_unknown_fields_types_and_legacy_spelling() {
         "deny:\n  - name: http/Wasm\n    enable: false",
         "deny:\n  - action: block",
     ] {
-        assert!(serde_yaml::from_str::<PluginPolicyConfig>(yaml).is_err(), "{yaml}");
+        assert!(yaml_serde::from_str::<PluginPolicyConfig>(yaml).is_err(), "{yaml}");
     }
-    let cfg: PluginPolicyConfig = serde_yaml::from_str("deny:\n  - name: http/Wasm").unwrap();
+    let cfg: PluginPolicyConfig = yaml_serde::from_str("deny:\n  - name: http/Wasm").unwrap();
     let wire = serde_json::to_value(&cfg).unwrap();
     assert!(wire["deny"][0].get("action").is_none());
     assert!(wire["deny"][0].get("blockStatus").is_none());
@@ -172,7 +172,7 @@ fn execution_action_serde_round_trip() {
 
 #[test]
 fn plugin_entries_do_not_carry_execution_policy() {
-    let entry: RequestFilterEntry = serde_yaml::from_str("type: Mock\nconfig: {}").unwrap();
+    let entry: RequestFilterEntry = yaml_serde::from_str("type: Mock\nconfig: {}").unwrap();
     let wire = serde_json::to_value(&entry).unwrap();
     let schema = serde_json::to_value(schemars::schema_for!(RequestFilterEntry)).unwrap();
     assert!(wire.get("policyAction").is_none());

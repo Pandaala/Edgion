@@ -110,7 +110,7 @@ fn committed_crds_define_bounded_structural_controller_maps() {
             .join("../config/crd/edgion-crd")
             .join(file);
         let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
-        let doc: Value = serde_yaml::from_str(&text).unwrap_or_else(|error| panic!("parse {path:?}: {error}"));
+        let doc: Value = yaml_serde::from_str(&text).unwrap_or_else(|error| panic!("parse {path:?}: {error}"));
         let controllers = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"]
             ["properties"]["controllers"];
         assert_eq!(controllers["type"], "array", "{file}");

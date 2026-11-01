@@ -952,12 +952,12 @@ async fn restore_geo_fixture(ctx: &TestContext) -> Result<(), String> {
     };
     let yaml = {
         let mut selected = None;
-        for document in serde_yaml::Deserializer::from_str(source) {
-            let value = serde_yaml::Value::deserialize(document).map_err(|error| error.to_string())?;
+        for document in yaml_serde::Deserializer::from_str(source) {
+            let value = yaml_serde::Value::deserialize(document).map_err(|error| error.to_string())?;
             if value["kind"].as_str() == Some("EdgionStreamPlugins")
                 && value["metadata"]["name"].as_str() == Some("tcp-geo-esp")
             {
-                selected = Some(serde_yaml::to_string(&value).map_err(|error| error.to_string())?);
+                selected = Some(yaml_serde::to_string(&value).map_err(|error| error.to_string())?);
                 break;
             }
         }
@@ -1007,14 +1007,14 @@ mod tests {
             ));
             let template = std::fs::read_to_string(path).unwrap();
             let rendered = crate::suites::k8s_peer_identity::render_geo_template(&template).unwrap();
-            let _: edgion_resources::EdgionConfigData = serde_yaml::from_str(&rendered).unwrap();
-            let mut expected: serde_yaml::Value = serde_yaml::from_str(&template).unwrap();
+            let _: edgion_resources::EdgionConfigData = yaml_serde::from_str(&rendered).unwrap();
+            let mut expected: yaml_serde::Value = yaml_serde::from_str(&template).unwrap();
             expected["spec"]["data"]["config"]["items"][0]["cidrs"][0] =
-                serde_yaml::Value::String(if hit { "192.168.99.42/32" } else { "198.51.100.0/24" }.into());
-            let actual: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+                yaml_serde::Value::String(if hit { "192.168.99.42/32" } else { "198.51.100.0/24" }.into());
+            let actual: yaml_serde::Value = yaml_serde::from_str(&rendered).unwrap();
             assert_eq!(actual, expected);
             let groups: Vec<edgion_resources::resources::edgion_config_data::IpGroup> =
-                serde_yaml::from_value(actual["spec"]["data"]["config"]["items"].clone()).unwrap();
+                yaml_serde::from_value(actual["spec"]["data"]["config"]["items"].clone()).unwrap();
             let matcher = edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&groups).unwrap();
             assert_eq!(matcher.contains(&"192.168.99.42".parse().unwrap()), hit);
         }
@@ -1101,7 +1101,7 @@ mod tests {
             ),
         ] {
             let yaml = format!("apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata:\n  name: tcp-geo-esp\n  namespace: edgion-test\nspec:\n  plugins:\n{raw}");
-            let consumer: edgion_resources::EdgionStreamPlugins = serde_yaml::from_str(&yaml).unwrap();
+            let consumer: edgion_resources::EdgionStreamPlugins = yaml_serde::from_str(&yaml).unwrap();
             use edgion_resources::resources::edgion_plugins::PluginValidation;
             use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPlugin;
             assert!(consumer.unsupported_plugin_errors().is_empty());
@@ -1127,7 +1127,7 @@ mod tests {
                 .join("conf/TCPRoute/GeoRestriction")
                 .join(fixture);
             let resource: edgion_resources::EdgionConfigData =
-                serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+                yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             assert_eq!(resource.metadata.name.as_deref(), Some(reference));
             assert_eq!(resource.metadata.namespace.as_deref(), Some("edgion-test"));
             let value: serde_json::Value = serde_json::to_value(resource).unwrap();

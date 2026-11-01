@@ -27,7 +27,7 @@ pub struct ResourceMetadata {
 /// this extraction is not typed resource validation. Individual fields inside the
 /// returned `ResourceMetadata` may still be `None` when absent.
 pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
-    let value: serde_yaml::Value = match serde_yaml::from_str(content) {
+    let value: yaml_serde::Value = match yaml_serde::from_str(content) {
         Ok(v) => v,
         Err(_) => serde_json::from_str(content).ok()?,
     };

@@ -1,7 +1,7 @@
 use super::*;
 
 fn config() -> GuardrailConfig {
-    serde_yaml::from_str(
+    yaml_serde::from_str(
         r#"
 target:
   url: https://guard.example

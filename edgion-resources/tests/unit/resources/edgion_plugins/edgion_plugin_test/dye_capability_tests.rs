@@ -272,28 +272,28 @@ fn key_header_names_mirrors_single_from_field_plugins() {
     // `KeyGet` tags are `#[serde(tag = "type", rename_all = "camelCase")]`,
     // so the `Header` variant renders as lowercase `header`.
     let direct: DirectEndpointConfig =
-        serde_yaml::from_str("from:\n  type: header\n  name: X-Backend-Target\n").unwrap();
+        yaml_serde::from_str("from:\n  type: header\n  name: X-Backend-Target\n").unwrap();
     assert_eq!(
         EdgionPlugin::DirectEndpoint(direct).key_header_names(),
         vec!["X-Backend-Target".to_string()]
     );
 
     let dyn_internal: DynamicInternalUpstreamConfig =
-        serde_yaml::from_str("from:\n  type: header\n  name: X-Upstream\n").unwrap();
+        yaml_serde::from_str("from:\n  type: header\n  name: X-Upstream\n").unwrap();
     assert_eq!(
         EdgionPlugin::DynamicInternalUpstream(dyn_internal).key_header_names(),
         vec!["X-Upstream".to_string()]
     );
 
     let dyn_external: DynamicExternalUpstreamConfig =
-        serde_yaml::from_str("from:\n  type: header\n  name: X-External\ndomainMap: {}\n").unwrap();
+        yaml_serde::from_str("from:\n  type: header\n  name: X-External\ndomainMap: {}\n").unwrap();
     assert_eq!(
         EdgionPlugin::DynamicExternalUpstream(dyn_external).key_header_names(),
         vec!["X-External".to_string()]
     );
 
     // Non-header key source contributes nothing.
-    let direct_ip: DirectEndpointConfig = serde_yaml::from_str("from:\n  type: remoteIp\n").unwrap();
+    let direct_ip: DirectEndpointConfig = yaml_serde::from_str("from:\n  type: remoteIp\n").unwrap();
     assert!(EdgionPlugin::DirectEndpoint(direct_ip).key_header_names().is_empty());
 }
 
@@ -301,7 +301,7 @@ fn key_header_names_mirrors_single_from_field_plugins() {
 fn key_header_names_collects_all_region_route_sources() {
     use crate::resources::plugin_configs::RegionRouteConfig;
 
-    let cfg: RegionRouteConfig = serde_yaml::from_str(
+    let cfg: RegionRouteConfig = yaml_serde::from_str(
         "myRegion: us\n\
              keyGet:\n  - type: header\n    name: X-Key\n\
              hashKeyGet:\n  - type: header\n    name: X-Hash\n\

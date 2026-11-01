@@ -52,7 +52,7 @@ fn selection_config(source: &str, expression: &str) -> WafConfig {
                 "default".into(),
                 WafProfile {
                     bundle_refs: vec![reference],
-                    rule_selection: serde_yaml::from_str(expression).unwrap(),
+                    rule_selection: yaml_serde::from_str(expression).unwrap(),
                 },
             )]),
         }),
@@ -81,7 +81,7 @@ fn static_selection_recompiles_from_identical_original_sources_and_transport() {
         .profiles
         .get_mut("default")
         .unwrap()
-        .rule_selection = serde_yaml::from_str("include: {tag: company/b}").unwrap();
+        .rule_selection = yaml_serde::from_str("include: {tag: company/b}").unwrap();
     let ids = |config: &WafConfig| {
         config
             .compile_generation()
@@ -878,8 +878,8 @@ fn dynamic_json_fixture_profiles_keep_valid_invalid_and_zero_limit_purposes() {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
                 "../edgion-tests/{tree}/conf/EdgionPlugins/Waf/DynamicTest/updates/to_json_{phase}/EdgionPlugins_waf-dynamic.yaml"
             ));
-            let document: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            let config: WafConfig = serde_yaml::from_value(document["spec"]["waf"].clone()).unwrap();
+            let document: yaml_serde::Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let config: WafConfig = yaml_serde::from_value(document["spec"]["waf"].clone()).unwrap();
             assert_eq!(config.request_body.prefix_size_bytes().is_err(), phase == "invalid");
             assert_eq!(
                 config.request_body.json.unwrap().inspection_limits(64).lexical.max_work == 0,
@@ -954,24 +954,24 @@ fn xml_dynamic_fixtures_pin_valid_bundles_and_strict_static_xml_demands() {
             let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
                 "../edgion-tests/{tree}/conf/EdgionPlugins/Waf/DynamicTest/updates/to_xml_{phase}"
             ));
-            let bundle: serde_yaml::Value = serde_yaml::from_str(
+            let bundle: yaml_serde::Value = yaml_serde::from_str(
                 &std::fs::read_to_string(base.join(format!("EdgionConfigData_waf-rules-{version}.yaml"))).unwrap(),
             )
             .unwrap();
             let data: crate::resources::WafRuleBundleData =
-                serde_yaml::from_value(bundle["spec"]["data"]["config"].clone()).unwrap();
+                yaml_serde::from_value(bundle["spec"]["data"]["config"].clone()).unwrap();
             data.validate().unwrap();
-            let policy: serde_yaml::Value =
-                serde_yaml::from_str(&std::fs::read_to_string(base.join("EdgionConfigData_waf-policy.yaml")).unwrap())
+            let policy: yaml_serde::Value =
+                yaml_serde::from_str(&std::fs::read_to_string(base.join("EdgionConfigData_waf-policy.yaml")).unwrap())
                     .unwrap();
             assert_eq!(
                 policy["spec"]["data"]["config"]["profiles"]["baseline"]["bundleRefs"][0]["expectedDigest"].as_str(),
                 Some(data.compute_digest().as_str())
             );
-            let plugin: serde_yaml::Value =
-                serde_yaml::from_str(&std::fs::read_to_string(base.join("EdgionPlugins_waf-dynamic.yaml")).unwrap())
+            let plugin: yaml_serde::Value =
+                yaml_serde::from_str(&std::fs::read_to_string(base.join("EdgionPlugins_waf-dynamic.yaml")).unwrap())
                     .unwrap();
-            let mut config: WafConfig = serde_yaml::from_value(plugin["spec"]["waf"].clone()).unwrap();
+            let mut config: WafConfig = yaml_serde::from_value(plugin["spec"]["waf"].clone()).unwrap();
             assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Full);
             assert!(config.request_body.json.is_none());
             config.rules = data.rules[0].content.clone();

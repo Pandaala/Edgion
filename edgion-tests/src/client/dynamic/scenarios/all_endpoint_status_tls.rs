@@ -282,12 +282,12 @@ pub static SCENARIO: &Scenario = &Scenario {
 mod tests {
     #[test]
     fn k8s_plaintext_transition_changes_only_the_service_endpoint_set() {
-        let transition: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let transition: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/k8s/conf/EdgionPlugins/AllEndpointStatus/DynamicTest/updates/plaintext_endpoint.yaml"
         )))
         .unwrap();
-        let mtls: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        let mtls: yaml_serde::Value = yaml_serde::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/k8s/conf/EdgionPlugins/AllEndpointStatus/DynamicTest/bootstrap/02_Deployment_mtls.yaml"
         )))

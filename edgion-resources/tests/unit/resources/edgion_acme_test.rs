@@ -30,7 +30,7 @@ spec:
         namespace: default
 "#;
 
-    let acme: Result<EdgionAcme, _> = serde_yaml::from_str(yaml);
+    let acme: Result<EdgionAcme, _> = yaml_serde::from_str(yaml);
     assert!(acme.is_ok(), "Failed to deserialize YAML: {:?}", acme.err());
 
     let acme = acme.unwrap();
@@ -52,7 +52,7 @@ fn challenge_rejects_unsupported_types_and_dns_fields() {
         "type: http-01\ngatewayRef:\n  name: gw\ncredentialRef:\n  name: dns-token",
         "type: http-01\ngatewayRef:\n  name: gw\npropagationTimeout: 120s",
     ] {
-        assert!(serde_yaml::from_str::<AcmeChallenge>(yaml).is_err(), "accepted: {yaml}");
+        assert!(yaml_serde::from_str::<AcmeChallenge>(yaml).is_err(), "accepted: {yaml}");
     }
 }
 
@@ -84,7 +84,7 @@ status:
       expireAt: 1700000000
 "#;
 
-    let mut acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+    let mut acme: EdgionAcme = yaml_serde::from_str(yaml).unwrap();
     assert!(
         acme.active_challenges().is_empty(),
         "full status is not a serving input"
@@ -119,7 +119,7 @@ spec:
     secretName: cert
 "#;
 
-    let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+    let acme: EdgionAcme = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
     assert_eq!(acme.spec.key_type, AcmeKeyType::EcdsaP256);
     assert_eq!(acme.spec.renewal.renew_before, "720h");
@@ -151,7 +151,7 @@ spec:
     secretName: cert
 "#;
 
-    let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+    let acme: EdgionAcme = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(
         crate::resources::refs::acme_fields::AcmeRefs::from_acme(&acme)
             .outputs()
@@ -194,14 +194,14 @@ spec:
   storage:
     secretName: cert
 "#;
-    let result: Result<EdgionAcme, _> = serde_yaml::from_str(yaml);
+    let result: Result<EdgionAcme, _> = yaml_serde::from_str(yaml);
     assert!(result.is_err(), "privateKeySecretRef should be required");
 }
 
 #[test]
 fn eab_deserializes_key_secret_ref() {
     let yaml = "keyId: kid-123\nkeySecretRef:\n  name: eab-secret";
-    let eab: AcmeExternalAccountBinding = serde_yaml::from_str(yaml).expect("should deserialize");
+    let eab: AcmeExternalAccountBinding = yaml_serde::from_str(yaml).expect("should deserialize");
     assert_eq!(eab.key_id, "kid-123");
     assert_eq!(eab.key_secret_ref.name, "eab-secret");
 }
@@ -209,7 +209,7 @@ fn eab_deserializes_key_secret_ref() {
 #[test]
 fn eab_rejects_inline_hmac_key() {
     let yaml = "keyId: kid\nkeySecretRef:\n  name: s\nhmacKey: leaked";
-    assert!(serde_yaml::from_str::<AcmeExternalAccountBinding>(yaml).is_err());
+    assert!(yaml_serde::from_str::<AcmeExternalAccountBinding>(yaml).is_err());
 }
 
 #[test]
@@ -233,7 +233,7 @@ spec:
   storage:
     secretName: cert
 "#;
-    let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+    let acme: EdgionAcme = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(acme.spec.private_key_secret_ref.name, "my-acme-account");
     assert_eq!(
         acme.spec.private_key_secret_ref.namespace.as_deref(),
@@ -261,7 +261,7 @@ spec:
   storage:
     secretName: cert
 "#;
-    let mut acme: EdgionAcme = serde_yaml::from_str(yaml).expect("test resource must deserialize");
+    let mut acme: EdgionAcme = yaml_serde::from_str(yaml).expect("test resource must deserialize");
     acme.spec.notify_after_publish = true;
     acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
         gateway_namespace: "default".to_string(),

@@ -23,10 +23,10 @@ fn suite(request: Vec<DyeRule>, response: Vec<DyeRule>) -> DyeSuite {
 
 #[test]
 fn on_defaults_to_success_in_serde() {
-    let r: DyeRule = serde_yaml::from_str("name: X-Track").unwrap();
+    let r: DyeRule = yaml_serde::from_str("name: X-Track").unwrap();
     assert_eq!(r.on, vec![DyeOutcome::Success]);
     // kebab-case round trip
-    let r2: DyeRule = serde_yaml::from_str("name: X-O\non: [fail-open, fail-close]").unwrap();
+    let r2: DyeRule = yaml_serde::from_str("name: X-O\non: [fail-open, fail-close]").unwrap();
     assert_eq!(r2.on, vec![DyeOutcome::FailOpen, DyeOutcome::FailClose]);
 }
 

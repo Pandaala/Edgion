@@ -21,7 +21,7 @@ fn test_file_system_config_serialize() {
         poll_interval_ms: None,
     };
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
+    let yaml = yaml_serde::to_string(&config).unwrap();
     assert!(yaml.contains("conf_dir:"));
 }
 
@@ -30,7 +30,7 @@ fn test_file_system_config_deserialize() {
     let yaml = r#"
 conf_dir: /etc/edgion/conf
 "#;
-    let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: FileSystemConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.conf_dir, PathBuf::from("/etc/edgion/conf"));
 }
 
@@ -40,26 +40,26 @@ fn test_file_system_config_rejects_unknown_fields() {
 conf_dir: /etc/edgion/conf
 endpoint_mode: endpoint_slice
 "#;
-    let result: Result<FileSystemConfig, _> = serde_yaml::from_str(yaml);
+    let result: Result<FileSystemConfig, _> = yaml_serde::from_str(yaml);
     assert!(result.is_err(), "endpoint_mode is a removed field and must be rejected");
 }
 
 #[test]
 fn test_file_system_config_poll_interval_ms_roundtrip() {
     let yaml = "conf_dir: /tmp/conf\npoll_interval_ms: 500\n";
-    let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: FileSystemConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.poll_interval_ms, Some(500));
 
-    let serialized = serde_yaml::to_string(&config).unwrap();
+    let serialized = yaml_serde::to_string(&config).unwrap();
     assert!(serialized.contains("poll_interval_ms: 500"));
 }
 
 #[test]
 fn test_file_system_config_poll_interval_ms_absent() {
     let yaml = "conf_dir: /tmp/conf\n";
-    let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: FileSystemConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.poll_interval_ms, None);
 
-    let serialized = serde_yaml::to_string(&config).unwrap();
+    let serialized = yaml_serde::to_string(&config).unwrap();
     assert!(!serialized.contains("poll_interval_ms"));
 }

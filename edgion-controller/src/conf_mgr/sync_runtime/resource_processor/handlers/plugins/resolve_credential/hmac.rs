@@ -78,8 +78,8 @@ fn decode_group_secret(
     seen: &mut HashMap<String, String>,
     resource_ref: &ResourceRef,
 ) {
-    let username_key = serde_yaml::Value::String(config.username_field.clone());
-    let secret_key_yaml = serde_yaml::Value::String(config.secret_field.clone());
+    let username_key = yaml_serde::Value::String(config.username_field.clone());
+    let secret_key_yaml = yaml_serde::Value::String(config.secret_field.clone());
     let Some(data) = &secret.data else {
         tracing::warn!(
             edgion_plugins = %resource_ref.key(),
@@ -112,7 +112,7 @@ fn decode_group_secret(
         }
     };
 
-    let entries: Vec<serde_yaml::Value> = match serde_yaml::from_str(credentials_yaml_str) {
+    let entries: Vec<yaml_serde::Value> = match yaml_serde::from_str(credentials_yaml_str) {
         Ok(list) => list,
         Err(e) => {
             tracing::warn!(
@@ -128,7 +128,7 @@ fn decode_group_secret(
     };
 
     for entry in entries {
-        let serde_yaml::Value::Mapping(entry_map) = &entry else {
+        let yaml_serde::Value::Mapping(entry_map) = &entry else {
             tracing::warn!(
                 edgion_plugins = %resource_ref.key(),
                 secret_key = %secret_key,
@@ -166,7 +166,7 @@ fn decode_group_secret(
 
         // Flatten nested headers: subtable (filtered by whitelist).
         let mut headers: HashMap<String, String> = HashMap::new();
-        if let Some(serde_yaml::Value::Mapping(map)) = entry_map.get("headers") {
+        if let Some(yaml_serde::Value::Mapping(map)) = entry_map.get("headers") {
             for (k, v) in map {
                 let Some(header_name) = k.as_str() else {
                     continue;
@@ -178,8 +178,8 @@ fn decode_group_secret(
                     value.to_string()
                 } else {
                     match v {
-                        serde_yaml::Value::Bool(b) => b.to_string(),
-                        serde_yaml::Value::Number(n) => n.to_string(),
+                        yaml_serde::Value::Bool(b) => b.to_string(),
+                        yaml_serde::Value::Number(n) => n.to_string(),
                         _ => continue,
                     }
                 };

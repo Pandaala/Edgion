@@ -83,7 +83,7 @@ fn nested_unknown_fields_are_rejected() {
             "ai:\n  provider: OpenAI\n  credentialPool:\n    credentials:\n      - name: primary\n        secretRef:\n          name: creds\n        unknown: true\n  models:\n    - name: model-a\n",
         ] {
             assert!(
-                serde_yaml::from_str::<EdgionBackendSpec>(yaml).is_err(),
+                yaml_serde::from_str::<EdgionBackendSpec>(yaml).is_err(),
                 "unknown nested field must fail: {yaml}"
             );
         }
@@ -101,7 +101,7 @@ fn provider_wire_names_are_stable() {
 
 #[test]
 fn serde_defaults_are_stable() {
-    let parsed: AiBackendSpec = serde_yaml::from_str(
+    let parsed: AiBackendSpec = yaml_serde::from_str(
             "provider: OpenAI\ncredentialPool:\n  credentials:\n    - name: primary\n      secretRef:\n        name: ai-credential\nmodels:\n  - name: model-a\n",
         )
         .unwrap();
@@ -115,7 +115,7 @@ fn serde_defaults_are_stable() {
 
 #[test]
 fn max_output_tokens_wire_and_schema_are_stable() {
-    let parsed: AiBackendSpec = serde_yaml::from_str(
+    let parsed: AiBackendSpec = yaml_serde::from_str(
             "provider: Anthropic\ncredentialPool:\n  credentials:\n    - name: primary\n      secretRef:\n        name: ai-credential\nmodels:\n  - name: model-a\ndefaults:\n  maxOutputTokens: 4096\n",
         )
         .unwrap();
@@ -136,7 +136,7 @@ fn rejects_inline_or_unknown_credential_fields() {
                 "provider: OpenAI\ncredentialPool:\n  credentials:\n    - name: primary\n      secretRef:\n        name: ai-credential\n      {field}: must-not-be-accepted\nmodels:\n  - name: model-a\n"
             );
         assert!(
-            serde_yaml::from_str::<AiBackendSpec>(&yaml).is_err(),
+            yaml_serde::from_str::<AiBackendSpec>(&yaml).is_err(),
             "unknown inline credential field {field} must be rejected"
         );
     }

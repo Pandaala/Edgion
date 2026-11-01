@@ -18,7 +18,7 @@ fn crd_scalar_defaults_resolve_to_builtin_runtime_policy() {
                 .collect(),
         )
     }
-    let crd: serde_json::Value = serde_yaml::from_str(include_str!(
+    let crd: serde_json::Value = yaml_serde::from_str(include_str!(
         "../../../../config/crd/edgion-crd/edgion_gateway_config_crd.yaml"
     ))
     .unwrap();

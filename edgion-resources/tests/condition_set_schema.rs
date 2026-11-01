@@ -6,10 +6,10 @@ use edgion_resources::resources::edgion_plugins::{
 
 #[test]
 fn accepts_each_bounded_dnf_shape() {
-    let all_of: ConditionSet = serde_yaml::from_str("allOf:\n  - type: probability\n    ratio: 1.0\n").unwrap();
+    let all_of: ConditionSet = yaml_serde::from_str("allOf:\n  - type: probability\n    ratio: 1.0\n").unwrap();
     assert_eq!(all_of.atomic_count(), 1);
 
-    let any_of: ConditionSet = serde_yaml::from_str(
+    let any_of: ConditionSet = yaml_serde::from_str(
         r#"
 anyOf:
   - type: probability
@@ -38,8 +38,8 @@ fn json_yaml_and_schemars_expose_the_same_literal_shapes() {
         r#"{"anyOf":[{"type":"probability","ratio":1.0},{"name":"pair","allOf":[{"type":"probability","ratio":0.5}]}]}"#,
     ] {
         let from_json: ConditionSet = serde_json::from_str(document).unwrap();
-        let yaml = serde_yaml::to_string(&from_json).unwrap();
-        let from_yaml: ConditionSet = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = yaml_serde::to_string(&from_json).unwrap();
+        let from_yaml: ConditionSet = yaml_serde::from_str(&yaml).unwrap();
         assert_eq!(from_json.atomic_count(), from_yaml.atomic_count());
     }
 
@@ -61,7 +61,7 @@ fn structurally_rejects_ambiguous_unknown_and_recursive_shapes() {
         "anyOf:\n  - anyOf: []\n",
         "anyOf:\n  - allOf:\n      - allOf: []\n",
     ] {
-        assert!(serde_yaml::from_str::<ConditionSet>(yaml).is_err(), "accepted: {yaml}");
+        assert!(yaml_serde::from_str::<ConditionSet>(yaml).is_err(), "accepted: {yaml}");
     }
 
     let legacy = r#"
@@ -69,15 +69,15 @@ run:
   - type: probability
     ratio: 1.0
 "#;
-    assert!(serde_yaml::from_str::<PluginConditions>(legacy).is_err());
+    assert!(yaml_serde::from_str::<PluginConditions>(legacy).is_err());
 }
 
 #[test]
 fn semantic_validation_rejects_empty_and_blank_groups() {
-    let empty: ConditionSet = serde_yaml::from_str("allOf: []\n").unwrap();
+    let empty: ConditionSet = yaml_serde::from_str("allOf: []\n").unwrap();
     assert!(empty.validate(ConditionValidationProfile::EntrySync).is_err());
 
-    let blank: ConditionSet = serde_yaml::from_str("anyOf:\n  - name: '  '\n    allOf: []\n").unwrap();
+    let blank: ConditionSet = yaml_serde::from_str("anyOf:\n  - name: '  '\n    allOf: []\n").unwrap();
     let errors = blank.validate(ConditionValidationProfile::EntrySync).unwrap_err();
     assert!(
         errors.iter().any(|error| error.contains("name cannot be empty")),
@@ -106,7 +106,7 @@ anyOf:
       - type: remoteIpMatch
         ipRefs: [{name: peer-networks}]
 "#;
-    let mut set: ConditionSet = serde_yaml::from_str(yaml).unwrap();
+    let mut set: ConditionSet = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(set.atomic_count(), 3);
     assert_eq!(set.ip_match_count(), 2);
     assert!(set.validates_request_body());
@@ -127,7 +127,7 @@ anyOf:
       - type: probability
         ratio: 1.0
 "#;
-    assert!(serde_yaml::from_str::<RequestRestrictionConfig>(old_rr).is_err());
+    assert!(yaml_serde::from_str::<RequestRestrictionConfig>(old_rr).is_err());
 
     let new_rr = r#"
 mode: Deny
@@ -136,7 +136,7 @@ conditions:
     - type: probability
       ratio: 1.0
 "#;
-    let mut rr: RequestRestrictionConfig = serde_yaml::from_str(new_rr).unwrap();
+    let mut rr: RequestRestrictionConfig = yaml_serde::from_str(new_rr).unwrap();
     rr.validate().unwrap();
 
     let old_rap = r#"
@@ -154,7 +154,7 @@ profiles:
                 - type: probability
                   ratio: 1.0
 "#;
-    let invalid_rap: RequestAccessPolicyConfig = serde_yaml::from_str(old_rap).unwrap();
+    let invalid_rap: RequestAccessPolicyConfig = yaml_serde::from_str(old_rap).unwrap();
     assert!(edgion_resources::resources::edgion_plugins::PluginValidation::validation_error(&invalid_rap).is_some());
 
     let mixed_rr = r#"
@@ -165,7 +165,7 @@ conditions:
     - type: probability
       ratio: 1.0
 "#;
-    assert!(serde_yaml::from_str::<RequestRestrictionConfig>(mixed_rr).is_err());
+    assert!(yaml_serde::from_str::<RequestRestrictionConfig>(mixed_rr).is_err());
 
     let mixed_candidate = r#"
 name: health
@@ -179,7 +179,7 @@ conditions:
     - type: probability
       ratio: 1.0
 "#;
-    assert!(serde_yaml::from_str::<UrlAccessCandidate>(mixed_candidate).is_err());
+    assert!(yaml_serde::from_str::<UrlAccessCandidate>(mixed_candidate).is_err());
 }
 
 #[test]
@@ -207,7 +207,7 @@ anyOf:
         validateRequestBody: true
 "#,
     ] {
-        let set: ConditionSet = serde_yaml::from_str(yaml).unwrap();
+        let set: ConditionSet = yaml_serde::from_str(yaml).unwrap();
         assert!(set.validate(ConditionValidationProfile::EntrySync).is_err());
         assert!(set.validate(ConditionValidationProfile::RequestAsync).is_ok());
     }

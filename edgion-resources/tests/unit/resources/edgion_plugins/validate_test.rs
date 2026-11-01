@@ -21,14 +21,14 @@ fn header_filter() -> HTTPHeaderFilter {
 
 fn ai_guard_entry() -> RequestFilterEntry {
     let config: crate::resources::edgion_plugins::AiGuardConfig =
-        serde_yaml::from_str("rules:\n  - name: r\n    match: { type: regex, pattern: \"x\" }\n    action: reject\n")
+        yaml_serde::from_str("rules:\n  - name: r\n    match: { type: regex, pattern: \"x\" }\n    action: reject\n")
             .expect("configuration parses");
     RequestFilterEntry::new(EdgionPlugin::AiGuard(config))
 }
 
 fn ai_proxy_entry() -> RequestFilterEntry {
     let config: crate::resources::edgion_plugins::AiProxyConfig =
-        serde_yaml::from_str("api: openaiChat").expect("configuration parses");
+        yaml_serde::from_str("api: openaiChat").expect("configuration parses");
     RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
 }
 
@@ -626,8 +626,8 @@ fn unsupported_types_decode_without_poisoning_a_resource_list_and_remain_invalid
             assert!(!serialized.contains("must-not-survive"));
             let roundtrip: EdgionPlugins = serde_json::from_str(&serialized).unwrap();
             assert_eq!(roundtrip.validate_plugins(), list[0].validate_plugins());
-            let yaml = serde_yaml::to_string(&list[0]).unwrap();
-            let from_yaml: EdgionPlugins = serde_yaml::from_str(&yaml).unwrap();
+            let yaml = yaml_serde::to_string(&list[0]).unwrap();
+            let from_yaml: EdgionPlugins = yaml_serde::from_str(&yaml).unwrap();
             assert_eq!(from_yaml.validate_plugins(), list[0].validate_plugins());
         }
     }
@@ -656,7 +656,7 @@ fn unsupported_fallback_does_not_accept_malformed_known_configs_or_tags() {
 fn native_responses_rejects_enabled_guard_capabilities_in_both_orders() {
     let responses = || {
         RequestFilterEntry::new(EdgionPlugin::AiProxy(
-            serde_yaml::from_str("api: openaiResponses").unwrap(),
+            yaml_serde::from_str("api: openaiResponses").unwrap(),
         ))
     };
     for entries in [vec![ai_guard_entry(), responses()], vec![responses(), ai_guard_entry()]] {
@@ -678,7 +678,7 @@ fn native_responses_rejects_enabled_guard_capabilities_in_both_orders() {
 fn native_messages_rejects_enabled_guard_capabilities_in_both_orders() {
     let responses = || {
         RequestFilterEntry::new(EdgionPlugin::AiProxy(
-            serde_yaml::from_str("api: anthropicMessages").unwrap(),
+            yaml_serde::from_str("api: anthropicMessages").unwrap(),
         ))
     };
     for entries in [vec![ai_guard_entry(), responses()], vec![responses(), ai_guard_entry()]] {

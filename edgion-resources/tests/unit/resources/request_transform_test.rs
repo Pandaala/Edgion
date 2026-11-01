@@ -175,7 +175,7 @@ fn typed_path_match_defaults_come_from_the_contract() {
         (json!({"path": {"type": "Exact", "value": null}}), "Exact", "/"),
     ] {
         let json_match: HTTPRouteMatch = serde_json::from_value(input.clone()).unwrap();
-        let yaml_match: HTTPRouteMatch = serde_yaml::from_str(&serde_yaml::to_string(&input).unwrap()).unwrap();
+        let yaml_match: HTTPRouteMatch = yaml_serde::from_str(&yaml_serde::to_string(&input).unwrap()).unwrap();
         for parsed in [json_match, yaml_match] {
             let path = parsed.path.as_ref().unwrap();
             assert_eq!(path.match_type.as_deref(), Some(expected_type));

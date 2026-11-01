@@ -214,7 +214,7 @@ spec:
       defaultConnectTimeout: 5s
       defaultRequestTimeout: 60s
 "#;
-    let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
+    let config: EdgionGatewayConfig = yaml_serde::from_str(yaml).expect("Failed to parse YAML");
     assert_eq!(config.metadata.name, Some("test-config".to_string()));
 
     let spec = config.spec;
@@ -230,7 +230,7 @@ metadata:
   name: test-default
 spec: {}
 "#;
-    let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse defaults");
+    let config: EdgionGatewayConfig = yaml_serde::from_str(yaml).expect("Should parse defaults");
     assert_eq!(config.spec.retry.attempts, 2);
 }
 
@@ -245,7 +245,7 @@ spec:
   retry:
     attempts: 10
 "#;
-    let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse");
+    let config: EdgionGatewayConfig = yaml_serde::from_str(yaml).expect("Should parse");
     assert_eq!(config.spec.retry.attempts, 10);
     assert!(config.spec.validate_retry().is_empty());
 

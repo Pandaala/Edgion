@@ -193,7 +193,7 @@ fn downstream_tls_offload_requires_a_bounded_pair() {
 
 #[test]
 fn downstream_tls_offload_cli_values_override_file_values() {
-    let mut file: EdgionGatewayConfig = serde_yaml::from_str(
+    let mut file: EdgionGatewayConfig = yaml_serde::from_str(
         "server:\n  downstream_tls_offload_threadpools: 1\n  downstream_tls_offload_thread_per_pool: 2\n",
     )
     .unwrap();

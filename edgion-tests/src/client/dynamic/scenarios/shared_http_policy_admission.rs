@@ -263,14 +263,14 @@ async fn recover_initially_missing_certificate(ctx: &ScenarioCtx) -> Result<()> 
         // Admin reads intentionally omit Secret material. Use the generated
         // local test fixture without logging its contents.
         let fixture_path = std::path::Path::new(&work_dir).join("config/edgion-test/Secret_edgion-test_edge-tls.yaml");
-        let mut secret: Value = serde_yaml::from_str(&tokio::fs::read_to_string(fixture_path).await?)?;
+        let mut secret: Value = yaml_serde::from_str(&tokio::fs::read_to_string(fixture_path).await?)?;
         secret["metadata"] = serde_json::json!({"name": CERT, "namespace": NAMESPACE});
         secret
             .as_object_mut()
             .context("invalid Secret fixture")?
             .remove("status");
         let response = client
-            .create("Secret", Some(NAMESPACE), serde_yaml::to_string(&secret)?)
+            .create("Secret", Some(NAMESPACE), yaml_serde::to_string(&secret)?)
             .await?;
         ensure!(response.status().is_success(), "certificate Secret creation failed");
         let deadline = Instant::now() + CONVERGENCE;

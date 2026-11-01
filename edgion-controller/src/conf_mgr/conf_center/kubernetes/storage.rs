@@ -387,7 +387,7 @@ impl KubernetesStorage {
         content: &str,
         api_resource: &ApiResource,
     ) -> Result<DynamicObject, ConfWriterError> {
-        let mut value: serde_json::Value = serde_yaml::from_str(content).map_err(|e| ConfWriterError::ParseError {
+        let mut value: serde_json::Value = yaml_serde::from_str(content).map_err(|e| ConfWriterError::ParseError {
             context: "Failed to parse YAML",
             source: e.into(),
         })?;
@@ -510,7 +510,7 @@ impl KubernetesStorage {
         ) {
             let resource_kind = edgion_resources::ResourceKind::from_kind_name(kind)
                 .ok_or_else(|| ConfWriterError::ValidationError(format!("Unknown Gateway API kind: {kind}")))?;
-            let raw = serde_yaml::to_value(&value).map_err(|source| ConfWriterError::ParseError {
+            let raw = yaml_serde::to_value(&value).map_err(|source| ConfWriterError::ParseError {
                 context: "Failed to decode Gateway API source",
                 source: source.into(),
             })?;
@@ -803,7 +803,7 @@ impl CenterApi for KubernetesStorage {
 
         let obj = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
 
-        let content = serde_yaml::to_string(&obj).map_err(|e| ConfWriterError::ParseError {
+        let content = yaml_serde::to_string(&obj).map_err(|e| ConfWriterError::ParseError {
             context: "Failed to serialize to YAML",
             source: e.into(),
         })?;
@@ -941,7 +941,7 @@ impl CenterApi for KubernetesStorage {
                     list.metadata.resource_version.as_deref().unwrap_or_default()
                 ));
                 items.extend(list.items.into_iter().map(|obj| {
-                    let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                    let content = yaml_serde::to_string(&obj).unwrap_or_else(|e| {
                         tracing::error!(
                             component = "kubernetes_writer",
                             kind = kind,
@@ -981,7 +981,7 @@ impl CenterApi for KubernetesStorage {
             .items
             .into_iter()
             .map(|obj| {
-                let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                let content = yaml_serde::to_string(&obj).unwrap_or_else(|e| {
                     tracing::error!(
                         component = "kubernetes_writer",
                         kind = kind,
@@ -1038,7 +1038,7 @@ impl CenterApi for KubernetesStorage {
             .items
             .into_iter()
             .map(|obj| {
-                let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                let content = yaml_serde::to_string(&obj).unwrap_or_else(|e| {
                     tracing::error!(
                         component = "kubernetes_writer",
                         kind = kind,

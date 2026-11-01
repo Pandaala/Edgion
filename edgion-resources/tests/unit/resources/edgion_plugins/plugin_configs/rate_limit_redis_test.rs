@@ -267,7 +267,7 @@ quotas:
   - rate: 100
     interval: 1s
 "#;
-    let config: RateLimitRedisConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitRedisConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.redis_ref, "default/shared-redis");
     assert_eq!(config.quotas[0].policies.len(), 1);
     assert_eq!(config.quotas[0].policies[0].rate, 100);
@@ -299,7 +299,7 @@ quotas:
   onKeyMiss: Deny
   cost: 5
 "#;
-    let config: RateLimitRedisConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RateLimitRedisConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.quotas[0].policies.len(), 3);
     assert_eq!(
         config.quotas[0].policies[0].algorithm,

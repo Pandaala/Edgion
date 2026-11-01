@@ -6,7 +6,7 @@ use std::path::PathBuf;
 fn stream_crd_types_are_open_strings_in_both_stages() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_stream_plugins_crd.yaml");
-    let doc: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let doc: Value = yaml_serde::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let props = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"];
     for stage in ["plugins", "tlsRoutePlugins"] {
         let item = &props[stage]["items"];

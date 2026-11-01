@@ -115,7 +115,7 @@ perSourceIp:
   rate: 50
   interval: "1s"
 "#;
-    let cfg: ConnectionRateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: ConnectionRateLimitConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(cfg.per_listener.unwrap().on_redis_failure, OnRedisFailure::Deny);
     assert_eq!(cfg.per_source_ip.unwrap().on_redis_failure, OnRedisFailure::Allow);
 }
@@ -128,7 +128,7 @@ perSourceIp:
   rate: 50
   interval: "1s"
 "#;
-    let cfg: ConnectionRateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+    let cfg: ConnectionRateLimitConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(cfg.redis_timeout, "100ms");
 }
 

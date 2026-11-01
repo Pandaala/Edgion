@@ -107,10 +107,10 @@ struct Bundle {
     phrase_assets: Vec<Member>,
 }
 fn load(profile: &str) -> Fallible<Bundle> {
-    let value: serde_yaml::Value = serde_yaml::from_slice(&fs::read(format!(
+    let value: yaml_serde::Value = yaml_serde::from_slice(&fs::read(format!(
         "{PACKAGE}/generated/EdgionConfigData_crs-supported-{profile}.yaml"
     ))?)?;
-    Ok(serde_yaml::from_value(value["spec"]["data"]["config"].clone())?)
+    Ok(yaml_serde::from_value(value["spec"]["data"]["config"].clone())?)
 }
 fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))

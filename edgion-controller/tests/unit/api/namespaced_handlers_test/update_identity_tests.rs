@@ -114,7 +114,7 @@ async fn stale_if_match_returns_conflict_and_keeps_current_resource() {
         .get_one("HTTPRoute", Some("default"), "route-a")
         .await
         .expect("current resource must remain readable");
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).unwrap();
     assert_eq!(stored["metadata"]["resourceVersion"], "42");
 }
 
@@ -250,7 +250,7 @@ async fn tls_route_create_and_update_reject_invalid_versions_before_persistence(
         .get_one("TLSRoute", Some("default"), "tls-route")
         .await
         .unwrap();
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).unwrap();
     assert_eq!(stored["apiVersion"], "gateway.networking.k8s.io/v1");
 }
 
@@ -284,7 +284,7 @@ async fn update_rejects_unregistered_backend_tls_policy_version_and_keeps_canoni
         .get_one("BackendTLSPolicy", Some("default"), "backend-tls")
         .await
         .expect("canonical object must remain stored");
-    let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+    let stored: yaml_serde::Value = yaml_serde::from_str(&stored).unwrap();
     assert_eq!(stored["apiVersion"], "gateway.networking.k8s.io/v1");
 }
 

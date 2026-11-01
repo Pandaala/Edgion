@@ -7,10 +7,10 @@ fn new_configuration_subtrees_reject_unknown_fields() {
         "conversion: {chat_to_anthropic: {unary: {typo: 1}}}",
         "typo: 1",
     ] {
-        assert!(serde_yaml::from_str::<AiConfig>(yaml).is_err(), "{yaml}");
+        assert!(yaml_serde::from_str::<AiConfig>(yaml).is_err(), "{yaml}");
     }
     let config: AiConfig =
-        serde_yaml::from_str("conversion: {chat_to_anthropic: {unary: {hold_timeout: 500ms}}}").unwrap();
+        yaml_serde::from_str("conversion: {chat_to_anthropic: {unary: {hold_timeout: 500ms}}}").unwrap();
     assert_eq!(
         UnaryLimits::resolve(&config.conversion.chat_to_anthropic.unary)
             .unwrap()

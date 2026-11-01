@@ -58,7 +58,7 @@ fn plugins_crd_text() -> String {
 fn plugins_crd_doc() -> Value {
     let path = plugins_crd_path();
     let text = plugins_crd_text();
-    serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
+    yaml_serde::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
 /// Top-level `allOf` atomic leaf after YAML-anchor expansion:

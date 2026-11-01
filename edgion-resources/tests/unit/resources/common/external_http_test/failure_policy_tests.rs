@@ -9,6 +9,6 @@ fn failure_policy_defaults() {
 #[test]
 fn failure_policy_parses_top_level() {
     let c: ExternalHttpConnection =
-        serde_yaml::from_str("target:\n  url: https://api.example.com\nstatusOnError: 502\n").unwrap();
+        yaml_serde::from_str("target:\n  url: https://api.example.com\nstatusOnError: 502\n").unwrap();
     assert_eq!(c.status_on_error, 502);
 }

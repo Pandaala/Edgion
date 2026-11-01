@@ -272,7 +272,7 @@ target:
   name: "api-svc"
   port: 8080
 "#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: WebhookServiceConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.conn.target.service.name.as_deref(), Some("api-svc"));
     assert_eq!(config.conn.target.service.port, Some(8080));
     assert_eq!(config.conn.timeout_ms, 5000);
@@ -312,7 +312,7 @@ healthCheck:
     timeoutMs: 2000
     healthyThreshold: 1
 "#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: WebhookServiceConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.conn.target.service.name.as_deref(), Some("key-service"));
     assert_eq!(config.conn.target.service.namespace, Some("internal".to_string()));
     assert_eq!(config.conn.target.service.port, Some(443));
@@ -345,7 +345,7 @@ target:
   namespace: "prod"
   port: 8080
 "#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: WebhookServiceConfig = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(config.conn.target.service.name.as_deref(), Some("my-webhook-svc"));
     assert_eq!(config.conn.target.service.namespace, Some("prod".to_string()));
     assert_eq!(config.conn.target.service.port, Some(8080));
@@ -433,7 +433,7 @@ countTimeout: true
 backoff:
   initialSec: 5
 "#;
-    let passive: PassiveHealthCheck = serde_yaml::from_str(yaml).unwrap();
+    let passive: PassiveHealthCheck = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(passive.unhealthy_threshold, 5);
     assert!(passive.count_timeout);
     let backoff = passive.backoff.unwrap();
@@ -592,7 +592,7 @@ fn test_webhook_target_unsupported_kind_rejected() {
 fn webhook_config_ignores_unknown_fields_after_flatten() {
     // Intentional: #[serde(flatten)] disables deny_unknown_fields (spec §3.2).
     let y = "target:\n  name: s\n  port: 1\nunknownFieldName: x\n";
-    assert!(serde_yaml::from_str::<WebhookServiceConfig>(y).is_ok());
+    assert!(yaml_serde::from_str::<WebhookServiceConfig>(y).is_ok());
 }
 
 #[test]
@@ -619,7 +619,7 @@ target:
   port: 8080
 timeoutMs: 3000
 "#;
-    let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: WebhookServiceConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(config.conn.target.service.port.is_some());
     assert_eq!(config.conn.timeout_ms, 3000);
 }
@@ -634,7 +634,7 @@ timeoutMs: 3000
 #[test]
 fn webhook_config_target_stays_nested_after_flatten() {
     let y = "target:\n  name: svc\n  namespace: prod\n  port: 8080\nrequest: {}\n";
-    let cfg: WebhookServiceConfig = serde_yaml::from_str(y).unwrap();
+    let cfg: WebhookServiceConfig = yaml_serde::from_str(y).unwrap();
     assert_eq!(cfg.conn.target.service.name.as_deref(), Some("svc"));
     assert_eq!(cfg.conn.target.service.port, Some(8080));
 }
@@ -648,7 +648,7 @@ use crate::resources::common::external_http::{TargetKind, WebhookServiceRef};
 /// A bare URL target parses and derives TargetKind::Url.
 #[test]
 fn test_target_url_variant_parses() {
-    let target: WebhookTarget = serde_yaml::from_str("url: https://api.example.com").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: https://api.example.com").unwrap();
     match target.kind().expect("url target must be valid") {
         TargetKind::Url { url, block_private } => {
             assert_eq!(url, "https://api.example.com");
@@ -662,7 +662,7 @@ fn test_target_url_variant_parses() {
 /// This is the exact failure mode an untagged enum would have had (spec 2.5).
 #[test]
 fn test_target_url_and_service_fields_are_mutually_exclusive() {
-    let target: WebhookTarget = serde_yaml::from_str("url: https://api.example.com\nname: svc\nport: 8080").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: https://api.example.com\nname: svc\nport: 8080").unwrap();
     let err = target.kind().expect_err("url + name must be rejected");
     assert!(err.contains("mutually exclusive"), "got: {err}");
 }
@@ -678,28 +678,28 @@ fn test_target_empty_is_rejected() {
 /// Origin-only: a path is rejected.
 #[test]
 fn test_target_url_with_path_is_rejected() {
-    let target: WebhookTarget = serde_yaml::from_str("url: https://api.example.com/v1/check").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: https://api.example.com/v1/check").unwrap();
     let err = target.kind().expect_err("url with path must be rejected");
     assert!(err.contains("origin-only"), "got: {err}");
 }
 
 #[test]
 fn test_target_url_with_query_is_rejected() {
-    let target: WebhookTarget = serde_yaml::from_str("url: https://api.example.com?a=1").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: https://api.example.com?a=1").unwrap();
     let err = target.kind().expect_err("url with query must be rejected");
     assert!(err.contains("origin-only"), "got: {err}");
 }
 
 #[test]
 fn test_target_url_scheme_must_be_http_or_https() {
-    let target: WebhookTarget = serde_yaml::from_str("url: ftp://api.example.com").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: ftp://api.example.com").unwrap();
     let err = target.kind().expect_err("ftp must be rejected");
     assert!(err.contains("scheme must be http or https"), "got: {err}");
 }
 
 #[test]
 fn test_target_url_with_credentials_is_rejected() {
-    let target: WebhookTarget = serde_yaml::from_str("url: https://user:pw@api.example.com").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("url: https://user:pw@api.example.com").unwrap();
     let err = target.kind().expect_err("credentials must be rejected");
     assert!(err.contains("credentials"), "got: {err}");
 }
@@ -708,7 +708,7 @@ fn test_target_url_with_credentials_is_rejected() {
 #[test]
 fn test_target_url_accepts_port_and_ipv6_literal() {
     for raw in ["url: https://api.example.com:8443", "url: http://[2001:db8::1]:8080"] {
-        let target: WebhookTarget = serde_yaml::from_str(raw).unwrap();
+        let target: WebhookTarget = yaml_serde::from_str(raw).unwrap();
         assert!(target.kind().is_ok(), "{raw} should be a valid origin");
     }
 }
@@ -716,7 +716,7 @@ fn test_target_url_accepts_port_and_ipv6_literal() {
 /// blockPrivate is meaningless on a Service target.
 #[test]
 fn test_block_private_on_service_target_is_rejected() {
-    let target: WebhookTarget = serde_yaml::from_str("name: svc\nport: 8080\nblockPrivate: true").unwrap();
+    let target: WebhookTarget = yaml_serde::from_str("name: svc\nport: 8080\nblockPrivate: true").unwrap();
     let err = target
         .kind()
         .expect_err("blockPrivate on a service target must be rejected");
@@ -730,7 +730,7 @@ fn test_http_url_with_tls_enabled_is_rejected() {
     use crate::resources::common::TlsConfig;
 
     let mut conn = ExternalHttpConnection {
-        target: serde_yaml::from_str("url: http://api.example.com").unwrap(),
+        target: yaml_serde::from_str("url: http://api.example.com").unwrap(),
         ..Default::default()
     };
     conn.tls = Some(TlsConfig {
@@ -749,7 +749,7 @@ fn test_uppercase_http_url_with_tls_enabled_is_rejected() {
     use crate::resources::common::TlsConfig;
 
     let mut conn = ExternalHttpConnection {
-        target: serde_yaml::from_str("url: HTTP://api.example.com").unwrap(),
+        target: yaml_serde::from_str("url: HTTP://api.example.com").unwrap(),
         ..Default::default()
     };
     conn.tls = Some(TlsConfig {
@@ -766,7 +766,7 @@ fn test_https_url_without_tls_block_is_valid() {
     use crate::resources::common::external_http::validate_connection_target;
 
     let conn = ExternalHttpConnection {
-        target: serde_yaml::from_str("url: https://api.example.com").unwrap(),
+        target: yaml_serde::from_str("url: https://api.example.com").unwrap(),
         ..Default::default()
     };
     assert_eq!(validate_connection_target(&conn), None);
@@ -776,9 +776,9 @@ fn test_https_url_without_tls_block_is_valid() {
 #[test]
 fn test_service_target_roundtrip_is_byte_stable() {
     let yaml = "kind: Service\nname: auth-svc\nnamespace: prod\nport: 8080\n";
-    let target: WebhookTarget = serde_yaml::from_str(yaml).unwrap();
-    let out = serde_yaml::to_string(&target).unwrap();
-    let reparsed: WebhookTarget = serde_yaml::from_str(&out).unwrap();
+    let target: WebhookTarget = yaml_serde::from_str(yaml).unwrap();
+    let out = yaml_serde::to_string(&target).unwrap();
+    let reparsed: WebhookTarget = yaml_serde::from_str(&out).unwrap();
     assert_eq!(reparsed.service.name.as_deref(), Some("auth-svc"));
     assert_eq!(reparsed.service.namespace.as_deref(), Some("prod"));
     assert_eq!(reparsed.service.port, Some(8080));
@@ -801,7 +801,7 @@ fn test_forward_auth_accepts_url_target() {
 
     // `decision` has no serde default on `ForwardAuthConfig` (unrelated to Task 1),
     // so it must be present even though this test only exercises target validation.
-    let cfg: ForwardAuthConfig = serde_yaml::from_str(
+    let cfg: ForwardAuthConfig = yaml_serde::from_str(
         "target:\n  url: https://auth.example.com\nrequest:\n  path:\n    template: /verify\ndecision: {}\n",
     )
     .unwrap();

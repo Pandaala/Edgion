@@ -47,7 +47,7 @@ config:
   fallback:
     type: system
 "#;
-    let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse httpdns LinkSys");
+    let spec: LinkSysSpec = yaml_serde::from_str(yaml).expect("parse httpdns LinkSys");
     assert_eq!(spec.config.system_type(), SystemType::HttpDns);
     assert!(spec.config.as_http_dns().is_some());
 
@@ -61,7 +61,7 @@ config:
 #[test]
 fn http_dns_missing_url_template_is_invalid() {
     let yaml = "type: httpdns\nconfig:\n  fallback:\n    type: none\n";
-    let spec: LinkSysSpec = serde_yaml::from_str(yaml).unwrap();
+    let spec: LinkSysSpec = yaml_serde::from_str(yaml).unwrap();
     let ls = make_link_sys("h", spec);
     assert!(!ls.validate_config().is_empty());
 }
@@ -77,7 +77,7 @@ config:
   maxPendingRecords: 0
   maxPendingBytes: 0
 "#;
-    let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse Kafka LinkSys");
+    let spec: LinkSysSpec = yaml_serde::from_str(yaml).expect("parse Kafka LinkSys");
     let errors = make_link_sys("k", spec).validate_config();
 
     assert_eq!(errors.len(), 4);
@@ -104,7 +104,7 @@ config:
     cluster:
       maxRedirects: 65
 "#;
-    let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse Redis LinkSys");
+    let spec: LinkSysSpec = yaml_serde::from_str(yaml).expect("parse Redis LinkSys");
     let errors = make_link_sys("r", spec).validate_config().join("; ");
 
     assert!(errors.contains("db must be between 0 and 255"));

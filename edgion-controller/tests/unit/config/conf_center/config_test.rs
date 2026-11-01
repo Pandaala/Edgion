@@ -46,7 +46,7 @@ fn test_deserialize_file_system() {
 type: file_system
 conf_dir: /etc/edgion/conf
 "#;
-    let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ConfCenterConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(!config.is_k8s_mode());
     assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
 }
@@ -60,7 +60,7 @@ watch_namespaces:
   - prod
 label_selector: app=edgion
 "#;
-    let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ConfCenterConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(config.is_k8s_mode());
     // Default metadata filter should be applied
     let filter = config.as_kubernetes().unwrap().metadata_filter();
@@ -76,7 +76,7 @@ metadata_filter:
     - "custom.annotation/to-remove"
   remove_managed_fields: false
 "#;
-    let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: ConfCenterConfig = yaml_serde::from_str(yaml).unwrap();
     assert!(config.is_k8s_mode());
     let filter = config.as_kubernetes().unwrap().metadata_filter();
     assert!(!filter.remove_managed_fields);
@@ -94,22 +94,22 @@ fn test_from_path() {
 #[test]
 fn obsolete_gateway_class_is_rejected_through_tagged_configuration() {
     for value in ["edgion", "''", "null", "12"] {
-        let error = serde_yaml::from_str::<ConfCenterConfig>(&format!("type: kubernetes\ngateway_class: {value}\n"))
+        let error = yaml_serde::from_str::<ConfCenterConfig>(&format!("type: kubernetes\ngateway_class: {value}\n"))
             .unwrap_err();
         assert!(error.to_string().contains("gateway_class has been removed"), "{error}");
     }
     let config: ConfCenterConfig =
-        serde_yaml::from_str("type: kubernetes\ncontroller_name: example.com/controller\n").unwrap();
+        yaml_serde::from_str("type: kubernetes\ncontroller_name: example.com/controller\n").unwrap();
     assert_eq!(
         config.as_kubernetes().unwrap().resolve_controller_name().unwrap(),
         "example.com/controller"
     );
-    assert!(!serde_yaml::to_string(&config).unwrap().contains("gateway_class"));
+    assert!(!yaml_serde::to_string(&config).unwrap().contains("gateway_class"));
     assert!(
-        serde_yaml::from_str::<ConfCenterConfig>("type: kubernetes\nha_mode: all-serve\nha_mode: leader-only\n")
+        yaml_serde::from_str::<ConfCenterConfig>("type: kubernetes\nha_mode: all-serve\nha_mode: leader-only\n")
             .is_err()
     );
-    assert!(serde_yaml::from_str::<ConfCenterConfig>("type: kubernetes\nunrelated: ignored\n").is_ok());
+    assert!(yaml_serde::from_str::<ConfCenterConfig>("type: kubernetes\nunrelated: ignored\n").is_ok());
 }
 
 impl ConfCenterConfig {

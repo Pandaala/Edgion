@@ -563,7 +563,7 @@ mod tests {
                 MODERN_CIPHERS,
             ),
         ] {
-            let fixture: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+            let fixture: yaml_serde::Value = yaml_serde::from_str(yaml).unwrap();
             let ciphers: Vec<_> = fixture["spec"]["ciphers"]
                 .as_sequence()
                 .unwrap()

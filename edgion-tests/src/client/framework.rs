@@ -423,8 +423,8 @@ impl TestContext {
     /// correct `/api/v1/namespaced/{kind}/{namespace}` URL.
     /// Uses PUT (update) first; falls back to POST (create) on 404.
     pub async fn apply_yaml(&self, yaml_content: &str) -> Result<(), String> {
-        let value: serde_yaml::Value =
-            serde_yaml::from_str(yaml_content).map_err(|e| format!("Invalid YAML: {}", e))?;
+        let value: yaml_serde::Value =
+            yaml_serde::from_str(yaml_content).map_err(|e| format!("Invalid YAML: {}", e))?;
 
         let kind = value["kind"].as_str().ok_or("Missing 'kind' in YAML")?;
         let namespace = value["metadata"]["namespace"].as_str().unwrap_or("default");
