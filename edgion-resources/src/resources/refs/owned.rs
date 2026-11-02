@@ -5,7 +5,7 @@ use super::plugin_fields::{PluginStage, Role};
 use super::{GrantQuery, ObjectIdentity, ReferenceError, ReferenceSource, ResourceScope};
 use crate::resources::common::{is_core_api_group, CustomCACertificateRef, SecretObjectReference};
 use crate::EdgionBackend;
-use kube::api::ObjectMeta;
+use kube::core::ObjectMeta;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;

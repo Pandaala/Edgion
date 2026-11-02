@@ -20,6 +20,7 @@
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,16 +60,18 @@ impl ServerIdentity {
                 .raw_serial_as_string()
         };
 
-        let certs: Vec<_> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem.as_bytes()))
+        let certs: Vec<_> = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
             .collect::<Result<_, _>>()
-            .map_err(|e| anyhow::anyhow!("leaf cert chain parse: {e}"))?;
-        let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem.as_bytes()))
-            .map_err(|e| anyhow::anyhow!("key parse: {e}"))?
+            .map_err(|_| anyhow::anyhow!("leaf cert chain parse: invalid PEM"))?;
+        let key = PrivateKeyDer::pem_slice_iter(key_pem.as_bytes())
+            .next()
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("key parse: invalid PEM"))?
             .ok_or_else(|| anyhow::anyhow!("no private key in PEM"))?;
         let mut roots = RootCertStore::empty();
-        for ca in rustls_pemfile::certs(&mut std::io::Cursor::new(ca_pem.as_bytes())) {
+        for ca in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
             roots
-                .add(ca.map_err(|e| anyhow::anyhow!("CA cert parse: {e}"))?)
+                .add(ca.map_err(|_| anyhow::anyhow!("CA cert parse: invalid PEM"))?)
                 .map_err(|e| anyhow::anyhow!("CA cert add: {e}"))?;
         }
         let verifier = WebPkiClientVerifier::builder(Arc::new(roots))

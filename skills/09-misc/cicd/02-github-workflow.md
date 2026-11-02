@@ -89,7 +89,11 @@ Etcd uses the upstream crates.io client without a local SDK or SDK-specific CI j
 
 `etcd-production-acceptance.yml` builds the three product binaries once and runs
 the existing LinkSys, Controller election and Gateway HA standalone scripts
-serially on one hosted VM, with a 90-minute job limit. The scripts retain their
+serially on one hosted VM, with a 90-minute job limit. Before those scripts, a
+dedicated, digest-pinned Etcd 3.7.2 fixture runs the authenticated SDK Lease,
+Watch, Lock and election regression and removes its owned container. It starts
+no Gateway/Controller topology; the existing service suites retain their Etcd
+3.5 fixture. The scripts retain their
 EXIT cleanup; pipefail propagates failures through tee. Artifacts contain only
 reports/log files, never the generated Secret/certificate/config directories,
 and are retained for seven days. This workflow reports a separate status from

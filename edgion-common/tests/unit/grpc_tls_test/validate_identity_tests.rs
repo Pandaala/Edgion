@@ -94,3 +94,42 @@ fn normal_chains_accept_but_wrong_leaf_and_ca_labels_reject_with_fixed_errors() 
     let (_, validity) = client_tls_from_pems(mixed.into_bytes(), key.into_bytes(), ca.into_bytes()).unwrap();
     assert_eq!(validity, parse_leaf_validity(cert).unwrap());
 }
+
+#[test]
+fn private_key_loading_skips_other_sections_and_selects_the_first_key() {
+    install_test_crypto_provider();
+    let (cert, key, ca) = gen_ca_and_leaf(30);
+    let (_, other_key, _) = gen_ca_and_leaf(30);
+    let bundle = format!("{cert}{key}{other_key}");
+    validate_identity(cert.as_bytes(), bundle.as_bytes(), ca.as_bytes()).unwrap();
+    let bundle = format!("{cert}{other_key}{key}");
+    assert_eq!(
+        validate_identity(cert.as_bytes(), bundle.as_bytes(), ca.as_bytes())
+            .unwrap_err()
+            .to_string(),
+        "private key does not match the leaf certificate public key"
+    );
+}
+
+#[test]
+fn missing_or_malformed_private_keys_have_fixed_errors() {
+    install_test_crypto_provider();
+    let (cert, _, ca) = gen_ca_and_leaf(30);
+    assert_eq!(
+        validate_identity(cert.as_bytes(), cert.as_bytes(), ca.as_bytes())
+            .unwrap_err()
+            .to_string(),
+        "no private key found in PEM"
+    );
+    for key in [
+        "-----BEGIN PRIVATE KEY SECRET_MARKER\n",
+        "-----BEGIN PRIVATE KEY-----\nnot-base64!\n-----END PRIVATE KEY-----\n",
+    ] {
+        assert_eq!(
+            validate_identity(cert.as_bytes(), key.as_bytes(), ca.as_bytes())
+                .unwrap_err()
+                .to_string(),
+            "private key PEM parse: invalid PEM"
+        );
+    }
+}

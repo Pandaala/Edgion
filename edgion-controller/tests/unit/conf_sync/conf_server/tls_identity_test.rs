@@ -313,3 +313,29 @@ fn concurrent_conditional_candidates_have_exactly_one_winner() {
     assert!(old_token.is_cancelled());
     assert!(!handle.handshake_material().1.is_cancelled());
 }
+
+#[test]
+fn from_pems_reads_trailing_chain_and_ca_blocks_without_echoing_markers() {
+    install_test_crypto_provider();
+    let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let other = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let leaf = ca
+        .sign_server(&["localhost".to_string()], time::Duration::days(7))
+        .unwrap();
+    let chain = format!("{}{}", leaf.cert_pem, ca.ca_cert_pem());
+    let roots = format!("{}{}", ca.ca_cert_pem(), other.ca_cert_pem());
+    let identity = ServerIdentity::from_pems(&chain, &leaf.key_pem, &roots).unwrap();
+    assert_eq!(identity.cert_pem, chain);
+    assert_eq!(identity.ca_cert_pem, roots);
+    let malformed = "-----BEGIN CERTIFICATE SECRET_MARKER\n";
+    let bad_chain = format!("{chain}{malformed}");
+    let error = ServerIdentity::from_pems(&bad_chain, &leaf.key_pem, &roots)
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "leaf cert chain parse: invalid PEM");
+    let bad_roots = format!("{roots}{malformed}");
+    let error = ServerIdentity::from_pems(&chain, &leaf.key_pem, &bad_roots)
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "CA cert parse: invalid PEM");
+}

@@ -90,6 +90,7 @@ pub fn jwk_matches_alg(jwk: &Jwk, alg: Algorithm) -> bool {
             Algorithm::PS384 => KeyAlgorithm::PS384,
             Algorithm::PS512 => KeyAlgorithm::PS512,
             Algorithm::EdDSA => KeyAlgorithm::EdDSA,
+            _ => return false,
         };
         if key_alg != expected {
             return false;

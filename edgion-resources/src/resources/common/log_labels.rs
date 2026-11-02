@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use kube::api::ObjectMeta;
+use kube::core::ObjectMeta;
 
 use crate::constants::annotations::edgion::LOG_LABEL_PREFIX;
 

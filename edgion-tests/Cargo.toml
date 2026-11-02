@@ -77,7 +77,7 @@ yaml_serde.workspace = true
 
 # HTTP / gRPC test origin + clients. This crate uses rustls directly and so
 # sidesteps the gateway's mutually-exclusive boringssl/rustls feature dance.
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 axum-server.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true

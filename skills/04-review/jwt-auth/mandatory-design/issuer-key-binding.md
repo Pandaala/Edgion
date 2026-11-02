@@ -14,7 +14,7 @@ break any of them.
 ## Invariant 1 — Route by iss FIRST
 
 `verify_jwt` must look up the group by `iss` (peeked from payload via
-`insecure_disable_signature_validation` decode) BEFORE selecting a key.
+`dangerous::insecure_decode`, without authentication) BEFORE selecting a key.
 Reject patches that:
 - Iterate all groups trying each one's keys
 - Fall back to a "default" group when iss doesn't match
@@ -79,11 +79,12 @@ no throughput improvement is measured.
 
 The insecure routing decode supplies both Header and claims. verify_jwt reuses
 that header for the algorithm equality check instead of calling decode_header
-separately. In locked jsonwebtoken 9.3.1, both paths split the token identically
-and use Header::from_encoded; the configured peek disables signature validation,
-so its earlier signature-key/algorithm checks are inactive. Header or payload
-parse failure still returns Malformed with the same fixed diagnostic. A successful
-peek does not authenticate either field.
+separately. The historical jsonwebtoken 9.3.1 comparison established that both
+paths split the token identically and used Header::from_encoded; its configured
+peek disabled signature validation and the earlier signature-key/algorithm checks.
+The current 11.1.0 untrusted API likewise returns both header and routing claims.
+Header or routing-payload parse failure returns Malformed with the same fixed
+diagnostic. A successful peek does not authenticate either field.
 
 Once issuer routing, algorithm equality and scoped key selection succeed, the
 peek claims and header are explicitly dropped before real decode. The selected
@@ -95,8 +96,38 @@ retaining the established routing-scratch release boundary.
 The insecure routing and real cryptographic decode stages remain distinct.
 Signature verification consumes the original token with the selected group's key
 and validation policy; only verified claims become the authenticated result.
-The malformed-input/precedence regression compares the old prefix with the
-current prefix and exercises issuer-before-algorithm and algorithm-before-key
+The malformed-input/precedence regression retains fixed expectations captured
+with the old prefix and exercises issuer-before-algorithm and algorithm-before-key
 failures, empty-signature rejection and fixed failure-log redaction. Re-evaluate
 this equivalence if the dependency or peek validation policy changes. No parser
 bypass, physical-erasure or measured throughput claim follows from this change.
+
+## jsonwebtoken 11 routing boundary
+
+The workspace selects jsonwebtoken 11.1.0 with use_pem and the existing AWS-LC
+backend. Rustls provider initialization remains independent. The untrusted stage
+uses dangerous::insecure_decode with a private routing deserializer: require one
+JSON object and reject duplicate exp, nbf, sub, iss and aud fields after JSON
+name decoding. Other field names retain last-value-wins semantics. This stage
+never authenticates claims or runs expiration/audience policy.
+
+The dummy HMAC decoding key and disabled Validation formerly needed for routing
+are removed. Prepared real credential keys, error caching and per-group
+Validation remain. Exact issuer routing, configured algorithm equality, scoped
+kid selection, scratch release and full verification of the original token keep
+their existing order. Only the full decode's claims enter VerifyOk.
+
+Do not copy the old SDK's private coercion/cursor quirks into Edgion. Some invalid
+claim shapes can move from an early Malformed result to a later signed-decode
+failure; every public denial remains generic invalid_token/401 and diagnostics
+remain fixed. Non-object payloads consistently fail routing, including the old
+five-element array edge that previously reached MissingIss. Optional exp/nbf
+format validation follows the newer SDK, with required exp and nbf checks kept
+intact. This does not claim every unused optional claim type is rejected.
+
+Tests retain the existing failure-order/redaction expectations, add registered
+and escaped-name duplicates, other-field last-value behavior and signed invalid
+claim rejection. Fixed OpenSSL-key tokens signed and verified by the old 9.3.1
+Ring backend exercise all eight supported issuer-group algorithms with the new
+backend and reject altered signatures. These are compatibility/security guards,
+not a measured performance improvement.

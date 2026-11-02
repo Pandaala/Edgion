@@ -1,4 +1,4 @@
-//! Thin wrapper over etcd-client 0.18's v3election service (spec §3.2).
+//! Thin wrapper over etcd-client 0.21's v3election service (spec §3.2).
 //!
 //! `campaign` blocks server-side until this candidate wins; it must run in a
 //! cancellable task and MUST NOT share a Client that has a channel-wide request

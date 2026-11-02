@@ -80,7 +80,7 @@ and real decode. No JWKS or discovery snapshot lifetime changes here.
 After real decode succeeds, its unused TokenData header releases before moving
 claims into the returned Value. Partial movement of claims alone would leave
 that header until scope cleanup. Both header owners have ordinary owned fields
-with no custom destructor in jsonwebtoken 9.3.1. These earlier release points
+with no custom destructor in jsonwebtoken 11.1.0. These earlier release points
 preserve raw-token verification, key rotation, issuer/audience/expiration and
 nonce/scope behavior. They establish no erasure, reduced allocation count or
 measured whole-request peak/throughput improvement.
@@ -107,3 +107,18 @@ also covers valid JWT selection, opaque/non-object-payload fallback and disabled
 JWKS, with scripted provider hit counts. This is local behavior evidence, not
 network or throughput measurement. Re-evaluate if classification, fallback rules,
 verification wrapper parameters or parsed-header ownership changes.
+
+## jsonwebtoken 11 backend and unknown keys
+
+The workspace enables only the AWS-LC jsonwebtoken 11.1.0 crypto backend, reusing
+an existing dependency. This does not install or change Rustls's Ring provider.
+Non-exhaustive algorithms fail closed in jwk_matches_alg; deserializable unknown
+JWK key types cannot satisfy a known algorithm, even with a matching kid. A kid
+match with an unsuitable key never falls back to another key.
+
+Existing defaults and explicit HS/PS/EdDSA opt-ins remain unchanged. Public fixed
+tokens signed and verified with the old Ring backend exercise policy resolution,
+JWK selection, real signature verification and altered-signature denial for all
+12 supported SDK algorithms. Allow-expired tests retain required exp, nbf and
+claim-format checks. Auto fallback remains restricted to InvalidFormat; new SDK
+error variants must not be broadly remapped to introspection fallback.

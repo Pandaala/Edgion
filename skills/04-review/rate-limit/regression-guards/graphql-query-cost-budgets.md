@@ -58,7 +58,7 @@ resolvers require conservative fixed weights; no per-item leaf charge is implied
 Review changes to this check, wrappers, interface rule applicability or the formula
 against both leaf rejection and retained composite/fixed-weight charging tests.
 
-The pinned Apollo0.8.6/Rowan0.16.1 parser allocation ledger uses lexical preflight,
+The pinned Apollo0.8.7/Rowan0.16.1 parser allocation ledger uses lexical preflight,
 4096 native tokens,256-byte nontrivia tokens,64 native recursion, bounded JSON and
 model cardinalities,32768 evaluation work steps and4 process-wide nonwaiting
 permits shared by the router and limiter. Frontend selection and cost evaluation
@@ -67,6 +67,16 @@ are borrowed from one owner. The conservative96MiB per evaluation excludes share
 compiled schema generations and allocator-wide RSS. Parser upgrades, cloning
 variables/CST subtrees, retaining error diagnostics, collecting expanded fragments
 or moving permit release across Redis require renewed resource review.
+
+The Apollo 0.8.7 upgrade received a renewed source-based resource review. Only
+lexer Unicode states and the unused StringValue decoding helper changed; grammar,
+CST construction and Rowan ownership are unchanged. Unicode state uses bounded
+scalars and saturation, and preflight still limits raw token bytes before CST
+allocation. Current consumers never call the decoded StringValue conversion, so
+there is no additional decoded-string owner. The existing 96 MiB estimate remains
+conservative design evidence, not a new heap measurement or a proved hard cap.
+Regression coverage pins Unicode escape acceptance, invalid-scalar rejection,
+256/257-byte raw-token boundaries and distinct raw safelist spellings.
 
 Schema/rule/representation mutations, executable extension support, downstream
 query sealing and new budget transaction promises require independent review.

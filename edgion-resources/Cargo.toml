@@ -34,7 +34,7 @@ cel.workspace = true
 jsonptr.workspace = true
 
 # Kubernetes resource model
-kube.workspace = true
+kube = { workspace = true, features = ["derive"] }
 k8s-openapi.workspace = true
 
 # Matcher / config helpers

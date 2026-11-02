@@ -135,7 +135,7 @@ impl PreparedIpListReferences {
 
     fn check(
         &self,
-        metadata: &kube::api::ObjectMeta,
+        metadata: &kube::core::ObjectMeta,
         headers: Vec<(u8, usize, bool, String)>,
         roots: &[Root<'_>],
     ) -> Result<(), ReferenceError> {

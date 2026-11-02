@@ -10,7 +10,7 @@ use crate::resources::{
     UDPBackendRef, UDPRoute,
 };
 use crate::ResourceKind;
-use kube::api::ObjectMeta;
+use kube::core::ObjectMeta;
 
 #[derive(Clone, Copy)]
 enum RouteOwner<'a> {

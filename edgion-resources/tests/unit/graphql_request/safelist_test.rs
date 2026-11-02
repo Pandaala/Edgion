@@ -38,3 +38,14 @@ fn fingerprint_charges_carried_work_including_discarded_tokens() {
     parsed.work = super::super::Work(super::super::MAX_WORK - 1);
     assert_eq!(parsed.document_fingerprint(), Err(GraphqlError::Invalid));
 }
+
+#[test]
+fn unicode_escape_spellings_keep_distinct_safelist_fingerprints() {
+    let literal = fingerprint(r#"{ f(arg: "é") }"#);
+    let fixed = fingerprint(r#"{ f(arg: "\u00E9") }"#);
+    let variable = fingerprint(r#"{ f(arg: "\u{E9}") }"#);
+    assert_ne!(literal, fixed);
+    assert_ne!(literal, variable);
+    assert_ne!(fixed, variable);
+    assert_eq!(variable, fingerprint(r#"{f(arg:"\u{E9}")} # comment"#));
+}

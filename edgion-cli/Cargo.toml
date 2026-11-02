@@ -42,7 +42,7 @@ serde.workspace = true
 serde_json.workspace = true
 yaml_serde.workspace = true
 
-kube.workspace = true
+kube = { workspace = true, features = ["client", "rustls-tls", "ring"] }
 k8s-openapi.workspace = true
 
 reqwest.workspace = true

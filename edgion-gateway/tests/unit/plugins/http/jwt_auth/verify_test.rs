@@ -126,17 +126,7 @@ fn routing_decode_preserves_malformed_and_security_failure_precedence() {
         ));
     }
     for (token, expected, tag) in cases {
-        // Freeze the old prefix as a dependency-upgrade equivalence oracle.
-        let old_prefix = jsonwebtoken::decode_header(&token).and_then(|header| {
-            decode::<Value>(&token, store.peek_decoding_key(), store.peek_validation())
-                .map(|peek| (header.alg, peek.claims))
-        });
-        let new_prefix = decode::<Value>(&token, store.peek_decoding_key(), store.peek_validation())
-            .map(|peek| (peek.header.alg, peek.claims));
-        assert_eq!(old_prefix.is_ok(), new_prefix.is_ok());
-        if let (Ok(old), Ok(new)) = (old_prefix, new_prefix) {
-            assert_eq!(old, new);
-        }
+        // Fixed expectations retain the routing contract across SDK API changes.
         let mut log = PluginLog::new("JwtAuth");
         let actual = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
         assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&expected));
@@ -332,5 +322,163 @@ fn verify_ok_debug_is_fully_opaque() {
         "sensitive-token",
     ] {
         assert!(!debug.contains(sentinel), "Debug leaked `{sentinel}`: {debug}");
+    }
+}
+
+#[test]
+fn routing_rejects_duplicate_registered_claims_including_escaped_names() {
+    use base64::Engine;
+    let encode = |raw: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+    let store = JwtIssuerGroupStore::new(HashMap::new(), false, 0);
+    let config = config_default_keyclaim();
+    let mut payloads = Vec::new();
+    for name in ["exp", "nbf", "sub", "iss", "aud"] {
+        for value in ["null", "{}", "[]", "1", r#""registered""#] {
+            let prefix = if name == "iss" {
+                ""
+            } else {
+                r#""iss":"https://unknown.example","#
+            };
+            payloads.push(format!("{{{prefix}\"{name}\":{value},\"{name}\":{value}}}"));
+        }
+    }
+    payloads.push(r#"{"iss":"https://unknown.example","i\u0073s":"https://other.example"}"#.into());
+    for payload in payloads {
+        let token = format!("{}.{}.signature", encode(r#"{"alg":"HS384"}"#), encode(&payload));
+        let mut log = PluginLog::new("JwtAuth");
+        assert!(matches!(
+            verify_jwt(&token, &store, &config, &mut log),
+            Err(VerifyDeny::Malformed)
+        ));
+        assert!(log.contains("Deny malformed token"));
+        assert!(!log.render_for_test().contains("https://"));
+    }
+}
+
+#[test]
+fn routing_requires_an_object_and_retains_other_claims_last_value() {
+    use base64::Engine;
+    let encode = |raw: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+    let store = JwtIssuerGroupStore::new(
+        HashMap::from([(
+            "https://a.example".into(),
+            make_hs_group("partner-a", "k1", b"routing-test-key"),
+        )]),
+        false,
+        0,
+    );
+    let mut config = config_default_keyclaim();
+    for payload in ["null", "[]", "[null,null,null,null,null]", "false", "42", r#""claims""#] {
+        let token = format!("{}.{}.signature", encode(r#"{"alg":"HS256"}"#), encode(payload));
+        assert!(matches!(
+            verify_jwt(&token, &store, &config, &mut PluginLog::new("JwtAuth")),
+            Err(VerifyDeny::Malformed)
+        ));
+    }
+    for name in ["key", "custom"] {
+        config.key_claim_name = name.into();
+        for (first, last, missing) in [("missing", "k1", false), ("k1", "missing", true)] {
+            let payload = format!(r#"{{"iss":"https://a.example","{name}":"{first}","{name}":"{last}"}}"#);
+            let token = format!("{}.{}.signature", encode(r#"{"alg":"HS256"}"#), encode(&payload));
+            let result = verify_jwt(&token, &store, &config, &mut PluginLog::new("JwtAuth"));
+            if missing {
+                assert!(matches!(result, Err(VerifyDeny::MissingKey)));
+            } else {
+                assert!(matches!(result, Err(VerifyDeny::SignatureFail)));
+            }
+        }
+    }
+}
+
+#[test]
+fn old_ring_signatures_verify_with_each_supported_issuer_group_algorithm() {
+    use base64::Engine;
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../../fixtures/jwt_dependency_signatures.json")).unwrap();
+    let mut checked = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let Ok(algorithm) = serde_json::from_value::<JwtAlgorithm>(case["alg"].clone()) else {
+            continue;
+        };
+        let credential = ResolvedJwtCredential {
+            key: Some("fixture-kid".into()),
+            secret: case["secret"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            public_key: case["publicKeyPem"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        };
+        let group = ResolvedJwtIssuerGroup {
+            group: "fixture-group".into(),
+            algorithm,
+            audiences: Some(vec!["fixture-client".into()]),
+            credentials: HashMap::from([("fixture-kid".into(), credential)]),
+        };
+        let store = JwtIssuerGroupStore::new(HashMap::from([("https://jwt-fixture.example".into(), group)]), false, 0);
+        let config = config_default_keyclaim();
+        let token = case["token"].as_str().unwrap();
+        let verified = verify_jwt(token, &store, &config, &mut PluginLog::new("JwtAuth")).unwrap();
+        assert_eq!(verified.issuer(), "https://jwt-fixture.example");
+        assert_eq!(verified.claims()["sub"], "fixture-user");
+        let (message, signature) = token.rsplit_once('.').unwrap();
+        let mut signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature)
+            .unwrap();
+        signature[0] ^= 1;
+        let tampered = format!(
+            "{message}.{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
+        );
+        assert!(matches!(
+            verify_jwt(&tampered, &store, &config, &mut PluginLog::new("JwtAuth")),
+            Err(VerifyDeny::SignatureFail)
+        ));
+        checked += 1;
+    }
+    assert_eq!(checked, 8);
+}
+
+#[test]
+fn signed_known_issuer_rejects_malformed_registered_claim_formats() {
+    let secret = b"claim-format-test-secret-at-least-thirty-two-bytes";
+    let store = JwtIssuerGroupStore::new(
+        HashMap::from([("https://a.example".into(), make_hs_group("partner-a", "k1", secret))]),
+        false,
+        0,
+    );
+    let config = config_default_keyclaim();
+    for (name, invalid) in [
+        ("sub", json!({})),
+        ("sub", json!([])),
+        ("exp", json!(["not-a-date"])),
+        ("exp", json!("not-a-date")),
+        ("exp", Value::Null),
+        ("nbf", json!(["not-a-date"])),
+        ("nbf", json!("not-a-date")),
+        ("nbf", json!(true)),
+    ] {
+        let mut claims = json!({"iss":"https://a.example","key":"k1","exp":4102444800u64});
+        claims[name] = invalid;
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .unwrap();
+        let mut log = PluginLog::new("JwtAuth");
+        assert!(
+            matches!(
+                verify_jwt(&token, &store, &config, &mut log),
+                Err(VerifyDeny::SignatureFail)
+            ),
+            "{name}"
+        );
+        let rendered = log.render_for_test();
+        for value in ["partner-a", "https://a.example", "k1", "not-a-date"] {
+            assert!(!rendered.contains(value));
+        }
     }
 }

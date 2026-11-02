@@ -170,7 +170,7 @@ fn backend_secret_ordinals_follow_current_fields_without_retained_descriptors() 
 
 fn credential_material(name: &str, namespace: Option<&str>, payload: &[u8]) -> k8s_openapi::api::core::v1::Secret {
     k8s_openapi::api::core::v1::Secret {
-        metadata: kube::api::ObjectMeta {
+        metadata: kube::core::ObjectMeta {
             name: Some(name.into()),
             namespace: namespace.map(str::to_owned),
             ..Default::default()

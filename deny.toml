@@ -24,27 +24,16 @@ ignore = [
     # remove once its custom-resolver hook no longer enables Hickory 0.24.
     { id = "RUSTSEC-2026-0119", reason = "fred resolver-hook feature baggage; Hickory 0.24 is not called" },
 
-    # protobuf 2.x decode-recursion crash. Pinned by pingora-core ->
-    # prometheus 0.13 (requires protobuf 2.x); the fixed 3.7+ is a major we
-    # cannot select. Exposure: the prometheus crate only ENCODES our metrics
-    # exposition; no untrusted protobuf is ever decoded through this path.
-    # RE-EVALUATE: next pingora-core bump.
-    { id = "RUSTSEC-2024-0437", reason = "pinned by pingora->prometheus; encode-only usage, no untrusted decode" },
-
-    # daemonize is unmaintained (no vulnerability). Pulled by pingora-core;
-    # runs once at process start for daemon mode. RE-EVALUATE: next
-    # pingora-core bump.
-    { id = "RUSTSEC-2025-0069", reason = "unmaintained only; pingora dep, process-start-only code path" },
-
     # derivative is unmaintained (no vulnerability). Compile-time proc-macro
     # via pingora-core; zero runtime attack surface. RE-EVALUATE: next
     # pingora-core bump.
     { id = "RUSTSEC-2024-0388", reason = "unmaintained only; compile-time proc-macro" },
 
-    # rustls-pemfile is unmaintained (no vulnerability): a feature-complete
-    # PEM parser still pulled by tonic 0.12 (conf_sync gRPC). RE-EVALUATE:
-    # when conf_sync migrates to tonic 0.14 (already in-tree for etcd/otlp).
-    { id = "RUSTSEC-2025-0134", reason = "unmaintained only; pinned by tonic 0.12" },
+    # The dormant, unsupported Pingora rustls backend still pulls this wrapper
+    # directly and through rustls-native-certs 0.7. Owned PEM loading uses
+    # rustls-pki-types instead. No supported Gateway build enables this backend.
+    # RE-EVALUATE: next Pingora rustls dependency update; audit scans the full lock.
+    { id = "RUSTSEC-2025-0134", reason = "dormant Pingora rustls backend; no owned PEM calls" },
 ]
 
 [licenses]
@@ -75,7 +64,7 @@ allow = [
 private = { ignore = true }
 
 [bans]
-# Duplicate crate versions double binary size and audit surface. Warn (not
+# Duplicate crate versions can add build work and audit surface. Warn (not
 # deny): the tree already carries some transitively-forced duplicates.
 multiple-versions = "warn"
 deny = [

@@ -37,7 +37,7 @@ const GROUPED_SECRET_A: &[u8] = b"partner-a-jwt-secret-32-chars-long-pad";
 const GROUPED_SECRET_B: &[u8] = b"partner-b-jwt-secret-32-chars-long-pad";
 
 /// Build a HS256 JWT with iss, kid (key claim), sub and exp.
-/// Uses the `jsonwebtoken` crate (v9) — the same library used by the gateway.
+/// Uses the workspace's `jsonwebtoken` version and backend, shared with the gateway.
 fn build_jwt_hs256(iss: &str, kid: &str, secret: &[u8], sub: &str) -> String {
     let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
     let claims = json!({

@@ -109,7 +109,7 @@ fn operator_attachment_dimensions_decode_then_validate_with_owner_namespace() {
 fn test_yaml_serialization_produces_camel_case() {
     // Test that serialization produces camelCase field names
     let tls = EdgionTls {
-        metadata: kube::api::ObjectMeta {
+        metadata: kube::core::ObjectMeta {
             name: Some("test-tls".to_string()),
             namespace: Some("default".to_string()),
             ..Default::default()

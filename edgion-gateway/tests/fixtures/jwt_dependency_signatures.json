@@ -1,0 +1,172 @@
+{
+  "cases": [
+    {
+      "alg": "HS256",
+      "jwk": {
+        "alg": "HS256",
+        "k": "ZGVwZW5kZW5jeS1maXh0dXJlLWhtYWMta2V5LXdpdGgtYXQtbGVhc3Qtc2l4dHktZm91ci1ieXRlcy1wYWRkaW5nLTIwMjY",
+        "kid": "fixture-kid",
+        "kty": "oct",
+        "use": "sig"
+      },
+      "publicKeyPem": "",
+      "secret": "dependency-fixture-hmac-key-with-at-least-sixty-four-bytes-padding-2026",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.RFe-PPOlJK-HHRE5JKUxv3q4kLPrvnMUO_m-KNgKgUE"
+    },
+    {
+      "alg": "HS384",
+      "jwk": {
+        "alg": "HS384",
+        "k": "ZGVwZW5kZW5jeS1maXh0dXJlLWhtYWMta2V5LXdpdGgtYXQtbGVhc3Qtc2l4dHktZm91ci1ieXRlcy1wYWRkaW5nLTIwMjY",
+        "kid": "fixture-kid",
+        "kty": "oct",
+        "use": "sig"
+      },
+      "publicKeyPem": "",
+      "secret": "dependency-fixture-hmac-key-with-at-least-sixty-four-bytes-padding-2026",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzM4NCIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.5xWbcWWIexb7RUF0On5ZOTrxpaypFsyadUWeJKLoPOIgFuJfvpOf2iHRSTVGaxQI"
+    },
+    {
+      "alg": "HS512",
+      "jwk": {
+        "alg": "HS512",
+        "k": "ZGVwZW5kZW5jeS1maXh0dXJlLWhtYWMta2V5LXdpdGgtYXQtbGVhc3Qtc2l4dHktZm91ci1ieXRlcy1wYWRkaW5nLTIwMjY",
+        "kid": "fixture-kid",
+        "kty": "oct",
+        "use": "sig"
+      },
+      "publicKeyPem": "",
+      "secret": "dependency-fixture-hmac-key-with-at-least-sixty-four-bytes-padding-2026",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.NGugzFS1B2KIJUreQqO4HYD6oCTaMHqkmMn8-wpN-Gh6pip3or1QBywHw4e981q_838jnTObviXSPxvu-aSobw"
+    },
+    {
+      "alg": "RS256",
+      "jwk": {
+        "alg": "RS256",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.h2QKkht7yhkJg1P21kvGT4LJBEM5ASIPFB8tA_S2OpM3s3uMkKgXwXrAbIQgcSnCVZgNJnVJOqOEJW9hGV-_hffi-kbkQ0tvr9Rw0nTxQ6-kJm4pxxwsYZtyAq7iV7En0J6yuPoqK03KVac58X-ejoVfZgWOzLfQWTLuoAc6mM2jXhYAIlmWd3qtBZYUSvhUxmh0nSx8Jd-1_OdlIcag89Yb_xk2NckRK70nl_7dPRnUazHhn_CnO3ftMWOiq98nnzqfcDFGutTIODnxq70sBg6aXZOjMHrlkzRWNTqedaR-xssXFzcJY5tjHy1fkNAs5iQcJS3qdK6a0weMFo627A"
+    },
+    {
+      "alg": "RS384",
+      "jwk": {
+        "alg": "RS384",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzM4NCIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.z3EaTsUylwmlyVC8anPI278vMP9BRdwN3BgykH3YFENHiETn68h7gtpCfMBbU0VFbk17UiLI5jS4MeTfZJu9OdBZG5vtAlMi_Z5cnv5W67GVAANjqEm_NnZKicV0wy-sebZDFrcQjYSbrzzgTk2HGlVW5MazjRXvj0HTxlBDtuDhHlInp3VkdDwbGh1u9ksdrgvn1mPbCPn1cxks4mFL0QbbI6wLnbx208kVxrDj-aAPaO9TW303oVTdcMSuMQSBEqpygkX2MzNm5IBLIYvq169RwZBfDfawC2NnyO21Y6_1o79xsJkRwIEAiHY2-5Up1S-rPsXjUWhX_cc9FCvwsw"
+    },
+    {
+      "alg": "RS512",
+      "jwk": {
+        "alg": "RS512",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzUxMiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.FkIEXcisl8u3h6OA0h2AJBU28ioWFgfa5-AFKLXuWJLZBhZn3o6Yp_lWsTdZ6CjYWQc42VTCT_7vjS5PtQFqUOCMVoLC424FSEUc1i_FThLhSKJvjWsvSiI8rMk-SMRzWDGkzoh3qEtAzbjPt1AquQKXwTIsi3vBqWfl7uyHiN0IeOtq24BeXpXzfNX0Ovu7oLyd_6xoJi6hmy-ym9R4yMeQcMOq0EYN2V573dI02ct2-6n6mGjdDdADpZlM9b6O7vs6yswtiqL2FbmB_2Gbgg_sKg_rsWQZxKbfUQgLR5Q8A7c9sDuDtVeEHciY0AL2JWKYwVSObOUG27bE9cIx0g"
+    },
+    {
+      "alg": "ES256",
+      "jwk": {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kid": "fixture-kid",
+        "kty": "EC",
+        "use": "sig",
+        "x": "RJbRSQ6Sos32_VfOfh908HKzmH55Iwivocd6HIbk1ps",
+        "y": "02WVPlXDY13LCD39wFEvXNdkoeHDNraY8a-6zwK49dQ"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERJbRSQ6Sos32/VfOfh908HKzmH55\nIwivocd6HIbk1pvTZZU+VcNjXcsIPf3AUS9c12Sh4cM2tpjxr7rPArj11A==\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.Awvtl1alq8rjLN5xyICguQwBMwZRZ2gmM4uZbkZUgu9DQASyMW_YqeA_8kCZn5-IRgwR3_ZcBFMXdw_1VwAgiQ"
+    },
+    {
+      "alg": "ES384",
+      "jwk": {
+        "alg": "ES384",
+        "crv": "P-384",
+        "kid": "fixture-kid",
+        "kty": "EC",
+        "use": "sig",
+        "x": "bw68leG1CowZSyEwDVP7w3clw8LYKt6lQDMYBVvLx_3WoElujDXN7w5qpHrlT6Cm",
+        "y": "wriVwjuG6eYWScN6-xA-6O1vGlVlpA9S20UUKdRiF3Kzz0LbV76jJ4N9URhJay41"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEbw68leG1CowZSyEwDVP7w3clw8LYKt6l\nQDMYBVvLx/3WoElujDXN7w5qpHrlT6CmwriVwjuG6eYWScN6+xA+6O1vGlVlpA9S\n20UUKdRiF3Kzz0LbV76jJ4N9URhJay41\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzM4NCIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.P0b8oDf4HgVuuIiJZgq6lZgi8Vn7vM15yiQxlIocaCRwfKI2Ze_1bu-psvy46e6gbw12XUlR2UUSymc0Xexj2Wa5JjKnvmOkuIA83Gf4Ksx_7ea-fJ89MujwU_2T2_zs"
+    },
+    {
+      "alg": "PS256",
+      "jwk": {
+        "alg": "PS256",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJQUzI1NiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.rxMgfa6BLa7fIr3lm5zjl8p4HzOlQzXGCzQQBTATddNt-6FM81CTTxj4cMetr3aP1N0K477kAI6cbd70Ze0WuIotNBUCrJTn7Vd8aXn0TOL90-pgN7eejc6-kRYUULoOCWi8BhG1O9oMVcAyZ4IVW2oIAxjvvL4jJvE4zP38-T2Fnm9XMeAFZG-zOs6IIf9BQwulG-Hmtg3LQc_MWuQ9aAE7HqXL94P73plx6i-6uQhI11KPrTLmNJLrBlXG8yaywhY9l8g5WE81v5t5sYJRbpC673jscupnVUFee7LhzVE-zY7wGCll8TMs5oXJVK_VOw_3nhc8ahDVoqhfz0piQg"
+    },
+    {
+      "alg": "PS384",
+      "jwk": {
+        "alg": "PS384",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJQUzM4NCIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.g6v2NgX0a82APu1ST5ek-KGrDvDaAfzLGs3hWDEAupXSuYKx_1qtFdr2s4117VKKOUB-p0_NitERvp_UX0GAZYZiCM1mQnFblAU00SI62ONmYNtpoclv5ZBfmTmF2EtzOajqcgMjQHmEf2v9lf6k2EcQOLU3eFkeqIOItULRyF9BZmhWnv22Z2kh-Lk4Y3wWdBoRgkh-4uxggdUJ98PRYXZdFOYIHrJo-xhO_OtVedIbcHgvYKlnYajwfbOs_SNJgzERoGsESOu16C51R0T4mHRY9E93fSblbvrJ1rghUStzrh-6C03YV-u5KJW3nJOiJapT8QrWT5v3_VNQjP5VYA"
+    },
+    {
+      "alg": "PS512",
+      "jwk": {
+        "alg": "PS512",
+        "e": "AQAB",
+        "kid": "fixture-kid",
+        "kty": "RSA",
+        "n": "0t5V7eOgAI8nzb24r8IplTLSiw3S2KUgojdwflX05-aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4jy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy_nrnjlkeY02wc20LGrLyQ1RqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz_OJRKM-NQVFhIuCkfH4hjwloa4xctDLFT65u_oebIE_DQnJ7mf60aVoU4mgD2sfEDbjxjw_tF4q-21gY8UyE-t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63dQ",
+        "use": "sig"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0t5V7eOgAI8nzb24r8Ip\nlTLSiw3S2KUgojdwflX05+aiExfjDjFhhoTp56mfLHzhCS7N25unameexOijofi4\njy18Iev8v7ZDOhUelcnkQPbZtdk8VE6RHz9T8YOiy/nrnjlkeY02wc20LGrLyQ1R\nqCOEeyBrT3cNET3lVYPgyiK76fJ1yBH3zrt8RtwuuYsGVDR2OoXomzgz/OJRKM+N\nQVFhIuCkfH4hjwloa4xctDLFT65u/oebIE/DQnJ7mf60aVoU4mgD2sfEDbjxjw/t\nF4q+21gY8UyE+t3XHkd8Fhzagl6P6cTh5bf6SX8CMIO5BXkN81KV72ibtwjFzZ63\ndQIDAQAB\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJQUzUxMiIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.YXRzrlPkFpVj5DjPHE87edJzIlrNKV8aEslGELKTDZiKk4mlJcWV1RIkbq3M2-KX_ScoikWigPxWMBrOnMl4GcihsBCA2a2-PsTo742wnsgC6ThAaTICF5F0Lf4Y-JMHOVs_rAPP22lRwwyerHTCL_o00XExEpHfadBq75u0KvRIaCVJDbh69UFlKWVGrZis-gMcmD-0-8Hra7_BPp4WqVQu3Ed3lJDDNxWhNt8JeNRxCCmZYh0Khi1yB6IHTEDoJIWbRptZsxoNWXYqQPLRdpkqBb6FvlyZmNeKduFxSUzLl5qTra9eFNsr_uc9oRJSV9gIZlTqcgRdWD9LHVB7Nw"
+    },
+    {
+      "alg": "EdDSA",
+      "jwk": {
+        "alg": "EdDSA",
+        "crv": "Ed25519",
+        "kid": "fixture-kid",
+        "kty": "OKP",
+        "use": "sig",
+        "x": "jmcIj2IMMrzRF-AOqMlRR8ipx5iAUhIIEm0tUnpvDTw"
+      },
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAjmcIj2IMMrzRF+AOqMlRR8ipx5iAUhIIEm0tUnpvDTw=\n-----END PUBLIC KEY-----\n",
+      "secret": "",
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSIsImtpZCI6ImZpeHR1cmUta2lkIn0.eyJhdWQiOiJmaXh0dXJlLWNsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwiaXNzIjoiaHR0cHM6Ly9qd3QtZml4dHVyZS5leGFtcGxlIiwia2V5IjoiZml4dHVyZS1raWQiLCJuYmYiOjAsIm5vbmNlIjoiZml4dHVyZS1ub25jZSIsInNjb3BlIjoib3BlbmlkIGVtYWlsIiwic3ViIjoiZml4dHVyZS11c2VyIn0.6un8OQf6ZgJHCQ__23hGL4_Z9--770jRC7mMIlGh9OHyIiCwTI6SNFnVJw-294-XG_XBBWDAMAb6hZxMqt7TBw"
+    }
+  ],
+  "provenance": "OpenSSL-generated keys; tokens signed and verified with jsonwebtoken 9.3.1 using Ring. Public fixture material only; expiration is 2100-01-01."
+}

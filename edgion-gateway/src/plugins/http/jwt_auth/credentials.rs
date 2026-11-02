@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation};
 
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     JwtAlgorithm, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
@@ -17,8 +17,6 @@ use super::to_jwt_algorithm;
 /// O(1) iss -> group lookup. Built once at plugin construction.
 pub(super) struct JwtIssuerGroupStore {
     by_iss: HashMap<String, CachedJwtIssuerGroup>,
-    peek_decoding_key: DecodingKey,
-    peek_validation: Validation,
 }
 
 pub(super) struct CachedJwtIssuerGroup {
@@ -58,30 +56,11 @@ impl JwtIssuerGroupStore {
             })
             .collect();
 
-        let mut peek_validation = Validation::new(Algorithm::HS256);
-        peek_validation.insecure_disable_signature_validation();
-        peek_validation.validate_exp = false;
-        peek_validation.validate_nbf = false;
-        peek_validation.validate_aud = false;
-        peek_validation.required_spec_claims.clear();
-
-        Self {
-            by_iss: arc_map,
-            peek_decoding_key: DecodingKey::from_secret(&[]),
-            peek_validation,
-        }
+        Self { by_iss: arc_map }
     }
 
     pub(super) fn lookup_by_iss(&self, iss: &str) -> Option<&CachedJwtIssuerGroup> {
         self.by_iss.get(iss)
-    }
-
-    pub(super) fn peek_decoding_key(&self) -> &DecodingKey {
-        &self.peek_decoding_key
-    }
-
-    pub(super) fn peek_validation(&self) -> &Validation {
-        &self.peek_validation
     }
 }
 

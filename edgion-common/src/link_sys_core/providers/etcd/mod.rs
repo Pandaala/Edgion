@@ -1,7 +1,7 @@
 //! Etcd LinkSys runtime client.
 //!
 //! Provides an Etcd client wrapper built from LinkSys CRD config (`EtcdClientConfig`),
-//! using [etcd-client](https://crates.io/crates/etcd-client) v0.18 as the underlying library.
+//! using [etcd-client](https://crates.io/crates/etcd-client) v0.21 as the underlying library.
 //!
 //! The upstream SDK owns multiplexed gRPC connections and transport recovery.
 //! This module adds:

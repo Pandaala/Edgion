@@ -2,6 +2,7 @@
 
 use crate::cert_util::{parse_leaf_validity, LeafValidity};
 use crate::conf_sync::config::ConfSyncTlsConfig;
+use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
 /// Load client TLS config from certificate files.
@@ -90,8 +91,10 @@ pub fn validate_identity(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> anyh
         .map_err(|e| anyhow::anyhow!("leaf signature does not verify against CA: {e}"))?;
 
     // (d) private key parses and matches the leaf public key.
-    let key_der = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
-        .map_err(|e| anyhow::anyhow!("private key PEM parse: {e}"))?
+    let key_der = PrivateKeyDer::pem_slice_iter(key_pem)
+        .next()
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("private key PEM parse: invalid PEM"))?
         .ok_or_else(|| anyhow::anyhow!("no private key found in PEM"))?;
     let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
         .map_err(|e| anyhow::anyhow!("unsupported private key type: {e}"))?;

@@ -18,6 +18,10 @@ before applying a decision to current code.
 - [Allocator Features Select the Dependency and Binary Allocator Together](regression-guards/allocator-feature-surface.md)
 - [Rustls TLS 1.3 Encryption-Level Validation](regression-guards/rustls-tls13-encryption-level-validation.md)
 
+## Compatibility constraints
+
+- [Pingora zero-capacity streams require Tokio before 1.54](compatibility-constraints/pingora-tokio-zero-capacity.md)
+
 ## Intentional design
 
 - [Maintenance-Mode Crate Acceptance — DESIGN-TRADEOFF](intentional-design/maintenance-mode-crate-acceptance.md)

@@ -25,7 +25,7 @@ fn elasticsearch_date_pattern_errors_flow_through_shared_validation() {
 
 fn make_link_sys(name: &str, spec: LinkSysSpec) -> LinkSys {
     LinkSys {
-        metadata: kube::api::ObjectMeta {
+        metadata: kube::core::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some("default".to_string()),
             ..Default::default()

@@ -112,7 +112,7 @@ fn build_base_options(
     auth: Option<&BasicAuthMaterial>,
     tls: Option<TlsOptions>,
 ) -> Option<ConnectOptions> {
-    let mut options = ConnectOptions::new();
+    let mut options = ConnectOptions::new().with_auto_token_refresh(false);
     let mut has_options = false;
 
     if let Some(m) = auth {

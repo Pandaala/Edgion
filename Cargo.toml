@@ -69,7 +69,9 @@ edgion-controller = { path = "edgion-controller" }
 edgion-cli        = { path = "edgion-cli" }
 
 # Async runtime / error handling
-tokio = { version = "1.49", features = ["full"] }
+# Pingora's zero-capacity BufStream constructors panic with Tokio >=1.54.
+# See skills/04-review/supply-chain/compatibility-constraints/pingora-tokio-zero-capacity.md.
+tokio = { version = "=1.53.3", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
 tokio-rustls = "0.26"
@@ -83,16 +85,17 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 yaml_serde = "0.10.7"
 serde_ignored = "0.1.14"
-schemars = "=1.2.1"
+schemars = "=1.2.3"
 jsonschema = { version = "0.40", default-features = false }
-apollo-parser = "=0.8.6"
+apollo-parser = "=0.8.7"
 cel = { version = "0.14.5", default-features = false }
 json-patch = { version = "4.1", default-features = false }
 jsonptr = "0.7.1"
 mime = "0.3.17"
 
 # Kubernetes
-kube = { version = "4.2.0", features = ["runtime", "derive"] }
+# Members enable client, runtime or derive according to their ownership.
+kube = { version = "4.2.0", default-features = false }
 k8s-openapi = { version = "0.28.0", features = ["v1_34", "schemars"] }
 
 # gRPC / protobuf
@@ -107,7 +110,6 @@ prost-reflect = { version = "=0.16.5", features = ["serde"] }
 # TLS / certificates
 rustls = { version = "0.23", features = ["aws_lc_rs", "ring"] }
 rustls-native-certs = "0.8"
-rustls-pemfile = "2"
 webpki-roots = "1"
 x509-parser = { version = "0.18", features = ["verify"] }
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
@@ -131,7 +133,7 @@ pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "ed
 tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_0.9.0_v1" }
 
 # HTTP server / client
-axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum = { version = "0.8.8", features = ["macros"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
 http = "1.4.0"
@@ -140,13 +142,13 @@ httpdate = "1"
 h2 = "0.4"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 tower = { version = "0.5", features = ["util"] }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = "0.29"
 proxy-header = "0.1.2"
 percent-encoding = "2.3"
 cookie = "0.18.1"
 
 # Storage / datastores
-etcd-client = { version = "0.18", features = ["tls"] }
+etcd-client = { version = "0.21.1", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
     "dns",                 # Expose the resolver hook; Edgion still owns DNS resolution
@@ -176,7 +178,7 @@ subtle = "2"
 # streamed body handlers stored in the (Sync-required) request context.
 sync_wrapper = "1"
 tar = "0.4"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 zeroize = { version = "1", features = ["derive"] }
 
 # Observability
@@ -187,13 +189,12 @@ metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 metrics-util = { version = "0.20", features = ["debugging"] }
 quanta = "=0.12.6"
-opentelemetry      = { version = "0.31", default-features = false, features = ["logs"] }
-opentelemetry_sdk  = { version = "0.31", default-features = false, features = ["logs"] }
-opentelemetry-otlp = { version = "0.31", default-features = false, features = ["logs", "grpc-tonic"] }
+opentelemetry      = { version = "0.33.1", default-features = false, features = ["logs"] }
+opentelemetry_sdk  = { version = "0.33.1", default-features = false, features = ["logs"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["logs", "grpc-tonic"] }
 
 # CLI / terminal
 clap = { version = "4.5", features = ["derive", "env"] }
-rpassword = "7"
 tabled = "0.22"
 colored = "2.2"
 console = "0.16"

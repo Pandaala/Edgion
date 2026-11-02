@@ -155,3 +155,45 @@ fn directive_names_preserve_acceptance_and_exact_work() {
         }
     }
 }
+
+#[test]
+fn variable_width_unicode_escapes_preserve_operation_selection() {
+    for query in [
+        r#"query Q { f(arg: "\u{E9}") }"#,
+        r#"query Q { f(arg: "\u{03C0}") }"#,
+        r#"query Q { f(arg: "\u00E9") }"#,
+    ] {
+        let parsed = post(query, None).unwrap();
+        assert_eq!(parsed.operation_name(), Some("Q"));
+        assert_eq!(parsed.operation_type(), GraphqlOperationType::Query);
+    }
+}
+
+#[test]
+fn unicode_escape_tokens_still_obey_raw_byte_limits() {
+    for (zeros, accepted) in [(248, true), (249, false)] {
+        let literal = format!("\"\\u{{{}E9}}\"", "0".repeat(zeros));
+        assert_eq!(literal.len(), zeros + 8);
+        let query = format!("{{ f(arg: {literal}) }}");
+        let result = post(&query, None);
+        if accepted {
+            assert_eq!(result.unwrap().operation_type(), GraphqlOperationType::Query);
+        } else {
+            assert_eq!(result.unwrap_err(), GraphqlError::Invalid);
+        }
+    }
+}
+
+#[test]
+fn malformed_unicode_escapes_fail_closed() {
+    for query in [
+        r#"{ f(arg: "\u{}") }"#,
+        r#"{ f(arg: "\u{G}") }"#,
+        r#"{ f(arg: "\u{110000}") }"#,
+        r#"{ f(arg: "\uD800") }"#,
+    ] {
+        assert_eq!(post(query, None).unwrap_err(), GraphqlError::Invalid);
+    }
+    let query = format!("{{ f(arg: \"\\u{{{}}}\") }}", "F".repeat(1024));
+    assert_eq!(post(&query, None).unwrap_err(), GraphqlError::Invalid);
+}

@@ -134,7 +134,10 @@ fn validate_api_secret(token: ReferenceToken<'_>, secret: &Secret) -> Result<(),
     let expected = token.validated()?.target();
     validate_api_metadata(expected, &secret.metadata)
 }
-fn validate_api_metadata(expected: ObjectIdentity<'_>, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+fn validate_api_metadata(
+    expected: ObjectIdentity<'_>,
+    metadata: &kube::core::ObjectMeta,
+) -> Result<(), ReferenceError> {
     let name = metadata.name.as_deref().ok_or(ReferenceError::StaleBinding)?;
     let namespace = metadata.namespace.as_deref().ok_or(ReferenceError::StaleBinding)?;
     let actual = ObjectIdentity::checked(
@@ -211,10 +214,10 @@ impl AcmeOutputRefs<'_> {
             })
             .transpose()
     }
-    pub fn validate_certificate_metadata(&self, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+    pub fn validate_certificate_metadata(&self, metadata: &kube::core::ObjectMeta) -> Result<(), ReferenceError> {
         validate_api_metadata(self.certificate()?, metadata)
     }
-    pub fn validate_tls_metadata(&self, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+    pub fn validate_tls_metadata(&self, metadata: &kube::core::ObjectMeta) -> Result<(), ReferenceError> {
         validate_api_metadata(self.tls()?.ok_or(ReferenceError::UnsupportedTarget)?, metadata)
     }
 }

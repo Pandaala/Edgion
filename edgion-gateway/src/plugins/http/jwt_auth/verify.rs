@@ -1,6 +1,8 @@
 //! JWT verification: iss-routed, algorithm-confusion-defended.
 
 use jsonwebtoken::decode;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::fmt;
 
@@ -46,6 +48,47 @@ pub(super) enum VerifyDeny {
     InvalidNumericDate,
 }
 
+/// Routing accepts one claims object and rejects ambiguous registered claims.
+/// Other claim names retain the JSON parser's last-value-wins behavior.
+struct RoutingClaims(Value);
+
+impl<'de> Deserialize<'de> for RoutingClaims {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ClaimsVisitor;
+
+        impl<'de> Visitor<'de> for ClaimsVisitor {
+            type Value = RoutingClaims;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JWT claims object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut claims = serde_json::Map::new();
+                let mut registered = 0_u8;
+                while let Some(name) = map.next_key::<String>()? {
+                    let bit = match name.as_str() {
+                        "exp" => 1,
+                        "nbf" => 2,
+                        "sub" => 4,
+                        "iss" => 8,
+                        "aud" => 16,
+                        _ => 0,
+                    };
+                    if registered & bit != 0 {
+                        return Err(serde::de::Error::custom("duplicate registered JWT claim"));
+                    }
+                    registered |= bit;
+                    claims.insert(name, map.next_value::<Value>()?);
+                }
+                Ok(RoutingClaims(Value::Object(claims)))
+            }
+        }
+
+        deserializer.deserialize_map(ClaimsVisitor)
+    }
+}
+
 /// Sync verify: peek payload (insecure decode) -> route by iss -> enforce
 /// header.alg == group.algorithm -> look up kid scoped to group -> real decode.
 pub(super) fn verify_jwt<'a>(
@@ -55,13 +98,13 @@ pub(super) fn verify_jwt<'a>(
     plugin_log: &mut PluginLog,
 ) -> Result<VerifyOk<'a>, VerifyDeny> {
     // 1. Peek at the header and payload without signature verification to route by iss.
-    let Ok(peek) = decode::<Value>(token, store.peek_decoding_key(), store.peek_validation()) else {
+    let Ok(peek) = jsonwebtoken::dangerous::insecure_decode::<RoutingClaims>(token) else {
         plugin_log.push("Deny malformed token");
         return Err(VerifyDeny::Malformed);
     };
     // 2. Reuse the header parsed by the peek for the algorithm-binding check below.
     let header = peek.header;
-    let peek = peek.claims;
+    let peek = peek.claims.0;
 
     // 3. Extract iss (REQUIRED, must be non-empty string).
     let iss = match peek.get("iss").and_then(|v| v.as_str()) {

@@ -4692,3 +4692,47 @@ async fn prepared_oidc_challenge_preserves_dynamic_descriptions_and_utf8_realm()
         oidc.send_forbidden(&mut session, body).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn allow_expired_keeps_nbf_and_claim_format_checks() {
+    use super::super::error::{AuthFailure, OidcVerifyError};
+    use super::super::jwks_provider::ScriptedHttp;
+    let mut config = base_config();
+    config.token_signing_alg = Some("HS256".into());
+    config.allowed_signing_algs = Some(vec!["HS256".into()]);
+    config.clock_skew_seconds = 0;
+    let plugin = OpenidConnect::new(&config, "default".into());
+    plugin.jwks_provider.install_scripted_http(signing_policy_script());
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("policy-key".into());
+    let future = OpenidConnect::now_unix_secs() + 3600;
+    for validate_exp in [true, false] {
+        for (nbf, expected) in [
+            (None, Ok(())),
+            (Some(json!(0)), Ok(())),
+            (
+                Some(json!(future)),
+                Err(OidcVerifyError::Auth(AuthFailure::NotYetValid)),
+            ),
+            (Some(json!("not-a-date")), Err(OidcVerifyError::InvalidFormat)),
+        ] {
+            let mut claims = json!({"iss":ScriptedHttp::origin(),"exp":if validate_exp {future} else {1}});
+            if let Some(nbf) = nbf {
+                claims["nbf"] = nbf;
+            }
+            let token = jsonwebtoken::encode(
+                &header,
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(b"signing-policy-test-secret"),
+            )
+            .unwrap();
+            assert_eq!(
+                plugin
+                    .verify_jwt_token_internal(&mut MockPluginSession::new(), &token, true, None, validate_exp)
+                    .await
+                    .map(|_| ()),
+                expected
+            );
+        }
+    }
+}

@@ -7,8 +7,7 @@
 //! rotation-due math (`edgion-controller/src/services/conf_sync_ca/cert_util.rs`),
 //! not this module.
 
-use rustls::pki_types::CertificateDer;
-use std::io::Cursor;
+use rustls::pki_types::{pem::PemObject, CertificateDer};
 use x509_parser::prelude::*;
 
 /// A leaf certificate's validity window (Unix timestamps, seconds).
@@ -54,10 +53,10 @@ pub fn parse_leaf_validity(cert_pem: impl AsRef<[u8]>) -> Result<LeafValidity, S
 }
 
 pub(crate) fn first_certificate_der(cert_pem: &[u8]) -> Result<CertificateDer<'static>, String> {
-    rustls_pemfile::certs(&mut Cursor::new(cert_pem))
+    CertificateDer::pem_slice_iter(cert_pem)
         .next()
         .ok_or_else(|| "no CERTIFICATE block found".to_string())?
-        // rustls-pemfile errors may include the original BEGIN line or an
+        // PEM decoder errors may include the original BEGIN line or an
         // input-derived END marker. Never forward certificate input to logs.
         .map_err(|_| "invalid certificate PEM".to_string())
 }

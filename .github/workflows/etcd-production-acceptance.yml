@@ -41,6 +41,13 @@ jobs:
       - name: Build production binaries once
         run: cargo build --locked -p edgion-controller -p edgion-gateway -p edgion-cli
 
+      - name: Verify authenticated upstream SDK Lease calls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/etcd-acceptance
+          python3 cicd/checks/run_etcd_authenticated_sdk.py 2>&1 | tee target/etcd-acceptance/authenticated-sdk.log
+
       - name: Verify LinkSys policy, election and HA serially
         shell: bash
         run: |

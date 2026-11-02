@@ -1,5 +1,5 @@
 use super::*;
-use kube::api::ObjectMeta;
+use kube::core::ObjectMeta;
 
 fn owner() -> EdgionTls {
     serde_json::from_value(serde_json::json!({

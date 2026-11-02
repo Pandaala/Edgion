@@ -1,6 +1,6 @@
 use super::*;
 use crate::resources::refs::outbound_tls::TlsMaterialIdentityError;
-use kube::api::ObjectMeta;
+use kube::core::ObjectMeta;
 
 fn owner() -> EdgionBackendTrafficPolicy {
     serde_json::from_value(serde_json::json!({

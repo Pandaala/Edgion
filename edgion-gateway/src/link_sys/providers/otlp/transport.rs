@@ -11,7 +11,7 @@ use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
 use edgion_resources::resources::link_sys::SystemConfig;
 use hyper_util::rt::TokioIo;
-use opentelemetry_otlp::WithTonicConfig;
+use opentelemetry_otlp::{RetryPolicy, WithTonicConfig};
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
@@ -156,6 +156,8 @@ impl PreparedTransport {
         opentelemetry_otlp::LogExporter::builder()
             .with_tonic()
             .with_channel(channel)
+            // Preserve one attempt per export; generation preparation owns retries.
+            .with_retry_policy(RetryPolicy::disabled())
             // This runs AFTER SDK environment-header injection. Secret references
             // are the sole auth source, even if OTEL exporter variables are set.
             .with_interceptor(move |mut request: tonic::Request<()>| {

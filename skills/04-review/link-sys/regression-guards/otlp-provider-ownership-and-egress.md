@@ -49,6 +49,26 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   changes, removals, and process shutdown use the persistent-runner lifecycle.
   OTLP store stats/counts report runner keys and participate in residue detection.
 
+## SDK 0.33.1 upgrade boundary
+
+OpenTelemetry API, SDK and OTLP exporter use 0.33.1 with defaults disabled and
+logs-only features (plus grpc-tonic for OTLP). SDK internal diagnostics, metrics
+and tracing export remain disabled. The SDK fixes pending-item accounting before
+flush/shutdown; existing retained retirement and whole-export deadlines still
+own cleanup and cancellation.
+
+OTLP 0.33 enables retries by default. PreparedTransport explicitly selects
+RetryPolicy::disabled() for both the empty preflight and active SDK exporter,
+retaining one attempt per export. Generation initialization retains its existing
+retry ownership; this adds neither durable replay nor a new retry configuration.
+The real transport target checks retryable Unavailable responses during both
+preflight and active batch export, counting requests only after channel release.
+
+The SDK's default Resource now uses unknown_service:<process.executable.name>
+when service.name is not configured. Preserve SDK environment overrides and this
+normal fallback instead of introducing a legacy resource override. Queue limits,
+batch size, scheduled delay and Secret-only transport metadata remain unchanged.
+
 ## Source-order and reference-identity regressions
 
 OTLP-REVIEW-001 exposed a gap outside the former OTLP owner: a resource changed from a

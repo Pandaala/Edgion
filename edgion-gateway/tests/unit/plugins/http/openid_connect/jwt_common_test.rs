@@ -178,3 +178,78 @@ fn jwk_algorithm_metadata_matches_locked_conversion_for_all_variants() {
         }
     }
 }
+
+#[test]
+fn old_ring_signatures_verify_through_oidc_algorithm_and_jwk_policy() {
+    use super::validate_token_alg;
+    use base64::Engine;
+    use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+    use serde_json::Value;
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../../fixtures/jwt_dependency_signatures.json")).unwrap();
+    let mut checked = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let name = case["alg"].as_str().unwrap();
+        let token = case["token"].as_str().unwrap();
+        let header = decode_header(token).unwrap();
+        let allowed = vec![name.to_owned()];
+        let (expected, allowed) = resolve_algorithm_policy(Some(name), Some(&allowed)).unwrap();
+        validate_token_alg(header.alg, expected, &allowed).unwrap();
+        let jwks = JwkSet {
+            keys: vec![serde_json::from_value(case["jwk"].clone()).unwrap()],
+        };
+        let jwk = select_jwk(&header, &jwks, header.alg).unwrap();
+        let key = DecodingKey::from_jwk(jwk).unwrap();
+        let mut validation = Validation::new(header.alg);
+        validation.leeway = 0;
+        validation.validate_nbf = true;
+        validation.set_issuer(&["https://jwt-fixture.example"]);
+        validation.set_audience(&["fixture-client"]);
+        let verified = decode::<Value>(token, &key, &validation).unwrap();
+        assert_eq!(verified.claims["sub"], "fixture-user");
+        let (message, signature) = token.rsplit_once('.').unwrap();
+        let mut signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature)
+            .unwrap();
+        signature[0] ^= 1;
+        let tampered = format!(
+            "{message}.{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
+        );
+        let error = decode::<Value>(&tampered, &key, &validation).unwrap_err();
+        assert!(!matches!(
+            map_jwt_decode_error_typed(error),
+            OidcVerifyError::InvalidFormat
+        ));
+        checked += 1;
+    }
+    assert_eq!(checked, 12);
+}
+
+#[test]
+fn unknown_jwk_type_with_matching_kid_cannot_select_another_key() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../fixtures/jwt_dependency_signatures.json")).unwrap();
+    let rsa = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["alg"] == "RS256")
+        .unwrap();
+    let future: Jwk =
+        serde_json::from_value(serde_json::json!({"kty":"FutureSigningKey","alg":"RS256","kid":"unknown-key"}))
+            .unwrap();
+    assert!(!jwk_matches_alg(&future, Algorithm::RS256));
+    let jwks = JwkSet {
+        keys: vec![future, serde_json::from_value(rsa["jwk"].clone()).unwrap()],
+    };
+    let header = Header {
+        alg: Algorithm::RS256,
+        kid: Some("unknown-key".into()),
+        ..Header::default()
+    };
+    assert_eq!(
+        select_jwk(&header, &jwks, Algorithm::RS256),
+        Err(JwkSelectError::NoSuitableKey)
+    );
+}

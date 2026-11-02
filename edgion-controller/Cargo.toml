@@ -54,7 +54,7 @@ jsonschema.workspace = true
 json-patch.workspace = true
 
 # Kubernetes conf_client and types
-kube.workspace = true
+kube = { workspace = true, features = ["client", "rustls-tls", "ring", "runtime"] }
 k8s-openapi.workspace = true
 schemars.workspace = true
 
@@ -62,7 +62,6 @@ schemars.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
 rustls.workspace = true
-rustls-pemfile.workspace = true
 tokio-rustls.workspace = true
 x509-parser.workspace = true
 prost.workspace = true

@@ -35,6 +35,7 @@ enum Mode {
     HostileHeaders,
     HostileTrailers,
     HostileBody,
+    Unavailable,
 }
 
 const REMOTE_MESSAGE: &str = "private-collector-status-sentinel";
@@ -119,7 +120,7 @@ impl Collector {
                                         }
                                         observed.metadata.lock().push(request.headers().get("authorization").and_then(|value| value.to_str().ok()).map(str::to_owned));
                                         let observed = observed.clone();
-                                        let mode = match mode.load(Ordering::SeqCst) {1=>Mode::StallHeaders,2=>Mode::StallBody,3=>Mode::HostileHeaders,4=>Mode::HostileTrailers,5=>Mode::HostileBody,_=>Mode::Success};
+                                        let mode = match mode.load(Ordering::SeqCst) {1=>Mode::StallHeaders,2=>Mode::StallBody,3=>Mode::HostileHeaders,4=>Mode::HostileTrailers,5=>Mode::HostileBody,6=>Mode::Unavailable,_=>Mode::Success};
                                         handlers.spawn(async move {
                                             let mut body = request.into_body();
                                             let mut bytes = Vec::new();
@@ -161,6 +162,9 @@ impl Collector {
                                                 trailers.insert("grpc-message", http::HeaderValue::from_static(REMOTE_MESSAGE));
                                                 stream.send_trailers(trailers).unwrap();
                                                 observed.hostile_responses.fetch_add(1, Ordering::SeqCst);
+                                            } else if matches!(mode, Mode::Unavailable) {
+                                                trailers.insert("grpc-status", http::HeaderValue::from_static("14"));
+                                                let _ = stream.send_trailers(trailers);
                                             } else {
                                                 trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
                                                 let _ = stream.send_trailers(trailers);
@@ -431,6 +435,45 @@ async fn tls_rejects_untrusted_wrong_hostname_and_missing_identity() {
         assert_eq!(collector.observations.requests.load(Ordering::SeqCst), 0);
         collector.shutdown().await;
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retryable_preflight_failure_makes_one_attempt() {
+    edgion_common::test_mode::init_integration_testing_mode(true);
+    let collector = Collector::start(Ipv4Addr::LOCALHOST, Mode::Unavailable, None).await;
+    let client = build_client(
+        "transport/unavailable-preflight",
+        config(format!("http://{}", collector.address), 1500),
+    );
+    assert!(client.init().await.is_err());
+    assert!(!client.healthy());
+    client.shutdown().await.unwrap();
+    drop(client);
+    wait_until(|| collector.observations.closes.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(collector.observations.requests.load(Ordering::SeqCst), 1);
+    assert_eq!(collector.observations.records.load(Ordering::SeqCst), 0);
+    collector.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retryable_active_export_failure_makes_one_attempt() {
+    edgion_common::test_mode::init_integration_testing_mode(true);
+    let collector = Collector::start(Ipv4Addr::LOCALHOST, Mode::Success, None).await;
+    let client = build_client(
+        "transport/unavailable-active",
+        config(format!("http://{}", collector.address), 1500),
+    );
+    client.init().await.unwrap();
+    collector.set_mode(Mode::Unavailable);
+    emit(&client, 1);
+    // The scheduled batch may fail before shutdown flushes. Both outcomes must
+    // still finish retirement and release the channel before counting attempts.
+    assert!(matches!(client.shutdown().await, Ok(()) | Err("shutdown_failed")));
+    drop(client);
+    wait_until(|| collector.observations.closes.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(collector.observations.requests.load(Ordering::SeqCst), 2);
+    assert_eq!(collector.observations.records.load(Ordering::SeqCst), 1);
+    collector.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]

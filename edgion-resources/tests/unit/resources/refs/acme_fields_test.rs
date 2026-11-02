@@ -3,7 +3,7 @@ use super::*;
 fn actual_account_and_eab_fields_are_distinct_strict_and_api_bound() {
     let owner: EdgionAcme = serde_json::from_value(serde_json::json!({"metadata":{"name":"issuer"},"spec":{"email":"ops@example.com","domains":["example.com"],"privateKeySecretRef":{"name":"account"},"externalAccountBinding":{"keyId":"id","keySecretRef":{"name":"eab"}},"challenge":{"type":"http-01","gatewayRef":{"name":"edge"}},"storage":{"secretName":"cert"}}})).unwrap();
     let mut secret = Secret {
-        metadata: kube::api::ObjectMeta {
+        metadata: kube::core::ObjectMeta {
             name: Some("account".into()),
             namespace: Some("default".into()),
             ..Default::default()
@@ -54,7 +54,7 @@ fn actual_generated_destinations_validate_active_fields_and_api_metadata() {
             outputs.certificate().unwrap()
         };
         for case in 0..5 {
-            let mut metadata = kube::api::ObjectMeta {
+            let mut metadata = kube::core::ObjectMeta {
                 name: Some(target.name().into()),
                 namespace: target.scope().namespace().map(str::to_string),
                 ..Default::default()

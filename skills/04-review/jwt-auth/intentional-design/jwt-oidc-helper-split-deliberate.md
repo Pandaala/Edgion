@@ -37,12 +37,13 @@ difference — i.e. re-creating both models behind a flag.
 
 **2. The only textual overlap is the two `ErrorKind` matches, and merging them costs more than it saves**
 
-`jwt_common::map_jwt_decode_error` returns `(u16, String)` user-facing HTTP responses;
-`verify::classify_jwt_decode_error` returns `&'static str` PluginLog `"Deny ..."` tags
-(a locked log-vocabulary convention — see the ldap-auth discriminated-error-log-tags rule)
-and additionally handles `ErrorKind::InvalidAlgorithmName`. A shared helper would need a
-third abstract error enum mapped twice — net more code, plus coupling two plugins'
-independently-evolving error vocabularies.
+`openid_connect::error::map_jwt_decode_error_typed` returns `OidcVerifyError`,
+including the InvalidFormat distinction that controls Auto-mode introspection fallback.
+Its response projection has its own bounded error owner. In contrast,
+`jwt_auth::verify::classify_jwt_decode_error` returns fixed `&'static str` PluginLog
+`"Deny ..."` tags and also handles InvalidAlgorithmName. A shared adapter would couple
+fallback classification with the other plugin's fixed diagnostic vocabulary without
+removing either owner.
 
 **3. Below the registry's fragmentation threshold**
 

@@ -9,7 +9,7 @@ knowledge_type: regression-guards
 ## Conclusion and scope
 
 On 2026-10-06 the user withdrew the custom SDK feature set to avoid maintaining
-third-party code. Etcd uses crates.io `etcd-client` 0.18 with its TLS feature.
+third-party code. Etcd uses crates.io `etcd-client` 0.21.1 with its TLS feature.
 There is no repository-local SDK, custom gRPC message envelope guard,
 connection-bound version/cluster admission, member discovery or RPC observer.
 
@@ -19,6 +19,15 @@ owns pure endpoint, timeout and keepalive validation; Common construction and
 Gateway fingerprints validate the same fields. Admin validation reuses
 `LinkSys::validate_config`. TLS verification remains enabled and resolved through
 the canonical `outbound_tls` resolver; dedicated election connections omit unary request timeout.
+
+Automatic token refresh is explicitly disabled in the shared options mapper.
+This preserves the lack of automatic expired-token refresh retries; it adds no
+operator-facing retry or refresh setting. SDK 0.21.1 includes the Lease token
+attachment fix needed by authenticated Etcd versions that enforce identity on
+Lease RPCs. The dedicated external authentication regression first reproduced
+`user name is empty` on LeaseGrant with SDK 0.18 against Etcd 3.7.2; SDK 0.21.1 then passed Lease, KeepAlive, Watch, Lock and election on the
+same fixture. The fixture runner is wired into the existing acceptance job. This is an authenticated
+availability correction, not a new authorization policy.
 
 The former `autoSyncInterval`, `maxCallSendSize`, `maxCallRecvSize`, `userAgent`,
 `rejectOldCluster`, `minClusterVersion`, `observability` and `timeout.keepAlive`

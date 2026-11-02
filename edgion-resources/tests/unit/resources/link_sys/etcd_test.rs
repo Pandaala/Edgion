@@ -207,7 +207,7 @@ spec:
 #[test]
 fn test_serialize_etcd_config() {
     let link_sys = LinkSys {
-        metadata: kube::api::ObjectMeta {
+        metadata: kube::core::ObjectMeta {
             name: Some("test-etcd".to_string()),
             namespace: Some("default".to_string()),
             ..Default::default()

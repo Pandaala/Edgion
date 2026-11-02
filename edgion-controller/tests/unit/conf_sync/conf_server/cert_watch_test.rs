@@ -1,6 +1,7 @@
 use super::*;
 use crate::conf_sync::conf_server::tls_identity::{ServerIdentity, ServerIdentityHandle};
 use crate::services::conf_sync_ca::Ca;
+use rustls::pki_types::{pem::PemObject, CertificateDer};
 use std::sync::Arc;
 
 // rustls 0.23 requires a process-level CryptoProvider before `ServerConfig::builder()`
@@ -105,7 +106,7 @@ async fn relabeled_valid_prefix_cannot_replace_identity_with_expired_same_key_le
         current.cert_pem.replace("CERTIFICATE", "PUBLIC KEY"),
         expired.pem()
     );
-    let selected = rustls_pemfile::certs(&mut std::io::Cursor::new(candidate.as_bytes()))
+    let selected = CertificateDer::pem_slice_iter(candidate.as_bytes())
         .next()
         .unwrap()
         .unwrap();
