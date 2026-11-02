@@ -194,7 +194,7 @@ opentelemetry-otlp = { version = "0.31", default-features = false, features = ["
 # CLI / terminal
 clap = { version = "4.5", features = ["derive", "env"] }
 rpassword = "7"
-tabled = "0.20"
+tabled = "0.22"
 colored = "2.2"
 console = "0.16"
 
@@ -207,7 +207,7 @@ bytes = "1.11.1"
 zstd = { version = "0.14.3", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
-croner = "3"
+croner = "4.0.2"
 time = { version = "0.3", features = ["std"] }
 uuid = { version = "1.19", features = ["v4", "v7"] }
 parking_lot = "0.12"

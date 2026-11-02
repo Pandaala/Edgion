@@ -200,9 +200,9 @@ pub fn print_resource_list_all(items: Vec<Value>, format: OutputFormat) -> Resul
 /// Used by the --all loop for table/wide modes; yaml/json modes accumulate
 /// and use `print_resource_list_all` instead.
 ///
-/// Table streaming header suppression is best-effort: tabled does not expose
-/// a "no-header" toggle, so on follow-up pages we strip the top 3 lines
-/// (border + header + separator) and the bottom 1 line (bottom border).
+/// Table streaming header suppression is best-effort: follow-up pages strip
+/// the first three rendered lines (top border, header, and separator), retaining
+/// the data rows and bottom border with that page's column widths.
 // FIXME(cli): pretty cross-page table streaming would need a custom Style.
 pub fn print_resource_list_page_streaming(data: &Value, format: OutputFormat, suppress_header: bool) -> Result<usize> {
     let items = data

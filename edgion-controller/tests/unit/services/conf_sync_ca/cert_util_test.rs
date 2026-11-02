@@ -237,6 +237,66 @@ fn cron_helpers() {
 }
 
 #[test]
+fn cron_spring_gap_fires_at_the_end_of_the_gap_inclusively() {
+    // Stockholm jumps from 01:59:59 CET to 03:00 CEST; 02:30 does not exist.
+    let firing = datetime!(2025-03-30 01:00 UTC);
+    for now in [firing, datetime!(2025-03-30 02:00 UTC)] {
+        assert_eq!(
+            last_firing("30 2 * * *", "Europe/Stockholm", now).unwrap(),
+            Some(firing)
+        );
+    }
+}
+
+#[test]
+fn cron_autumn_overlap_fixed_time_fires_only_once() {
+    let schedule = "30 2 * * *";
+    let timezone = "Europe/Stockholm";
+    assert_eq!(
+        last_firing(schedule, timezone, datetime!(2025-10-26 00:29 UTC)).unwrap(),
+        Some(datetime!(2025-10-25 00:30 UTC))
+    );
+    // The repeated 02:30 CET must not create a second fixed-time firing.
+    for now in [
+        datetime!(2025-10-26 00:30 UTC),
+        datetime!(2025-10-26 01:00 UTC),
+        datetime!(2025-10-26 01:30 UTC),
+    ] {
+        assert_eq!(
+            last_firing(schedule, timezone, now).unwrap(),
+            Some(datetime!(2025-10-26 00:30 UTC))
+        );
+    }
+}
+
+#[test]
+fn cron_autumn_overlap_wildcard_keeps_real_time_order() {
+    let cron = parse_cron("* * * * *").unwrap();
+    let timezone = resolve_tz("Europe/Stockholm").unwrap();
+    // The local clock moves back from 02:59 CEST to 02:00 CET.
+    let cursor = odt_to_chrono(datetime!(2025-10-26 00:59 UTC), timezone);
+    let next = cron.find_next_occurrence(&cursor, false).unwrap();
+    assert_eq!(chrono_to_odt(&next), datetime!(2025-10-26 01:00 UTC));
+    let now = datetime!(2025-10-26 01:30 UTC);
+    assert_eq!(last_firing("* * * * *", "Europe/Stockholm", now).unwrap(), Some(now));
+}
+
+#[test]
+fn cron_steps_require_a_wildcard_or_explicit_range() {
+    let mut cfg = scheduled_cfg(720);
+    cfg.schedule = Some("5/5 * * * *".into());
+    assert!(validate_schedule_controller(&cfg).is_err());
+    for schedule in ["5-59/5 * * * *", "*/5 * * * *"] {
+        cfg.schedule = Some(schedule.into());
+        assert!(validate_schedule_controller(&cfg).unwrap().is_empty());
+        assert_eq!(
+            last_firing(schedule, "UTC", datetime!(2026-06-15 04:12 UTC)).unwrap(),
+            Some(datetime!(2026-06-15 04:10 UTC))
+        );
+    }
+}
+
+#[test]
 fn validate_schedule_controller_warns_and_rejects() {
     // weekly cron with guard 168h (= exactly one gap) -> suspect-combination warning
     // PLUS the expiry-watch WARN-band cross-warn (168h < 720h WARN_THRESHOLD).

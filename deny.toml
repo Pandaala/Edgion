@@ -41,10 +41,6 @@ ignore = [
     # pingora-core bump.
     { id = "RUSTSEC-2024-0388", reason = "unmaintained only; compile-time proc-macro" },
 
-    # proc-macro-error2 is unmaintained (no vulnerability). Compile-time
-    # proc-macro via tabled (CLI table rendering); zero runtime surface.
-    { id = "RUSTSEC-2026-0173", reason = "unmaintained only; compile-time proc-macro" },
-
     # rustls-pemfile is unmaintained (no vulnerability): a feature-complete
     # PEM parser still pulled by tonic 0.12 (conf_sync gRPC). RE-EVALUATE:
     # when conf_sync migrates to tonic 0.14 (already in-tree for etcd/otlp).

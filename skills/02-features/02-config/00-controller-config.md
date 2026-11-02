@@ -292,12 +292,19 @@ its own analogous server-side hot reload). See
 |-------|------|---------|-------------|
 | `policy` | `"lifetime" \| "scheduled" \| "manual"` | `"lifetime"` | Rotation trigger strategy (see below) |
 | `lifetime_ratio` | `f64` | `0.5` | `lifetime` policy only: rotate once elapsed leaf age reaches this fraction of `leaf_ttl`. Must be in `(0.0, 1.0)` exclusive |
-| `schedule` | `String?` | `None` | 5-field crontab (e.g. `"0 3 * * *"`). **Required** iff `policy: scheduled`; ignored otherwise |
+| `schedule` | `String?` | `None` | 5-field crontab (e.g. `"0 3 * * *"`). Steps require a wildcard or explicit range (`*/5` or `5-59/5`, not `5/5`). **Required** iff `policy: scheduled`; ignored otherwise |
 | `schedule_timezone` | `String` | `"UTC"` | IANA timezone the `schedule` cron is evaluated in |
 | `rotate_if_remaining_below` | `CertDuration` | `"336h"` (14d) | `scheduled` policy only: guard threshold — rotate at a firing iff the leaf's remaining validity *at that firing time* is `<=` this value |
 | `emergency_rotate_below` | `CertDuration` | `"24h"` | Always-on safety-net threshold, independent of `policy` (see "Emergency safety net" below) |
 | `leaf_ttl` | `CertDuration` | `"365d"` | Validity period minted for new client/server leaf certs |
 | `ca_ttl` | `CertDuration` | `"3650d"` | Validity period minted for a new root CA (renewal keeps the same key, only extends validity) |
+
+Schedules use Croner 4 with the Chrono backend and bundled `chrono-tz` timezone
+data. A fixed local time inside a spring DST gap fires at the end of the gap;
+for example, Stockholm's nonexistent 02:30 fires at 03:00. In an autumn overlap,
+a fixed local time fires only on its first occurrence, while wildcard schedules
+continue through both occurrences in chronological order. A firing exactly at
+the current instant is included in the rotation due-check.
 
 **The three policies:**
 
