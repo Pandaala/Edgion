@@ -178,7 +178,7 @@ impl EncryptedProbeTransport {
                 service: service_name.to_string(),
             });
             let path = http::uri::PathAndQuery::from_static("/grpc.health.v1.Health/Check");
-            let codec: tonic::codec::ProstCodec<HealthCheckRequest, HealthCheckResponse> = Default::default();
+            let codec: tonic_prost::ProstCodec<HealthCheckRequest, HealthCheckResponse> = Default::default();
             let response = client
                 .unary(request, path, codec)
                 .await

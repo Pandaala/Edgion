@@ -13,8 +13,8 @@ use edgion_resources::resources::link_sys::SystemConfig;
 use hyper_util::rt::TokioIo;
 use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
-use tonic014::metadata::{MetadataMap, MetadataValue};
-use tonic014::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+use tonic::metadata::{MetadataMap, MetadataValue};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 use crate::plugins::http::common::outbound::egress::{default_block_private, EgressPolicy, EgressResolver};
 
@@ -158,7 +158,7 @@ impl PreparedTransport {
             .with_channel(channel)
             // This runs AFTER SDK environment-header injection. Secret references
             // are the sole auth source, even if OTEL exporter variables are set.
-            .with_interceptor(move |mut request: tonic014::Request<()>| {
+            .with_interceptor(move |mut request: tonic::Request<()>| {
                 *request.metadata_mut() = metadata.clone();
                 Ok(request)
             })

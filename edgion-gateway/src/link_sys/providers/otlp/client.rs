@@ -309,7 +309,7 @@ impl OtlpLinkClient {
     /// Build a real SDK pipeline without dialing for runtime-store tests.
     #[cfg(test)]
     pub(crate) fn publish_lazy_test_pipeline(&self) -> CleanupResult {
-        let channel = tonic014::transport::Endpoint::from_static("http://example.test:4317").connect_lazy();
+        let channel = tonic::transport::Endpoint::from_static("http://example.test:4317").connect_lazy();
         let exporter = self.transport.exporter(channel)?;
         self.pipeline
             .store(Some(Pipeline::build(self.transport.clone(), exporter)));

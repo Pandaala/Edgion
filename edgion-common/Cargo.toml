@@ -40,6 +40,7 @@ kube.workspace = true
 
 # gRPC (config sync + fed sync)
 tonic.workspace = true
+tonic-prost.workspace = true
 prost.workspace = true
 bytes.workspace = true
 zstd.workspace = true
@@ -85,7 +86,7 @@ time.workspace = true
 hickory-resolver.workspace = true
 
 [build-dependencies]
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

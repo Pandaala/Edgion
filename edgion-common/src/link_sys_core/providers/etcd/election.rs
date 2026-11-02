@@ -9,12 +9,6 @@ use anyhow::Result;
 use etcd_client::Client;
 pub use etcd_client::LeaderKey;
 
-// Canonical gRPC "Unimplemented" code. Compared numerically because etcd-client
-// 0.18 exposes `tonic::Status` from tonic 0.14, while the workspace `tonic` is
-// 0.12 — the two `tonic::Code` types are distinct, so a named-variant comparison
-// would not type-check. `tonic::Code::Unimplemented as i32` is the stable value.
-const GRPC_CODE_UNIMPLEMENTED: i32 = 12;
-
 pub struct ElectionSession {
     client: Client,
 }
@@ -65,7 +59,7 @@ impl ElectionSession {
     /// error code or message.
     pub async fn probe(&mut self) -> Result<()> {
         match self.client.leader("edgion/__v3election_probe__").await {
-            Err(etcd_client::Error::GRpcStatus(s)) if s.code() as i32 == GRPC_CODE_UNIMPLEMENTED => {
+            Err(etcd_client::Error::GRpcStatus(s)) if s.code() == tonic::Code::Unimplemented => {
                 anyhow::bail!(
                     "etcd does not serve the v3election service (Unimplemented). Etcd leader \
                      election requires v3election; some proxied/managed etcd deployments disable \

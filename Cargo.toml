@@ -96,12 +96,13 @@ kube = { version = "4.2.0", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.28.0", features = ["v1_34", "schemars"] }
 
 # gRPC / protobuf
-tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-tonic-reflection = "0.12"
-tonic-build = "0.12"
-prost = "0.13"
-prost-types = "0.13"
-prost-reflect = { version = "=0.14.7", features = ["serde"] }
+tonic = { version = "0.14.9", features = ["tls-ring", "tls-webpki-roots"] }
+tonic-reflection = "0.14.9"
+tonic-prost = "0.14.9"
+tonic-prost-build = "0.14.9"
+prost = "0.14.4"
+prost-types = "0.14.4"
+prost-reflect = { version = "=0.16.5", features = ["serde"] }
 
 # TLS / certificates
 rustls = { version = "0.23", features = ["aws_lc_rs", "ring"] }

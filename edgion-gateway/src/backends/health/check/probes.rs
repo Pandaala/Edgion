@@ -137,7 +137,7 @@ pub async fn probe_grpc(
 ) -> Result<(), ProbeError> {
     use grpc_health_proto::{HealthCheckRequest, HealthCheckResponse, SERVING};
     use http::uri::Uri;
-    use tonic::codec::ProstCodec;
+    use tonic_prost::ProstCodec;
 
     let port = port_override.unwrap_or(addr.port());
     let target = SocketAddr::new(addr.ip(), port);

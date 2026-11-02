@@ -436,8 +436,7 @@ impl ConfigSyncGrpcServer {
                 // An omitted `conf_sync_security` returns Err here and aborts startup.
                 Self::accept_skip_tls_or_refuse(security, listener.local_addr().ok())?;
                 // TcpListenerStream loses TCP_NODELAY; TcpIncoming restores it per-socket.
-                let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
-                    .map_err(|e| anyhow::anyhow!("failed to build TCP incoming: {e}"))?;
+                let incoming = tonic::transport::server::TcpIncoming::from(listener).with_nodelay(Some(true));
                 builder
                     .add_service(self.into_service())
                     .serve_with_incoming_shutdown(incoming, shutdown_signal)

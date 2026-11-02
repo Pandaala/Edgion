@@ -26,7 +26,7 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
 - Controller AuthSpec/SecretSlot and shared TLS loading clear old material and
   dependencies, visit all refs even after failure, and publish complete material.
   Resolved secrets are schema-excluded and admin-redacted, but serialized for sync.
-- Native tonic014 channel retains hostname authority/SNI while each connector and
+- Native Tonic 0.14 channel retains hostname authority/SNI while each connector and
   probe dial calls canonical EgressResolver on exact addresses. No hostname fallback,
   environment proxy or redirect path exists. Custom CA replaces public roots.
 - An interceptor overwrites SDK environment metadata with the resolved bounded
@@ -177,7 +177,7 @@ parsing and sensitive metadata retain their existing contract; this migration
 alone does not establish auth Secret reference authority.
 
 PreparedTransport retains the owning TLS input alongside the single constructed
-native tonic014 Endpoint and metadata. Initialization retries, exporter channels
+native Tonic 0.14 Endpoint and metadata. Initialization retries, exporter channels
 and reconnects do not re-read global policy or clone TLS config/Secret objects.
 Common owns canonical resolution and capability checks; Gateway keeps the sole
 native conversion with explicit webpki System roots, custom CA replacement,

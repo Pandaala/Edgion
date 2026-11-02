@@ -19,11 +19,13 @@ fn generate(proto_dir: &Path, out_dir: &Path) -> Result<()> {
     // Keep generation and formatting failures away from the checked-in artifact.
     // A same-filesystem rename publishes only the completed test package.
     let staging = tempfile::Builder::new().prefix(".test-proto-").tempdir_in(out_dir)?;
-    tonic_build::configure()
+    tonic_prost_build::configure()
+        // Preserve primitive Rust signatures for scalar WKT RPC messages.
+        .with_extended_rust_types(true)
         .build_server(true)
         .build_client(true)
         .out_dir(staging.path())
-        .compile_protos(&[proto_path], &[proto_dir])
+        .compile_protos(&[proto_path], &[proto_dir.to_path_buf()])
         .context("Test schema generation failed; check the schema and protoc installation")?;
 
     let generated_file = staging.path().join("test.rs");

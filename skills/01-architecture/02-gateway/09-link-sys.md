@@ -340,7 +340,7 @@ alone can precede mTLS rejection. Subsequent health remains connection-level TCP
 evidence only.
 One resource serves every async log type through the existing scope/record format.
 
-Native tonic014 uses the exact original URI and shared outbound TLS results;
+Native Tonic 0.14 uses the exact original URI and shared outbound TLS results;
 its custom connector resolves/classifies every actual dial. An SDK decorator
 bounds the complete export future and polls it with captured runtime context
 because the batch processor runs on a std thread. Retained cleanup tasks drain

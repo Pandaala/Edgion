@@ -4053,7 +4053,7 @@ where
     B: tonic::codegen::Body + Send + 'static,
     B::Error: Into<tonic::codegen::StdError> + Send + 'static,
 {
-    type Response = http::Response<tonic::body::BoxBody>;
+    type Response = http::Response<tonic::body::Body>;
     type Error = std::convert::Infallible;
     type Future = tonic::codegen::BoxFuture<Self::Response, Self::Error>;
 
@@ -4068,7 +4068,7 @@ where
                     .status(200)
                     .header("grpc-status", "13")
                     .header("content-type", "application/grpc")
-                    .body(tonic::body::empty_body())
+                    .body(tonic::body::Body::empty())
                     .expect("static health response headers are valid"))
             });
         }
@@ -4088,7 +4088,7 @@ where
         match req.uri().path() {
             "/grpc.health.v1.Health/Check" => {
                 let fut = async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::default());
+                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
                     let resp = grpc.unary(CheckSvc(inner), req).await;
                     Ok(resp)
                 };
@@ -4099,7 +4099,7 @@ where
                     .status(200)
                     .header("grpc-status", "12") // UNIMPLEMENTED
                     .header("content-type", "application/grpc")
-                    .body(tonic::body::empty_body())
+                    .body(tonic::body::Body::empty())
                     .unwrap())
             }),
         }

@@ -161,7 +161,7 @@ policy. TLS/client construction failure must never select an unconfigured client
   Scoped source and unit verification does not establish live revocation or conformance.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
-  kafka provider (rskafka), the etcd link provider, the OTLP LinkSys tonic014 transport, openid_connect token
+  kafka provider (rskafka), the etcd link provider, the OTLP LinkSys Tonic 0.14 transport, openid_connect token
   exchange, and health-local HTTPS/GRPCS probes (explicit defaults).
 
 ### 4. Egress safety (SSRF) — Unified mechanisms, per-path adoption
@@ -501,7 +501,7 @@ plus OTLP's validated destination and explicit source identity contract. HTTPS
 absent/disabled local TLS inherits through empty local policy; HTTP consumes no
 TLS globals. OtlpCandidate proves those selections before same-RV/equality reuse
 and hashes inherited axes in the secret/material digest. Common canonical TLS
-resolution feeds the sole Gateway tonic014 conversion. The transport retains
+resolution feeds the sole Gateway Tonic 0.14 conversion. The transport retains
 its owning input, native Endpoint and metadata across retries/reconnects; SDK
 roots, SNI, deadlines, H2 and dial-time egress behavior remain provider-owned.
 

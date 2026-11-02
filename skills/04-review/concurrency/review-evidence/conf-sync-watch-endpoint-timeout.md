@@ -27,3 +27,15 @@ Verifier missed tower-level `GrpcTimeout`: `Endpoint::timeout(10s)` in `grpc_cli
 ## Resolution references
 
 - `h2-grpc-06` — 2026-05-18 (❌ false positive).
+
+
+## Tonic 0.14 migration source check
+
+The unified 0.14.9 dependency still installs `GrpcTimeout` in
+`transport/channel/service/connection.rs` with the configured endpoint timeout.
+The earlier 0.12.3 analysis above remains historical evidence for the same
+headers/stream-establishment boundary; it is not proof that consuming a complete
+unary response body is bounded. Keep the explicit complete-RPC deadline and the
+`edgion-gateway/tests/conf_sync_failover.rs` stalled-body regression. Migration
+runtime verification is recorded with the dependency update, not inferred from
+this source check.

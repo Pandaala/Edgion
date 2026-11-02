@@ -60,6 +60,7 @@ schemars.workspace = true
 
 # gRPC (config sync)
 tonic.workspace = true
+tonic-prost.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 tokio-rustls.workspace = true
@@ -116,7 +117,7 @@ chrono-tz.workspace = true
 
 
 [build-dependencies]
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }

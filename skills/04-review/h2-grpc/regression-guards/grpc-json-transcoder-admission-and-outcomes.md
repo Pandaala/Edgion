@@ -80,7 +80,7 @@ set's production deallocation point.
 Collection classification uses protobuf cardinality directly where map/list
 distinction is already resolved: null pruning rejects every repeated field,
 and the normalization branch treats a repeated non-map field as a list. Locked
-prost-reflect 0.14.7 defines is_list as repeated and not is_map, and maps require
+prost-reflect 0.16.5 retains is_list as repeated and not is_map, and maps require
 repeated cardinality. These equivalent predicates avoid reclassifying map shape
 and constructing its temporary Kind handles; scalar sentinel behavior and all
 charging remain unchanged. This adds no prepared schema or lookup cache and

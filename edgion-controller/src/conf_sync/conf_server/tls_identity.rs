@@ -79,7 +79,7 @@ impl ServerIdentity {
             .with_single_cert(certs, key)
             .map_err(|e| anyhow::anyhow!("server config build: {e}"))?;
         // CRITICAL (spec §6 T3): tonic's own server-TLS layer injects ALPN h2 and this
-        // design bypasses that layer; tonic 0.12 clients hard-fail (H2NotNegotiated)
+        // design bypasses that layer; tonic clients hard-fail (H2NotNegotiated)
         // when the server does not negotiate h2.
         config.alpn_protocols = vec![b"h2".to_vec()];
 

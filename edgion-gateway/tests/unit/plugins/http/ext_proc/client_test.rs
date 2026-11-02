@@ -519,7 +519,7 @@ async fn tonic_unsolicited_poll_preserves_partial_frame_across_pending_checks() 
     for split in [2, 5, frame.len() - 1] {
         let (frames, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, tonic::Status>>(2);
         let (sender, mut outbound) = tokio::sync::mpsc::channel(1);
-        let mut codec = tonic::codec::ProstCodec::<ProcessingRequest, ProcessingResponse>::default();
+        let mut codec = tonic_prost::ProstCodec::<ProcessingRequest, ProcessingResponse>::default();
         let streaming = tonic::Streaming::new_response(
             codec.decoder(),
             axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)),

@@ -143,7 +143,7 @@ impl GrpcDelegationTestSuite {
                             .map_err(|_| "Delegation probe service was not ready".to_string())?;
                         // This service is deliberately absent from the backend. Its status alone
                         // cannot establish that the Gateway rejected the out-of-scope rule.
-                        let codec = tonic::codec::ProstCodec::<HelloRequest, HelloResponse>::default();
+                        let codec = tonic_prost::ProstCodec::<HelloRequest, HelloResponse>::default();
                         let path = http::uri::PathAndQuery::from_static("/test.OtherService/Whatever");
                         let mut req = tonic::Request::new(HelloRequest {
                             name: "probe".to_string(),

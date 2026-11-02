@@ -217,6 +217,6 @@ precede OtlpCandidate fingerprints and persistent reuse. Unlike Etcd's explicit
 local enablement gate, OTLP HTTPS with absent/disabled local TLS inherits the
 captured globals via empty local policy. HTTP consumes no global TLS and rejects
 an enabled local block. The closed adapter feeds the canonical audited resolver;
-Gateway performs the one native tonic014 SDK conversion and retains its Endpoint
+Gateway performs the one native Tonic 0.14 SDK conversion and retains its Endpoint
 and actual owning input through retries/reconnects. Authentication authority and
 other providers' distinct native TLS policies are not changed by this adapter.

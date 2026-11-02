@@ -88,8 +88,7 @@ schemars.workspace = true
 
 # gRPC (config sync)
 tonic.workspace = true
-# OTLP SDK 0.31 owns tonic 0.14; configuration sync remains on workspace tonic.
-tonic014 = { package = "tonic", version = "0.14", default-features = false, features = ["channel", "tls-ring", "tls-webpki-roots"] }
+tonic-prost.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 # Built-in webpki roots for building custom rustls ClientConfig (ext_proc connector)
