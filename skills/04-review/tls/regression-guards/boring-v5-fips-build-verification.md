@@ -24,24 +24,23 @@ artifact and therefore required a separate precompiled-artifact provenance
 contract. That is not the product boundary: FIPS is an explicitly requested
 Edgion build, and the ordinary release remains non-FIPS.
 
-Boring 5 builds its bundled FIPS module source when the `fips` feature is
-selected. Boring 5.2.0 vendors BoringSSL revision
-`e2a57cfb4d915b4ba820585aef9fdee7bca13fe5`, whose AArch64 `delocate` pass omits
-`BORINGSSL_bcm_text_hash` from its synthesized-symbol set. A GOT relocation can
-then point at the module start rather than the hash object, so the constructor
-compares the module's first 32 bytes with its calculated integrity HMAC and
-aborts before Rust `main`.
+Boring 5.4 builds its bundled FIPS module source when the `fips` feature is
+selected. The published `boring-sys 5.4.0` vendors BoringSSL revision
+`d3bf4795ad5b79d646cddf2fec687da5b9b502db`, a descendant of the upstream
+arm64 integrity-hash relocation fix
+`4d6b2f971e456962b70e4e91768caffdb36fe016`. Its `delocate` implementation
+registers `BORINGSSL_bcm_text_hash` in the symbols map and emits its local target.
+Both halves of the fix are present in the published crate, not only the Git tree.
 
-The canonical Edgion FIPS builders support amd64 and arm64. They pin that same
-BoringSSL revision and checksum-verify the exact patch from upstream commit
-`4d6b2f971e456962b70e4e91768caffdb36fe016`, which synthesizes the hash symbol's
-local target. The override has a separate builder tag and is only supplied via
-`BORING_BSSL_FIPS_SOURCE_PATH` when the exact `fips` feature is selected.
-The base revision, fix revision, and patch checksum are encoded into that path,
-so changing any source input also changes Cargo's build-script environment
-cache key and forces `boring-sys` to rebuild. Ordinary builders do not fetch
-it. `BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch
-outside this script contract.
+Previously, Boring 5.2.0 bundled revision
+`e2a57cfb4d915b4ba820585aef9fdee7bca13fe5`, whose AArch64 relocation could
+point at the module start rather than its hash object and abort before Rust
+`main`. Edgion's former FIPS-only builder pinned that revision and applied the
+checksum-verified upstream fix. The current builders need no separate source
+checkout, patch, source environment override or FIPS-only builder tag. Ordinary
+and FIPS builds share the architecture builder and use the bundled source.
+`BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch outside
+the canonical script contract.
 
 ## Verification contract
 
@@ -59,11 +58,25 @@ The builder includes Go and Clang because BoringSSL's source FIPS build generate
 the `delocate` and `inject_hash` tools during compilation. It also includes the
 runtime utilities used by the isolated scenario.
 
+## Current verification
+
+The 2026-11-02 dependency maintenance run passed the canonical ordinary and
+explicit FIPS builds on Linux arm64 and amd64 using bundled Boring 5.4.0 source.
+Both ordinary module-0 policy probes passed; both FIPS binaries started with
+`EDGION_REQUIRE_FIPS=1`, reported module 1, rejected ChaCha20 and accepted approved
+AES-GCM under TLS 1.2. The obsolete source-override follow-up is closed.
+
+One shared ordinary Linux topology also passed TLS, gRPC TLS, SNI, mTLS, cipher,
+SAN, curve-reload and last-known-good certificate scenarios, with strict final
+resource/cache cleanup. Native TLS unit checks passed. The macOS live runner
+stopped before startup because required loopback aliases were absent; no macOS
+live result is claimed.
+
 ## Intentional boundaries
 
 - The ordinary release workflow does not enable `fips`.
-- The source override is FIPS-only; ordinary amd64 and arm64 builds remain on
-  Boring's bundled source and ordinary release builds remain non-FIPS.
+- Both ordinary and FIPS builds use Boring's bundled source. Ordinary release
+  builds remain non-FIPS.
 - The full compatibility integration suite does not run under the FIPS binary.
   Several cases intentionally require weak protocol or cipher support; turning
   that run into a skip list would weaken both signals. The isolated scenario is
@@ -82,7 +95,7 @@ runtime utilities used by the isolated scenario.
 
 The cipher-list API restriction applies to both full and resumed TLS 1.3
 handshakes. Do not explain it as PSK skipping Edgion's certificate callback:
-in pinned boring-sys 5.2.0, `ssl/handshake_server.cc::do_cert_callback` invokes
+in the historically inspected boring-sys 5.2.0, `ssl/handshake_server.cc::do_cert_callback` invokes
 `cert_cb` before entering the TLS 1.3 state machine, and
 `ssl/tls13_server.cc` selects session reuse later. The cipher-list contract in
 `include/openssl/ssl.h` explicitly excludes TLS 1.3 from these setters.
@@ -99,9 +112,9 @@ runtime PSK policy bypass.
 ### Build contract
 
 - Boring changes the `fips` feature or its source-build prerequisites.
-- A released `boring-sys` vendors upstream commit
-  `4d6b2f971e456962b70e4e91768caffdb36fe016` or a descendant, allowing the
-  FIPS-only source override to be removed.
+- Boring changes the bundled source or the arm64 integrity-relocation fix.
+- The Gateway adopts a TLS 1.3 cipher-selection API; the current policy uses
+  TLS 1.2 cipher-list setters only.
 - Edgion decides to publish a dedicated FIPS image in the release workflow.
 - The integration suite gains a separate FIPS-compatible compatibility profile.
 
@@ -109,7 +122,6 @@ runtime PSK policy bypass.
 
 - `cicd/build-image.sh`
 - `cicd/docker/Dockerfile.builder`
-- `tasks/block/boring-upstream-arm64-fips-source-override-removal.md`
 - `edgion-tests/integration/scripts/integration/test_fips_policy.sh`
 - `docs/en/ops-guide/gateway/tls/fips.md`
 

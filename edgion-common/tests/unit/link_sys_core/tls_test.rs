@@ -486,7 +486,7 @@ fn apply_resolved_outbound_tls_multi_bundle_reqwest() {
 
 /// A single CA bundle containing multiple certificates (root + intermediate chain)
 /// must have all certificates loaded into the reqwest root store.
-/// This regression test ensures that `apply_custom_ca_pem` correctly handles
+/// This regression test ensures that the verified HTTP converter correctly handles
 /// multi-certificate PEM bundles instead of silently dropping certificates after the first.
 #[test]
 fn apply_custom_ca_pem_multi_cert_in_single_bundle() {
@@ -506,7 +506,7 @@ fn apply_custom_ca_pem_multi_cert_in_single_bundle() {
     };
 
     // Before the fix, reqwest::Certificate::from_pem would silently accept
-    // only the first cert and drop the second. After the fix, apply_custom_ca_pem
+    // only the first cert and drop the second. The verified HTTP converter
     // splits the bundle and loads all certs.
     let result = apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "MultiCertTest");
     assert!(
@@ -583,7 +583,13 @@ fn incapable_builders_reject_local_and_inherited_identity_policy() {
 fn custom_ca_rejects_truncated_trailing_certificate() {
     let (pem, _, _) = gen_ca_and_leaf();
     let bundle = format!("{pem}-----BEGIN CERTIFICATE-----\nYWJj\n").into_bytes();
-    assert!(apply_custom_ca_pem(reqwest::Client::builder(), &[bundle]).is_err());
+    assert!(build_http_rustls_client_config(&ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![bundle]),
+        client_identity: None,
+        san: None,
+    })
+    .is_err());
 }
 
 fn redis_input(tls: &TlsConfig) -> anyhow::Result<outbound_tls::PreparedRedisTls> {
@@ -593,4 +599,41 @@ fn redis_input(tls: &TlsConfig) -> anyhow::Result<outbound_tls::PreparedRedisTls
     }))
     .unwrap();
     outbound_tls::PreparedRedisTls::with_snapshot(std::sync::Arc::new(owner), outbound_tls::outbound_global_default())
+}
+
+#[test]
+fn verified_http_roots_are_the_compiled_webpki_set_and_alpn_is_explicit() {
+    let roots = build_root_store(&EffectiveCa::System).unwrap();
+    assert_eq!(roots.roots.as_slice(), webpki_roots::TLS_SERVER_ROOTS);
+    let config = build_http_rustls_client_config(&ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: None,
+        san: None,
+    })
+    .unwrap();
+    assert_eq!(config.alpn_protocols, [b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+
+#[test]
+fn http_identity_retains_chain_order_and_last_private_key_selection() {
+    let (_, cert, key) = gen_ca_and_leaf();
+    let (_, other_cert, other_key) = gen_ca_and_leaf();
+    let chain = format!("{cert}\n{other_cert}");
+    let keys = format!("{other_key}\n{key}");
+    let (certificates, _) = http_client_identity(chain.as_bytes(), keys.as_bytes()).unwrap();
+    let expected = CertificateDer::pem_slice_iter(chain.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(certificates, expected);
+    let resolved = |keys: String| ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: Some((cert.as_bytes().to_vec(), Zeroizing::new(keys.into_bytes()))),
+        san: None,
+    };
+    assert!(build_http_rustls_client_config(&resolved(keys)).is_ok());
+    assert!(build_http_rustls_client_config(&resolved(format!("{key}\n{other_key}"))).is_err());
+    let unsupported = format!("{key}\n-----BEGIN PUBLIC KEY-----\nAQID\n-----END PUBLIC KEY-----\n");
+    assert!(http_client_identity(cert.as_bytes(), unsupported.as_bytes()).is_err());
 }

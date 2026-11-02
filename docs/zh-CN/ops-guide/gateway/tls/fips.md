@@ -48,12 +48,11 @@ FEATURES="allocator-jemalloc,fips" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-规范的 FIPS 源码构建支持 `amd64` 与 `arm64`。Boring 5.2.0 随附的 BoringSSL 版本存在 arm64 完整性
-哈希重定位缺陷；显式 FIPS 构建会固定同一个源码版本，并应用上游提交
-`4d6b2f971e456962b70e4e91768caffdb36fe016` 的精确修复。builder 会校验下载补丁的 checksum，并运行
-上游 `delocate` 测试。普通 builder 不下载也不使用该覆盖，因此普通非 FIPS 构建与发布 workflow 均不受
-影响。去掉 `--compile-only` 即会继续打包镜像。`BORING_BSSL_FIPS_PATH` 仍是上游提供的预构建目录
-逃生口，不属于 Edgion 规范脚本的支持契约。
+规范的 FIPS 源码构建支持 `amd64` 与 `arm64`。Boring 5.4 随附的源码已包含上游 arm64 完整性
+哈希重定位修复。普通与 FIPS 构建共用对应架构的 builder，直接使用 crate 随附源码，不再单独检出
+源码或下载补丁。普通构建和发布 workflow 仍不启用 FIPS。去掉 `--compile-only` 即会继续打包镜像。
+可设置 `CARGO_BUILD_JOBS` 限制构建容器中的编译并发数。`BORING_BSSL_FIPS_PATH` 仍是上游提供的
+预构建目录入口，不属于 Edgion 规范脚本的支持契约。
 
 选择 `fips` 后，脚本会对每个 release 二进制自动执行隔离验证。Gateway 必须能以
 `EDGION_REQUIRE_FIPS=1` 启动，报告 `edgion_gateway_fips_module_enabled 1`，拒绝仅提供 ChaCha20 的
@@ -278,13 +277,13 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（当前契约见
 `skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md`）：
 
-- **BoringSSL 无法限制 TLS 1.3 密码套件。** `TLS_CHACHA20_POLY1305_SHA256` 在 TLS 1.3 上仍可协商。
+- **当前 Gateway 的密码套件列表策略不限制 TLS 1.3 套件。** `TLS_CHACHA20_POLY1305_SHA256` 在 TLS 1.3 上仍可协商。
   批准套件强制仅在 **TLS 1.2** 生效。若要彻底排除 TLS 1.3 ChaCha20，必须禁用 TLS 1.3（默认不禁用）。
 - **上行（Gateway → 后端）TLS 密码套件不受 FIPS 限制。** Pingora 0.8.1 连接器使用静态密码套件列表，无
   per-peer 钩子。上行依赖 BoringSSL FIPS 模式加既有的服务端证书校验。
 - **不强制密钥类型策略**（例如拒绝 Ed25519 叶子密钥）。
-- **TLS 1.3 会话恢复（PSK）** 与完整 TLS 1.3 握手具有相同的密码套件限制：BoringSSL 的密码套件列表
-  API 无法限制 TLS 1.3 套件。曲线策略在证书查找之前的早期 ClientHello 回调中单独应用。
+- **TLS 1.3 会话恢复（PSK）** 与完整 TLS 1.3 握手具有相同的密码套件限制：Gateway 使用的 TLS 1.2 密码套件列表
+  API 不限制 TLS 1.3 套件。曲线策略在证书查找之前的早期 ClientHello 回调中单独应用。
   本次变更尚未验证 PSK 专属的曲线协商行为。
 
 ## 故障排查
@@ -295,7 +294,7 @@ FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（
 | `edgion_gateway_fips_module_enabled` 为 `0` | 二进制不是 FIPS 构建 | 运行的镜像未以 `fips` feature 编译——改用 FIPS 镜像 |
 | Gateway 配置未变，但 ChaCha20 或纯 CBC 的 TLS 1.2 客户端突然失败 | 节点变成了 FIPS 主机，且 `fips_policy` 处于 `auto` 默认值 | 为该部署设置 `fips_policy: off`，或为该工作负载设置 `EdgionTls.spec.ciphers` |
 | ChaCha20 客户端在 TLS 1.2 上失败，但你以为能用 | FIPS 批准默认套件排除了 ChaCha20 | 在该 listener 显式设置 `EdgionTls.spec.ciphers`，或将这些客户端路由到非 FIPS listener |
-| ChaCha20 在 TLS 1.3 上仍能协商 | BoringSSL 无法限制 TLS 1.3 套件（有记录的限制） | 固定 `minTlsVersion: TLS1_2` 并在该 listener 禁用 TLS 1.3（若必须排除） |
+| ChaCha20 在 TLS 1.3 上仍能协商 | 当前 Gateway 的密码套件列表策略仅控制 TLS 1.2 套件 | 排除 TLS 1.3 ChaCha20 需要单独修改 TLS 策略 |
 | 本地（非 FIPS）构建 / 非 FIPS 主机上未应用批准策略 | `fips_policy` 解析为 `off`（或 `auto` 且主机非 FIPS） | 设置 `fips_policy: on`（或 `EDGION_FIPS_POLICY=on`）以在无 FIPS 模块时验证策略 |
 | YAML 中 `fips_policy: true` 加载失败 | 历史遗留布尔写法；`fips_policy` 是字符串三态，不是布尔值 | 改用 `fips_policy: "on"` / `"off"` / `auto` |
 | `edgion_gateway_fips_host_detect_error` 为 `1` | 主机检测无法读取 `/proc/sys/crypto/fips_enabled`（例如被加固 / 屏蔽的 `/proc`） | 显式设置 `fips_policy`（`on`/`off`）；检测处于 `Unknown` 时 `auto` 不生效 |

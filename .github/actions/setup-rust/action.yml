@@ -49,7 +49,7 @@ runs:
           build-essential \
           cmake \
           pkg-config \
-          protobuf-compiler \
+          protobuf-compiler libprotobuf-dev \
           libssl-dev \
           libclang-dev \
           clang \

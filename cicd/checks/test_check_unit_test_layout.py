@@ -49,6 +49,30 @@ mod extra;
         self.assertIn("missing", messages)
         self.assertIn("orphan", messages)
 
+    def test_integration_support_can_have_multiple_real_owners(self):
+        for owner in ["one", "two"]:
+            self.write(f"tests/{owner}.rs", '#[path = "support/peer.rs"]\nmod peer;\n')
+        self.write("tests/support/peer.rs", "pub fn peer() {}\n")
+        self.assertEqual(layout.check(), [])
+
+    def test_fake_integration_mount_does_not_rescue_support(self):
+        self.write("tests/one.rs", '// #[path = "support/peer.rs"] mod peer;\n'
+                   'const FAKE: &str = r#"#[path = "support/peer.rs"] mod peer;"#;\n')
+        self.write("tests/support/peer.rs", "pub fn peer() {}\n")
+        self.write("tests/support/unreferenced.rs", "pub fn unused() {}\n")
+        messages = "\n".join(layout.check())
+        self.assertIn("support/peer.rs: orphan support file", messages)
+        self.assertIn("support/unreferenced.rs: orphan support file", messages)
+
+    def test_integration_mount_cannot_rescue_unit_file(self):
+        self.write("tests/one.rs", '#[path = "unit/orphan_test.rs"] mod peer;\n')
+        self.write("tests/unit/orphan_test.rs", "#[test] fn case() {}\n")
+        self.assertIn("orphan unit-test file", "\n".join(layout.check()))
+
+    def test_missing_integration_support_is_rejected(self):
+        self.write("tests/one.rs", '#[path = "support/missing.rs"] mod peer;\n')
+        self.assertIn("missing test support", "\n".join(layout.check()))
+
     def test_test_attribute_in_source_is_rejected(self):
         self.write("src/foo.rs", "#[test]\nfn escaped_case() {}\n")
         self.assertIn("test attribute remains in src", "\n".join(layout.check()))

@@ -40,8 +40,8 @@ rustls = [
 ]
 
 # BoringSSL FIPS-mode build. Opt-in image build only (NOT a default). The
-# canonical amd64/arm64 builders compile Boring v5's bundled module source;
-# arm64 applies the pinned upstream integrity-relocation fix.
+# canonical amd64/arm64 builders compile Boring v5.4's bundled module source,
+# which includes the upstream arm64 integrity-relocation fix.
 fips = ["boringssl", "boring/fips"]
 
 [dependencies]

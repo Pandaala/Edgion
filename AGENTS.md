@@ -94,11 +94,12 @@ clients are unaffected. Details: [TLS backend policy](skills/01-architecture/02-
 
 **BoringSSL FIPS (opt-in image build)**: `fips` is a gateway cargo feature enabled explicitly
 through `cicd/build-image.sh` (requires `boringssl`; not a default, not enabled by the ordinary
-release workflow, and not toggled at runtime). Boring 5 builds its bundled FIPS module source by
-default. The canonical amd64/arm64 builder pins that same source revision and backports BoringSSL
-commit `4d6b2f971e456962b70e4e91768caffdb36fe016`, which fixes the arm64 integrity-hash relocation;
-the override is isolated to explicit FIPS builders and ordinary builds do not fetch it. The upstream
-`BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the canonical script contract.
+release workflow, and not toggled at runtime). Boring 5.4 builds its bundled FIPS module source
+when selected. The canonical amd64/arm64 builders use the bundled BoringSSL revision
+`d3bf4795ad5b79d646cddf2fec687da5b9b502db`, which includes the upstream arm64 integrity-hash
+relocation fix. Ordinary and FIPS builds share the architecture builder; there is no separate source
+checkout or downloaded patch. The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch
+is outside the canonical script contract.
 On a FIPS build,
 downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
 (`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)
@@ -119,7 +120,7 @@ compliance claim. The module metric reports BoringSSL FIPS mode; it does not est
 certificate scope, artifact provenance, or deployment compliance. A non-FIPS binary on a FIPS node also emits a startup WARN;
 alert on `edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0`. Known
 limitations: TLS 1.3 cipher suites
-cannot be restricted in BoringSSL (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
+are not restricted by the current Gateway TLS 1.2 cipher-list policy (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
 upstream (gateway→backend) TLS cipher suites are not FIPS-restricted (pingora connector
 limitation). See `skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md` for the current
 build and verification contract.

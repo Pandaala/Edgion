@@ -15,8 +15,8 @@
 # EDGION_EXPECT_FIPS_MODULE=1 to require a real FIPS build, assert the module
 # metric, and let the linked module activate the same policy.
 #
-# Assertions (openssl s_client, TLS 1.2 — BoringSSL cannot restrict TLS 1.3
-# suites, so ChaCha20 exclusion is only observable at 1.2):
+# Assertions (openssl s_client, TLS 1.2 — the Gateway cipher-list policy does
+# not restrict TLS 1.3 suites, so ChaCha20 exclusion is observable at 1.2):
 #   1. A ChaCha20-only client is REJECTED (ChaCha20 is not FIPS-approved).
 #   2. An approved AES-GCM client is ACCEPTED (negotiates the approved suite).
 #

@@ -54,13 +54,12 @@ FEATURES="allocator-jemalloc,fips" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-The canonical source FIPS build supports `amd64` and `arm64`. Boring 5.2.0's bundled BoringSSL
-revision has an arm64 integrity-hash relocation defect. For explicit FIPS builds, Edgion pins that
-same revision and applies the exact upstream fix from commit
-`4d6b2f971e456962b70e4e91768caffdb36fe016`; the builder verifies the downloaded patch checksum and
-runs its upstream `delocate` tests. Ordinary builders do not fetch or use this override, so ordinary
-non-FIPS builds and the release workflow are unchanged. Omit `--compile-only` to package the images.
-`BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch, not part of the canonical
+The canonical source FIPS build supports `amd64` and `arm64`. Boring 5.4 bundles the upstream
+arm64 integrity-hash relocation fix. Ordinary and FIPS builds share the architecture builder and
+use the crate's bundled source without a separate checkout or downloaded patch. Ordinary builds
+and the release workflow remain non-FIPS. Omit `--compile-only` to package the images. Set
+`CARGO_BUILD_JOBS` to optionally cap compilation parallelism inside the build containers.
+`BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch, outside the canonical
 Edgion script contract.
 
 When `fips` is selected, the script automatically runs an isolated verification on each release
@@ -313,7 +312,7 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 FIPS mode covers the common downstream posture, but has documented gaps (see the current contract in
 `skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md`):
 
-- **TLS 1.3 cipher suites cannot be restricted in BoringSSL.** `TLS_CHACHA20_POLY1305_SHA256`
+- **The current Gateway cipher-list policy does not restrict TLS 1.3 suites.** `TLS_CHACHA20_POLY1305_SHA256`
   remains negotiable at TLS 1.3. Approved-suite enforcement bites at **TLS 1.2 only**. To eliminate
   TLS 1.3 ChaCha20 entirely you would have to disable TLS 1.3 (not done by default).
 - **Upstream (Gateway → backend) TLS ciphers are not FIPS-restricted.** The Pingora 0.8.1 connector
@@ -321,7 +320,7 @@ FIPS mode covers the common downstream posture, but has documented gaps (see the
   existing server-certificate verification.
 - **No key-type policy** (e.g. rejecting Ed25519 leaf keys) is enforced.
 - **TLS 1.3 session resumption (PSK)** has the same cipher-suite limitation as a full TLS 1.3
-  handshake: BoringSSL cipher-list APIs do not restrict TLS 1.3 suites. Curve policy is applied
+  handshake: the Gateway's TLS 1.2 cipher-list API does not restrict TLS 1.3 suites. Curve policy is applied
   separately in the early ClientHello callback, before certificate lookup. PSK-specific curve
   negotiation has not been verified by this change.
 
@@ -333,7 +332,7 @@ FIPS mode covers the common downstream posture, but has documented gaps (see the
 | `edgion_gateway_fips_module_enabled` is `0` | Binary is not a FIPS build | The running image was not compiled with the `fips` feature — use a FIPS image |
 | A ChaCha20 or CBC-only TLS 1.2 client suddenly fails after no gateway config change | The node became a FIPS host and `fips_policy` is at its `auto` default | Set `fips_policy: off` for this deployment, or `EdgionTls.spec.ciphers` for this workload |
 | A ChaCha20 client fails on TLS 1.2 but you expected it to work | FIPS approved-default cipher list excludes ChaCha20 | Set `EdgionTls.spec.ciphers` explicitly on that listener, or route those clients to a non-FIPS listener |
-| ChaCha20 still negotiates on TLS 1.3 | BoringSSL cannot restrict TLS 1.3 suites (documented limitation) | Pin `minTlsVersion: TLS1_2` and disable TLS 1.3 on that listener if you must exclude it |
+| ChaCha20 still negotiates on TLS 1.3 | The current Gateway cipher-list policy only controls TLS 1.2 suites | Excluding TLS 1.3 ChaCha20 requires a separate TLS policy change |
 | Approved policy not applied on a local (non-FIPS) build / non-FIPS host | `fips_policy` resolves to `off` (or `auto` with a non-FIPS host) | Set `fips_policy: on` (or `EDGION_FIPS_POLICY=on`) to exercise the policy without a FIPS module |
 | `fips_policy: true` in YAML fails to load | Legacy boolean spelling; `fips_policy` is a string tri-state, not a bool | Use `fips_policy: "on"` / `"off"` / `auto` |
 | `edgion_gateway_fips_host_detect_error` is `1` | Host detection could not read `/proc/sys/crypto/fips_enabled` (e.g. hardened/masked `/proc`) | Set `fips_policy` explicitly (`on`/`off`); `auto` is inert while detection is `Unknown` |

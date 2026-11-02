@@ -37,7 +37,7 @@ use edgion_resources::resources::link_sys::SystemConfig;
 // ============================================================================
 
 /// Phase 2: SAN pinning is enforced for the OpenidConnect plugin.
-/// OIDC reqwest path uses use_preconfigured_tls + OutboundSanVerifier.
+/// OIDC reqwest path uses tls_backend_preconfigured + OutboundSanVerifier.
 pub const SAN_ENFORCED_OIDC: bool = true;
 
 /// Phase 2: SAN pinning is enforced for the LdapAuth plugin.

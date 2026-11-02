@@ -445,6 +445,7 @@ fn print_report(result: &ValidationResult, controller_url: &str, config_dir: &st
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    edgion_common::startup::init_crypto();
 
     // Create admin client
     let client = AdminClient::new(

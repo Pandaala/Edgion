@@ -506,8 +506,25 @@ def check() -> list[str]:
     for path in sorted((CRATE / "tests" / "unit").rglob("*.rs")):
         if path.resolve() not in mounts:
             errors.append(f"{path.relative_to(CRATE)}: orphan unit-test file")
+    integration_support = set()
+    support_root = (CRATE / "tests" / "support").resolve()
+    integration_mount = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]\s*(?:pub\s+)?mod\s+\w+\s*;')
+    for owner in sorted((CRATE / "tests").glob("*.rs")):
+        original = owner.read_text()
+        code = mask_non_code(original)
+        for match in integration_mount.finditer(original):
+            if code[match.start()] != "#":
+                continue
+            actual = (owner.parent / match.group(1)).resolve()
+            # Cross-crate helpers are registered by their owning crate. Unit
+            # files still require their production module's unique mount.
+            if actual.is_relative_to(support_root):
+                if actual.is_file():
+                    integration_support.add(actual)
+                else:
+                    errors.append(f"{owner.relative_to(CRATE)}: missing test support {actual}")
     for path in sorted((CRATE / "tests" / "support").rglob("*.rs")):
-        if path.resolve() not in mounts:
+        if path.resolve() not in mounts and path.resolve() not in integration_support:
             errors.append(f"{path.relative_to(CRATE)}: orphan support file")
     return errors
 

@@ -4,7 +4,7 @@ ARG RUST_VERSION=1.99.1
 RUN dnf -y install dnf-plugins-core \
     && dnf config-manager --set-enabled crb
 RUN dnf -y install gcc gcc-c++ make cmake git clang clang-devel lld \
-      perl pkgconf-pkg-config protobuf-compiler openssl-devel \
+      perl pkgconf-pkg-config protobuf-compiler protobuf-devel openssl-devel \
       tar gzip findutils binutils diffutils ca-certificates \
     && dnf clean all
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \

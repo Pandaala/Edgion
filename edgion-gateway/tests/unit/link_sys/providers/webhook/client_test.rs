@@ -130,6 +130,7 @@ fn active_ca_config() -> WebhookServiceConfig {
 
 #[test]
 fn active_reference_material_proof_precedes_same_rv_and_verify_false() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut valid = (*owner(active_ca_config())).clone();
     valid.metadata.resource_version = Some("42".into());
     let valid = Arc::new(valid);
@@ -177,6 +178,7 @@ fn active_reference_material_proof_precedes_same_rv_and_verify_false() {
 
 #[test]
 fn captured_inheritance_masks_overrides_and_unmasked_changes_prevent_same_rv_reuse() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use edgion_common::link_sys_core::outbound_tls::test_util;
     use edgion_resources::resources::common::OutboundTlsConfig;
     let a = test_util::snapshot(OutboundTlsConfig::default());
@@ -211,6 +213,7 @@ fn captured_inheritance_masks_overrides_and_unmasked_changes_prevent_same_rv_reu
 
 #[test]
 fn candidate_comparison_does_not_parse_material_or_emit_tls_audit() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use std::sync::atomic::AtomicUsize;
     use tracing_subscriber::{layer::SubscriberExt, Layer};
     struct AuditCounter(Arc<AtomicUsize>);

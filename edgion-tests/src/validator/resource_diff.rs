@@ -666,6 +666,7 @@ fn print_json_report(result: &DiffResult, controller_url: &str, gateway_url: &st
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    edgion_common::startup::init_crypto();
 
     // Create admin client
     let client = AdminClient::new(&args);
@@ -783,6 +784,8 @@ mod tests {
     }
 
     fn test_client(controller_url: String, controller_token: Option<String>) -> AdminClient {
+        static CRYPTO: std::sync::Once = std::sync::Once::new();
+        CRYPTO.call_once(edgion_common::startup::init_crypto);
         AdminClient {
             client: Client::builder()
                 .timeout(Duration::from_secs(1))

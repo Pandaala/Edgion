@@ -11,7 +11,10 @@
 //! and rejected only when the provider's SDK has no skip-verify API.
 
 use anyhow::{Context, Result};
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{
+    pem::{PemObject, SectionKind},
+    CertificateDer, PrivateKeyDer,
+};
 use rustls::{ClientConfig, RootCertStore};
 use zeroize::Zeroizing;
 
@@ -85,9 +88,29 @@ pub fn build_kafka_rustls_client_config(input: &outbound_tls::PreparedLinkSysTls
 
 fn build_concrete_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls) -> Result<ClientConfig> {
     resolved.reject_unsupported_identity_policy("LinkSys")?;
+    let builder = ClientConfig::builder().with_root_certificates(build_root_store(&resolved.ca)?);
+
+    let identity = match &resolved.client_identity {
+        Some((cert_pem, key_pem)) => {
+            let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+                .collect::<std::result::Result<_, _>>()
+                .context("failed to parse client certificate PEM from LinkSys TLS material")?;
+            if certs.is_empty() {
+                anyhow::bail!("LinkSys TLS client certificate PEM did not contain any certificates");
+            }
+            let key = PrivateKeyDer::from_pem_slice(key_pem.as_slice())
+                .context("failed to parse client private key PEM from LinkSys TLS Secret")?;
+            Some((certs, key))
+        }
+        None => None,
+    };
+    complete_client_auth(builder, identity)
+}
+
+fn build_root_store(ca: &EffectiveCa) -> Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
 
-    match &resolved.ca {
+    match ca {
         EffectiveCa::Custom(bundles) => {
             if bundles.is_empty() {
                 anyhow::bail!("LinkSys TLS CA PEM did not contain any valid certificates");
@@ -111,58 +134,99 @@ fn build_concrete_rustls_client_config(resolved: &outbound_tls::ResolvedOutbound
         }
     }
 
-    let builder = ClientConfig::builder().with_root_certificates(roots);
-
-    let client_config = match &resolved.client_identity {
-        Some((cert_pem, key_pem)) => {
-            let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
-                .collect::<std::result::Result<_, _>>()
-                .context("failed to parse client certificate PEM from LinkSys TLS material")?;
-            if certs.is_empty() {
-                anyhow::bail!("LinkSys TLS client certificate PEM did not contain any certificates");
-            }
-            let key = PrivateKeyDer::from_pem_slice(key_pem.as_slice())
-                .context("failed to parse client private key PEM from LinkSys TLS Secret")?;
-            builder
-                .with_client_auth_cert(certs, key)
-                .context("failed to configure rustls client authentication")?
-        }
-        None => builder.with_no_client_auth(),
-    };
-
-    Ok(client_config)
+    Ok(roots)
 }
 
-/// Apply custom CA PEM bundles to a reqwest `ClientBuilder` with REPLACE
-/// semantics: disables the built-in root certificates, then adds each supplied
-/// PEM bundle as a trust anchor.
-///
-/// Use this instead of the bare `add_root_certificate` call whenever a custom
-/// CA replaces (rather than supplements) the public roots.
-///
-/// Each bundle in `bundles` may contain multiple certificates (root + intermediate chain).
-/// `bundles` is a slice of PEM byte vectors, one per resolved CA Secret.
-pub fn apply_custom_ca_pem(
-    builder: reqwest::ClientBuilder,
-    bundles: &[Vec<u8>],
-) -> anyhow::Result<reqwest::ClientBuilder> {
-    let mut builder = builder.tls_built_in_root_certs(false);
-    anyhow::ensure!(!bundles.is_empty(), "TLS: custom CA bundle contains no certificates");
-    for bundle in bundles {
-        let parsed = crate::tls_validation::parse_canonical_ca_bundle(bundle)
-            .map_err(|_| anyhow::anyhow!("TLS: invalid CA certificate PEM bundle"))?;
-        for der in parsed.certificates_der {
-            let cert = reqwest::Certificate::from_der(&der).context("TLS: invalid CA certificate DER")?;
-            builder = builder.add_root_certificate(cert);
+type ClientIdentity = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
+
+fn complete_client_auth(
+    builder: rustls::ConfigBuilder<ClientConfig, rustls::client::WantsClientCert>,
+    identity: Option<ClientIdentity>,
+) -> Result<ClientConfig> {
+    match identity {
+        Some((certs, key)) => builder
+            .with_client_auth_cert(certs, key)
+            .context("failed to configure rustls client authentication"),
+        None => Ok(builder.with_no_client_auth()),
+    }
+}
+
+/// Preserve the former HTTP identity parser: chain order, supported section
+/// kinds and last private key win. The combined secret buffer is zeroized.
+fn http_client_identity(cert_pem: &[u8], key_pem: &[u8]) -> Result<ClientIdentity> {
+    let mut combined = Zeroizing::new(Vec::with_capacity(cert_pem.len() + key_pem.len() + 1));
+    combined.extend_from_slice(cert_pem);
+    combined.push(b'\n');
+    combined.extend_from_slice(key_pem);
+    let mut reader = std::io::Cursor::new(combined.as_slice());
+    let mut certs = Vec::new();
+    let mut key = None;
+    while let Some((kind, data)) = rustls::pki_types::pem::from_buf(&mut reader)
+        .map_err(|_| anyhow::anyhow!("TLS: invalid client identity PEM"))?
+    {
+        match kind {
+            SectionKind::Certificate => certs.push(data.into()),
+            SectionKind::PrivateKey => key = Some(PrivateKeyDer::Pkcs8(data.into())),
+            SectionKind::RsaPrivateKey => key = Some(PrivateKeyDer::Pkcs1(data.into())),
+            SectionKind::EcPrivateKey => key = Some(PrivateKeyDer::Sec1(data.into())),
+            _ => anyhow::bail!("TLS: unsupported client identity PEM section"),
         }
     }
-    Ok(builder)
+    anyhow::ensure!(!certs.is_empty(), "TLS: client identity contains no certificates");
+    Ok((
+        certs,
+        key.ok_or_else(|| anyhow::anyhow!("TLS: client identity contains no private key"))?,
+    ))
+}
+
+fn build_http_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls) -> Result<ClientConfig> {
+    anyhow::ensure!(
+        resolved.verify,
+        "TLS: verified HTTP configuration requires verification"
+    );
+    resolved.reject_unsupported_identity_policy("OutboundClient")?;
+    if let EffectiveCa::Custom(bundles) = &resolved.ca {
+        anyhow::ensure!(!bundles.is_empty(), "TLS: custom CA bundle contains no certificates");
+        // Keep HTTP's canonical whole-bundle/DER/cap checks before the shared
+        // rustls conversion. This bounded cold-path reparse preserves other
+        // providers' existing material-parser contracts.
+        for bundle in bundles {
+            crate::tls_validation::parse_canonical_ca_bundle(bundle)
+                .map_err(|_| anyhow::anyhow!("TLS: invalid CA certificate PEM bundle"))?;
+        }
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("TLS: unsupported HTTP protocol configuration")?
+        .with_root_certificates(build_root_store(&resolved.ca)?);
+    let identity = resolved
+        .client_identity
+        .as_ref()
+        .map(|(cert, key)| http_client_identity(cert, key.as_slice()))
+        .transpose()?;
+    let mut config = complete_client_auth(builder, identity)?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(config)
+}
+
+/// The absent/inactive HTTP policy uses the same public roots as reqwest 0.12,
+/// without reading process-global outbound policy or installing a provider.
+pub(crate) fn apply_default_http_tls(builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder> {
+    let config = build_http_rustls_client_config(&outbound_tls::ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: None,
+        san: None,
+    })?;
+    Ok(builder.tls_backend_preconfigured(config))
 }
 
 /// Resolve `tls` through the shared outbound resolver and apply the result
 /// (verify flag, custom-CA REPLACE, mTLS identity) to a reqwest builder.
-/// This is the ONLY reqwest TLS path: `verify` always flows through
-/// the canonical snapshot resolver, so global-default inheritance is enforced uniformly.
+/// Active local policy flows through the canonical snapshot resolver. The HTTP
+/// factory separately owns absent/inactive public-root defaults and complete
+/// caller-prepared verifier configurations.
 /// `verify=false` is honored when the operator sets it explicitly (provider
 /// must support skip-verify); a WARN is emitted at configuration-load time.
 pub fn apply_resolved_outbound_tls(
@@ -210,24 +274,13 @@ fn apply_effective_outbound_tls(
 ) -> Result<reqwest::ClientBuilder> {
     resolved.reject_unsupported_identity_policy(provider)?;
 
-    let mut builder = builder;
     if !resolved.verify {
-        // Operator explicitly disabled verification; resolver already emitted WARN.
-        builder = builder.danger_accept_invalid_certs(true);
-    } else if let EffectiveCa::Custom(bundles) = &resolved.ca {
-        builder = apply_custom_ca_pem(builder, bundles)
-            .with_context(|| format!("{provider} TLS: invalid CA certificate PEM"))?;
+        // Canonical resolution already warned and omitted client identity (M4).
+        return Ok(builder.tls_backend_rustls().tls_danger_accept_invalid_certs(true));
     }
-    if let Some((cert_pem, key_pem)) = &resolved.client_identity {
-        let mut combined = Zeroizing::new(Vec::with_capacity(cert_pem.len() + key_pem.len() + 1));
-        combined.extend_from_slice(cert_pem);
-        combined.push(b'\n');
-        combined.extend_from_slice(key_pem);
-        let identity = reqwest::Identity::from_pem(combined.as_slice())
-            .with_context(|| format!("{provider} TLS: invalid client identity PEM"))?;
-        builder = builder.identity(identity);
-    }
-    Ok(builder)
+    let config =
+        build_http_rustls_client_config(resolved).with_context(|| format!("{provider} TLS: configuration error"))?;
+    Ok(builder.tls_backend_preconfigured(config))
 }
 
 #[cfg(test)]

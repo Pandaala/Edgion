@@ -342,3 +342,61 @@ fn bulk_response_limit_resolves_default_and_positive_safety_bounds() {
         assert_eq!(EsBulkConfig::from_crd(&crd).max_response_bytes, expected);
     }
 }
+
+#[test]
+fn actual_es_factory_rejects_local_and_inherited_identity_policy() {
+    use edgion_common::link_sys_core::outbound_tls::test_util;
+    use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsValidation, TlsConfig};
+
+    for validation in [
+        serde_json::json!({"hostname": "es.example"}),
+        serde_json::json!({"subjectAltNames": [{"type": "Hostname", "hostname": "es.example"}]}),
+    ] {
+        let validation: OutboundTlsValidation = serde_json::from_value(validation).unwrap();
+        for inherited in [false, true] {
+            let mut tls = TlsConfig {
+                enabled: true,
+                ..Default::default()
+            };
+            if !inherited {
+                tls.outbound.validation = Some(validation.clone());
+            }
+            let mut owner = LinkSys::new(
+                "es-policy",
+                LinkSysSpec {
+                    config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
+                        endpoints: vec!["https://127.0.0.1:1".into()],
+                        tls: Some(tls),
+                        ..Default::default()
+                    }),
+                    current_status: None,
+                    unknown_fields: Vec::new(),
+                },
+            );
+            owner.metadata.namespace = Some("mapping".into());
+            let prepared = PreparedLinkSysTls::with_snapshot(
+                Arc::new(owner),
+                test_util::snapshot(OutboundTlsConfig {
+                    validation: inherited.then(|| OutboundTlsValidation {
+                        well_known_ca_certificates: Some(
+                            edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::System,
+                        ),
+                        ..validation.clone()
+                    }),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+            // Exercise the production factory rather than this module's
+            // auth-shape helper, including its deliberately static projection.
+            let Err(error) = super::build_es_client(&prepared) else {
+                panic!("identity constraints must be rejected: inherited={inherited}, policy={validation:?}");
+            };
+            assert_eq!(error.to_string(), "failed to build reqwest client");
+            assert_eq!(
+                error.root_cause().to_string(),
+                "Elasticsearch TLS hostname/subjectAltNames policy is unsupported by this transport"
+            );
+        }
+    }
+}

@@ -446,12 +446,20 @@ provider_path() {
 }
 resource_synced() { api_ok "/configclient/LinkSys?namespace=default&name=$1"; }
 rejection_recorded() {
-    grep -F "$1" "${WORK_DIR}/logs/gateway.log" 2>/dev/null | \
-        grep -F 'hostname/subjectAltNames policy is unsupported' >/dev/null
+    if test "$2" = elasticsearch || test "$2" = es; then
+        # ES deliberately projects factory errors to this fixed context. The
+        # actual factory unit matrix checks the unsupported-policy root cause.
+        sed -E $'s/\033\\[[0-9;]*m//g' "${WORK_DIR}/logs/gateway.log" 2>/dev/null | \
+            grep -F "key=default/$1 " | grep -F 'from_config failed' | \
+            grep -F 'label="Elasticsearch"' | grep -E 'error=failed to build reqwest client$' >/dev/null
+    else
+        grep -F "$1" "${WORK_DIR}/logs/gateway.log" 2>/dev/null | \
+            grep -F 'hostname/subjectAltNames policy is unsupported' >/dev/null
+    fi
 }
 assert_no_dial() {
     local name="$1" provider="$2" counter="$3" path
-    wait_for "effective rejection of $name" 45 rejection_recorded "$name"
+    wait_for "effective rejection of $name" 45 rejection_recorded "$name" "$provider"
     wait_for "Gateway publication of $name" 30 resource_synced "$name"
     path="$(provider_path "$provider")"
     if api_ok "/api/v1/testing/link-sys/${path}/default_${name}/ping"; then
@@ -501,7 +509,7 @@ write_linksys etcd policy-etcd-recovery "https://127.0.0.1:${ETCD_PORT}" no
 write_linksys elasticsearch policy-es-recovery "https://127.0.0.1:${ES_PORT}" no
 for provider in redis etcd es; do
     name="policy-${provider}-recovery"
-    wait_for "pre-recovery rejection of $name" 45 rejection_recorded "$name"
+    wait_for "pre-recovery rejection of $name" 45 rejection_recorded "$name" "$provider"
 done
 write_egc ca
 wait_for 'effective CA EGC publication' 45 egc_policy_published ca

@@ -116,8 +116,8 @@ rcgen = { version = "0.14.7", features = ["x509-parser"] }
 instant-acme = "0.8.4"
 # BoringSSL bindings for custom TLS callbacks — pulled in (optional) only by the
 # `boringssl` feature of the crates that hold the callback code.
-boring = "5"
-boring-sys = "5"
+boring = "5.4"
+boring-sys = "5.4"
 foreign-types = "0.5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
@@ -135,7 +135,7 @@ tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git"
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider", "http2", "stream", "form", "query"] }
 http = "1.4.0"
 http-body = "=1.1.0"
 httpdate = "1"

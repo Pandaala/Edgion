@@ -65,7 +65,7 @@ cicd/build-image.sh
   - `libclang-dev`
   - `perl`
   - `pkg-config`
-  - `protobuf-compiler`
+  - `protobuf-compiler` and `libprotobuf-dev` (compiler plus standard `.proto` definitions)
 - Maps `PROFILE` to `--release` / no flag / `--profile <name>`, then runs
   package-qualified `cargo chef cook -p <package>` (feature args only for product crates)
 - Then copies the full source and runs the actual `cargo build`
@@ -153,14 +153,13 @@ FEATURES="allocator-jemalloc,fips" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-The canonical source FIPS build supports amd64 and arm64. Boring 5.2.0's bundled
-BoringSSL revision has an arm64 integrity-hash relocation defect, so the
-FIPS-only builder pins that revision and applies the exact upstream fix from
-commit `4d6b2f971e456962b70e4e91768caffdb36fe016`; its patch bytes are checksum
-verified. Ordinary builders do not fetch or use the override, and the ordinary
-release workflow plus a default invocation of `build-image.sh` stay non-FIPS.
+The canonical source FIPS build supports amd64 and arm64. Both modes share the
+architecture builder. Boring 5.4 bundles the upstream arm64 integrity-hash
+relocation fix, so no separate source checkout, patch download or source override
+is needed. Ordinary builds and the release workflow remain non-FIPS.
 The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the
-canonical script contract.
+canonical script contract. Set `CARGO_BUILD_JOBS` to optionally limit Rust build
+parallelism inside the compilation containers; an unset value keeps Cargo's default.
 
 The verification reuses
 `edgion-tests/integration/scripts/integration/test_fips_policy.sh` in its real

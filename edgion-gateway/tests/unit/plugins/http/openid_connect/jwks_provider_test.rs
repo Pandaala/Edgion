@@ -130,6 +130,7 @@ fn scripted_idp() -> ScriptedIdp {
 }
 
 fn unused_client() -> Arc<Client> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     Arc::new(Client::new())
 }
 

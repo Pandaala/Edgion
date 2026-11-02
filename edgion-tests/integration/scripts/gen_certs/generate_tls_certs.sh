@@ -139,6 +139,7 @@ generate_tls_cert() {
       -out "$TEMP_DIR/edge-tls.crt" \
       -days 365 \
       -subj "/CN=test.example.com" \
+      -addext "basicConstraints=critical,CA:FALSE" \
       -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:default.example.com,DNS:gateway-tls.test.com,DNS:*.sandbox.example.com,DNS:*.pp2.example.com,DNS:*.sp-allow.example.com,DNS:*.sp-deny.example.com,DNS:*.both-absent.example.com,DNS:both-absent-tls.example.com,DNS:port-only.example.com,DNS:no-hostname-gateway-tls.test.com,DNS:sni421-exact.test.com,DNS:*.sni421.test.com,DNS:*.example.com" \
       2>/dev/null
 
@@ -159,6 +160,7 @@ generate_ecdsa_cert() {
       -out "$TEMP_DIR/edge-tls-ecdsa.crt" \
       -days 365 \
       -subj "/CN=ecdsa-dualcert.example.com" \
+      -addext "basicConstraints=critical,CA:FALSE" \
       -addext "subjectAltName=DNS:gateway-tls.test.com,DNS:ecdsa-dualcert.example.com" \
       2>/dev/null
 
@@ -183,6 +185,7 @@ generate_lkg_certs() {
       -out "$CERTS_DIR/lkg-valid.crt" \
       -days 365 \
       -subj "/CN=lkg.example.com" \
+      -addext "basicConstraints=critical,CA:FALSE" \
       -addext "subjectAltName=DNS:lkg.example.com" \
       2>/dev/null
 
@@ -198,15 +201,20 @@ generate_lkg_certs() {
     log_success "Last-known-good cert generated (lkg-valid)."
 }
 
-cert_matches_required_sans() {
+cert_is_server_leaf() {
+    openssl x509 -in "$1" -noout -text 2>/dev/null | grep -q 'CA:FALSE'
+}
+
+cert_matches_sans() {
     local cert_file=$1
+    shift
     local san_text
 
     [ -f "$cert_file" ] || return 1
 
     san_text=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | sed -n '/Subject Alternative Name/,+1p') || return 1
 
-    for san in "${REQUIRED_SAN_ENTRIES[@]}"; do
+    for san in "$@"; do
         if [[ "$san_text" != *"$san"* ]]; then
             log_warning "Existing TLS cert is missing SAN entry: $san"
             return 1
@@ -216,24 +224,30 @@ cert_matches_required_sans() {
     return 0
 }
 
+cert_matches_required_sans() {
+    cert_matches_sans "$1" "${REQUIRED_SAN_ENTRIES[@]}"
+}
+
 log_section "Generate TLS certificate"
 log_info "temp directory: $TEMP_DIR"
 log_info "cert directory: $CERTS_DIR"
 log_info "runtime secret output: $SECRET_OUTPUT_FILE"
 
-if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && cert_matches_required_sans "$CERTS_DIR/server.crt"; then
-    log_info "Found existing TLS cert/key with matching SANs, reusing them."
+if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && cert_matches_required_sans "$CERTS_DIR/server.crt" && cert_is_server_leaf "$CERTS_DIR/server.crt"; then
+    log_info "Found existing TLS cert/key with matching SANs and leaf constraints, reusing them."
 else
     log_info "Generating fresh TLS cert/key for current integration test domains."
     generate_tls_cert
     log_success "TLS cert/key generated."
 fi
 
-if [ ! -f "$CERTS_DIR/ca.pem" ] && [ -f "$CERTS_DIR/server.crt" ]; then
-    cp "$CERTS_DIR/server.crt" "$CERTS_DIR/ca.pem"
-fi
+# This fixture trusts its self-signed server certificate directly.
+cp "$CERTS_DIR/server.crt" "$CERTS_DIR/ca.pem"
 
-if [ -f "$CERTS_DIR/server-ecdsa.crt" ] && [ -f "$CERTS_DIR/server-ecdsa.key" ]; then
+if [ -f "$CERTS_DIR/server-ecdsa.crt" ] && [ -f "$CERTS_DIR/server-ecdsa.key" ] \
+    && cert_is_server_leaf "$CERTS_DIR/server-ecdsa.crt" \
+    && cert_matches_sans "$CERTS_DIR/server-ecdsa.crt" \
+        "DNS:gateway-tls.test.com" "DNS:ecdsa-dualcert.example.com"; then
     log_info "Found existing ECDSA cert/key, reusing them."
 else
     generate_ecdsa_cert

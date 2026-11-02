@@ -92,6 +92,7 @@ base64.workspace = true
 h2.workspace = true
 rcgen.workspace = true
 tempfile.workspace = true
+tokio-rustls.workspace = true
 
 [[bench]]
 name = "metrics_lifetime"

@@ -108,7 +108,8 @@ pub struct OutboundClientConfig {
 ///
 /// Mirrors the existing `apply_*(builder) -> builder` idiom in [`super::tls`], so
 /// callers that need extra builder customization (e.g. `default_headers`) can
-/// chain onto the returned builder before `build()`.
+/// chain onto the returned builder before `build()`. TLS state is owned by cfg
+/// or the proved selection; additional builder customization is for HTTP policy.
 pub fn apply_outbound_policy(builder: ClientBuilder, cfg: OutboundClientConfig) -> anyhow::Result<ClientBuilder> {
     apply_outbound_policy_core(builder, cfg, None)
 }
@@ -149,10 +150,9 @@ fn apply_outbound_policy_core(
         builder = builder.no_proxy();
     }
     if let Some(resolver) = cfg.dns_resolver {
-        // `dns_resolver2` (not `dns_resolver`) — the latter's `R: Sized` bound
-        // rejects `Arc<dyn Resolve>`.
-        builder = builder.dns_resolver2(resolver);
+        builder = builder.dns_resolver(resolver);
     }
+    let mut tls_configured = false;
     if let Some(tls) = cfg.tls.as_ref() {
         let ctx = cfg.tls_context.unwrap_or("OutboundClient");
         builder = if let Some(defaults) = cfg.tls_defaults.as_ref() {
@@ -160,9 +160,11 @@ fn apply_outbound_policy_core(
         } else {
             apply_resolved_outbound_tls(builder, tls, ctx)?
         };
+        tls_configured = true;
     }
     if let Some(tls) = cfg.preconfigured_tls {
-        builder = builder.use_preconfigured_tls(tls);
+        builder = builder.tls_backend_preconfigured(tls);
+        tls_configured = true;
     }
     if let Some((proof, defaults)) = owned {
         if proof.active_field().is_some() {
@@ -172,7 +174,11 @@ fn apply_outbound_policy_core(
                 cfg.tls_context.unwrap_or("OutboundClient"),
                 defaults,
             )?;
+            tls_configured = true;
         }
+    }
+    if !tls_configured {
+        builder = super::tls::apply_default_http_tls(builder)?;
     }
     Ok(builder)
 }
@@ -183,7 +189,7 @@ pub fn build_outbound_client(cfg: OutboundClientConfig) -> anyhow::Result<Client
 }
 
 /// Build from the actual validated local selection and captured inheritance.
-/// Inactive/absent policy retains native defaults without global inheritance.
+/// Inactive/absent policy retains public WebPKI trust without global inheritance.
 /// Raw TLS overrides in cfg are rejected before client construction.
 pub fn build_outbound_client_with_tls_selection(
     cfg: OutboundClientConfig,

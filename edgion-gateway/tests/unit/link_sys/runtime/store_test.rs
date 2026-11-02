@@ -1655,6 +1655,7 @@ async fn webhook_same_rv_invalid_owner_preserves_last_good_but_forced_rebuild_wi
 
 #[tokio::test(flavor = "current_thread")]
 async fn webhook_same_rv_active_reference_failure_obeys_ordinary_and_forced_policy() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     for failure in ["group", "material-namespace", "missing-material"] {
         let registry = RuntimeRegistry::new();
         let mut valid = create_test_webhook_linksys("test", "link");

@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y \
     lld \
     perl \
     pkg-config \
-    protobuf-compiler \
+    protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Use lld as the linker for all targets to reduce link-time memory usage

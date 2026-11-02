@@ -166,6 +166,7 @@ fn custom_redirect_policy_is_accepted() {
 
 #[test]
 fn insecure_tls_is_honored_when_verify_false() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use edgion_resources::resources::common::OutboundTlsLocal;
 
     let _guard = super::super::outbound_tls::outbound_tls_test_guard();

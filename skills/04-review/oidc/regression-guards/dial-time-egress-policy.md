@@ -15,7 +15,7 @@ knowledge_type: regression-guards
 `openid_connect` must classify every outbound IdP destination at dial time through
 the shared Gateway `EgressResolver`, disable proxy-environment pickup, and keep
 denying redirects. Both the default factory client and the SAN-pinning
-`use_preconfigured_tls` client share that transport contract. RFC1918 private
+`tls_backend_preconfigured` client share that transport contract. RFC1918 private
 destinations follow gateway `default_block_private()` so in-cluster identity
 providers stay reachable unless the operator enables the gateway switch.
 
@@ -54,7 +54,7 @@ that switch and silently break existing private IdPs if defaulted to `true`.
 **4. SAN pinning is a TLS exemption, not an egress exemption**
 
 The SAN branch still attaches a custom `ServerCertVerifier` through
-`use_preconfigured_tls` because the factory TLS helpers cannot. Proxy, redirect,
+`tls_backend_preconfigured` because the factory TLS helpers cannot. Proxy, redirect,
 timeout, and resolver knobs go through `apply_outbound_policy` so the two
 branches cannot drift.
 
@@ -105,7 +105,7 @@ Re-open this decision only if:
   the EndpointSlice path instead of hostname egress
 - Gateway egress defaults change so that typical in-cluster IdPs would be denied
   without a plugin-local override
-- Reqwest starts invoking `dns_resolver2` for IP-literal hosts, making the
+- Reqwest starts invoking `dns_resolver` for IP-literal hosts, making the
   pre-send literal guard redundant
 
 ## Reference Cases

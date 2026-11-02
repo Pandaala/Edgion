@@ -249,6 +249,7 @@ fn prepared_secret_rotation_changes_private_identity_only_and_debug_is_safe() {
 
 #[test]
 fn inherited_tls_changes_revalidate_prepared_runtime_but_disabled_tls_is_inert() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use crate::link_sys_core::outbound_tls::{outbound_tls_test_guard, set_outbound_global_default};
     use edgion_resources::resources::common::OutboundTlsConfig;
     let _guard = outbound_tls_test_guard();
@@ -282,6 +283,7 @@ fn inherited_tls_changes_revalidate_prepared_runtime_but_disabled_tls_is_inert()
 
 #[test]
 fn captured_global_generation_drives_httpdns_identity_and_construction() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use crate::link_sys_core::outbound_tls::{outbound_tls_test_guard, set_outbound_global_default, test_util};
     use edgion_resources::resources::common::OutboundTlsConfig;
     let _guard = outbound_tls_test_guard();
@@ -331,6 +333,7 @@ fn captured_global_generation_drives_httpdns_identity_and_construction() {
 
 #[test]
 fn masked_global_axes_keep_the_ready_httpdns_generation() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use crate::link_sys_core::outbound_tls::{outbound_tls_test_guard, test_util};
     use edgion_resources::resources::common::OutboundTlsConfig;
     let _guard = outbound_tls_test_guard();

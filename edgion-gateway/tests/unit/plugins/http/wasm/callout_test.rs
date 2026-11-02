@@ -17,6 +17,7 @@ fn callout(origin: String, timeout_ms: u32) -> PendingCallout {
 }
 
 fn test_client() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder().no_proxy().build().expect("test client")
 }
 

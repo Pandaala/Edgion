@@ -176,6 +176,7 @@ fn decide_exit(snap_empty: bool, mode: &str) -> Result<ExitDecision, String> {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    edgion_common::startup::init_crypto();
     let ignored_controller_configmaps = match parse_controller_configmap_ignores(&args.ignore_controller_configmap) {
         Ok(ignored) => ignored,
         Err(message) => {
@@ -838,6 +839,13 @@ fn print_report(snap: &Snapshot, timeout_secs: u64) {
 }
 
 #[cfg(test)]
+fn test_client_builder() -> reqwest::ClientBuilder {
+    static CRYPTO: std::sync::Once = std::sync::Once::new();
+    CRYPTO.call_once(edgion_common::startup::init_crypto);
+    Client::builder()
+}
+
+#[cfg(test)]
 mod exit_tests {
     use super::*;
 
@@ -949,9 +957,12 @@ mod exit_tests {
                 .expect(0)
                 .mount(&server)
                 .await;
-            assert!(wipe_and_report(&Client::new(), &inventory_args(&server.uri()))
-                .await
-                .is_err());
+            assert!(wipe_and_report(
+                &test_client_builder().build().expect("test HTTP client"),
+                &inventory_args(&server.uri())
+            )
+            .await
+            .is_err());
         }
     }
 
@@ -968,10 +979,18 @@ mod exit_tests {
         }
         let mut args = inventory_args(&server.uri());
         args.no_wipe = true;
-        assert!(wipe_and_report(&Client::new(), &args).await.is_ok());
+        assert!(
+            wipe_and_report(&test_client_builder().build().expect("test HTTP client"), &args)
+                .await
+                .is_ok()
+        );
         args.no_wipe = false;
         args.skip = Some("controller".into());
-        assert!(wipe_and_report(&Client::new(), &args).await.is_ok());
+        assert!(
+            wipe_and_report(&test_client_builder().build().expect("test HTTP client"), &args)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -993,9 +1012,12 @@ mod exit_tests {
             .expect(1)
             .mount(&server)
             .await;
-        assert!(wipe_and_report(&Client::new(), &inventory_args(&server.uri()))
-            .await
-            .is_err());
+        assert!(wipe_and_report(
+            &test_client_builder().build().expect("test HTTP client"),
+            &inventory_args(&server.uri())
+        )
+        .await
+        .is_err());
     }
 
     #[test]
@@ -1103,7 +1125,7 @@ mod e2e_tests {
             ignore_controller_configmap: Vec::new(),
             ignore_controller_conf_sync_secret: Vec::new(),
         };
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let snap = collect(&client, &args, &BTreeSet::new(), &BTreeSet::new())
             .await
             .unwrap();
@@ -1154,9 +1176,14 @@ mod e2e_tests {
             ignore_controller_configmap: Vec::new(),
             ignore_controller_conf_sync_secret: Vec::new(),
         };
-        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &BTreeSet::new())
-            .await
-            .unwrap();
+        let snap = collect(
+            &test_client_builder().build().expect("test HTTP client"),
+            &args,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(snap.residue.get("gateway.metrics.gauge_owners"), Some(&1));
         assert_eq!(snap.residue.get("gateway.metrics.overdue_epochs"), Some(&1));
@@ -1246,9 +1273,14 @@ mod e2e_tests {
             ignore_controller_conf_sync_secret: Vec::new(),
         };
         let ignored = parse_controller_configmap_ignores(&args.ignore_controller_configmap).unwrap();
-        let snap = collect(&Client::new(), &args, &ignored, &BTreeSet::new())
-            .await
-            .unwrap();
+        let snap = collect(
+            &test_client_builder().build().expect("test HTTP client"),
+            &args,
+            &ignored,
+            &BTreeSet::new(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(snap.residue.get("controller.conf_center_storage.ConfigMap"), Some(&2));
         assert_eq!(
@@ -1328,9 +1360,14 @@ mod e2e_tests {
             ignore_controller_conf_sync_secret: secret_keys.iter().cloned().collect(),
         };
 
-        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &secret_keys)
-            .await
-            .unwrap();
+        let snap = collect(
+            &test_client_builder().build().expect("test HTTP client"),
+            &args,
+            &BTreeSet::new(),
+            &secret_keys,
+        )
+        .await
+        .unwrap();
         assert_eq!(snap.residue.get("controller.conf_center_storage.Secret"), Some(&1));
         assert_eq!(snap.residue.get("controller.secret_store"), Some(&1));
         assert_eq!(
@@ -1408,9 +1445,14 @@ mod e2e_tests {
             ignore_controller_conf_sync_secret: secret_keys.iter().cloned().collect(),
         };
 
-        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &secret_keys)
-            .await
-            .unwrap();
+        let snap = collect(
+            &test_client_builder().build().expect("test HTTP client"),
+            &args,
+            &BTreeSet::new(),
+            &secret_keys,
+        )
+        .await
+        .unwrap();
         assert!(!snap.residue.contains_key("controller.conf_center_storage.Secret"));
         assert_eq!(snap.residue.get("controller.secret_store"), Some(&1));
         assert_eq!(
@@ -1465,9 +1507,14 @@ mod e2e_tests {
             ignore_controller_conf_sync_secret: secret_keys.iter().cloned().collect(),
         };
 
-        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &secret_keys)
-            .await
-            .unwrap();
+        let snap = collect(
+            &test_client_builder().build().expect("test HTTP client"),
+            &args,
+            &BTreeSet::new(),
+            &secret_keys,
+        )
+        .await
+        .unwrap();
         assert_eq!(snap.residue.get("controller.secret_store_contract"), Some(&1));
     }
 }
@@ -1502,7 +1549,7 @@ mod walk_tests {
 
     #[test]
     fn wipe_all_overrides_the_short_polling_request_timeout() {
-        let client = Client::builder().timeout(HTTP_REQUEST_TIMEOUT).build().unwrap();
+        let client = test_client_builder().timeout(HTTP_REQUEST_TIMEOUT).build().unwrap();
         let request = wipe_all_request(
             &client,
             "http://127.0.0.1/wipe",
@@ -2494,7 +2541,7 @@ mod staged_cleanup_tests {
                 .mount(&server)
                 .await;
             let args = args(&server);
-            let client = Client::new();
+            let client = test_client_builder().build().expect("test HTTP client");
             let secrets = BTreeSet::new();
             assert!(context(&client, &args, &secrets)
                 .inventory(ResourceKind::Service)
@@ -2538,7 +2585,7 @@ mod staged_cleanup_tests {
             .mount(&server)
             .await;
         let args = args(&server);
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let secrets = BTreeSet::new();
         let keys = context(&client, &args, &secrets)
             .inventory(ResourceKind::Service)
@@ -2570,7 +2617,7 @@ mod staged_cleanup_tests {
                 .mount(&server)
                 .await;
             let args = args(&server);
-            let client = Client::new();
+            let client = test_client_builder().build().expect("test HTTP client");
             let secrets = BTreeSet::new();
             let error = context(&client, &args, &secrets)
                 .inventory(ResourceKind::Service)
@@ -2608,7 +2655,7 @@ mod staged_cleanup_tests {
                 .mount(&server)
                 .await;
             let args = args(&server);
-            let client = Client::new();
+            let client = test_client_builder().build().expect("test HTTP client");
             let secrets = BTreeSet::new();
             let keys = staged_page(
                 &page(vec![key(ResourceKind::Service, Some("test"), "backend")]),
@@ -2633,7 +2680,7 @@ mod staged_cleanup_tests {
             .mount(&server)
             .await;
         let args = args(&server);
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let secrets = BTreeSet::new();
         let mut cleanup = context(&client, &args, &secrets);
         cleanup.deadline = Instant::now() + Duration::from_millis(20);
@@ -2666,7 +2713,7 @@ mod staged_cleanup_tests {
             .mount(&server)
             .await;
         let args = args(&server);
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let secrets = BTreeSet::new();
         let selected = staged_page(&page(vec![original]), ResourceKind::HTTPRoute).unwrap().0;
         context(&client, &args, &secrets).delete(&selected[0]).await.unwrap();
@@ -2699,7 +2746,7 @@ mod staged_cleanup_tests {
                 .mount(&server)
                 .await;
             let args = args(&server);
-            let client = Client::new();
+            let client = test_client_builder().build().expect("test HTTP client");
             let secrets = BTreeSet::new();
             let selected = staged_page(&page(vec![original]), ResourceKind::Service).unwrap().0;
             assert!(context(&client, &args, &secrets).delete(&selected[0]).await.is_err());
@@ -2720,7 +2767,7 @@ mod staged_cleanup_tests {
             .mount(&server)
             .await;
         let args = args(&server);
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let secrets = BTreeSet::new();
         let selected = staged_page(
             &page(vec![key(ResourceKind::Service, Some("test"), "backend")]),
@@ -2751,7 +2798,7 @@ mod staged_cleanup_tests {
                 .mount(&server)
                 .await;
             let args = args(&server);
-            let client = Client::new();
+            let client = test_client_builder().build().expect("test HTTP client");
             let secrets = BTreeSet::new();
             let selected = staged_page(&page(vec![original]), ResourceKind::Service).unwrap().0;
             assert!(context(&client, &args, &secrets).delete(&selected[0]).await.is_err());
@@ -2868,7 +2915,7 @@ mod staged_cleanup_tests {
         let fixture = Fixture(std::sync::Arc::new(parking_lot::Mutex::new(objects)));
         Mock::given(any()).respond_with(fixture.clone()).mount(&server).await;
         let args = args(&server);
-        let client = Client::new();
+        let client = test_client_builder().build().expect("test HTTP client");
         let roots = BTreeSet::from(["test/kube-root-ca.crt".into(), "unwatched/kube-root-ca.crt".into()]);
         let secrets = BTreeSet::from([
             "system/edgion-conf-sync-ca".into(),

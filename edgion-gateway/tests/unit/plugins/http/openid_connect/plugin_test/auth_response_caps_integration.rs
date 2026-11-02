@@ -227,6 +227,7 @@ async fn auto_introspection_keeps_401_and_response_diagnostic() {
 #[tokio::test]
 #[ignore = "network integration test: explicit local IdP fixture"]
 async fn declared_oversize_is_rejected_before_body_arrives() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (release, released) = tokio::sync::oneshot::channel::<()>();

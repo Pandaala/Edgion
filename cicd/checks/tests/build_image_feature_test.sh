@@ -32,61 +32,83 @@ if [[ "$(builder_image_tag linux/arm64)" != "edgion-builder:linux-arm64" ]]; the
     echo "ERROR: ordinary arm64 builder tag changed unexpectedly" >&2
     exit 1
 fi
-if [[ "$(builder_image_tag linux/arm64 true)" != "edgion-builder:linux-arm64-fips" ]]; then
-    echo "ERROR: arm64 FIPS builder does not use an isolated tag" >&2
-    exit 1
-fi
-if [[ "$(builder_image_tag linux/amd64 true)" != "edgion-builder:linux-amd64-fips" ]]; then
-    echo "ERROR: amd64 FIPS builder does not use an isolated tag" >&2
+if [[ "$(builder_image_tag linux/amd64)" != "edgion-builder:linux-amd64" ]]; then
+    echo "ERROR: amd64 builder tag changed unexpectedly" >&2
     exit 1
 fi
 
 DOCKER_CALLS=()
+DOCKER_JOB_VALUES=()
 docker() {
     DOCKER_CALLS+=("$*")
+    DOCKER_JOB_VALUES+=("${CARGO_BUILD_JOBS-unset}")
 }
 
-assert_calls_exclude_fips_source() {
-    local context=$1
+assert_calls() {
+    local context=$1 expected_fips=$2 expected_jobs=$3
     local calls="${DOCKER_CALLS[*]}"
     if [[ "${calls}" == *"BORING_BSSL_FIPS_SOURCE_PATH="* ]] ||
+        [[ "${calls}" == *"INCLUDE_BORINGSSL_FIPS_SOURCE="* ]] ||
+        [[ "${calls}" == *"BORINGSSL_FIPS_"* ]] ||
         [[ "${calls}" == *"edgion-builder:linux-arm64-fips"* ]]; then
-        echo "ERROR: ${context} unexpectedly used the FIPS source builder" >&2
+        echo "ERROR: ${context} used the obsolete FIPS source override" >&2
         exit 1
     fi
-}
-
-assert_calls_include_fips_source() {
-    local context=$1
-    local calls="${DOCKER_CALLS[*]}"
-    if [[ "${calls}" != *"BORING_BSSL_FIPS_SOURCE_PATH=${BORINGSSL_FIPS_SOURCE_PATH}"* ]] ||
-        [[ "${calls}" != *"edgion-builder:linux-arm64-fips"* ]]; then
-        echo "ERROR: ${context} did not use the pinned FIPS source builder" >&2
+    if [[ "${calls}" != *"edgion-builder:linux-arm64"* ]] ||
+        [[ "${calls}" != *"-e CARGO_BUILD_JOBS "* ]]; then
+        echo "ERROR: ${context} did not use the shared builder and optional job cap" >&2
         exit 1
     fi
+    local actual_fips=false
+    if [[ "${calls}" == *"EDGION_EXPECT_FIPS_MODULE=1"* ]]; then
+        actual_fips=true
+    fi
+    if [[ "${actual_fips}" != "${expected_fips}" ]]; then
+        echo "ERROR: ${context} selected the wrong runtime verification mode" >&2
+        exit 1
+    fi
+    local jobs
+    for jobs in "${DOCKER_JOB_VALUES[@]}"; do
+        if [[ "${jobs}" != "${expected_jobs}" ]]; then
+            echo "ERROR: ${context} changed the optional host job cap" >&2
+            exit 1
+        fi
+    done
 }
 
-BUILDER_IMAGES_READY=""
+reset_calls() {
+    DOCKER_CALLS=()
+    DOCKER_JOB_VALUES=()
+    BUILDER_IMAGES_READY=""
+}
+
+unset CARGO_BUILD_JOBS
+reset_calls
 GATEWAY_FEATURES="default"
 GATEWAY_NO_DEFAULT_FEATURES=false
 compile_binaries arm64 false >/dev/null
-assert_calls_exclude_fips_source "ordinary standard build"
+assert_calls "ordinary standard build" false unset
 
-DOCKER_CALLS=()
-BUILDER_IMAGES_READY=""
+export CARGO_BUILD_JOBS=2
+reset_calls
 GATEWAY_FEATURES="allocator-jemalloc,fips"
 GATEWAY_NO_DEFAULT_FEATURES=true
 compile_binaries arm64 false >/dev/null
-assert_calls_include_fips_source "explicit FIPS standard build"
+assert_calls "explicit FIPS standard build" true 2
 
-DOCKER_CALLS=()
-BUILDER_IMAGES_READY=""
+reset_calls
 compile_controller_gateway_binaries arm64 false >/dev/null
-assert_calls_include_fips_source "explicit FIPS controller-gateway build"
+assert_calls "explicit FIPS controller-gateway build" true 2
 
-DOCKER_CALLS=()
-BUILDER_IMAGES_READY=""
+reset_calls
 compile_test_binaries arm64 false >/dev/null
-assert_calls_exclude_fips_source "test-images build"
+assert_calls "test-images build" false 2
 
-echo "OK: build-image feature parsing and FIPS builder isolation passed"
+unset CARGO_BUILD_JOBS
+reset_calls
+GATEWAY_FEATURES="default"
+GATEWAY_NO_DEFAULT_FEATURES=false
+compile_controller_gateway_binaries arm64 false >/dev/null
+assert_calls "ordinary controller-gateway build" false unset
+
+echo "OK: exact FIPS selection, shared builders, optional jobs and runtime verification passed"

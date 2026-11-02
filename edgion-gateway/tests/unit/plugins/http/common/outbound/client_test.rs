@@ -1016,6 +1016,7 @@ fn internal_route_auth_wrong_material_fails_before_health_preparation_without_to
 
 #[test]
 fn internal_route_auth_captures_nonempty_global_tls_and_inherits_the_same_generation() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use edgion_common::link_sys_core::outbound_tls::resolve_validated_outbound_tls;
     use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
     use serde_json::json;

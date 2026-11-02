@@ -50,12 +50,12 @@ inert through the canonical owning selection.
   WebhookCandidate retains the actual owner and captured snapshot. Its owning
   ManagedOutboundClient entry checks source and active pairing, then selects
   Service target scheme and canonical HTTP construction from the proved active
-  field. Inactive TLS uses native defaults without cloning/removing config or
+  field. Inactive HTTP TLS uses public WebPKI defaults without cloning/removing config or
   consuming inherited policy. URL targets retain their explicit scheme.
 - Elasticsearch's EsCandidate retains the shared actual PreparedLinkSysTls
   container and checks active inherited authority before persistent planning.
   Its fixed-header owning HTTP factory derives config/auth from that owner and
-  borrows the same captured TLS selection. Absent/disabled TLS retains native
+  borrows the same captured TLS selection. Absent/disabled TLS retains public WebPKI
   HTTPS trust without global inheritance. Bulk and recovery reuse the Client;
   init continues publishing unhealthy after a failed initial probe. Ordinary
   custom failure retains a callable prior publication; forced refresh withdraws
@@ -111,7 +111,7 @@ that actual owner and validates active inheritance. OAuth2Provider derives its
 endpoint, scopes and egress policy from the same owner and builds through
 build_outbound_client_with_tls_selection using the captured defaults. It keeps
 only the Client and existing request metadata after construction. Absent/disabled
-local TLS retains secure HTTPS with native trust and consumes no global policy.
+local TLS retains secure HTTPS with public WebPKI trust and consumes no global policy.
 Raw-owner UID/generation, frozen references, Grant revision, Secret UID/RV,
 issuer/fallback checks, LeaderFence and publication/CAS remain independent and
 unchanged: a stable captured owner is not authority to use stale credentials.
@@ -220,3 +220,37 @@ an enabled local block. The closed adapter feeds the canonical audited resolver;
 Gateway performs the one native Tonic 0.14 SDK conversion and retains its Endpoint
 and actual owning input through retries/reconnects. Authentication authority and
 other providers' distinct native TLS policies are not changed by this adapter.
+
+## Reqwest 0.13 complete HTTP TLS configuration
+
+The canonical HTTP factory uses reqwest 0.13.5. Verified HTTP clients receive one
+complete Rustls configuration with explicit Ring, public WebPKI roots or custom
+CA REPLACE semantics, ordered client identity and HTTP/2 + HTTP/1.1 ALPN. An
+absent/inactive TLS selection uses public roots without reading global outbound
+TLS policy. Complete caller-prepared Gateway SAN configurations remain intact;
+the factory does not add CA/identity/verify flags after selecting them.
+
+Reqwest's preconfigured backend ignores later builder root/identity flags and
+does not fill ALPN. Its native 0.13 trust defaults differ from the old WebPKI
+feature. The explicit verified configuration preserves Edgion's existing trust
+contract. The platform-verifier crate remains transitive but does not supply
+trust for these verified HTTP clients.
+
+HTTP custom CA input retains canonical whole-bundle/DER checks and caps before
+the shared root-store conversion. The bounded cold-path PEM reparse preserves
+Redis/Kafka material parsing and native fallback behavior. HTTP identity uses
+the same public pki-types section reader as reqwest 0.12: certificate order,
+PKCS8/PKCS1/SEC1 keys, last private key and recognized non-identity section
+rejection remain unchanged. Combined secret bytes are zeroized.
+
+Explicit verify=false keeps reqwest's native insecure backend and canonical M4
+client-identity omission. Existing binary startup installs Ring; standalone
+native-insecure tests initialize it explicitly. Verified construction neither
+reads nor installs a global crypto provider. This introduces no shared custom
+NoVerifier or new trust-root dependency.
+
+Actual Common and Gateway reqwest transport tests cover independent private CA
+roots, default/wrong-root rejection, mTLS, identity omission, H2 ALPN and retained
+positive/negative SAN verification. The original OIDC egress and outbound
+identity-policy drivers remain the cross-process verification controls. These
+checks do not establish every external provider or a TLS compliance claim.

@@ -62,11 +62,11 @@ TLS 1.3 cipher suites cannot be restricted through BoringSSL's TLS 1.2 cipher-li
 ## FIPS build and policy
 
 `fips` is an explicit image-build feature, not a runtime Cargo default and not
-part of the ordinary release workflow. Boring 5 builds its bundled FIPS module
-source in dedicated Linux amd64 and arm64 builders, which then run the isolated
-module and TLS-profile verification. The FIPS-only source override pins Boring
-5.2.0's BoringSSL revision plus the upstream arm64 integrity-relocation fix;
-ordinary builders do not fetch or use that override. At startup:
+part of the ordinary release workflow. Boring 5.4 builds its bundled FIPS module
+source in Linux amd64 and arm64 builders, which then run the isolated module and
+TLS-profile verification. The bundled source includes the upstream arm64
+integrity-relocation fix. Both modes share the architecture builder and require
+no source override. At startup:
 
 - `require_fips: true` fails startup when BoringSSL FIPS mode is not present;
 - `fips_policy` is `auto | on | off` and resolves with environment (`EDGION_FIPS_POLICY`) over
@@ -85,7 +85,8 @@ independent of certificate-source and cipher overrides.
 
 Limitations:
 
-- BoringSSL TLS 1.3 suites cannot be restricted, so ChaCha20 can still negotiate.
+- The current Gateway TLS 1.2 cipher-list policy does not restrict TLS 1.3 suites,
+  so ChaCha20 can still negotiate.
 - Upstream gateway-to-backend cipher suites are not FIPS-restricted by this policy.
 - The runtime FIPS-mode signal and host-policy alignment do not establish CMVP
   certificate scope, artifact provenance, or deployment compliance.

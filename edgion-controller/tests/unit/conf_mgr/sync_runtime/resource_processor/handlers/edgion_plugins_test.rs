@@ -6287,7 +6287,7 @@ async fn guardrail_missing_secret_is_reported_once() {
 // ── Phase 1 SAN guard tests ───────────────────────────────────────────────
 
 /// OpenidConnect plugin with `tls.validation.subjectAltNames` is accepted in Phase 2.
-/// SAN pinning is now enforced by the OIDC TLS verifier (use_preconfigured_tls + OutboundSanVerifier).
+/// SAN pinning is now enforced by the OIDC TLS verifier (tls_backend_preconfigured + OutboundSanVerifier).
 #[tokio::test]
 async fn oidc_with_san_accepted_phase2() {
     use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
