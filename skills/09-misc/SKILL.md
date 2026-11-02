@@ -5,8 +5,8 @@ description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, re
 
 # 09 Miscellaneous
 
-> Edgion build and release workflow. Rust is pinned to `1.96.1`: `rust-toolchain.toml`
-> (`channel = "1.96.1"`) is the single source of truth, and CI plus release/Docker builds
+> Edgion build and release workflow. Rust is pinned to `1.99.1`: `rust-toolchain.toml`
+> (`channel = "1.99.1"`) is the single source of truth, and CI plus release/Docker builds
 > declare the same version so all three agree. Default Gateway and
 > Controller defaults to `allocator-jemalloc`; Pingora source/TLS features are
 > Gateway-local.

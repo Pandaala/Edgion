@@ -145,7 +145,7 @@ struct Ledger {
 
 fn reserve(counter: &AtomicUsize, amount: usize, limit: usize) -> bool {
     counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             current.checked_add(amount).filter(|next| *next <= limit)
         })
         .is_ok()
@@ -239,7 +239,7 @@ impl Store {
 
     fn advance_epoch(&self) -> PublicationEpoch {
         let id = NEXT_EPOCH
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| old.checked_add(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |old| old.checked_add(1))
             .ok()
             .map(|old| old + 1);
         // Admission precedes Arc allocation and the retirement fence. Refusal

@@ -89,7 +89,7 @@ impl HealthCheckConfigStore {
                     return;
                 }
                 let Some(generation) = NEXT_HEALTH_POLICY_GENERATION
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
                     .ok()
                 else {
                     new_map.remove(service_key);

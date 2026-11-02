@@ -302,7 +302,7 @@ impl PluginRuntime {
     pub fn new() -> Self {
         Self {
             cache_identity: NEXT_RUNTIME_ID
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
                 .ok()
                 .map_or(0, |id| id + 1),
             cache_capabilities: super::entry_bundle::CacheCapabilities::default(),

@@ -81,7 +81,7 @@ impl Counter {
 
     pub(crate) fn reserve(self: &Arc<Self>, amount: u64) -> Result<Reservation, BodyReadError> {
         self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(amount).filter(|next| *next <= self.limit)
             })
             .map_err(|_| BodyReadError::CapacityExceeded)?;

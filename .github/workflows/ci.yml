@@ -20,7 +20,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-check"
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-gateway"
@@ -86,7 +86,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           components: rustfmt
           install-deps: "false"
           cache-enabled: "false"
@@ -118,7 +118,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           components: clippy
           install-deps: "true"
           cache-enabled: "true"
@@ -138,7 +138,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-test"

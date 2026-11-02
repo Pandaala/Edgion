@@ -31,7 +31,7 @@ set -eo pipefail
 DEFAULT_VERSION="0.3.6"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.96.1}"
+RUST_VERSION="${RUST_VERSION:-1.99.1}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
 # Test harness binaries. These are [[bin]] targets of the edgion-tests crate
@@ -196,7 +196,7 @@ Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
     VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
-    RUST_VERSION        Rust version for builder (default: 1.96.1)
+    RUST_VERSION        Rust version for builder (default: 1.99.1)
     FEATURES            Gateway Cargo features (default: default)
 
 Examples:

@@ -216,7 +216,7 @@ impl GuestBudget {
 
     fn reserve(&self, bytes: usize) -> bool {
         self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes).filter(|total| *total <= self.limit)
             })
             .is_ok()

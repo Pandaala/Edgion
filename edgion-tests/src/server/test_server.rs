@@ -644,7 +644,7 @@ async fn cache_fixture_ingress(mut request: AxumRequest, next: axum::middleware:
         ) {
             let Ok(previous) =
                 CACHE_ORIGIN_COUNTS[tag * 2 + port]
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| old.checked_add(1))
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |old| old.checked_add(1))
             else {
                 return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
             };

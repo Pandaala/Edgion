@@ -45,14 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # `toolchain: "1.96.1"` matches every job in ci.yml and agrees with the pin in
-      # rust-toolchain.toml (`channel = "1.96.1"`), which is the single source of truth
+      # `toolchain: "1.99.1"` matches every job in ci.yml and agrees with the pin in
+      # rust-toolchain.toml (`channel = "1.99.1"`), which is the single source of truth
       # rustup honors inside the repo. The input pre-installs that exact toolchain so the
       # first cargo call does not download a second one.
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "conf-sync"

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
 fn allocate_owner(counter: &AtomicU64) -> Result<u64> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| StoreError::Generation)
 }
 

@@ -27,7 +27,7 @@ impl Reservation {
     pub(super) fn output(self: &Arc<Self>, bytes: Vec<u8>) -> Result<Bytes, ()> {
         let len = bytes.capacity();
         self.outstanding
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_add(len).filter(|total| *total <= OUTPUT_CAP)
             })
             .map_err(|_| ())?;

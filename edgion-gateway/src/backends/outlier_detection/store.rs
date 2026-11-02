@@ -114,7 +114,7 @@ impl OutlierDetectionStore {
 
     fn allocate_policy_identity(&self) -> Option<Arc<OutlierPolicyIdentity>> {
         self.next_policy_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
             .ok()
             .map(|generation| Arc::new(OutlierPolicyIdentity { generation }))
     }

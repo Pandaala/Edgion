@@ -195,7 +195,7 @@ impl LbBackend {
     pub fn try_acquire_cb_permit(&self, max: u32) -> bool {
         self.counters
             .cb_inflight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
                 if (cur as u64) < max as u64 {
                     Some(cur + 1)
                 } else {

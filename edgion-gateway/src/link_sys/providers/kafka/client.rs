@@ -114,7 +114,7 @@ impl Drop for TopicReservation {
 
 fn try_reserve_counter(counter: &AtomicUsize, amount: usize, maximum: usize) -> bool {
     counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             current.checked_add(amount).filter(|next| *next <= maximum)
         })
         .is_ok()

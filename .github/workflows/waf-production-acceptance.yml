@@ -17,7 +17,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.99.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-waf-acceptance"

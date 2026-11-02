@@ -22,7 +22,7 @@ impl LogicalBackendCircuitBreaker {
 
     pub fn try_acquire(self: Arc<Self>) -> Option<LogicalBackendCircuitBreakerPermit> {
         self.in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.max).then_some(current.saturating_add(1))
             })
             .ok()

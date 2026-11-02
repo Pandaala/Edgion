@@ -115,7 +115,7 @@ impl QuotaAccumulator {
         }
         let previous = self
             .observed_output
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(delta))
             })
             .unwrap_or(u64::MAX);

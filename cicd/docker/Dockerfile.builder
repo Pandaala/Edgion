@@ -15,7 +15,7 @@
 #     edgion-builder \
 #     cargo build --release --target aarch64-unknown-linux-gnu
 
-ARG RUST_VERSION=1.96.1
+ARG RUST_VERSION=1.99.1
 ARG GO_VERSION=1.25.0
 
 FROM golang:${GO_VERSION}-bookworm AS go-toolchain

@@ -9,7 +9,7 @@ Linux 9 (RPM), with systemd for both daemons. See the
 ## Build
 
 From the repository root, build current-source binaries in a native Rocky 9
-container using Rust 1.96.1, Cargo.lock, the `production` profile, and ordinary
+container using Rust 1.99.1, Cargo.lock, the `production` profile, and ordinary
 BoringSSL defaults:
 
 ```bash

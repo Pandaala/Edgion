@@ -1,6 +1,6 @@
 # Native builds on the oldest supported libc baseline; no cross-compiler is used.
 FROM rockylinux/rockylinux:9
-ARG RUST_VERSION=1.96.1
+ARG RUST_VERSION=1.99.1
 RUN dnf -y install dnf-plugins-core \
     && dnf config-manager --set-enabled crb
 RUN dnf -y install gcc gcc-c++ make cmake git clang clang-devel lld \

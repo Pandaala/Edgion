@@ -166,7 +166,7 @@ impl LocalGateRegistry {
         };
         let previous = entry
             .next_generation
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
             .ok()?;
         Some(LocalGateBinding {
             entry,
