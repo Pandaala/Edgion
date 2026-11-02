@@ -247,8 +247,20 @@ queues, persisted status seeding and actual ServerCache List/Watch serialization
 Gateway dispatch tests consume the same complete expected wire objects through
 production List/Watch decoders and real policy ConfHandlers. Fraction-only updates,
 missing preparation, captured snapshots and equivalent replay have store-level
-regressions. Resources and Controller ingress tests cover chrono extrema,
-fractions, extended years and leap seconds. This composes in-process boundaries;
+regressions. The original Chrono-domain coverage is historical. The authorized Kube 4.2 /
+k8s-openapi 0.28 migration uses Jiff Timestamp consistently in metadata, prepared
+precedence and arbitration stores. Current coverage retains fractions, timezone
+equivalence, pre-epoch instants, missing-last and source/status/List/Watch paths.
+Jiff bounds replace Chrono extrema; out-of-range years are rejected and leap
+seconds normalize to second 59, matching upstream metadata ingestion. This
+explicitly supersedes the old extended-year and leap-second preservation contract.
+The prepared carrier roundtrips the full Jiff domain, including negative years.
+Full-resource transport supports nonnegative four-digit metadata years: upstream
+`Time` serializes negative years using `%Y`, which its Jiff parser cannot read
+back. A regression exposes that upstream limitation; FS input shares it. Controller
+roundtrip coverage uses year 0000 and the upper supported boundary instead of
+negative metadata years. Shared wire fixtures use Jiff's minimal fractional digits
+(e.g. `.1Z`), retaining identical instants and full-object assertions. This composes in-process boundaries;
 it does not claim socket-level integration or a Kubernetes production incident.
 Fresh execution results belong to the implementation verification record.
 

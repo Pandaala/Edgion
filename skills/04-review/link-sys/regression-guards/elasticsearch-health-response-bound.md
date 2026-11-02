@@ -38,8 +38,11 @@ limit provides generous headroom without a new configuration field. This is a
 logical input bound, not an exact allocation/RSS guarantee: collector capacity,
 delivered chunks, transport buffers and the JSON tree also use memory.
 There is no demonstrated anonymous downstream-request exploit or periodic
-probe-body leak. Other retained CRUD/search responses remain deferred in
-[ES-02](../../../../tasks/todo/elasticsearch-operation-response-caps.md).
+probe-body leak. Other retained CRUD/search response collectors remain outside
+this health-check fix (ES-02); see the current
+[Elasticsearch operations](../../../../edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs)
+implementation. This health-response guard does not establish receiving-time
+bounds for those operation responses.
 
 ## Verification and re-evaluation
 

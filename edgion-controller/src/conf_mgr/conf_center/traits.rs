@@ -54,7 +54,7 @@ pub struct ResourceKeyMeta {
     #[serde(default)]
     pub name: String,
     #[serde(rename = "creationTimestamp", skip_serializing_if = "Option::is_none")]
-    pub creation_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub creation_timestamp: Option<k8s_openapi::jiff::Timestamp>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub labels: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]

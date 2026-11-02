@@ -5,6 +5,7 @@ pub mod dns;
 pub mod egress;
 pub mod ext_proc;
 pub mod grpc_tls;
+pub mod kube_client;
 pub mod link_sys_core;
 pub mod observe;
 pub mod secret;

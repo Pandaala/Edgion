@@ -298,11 +298,10 @@ fn attachment_hostnames_cannot_shadow_another_ports_valid_route() {
 
 #[test]
 fn test_same_hostname_collision_prefers_oldest_deterministically() {
-    use chrono::{TimeZone, Utc};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 
-    let older = Some(Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()));
-    let newer = Some(Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()));
+    let older = Some(Time("2020-01-01T00:00:00Z".parse().unwrap()));
+    let newer = Some(Time("2024-01-01T00:00:00Z".parse().unwrap()));
 
     // incumbent is lexically larger (zzz) but older; must win regardless of input order.
     let incumbent = unit(create_test_tls_route_ts("team-z", "zzz", "shared.example.com", older));
@@ -387,11 +386,10 @@ fn test_exact_longest_wildcard_and_invalid_catch_all() {
 
 #[test]
 fn test_collision_precedence_for_every_slot_kind() {
-    use chrono::{TimeZone, Utc};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 
-    let older = Some(Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()));
-    let newer = Some(Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()));
+    let older = Some(Time("2020-01-01T00:00:00Z".parse().unwrap()));
+    let newer = Some(Time("2024-01-01T00:00:00Z".parse().unwrap()));
     for host in [Some("shared.example.com"), Some("*.example.com")] {
         for (winner_ns, winner_name, winner_ts, loser_ns, loser_name, loser_ts) in [
             ("z", "z", older.clone(), "a", "a", newer.clone()),

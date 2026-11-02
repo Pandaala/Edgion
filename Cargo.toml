@@ -92,8 +92,8 @@ jsonptr = "0.7.1"
 mime = "0.3.17"
 
 # Kubernetes
-kube = { version = "2.0.1", features = ["runtime", "derive"] }
-k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
+kube = { version = "4.2.0", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.28.0", features = ["v1_34", "schemars"] }
 
 # gRPC / protobuf
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
@@ -204,7 +204,7 @@ mimalloc = { version = "0.1", default-features = false }
 # Utilities
 bytes = "1.11.1"
 zstd = { version = "0.14.3", default-features = false }
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 croner = "3"
 time = { version = "0.3", features = ["std"] }

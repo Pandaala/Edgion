@@ -210,10 +210,9 @@ async fn write_to_k8s_secrets(
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::{Api, Patch, PatchParams};
-    use kube::Client;
     use std::collections::BTreeMap;
 
-    let client = Client::try_default()
+    let client = edgion_common::kube_client::default_client()
         .await
         .context("Failed to create Kubernetes client. Are you running inside a cluster or have a valid kubeconfig?")?;
 

@@ -3,7 +3,7 @@ use edgion_resources::resources::backend_tls_policy::*;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 fn create_test_policy(namespace: &str, name: &str, target_name: &str) -> BackendTLSPolicy {
-    let creation_timestamp = chrono::Utc::now();
+    let creation_timestamp = k8s_openapi::jiff::Timestamp::now();
     BackendTLSPolicy {
         metadata: ObjectMeta {
             name: Some(name.to_string()),

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::{SignedDuration, Timestamp};
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::Client;
 use parking_lot::RwLock;
@@ -392,8 +392,8 @@ impl LeaderElection {
                     spec: Some(k8s_openapi::api::coordination::v1::LeaseSpec {
                         holder_identity: Some(self.config.identity.clone()),
                         lease_duration_seconds: Some(self.config.lease_duration_secs),
-                        acquire_time: Some(MicroTime(Utc::now())),
-                        renew_time: Some(MicroTime(Utc::now())),
+                        acquire_time: Some(MicroTime(Timestamp::now())),
+                        renew_time: Some(MicroTime(Timestamp::now())),
                         lease_transitions: Some(0),
                         ..Default::default()
                     }),
@@ -553,8 +553,7 @@ impl LeaderElection {
             let lease_duration = spec
                 .and_then(|s| s.lease_duration_seconds)
                 .unwrap_or(DEFAULT_LEASE_DURATION_SECS) as i64;
-            let expiry = renew_time.0 + chrono::Duration::seconds(lease_duration);
-            Utc::now() > expiry
+            lease_expired(renew_time.0, lease_duration, Timestamp::now())
         } else {
             true // No renew time means expired
         };
@@ -570,7 +569,7 @@ impl LeaderElection {
             return Ok(None);
         }
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let transitions = if is_current_holder {
             spec.and_then(|s| s.lease_transitions).unwrap_or(0)
         } else {
@@ -838,3 +837,8 @@ mod fence_tests;
 #[cfg(test)]
 #[path = "../../../../tests/unit/conf_mgr/conf_center/kubernetes/leader_election_test/renewal_tests.rs"]
 mod renewal_tests;
+
+/// Compare elapsed wall time without adding to an untrusted boundary timestamp.
+fn lease_expired(renew_time: Timestamp, duration_secs: i64, now: Timestamp) -> bool {
+    now.duration_since(renew_time) > SignedDuration::from_secs(duration_secs)
+}

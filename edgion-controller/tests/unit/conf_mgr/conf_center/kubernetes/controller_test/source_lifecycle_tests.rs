@@ -154,8 +154,9 @@ async fn namespace_relist_and_incremental_changes_defer_refresh_until_gateway_bo
     assert!(runtime.namespace_store.get("a").is_some());
     // Relist retains the previous committed map until completion, then removes terminating namespaces.
     let mut terminating = ns("a");
-    terminating.metadata.deletion_timestamp =
-        Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()));
+    terminating.metadata.deletion_timestamp = Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+        k8s_openapi::jiff::Timestamp::now(),
+    ));
     for event in [
         Event::Init,
         Event::InitApply(terminating),

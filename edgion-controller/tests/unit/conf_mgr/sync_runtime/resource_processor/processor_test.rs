@@ -771,7 +771,7 @@ mod policy_precedence_test {
                     for (index, name) in ["b", "a"].iter().enumerate() {
                         let cached = processor.get(&format!("precision/{name}")).unwrap();
                         assert_eq!(cached.metadata.creation_timestamp.as_ref().unwrap().0,
-                            sources[index]["metadata"]["creationTimestamp"].as_str().unwrap().parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+                            sources[index]["metadata"]["creationTimestamp"].as_str().unwrap().parse::<k8s_openapi::jiff::Timestamp>().unwrap());
                         assert_eq!(cached.spec.prepared_precedence.unwrap().creation_timestamp, cached.metadata.creation_timestamp.map(|time| time.0));
                         let status = serde_json::to_value(&cached.status).unwrap();
                         assert_eq!(accepted(&status)["reason"], if index == 0 { "Accepted" } else { "Conflicted" });
@@ -856,12 +856,9 @@ mod policy_precedence_test {
                 let runtime = runtime_with_backend();
                 let processor = ResourceProcessor::<$ty>::new(<$ty>::kind_name(), 32, Arc::new(<$handler>::new("test.edgion.io/controller".into())), runtime);
                 let instants = [
-                    Some(chrono::DateTime::<chrono::Utc>::MIN_UTC),
-                    Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
-                    Some("2016-12-31T23:59:60.123456789Z".parse().unwrap()),
+                    Some("0000-01-01T00:00:00Z".parse().unwrap()),
+                    Some(k8s_openapi::jiff::Timestamp::MAX),
                     Some("1969-12-31T23:59:59.999999999Z".parse().unwrap()),
-                    Some("+10000-01-01T00:00:00.123456789Z".parse().unwrap()),
-                    Some("-0001-01-01T00:00:00.123456789Z".parse().unwrap()),
                     Some("2026-01-01T01:00:00.123456789+01:00".parse().unwrap()),
                     None,
                 ];
@@ -879,6 +876,21 @@ mod policy_precedence_test {
                     let decoded: $ty = serde_json::from_str(&wire).unwrap();
                     assert_eq!(decoded.spec.prepared_precedence.unwrap().creation_timestamp, instant);
                 }
+                for timestamp in ["-262143-01-01T00:00:00Z", "+262142-12-31T23:59:59Z", "+10000-01-01T00:00:00Z"] {
+                    let mut source = fixture["source"][0].clone();
+                    source["metadata"]["creationTimestamp"] = json!(timestamp);
+                    assert!(parse_resource_content_offline::<$ty>(&source.to_string()).is_err());
+                }
+                let mut source = fixture["source"][0].clone();
+                source["metadata"]["creationTimestamp"] = json!("2016-12-31T23:59:60.123456789Z");
+                let resource: $ty = parse_resource_content_offline(&source.to_string()).unwrap();
+                let expected = "2016-12-31T23:59:59.123456789Z".parse::<k8s_openapi::jiff::Timestamp>().unwrap();
+                assert_eq!(resource.metadata.creation_timestamp.as_ref().unwrap().0, expected);
+                let result = processor.on_init_apply(resource, Some("{\"ancestors\":[]}".into())).await;
+                let WorkItemResult::Processed { obj, .. } = result else { panic!("policy must be processed") };
+                assert_eq!(obj.spec.prepared_precedence.unwrap().creation_timestamp, Some(expected));
+                let decoded: $ty = serde_json::from_str(&serde_json::to_string(&obj).unwrap()).unwrap();
+                assert_eq!(decoded.spec.prepared_precedence.unwrap().creation_timestamp, Some(expected));
             }};
         }
         check!(BackendTLSPolicy, BackendTlsPolicyHandler);

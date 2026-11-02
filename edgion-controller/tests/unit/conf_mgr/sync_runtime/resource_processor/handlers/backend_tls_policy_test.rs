@@ -1,12 +1,12 @@
 use super::*;
 use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::conf_mgr::ControllerRuntime;
-use chrono::{DateTime, Utc};
 use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, WellKnownCACertificates,
 };
 use edgion_resources::ResourceKind;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::ObjectMeta;
 use std::sync::Arc;
 
@@ -70,13 +70,13 @@ fn make_ctx() -> (HandlerContext, Arc<ControllerRuntime>) {
     (ctx, runtime)
 }
 
-/// Parse an RFC3339 literal into the `DateTime<Utc>` the precedence store holds.
-fn dt(s: &str) -> DateTime<Utc> {
+/// Parse an RFC3339 literal into the `Timestamp` the precedence store holds.
+fn dt(s: &str) -> Timestamp {
     s.parse().expect("valid RFC3339")
 }
 
 fn make_btp(ns: &str, name: &str, target_svc: &str, creation_ts: &str) -> BackendTLSPolicy {
-    let ts: DateTime<Utc> = creation_ts.parse().expect("valid RFC3339 timestamp in test");
+    let ts: Timestamp = creation_ts.parse().expect("valid RFC3339 timestamp in test");
     BackendTLSPolicy {
         metadata: ObjectMeta {
             name: Some(name.to_string()),

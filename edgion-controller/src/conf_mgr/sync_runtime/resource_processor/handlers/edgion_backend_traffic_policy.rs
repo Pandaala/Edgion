@@ -67,7 +67,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
-use chrono::{DateTime, Utc};
 #[cfg(test)]
 use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::prelude_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy};
@@ -80,6 +79,7 @@ use edgion_resources::resources::refs::policy_fields::{BackendTlsPolicyTargets, 
 use edgion_resources::resources::upstream_authority::host_matches_pattern;
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -116,8 +116,8 @@ struct PolicyEvaluation {
 fn should_requeue_siblings(
     old_target_keys: &[String],
     new_target_keys: &[String],
-    old_timestamp: Option<DateTime<Utc>>,
-    new_timestamp: Option<DateTime<Utc>>,
+    old_timestamp: Option<Timestamp>,
+    new_timestamp: Option<Timestamp>,
 ) -> bool {
     old_target_keys != new_target_keys || old_timestamp != new_timestamp
 }

@@ -1174,13 +1174,8 @@ fn project_partial_meta_strips_last_applied_and_preserves_others() {
 
 #[test]
 fn map_kube_error_410_to_stale_pagination() {
-    let ae = kube::core::ErrorResponse {
-        status: "Failure".into(),
-        message: "The provided continue parameter is too old".into(),
-        reason: "Expired".into(),
-        code: 410,
-    };
-    let err = kube::Error::Api(ae);
+    let ae = kube::core::Status::failure("The provided continue parameter is too old", "Expired").with_code(410);
+    let err = kube::Error::Api(ae.boxed());
     let mapped = map_kube_error(err);
     assert!(
         matches!(mapped, ConfWriterError::StalePagination(_)),

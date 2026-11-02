@@ -278,7 +278,7 @@ fn extract_creation_ts_ms(route: &HTTPRoute) -> i64 {
         .metadata
         .creation_timestamp
         .as_ref()
-        .map(|t| t.0.timestamp_millis())
+        .map(|t| edgion_common::time::kubernetes_timestamp_millis(t.0))
         .unwrap_or(0)
 }
 

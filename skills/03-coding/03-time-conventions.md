@@ -21,6 +21,24 @@ elapsed windows. `RetryBudget` samples elapsed milliseconds once per public
 operation and passes that sample to both its percentage and minimum-rate windows.
 Preserve GEP-2257 millisecond precision when resolving the intervals.
 
+## Kubernetes metadata and complete policy precedence
+
+Kube 4.2 / k8s-openapi 0.28 represents metadata with
+`k8s_openapi::jiff::Timestamp`. Keep that type through Controller precedence
+indices, `PreparedPolicyPrecedence` and Gateway arbitration. The prepared carrier
+preserves nanoseconds even though Kubernetes `Time` serialization rounds metadata
+to seconds. Missing timestamps sort last; lexical resource identity breaks ties.
+The accepted domain follows Jiff: out-of-range years fail parsing and second 60
+normalizes to 59. Full-resource transport supports nonnegative four-digit
+metadata years. Upstream `Time` negative-year formatting cannot be parsed back by
+Jiff; this also limits FS input. Prepared precedence alone still roundtrips the
+full Jiff range. Do not restore Chrono extrema through a conversion shim.
+
+For HTTP/GRPC route precedence in epoch milliseconds, use
+`edgion_common::time::kubernetes_timestamp_millis`. It floors negative fractional
+milliseconds; Jiff's `as_millisecond()` truncates toward zero and changes ordering
+before the epoch. Fresh status strings still use `now_rfc3339()` as above.
+
 ## Why operator/K8s timestamps are RFC3339 seconds + `Z` (Gateway-API alignment)
 
 Gateway API status conditions are standard Kubernetes `metav1.Condition`, whose

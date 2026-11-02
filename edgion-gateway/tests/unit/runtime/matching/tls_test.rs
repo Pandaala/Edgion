@@ -1146,11 +1146,10 @@ fn test_cross_gateway_collision_prefers_oldest_creation_timestamp() {
     // The tiebreak is creationTimestamp-first (oldest wins), then namespace/name.
     // Give the lexically-LARGER-named Gateway the OLDER timestamp; it must still win,
     // proving creationTimestamp dominates the name comparison.
-    use chrono::{TimeZone, Utc};
     let key = test_listener_key(443);
 
-    let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
-    let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+    let older = Time("2020-01-01T00:00:00Z".parse().unwrap());
+    let newer = Time("2024-01-01T00:00:00Z".parse().unwrap());
 
     let mut incumbent = create_test_gateway(
         "zzz-gw",

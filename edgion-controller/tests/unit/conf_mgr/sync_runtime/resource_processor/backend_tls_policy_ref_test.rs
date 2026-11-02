@@ -2,8 +2,8 @@ use super::*;
 use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
 use edgion_resources::ResourceKind;
 
-/// Parse an RFC3339 literal into the `DateTime<Utc>` the store now holds.
-fn ts(s: &str) -> DateTime<Utc> {
+/// Parse an RFC3339 literal into the `Timestamp` the store now holds.
+fn ts(s: &str) -> Timestamp {
     s.parse().expect("valid RFC3339")
 }
 

@@ -132,3 +132,20 @@ fn reset_timestamp_routing_matches_original_parser_chain() {
         }
     }
 }
+
+#[test]
+fn kubernetes_epoch_millis_floor_negative_fractions() {
+    for (source, expected) in [
+        ("1969-12-31T23:59:59.999999999Z", -1),
+        ("1969-12-31T23:59:59.998999999Z", -2),
+        ("1970-01-01T00:00:00Z", 0),
+        ("1970-01-01T00:00:00.000000001Z", 0),
+        ("1970-01-01T00:00:00.001Z", 1),
+    ] {
+        assert_eq!(kubernetes_timestamp_millis(source.parse().unwrap()), expected);
+    }
+    for timestamp in [Timestamp::MIN, Timestamp::MAX] {
+        let expected = i64::try_from(timestamp.as_nanosecond().div_euclid(1_000_000)).unwrap();
+        assert_eq!(kubernetes_timestamp_millis(timestamp), expected);
+    }
+}

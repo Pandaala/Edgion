@@ -68,7 +68,7 @@ impl LegacySelections {
 impl KubernetesStorage {
     /// Create a new KubernetesStorage with default client
     pub async fn new(allowed_namespaces: Vec<String>) -> Result<Self> {
-        let client = Client::try_default().await?;
+        let client = edgion_common::kube_client::default_client().await?;
         Ok(Self {
             client,
             allowed_namespaces: allowed_namespaces.into_iter().collect(),

@@ -1,5 +1,4 @@
 use super::*;
-use chrono::{TimeZone, Utc};
 use edgion_resources::resources::edgion_tls::EdgionTlsSpec;
 use edgion_resources::resources::gateway::SecretObjectReference;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
@@ -254,8 +253,7 @@ fn overflowing_exact_attachment_omits_entire_group_independent_of_input_order() 
         .collect::<Vec<_>>();
     let mut highest_precedence_unique = (*unique).clone();
     highest_precedence_unique.metadata.name = Some("aaa-oldest".to_string());
-    highest_precedence_unique.metadata.creation_timestamp =
-        Some(Time(Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap()));
+    highest_precedence_unique.metadata.creation_timestamp = Some(Time("2000-01-01T00:00:00Z".parse().unwrap()));
     highest_precedence_unique.spec.resolved_listener_attachments = Some(vec![attachment.clone()]);
     resources.push(("ns/aaa-oldest".to_string(), Arc::new(highest_precedence_unique)));
 
@@ -322,8 +320,8 @@ fn full_snapshot_drops_absent_keys() {
 
 #[test]
 fn test_edgion_tls_precedence_prefers_oldest_over_name() {
-    let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
-    let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+    let older = Time("2020-01-01T00:00:00Z".parse().unwrap());
+    let newer = Time("2024-01-01T00:00:00Z".parse().unwrap());
 
     // incumbent is lexically LARGER (team-z/zzz) but OLDER; newcomer smaller but newer.
     let incumbent = make_etls("team-z", "zzz", Some(older));
@@ -355,8 +353,8 @@ fn test_edgion_tls_precedence_name_tiebreak_when_no_timestamp() {
 
 #[test]
 fn canonical_host_collision_always_selects_precedence_winner() {
-    let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
-    let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+    let older = Time("2020-01-01T00:00:00Z".parse().unwrap());
+    let newer = Time("2024-01-01T00:00:00Z".parse().unwrap());
     let mut incumbent = make_etls("team-z", "older", Some(older));
     Arc::get_mut(&mut incumbent)
         .expect("test Arc must be unique")
@@ -694,8 +692,8 @@ fn overlapping_add_update_uses_added_predecessor_and_remove_wins() {
 #[test]
 fn collision_membership_and_winner_transitions_are_bounded() {
     let store = TlsStore::new();
-    let old_time = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
-    let new_time = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+    let old_time = Time("2020-01-01T00:00:00Z".parse().unwrap());
+    let new_time = Time("2024-01-01T00:00:00Z".parse().unwrap());
     let mut older = make_valid_tls("ns", "z-old", &["shared.example.com"]);
     Arc::get_mut(&mut older).unwrap().metadata.creation_timestamp = Some(old_time.clone());
     let mut newer = make_valid_tls("ns", "a-new", &["shared.example.com"]);

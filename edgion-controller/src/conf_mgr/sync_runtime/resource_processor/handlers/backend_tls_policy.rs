@@ -17,7 +17,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResourceRef,
 };
-use chrono::{DateTime, Utc};
 use edgion_resources::constants::secret_keys::tls::CA_CERT;
 use edgion_resources::prelude_resources::BackendTLSPolicy;
 #[cfg(test)]
@@ -31,6 +30,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
 use edgion_resources::ResourceKind;
+use k8s_openapi::jiff::Timestamp;
 
 fn btp_target_base_key(key: &str) -> &str {
     key.split("::").next().unwrap_or(key)
@@ -75,8 +75,8 @@ fn raw_service_exists(target: &PolicyTargetKey, ctx: &HandlerContext) -> bool {
 fn should_requeue_siblings(
     old_target_keys: &[String],
     new_target_keys: &[String],
-    old_timestamp: Option<DateTime<Utc>>,
-    new_timestamp: Option<DateTime<Utc>>,
+    old_timestamp: Option<Timestamp>,
+    new_timestamp: Option<Timestamp>,
 ) -> bool {
     old_target_keys != new_target_keys || old_timestamp != new_timestamp
 }

@@ -42,7 +42,7 @@ struct PreparedPolicy {
     policy: Arc<EdgionBackendTrafficPolicy>,
     eligible: bool,
     target_keys: Vec<PolicyTargetKey>,
-    precedence: Option<chrono::DateTime<chrono::Utc>>,
+    precedence: Option<k8s_openapi::jiff::Timestamp>,
 }
 
 /// Effective destination policy captured once by a request. Live retry

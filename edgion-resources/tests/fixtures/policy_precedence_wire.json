@@ -70,7 +70,7 @@
           },
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
-            "creationTimestamp": "2026-01-01T00:00:00.100Z"
+            "creationTimestamp": "2026-01-01T00:00:00.1Z"
           },
           "useSystemCa": true,
           "preparedAncestorAdmission": {
@@ -100,7 +100,7 @@
           },
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
-            "creationTimestamp": "2026-01-01T00:00:00.900Z"
+            "creationTimestamp": "2026-01-01T00:00:00.9Z"
           },
           "useSystemCa": true,
           "preparedAncestorAdmission": {
@@ -153,7 +153,7 @@
         },
         "resolvedTargetClass": "service",
         "preparedPrecedence": {
-          "creationTimestamp": "2026-01-01T00:00:00.950Z"
+          "creationTimestamp": "2026-01-01T00:00:00.95Z"
         },
         "useSystemCa": true,
         "preparedAncestorAdmission": {
@@ -230,7 +230,7 @@
           },
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
-            "creationTimestamp": "2026-01-01T00:00:00.100Z"
+            "creationTimestamp": "2026-01-01T00:00:00.1Z"
           },
           "preparedAncestorAdmission": {
             "mode": "unrestricted"
@@ -258,7 +258,7 @@
           },
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
-            "creationTimestamp": "2026-01-01T00:00:00.900Z"
+            "creationTimestamp": "2026-01-01T00:00:00.9Z"
           },
           "preparedAncestorAdmission": {
             "mode": "unrestricted"
@@ -308,7 +308,7 @@
         },
         "resolvedTargetClass": "service",
         "preparedPrecedence": {
-          "creationTimestamp": "2026-01-01T00:00:00.950Z"
+          "creationTimestamp": "2026-01-01T00:00:00.95Z"
         },
         "preparedAncestorAdmission": {
           "mode": "unrestricted"

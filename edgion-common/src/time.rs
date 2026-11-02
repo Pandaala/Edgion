@@ -1,7 +1,15 @@
 //! Time / timestamp formatting helpers shared across control-plane code.
 
 use chrono::{SecondsFormat, Utc};
+use k8s_openapi::jiff::Timestamp;
 use std::time::{Duration, SystemTime};
+
+/// Convert Kubernetes metadata to epoch milliseconds, flooring before the epoch.
+/// Jiff's millisecond accessor truncates toward zero; route precedence requires
+/// the same floor semantics as Chrono. Jiff's entire millisecond range fits i64.
+pub fn kubernetes_timestamp_millis(timestamp: Timestamp) -> i64 {
+    timestamp.as_nanosecond().div_euclid(1_000_000) as i64
+}
 
 /// Current wall-clock time as an RFC3339 UTC string at **second** precision with a
 /// `Z` suffix (e.g. `2026-07-21T10:00:00Z`).

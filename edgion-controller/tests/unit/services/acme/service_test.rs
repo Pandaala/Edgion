@@ -805,7 +805,9 @@ async fn terminating_resource_does_not_start_an_attempt() {
     let _guard = ACME_TEST_MUTEX.lock().await;
     let capture = NotificationCapture::install();
     let mut acme = test_acme();
-    acme.metadata.deletion_timestamp = Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()));
+    acme.metadata.deletion_timestamp = Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+        k8s_openapi::jiff::Timestamp::now(),
+    ));
     let runtime = eligibility_runtime(&mut acme.clone());
     let reads = Arc::new(AtomicU64::new(0));
     let read_count = reads.clone();

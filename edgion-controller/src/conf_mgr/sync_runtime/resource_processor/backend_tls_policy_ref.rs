@@ -8,9 +8,9 @@
 //! Uses the same `BidirectionalRefManager` pattern as SecretRefManager
 //! and ServiceRefManager.
 
-use chrono::{DateTime, Utc};
 use edgion_resources::resources::common::policy_precedence::policy_precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
+use k8s_openapi::jiff::Timestamp;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
@@ -27,11 +27,11 @@ type BackendTLSPolicyTargetManager = SecretRefManager;
 /// instead of living in module-level globals.
 pub struct BackendTLSPolicyState {
     target_mgr: BackendTLSPolicyTargetManager,
-    // Creation timestamps kept as `DateTime<Utc>` (not a formatted RFC3339 String):
+    // Creation timestamps kept as `Timestamp` (not a formatted RFC3339 String):
     // precedence sorting in `is_winner` compares instants directly, which is correct
     // by construction and avoids the fragility of lexicographically comparing strings
     // whose RFC3339 shape (`Z` vs `+00:00`, sub-second digits) would have to match.
-    timestamps: RwLock<HashMap<String, DateTime<Utc>>>,
+    timestamps: RwLock<HashMap<String, Timestamp>>,
 }
 
 impl BackendTLSPolicyState {
@@ -53,7 +53,7 @@ impl BackendTLSPolicyState {
     /// keeps the stored map in sync with the policy's actual metadata (e.g. on
     /// recreate without a creation_timestamp the old value must not linger,
     /// otherwise `is_winner` would compare a stale Some against fresh peers).
-    pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<DateTime<Utc>>) {
+    pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<Timestamp>) {
         let mut map = self.timestamps.write();
         match timestamp {
             Some(ts) => {
@@ -71,7 +71,7 @@ impl BackendTLSPolicyState {
     }
 
     /// Get the stored creation timestamp for a policy.
-    fn get_timestamp(&self, policy_key: &str) -> Option<DateTime<Utc>> {
+    fn get_timestamp(&self, policy_key: &str) -> Option<Timestamp> {
         self.timestamps.read().get(policy_key).copied()
     }
 
@@ -81,7 +81,7 @@ impl BackendTLSPolicyState {
     /// PollWatcher tick: same name, same target set, but a new
     /// `creation_timestamp` shifts precedence ordering so siblings must be
     /// re-evaluated.
-    pub fn timestamp_of(&self, policy_key: &str) -> Option<DateTime<Utc>> {
+    pub fn timestamp_of(&self, policy_key: &str) -> Option<Timestamp> {
         self.get_timestamp(policy_key)
     }
 
@@ -101,7 +101,7 @@ impl BackendTLSPolicyState {
         // Project only this target's timestamps under one read guard. These
         // values are coherent with each other, but not an atomic snapshot with
         // the separate reference lookup above. Release the guard before sorting.
-        let mut entries: Vec<(String, Option<DateTime<Utc>>)> = {
+        let mut entries: Vec<(String, Option<Timestamp>)> = {
             let timestamps = self.timestamps.read();
             refs.iter()
                 .map(|r| {

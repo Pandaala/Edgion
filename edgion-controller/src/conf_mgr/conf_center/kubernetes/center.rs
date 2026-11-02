@@ -1458,7 +1458,7 @@ impl CenterLifeCycle for KubernetesCenter {
         );
         self.runtime.set_conf_writer(writer_arc);
 
-        let client = Client::try_default().await?;
+        let client = edgion_common::kube_client::default_client().await?;
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",

@@ -31,12 +31,7 @@ fn invalid_discovery_configuration_is_not_classified_as_absent() {
 
 #[test]
 fn only_api_not_found_is_classified_as_absent() {
-    let response = |code| kube::error::ErrorResponse {
-        status: "Failure".into(),
-        message: "test".into(),
-        reason: "test".into(),
-        code,
-    };
+    let response = |code| kube::core::Status::failure("test", "test").with_code(code).boxed();
     assert!(is_api_unavailable(&kube::Error::Api(response(404))));
     assert!(!is_api_unavailable(&kube::Error::Api(response(403))));
 }

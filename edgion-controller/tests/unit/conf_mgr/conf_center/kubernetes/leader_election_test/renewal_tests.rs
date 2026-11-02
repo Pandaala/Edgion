@@ -728,3 +728,18 @@ async fn election_wait_accepts_success_only_before_absolute_deadline() {
         }
     }
 }
+
+#[test]
+fn expiry_preserves_strict_boundary_and_handles_timestamp_extrema() {
+    let renewal: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+    assert!(!lease_expired(renewal, 30, "2026-01-01T00:00:30Z".parse().unwrap()));
+    assert!(lease_expired(
+        renewal,
+        30,
+        "2026-01-01T00:00:30.000000001Z".parse().unwrap()
+    ));
+    assert!(!lease_expired(Timestamp::MAX, 30, renewal));
+    assert!(lease_expired(Timestamp::MIN, 30, renewal));
+    assert!(!lease_expired(Timestamp::MAX, i32::MAX as i64, Timestamp::MAX));
+    assert!(lease_expired(Timestamp::MIN, i32::MAX as i64, Timestamp::MAX));
+}

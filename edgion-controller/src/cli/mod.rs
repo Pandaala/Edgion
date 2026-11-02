@@ -778,7 +778,7 @@ impl ConfSyncTransport {
                 sans,
                 rotation,
             } => {
-                let client = kube::Client::try_default().await?;
+                let client = edgion_common::kube_client::default_client().await?;
                 let identity =
                     crate::services::conf_sync_ca::provision(client.clone(), &namespace, sans.clone(), &rotation)
                         .await?;

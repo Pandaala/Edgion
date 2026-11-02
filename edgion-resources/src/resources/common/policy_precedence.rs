@@ -1,6 +1,6 @@
 //! Complete creation instants for Controller and Gateway policy arbitration.
 
-use chrono::{DateTime, Utc};
+use k8s_openapi::jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Controller-prepared ordering input. An absent outer value means unprepared;
@@ -9,15 +9,15 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct PreparedPolicyPrecedence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub creation_timestamp: Option<DateTime<Utc>>,
+    pub creation_timestamp: Option<Timestamp>,
 }
 
 /// Oldest complete instant wins, missing timestamps sort last, then the caller's
 /// existing lexical identity breaks ties. No epoch sentinel narrows the domain.
 pub fn policy_precedence_key(
-    creation_timestamp: Option<DateTime<Utc>>,
+    creation_timestamp: Option<Timestamp>,
     lexical_key: &str,
-) -> (bool, Option<DateTime<Utc>>, &str) {
+) -> (bool, Option<Timestamp>, &str) {
     (creation_timestamp.is_none(), creation_timestamp, lexical_key)
 }
 
