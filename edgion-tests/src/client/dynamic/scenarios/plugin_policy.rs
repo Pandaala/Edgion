@@ -319,6 +319,10 @@ mod tests {
                     !errors.is_empty(),
                     "the unsupported fourth-stage control must be invalid"
                 );
+            } else if name == "waf" {
+                // The WAF fixture uses a policyRef that only the Controller
+                // resolves; offline validation must fail on nothing else.
+                assert_eq!(errors, vec!["waf: policyRef has not been resolved"], "{name}");
             } else {
                 assert!(errors.is_empty(), "{name}: {errors:?}");
             }

@@ -2886,6 +2886,14 @@ async fn header_ca_owner_preflight_precedes_cache_and_new_generations_recover() 
         let mut headers = http::HeaderMap::new();
         headers.insert("x-client-cert", http::HeaderValue::from_str(&encoded).unwrap());
         session.expect_request_header_map().return_const(headers);
+        // The plugin clears client-supplied identity headers before writing.
+        for name in ["X-Consumer-Username", "X-Client-Cert-Fingerprint"] {
+            session
+                .expect_remove_request_header()
+                .withf(move |actual| actual == name)
+                .times(1)
+                .returning(|_| Ok(()));
+        }
         session
             .expect_set_request_header_value()
             .times(2)
@@ -2951,6 +2959,14 @@ async fn header_ca_owner_preflight_precedes_cache_and_new_generations_recover() 
                     let mut headers = http::HeaderMap::new();
                     headers.insert("x-client-cert", http::HeaderValue::from_str(certificate).unwrap());
                     session.expect_request_header_map().return_const(headers);
+                    // The plugin clears client-supplied identity headers before writing.
+                    for name in ["X-Consumer-Username", "X-Client-Cert-Fingerprint"] {
+                        session
+                            .expect_remove_request_header()
+                            .withf(move |actual| actual == name)
+                            .times(1)
+                            .returning(|_| Ok(()));
+                    }
                     session
                         .expect_set_request_header_value()
                         .times(2)

@@ -63,23 +63,25 @@ impl GatewayBackendTlsStore {
             self.remove(gateway_key);
             return;
         };
-        let current = self.store.load();
-        let mut new_map = (**current).clone();
         #[cfg(feature = "boringssl")]
-        let prepared = current
+        let prepared = self
+            .store
+            .load()
             .get(gateway_key)
             .filter(|entry| entry.raw.data == secret.data)
             .map(|entry| Arc::clone(&entry.prepared))
             .unwrap_or_else(|| Arc::new(super::prepared_backend_tls::PreparedGatewayIdentity::new(&secret)));
-        new_map.insert(
-            gateway_key.to_string(),
-            Arc::new(GatewayBackendTlsEntry {
-                raw: Arc::new(secret),
-                #[cfg(feature = "boringssl")]
-                prepared,
-            }),
-        );
-        self.store.store(Arc::new(new_map));
+        let entry = Arc::new(GatewayBackendTlsEntry {
+            raw: Arc::new(secret),
+            #[cfg(feature = "boringssl")]
+            prepared,
+        });
+        // Compare-and-swap so concurrent writers of other keys are never lost.
+        self.store.rcu(|current| {
+            let mut new_map = (**current).clone();
+            new_map.insert(gateway_key.to_string(), Arc::clone(&entry));
+            new_map
+        });
     }
 
     /// Number of gateway entries currently in the store.
@@ -94,12 +96,14 @@ impl GatewayBackendTlsStore {
 
     /// Remove the client certificate for a gateway.
     pub fn remove(&self, gateway_key: &str) {
-        let current = self.store.load();
-        if current.contains_key(gateway_key) {
+        if !self.store.load().contains_key(gateway_key) {
+            return;
+        }
+        self.store.rcu(|current| {
             let mut new_map = (**current).clone();
             new_map.remove(gateway_key);
-            self.store.store(Arc::new(new_map));
-        }
+            new_map
+        });
     }
 }
 

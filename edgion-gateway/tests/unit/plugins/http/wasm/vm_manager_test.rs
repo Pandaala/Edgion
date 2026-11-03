@@ -2917,7 +2917,7 @@ fn all_source_preparation_rejects_before_fetch_when_full() {
         "bounded",
         || {
             tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let permits: Vec<_> = (0..4)
+                let permits: Vec<_> = (0..super::super::admission::limits().max_preparations)
                     .map(|_| super::super::admission::try_prepare().unwrap())
                     .collect();
                 assert!(super::super::admission::try_prepare().is_err());

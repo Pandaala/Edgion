@@ -72,6 +72,9 @@
           "preparedPrecedence": {
             "creationTimestamp": "2026-01-01T00:00:00.100Z"
           },
+          "preparedAncestorAdmission": {
+            "mode": "unrestricted"
+          },
           "useSystemCa": true
         }
       },
@@ -98,6 +101,9 @@
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
             "creationTimestamp": "2026-01-01T00:00:00.900Z"
+          },
+          "preparedAncestorAdmission": {
+            "mode": "unrestricted"
           },
           "useSystemCa": true
         }
@@ -148,6 +154,9 @@
         "resolvedTargetClass": "service",
         "preparedPrecedence": {
           "creationTimestamp": "2026-01-01T00:00:00.950Z"
+        },
+        "preparedAncestorAdmission": {
+          "mode": "unrestricted"
         },
         "useSystemCa": true
       }
@@ -222,6 +231,9 @@
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
             "creationTimestamp": "2026-01-01T00:00:00.100Z"
+          },
+          "preparedAncestorAdmission": {
+            "mode": "unrestricted"
           }
         }
       },
@@ -247,6 +259,9 @@
           "resolvedTargetClass": "service",
           "preparedPrecedence": {
             "creationTimestamp": "2026-01-01T00:00:00.900Z"
+          },
+          "preparedAncestorAdmission": {
+            "mode": "unrestricted"
           }
         }
       }
@@ -294,6 +309,9 @@
         "resolvedTargetClass": "service",
         "preparedPrecedence": {
           "creationTimestamp": "2026-01-01T00:00:00.950Z"
+        },
+        "preparedAncestorAdmission": {
+          "mode": "unrestricted"
         }
       }
     }

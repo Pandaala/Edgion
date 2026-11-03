@@ -76,6 +76,9 @@ impl Drop for BoundOriginFixture {
 #[tokio::test]
 async fn response_cache_first_actual_tail_binding_and_consumed_peer_fill_then_hit_and_input_miss() {
     let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    // Cache stamps include the global BackendTrafficPolicy generation; keep
+    // concurrent store writers out so a fill stays valid for the next hit.
+    let _traffic_serial = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
     use crate::plugins::http::response_cache::ResponseCachePolicy;
     let mut fixture = RequestFixture::new(serde_json::json!([]));
     let _origin = BoundOriginFixture::new();
@@ -657,6 +660,9 @@ impl RequestFixture {
 #[tokio::test]
 async fn response_cache_real_tail_ranges_and_conditionals_never_lookup_or_capture() {
     let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    // Cache stamps include the global BackendTrafficPolicy generation; keep
+    // concurrent store writers out so lookups observe a stable generation.
+    let _traffic_serial = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
     use crate::plugins::http::response_cache::ResponseCachePolicy;
     let mut fixture = RequestFixture::new(serde_json::json!([]));
     let _origin = BoundOriginFixture::new();
@@ -702,6 +708,9 @@ async fn response_cache_real_tail_ranges_and_conditionals_never_lookup_or_captur
 #[tokio::test]
 async fn response_cache_actual_graphql_tail_shares_final_bytes_across_matches_and_body_generations_only() {
     let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    // Cache stamps include the global BackendTrafficPolicy generation; keep
+    // concurrent store writers out so a fill stays valid for the next hit.
+    let _traffic_serial = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
     use crate::plugins::http::response_cache::ResponseCachePolicy;
     use serde_json::json;
     const ENVELOPE: &str = r#"{"query":"query Q { ping }","operationName":"Q","variables":{"n":1}}"#;
@@ -942,6 +951,9 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
 async fn common_peer_barrier_projects_late_query_edits_and_rejects_failed_projection() {
     use crate::plugins::runtime::{PingoraSessionAdapter, PluginSession};
     let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    // Cache stamps include the global BackendTrafficPolicy generation; keep
+    // concurrent store writers out so lookups observe a stable generation.
+    let _traffic_serial = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
     let fixture = RequestFixture::new(serde_json::json!([]));
     let _origin = BoundOriginFixture::new();
     for fail_projection in [false, true] {
@@ -995,6 +1007,9 @@ async fn common_peer_barrier_projects_late_query_edits_and_rejects_failed_projec
 async fn common_peer_projection_failure_keeps_sealed_transcoder_rest_error_contract() {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    // Cache stamps include the global BackendTrafficPolicy generation; keep
+    // concurrent store writers out so lookups observe a stable generation.
+    let _traffic_serial = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
     let descriptor = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../edgion-tests/proto/grpc_json_transcoding/test.pb"

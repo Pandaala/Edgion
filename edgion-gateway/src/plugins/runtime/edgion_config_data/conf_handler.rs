@@ -448,10 +448,10 @@ impl EdgionConfigDataStore {
     }
 
     fn update(&self, add: RawMap, update: RawMap, remove: &HashSet<String>) {
-        let current = self.snapshot.load();
-        if let Some(next) = Self::build_incremental_snapshot(&current, &add, &update, remove) {
-            self.snapshot.store(next);
-        }
+        // Compare-and-swap so a concurrent writer's entries are never lost.
+        self.snapshot.rcu(|current| {
+            Self::build_incremental_snapshot(current, &add, &update, remove).unwrap_or_else(|| Arc::clone(current))
+        });
     }
 }
 

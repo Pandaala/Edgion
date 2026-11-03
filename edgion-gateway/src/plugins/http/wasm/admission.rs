@@ -147,7 +147,24 @@ pub fn initialize(limits: WasmLimits) -> Result<(), &'static str> {
 }
 
 fn global() -> &'static Admission {
-    ADMISSION.get_or_init(|| Admission::new(WasmLimits::default()).expect("default Wasm limits satisfy safety bounds"))
+    ADMISSION
+        .get_or_init(|| Admission::new(default_process_limits()).expect("default Wasm limits satisfy safety bounds"))
+}
+
+#[cfg(not(test))]
+fn default_process_limits() -> WasmLimits {
+    WasmLimits::default()
+}
+
+/// The lib test harness runs many independent loads in one process; the
+/// production preparation bound (4, non-waiting) would make them reject each
+/// other. Tests that exercise exhaustion read `limits()` instead of assuming 4.
+#[cfg(test)]
+fn default_process_limits() -> WasmLimits {
+    WasmLimits {
+        max_preparations: 32,
+        ..WasmLimits::default()
+    }
 }
 
 pub(super) fn limits() -> &'static WasmLimits {

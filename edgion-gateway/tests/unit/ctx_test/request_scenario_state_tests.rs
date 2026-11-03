@@ -11,7 +11,7 @@ fn ordinary_request_keeps_tls_and_grpc_state_absent() {
     #[cfg(target_pointer_width = "64")]
     assert_eq!(
         std::mem::size_of::<RequestInfo>(),
-        432,
+        400,
         "RequestInfo exceeds its audited layout"
     );
 }
