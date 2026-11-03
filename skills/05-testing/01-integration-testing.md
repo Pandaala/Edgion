@@ -196,6 +196,13 @@ The actual responsibilities of `run_integration.sh` are:
 7. Call `test_client -g -r <Resource> -i <Item>` to run the tests
 8. Clean up by default; with `--keep-alive` the processes, logs, and working directory are kept
 
+> The final cache-residue gate runs `wipe-all`, which deletes every Gateway as well as its
+> Routes. Processes preserved with `--keep-alive` therefore cannot serve fixtures reloaded on
+> the same listeners: the original proxy keeps its retired route manager and returns 404
+> `RouteNotFound`. This is the accepted
+> [Gateway recreation boundary](../04-review/listeners/intentional-design/gateway-recreation-requires-restart.md),
+> not a sync defect. Restart the topology before reloading fixtures after a wipe.
+
 A few key facts:
 
 - `--full-test` additionally includes slow tests and requires Docker to be available. In a
