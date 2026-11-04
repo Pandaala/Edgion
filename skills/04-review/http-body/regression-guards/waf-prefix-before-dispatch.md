@@ -152,7 +152,7 @@ delete/recovery. The wire fixture must use a domain URL with an explicit local
 address mapping so H2 authority and Host agree; its H1 backend version marker
 is `1.1`. Both fixture corrections retain the strict forwarding assertions.
 The historical prefix/discard work is integrated into the current supported
-Edgion Pingora fork. Cargo.toml selects `edgion_0.9.0_v1`; Cargo.lock pins the
+Edgion Pingora fork. Cargo.toml selects `edgion_v0.9.1`; Cargo.lock pins the
 canonical Git revision. The earlier local `edgion_v5` publication note is
 superseded and is not an outstanding WAF task.
 This historical wire result does not prove trailer preservation.
