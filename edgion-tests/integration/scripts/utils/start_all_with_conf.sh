@@ -441,7 +441,7 @@ expected = {
     "status": "ready",
     "fixture": "edgion-ext-proc-external",
     "protocol_version": "v1",
-    "go_control_plane_envoy": "v1.37.0",
+    "go_control_plane_envoy": "v1.40.0",
     "fixture_stream_capacity": 96,
     "tls_capable": True,
     "mtls_capable": True,

@@ -91,7 +91,7 @@ The Full integration case `external_opaque_header_wire_fidelity` now exercises
 fixed repeated non-UTF-8 request values, request and response typed mutations,
 upstream response projection, and ImmediateResponse headers over real HTTP/1
 and HTTP/2 downstream connections. The independent processor uses official Go
-v1.37.0 types, validates exact protobuf `raw_value` bytes, and publishes only
+v1.40.0 types, validates exact protobuf `raw_value` bytes, and publishes only
 fixed match booleans rather than retaining arbitrary header contents. The
 downstream assertions cover presence, overwrite, append, empty values, repeated
 per-name order, and absence of UTF-8 replacement bytes.

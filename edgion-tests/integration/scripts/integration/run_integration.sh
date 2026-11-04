@@ -94,7 +94,7 @@ EXT_PROC_EXTERNAL_MTLS_PORT=30047
 EXT_PROC_EXTERNAL_ADMIN_URL="http://127.0.0.1:${EXT_PROC_EXTERNAL_ADMIN_PORT}"
 EXT_PROC_EXTERNAL_FIXTURE_NAME="edgion-ext-proc-external"
 EXT_PROC_EXTERNAL_PROTOCOL_VERSION="v1"
-EXT_PROC_EXTERNAL_GO_CONTROL_PLANE_VERSION="v1.37.0"
+EXT_PROC_EXTERNAL_GO_CONTROL_PLANE_VERSION="v1.40.0"
 
 # Standalone scenarios use isolated ports and work directories, so they can run
 # concurrently without touching the shared Controller/Gateway topology. Keep the
@@ -222,7 +222,7 @@ expected = {
     "status": "ready",
     "fixture": "edgion-ext-proc-external",
     "protocol_version": "v1",
-    "go_control_plane_envoy": "v1.37.0",
+    "go_control_plane_envoy": "v1.40.0",
     "fixture_stream_capacity": 96,
     "tls_capable": True,
     "mtls_capable": True,

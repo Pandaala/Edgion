@@ -3,9 +3,9 @@
 ## Envoy Go control-plane API
 
 - Module: `github.com/envoyproxy/go-control-plane/envoy`
-- Version: `v1.37.0`
-- Upstream tag: `envoy/v1.37.0`
-- Upstream commit: `004b9ec70a4696c9fac559adea646dab4ebf62b7`
+- Version: `v1.40.0`
+- Upstream tag: `envoy/v1.40.0`
+- Upstream commit: `5c5ac772744b372ddb804659c1526307eae10a91`
 - Source: <https://github.com/envoyproxy/go-control-plane>
 - License: Apache License 2.0
 

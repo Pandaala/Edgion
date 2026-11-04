@@ -2,7 +2,7 @@
 
 This standalone Go program implements the Envoy
 `envoy.service.ext_proc.v3.ExternalProcessor` service with official generated
-types from `github.com/envoyproxy/go-control-plane/envoy` v1.37.0. It provides
+types from `github.com/envoyproxy/go-control-plane/envoy` v1.40.0. It provides
 independent wire-interoperability evidence for Edgion's ExtProc client. It is a
 test fixture, not a production processor.
 

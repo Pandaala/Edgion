@@ -627,7 +627,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ensure!(
             ready["fixture"] == "edgion-ext-proc-external"
                 && ready["protocol_version"] == "v1"
-                && ready["go_control_plane_envoy"] == "v1.37.0",
+                && ready["go_control_plane_envoy"] == "v1.40.0",
             "wrong external processor fixture"
         );
         accepted_connections(&ctx.test_ctx).await?;

@@ -49,7 +49,7 @@ import (
 const (
 	fixtureIdentity = "edgion-ext-proc-external"
 	protocolVersion = "v1"
-	moduleVersion   = "v1.37.0"
+	moduleVersion   = "v1.40.0"
 
 	caseIDHeader  = "x-ext-proc-case-id"
 	modeHeader    = "x-ext-proc-test-mode"

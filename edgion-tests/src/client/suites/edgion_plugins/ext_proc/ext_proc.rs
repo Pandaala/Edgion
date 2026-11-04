@@ -221,7 +221,7 @@ async fn external_admin_url(client: &reqwest::Client) -> Result<String, String> 
     if ready.status != "ready"
         || ready.fixture != "edgion-ext-proc-external"
         || ready.protocol_version != "v1"
-        || ready.go_control_plane_envoy != "v1.37.0"
+        || ready.go_control_plane_envoy != "v1.40.0"
         || ready.fixture_stream_capacity != EXTERNAL_FIXTURE_STREAM_CAPACITY
     {
         return Err(format!("unexpected external ExtProc fixture identity: {ready:?}"));

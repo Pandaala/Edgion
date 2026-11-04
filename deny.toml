@@ -34,6 +34,12 @@ ignore = [
     # rustls-pki-types instead. No supported Gateway build enables this backend.
     # RE-EVALUATE: next Pingora rustls dependency update; audit scans the full lock.
     { id = "RUSTSEC-2025-0134", reason = "dormant Pingora rustls backend; no owned PEM calls" },
+
+    # unsafe-libyaml is unmaintained (no vulnerability). It arrives only through
+    # the deprecated serde_yaml 0.9 that pingora-core uses for its optional YAML
+    # server-config loader, which Edgion never calls. RE-EVALUATE: next
+    # Pingora fork bump; remove once pingora-core drops serde_yaml 0.9.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained only; pingora-core serde_yaml 0.9 for its own config" },
 ]
 
 [licenses]
