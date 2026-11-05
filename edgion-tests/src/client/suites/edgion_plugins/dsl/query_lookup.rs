@@ -78,48 +78,18 @@ fn observation_failure_category(error: Option<&str>) -> &'static str {
 }
 
 fn observation_dependency_kind(error: Option<&str>) -> &'static str {
-    let Some(error) = error.and_then(|error| error.strip_prefix("DEL failed: Redis DEL: Error { details: ")) else {
-        return "unknown_kind";
-    };
-    let Some((_, kind)) = error.rsplit_once(", kind: ") else {
-        return "unknown_kind";
-    };
-    match kind.strip_suffix(" }") {
-        Some("Config") => "config",
-        Some("Auth") => "auth",
-        Some("Routing") => "routing",
-        Some("IO") => "io",
-        Some("InvalidCommand") => "invalid_command",
-        Some("InvalidArgument") => "invalid_argument",
-        Some("Url") => "url",
-        Some("Protocol") => "protocol",
-        Some("Tls") => "tls",
-        Some("Canceled") => "canceled",
-        Some("Unknown") => "unknown",
-        Some("Timeout") => "timeout",
-        Some("Cluster") => "cluster",
-        Some("Parse") => "parse",
-        Some("Sentinel") => "sentinel",
-        Some("NotFound") => "not_found",
-        Some("Backpressure") => "backpressure",
-        Some("Replica") => "replica",
+    match error {
+        Some("DEL failed: Redis operation timed out") => "timeout",
+        Some("DEL failed: Redis I/O failed") => "io",
+        Some("DEL failed: Redis command failed") => "server",
         _ => "unknown_kind",
     }
 }
-
 fn observation_io_reason(error: Option<&str>) -> &'static str {
-    if observation_dependency_kind(error) != "io" {
-        return "not_io";
-    }
-    match error {
-        Some("DEL failed: Redis DEL: Error { details: \"Connection closed.\", kind: IO }") => "reader_eof",
-        Some("DEL failed: Redis DEL: Error { details: \"Connection Closed\", kind: IO }") => "final_write_fallback",
-        Some("DEL failed: Redis DEL: Error { details: \"Unresponsive connection.\", kind: IO }") => "unresponsive",
-        Some("DEL failed: Redis DEL: Error { details: \"Failed to connect.\", kind: IO }") => {
-            "connection_failure_fallback"
-        }
-        Some("DEL failed: Redis DEL: Error { details: \"Invalid server.\", kind: IO }") => "invalid_server",
-        _ => "other_io",
+    if observation_dependency_kind(error) == "io" {
+        "other_io"
+    } else {
+        "not_io"
     }
 }
 
@@ -1165,101 +1135,35 @@ mod tests {
     }
 
     #[test]
-    fn redis_dependency_kind_uses_only_the_final_pinned_fred_enum_variant() {
-        for (kind, label) in [
-            ("Config", "config"),
-            ("Auth", "auth"),
-            ("Routing", "routing"),
-            ("IO", "io"),
-            ("InvalidCommand", "invalid_command"),
-            ("InvalidArgument", "invalid_argument"),
-            ("Url", "url"),
-            ("Protocol", "protocol"),
-            ("Tls", "tls"),
-            ("Canceled", "canceled"),
-            ("Unknown", "unknown"),
-            ("Timeout", "timeout"),
-            ("Cluster", "cluster"),
-            ("Parse", "parse"),
-            ("Sentinel", "sentinel"),
-            ("NotFound", "not_found"),
-            ("Backpressure", "backpressure"),
-            ("Replica", "replica"),
+    fn redis_dependency_kind_uses_only_fixed_provider_errors() {
+        for (message, expected) in [
+            ("DEL failed: Redis operation timed out", "timeout"),
+            ("DEL failed: Redis I/O failed", "io"),
+            ("DEL failed: Redis command failed", "server"),
         ] {
-            let error = format!(
-                "DEL failed: Redis DEL: Error {{ details: {:?}, kind: {kind} }}",
-                "private detail"
+            assert_eq!(super::observation_dependency_kind(Some(message)), expected);
+            assert_eq!(
+                super::observation_dependency_kind(Some(&format!("{message} private"))),
+                "unknown_kind"
             );
-            assert_eq!(super::observation_dependency_kind(Some(&error)), label);
-        }
-        for (kind, forged, label) in [("IO", "Timeout", "io"), ("Timeout", "IO", "timeout")] {
-            let detail = format!("private-token redis://private-user@private-host/private-key \"\n, kind: {forged} }}");
-            let error = format!("DEL failed: Redis DEL: Error {{ details: {detail:?}, kind: {kind} }}");
-            assert_eq!(super::observation_dependency_kind(Some(&error)), label);
-            let message = super::observation_failure_message("del", 200, Some(&error));
-            assert_eq!(message, format!("Redis observation operation failed: operation=del status=200 category=dependency_operation_failed dependency_kind={label} io_reason={}", if kind == "IO" { "other_io" } else { "not_io" }));
-            assert!(!message.contains("private"));
-            assert!(!message.contains("redis://"));
-            assert!(!message.contains('\n'));
-        }
-        for error in [
-            None,
-            Some(""),
-            Some("Error { details: \"private\", kind: IO }"),
-            Some("GET failed: Redis DEL: Error { details: \"private\", kind: IO }"),
-            Some("DEL failed: Redis DEL: Error { details: \"private\" }"),
-            Some("DEL failed: Redis DEL: Error { details: \"private\", kind: IO } trailing"),
-            Some("DEL failed: Redis DEL: Error { details: \"private\", kind: FutureKind }"),
-            Some("DEL failed: Redis DEL: Error { details: \"private\", kind: Io }"),
-            Some("DEL failed: Redis DEL: Error { details: private, kind: IO"),
-        ] {
-            assert_eq!(super::observation_dependency_kind(error), "unknown_kind");
         }
     }
 
     #[test]
     fn redis_io_reason_requires_a_complete_fixed_envelope_and_never_discloses_detail() {
-        for (detail, reason) in [
-            ("Connection closed.", "reader_eof"),
-            ("Connection Closed", "final_write_fallback"),
-            ("Unresponsive connection.", "unresponsive"),
-            ("Failed to connect.", "connection_failure_fallback"),
-            ("Invalid server.", "invalid_server"),
+        assert_eq!(
+            super::observation_io_reason(Some("DEL failed: Redis I/O failed")),
+            "other_io"
+        );
+        for message in [
+            "private-password",
+            "DEL failed: Redis I/O failed private-token",
+            "GET failed: Redis I/O failed",
         ] {
-            let error = format!("DEL failed: Redis DEL: Error {{ details: {detail:?}, kind: IO }}");
-            assert_eq!(super::observation_io_reason(Some(&error)), reason);
-            assert_eq!(super::observation_failure_message("del", 200, Some(&error)),
-                format!("Redis observation operation failed: operation=del status=200 category=dependency_operation_failed dependency_kind=io io_reason={reason}"));
-            let timeout = format!("DEL failed: Redis DEL: Error {{ details: {detail:?}, kind: Timeout }}");
-            assert_eq!(super::observation_io_reason(Some(&timeout)), "not_io");
-            let forged_detail = format!("private-token redis://private-user@private-host/private-key \"\n{detail}");
-            let forged = format!("DEL failed: Redis DEL: Error {{ details: {forged_detail:?}, kind: IO }}");
-            assert_eq!(super::observation_io_reason(Some(&forged)), "other_io");
-            let message = super::observation_failure_message("del", 200, Some(&forged));
-            assert!(!message.contains("private"));
-            assert!(!message.contains("redis://"));
-            assert!(!message.contains('\n'));
-        }
-        for error in [
-            "DEL failed: Redis DEL: Error { details: \"Os { code: 54, kind: ConnectionReset }\", kind: IO }",
-            "DEL failed: Redis DEL: Error { details: \"Connection closed\", kind: IO }",
-            "DEL failed: Redis DEL: Error { details: \"connection closed.\", kind: IO }",
-            "DEL failed: Redis DEL: Error { details: \"prefix Connection closed. suffix\", kind: IO }",
-        ] {
-            assert_eq!(super::observation_io_reason(Some(error)), "other_io");
-        }
-        for error in [
-            None,
-            Some(""),
-            Some("GET failed: Redis DEL: Error { details: \"Connection closed.\", kind: IO }"),
-            Some("DEL failed: Redis DEL: Error { details: \"Connection closed.\", kind: IO } trailing"),
-            Some("DEL failed: Redis DEL: Error { details: \"Connection closed.\", kind: IO }\n"),
-            Some("DEL failed: Redis DEL: Error { details: \"Connection closed.\", kind: FutureKind }"),
-        ] {
-            assert_eq!(super::observation_io_reason(error), "not_io");
+            assert_eq!(super::observation_io_reason(Some(message)), "not_io");
+            assert!(!super::observation_failure_message("del", 200, Some(message)).contains("private"));
         }
     }
-
     #[test]
     fn execution_evidence_requires_the_inner_plugin_of_the_owned_request_resource() {
         let outer = serde_json::json!({"stage_logs":[{"stage":"request_filters","edgion_plugins":[{"name":"dsl-query-executor-dynamic","logs":[]}]}]});
@@ -1297,6 +1201,7 @@ mod tests {
         // execute this same map-field comparison through the Gateway VM.
         for path in [
             "docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md",
+            "docs/zh-CN/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md",
             "skills/03-coding/dsl/redis-builtin.md",
         ] {
             let text = std::fs::read_to_string(

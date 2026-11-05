@@ -158,12 +158,19 @@ fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &RedisClientConfig) -> an
     }
 
     h.u64(u64::from(cfg.db.unwrap_or(0).max(0) as u32));
-    h.u64(u64::from(
+    let pool_size = if cfg
+        .topology
+        .as_ref()
+        .is_some_and(|topology| matches!(topology.mode, RedisTopologyMode::Cluster))
+    {
+        1
+    } else {
         cfg.pool
             .as_ref()
             .and_then(|pool| pool.size)
-            .unwrap_or(REDIS_DEFAULT_POOL_SIZE),
-    ));
+            .unwrap_or(REDIS_DEFAULT_POOL_SIZE)
+    };
+    h.u64(u64::from(pool_size));
 
     let connect = cfg.connect_timeout().map_err(anyhow::Error::msg)?;
     let command = cfg.command_timeout().map_err(anyhow::Error::msg)?;

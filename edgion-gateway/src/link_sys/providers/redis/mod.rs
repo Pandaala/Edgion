@@ -1,10 +1,6 @@
-//! Redis LinkSys runtime client.
-//!
-//! Provides a Redis client wrapper built from LinkSys CRD config (`RedisClientConfig`),
-//! using [fred](https://crates.io/crates/fred) v10 as the underlying library.
-//!
-//! Supports standalone, sentinel, and cluster deployments through fred's unified API.
-//! Connection pooling, automatic reconnection, and TLS are all handled by fred internally.
+//! Redis LinkSys runtime with standalone, Sentinel and Cluster support.
+//! redis-rs owns protocol encoding, multiplexing and Cluster routing; Edgion
+//! owns canonical dialing, pool recovery, Sentinel discovery and no-replay policy.
 //!
 //! # Usage
 //!
@@ -19,7 +15,6 @@
 
 pub(crate) mod apply;
 pub mod client;
-pub mod config_mapping;
 pub mod ops;
 mod resolver;
 
@@ -27,3 +22,6 @@ mod resolver;
 pub(crate) use apply::RedisApply;
 pub use client::RedisLinkClient;
 pub use ops::{LockOptions, RedisLockGuard};
+
+mod backend;
+mod transport;

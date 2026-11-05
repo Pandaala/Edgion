@@ -41,7 +41,13 @@ GATEWAY_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
 : "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 PLUGIN_GATEWAY_PORT="${EDGION_PLUGIN_GATEWAY_PORT:-31180}"
-EDGION_CLI="${EDGION_CLI:-${PROJECT_ROOT}/target/debug/edgion-cli}"
+if [ -z "${EDGION_CLI:-}" ]; then
+    if [ -n "${EDGION_TEST_BIN_DIR:-}" ]; then
+        EDGION_CLI="${EDGION_TEST_BIN_DIR}/edgion-cli"
+    else
+        EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
+    fi
+fi
 
 REDIS_CLIENT="default_redis-test"
 RATE_LIMIT_REDIS_HOST="rate-limit-redis.example.com"
@@ -195,6 +201,32 @@ wait_for_redis_client() {
     done
 
     return 1
+}
+
+# Both phrases must appear on one gateway-log line. A missing log file fails
+# the check; an unpublished dial and a certificate rejection are different lines.
+wait_for_gateway_log_pair() {
+    local first="$1"
+    local second="$2"
+    local label="$3"
+    local log="${EDGION_WORK_DIR:-}/logs/gateway.log"
+    local deadline=$((SECONDS + 20))
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
+    if [ -z "${EDGION_WORK_DIR:-}" ] || [ ! -f "$log" ]; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "${label}: gateway log is missing"
+        return
+    fi
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if grep -F "$first" "$log" | grep -F "$second" >/dev/null 2>&1; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            log_success "$label"
+            return
+        fi
+        sleep 0.5
+    done
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "${label}: gateway log has no line containing '${first}' and '${second}'"
 }
 
 # ── HTTP helpers ────────────────────────────────────────────────────────────
@@ -399,7 +431,7 @@ assert_json_failure "PING non-existent client returns error" "$RESP"
 assert_contains "Error mentions 'not found'" "$RESP" "not found"
 
 # ── 8b. Outbound TLS verify=false is always rejected for Redis ──────────────
-# fred's rustls connector always verifies; the outbound-TLS resolver rejects
+# redis-rs's rustls connector always verifies; the outbound-TLS resolver rejects
 # verify=false unconditionally (provider_can_disable=false). Construction
 # fails before any dial. The CRD still syncs. D10 keeps an unpublished
 # runner (list may contain the key) while get/ping stay not found.
@@ -413,24 +445,33 @@ assert_json_success "redis-tls-reject CRD synced to Gateway (controller admissio
 RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/${REJECT_CLIENT}/ping")
 assert_json_failure "PING redis-tls-reject fails (client was never published)" "$RESP"
 assert_contains "redis-tls-reject ping error mentions 'not found'" "$RESP" "not found"
+wait_for_gateway_log_pair \
+    "Redis TLS configuration error" \
+    "redis-tls-reject" \
+    "redis-tls-reject construction is logged before any dial"
 
 # ── 8c. Successful Redis TLS and mTLS handshakes ───────────────────────────
 # These clients connect to real TLS-enabled Redis processes. A successful PING
 # crosses Controller Secret resolution, conf_sync, shared TLS material loading,
-# Fred/rustls connector construction, certificate verification, and Redis AUTH.
+# redis-rs/rustls connector construction, certificate verification, and Redis AUTH.
 log_info "─── 8c. TLS and mTLS success ───"
 TLS_CLIENT="default_redis-tls-custom-ca"
 MTLS_CLIENT="default_redis-mtls"
 DEFAULT_TRUST_CLIENT="default_redis-tls-default-trust"
 
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
-if wait_for_redis_client "$DEFAULT_TRUST_CLIENT"; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    log_success "Scheme-only rediss PING succeeds with default trust"
-else
+RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/${DEFAULT_TRUST_CLIENT}/ping")
+if [ "$(echo "$RESP" | jq -r ' .success // false')" = "true" ]; then
     TESTS_FAILED=$((TESTS_FAILED + 1))
-    log_error "Scheme-only rediss client did not complete a default-trust handshake within 20s; last response: ${WAIT_REDIS_LAST_RESPONSE:-<empty>}"
+    log_error "Built-in Redis trust unexpectedly accepted the private test CA"
+else
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "Built-in Redis trust rejects the private test CA"
 fi
+wait_for_gateway_log_pair \
+    "Redis TLS verification failed" \
+    "redis-tls-default-trust" \
+    "default-trust failure is a certificate rejection, not a missing client"
 
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
 if wait_for_redis_client "$TLS_CLIENT"; then
@@ -513,29 +554,39 @@ assert_eq "RateLimitRedis fail-close omits Retry-After (no zero header)" "" "$(g
 # ── 10. Lifecycle: delete LinkSys → client removed (opt-in) ────────────────
 if $INCLUDE_LIFECYCLE; then
     log_info "─── 10. Lifecycle: Delete LinkSys ───"
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
     if [ ! -x "$EDGION_CLI" ]; then
-        log_warn "edgion-cli not found at $EDGION_CLI — skipping lifecycle delete"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "edgion-cli not found at $EDGION_CLI"
+    elif ! "$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys redis-test -n default; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "LinkSys delete failed"
     else
-        "$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys redis-test -n default 2>&1 || true
         # Wait for sync: Controller → Gateway → ConfHandler → remove client
         sleep 5
-
         RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/clients")
-        TESTS_TOTAL=$((TESTS_TOTAL + 1))
-        if echo "$RESP" | grep -q "default/redis-test"; then
-            TESTS_FAILED=$((TESTS_FAILED + 1))
-            log_error "Client should be removed after LinkSys delete"
-        else
+        if echo "$RESP" | jq -e '.success == true' >/dev/null 2>&1 \
+            && ! echo "$RESP" | grep -q "default/redis-test"; then
             TESTS_PASSED=$((TESTS_PASSED + 1))
             log_success "Client removed after LinkSys delete"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            log_error "Client list did not confirm removal of default/redis-test"
         fi
+    fi
 
-        # Re-create so any subsequent suite that reuses redis-test still works.
-        if [ -f "$LINKSYS_REDIS_YAML" ]; then
-            "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$LINKSYS_REDIS_YAML" \
-                > /dev/null 2>&1 || true
-            sleep 2
-        fi
+    # Re-create so any subsequent suite that reuses redis-test still works.
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
+    if [ ! -x "$EDGION_CLI" ] || [ ! -f "$LINKSYS_REDIS_YAML" ]; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "Cannot re-apply redis-test LinkSys"
+    elif "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$LINKSYS_REDIS_YAML" > /dev/null; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        log_success "redis-test LinkSys re-applied"
+        sleep 2
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "LinkSys re-apply failed"
     fi
 else
     log_info "─── 10. Lifecycle: skipped (pass --include-lifecycle to run) ───"

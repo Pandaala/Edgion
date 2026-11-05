@@ -272,9 +272,9 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `pool.size` | Integer | `8` | Fixed connection count, from 1 through 64. All connections are initialized eagerly. |
+| `pool.size` | Integer | `8` | Standalone and Sentinel target connection count, from 1 through 64. The client is published after at least one connection is established and the first probe succeeds. A short pool stays published and keeps recovering. Cluster ignores this field. |
 | `timeout.connect` | Duration | `5s` | Connection timeout; must be greater than zero and no more than `10s`. |
-| `timeout.command` | Duration | `5s` | Timeout for one Redis command; must be greater than zero and no more than `30s`. |
+| `timeout.command` | Duration | `5s` | Deadline for one operation, including Cluster MOVED redirects and a NOSCRIPT fallback. Greater than zero and no more than `30s`. |
 
 Redis durations use the Gateway API duration syntax, such as `500ms`, `3s`, or
 `10s`. The connector continuously retries connection establishment with a fixed
@@ -290,8 +290,8 @@ callers must decide whether repeating their operation is safe.
 | `topology.sentinel` | Object | none | Sentinel configuration. **Required when `mode=sentinel`.** |
 | `topology.cluster` | Object | none | Optional Cluster routing configuration. |
 | `topology.sentinel.masterName` | String | **Required** | Master name monitored by Sentinel. |
-| `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). |
-| `topology.cluster.maxRedirects` | Integer | `5` | Maximum cluster redirects to follow, from 0 through 64. |
+| `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). A missing port defaults to `26379`. |
+| `topology.cluster.maxRedirects` | Integer | `5` | Maximum additional MOVED redirects, from 0 through 64. ASK, TRYAGAIN, and CLUSTERDOWN are returned without another attempt. |
 
 When `topology` is omitted, the connector runs in standalone mode. When
 `mode=sentinel` but `sentinel` is missing, the status reports
@@ -307,22 +307,32 @@ Validation errors identify the field and list index without echoing the input.
 
 Without `tls.enabled: true`, every active endpoint must select the same
 transport: `rediss://` is TLS, while `redis://` and scheme-less forms are
-plaintext. Explicit TLS applies to the complete Fred client and therefore
+plaintext. Explicit TLS applies to the complete redis-rs client and therefore
 permits mixed endpoint spelling.
 
 ### DNS and egress policy
 
-Redis endpoints are resolved by the Gateway when Fred opens a connection, not by the Controller and
+Redis endpoints are resolved by the Gateway when redis-rs opens a connection, not by the Controller and
 not once per Redis command. The same dial-time resolver covers configured seeds, automatic reconnects,
-Sentinel-discovered primaries, and Cluster-discovered or redirected nodes. Results use the system DNS
+Sentinel-discovered primaries, Cluster primaries already known to the published client, and redirected nodes.
+Results use the system DNS
 mode of Edgion's shared resolver and are cached for `outbound_egress_dns_cache_ttl_ms` (5 seconds by
 default).
 
-Every resolved address is classified immediately before Fred connects. Loopback, link-local, and
+Every resolved address is classified immediately before redis-rs connects. Loopback, link-local, and
 unspecified addresses are always rejected in production. Private and unique-local addresses follow the
 Gateway-wide `outbound_egress_block_private` setting; Redis has no per-connector override. This guard is
 defense in depth and does not replace a Gateway Pod `NetworkPolicy`. See
 [Egress policy](#egress-policy-ssrf-protection) for the shared settings and address classes.
+
+Standalone and Sentinel use `pool.size`. Cluster uses one multiplexed topology client and ignores `pool.size`.
+An operation has one `timeout.command` budget. Unknown outcomes are never replayed. Only MOVED is followed,
+up to `maxRedirects`. Multi-key commands must stay in one Cluster hash slot; cross-slot operations do not fan out.
+Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling and probe duration add latency.
+System TLS trust uses compiled-in webpki roots. Configure an explicit CA reference for a private CA.
+Sentinel publishes the address confirmed as master by a unique plurality of reachable sentinels; a tie does not publish. Each Sentinel votes once, identified by its run ID (`SENTINEL MYID`, Redis 6.2+), even when it is reachable by both a configured name and a learned IP; a Sentinel that does not answer `SENTINEL MYID` casts no vote. Sentinel nodes share data-node credentials. After publication, Cluster recovery dials the current known
+primaries as well as the configured seeds, so losing the original seed does not prevent topology refresh.
+A new generation must establish real connectivity before ordinary replacement. Forced refresh keeps retire-first behavior.
 
 > **Note**: `topology.sentinel.password` (a Sentinel-specific password separate from Redis node auth) has been removed — it was a runtime no-op and was never consumed by the connector. If you have an existing CR that includes a `password:` field under `topology.sentinel`, the Kubernetes API server will silently prune it on re-apply; it does not cause a parse error.
 

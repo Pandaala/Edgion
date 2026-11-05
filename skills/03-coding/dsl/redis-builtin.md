@@ -47,12 +47,12 @@ static check and fail through the normal runtime result map. Therefore:
 
 `redis.hgetall` uses the provider's `hgetall_bounded` entry: check raw entry
 count and the fixed 1 MiB field-plus-value budget on a borrowed raw RESP frame
-before Fred's additional result Map and owned-string conversion.
+before owned-string conversion.
 Overflow maps to `result_too_large`; successful entries retain per-string
-truncation. Fred's complete reply aggregation precedes this check and remains
-outside the bound. Use the existing pool's `custom_raw` HGETALL with first-key
-routing; Fred's custom command forces a flush and can reduce batching efficiency.
-Do not replace this call with the unbounded public `hgetall`.
+truncation. redis-rs's complete reply aggregation precedes this check and remains
+outside the bound. Dispatch `redis::cmd("HGETALL")` through `RedisLinkClient` and
+the single-node `command_route` (key index 1). Do not replace this call with an
+unbounded public `hgetall`.
 
 Failures return a bounded error map, for example an undeclared alias, a declared link
 whose provider is not ready, or a Redis operation error. The public `error` value is a
@@ -125,13 +125,14 @@ per-call typed Redis lookup remains live.
 ## Nontruncating GET
 
 `redis.get_bounded(alias,key,max_bytes)` uses the same live per-call resolution,
-GET ACL and Fred pool as other reads, with raw `custom_raw` / `FirstKey` dispatch.
-Its positive usize-representable Int bound is admitted before provider lookup;
-effective cap is min(requested,maxStringLen,65536). Borrowed frame length and UTF-8
-are checked before owned DSL conversion; oversize is result_too_large and invalid
-reply is the new fixed invalid_response class. Fred's full reply aggregation is
-outside this conversion bound. Missing is successful nil; old get remains
-truncating. Classify Fred ErrorKind::Timeout before wrapping errors; reuse the
-pool's configured default_command_timeout and caller cancellation, not a claimed
-VM wall-clock timeout. Charge final Arc text before copying. Keep all eight
+GET ACL and redis-rs pool as other reads, with `redis::cmd("GET")` and the same
+single-node `command_route`. Its positive usize-representable Int bound is admitted
+before provider lookup; effective cap is min(requested,maxStringLen,65536). Borrowed
+frame length and UTF-8 are checked before owned DSL conversion; oversize is
+result_too_large and invalid reply is the new fixed invalid_response class.
+redis-rs's full reply aggregation is outside this conversion bound. Missing is
+successful nil; old get remains truncating. Classify `RedisError::is_timeout()`
+before wrapping errors. The deadline is LinkSys `timeout.command` together with
+caller cancellation, not a VM wall-clock timeout. Charge final Arc text before
+copying. Keep all eight
 RedisFailure tags and their small-string fallback lock-in tests exhaustive.

@@ -9,6 +9,9 @@ fn sensitive_transport_targets_are_closed_at_every_level() {
         "rustls::client::tls12",
         "h2",
         "h2::codec::framed_read",
+        "redis",
+        "redis::cluster_handling::async_connection",
+        "redis::aio::multiplexed_connection",
     ] {
         for level in [Level::TRACE, Level::DEBUG, Level::INFO, Level::WARN, Level::ERROR] {
             assert!(!system_log_event_allowed(target, &level), "{target} {level}");
@@ -18,6 +21,7 @@ fn sensitive_transport_targets_are_closed_at_every_level() {
         "h2_extra",
         "rustls_client",
         "tonic::transport_extra",
+        "redis_protocol",
         "edgion_gateway::link_sys",
     ] {
         assert!(system_log_event_allowed(target, &Level::TRACE), "{target}");
@@ -85,6 +89,48 @@ fn pingora_h1_header_log_targets_have_an_error_floor() {
         &Level::TRACE
     ));
     assert!(system_log_event_allowed("edgion_common::observe", &Level::TRACE));
+}
+
+/// Drives the real `init_logging` subscriber so the `log` -> tracing bridge it
+/// installs is the path under test, matching how redis-rs emits records.
+#[tokio::test]
+async fn redis_sdk_log_records_are_dropped_through_the_log_bridge() {
+    const CHILD_ENV: &str = "EDGION_REDIS_LOG_BRIDGE_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "observe::logs::tests::redis_sdk_log_records_are_dropped_through_the_log_bridge",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("RUST_LOG", "trace,redis=trace")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config = LogConfig {
+        log_dir: temp_dir.path().to_path_buf(),
+        file_prefix: "redis-bridge".to_string(),
+        json_format: false,
+        console: false,
+        level: "trace".to_string(),
+    };
+    let guard = init_logging(config).await.unwrap();
+
+    log::warn!(target: "redis::cluster_handling::async_connection", "node-address-sentinel 10.0.0.7:6379");
+    log::info!(target: "redis::cluster_handling::async_connection", "reconnect-sentinel");
+    log::error!(target: "redis::aio::multiplexed_connection", "raw-error-sentinel");
+    log::warn!(target: "edgion_gateway::link_sys::providers::redis", "redis_state_changed bridge-control");
+
+    drop(guard);
+    let output = std::fs::read_to_string(temp_dir.path().join("redis-bridge.log")).unwrap();
+    assert!(!output.contains("sentinel"), "{output}");
+    assert!(!output.contains("10.0.0.7"), "{output}");
+    assert!(output.contains("bridge-control"), "{output}");
 }
 
 #[tokio::test]

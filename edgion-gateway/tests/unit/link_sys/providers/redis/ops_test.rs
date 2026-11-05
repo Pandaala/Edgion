@@ -1,27 +1,23 @@
+fn server_error() -> redis::Value {
+    redis::parse_redis_value(b"-WRONGTYPE private value\r\n").unwrap()
+}
 use super::*;
 
-fn bulk(data: impl Into<bytes::Bytes>) -> Resp3Frame {
-    Resp3Frame::BlobString {
-        data: data.into(),
-        attributes: None,
-    }
+fn bulk(data: impl Into<bytes::Bytes>) -> Value {
+    Value::BulkString(data.into().to_vec())
 }
 
-fn raw_hash(entries: impl IntoIterator<Item = (String, Resp3Frame)>) -> Resp3Frame {
-    Resp3Frame::Map {
-        data: entries.into_iter().map(|(key, value)| (bulk(key), value)).collect(),
-        attributes: None,
-    }
+fn raw_hash(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
+    Value::Map(entries.into_iter().map(|(key, value)| (bulk(key), value)).collect())
 }
 
-fn raw_array(entries: impl IntoIterator<Item = (String, Resp3Frame)>) -> Resp3Frame {
-    Resp3Frame::Array {
-        data: entries
+fn raw_array(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
+    Value::Array(
+        entries
             .into_iter()
             .flat_map(|(key, value)| [bulk(key), value])
             .collect(),
-        attributes: None,
-    }
+    )
 }
 
 #[test]
@@ -98,20 +94,10 @@ fn bounded_hash_resp2_array_preserves_bulk_text_and_byte_boundaries() {
 
 #[test]
 fn bounded_hash_resp2_count_preflight_precedes_nested_frame_conversion() {
-    // Nested errors fail Fred's frame-to-Value conversion itself. Returning None
+    // Nested errors fail redis-rs frame-to-Value conversion itself. Returning None
     // proves that count rejection precedes even that conversion, not just Strings.
-    let make_frame = || {
-        raw_array((0..1024).map(|i| {
-            (
-                format!("field-{i}"),
-                Resp3Frame::SimpleError {
-                    data: "WRONGTYPE nested test error".into(),
-                    attributes: None,
-                },
-            )
-        }))
-    };
-    assert!(RedisValue::try_from(make_frame()).is_err());
+    let make_frame = || raw_array((0..1024).map(|i| (format!("field-{i}"), server_error())));
+    assert!(redis::from_redis_value::<HashMap<String, String>>(make_frame()).is_err());
     assert!(bounded_hash_result(make_frame(), 32, usize::MAX).unwrap().is_none());
     assert!(bounded_hash_result(make_frame(), 1024, usize::MAX).is_err());
     let many_large = raw_array((0..32).map(|i| (format!("field-{i}"), bulk(vec![0xFF; 32 * 1024]))));
@@ -120,29 +106,16 @@ fn bounded_hash_resp2_count_preflight_precedes_nested_frame_conversion() {
 
 #[test]
 fn bounded_hash_rejects_malformed_response_frames() {
-    let odd = Resp3Frame::Array {
-        data: vec![bulk("secret-field")],
-        attributes: None,
-    };
+    let odd = Value::Array(vec![bulk("secret-field")]);
     let error = bounded_hash_result(odd, 0, 0).unwrap_err();
     assert_eq!(error.to_string(), "Redis HGETALL returned an odd number of elements");
-    for frame in [
-        Resp3Frame::Null,
-        bulk("QUEUED"),
-        Resp3Frame::Number {
-            data: 123,
-            attributes: None,
-        },
-    ] {
+    for frame in [Value::Nil, bulk("QUEUED"), Value::Int(123)] {
         assert_eq!(
             bounded_hash_result(frame, 32, 1024).unwrap_err().to_string(),
             "Redis HGETALL returned an invalid response"
         );
     }
-    let bad_key = Resp3Frame::Array {
-        data: vec![raw_array([]), bulk("value")],
-        attributes: None,
-    };
+    let bad_key = Value::Array(vec![raw_array([]), bulk("value")]);
     assert_eq!(
         bounded_hash_result(bad_key, 1, 1024).unwrap_err().to_string(),
         "Redis HGETALL returned a non-string value"
@@ -150,19 +123,8 @@ fn bounded_hash_rejects_malformed_response_frames() {
 }
 
 #[test]
-fn bounded_hash_preserves_fred_command_error_classification() {
-    let simple = Resp3Frame::SimpleError {
-        data: "WRONGTYPE test error".into(),
-        attributes: None,
-    };
-    let blob = Resp3Frame::BlobError {
-        data: bytes::Bytes::from_static(b"WRONGTYPE test error"),
-        attributes: None,
-    };
-    for frame in [simple, blob] {
-        let expected = RedisValue::try_from(frame.clone()).unwrap_err().to_string();
-        assert_eq!(bounded_hash_result(frame, 0, 0).unwrap_err().to_string(), expected);
-    }
+fn bounded_hash_preserves_command_error_classification() {
+    assert!(bounded_hash_result(server_error(), 0, 0).is_err());
 }
 
 #[test]
@@ -201,18 +163,9 @@ fn bounded_get_checks_original_bytes_before_text_conversion() {
         bounded_get_result(bulk(vec![0xff; 4]), 4),
         Err(BoundedGetError::InvalidResponse)
     ));
+    assert!(matches!(bounded_get_result(Value::Nil, 0), Ok(BoundedGet::Missing)));
     assert!(matches!(
-        bounded_get_result(Resp3Frame::Null, 0),
-        Ok(BoundedGet::Missing)
-    ));
-    assert!(matches!(
-        bounded_get_result(
-            Resp3Frame::Number {
-                data: 1,
-                attributes: None
-            },
-            4
-        ),
+        bounded_get_result(Value::Int(1), 4),
         Err(BoundedGetError::InvalidResponse)
     ));
 }
@@ -220,67 +173,32 @@ fn bounded_get_checks_original_bytes_before_text_conversion() {
 #[test]
 fn bounded_get_timeout_classification_uses_typed_error_kind() {
     assert!(matches!(
-        bounded_get_error(fred::error::Error::new(
-            fred::error::ErrorKind::Timeout,
-            "private detail"
-        )),
+        bounded_get_error(super::super::backend::timed_out()),
         BoundedGetError::Timeout
     ));
     assert!(matches!(
-        bounded_get_error(fred::error::Error::new(fred::error::ErrorKind::Unknown, "timeout text")),
+        bounded_get_error(redis::RedisError::from((redis::ErrorKind::Client, "timeout text"))),
         BoundedGetError::Dependency(_)
     ));
 }
 
 #[test]
 fn bounded_get_server_error_frames_are_private_dependency_failures() {
-    for frame in [
-        Resp3Frame::SimpleError {
-            data: "WRONGTYPE private value".into(),
-            attributes: None,
-        },
-        Resp3Frame::BlobError {
-            data: bytes::Bytes::from(vec![b'x'; 128 * 1024]),
-            attributes: None,
-        },
-    ] {
+    for frame in [server_error(), server_error()] {
         let Err(BoundedGetError::Dependency(error)) = bounded_get_result(frame, 64) else {
             panic!("expected dependency failure");
         };
-        assert_eq!(error.details(), "Redis GET returned a command error");
+        assert!(error.to_string().contains("Redis GET returned a command error"));
     }
 }
 
 #[test]
 fn deletion_arguments_preserve_order_and_own_their_bytes() {
-    for names in [
-        vec![],
-        vec![String::new()],
-        vec!["single".to_string()],
-        vec!["repeat".to_string(), "repeat".to_string()],
-        vec!["é".to_string(), String::new(), "π".to_string()],
-        vec!["long".repeat(4096), "tail".to_string()],
-    ] {
-        let (old, new, old_stats, new_stats) = {
-            let input = names.clone();
-            let refs: Vec<&str> = input.iter().map(String::as_str).collect();
-            let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
-                MultipleKeys::from(std::hint::black_box(refs.as_slice()).to_vec())
-            });
-            let (new, new_stats) =
-                crate::test_allocation_counter::count_allocation_stats(|| redis_keys(std::hint::black_box(&refs)));
-            (old, new, old_stats, new_stats)
-        };
-        assert_eq!(new, old);
-        assert_eq!(new_stats.calls + usize::from(!names.is_empty()), old_stats.calls);
-        assert_eq!(
-            new_stats.requested_bytes + names.len() * std::mem::size_of::<&str>(),
-            old_stats.requested_bytes
-        );
-        let keys = new.inner();
-        assert_eq!(keys.len(), names.len());
-        for (key, name) in keys.iter().zip(&names) {
-            assert_eq!(key.as_bytes(), name.as_bytes());
-        }
-    }
+    let keys = ["first", "repeat", "repeat", "é"];
+    let mut cmd = redis::cmd("DEL");
+    cmd.arg(&keys);
+    let packed = cmd.get_packed_command();
+    let value = redis::parse_redis_value(&packed).unwrap();
+    let args: Vec<String> = redis::from_redis_value(value).unwrap();
+    assert_eq!(args, ["DEL", "first", "repeat", "repeat", "é"]);
 }

@@ -83,7 +83,7 @@ fn whole_active_pairs_are_checked_in_author_order_and_disabled_refs_are_inert() 
         let prepared =
             PreparedRedisTls::with_snapshot(owner("rediss://redis.example:6380", Some(bad)), empty()).unwrap();
         assert!(prepared.uses_tls());
-        assert!(prepared.rustls_client_config().unwrap().is_none());
+        assert!(prepared.redis_tls_material().unwrap().is_some());
     }
 }
 
@@ -158,8 +158,8 @@ fn captured_actual_global_generation_is_used_for_every_construction_attempt() {
     }))
     .unwrap();
     set_outbound_global_default(Arc::new(GlobalOutboundTlsSnapshot::from_configs([Arc::new(bad)])));
-    assert!(captured.rustls_client_config().unwrap().is_none());
-    assert!(captured.rustls_client_config().unwrap().is_none());
+    assert!(captured.redis_tls_material().unwrap().is_some());
+    assert!(captured.redis_tls_material().unwrap().is_some());
     assert!(PreparedRedisTls::from_link_sys(Arc::clone(&actual)).is_err());
     assert_eq!(
         hash(&captured),
@@ -192,8 +192,9 @@ fn comparison_is_pure_and_transport_construction_keeps_provider_rejections() {
     }
     assert_eq!(count.load(Ordering::Relaxed), 0);
     assert!(prepared
-        .rustls_client_config()
-        .unwrap_err()
+        .redis_tls_material()
+        .err()
+        .unwrap()
         .to_string()
         .contains("Redis TLS configuration error"));
     for policy in [
@@ -208,6 +209,17 @@ fn comparison_is_pure_and_transport_construction_keeps_provider_rejections() {
             empty(),
         )
         .unwrap();
-        assert!(prepared.rustls_client_config().is_err());
+        assert!(prepared.redis_tls_material().is_err());
     }
+}
+
+#[test]
+fn redis_pem_material_distinguishes_plaintext_from_default_trust() {
+    let defaults = Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let plain = PreparedRedisTls::with_snapshot(owner("redis://redis.example:6379", None), defaults.clone()).unwrap();
+    assert!(plain.redis_tls_material().unwrap().is_none());
+    let tls = PreparedRedisTls::with_snapshot(owner("rediss://redis.example:6380", None), defaults).unwrap();
+    let material = tls.redis_tls_material().unwrap().unwrap();
+    assert!(material.root_pem.is_none());
+    assert!(material.client_identity.is_none());
 }

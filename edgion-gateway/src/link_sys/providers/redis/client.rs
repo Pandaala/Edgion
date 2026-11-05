@@ -1,77 +1,43 @@
-//! RedisLinkClient — runtime Redis client wrapper.
-//!
-//! Built from LinkSys CRD config. The persistent Redis runner owns construct /
-//! init / retire; this type is the published small handle.
-//! Wraps a `fred::clients::Pool` which internally manages:
-//! - Connection pool (round-robin, configurable size)
-//! - Automatic reconnection (exponential backoff)
-//! - TLS (rustls)
-//! - Cluster slot routing / Sentinel failover
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
+//! Published Redis generation. The persistent runner owns initial retry and handover.
+use super::{
+    backend::RedisBackend,
+    resolver::{redis_rs_resolver, RedisEgressResolver},
+    transport::Transport,
+};
+use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
+use crate::link_sys::runtime::health_probe::{new_published_health, spawn_health_probe, ProbeConfig};
 use anyhow::Result;
-use fred::clients::Pool;
-use fred::interfaces::ClientLike;
-use fred::types::Resolve;
+use edgion_common::link_sys_core::PublishedHealth;
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
+use rand::Rng;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
-use crate::link_sys::runtime::health_probe::{new_published_health, spawn_health_probe, ProbeConfig};
-use edgion_common::link_sys_core::PublishedHealth;
-use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
+/// Partial or failed recovery must keep backing off. Only a complete recovery
+/// returns to the 100 ms base; the caller applies jitter and the 30 s cap.
+pub(super) fn next_recovery_delay(current: Duration, fully_recovered: bool) -> Duration {
+    if fully_recovered {
+        Duration::from_millis(100)
+    } else {
+        (current * 2).min(Duration::from_secs(30))
+    }
+}
 
-use super::config_mapping::{build_fred_config, build_fred_pool};
-use super::resolver::redis_egress_resolver;
-#[cfg(feature = "test-util")]
-use super::resolver::redis_egress_resolver_for_test;
-
-/// Runtime Redis client wrapper.
-///
-/// This struct wraps a `fred::clients::Pool` (not a single `Client`) to support
-/// concurrent access with internal round-robin connection pooling.
-///
-/// One published generation. The runner may hold a second retiring Arc during
-/// Handover; callers always go through `get_redis_client`.
-/// Detached production configuration cannot construct a client.
-/// ```compile_fail
-/// use edgion_gateway::link_sys::providers::redis::RedisLinkClient;
-/// use edgion_gateway::link_sys::credential::CredentialState;
-/// let config = serde_json::from_value(serde_json::json!({"endpoints":["redis://redis.example:6379"]})).unwrap();
-/// let _ = RedisLinkClient::from_config("apps/redis", &config, &CredentialState::NotRequired);
-/// ```
 pub struct RedisLinkClient {
-    /// fred connection pool (round-robin across connections)
-    pool: Pool,
-    /// Human-readable name ("namespace/name")
+    pub(super) backend: Arc<RedisBackend>,
     name: String,
-    /// Configured Fred pool member count (`pool.size`, default 8).
-    pool_size: usize,
-    /// Apply fingerprint captured at construction (D19: last-applied after publish).
     fingerprint: RuntimeFingerprint,
-    /// Set before handover retire so the probe stops updating this generation.
-    retired: Arc<AtomicBool>,
-    /// Makes [`Self::shutdown`] idempotent when delete races handover/replace.
     shutdown_started: AtomicBool,
-    /// Atomic aggregate health flag, updated by the connection-state probe.
     healthy: Arc<PublishedHealth>,
-    /// Shutdown signal for the aggregate connection-state probe.
-    probe_shutdown: parking_lot::Mutex<Option<watch::Sender<bool>>>,
-    /// Aggregate connection-state probe task.
-    probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    shutdown_tx: parking_lot::Mutex<Option<watch::Sender<bool>>>,
+    tasks: parking_lot::Mutex<Vec<JoinHandle<()>>>,
+    pub(super) resolver: std::sync::OnceLock<RedisEgressResolver>,
 }
-
-fn pool_has_connected_member(pool: &Pool) -> bool {
-    any_connected(pool.clients().iter().map(ClientLike::is_connected))
-}
-
-fn any_connected(states: impl IntoIterator<Item = bool>) -> bool {
-    states.into_iter().any(|connected| connected)
-}
-
 impl RedisLinkClient {
     /// Create from the actual resolved resource. Does not connect; call init next.
     pub fn from_link_sys(owner: Arc<LinkSys>) -> Result<Self> {
@@ -90,178 +56,203 @@ impl RedisLinkClient {
             anyhow::bail!("Redis construction requires an actual Redis owner");
         };
         let auth = crate::link_sys::credential::basic_state(candidate.tls.owner());
-        let fred_config = build_fred_config(config, &auth)?;
-        let connector = if candidate.tls.uses_tls() {
-            Some(match candidate.tls.rustls_client_config()? {
-                Some(config) => fred::types::config::TlsConnector::from(config),
-                None => fred::types::config::TlsConnector::default_rustls()
-                    .map_err(|error| anyhow::anyhow!("Failed to create default rustls TLS config: {error:?}"))?,
-            })
-        } else {
-            None
-        };
-        let (builder, pool_size) = build_fred_pool(config, fred_config, connector)?;
-
-        let pool = builder
-            .build_pool(pool_size)
-            .map_err(|e| anyhow::anyhow!("failed to build Redis pool for {}: {:?}", name, e))?;
-
+        let transport = Transport::new(config, &auth, candidate.tls.redis_tls_material()?)?;
         Ok(Self {
-            pool,
-            name: name.to_string(),
-            pool_size,
+            backend: Arc::new(RedisBackend::new(transport)),
+            name: name.to_owned(),
             fingerprint: candidate.fingerprint().clone(),
-            retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
             healthy: new_published_health(name, false),
-            probe_shutdown: parking_lot::Mutex::new(None),
-            probe_handle: parking_lot::Mutex::new(None),
+            shutdown_tx: parking_lot::Mutex::new(None),
+            tasks: parking_lot::Mutex::new(Vec::new()),
+            resolver: std::sync::OnceLock::new(),
         })
     }
-
     pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
         &self.fingerprint
     }
-
     pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
-        ConnectionCoverage {
-            live: self
-                .pool
-                .clients()
-                .iter()
-                .filter(|client| client.is_connected())
-                .count(),
-            configured: self.pool_size,
-        }
+        let (live, configured) = *self.backend.coverage.lock();
+        ConnectionCoverage { live, configured }
     }
-
-    pub(crate) fn mark_retired(&self) {
-        self.healthy.deactivate();
-        self.retired.store(true, Ordering::Relaxed);
-        if let Some(shutdown_tx) = self.probe_shutdown.lock().as_ref() {
-            let _ = shutdown_tx.send(true);
-        }
-    }
-
-    /// Initialize the already prepared actual-resource generation.
-    ///
-    /// Connects all pool clients to Redis, records aggregate health, and starts
-    /// the background connection-state probe.
-    pub async fn init(&self) -> Result<()> {
-        self.init_with_resolver(redis_egress_resolver()).await
-    }
-
-    /// Initialize against an integration fixture that may be bound to
-    /// loopback. Production LinkSys clients always use [`Self::init`].
-    #[cfg(feature = "test-util")]
-    pub async fn init_for_test(&self) -> Result<()> {
-        self.init_with_resolver(redis_egress_resolver_for_test()).await
-    }
-
-    async fn init_with_resolver(&self, resolver: Arc<dyn Resolve>) -> Result<()> {
-        // Install Edgion's resolver before Fred performs any seed, reconnect,
-        // Sentinel, or Cluster topology dial.
-        self.pool.set_resolver(resolver).await;
-
-        // Connect all pool clients to Redis
-        self.pool
-            .init()
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis [{}] init failed: {:?}", self.name, e))?;
-
-        let connected = pool_has_connected_member(&self.pool);
-        self.healthy.update(connected, false);
-
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let probe_pool = self.pool.clone();
-        let probe_retired = self.retired.clone();
-        let probe_handle = spawn_health_probe(
-            ProbeConfig {
-                name: self.name.clone(),
-                system_type: "redis",
-                base_interval: Duration::from_secs(1),
-                max_backoff: Duration::from_secs(1),
-                probe_timeout: Duration::from_secs(1),
-                upgrade_only: false,
-            },
-            self.healthy.clone(),
-            shutdown_rx,
-            move || {
-                let pool = probe_pool.clone();
-                let retired = probe_retired.clone();
-                async move {
-                    if retired.load(Ordering::Relaxed) {
-                        return false;
-                    }
-                    let connected = pool_has_connected_member(&pool);
-                    if retired.load(Ordering::Relaxed) {
-                        return false;
-                    }
-                    connected
-                }
-            },
-        );
-        *self.probe_shutdown.lock() = Some(shutdown_tx);
-        *self.probe_handle.lock() = Some(probe_handle);
-
-        tracing::info!(redis = %self.name, "Redis client initialized successfully");
-        Ok(())
-    }
-
-    /// Check if the client is connected and healthy.
-    #[inline]
-    pub fn healthy(&self) -> bool {
-        self.healthy.load()
-    }
-
     pub(crate) fn published_health(&self) -> &PublishedHealth {
         &self.healthy
     }
-
-    /// Get client name (namespace/name).
-    #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
-
-    /// Graceful shutdown — disconnect all pool connections.
+    pub fn healthy(&self) -> bool {
+        self.healthy.load()
+    }
+    pub(crate) fn mark_retired(&self) {
+        self.healthy.deactivate();
+        self.backend.retire();
+        if let Some(tx) = self.shutdown_tx.lock().as_ref() {
+            let _ = tx.send(true);
+        }
+    }
+    pub async fn init(&self) -> Result<()> {
+        self.initialize(redis_rs_resolver()).await
+    }
+    #[cfg(feature = "test-util")]
+    pub async fn init_for_test(&self) -> Result<()> {
+        self.initialize(super::resolver::redis_rs_resolver_for_test()).await
+    }
+    async fn initialize(&self, resolver: RedisEgressResolver) -> Result<()> {
+        self.resolver
+            .set(resolver.clone())
+            .map_err(|_| anyhow::anyhow!("Redis already initialized"))?;
+        self.backend
+            .establish(resolver.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!(initialization_failure_message(&error)))?;
+        anyhow::ensure!(
+            self.backend.probe(resolver.clone()).await,
+            "Redis initialization health check failed"
+        );
+        self.healthy.update(true, false);
+        let (tx, rx) = watch::channel(false);
+        *self.shutdown_tx.lock() = Some(tx);
+        let backend = self.backend.clone();
+        let probe_resolver = resolver.clone();
+        let probe = spawn_health_probe(
+            ProbeConfig {
+                name: self.name.clone(),
+                system_type: "redis",
+                base_interval: Duration::from_secs(5),
+                max_backoff: Duration::from_secs(5),
+                probe_timeout: Duration::from_secs(3),
+                upgrade_only: false,
+            },
+            self.healthy.clone(),
+            rx.clone(),
+            move || {
+                let backend = backend.clone();
+                let resolver = probe_resolver.clone();
+                async move { backend.probe(resolver).await }
+            },
+        );
+        let backend = self.backend.clone();
+        let mut shutdown = rx;
+        let name = self.name.clone();
+        let recovery = tokio::spawn(async move {
+            let mut delay = Duration::from_millis(100);
+            // Log transitions only, with metadata (link name), never endpoints
+            // or dependency error text; repeated failures stay silent.
+            let mut failing = false;
+            loop {
+                tokio::select! { biased;
+                    _ = shutdown.changed() => break,
+                    _ = backend.wake.notified() => {},
+                }
+                while backend.needs_recovery.load(Ordering::Acquire) {
+                    let wait = delay
+                        .mul_f64(rand::rng().random_range(0.8..=1.2))
+                        .min(Duration::from_secs(30));
+                    tokio::select! { biased;
+                        _ = shutdown.changed() => return,
+                        _ = tokio::time::sleep(wait) => {},
+                    }
+                    let primary_before = backend.published_primary();
+                    let result = tokio::select! { biased;
+                        _ = shutdown.changed() => return,
+                        result = backend.establish(resolver.clone()) => result,
+                    };
+                    match &result {
+                        Ok(()) => {
+                            if failing {
+                                failing = false;
+                                tracing::info!(redis = %name, "Redis topology recovery succeeded");
+                            }
+                            if primary_changed(primary_before.as_ref(), backend.published_primary().as_ref()) {
+                                tracing::info!(redis = %name, "Redis Sentinel primary changed");
+                            }
+                        }
+                        Err(_) if !failing => {
+                            failing = true;
+                            tracing::warn!(redis = %name, "Redis topology recovery failed; retrying");
+                        }
+                        Err(_) => {}
+                    }
+                    let fully_recovered = result.is_ok() && !backend.needs_recovery.load(Ordering::Acquire);
+                    delay = next_recovery_delay(delay, fully_recovered);
+                }
+            }
+        });
+        self.tasks.lock().extend([probe, recovery]);
+        Ok(())
+    }
+    /// Rebuild the published connection from the current known topology.
+    /// Test-only: production recovery owns this path.
+    #[cfg(any(test, feature = "test-util"))]
+    pub async fn reestablish_for_test(&self) -> Result<()> {
+        let resolver = self
+            .resolver
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Redis is not initialized"))?;
+        self.backend
+            .establish(resolver)
+            .await
+            .map_err(|_| anyhow::anyhow!("Redis reestablish failed"))
+    }
+    pub(crate) fn operation_deadline(&self) -> tokio::time::Instant {
+        tokio::time::Instant::now() + self.backend.transport.command_timeout
+    }
+    pub(crate) async fn exec_until(
+        &self,
+        cmd: &redis::Cmd,
+        deadline: tokio::time::Instant,
+    ) -> redis::RedisResult<redis::Value> {
+        let resolver = self.resolver.get().ok_or_else(super::backend::unavailable)?.clone();
+        self.backend.exec(cmd, deadline, resolver).await
+    }
+    pub(crate) async fn exec(&self, cmd: &redis::Cmd) -> redis::RedisResult<redis::Value> {
+        self.exec_until(cmd, self.operation_deadline()).await
+    }
     pub async fn shutdown(&self) -> Result<()> {
         if self.shutdown_started.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        tracing::info!(redis = %self.name, "Redis client shutting down");
         self.mark_retired();
-        let probe_handle = self.probe_handle.lock().take();
-        if let Some(probe_handle) = probe_handle {
-            let _ = probe_handle.await;
+        let tasks = std::mem::take(&mut *self.tasks.lock());
+        for task in tasks {
+            let _ = task.await;
         }
-
-        let quit_result = self
-            .pool
-            .quit()
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis [{}] shutdown error: {:?}", self.name, e));
+        self.backend.snapshot.store(None);
         self.healthy.update(false, false);
-        quit_result
+        Ok(())
     }
+}
 
-    /// Access the underlying fred Pool for advanced operations.
-    ///
-    /// Prefer using the high-level operations in `ops.rs` when possible.
-    /// This is provided as an escape hatch for commands not yet wrapped.
-    #[inline]
-    pub fn pool(&self) -> &Pool {
-        &self.pool
+/// A failover is a published Sentinel primary replaced by a different one.
+/// A first publication or a removed snapshot is not a primary change.
+pub(super) fn primary_changed(before: Option<&(String, u16)>, after: Option<&(String, u16)>) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => {
+            super::backend::endpoint_identity(before) != super::backend::endpoint_identity(after)
+        }
+        _ => false,
+    }
+}
+
+/// Keep dial failures fixed. A certificate rejection is distinguishable from a
+/// plaintext or refused connection without copying the peer address into the log.
+pub(super) fn initialization_failure_message(error: &redis::RedisError) -> &'static str {
+    if super::backend::is_tls_verification_error(error) {
+        "Redis TLS verification failed"
+    } else {
+        "Redis initialization failed"
     }
 }
 
 #[cfg(test)]
+#[path = "../../../../tests/unit/link_sys/providers/redis/client_test/test_util.rs"]
+mod test_util;
+#[cfg(test)]
 #[path = "../../../../tests/unit/link_sys/providers/redis/client_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/link_sys/providers/redis/client_test/test_util.rs"]
-mod test_util;
 #[cfg(all(not(test), feature = "test-util"))]
 #[path = "../../../../tests/unit/link_sys/providers/redis/client_test/test_util.rs"]
 mod test_util;

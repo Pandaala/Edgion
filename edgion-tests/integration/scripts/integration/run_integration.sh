@@ -83,7 +83,6 @@ REDIS_PASSWORD="edgion-test-pwd"
 REDIS_CONTAINER_NAME="edgion-test-redis"
 REDIS_TLS_CONTAINER_NAME="edgion-test-redis-tls"
 REDIS_MTLS_CONTAINER_NAME="edgion-test-redis-mtls"
-REDIS_NATIVE_CA_FILE=""
 
 CONTROLLER_GRPC_PORT=12151
 
@@ -1253,7 +1252,7 @@ probe_redis_ready() {
 # will trust. Host certificate files are the only identity source: a docker
 # exec against container-local /certs can succeed for a healthy leftover
 # container even after make-test-certs.sh replaced the host material that
-# Gateway Secrets and SSL_CERT_FILE will load.
+# Gateway custom-CA and mTLS Secrets will load. Default trust does not read SSL_CERT_FILE.
 probe_redis_tls_identity() {
     local host=$1 port=$2 require_client_cert=$3
     local certs_dir="${REDIS_COMPOSE_DIR:-${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis}/certs"
@@ -1376,10 +1375,6 @@ start_redis_service_if_needed() {
             return 1
         fi
 
-        # fred's scheme-only rediss:// path uses rustls-native-certs. Point its
-        # documented file source at the ephemeral test CA so this isolated suite
-        # exercises default trust without modifying the host trust store.
-        REDIS_NATIVE_CA_FILE="${REDIS_COMPOSE_DIR}/certs/ca.crt"
         tls_ready=false
         mtls_ready=false
         probe_redis_tls_ready "$REDIS_HOST" "$REDIS_TLS_PORT" "$REDIS_PASSWORD" false && tls_ready=true
@@ -2095,8 +2090,11 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "LinkSys_Status" "${EDGION_TEST_CLIENT_BIN} -g -r LinkSys -i Status" || test_failed=true
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
+                    run_test "LinkSys_RedisTopology" "bash ${SCRIPT_DIR}/link_sys/run_redis_topology.sh" || test_failed=true
                 elif [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; then
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
+                elif [ "$G_ITEM" = "RedisTopology" ]; then
+                    run_test "LinkSys_RedisTopology" "bash ${SCRIPT_DIR}/link_sys/run_redis_topology.sh" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "LinkSys_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r LinkSys -i ${G_ITEM}" || test_failed=true
@@ -2369,6 +2367,7 @@ run_all_tests() {
         run_test "Status_RefGrant_EdgionConfigData" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i RefGrant/EdgionConfigData" || test_failed=true
         run_test "LinkSys_Status" "${EDGION_TEST_CLIENT_BIN} -g -r LinkSys -i Status" || test_failed=true
         run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
+        run_test "LinkSys_RedisTopology" "bash ${SCRIPT_DIR}/link_sys/run_redis_topology.sh" || test_failed=true
 
         # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
         if $FULL_TEST; then
@@ -2706,6 +2705,9 @@ main() {
                 suites="${base_suites},LinkSys/Status,LinkSys/Redis,LinkSys/RedisTls,${linksys_extras}"
             elif [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; then
                 suites="${base_suites},LinkSys/Redis,LinkSys/RedisTls,${linksys_extras}"
+            elif [ "$G_ITEM" = "RedisTopology" ]; then
+                # The topology script owns its fixture. There is no conf/LinkSys/RedisTopology tree.
+                suites="${base_suites}"
             else
                 suites="${base_suites},LinkSys/${G_ITEM}"
             fi
@@ -3219,8 +3221,8 @@ main() {
         # NOTE: Must separate 'local' from command substitution, because
         # 'local' always returns 0 and masks the real exit code of $().
         local output exit_code
-        if [ -n "$REDIS_NATIVE_CA_FILE" ]; then
-            output=$(EDGION_TEST_ENABLE_REDIS_TLS=1 SSL_CERT_FILE="$REDIS_NATIVE_CA_FILE" \
+        if $REDIS_TLS_SERVICE_REQUIRED; then
+            output=$(EDGION_TEST_ENABLE_REDIS_TLS=1 \
                 "${start_args[@]}" 2>&1) \
                 && exit_code=0 || exit_code=$?
         else

@@ -138,7 +138,7 @@ pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
 pingora-ketama.workspace = true
 tinyufo.workspace = true
-fred.workspace = true
+redis.workspace = true
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
 boring-sys = { workspace = true, optional = true }

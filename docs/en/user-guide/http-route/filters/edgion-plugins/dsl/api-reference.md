@@ -2019,9 +2019,9 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 
 Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` is `result_too_large`, subject to the generic-class rule above). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
 
-The original field and value bytes together must also fit a fixed 1 MiB cap. This check uses the untruncated reply and runs before converting fred's result to an owned string table. Exceeding either the entry count or byte cap returns `ok: false`, `value: nil`, and `error: "result_too_large"` (or `"e"` for a small string budget). Admitted results retain the per-string truncation described above. Raising `maxStringLen` does not raise the cumulative cap.
+The original field and value bytes together must also fit a fixed 1 MiB cap. This check uses the untruncated reply and runs before converting redis-rs's result to an owned string table. Exceeding either the entry count or byte cap returns `ok: false`, `value: nil`, and `error: "result_too_large"` (or `"e"` for a small string budget). Admitted results retain the per-string truncation described above. Raising `maxStringLen` does not raise the cumulative cap.
 
-**Dependency boundary**: fred 10.1.0 receives and aggregates the complete HGETALL reply before Edgion can inspect it. The cap checks the raw reply before the additional Fred result Map, Edgion string table, and DSL Map construction for oversized results; it does not bound Redis wire buffering or the decoded frame (including a native RESP3 Map). Keep server-side hashes bounded; this check alone is not a total-memory guarantee.
+**Dependency boundary**: redis-rs 1.8.1 receives and aggregates the complete HGETALL reply before Edgion can inspect it. The cap checks the raw reply before the Edgion string table and DSL Map construction for oversized results; it does not bound Redis wire buffering or the decoded frame (including a native RESP3 Map). Keep server-side hashes bounded; this check alone is not a total-memory guarantee.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`
@@ -2550,7 +2550,7 @@ when `maxStringLen` cannot hold the class.
 The live LinkSys client is resolved on each call. This operation reuses its pool
 and configured command timeout; there is no general VM wall-clock timeout.
 Caller cancellation drops the await. Raw replies are checked before allocating
-DSL text, but Fred has already aggregated the complete Redis reply: this is a
+DSL text, but redis-rs has already aggregated the complete Redis reply: this is a
 conversion bound, not a Redis transport memory cap. Existing `redis.get` retains
 its documented truncation behavior. Publication can use existing
 `redis.set(alias, key, value, 604800000)` for a seven-day TTL; reads do not renew it.

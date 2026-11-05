@@ -3,7 +3,7 @@
 //! All outbound TLS flows through the shared resolver
 //! ([`crate::link_sys_core::outbound_tls`]):
 //! - `apply_resolved_outbound_tls` — reqwest path (ES, webhook)
-//! - `build_validated_rustls_client_config` — actual-owner Redis/Fred path
+//! - `build_effective_rustls_client_config` — validates prepared Redis PEM material
 //! - `build_kafka_rustls_client_config` — actual-owner Kafka/rskafka path
 //!
 //! The resolver handles global-default inheritance and CA material resolution.
@@ -22,38 +22,10 @@ use edgion_resources::resources::common::TlsConfig;
 
 use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 
-/// Build from an actual owning selection and one captured inherited generation.
-///
-/// Returns `Ok(None)` when there is nothing to configure — no custom CA and no
-/// client identity (callers can then fall back to the library's default TLS
-/// connector).
-///
-/// **Skip-verify is not supported**: `verify=false` is always rejected
-/// (`provider_can_disable=false`). The supported connector has no skip-verify path — a
-/// `verify=false` config would silently fall through to a verifying connector,
-/// so canonical resolution rejects it upfront with
-/// `OutboundTlsVerifyUnsupported` instead.
-///
-/// Root certificate selection:
-/// - [`EffectiveCa::Custom`] → the CA PEM is the **only** trust root (private
-///   CA mode; the system trust store is intentionally not merged in).
-/// - [`EffectiveCa::System`] → uses the built-in webpki roots compiled into
-///   the binary so mTLS against a public-CA backend still verifies the server
-///   chain.
-///
-/// Client authentication: applied only when **both** `client_cert_pem` and
-/// `client_key_pem` are present; otherwise `.with_no_client_auth()`.
-pub(crate) fn build_validated_rustls_client_config(
-    proof: &outbound_tls::ValidatedLocalTlsSelection<'_>,
-    defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
-    provider: &str,
+/// Validate the effective root store and client identity before provider conversion.
+pub(crate) fn build_effective_rustls_client_config(
+    resolved: &outbound_tls::ResolvedOutboundTls,
 ) -> Result<Option<ClientConfig>> {
-    let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, provider, defaults)
-        .map_err(|error| anyhow::anyhow!("{provider} TLS configuration error: {error:?}"))?;
-    build_effective_rustls_client_config(&resolved)
-}
-
-fn build_effective_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls) -> Result<Option<ClientConfig>> {
     resolved.reject_unsupported_identity_policy("LinkSys")?;
 
     // Nothing to configure: system CA + no client identity → caller uses

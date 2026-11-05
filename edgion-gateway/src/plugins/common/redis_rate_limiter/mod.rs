@@ -14,10 +14,6 @@ use edgion_resources::redis_rate_limit::{
     validate_rate_limit_call, validate_rate_limit_policy, validate_rate_limit_units,
 };
 use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
-use fred::{
-    interfaces::LuaInterface,
-    types::{MultipleKeys, Value},
-};
 use scripts::{
     CREDENTIAL_RESERVATION_SCRIPT, CUMULATIVE_QUOTA_SCRIPT, FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT,
     TOKEN_BUCKET_SCRIPT,
@@ -522,19 +518,15 @@ static SCRIPTS: LazyLock<ScriptDescriptors> = LazyLock::new(|| ScriptDescriptors
     credential_reservation: ScriptDescriptor::new(CREDENTIAL_RESERVATION_SCRIPT),
 });
 
-// Fred preserves the Redis error code in the first token of an Unknown error.
-// Only a cache miss proves the script did not run; other errors must not replay it.
-fn is_missing_script(error: &fred::error::Error) -> bool {
-    error.kind() == &fred::error::ErrorKind::Unknown
-        && error.details().split_ascii_whitespace().next() == Some("NOSCRIPT")
+// Only NOSCRIPT proves the previous script was not executed.
+fn is_missing_script(error: &redis::RedisError) -> bool {
+    error.code() == Some("NOSCRIPT")
 }
-
-fn script_args<const N: usize>(args: [i64; N]) -> Vec<Value> {
-    args.into_iter().map(Into::into).collect()
+fn script_args<const N: usize>(args: [i64; N]) -> Vec<i64> {
+    args.into()
 }
-
-fn script_keys<const N: usize>(keys: [String; N]) -> MultipleKeys {
-    keys.into_iter().collect()
+fn script_keys<const N: usize>(keys: [String; N]) -> Vec<String> {
+    keys.into()
 }
 
 /// References process-shared script descriptors; remote cache misses are handled per invocation.
@@ -560,23 +552,22 @@ impl RedisRateLimiter {
         &self,
         client: &RedisLinkClient,
         script: &ScriptDescriptor,
-        keys: MultipleKeys,
-        args: Vec<Value>,
+        keys: Vec<String>,
+        args: Vec<i64>,
     ) -> anyhow::Result<Vec<i64>> {
-        let args = Value::Array(args);
-        match client
-            .pool()
-            .evalsha::<Vec<i64>, _, _, _>(script.sha1.as_str(), keys.clone(), args.clone())
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(ref e) if is_missing_script(e) => client
-                .pool()
-                .eval(script.source, keys, args)
-                .await
-                .map_err(|e| anyhow::anyhow!("Redis EVAL fallback failed: {:?}", e)),
-            Err(e) => Err(anyhow::anyhow!("Redis EVALSHA failed: {:?}", e)),
-        }
+        let deadline = client.operation_deadline();
+        let mut command = redis::cmd("EVALSHA");
+        command.arg(&script.sha1).arg(keys.len()).arg(&keys).arg(&args);
+        let response = match client.exec_until(&command, deadline).await {
+            Ok(value) => value,
+            Err(error) if is_missing_script(&error) => {
+                let mut fallback = redis::cmd("EVAL");
+                fallback.arg(script.source).arg(keys.len()).arg(&keys).arg(&args);
+                client.exec_until(&fallback, deadline).await?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        redis::from_redis_value(response).map_err(|_| anyhow::anyhow!("Redis script returned an invalid response"))
     }
 
     /// Read the aggregate for a caller-selected quota window and decide whether

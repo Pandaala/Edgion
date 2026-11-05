@@ -4,7 +4,7 @@
 
 This fixture tests that the controller correctly rejects a Redis `LinkSys`
 resource that specifies `tls.validation.subjectAltNames`. SAN pinning is
-**not supported** for Redis because the `fred` TLS connector does not expose
+**not supported** for Redis because the `redis-rs` TLS connector does not expose
 per-connection SAN override hooks.
 
 ## Expected Behavior

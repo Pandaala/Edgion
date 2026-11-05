@@ -1,7 +1,4 @@
-# Scheme-only Redis TLS success fixture. The integration runner exposes the
-# generated test CA through SSL_CERT_FILE, which is the documented native trust
-# source consumed by fred's default rustls connector. There is deliberately no
-# local tls block: rediss:// alone must select TLS and use default trust.
+# Scheme-only TLS uses built-in webpki roots and must reject this private test CA.
 apiVersion: edgion.io/v1
 kind: LinkSys
 metadata:

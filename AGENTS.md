@@ -414,7 +414,7 @@ Edgion currently has two shared in-process cache implementations. Choose by sema
 Do not add another cache implementation or broaden TinyUFO usage without documenting why these two cannot satisfy the required semantics.
 
 1. Outbound HTTP clients are built via `build_outbound_client` (`edgion-common/src/link_sys_core/http_client.rs`); a bare `reqwest::Client::builder()` outside tests is a bug.
-2. Outbound TLS (CA/mTLS/verify) resolves through the canonical `outbound_tls` resolver — including non-reqwest dialers (tonic/ldap3/fred/rskafka).
+2. Outbound TLS (CA/mTLS/verify) resolves through the canonical `outbound_tls` resolver — including non-reqwest dialers (tonic/ldap3/redis-rs/rskafka).
 3. A new egress path with a config- or request-influenced destination uses `EgressResolver` (or at minimum `classify_ip`) at dial time, disables proxy-env pickup, and denies redirects unless per-hop re-checked.
 4. Operator-configured DNS resolution goes through the shared `ResolverSpec` (`edgion-common/src/dns/`); no second resolver library.
 5. Redis access goes through the LinkSys `RedisLinkClient`; rate-limit Lua logic extends the shared `redis_rate_limiter` core.

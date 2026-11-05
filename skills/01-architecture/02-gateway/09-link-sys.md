@@ -14,7 +14,7 @@ description: LinkSys external system integration — CRD connector variants, run
 |----------|--------|-------------|-------------------|-------------------|
 | Elasticsearch | `providers/elasticsearch/` | `EsLinkClient` | HTTP bulk API | Bulk indexing, data send |
 | Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV read/write |
-| Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
+| Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (redis-rs) | Data read/write, distributed rate limiting support |
 | Webhook | `providers/webhook/` | WebhookLinkClient | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
 | OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Persistent runner, shared log export, safe egress |
@@ -78,7 +78,8 @@ providers/elasticsearch/
 providers/redis/
 ├── apply.rs           # RedisApply fingerprint / coverage / build for the runner
 ├── client.rs          # RedisLinkClient (published small handle)
-├── config_mapping.rs  # configuration mapping (standalone / sentinel / cluster)
+├── transport.rs       # canonical Redis connection construction
+├── backend.rs         # topology, recovery and no-replay execution
 ├── ops.rs             # Redis operation wrappers
 └── mod.rs
 ```

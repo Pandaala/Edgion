@@ -50,7 +50,7 @@ digest and same-RV reuse and uses its captured snapshot for construction.
 RedisCandidate prepares actual source/local/consumed inherited authority before
 the persistent runner can enter reuse or zero-live planning. The same immutable
 candidate persists across initialization retries. Its common PreparedRedisTls
-adapter feeds the shared rustls conversion core once per construction, and Fred
+adapter feeds the shared rustls conversion core once per construction, and redis-rs
 retains that connector across reconnects.
 Redis and Elasticsearch share Common's PreparedLinkSysTls for immutable actual
 ownership, source/whole active pairing and captured-default loans. EsCandidate

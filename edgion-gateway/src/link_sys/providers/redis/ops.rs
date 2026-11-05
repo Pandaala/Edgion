@@ -1,26 +1,10 @@
-//! High-level Redis operations.
-//!
-//! Wraps fred's interface methods with anyhow error handling and Edgion-friendly signatures.
-//! Only exposes operations that Edgion actually needs — for advanced use cases,
-//! callers can access the underlying pool via `RedisLinkClient::pool()`.
-
-use std::collections::HashMap;
-use std::time::Duration;
-
-use anyhow::Result;
-use fred::clients::Pool;
-use fred::interfaces::{ClientLike, HashesInterface, KeysInterface, ListInterface, LuaInterface};
-use fred::types::{ClusterHash, CustomCommand, MultipleKeys, Resp3Frame, Value as RedisValue};
-
-use super::client::RedisLinkClient;
+//! Typed operations over the canonical, deadline-bounded Redis execution path.
+use super::{backend::RedisBackend, client::RedisLinkClient, resolver::RedisEgressResolver};
 use crate::link_sys::LinkSysHealth;
+use anyhow::Result;
+use redis::{Cmd, Value};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-fn redis_keys(keys: &[&str]) -> MultipleKeys {
-    keys.iter().copied().collect()
-}
-
-/// A raw GET result admitted before owned text conversion. Fred has already
-/// aggregated the reply; this is not a network-frame memory cap.
 pub(crate) enum BoundedGet {
     Missing,
     TooLarge,
@@ -30,264 +14,59 @@ pub(crate) enum BoundedGet {
 pub(crate) enum BoundedGetError {
     Timeout,
     InvalidResponse,
-    Dependency(fred::error::Error),
+    Dependency(redis::RedisError),
 }
-fn bounded_get_error(error: fred::error::Error) -> BoundedGetError {
-    if matches!(error.kind(), fred::error::ErrorKind::Timeout) {
+fn bounded_get_error(error: redis::RedisError) -> BoundedGetError {
+    if error.is_timeout() {
         BoundedGetError::Timeout
     } else {
         BoundedGetError::Dependency(error)
     }
 }
-fn bounded_get_result(frame: Resp3Frame, limit: usize) -> std::result::Result<BoundedGet, BoundedGetError> {
-    let data = match frame {
-        Resp3Frame::Null => return Ok(BoundedGet::Missing),
-        Resp3Frame::BlobString { data, .. } | Resp3Frame::SimpleString { data, .. } => data,
-        Resp3Frame::SimpleError { .. } | Resp3Frame::BlobError { .. } => {
-            // Avoid copying a potentially large/sensitive server error. A raw
-            // command-error reply is a dependency failure, not invalid success.
-            return Err(BoundedGetError::Dependency(fred::error::Error::new(
-                fred::error::ErrorKind::Unknown,
+fn bounded_get_result(value: Value, limit: usize) -> std::result::Result<BoundedGet, BoundedGetError> {
+    let bytes = match value {
+        Value::Nil => return Ok(BoundedGet::Missing),
+        Value::BulkString(bytes) => bytes,
+        Value::SimpleString(s) => s.into_bytes(),
+        Value::ServerError(_) => {
+            return Err(BoundedGetError::Dependency(redis::RedisError::from((
+                redis::ErrorKind::Client,
                 "Redis GET returned a command error",
-            )));
+            ))))
         }
         _ => return Err(BoundedGetError::InvalidResponse),
     };
-    if data.len() > limit {
+    if bytes.len() > limit {
         return Ok(BoundedGet::TooLarge);
     }
-    std::str::from_utf8(&data).map_err(|_| BoundedGetError::InvalidResponse)?;
-    Ok(BoundedGet::Value(data))
+    std::str::from_utf8(&bytes).map_err(|_| BoundedGetError::InvalidResponse)?;
+    Ok(BoundedGet::Value(bytes.into()))
 }
-
-// ============================================================================
-// Basic Key-Value Operations
-// ============================================================================
-
-impl RedisLinkClient {
-    pub(crate) async fn get_bounded(
-        &self,
-        key: &str,
-        limit: usize,
-    ) -> std::result::Result<BoundedGet, BoundedGetError> {
-        let frame = self
-            .pool()
-            .custom_raw(
-                CustomCommand::new_static("GET", ClusterHash::FirstKey, false),
-                vec![key],
-            )
-            .await
-            .map_err(bounded_get_error)?;
-        bounded_get_result(frame, limit)
-    }
-
-    /// GET key → Option<String>
-    pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        let val: Option<String> = self
-            .pool()
-            .get(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis GET {}: {:?}", key, e))?;
-        Ok(val)
-    }
-
-    /// SET key value [EX seconds]
-    pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<()> {
-        use fred::types::Expiration;
-        let expiration = ttl.map(|d| Expiration::EX(d.as_secs() as i64));
-        self.pool()
-            .set::<(), _, _>(key, value, expiration, None, false)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis SET {}: {:?}", key, e))?;
-        Ok(())
-    }
-
-    /// SET key value PX milliseconds (precise TTL)
-    pub async fn set_px(&self, key: &str, value: &str, ttl_ms: u64) -> Result<()> {
-        use fred::types::Expiration;
-        let expiration = Some(Expiration::PX(ttl_ms as i64));
-        self.pool()
-            .set::<(), _, _>(key, value, expiration, None, false)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis SET PX {}: {:?}", key, e))?;
-        Ok(())
-    }
-
-    /// DEL key(s) — returns number of keys deleted
-    pub async fn del(&self, keys: &[&str]) -> Result<u64> {
-        let count: u64 = self
-            .pool()
-            .del(redis_keys(keys))
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis DEL: {:?}", e))?;
-        Ok(count)
-    }
-
-    /// EXISTS key — returns true if key exists
-    pub async fn exists(&self, key: &str) -> Result<bool> {
-        let count: u64 = self
-            .pool()
-            .exists(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis EXISTS {}: {:?}", key, e))?;
-        Ok(count > 0)
-    }
-
-    /// EXPIRE key seconds — set TTL on an existing key
-    pub async fn expire(&self, key: &str, seconds: i64) -> Result<bool> {
-        let result: bool = self
-            .pool()
-            .expire(key, seconds, None)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis EXPIRE {}: {:?}", key, e))?;
-        Ok(result)
-    }
-
-    /// TTL key → remaining seconds (-1 = no expiry, -2 = key not found)
-    pub async fn ttl(&self, key: &str) -> Result<i64> {
-        let ttl: i64 = self
-            .pool()
-            .ttl(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis TTL {}: {:?}", key, e))?;
-        Ok(ttl)
-    }
-
-    /// INCR key (atomic increment, returns new value)
-    pub async fn incr(&self, key: &str) -> Result<i64> {
-        let val: i64 = self
-            .pool()
-            .incr(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis INCR {}: {:?}", key, e))?;
-        Ok(val)
-    }
-
-    /// INCRBY key increment (atomic increment by amount)
-    pub async fn incr_by(&self, key: &str, increment: i64) -> Result<i64> {
-        let val: i64 = self
-            .pool()
-            .incr_by(key, increment)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis INCRBY {}: {:?}", key, e))?;
-        Ok(val)
-    }
-}
-
-// ============================================================================
-// Hash Operations
-// ============================================================================
-
-impl RedisLinkClient {
-    /// HGET key field → Option<String>
-    pub async fn hget(&self, key: &str, field: &str) -> Result<Option<String>> {
-        let val: Option<String> = self
-            .pool()
-            .hget(key, field)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis HGET {} {}: {:?}", key, field, e))?;
-        Ok(val)
-    }
-
-    /// HSET key field value — returns number of fields added
-    pub async fn hset(&self, key: &str, field: &str, value: &str) -> Result<u64> {
-        let count: u64 = self
-            .pool()
-            .hset(key, (field, value))
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis HSET {} {}: {:?}", key, field, e))?;
-        Ok(count)
-    }
-
-    /// HDEL key field(s) — returns number of fields removed
-    pub async fn hdel(&self, key: &str, fields: &[&str]) -> Result<u64> {
-        let count: u64 = self
-            .pool()
-            .hdel(key, redis_keys(fields))
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis HDEL {} {:?}: {:?}", key, fields, e))?;
-        Ok(count)
-    }
-
-    /// HGETALL key → HashMap<String, String>
-    pub async fn hgetall(&self, key: &str) -> Result<HashMap<String, String>> {
-        let map: HashMap<String, String> = self
-            .pool()
-            .hgetall(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis HGETALL {}: {:?}", key, e))?;
-        Ok(map)
-    }
-
-    /// Bound raw hash payload before converting it to owned strings.
-    ///
-    /// Fred has already aggregated the complete reply; these limits prevent the
-    /// subsequent Fred Map and Edgion string-map allocations, not frame buffering.
-    /// `None` denotes a count or byte overflow, independently of command errors.
-    pub(crate) async fn hgetall_bounded(
-        &self,
-        key: &str,
-        max_entries: usize,
-        max_bytes: usize,
-    ) -> Result<Option<HashMap<String, String>>> {
-        // Reuse the same pool, key routing, timeout, and HGETALL ACL. Fred's custom
-        // command forces a flush, trading batching for access before Map conversion.
-        let frame = self
-            .pool()
-            .custom_raw(
-                CustomCommand::new_static("HGETALL", ClusterHash::FirstKey, false),
-                vec![key],
-            )
-            .await
-            .map_err(|error| anyhow::anyhow!("Redis HGETALL failed: {error}"))?;
-        bounded_hash_result(frame, max_entries, max_bytes)
-    }
-
-    /// HEXISTS key field → bool
-    pub async fn hexists(&self, key: &str, field: &str) -> Result<bool> {
-        let exists: bool = self
-            .pool()
-            .hexists(key, field)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis HEXISTS {} {}: {:?}", key, field, e))?;
-        Ok(exists)
-    }
-}
-
-/// Account raw field and value bytes without overflow or partial admission.
-fn checked_hash_bytes(current: usize, key_bytes: usize, value_bytes: usize, limit: usize) -> Option<usize> {
+fn checked_hash_bytes(current: usize, key: usize, value: usize, limit: usize) -> Option<usize> {
     current
-        .checked_add(key_bytes)?
-        .checked_add(value_bytes)
+        .checked_add(key)?
+        .checked_add(value)
         .filter(|total| *total <= limit)
 }
-
-fn hash_frame_bytes(frame: &Resp3Frame) -> Result<usize> {
-    match frame {
-        Resp3Frame::BlobString { data, .. }
-        | Resp3Frame::SimpleString { data, .. }
-        | Resp3Frame::VerbatimString { data, .. }
-        | Resp3Frame::BigNumber { data, .. } => Ok(data.len()),
-        _ => Err(anyhow::anyhow!("Redis HGETALL returned a non-string value")),
+fn hash_frame_bytes(value: &Value) -> Result<usize> {
+    match value {
+        Value::BulkString(bytes) => Ok(bytes.len()),
+        Value::SimpleString(s) => Ok(s.len()),
+        _ => anyhow::bail!("Redis HGETALL returned a non-string value"),
     }
 }
-
-fn bounded_hash_result(
-    frame: Resp3Frame,
-    max_entries: usize,
-    max_bytes: usize,
-) -> Result<Option<HashMap<String, String>>> {
+fn bounded_hash_result(value: Value, max_entries: usize, max_bytes: usize) -> Result<Option<HashMap<String, String>>> {
     let mut total = 0;
-    match &frame {
-        // Fred represents RESP2's flat HGETALL array as a RESP3 Array.
-        Resp3Frame::Array { data, .. } => {
-            if data.len() % 2 != 0 {
-                return Err(anyhow::anyhow!("Redis HGETALL returned an odd number of elements"));
-            }
-            if data.len() / 2 > max_entries {
+    match &value {
+        Value::Array(values) => {
+            anyhow::ensure!(
+                values.len() % 2 == 0,
+                "Redis HGETALL returned an odd number of elements"
+            );
+            if values.len() / 2 > max_entries {
                 return Ok(None);
             }
-            for pair in data.chunks_exact(2) {
+            for pair in values.as_chunks::<2>().0 {
                 let Some(next) = checked_hash_bytes(
                     total,
                     hash_frame_bytes(&pair[0])?,
@@ -299,11 +78,11 @@ fn bounded_hash_result(
                 total = next;
             }
         }
-        Resp3Frame::Map { data, .. } => {
-            if data.len() > max_entries {
+        Value::Map(values) => {
+            if values.len() > max_entries {
                 return Ok(None);
             }
-            for (key, value) in data {
+            for (key, value) in values {
                 let Some(next) = checked_hash_bytes(total, hash_frame_bytes(key)?, hash_frame_bytes(value)?, max_bytes)
                 else {
                     return Ok(None);
@@ -311,114 +90,153 @@ fn bounded_hash_result(
                 total = next;
             }
         }
-        Resp3Frame::SimpleError { .. } | Resp3Frame::BlobError { .. } => {
-            // Preserve Fred's canonical command-error classification.
-            RedisValue::try_from(frame)?;
-            return Err(anyhow::anyhow!("Redis HGETALL returned an invalid response"));
-        }
-        _ => return Err(anyhow::anyhow!("Redis HGETALL returned an invalid response")),
+        _ => anyhow::bail!("Redis HGETALL returned an invalid response"),
     }
-    // Only admitted frames reach Fred's canonical conversion. No Map or owned
-    // strings are constructed during the borrowed count/byte preflight above.
-    let map = RedisValue::try_from(frame)?.into_map()?;
-    Ok(Some(RedisValue::Map(map).convert()?))
+    redis::from_redis_value(value)
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("Redis HGETALL returned an invalid response"))
 }
-
-// ============================================================================
-// List Operations (for DataSender / queue use cases)
-// ============================================================================
-
+fn operation_error(error: redis::RedisError) -> anyhow::Error {
+    anyhow::anyhow!(if error.is_timeout() {
+        "Redis operation timed out"
+    } else if error.is_io_error() {
+        "Redis I/O failed"
+    } else {
+        "Redis command failed"
+    })
+}
 impl RedisLinkClient {
-    /// RPUSH key value(s) — append to list tail, returns new list length.
-    /// Used by DataSender for log buffering.
+    async fn query<T: redis::FromRedisValue>(&self, cmd: &Cmd) -> Result<T> {
+        let value = self.exec(cmd).await.map_err(operation_error)?;
+        redis::from_redis_value(value).map_err(|_| anyhow::anyhow!("Redis returned an invalid response"))
+    }
+    pub(crate) async fn get_bounded(
+        &self,
+        key: &str,
+        limit: usize,
+    ) -> std::result::Result<BoundedGet, BoundedGetError> {
+        bounded_get_result(
+            self.exec(redis::cmd("GET").arg(key)).await.map_err(bounded_get_error)?,
+            limit,
+        )
+    }
+    pub(crate) async fn hgetall_bounded(
+        &self,
+        key: &str,
+        max_entries: usize,
+        max_bytes: usize,
+    ) -> Result<Option<HashMap<String, String>>> {
+        bounded_hash_result(self.exec(redis::cmd("HGETALL").arg(key)).await?, max_entries, max_bytes)
+    }
+    pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<()> {
+        let mut cmd = redis::cmd("SET");
+        cmd.arg(key).arg(value);
+        if let Some(ttl) = ttl {
+            cmd.arg("EX").arg(ttl.as_secs());
+        }
+        self.query(&cmd).await
+    }
+    pub async fn set_px(&self, key: &str, value: &str, ttl_ms: u64) -> Result<()> {
+        self.query(redis::cmd("SET").arg(key).arg(value).arg("PX").arg(ttl_ms))
+            .await
+    }
+    pub async fn get(&self, key: &str) -> Result<Option<String>> {
+        self.query(redis::cmd("GET").arg(key)).await
+    }
+    pub async fn del(&self, keys: &[&str]) -> Result<u64> {
+        self.query(redis::cmd("DEL").arg(keys)).await
+    }
+    pub async fn exists(&self, key: &str) -> Result<bool> {
+        self.query(redis::cmd("EXISTS").arg(key)).await
+    }
+    pub async fn expire(&self, key: &str, seconds: i64) -> Result<bool> {
+        self.query(redis::cmd("EXPIRE").arg(key).arg(seconds)).await
+    }
+    pub async fn ttl(&self, key: &str) -> Result<i64> {
+        self.query(redis::cmd("TTL").arg(key)).await
+    }
+    pub async fn incr(&self, key: &str) -> Result<i64> {
+        self.query(redis::cmd("INCR").arg(key)).await
+    }
+    pub async fn incr_by(&self, key: &str, increment: i64) -> Result<i64> {
+        self.query(redis::cmd("INCRBY").arg(key).arg(increment)).await
+    }
+    pub async fn hget(&self, key: &str, field: &str) -> Result<Option<String>> {
+        self.query(redis::cmd("HGET").arg(key).arg(field)).await
+    }
+    pub async fn hset(&self, key: &str, field: &str, value: &str) -> Result<u64> {
+        self.query(redis::cmd("HSET").arg(key).arg(field).arg(value)).await
+    }
+    pub async fn hdel(&self, key: &str, fields: &[&str]) -> Result<u64> {
+        self.query(redis::cmd("HDEL").arg(key).arg(fields)).await
+    }
+    pub async fn hgetall(&self, key: &str) -> Result<HashMap<String, String>> {
+        self.query(redis::cmd("HGETALL").arg(key)).await
+    }
+    pub async fn hexists(&self, key: &str, field: &str) -> Result<bool> {
+        self.query(redis::cmd("HEXISTS").arg(key).arg(field)).await
+    }
     pub async fn rpush(&self, key: &str, values: Vec<String>) -> Result<u64> {
-        let len: u64 = self
-            .pool()
-            .rpush(key, values)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis RPUSH {}: {:?}", key, e))?;
-        Ok(len)
+        self.query(redis::cmd("RPUSH").arg(key).arg(values)).await
     }
-
-    /// LPOP key [count] — pop from list head
-    pub async fn lpop(&self, key: &str, count: Option<usize>) -> Result<Vec<String>> {
-        let vals: Vec<String> = self
-            .pool()
-            .lpop(key, count)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis LPOP {}: {:?}", key, e))?;
-        Ok(vals)
-    }
-
-    /// LLEN key — returns list length
     pub async fn llen(&self, key: &str) -> Result<u64> {
-        let len: u64 = self
-            .pool()
-            .llen(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis LLEN {}: {:?}", key, e))?;
-        Ok(len)
+        self.query(redis::cmd("LLEN").arg(key)).await
+    }
+    pub async fn lpop(&self, key: &str, count: Option<usize>) -> Result<Vec<String>> {
+        let mut cmd = redis::cmd("LPOP");
+        cmd.arg(key);
+        if let Some(count) = count {
+            cmd.arg(count);
+        }
+        let value = self.exec(&cmd).await?;
+        match value {
+            Value::Nil => Ok(Vec::new()),
+            Value::BulkString(_) | Value::SimpleString(_) => Ok(vec![redis::from_redis_value(value)?]),
+            value => Ok(redis::from_redis_value(value)?),
+        }
+    }
+    pub async fn ping(&self) -> Result<u64> {
+        let start = std::time::Instant::now();
+        let _: String = self.query(&redis::cmd("PING")).await?;
+        Ok(start.elapsed().as_millis() as u64)
+    }
+    pub async fn ping_all_members(&self) -> Result<usize> {
+        let resolver = self.resolver.get().ok_or_else(super::backend::unavailable)?.clone();
+        let view = self.backend.probe_view(resolver).await;
+        let Some((live, configured)) = view.observed else {
+            anyhow::bail!("Redis pool PING failed");
+        };
+        anyhow::ensure!(
+            view.healthy && live == configured && configured != 0,
+            "Redis pool PING failed"
+        );
+        Ok(configured)
+    }
+    pub async fn health_status(&self) -> LinkSysHealth {
+        match self.ping().await {
+            Ok(latency_ms) => LinkSysHealth {
+                name: self.name().to_owned(),
+                system_type: "redis".into(),
+                connected: true,
+                latency_ms: Some(latency_ms),
+                error: None,
+            },
+            Err(_) => LinkSysHealth {
+                name: self.name().to_owned(),
+                system_type: "redis".into(),
+                connected: false,
+                latency_ms: None,
+                error: Some("Redis PING failed".into()),
+            },
+        }
     }
 }
 
-// ============================================================================
-// Distributed Lock (single-instance, SET NX PX)
-// ============================================================================
-
-/// Lock guard that auto-releases on drop.
-/// Uses a unique value to ensure only the lock holder can release.
-pub struct RedisLockGuard {
-    pool: Pool,
-    key: String,
-    value: String,
-}
-
-impl RedisLockGuard {
-    /// Explicitly release the lock.
-    pub async fn unlock(self) -> Result<bool> {
-        release_lock(&self.pool, &self.key, &self.value).await
-    }
-}
-
-impl Drop for RedisLockGuard {
-    fn drop(&mut self) {
-        // Best-effort release via a spawned task.
-        // If the task can't run (runtime shutting down), the lock expires via TTL.
-        let pool = self.pool.clone();
-        let key = self.key.clone();
-        let value = self.value.clone();
-        tokio::spawn(async move {
-            let _ = release_lock(&pool, &key, &value).await;
-        });
-    }
-}
-
-/// Lua script for atomic lock release:
-/// Only delete the key if the value matches (prevents releasing someone else's lock).
-const UNLOCK_SCRIPT: &str = r#"
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("DEL", KEYS[1])
-else
-    return 0
-end
-"#;
-
-/// Release lock atomically via Lua EVAL script.
-async fn release_lock(pool: &Pool, key: &str, value: &str) -> Result<bool> {
-    let result: i64 = pool.eval(UNLOCK_SCRIPT, vec![key], vec![value]).await.unwrap_or(0);
-    Ok(result == 1)
-}
-
-/// Lock acquisition options.
 pub struct LockOptions {
-    /// Lock TTL (auto-expire if not released). Default: 10 seconds.
     pub ttl: Duration,
-    /// Maximum time to wait for lock acquisition. Default: 5 seconds.
     pub max_wait: Duration,
-    /// Retry interval between acquisition attempts. Default: 50ms.
     pub retry_interval: Duration,
 }
-
 impl Default for LockOptions {
     fn default() -> Self {
         Self {
@@ -428,130 +246,112 @@ impl Default for LockOptions {
         }
     }
 }
-
-impl RedisLinkClient {
-    /// Acquire a distributed lock.
-    ///
-    /// Uses `SET key value NX PX ttl` for atomic lock acquisition.
-    /// Returns a `RedisLockGuard` that auto-releases on drop.
-    ///
-    /// **Note:** This is a single-instance lock (not full Redlock).
-    /// Suitable for leader election and coordination within a single Redis deployment.
-    pub async fn lock(&self, key: &str, opts: LockOptions) -> Result<RedisLockGuard> {
-        use fred::types::{Expiration, SetOptions};
-
-        let value = generate_lock_value();
-        let ttl_ms = opts.ttl.as_millis() as i64;
-        let deadline = tokio::time::Instant::now() + opts.max_wait;
-
-        loop {
-            let result: Option<String> = self
-                .pool()
-                .set(
-                    key,
-                    value.as_str(),
-                    Some(Expiration::PX(ttl_ms)),
-                    Some(SetOptions::NX),
-                    false,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("Redis LOCK SET {}: {:?}", key, e))?;
-
-            if result.is_some() {
-                return Ok(RedisLockGuard {
-                    pool: self.pool().clone(),
-                    key: key.to_string(),
-                    value,
-                });
-            }
-
-            if tokio::time::Instant::now() >= deadline {
-                anyhow::bail!("Redis LOCK {}: timeout after {:?}", key, opts.max_wait);
-            }
-
-            tokio::time::sleep(opts.retry_interval).await;
-        }
-    }
-
-    /// Try to acquire lock without waiting. Returns None if lock is held.
-    pub async fn try_lock(&self, key: &str, ttl: Duration) -> Result<Option<RedisLockGuard>> {
-        use fred::types::{Expiration, SetOptions};
-
-        let value = generate_lock_value();
-        let ttl_ms = ttl.as_millis() as i64;
-
-        let result: Option<String> = self
-            .pool()
-            .set(
-                key,
-                value.as_str(),
-                Some(Expiration::PX(ttl_ms)),
-                Some(SetOptions::NX),
-                false,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis TRY_LOCK SET {}: {:?}", key, e))?;
-
-        if result.is_some() {
-            Ok(Some(RedisLockGuard {
-                pool: self.pool().clone(),
-                key: key.to_string(),
-                value,
-            }))
-        } else {
-            Ok(None)
-        }
+pub struct RedisLockGuard {
+    backend: Arc<RedisBackend>,
+    resolver: RedisEgressResolver,
+    key: String,
+    value: String,
+    released: bool,
+}
+const UNLOCK_SCRIPT: &str =
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+async fn release_lock(backend: &RedisBackend, resolver: RedisEgressResolver, key: &str, value: &str) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + backend.transport.command_timeout;
+    let response = backend
+        .exec(
+            redis::cmd("EVAL").arg(UNLOCK_SCRIPT).arg(1).arg(key).arg(value),
+            deadline,
+            resolver,
+        )
+        .await?;
+    Ok(redis::from_redis_value::<i64>(response)? == 1)
+}
+impl RedisLockGuard {
+    pub async fn unlock(mut self) -> Result<bool> {
+        self.released = true;
+        release_lock(&self.backend, self.resolver.clone(), &self.key, &self.value).await
     }
 }
-
-/// Generate a unique lock value for safe release.
-/// Format: "pid:timestamp_nanos" — unique across processes and time.
+impl Drop for RedisLockGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let (backend, resolver, key, value) = (
+            self.backend.clone(),
+            self.resolver.clone(),
+            self.key.clone(),
+            self.value.clone(),
+        );
+        runtime.spawn(async move {
+            let _ = release_lock(&backend, resolver, &key, &value).await;
+        });
+    }
+}
 fn generate_lock_value() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    format!("{}:{}", std::process::id(), ts.as_nanos())
+    format!(
+        "{}:{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }
-
-// ============================================================================
-// Health Check
-// ============================================================================
-
 impl RedisLinkClient {
-    /// Active health check via PING. Returns latency in milliseconds.
-    pub async fn ping(&self) -> Result<u64> {
-        let start = std::time::Instant::now();
-        self.pool()
-            .ping::<String>(None)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis PING failed: {:?}", e))?;
-        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
+    async fn acquire_lock_until(
+        &self,
+        key: &str,
+        ttl: Duration,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<RedisLockGuard>> {
+        let value = generate_lock_value();
+        let result = self
+            .exec_until(
+                redis::cmd("SET")
+                    .arg(key)
+                    .arg(&value)
+                    .arg("NX")
+                    .arg("PX")
+                    .arg(ttl.as_millis() as u64),
+                deadline,
+            )
+            .await?;
+        if matches!(result, Value::Nil) {
+            return Ok(None);
+        }
+        let _: String = redis::from_redis_value(result)?;
+        Ok(Some(RedisLockGuard {
+            backend: self.backend.clone(),
+            resolver: self.resolver.get().ok_or_else(super::backend::unavailable)?.clone(),
+            key: key.to_owned(),
+            value,
+            released: false,
+        }))
     }
-
-    /// Get detailed health status for admin API exposure.
-    pub async fn health_status(&self) -> LinkSysHealth {
-        match self.ping().await {
-            Ok(latency_ms) => LinkSysHealth {
-                name: self.name().to_string(),
-                system_type: "redis".to_string(),
-                connected: true,
-                latency_ms: Some(latency_ms),
-                error: None,
-            },
-            Err(e) => LinkSysHealth {
-                name: self.name().to_string(),
-                system_type: "redis".to_string(),
-                connected: false,
-                latency_ms: None,
-                error: Some(e.to_string()),
-            },
+    pub async fn try_lock(&self, key: &str, ttl: Duration) -> Result<Option<RedisLockGuard>> {
+        self.acquire_lock_until(key, ttl, self.operation_deadline()).await
+    }
+    pub async fn lock(&self, key: &str, opts: LockOptions) -> Result<RedisLockGuard> {
+        let deadline = self
+            .operation_deadline()
+            .min(tokio::time::Instant::now() + opts.max_wait);
+        loop {
+            if let Some(guard) = self.acquire_lock_until(key, opts.ttl, deadline).await? {
+                return Ok(guard);
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "Redis lock acquisition timed out"
+            );
+            tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + opts.retry_interval)).await;
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 #[path = "../../../../tests/unit/link_sys/providers/redis/ops_test.rs"]
 mod tests;

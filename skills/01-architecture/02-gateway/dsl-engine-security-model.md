@@ -57,10 +57,10 @@ Value limits do not claim to bound that producer-side aggregation.
 
 Gateway `redis.hgetall` and `http.call` response headers separately apply a
 fixed 1 MiB cumulative field/name plus value payload cap before Edgion copies
-their results. Redis checks a borrowed raw RESP frame before Fred's additional
+their results. Redis checks a borrowed raw RESP frame before additional
 result Map, truncation, and owned-string conversion; HTTP counts the live
 retained Map and refunds replaced values.
-Fred still aggregates the complete Redis reply before this guard. See
+redis-rs still aggregates the complete Redis reply before this guard. See
 [host-result byte budgets](../../04-review/dsl/regression-guards/host-result-byte-budgets.md)
 for failure shapes, dependency limits, and regression evidence.
 
@@ -383,7 +383,7 @@ session overwrite. Frozen-body/publication errors retain fixed BodyAccess500.
 String-only JSON reads need no body capture and response bodies remain streaming.
 
 RedisGetBounded resolves each live LinkSys client, checks raw GET type/length/UTF-8
-before DSL text allocation and classifies typed Fred timeout before error wrapping.
-It bounds conversion only: Fred aggregates the complete RESP reply first. Existing
+before DSL text allocation and classifies typed redis-rs timeout before error wrapping.
+It bounds conversion only: redis-rs aggregates the complete RESP reply first. Existing
 pool command deadlines and caller cancellation apply; there is no general VM
 execution timeout. See [the maintained JSON/Redis guard](../../04-review/dsl/regression-guards/bounded-json-reconstruction.md).

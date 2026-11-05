@@ -66,6 +66,31 @@ fn redis_configuration_contract_rejects_unsupported_values() {
 }
 
 #[test]
+fn portless_sentinel_endpoints_default_to_the_sentinel_port() {
+    let config: RedisClientConfig = serde_json::from_value(serde_json::json!({
+        "topology": {"mode": "sentinel", "sentinel": {
+            "masterName": "primary",
+            "sentinels": ["sentinel-a", "redis://sentinel-b", "sentinel-c:26380"]
+        }}
+    }))
+    .unwrap();
+    let ports: Vec<_> = config
+        .parsed_active_endpoints()
+        .unwrap()
+        .into_iter()
+        .map(|endpoint| (endpoint.host, endpoint.port))
+        .collect();
+    assert_eq!(
+        ports,
+        vec![
+            ("sentinel-a".to_string(), 26379),
+            ("sentinel-b".to_string(), 26379),
+            ("sentinel-c".to_string(), 26380)
+        ]
+    );
+}
+
+#[test]
 fn redis_endpoint_contract_accepts_supported_authority_forms() {
     for (raw, host, port, transport) in [
         ("cache", "cache", 6379, RedisTransport::Plaintext),

@@ -90,6 +90,7 @@ tonic-prost-build.workspace = true
 [dev-dependencies]
 base64.workspace = true
 h2.workspace = true
+log.workspace = true
 rcgen.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true

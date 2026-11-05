@@ -12,7 +12,10 @@ const PINGORA_H1_PROXY_TARGET: &str = "pingora_proxy::proxy_h1";
 // These dependencies can format peer-controlled headers, TLS identities and
 // certificate errors. Their diagnostics cannot be made safe by our callers.
 // Keep this protection independent of operator RUST_LOG directives.
-const SENSITIVE_TRANSPORT_TARGETS: [&str; 3] = ["tonic::transport", "rustls", "h2"];
+// redis-rs logs configured and discovered node addresses plus raw errors
+// through the `log` facade, which the subscriber bridges into tracing.
+// Edgion's own Redis lifecycle logs use metadata-only `edgion_*` targets.
+const SENSITIVE_TRANSPORT_TARGETS: [&str; 4] = ["tonic::transport", "rustls", "h2", "redis"];
 
 fn within_target(target: &str, parent: &str) -> bool {
     target == parent || target.strip_prefix(parent).is_some_and(|rest| rest.starts_with("::"))

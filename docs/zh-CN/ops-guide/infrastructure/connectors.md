@@ -252,9 +252,9 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `pool.size` | Integer | `8` | 固定连接数，范围 1–64；所有连接在初始化时建立。 |
+| `pool.size` | Integer | `8` | standalone 与 Sentinel 的目标连接数，范围 1–64。至少一条连接建立且首次探测成功后即发布；连接数不足时客户端保持发布并继续恢复。Cluster 忽略该字段。 |
 | `timeout.connect` | Duration | `5s` | 连接超时，必须大于零且不超过 `10s`。 |
-| `timeout.command` | Duration | `5s` | 单条 Redis 命令超时，必须大于零且不超过 `30s`。 |
+| `timeout.command` | Duration | `5s` | 单次操作的总期限，包含 Cluster MOVED 重定向和 NOSCRIPT 回退。必须大于零且不超过 `30s`。 |
 
 Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连接器以固定的
 有界指数退避持续恢复连接，但不会在连接失败且执行结果未知时透明重放普通命令；调用方
@@ -268,8 +268,8 @@ Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连
 | `topology.sentinel` | Object | none | Sentinel 配置。**`mode=sentinel` 时必填。** |
 | `topology.cluster` | Object | none | 可选的 Cluster 路由配置。 |
 | `topology.sentinel.masterName` | String | **必填** | Sentinel 监控的主节点名称。 |
-| `topology.sentinel.sentinels` | Array\<String\> | **必填** | Sentinel 地址（`host:port`）。 |
-| `topology.cluster.maxRedirects` | Integer | `5` | 最大集群重定向跳数，范围 0–64。 |
+| `topology.sentinel.sentinels` | Array\<String\> | **必填** | Sentinel 地址（`host:port`）。省略端口时默认 `26379`。 |
+| `topology.cluster.maxRedirects` | Integer | `5` | 额外跟随的 MOVED 次数，范围 0–64。ASK、TRYAGAIN 和 CLUSTERDOWN 直接失败，不再尝试。 |
 
 省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel`
 块时，状态报告 `Accepted=False/Invalid`。Cluster 模式仅在覆盖 `maxRedirects` 时需要
@@ -282,20 +282,22 @@ Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连
 验证错误只报告字段和列表索引，不回显输入值。
 
 未设置 `tls.enabled: true` 时，所有活动端点必须选择同一种传输：`rediss://`
-表示 TLS，`redis://` 和无 scheme 形式表示明文。显式 TLS 作用于整个 Fred 客户端，
+表示 TLS，`redis://` 和无 scheme 形式表示明文。显式 TLS 作用于整个 redis-rs 客户端，
 因此允许 endpoint 采用混合拼写。
 
 ### DNS 与出站流量策略
 
-Redis 端点由 Gateway 在 Fred 建立连接时解析，而不是由 Controller 预先解析，也不会在每条
-Redis 命令执行时解析。配置的 seed、自动重连、Sentinel 发现的主节点，以及 Cluster 发现或
-重定向到的节点都经过同一拨号时解析器。解析使用 Edgion 共享解析器的系统 DNS 模式，结果按
+Redis 端点由 Gateway 在 redis-rs 建立连接时解析，而不是由 Controller 预先解析，也不会在每条
+Redis 命令执行时解析。配置的 seed、自动重连、Sentinel 发现的主节点、已发布客户端已知的
+Cluster 主节点，以及重定向目标都经过同一拨号时解析器。解析使用 Edgion 共享解析器的系统 DNS 模式，结果按
 `outbound_egress_dns_cache_ttl_ms` 缓存（默认 5 秒）。
 
-Fred 建立连接前会立即对每个解析地址分类。生产模式始终拒绝回环、链路本地和未指定地址；
+redis-rs 建立连接前会立即对每个解析地址分类。生产模式始终拒绝回环、链路本地和未指定地址；
 私有地址与唯一本地地址遵循 Gateway 全局 `outbound_egress_block_private` 配置，Redis 不提供
 连接器级覆盖。此防护属于纵深防御，不能替代 Gateway Pod 的 `NetworkPolicy`。共享配置和地址
 分类详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。
+
+`pool.size` 只作用于 standalone 和 Sentinel。Cluster 使用一个多路复用拓扑客户端并忽略该字段。一次操作共用 `timeout.command` 总期限；执行结果未知时不重放。只跟随 MOVED，次数不超过 `maxRedirects`。多键命令必须位于同一个 Cluster hash slot，跨 slot 操作不会拆分到多个节点。健康检查以名义 5 秒周期主动发送 PING/ROLE，调度和探测耗时会额外增加检测延迟。系统信任使用编译进程序的 webpki 根证书；私有 CA 必须显式配置引用。Sentinel 发布在可达 Sentinel 中获得唯一相对多数、且 ROLE 确认为 master 的地址；票数并列时这一轮不发布。每个 Sentinel 按其 run ID（`SENTINEL MYID`，需 Redis 6.2+）只计一票，即使它同时可通过配置的域名和学习到的 IP 访问；不响应 `SENTINEL MYID` 的 Sentinel 不计票。Sentinel 与数据节点共用凭据。客户端发布后，Cluster 恢复会同时拨号当前已知主节点和配置的 seed，因此摘掉最初的 seed 不会阻止拓扑刷新。新一代必须先建立真实连接，普通替换才会生效。强制刷新仍先退役旧实例。
 
 > **说明**：`topology.sentinel.password`（独立于 Redis 节点认证的 Sentinel 自身密码）字段已被移除——该字段在运行时从未被消费（no-op）。如果现有 CR 的 `topology.sentinel` 下包含 `password:` 字段，Kubernetes API server 在重新 apply 时会静默裁剪该字段，不会导致解析错误。
 

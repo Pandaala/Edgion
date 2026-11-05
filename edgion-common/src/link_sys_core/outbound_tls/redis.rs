@@ -19,6 +19,12 @@ pub struct PreparedRedisTls {
     uses_tls: bool,
 }
 
+/// Canonical Redis TLS material. Do not derive Debug: the identity is secret.
+pub struct RedisTlsMaterial {
+    pub root_pem: Option<Vec<u8>>,
+    pub client_identity: Option<(Vec<u8>, zeroize::Zeroizing<Vec<u8>>)>,
+}
+
 impl PreparedRedisTls {
     pub fn from_link_sys(owner: Arc<LinkSys>) -> anyhow::Result<Self> {
         Self::with_snapshot(owner, outbound_global_default())
@@ -73,14 +79,31 @@ impl PreparedRedisTls {
         hash_tls_inheritance(hasher, policy, self.input.defaults());
     }
 
-    /// Cold construction against the same snapshot used before reuse. Fred owns
-    /// the resulting connector for seed, retry and reconnect dials.
-    pub fn rustls_client_config(&self) -> anyhow::Result<Option<rustls::ClientConfig>> {
+    /// Resolve and validate once against this prepared ownership generation.
+    pub fn redis_tls_material(&self) -> anyhow::Result<Option<RedisTlsMaterial>> {
         if !self.uses_tls {
             return Ok(None);
         }
         self.input.with_tls_selection(|proof, defaults| {
-            crate::link_sys_core::tls::build_validated_rustls_client_config(proof, defaults, "Redis")
+            let resolved = super::resolve_validated_outbound_tls_audited(proof, false, "Redis", defaults)
+                .map_err(|error| anyhow::anyhow!("Redis TLS configuration error: {error:?}"))?;
+            // Reuse canonical PEM, key-pair and unsupported-policy validation.
+            crate::link_sys_core::tls::build_effective_rustls_client_config(&resolved)?;
+            let root_pem = match &resolved.ca {
+                super::EffectiveCa::System => None,
+                super::EffectiveCa::Custom(bundles) => {
+                    let mut pem = Vec::new();
+                    for bundle in bundles {
+                        pem.extend_from_slice(bundle.as_slice());
+                        pem.push(b'\n');
+                    }
+                    Some(pem)
+                }
+            };
+            Ok(Some(RedisTlsMaterial {
+                root_pem,
+                client_identity: resolved.client_identity.clone(),
+            }))
         })
     }
 }

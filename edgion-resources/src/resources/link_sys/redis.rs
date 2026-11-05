@@ -16,6 +16,8 @@ pub const REDIS_DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 pub const REDIS_MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub const REDIS_MAX_REDIRECTS: u32 = 64;
 const REDIS_DEFAULT_PORT: u16 = 6379;
+/// Sentinel's standard port; a portless `topology.sentinel.sentinels` entry uses it.
+const REDIS_SENTINEL_DEFAULT_PORT: u16 = 26379;
 
 /// Validated Redis transport selected by an endpoint scheme.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,9 +172,14 @@ impl RedisClientConfig {
             },
         };
 
+        let default_port = if field == "topology.sentinel.sentinels" {
+            REDIS_SENTINEL_DEFAULT_PORT
+        } else {
+            REDIS_DEFAULT_PORT
+        };
         let mut parsed = Vec::with_capacity(endpoints.len());
         for (index, endpoint) in endpoints.iter().enumerate() {
-            match parse_redis_endpoint(endpoint) {
+            match parse_redis_endpoint(endpoint, default_port) {
                 Ok(endpoint) => parsed.push(endpoint),
                 Err(reason) => errors.push(format!("Redis {field}[{index}] is invalid: {reason}")),
             }
@@ -232,7 +239,7 @@ fn validate_standalone_shape(config: &RedisClientConfig, errors: &mut Vec<String
     }
 }
 
-fn parse_redis_endpoint(value: &str) -> Result<ParsedRedisEndpoint, &'static str> {
+fn parse_redis_endpoint(value: &str, default_port: u16) -> Result<ParsedRedisEndpoint, &'static str> {
     if value.is_empty() || value.trim() != value {
         return Err("must not be empty or contain surrounding whitespace");
     }
@@ -279,7 +286,7 @@ fn parse_redis_endpoint(value: &str) -> Result<ParsedRedisEndpoint, &'static str
         Some(Host::Ipv6(host)) => host.to_string(),
         _ => return Err("host must not be empty"),
     };
-    let port = url.port().unwrap_or(REDIS_DEFAULT_PORT);
+    let port = url.port().unwrap_or(default_port);
     if port == 0 {
         return Err("port must be between 1 and 65535");
     }

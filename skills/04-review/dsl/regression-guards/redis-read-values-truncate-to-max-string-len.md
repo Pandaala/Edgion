@@ -18,7 +18,7 @@ For `redis.hgetall`, the Gateway additionally checks original field plus value
 bytes against a fixed 1 MiB budget before owned-string conversion. Oversized
 results use the existing failure Map; only admitted results reach the truncation
 sites below. See [producer byte budgets](host-result-byte-budgets.md) for the
-current boundary and fred's unavoidable earlier aggregation. The historical
+current boundary and redis-rs's unavoidable earlier aggregation. The historical
 single-string fix below never bounded that dependency allocation.
 
 The three redis read builtins (`redis.get`, `redis.hget`, and — for both key and value — `redis.hgetall`) construct `Value::Str` from server-returned strings. Each string is now **silently truncated** at `self.limits.max_string_len` (default 8 KiB) before entering the DSL value heap, restoring the sandbox invariant "no `Value::Str` in the VM heap exceeds `max_string_len`".
@@ -29,7 +29,7 @@ Findings of the form "`redis.get`/`hget`/`hgetall` skips `check_string_len`" / "
 
 **1. Why the values need a `max_string_len` cap at all**
 
-Essentially every other externally-controlled string builtin in the same file (`req.header`/`query`/`cookie`, `json_get`, base64/hex/url decode, regex output, hash hex) routes through a string-length guard before constructing `Value::Str`. The three redis read arms were the sole carve-out. Without the cap, an oversized Redis value (up to 512 MB; `fred` applies no reply-size limit) flows verbatim into downstream sinks (`req.set_header`, `resp.set_header`, `ctx.set`, `log`, `log_error`) that `.into_string()` with no second size gate.
+Essentially every other externally-controlled string builtin in the same file (`req.header`/`query`/`cookie`, `json_get`, base64/hex/url decode, regex output, hash hex) routes through a string-length guard before constructing `Value::Str`. The three redis read arms were the sole carve-out. Without the cap, an oversized Redis value (up to 512 MB; `redis-rs` applies no reply-size limit) flows verbatim into downstream sinks (`req.set_header`, `resp.set_header`, `ctx.set`, `log`, `log_error`) that `.into_string()` with no second size gate.
 
 **2. Why silent truncation and not `RuntimeError::StringTooLong`**
 
@@ -37,7 +37,7 @@ The redis dispatcher carries the documented contract "Never panics, never raises
 
 **3. Why truncation does not weaken security**
 
-The memory peak is unchanged: the bytes are already materialized in the `fred` reply buffer before reaching the heap. Truncation only changes *what is retained* as a long-lived `Value::Str`, not *what is read* during the call — so it is not a live OOM mitigation, it is a sandbox-invariant restoration. Downstream sinks now receive at most `max_string_len` bytes, matching every other builtin. Operators who legitimately need larger values must raise `max_string_len` (explicit at config time).
+The memory peak is unchanged: the bytes are already materialized in the `redis-rs` reply buffer before reaching the heap. Truncation only changes *what is retained* as a long-lived `Value::Str`, not *what is read* during the call — so it is not a live OOM mitigation, it is a sandbox-invariant restoration. Downstream sinks now receive at most `max_string_len` bytes, matching every other builtin. Operators who legitimately need larger values must raise `max_string_len` (explicit at config time).
 
 **4. `hgetall` key and value both truncated**
 

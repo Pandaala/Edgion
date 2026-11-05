@@ -41,7 +41,7 @@ inert through the canonical owning selection.
   `rediss://` TLS and its existing empty-local global inheritance. It proves source
   and whole active pairing before replay, retains one captured snapshot across
   retries, then builds one connector through the shared rustls conversion core.
-  Fred mapping receives that connector without resolving TLS again;
+  redis-rs mapping receives that connector without resolving TLS again;
   other providers keep their existing transport-selection and TLS-loading paths.
   HTTP providers use `build_outbound_client` and `apply_resolved_outbound_tls`;
   active TLS policy continues through the canonical `outbound_tls` resolver, as required by
@@ -158,18 +158,13 @@ provider-owned runtime refactor; current preparation tests live in client.rs):
   under enabled unresolved TLS, and recovery after disabling. Resources and markers
   are cleaned up. No Kubernetes deployment or every-provider live transport sweep
   was run; other provider boundaries are covered by the targeted tests above.
-- `redis-tls-integration-coverage`: the isolated `LinkSys/RedisTls` fixtures now
-  exercise successful Redis handshakes through the complete Controller, conf_sync,
-  Gateway, Fred, and Redis path. The suite covers scheme-only `rediss://` with the
-  generated CA exposed through the documented native trust source, an explicit
-  `caCertificateRefs` private CA, and mTLS with `clientCertificateRef`. Each client
-  readiness check is bounded to 20 seconds. A fresh 2026-09-13 standard runner call,
-  `run_integration.sh --no-prepare -r LinkSys -i RedisTls`, passed all 73 Redis
-  LinkSys assertions, including the three new handshakes, plus resource convergence,
-  unknown-field, requeue-loop, and cache-residue checks. Its first service probe
-  exposed and drove correction of missing container-side TLS ports before the
-  successful rerun. Container reuse across later work directories is a separate
-  runner invariant: see
+- `redis-tls-integration-coverage` (historical Fred run, 2026-09-13): that run
+  exercised scheme-only `rediss://` through Fred's native trust source and
+  `SSL_CERT_FILE`. It is not the current redis-rs contract. Current default trust
+  is the compiled webpki root set. Scheme-only `rediss://` must fail closed against
+  the private test CA. Explicit `caCertificateRefs` and mTLS remain the successful
+  handshakes. Container reuse across later work directories is a separate runner
+  invariant: see
   [Redis TLS container reuse](../../testing/regression-guards/redis-tls-container-reuse-certificate-identity.md).
 - `cargo fmt --all` and `cargo fmt --all -- --check`,
   `cargo check --workspace --all-targets`, and
@@ -192,8 +187,10 @@ dependencies and scheme behavior must be reviewed together with front-end gates.
 - `g9a-007`: historical correction unifying outbound reqwest TLS loading.
 - `disabled-tls-publication-readiness`: fixed; inactive LinkSys TLS no longer
   blocks reference resolution/readiness or changes Webhook transport selection.
-- `redis-tls-integration-coverage`: fixed; successful default-trust, custom-CA,
-  and mutual-TLS Redis handshakes have isolated integration coverage.
+- `redis-tls-integration-coverage`: current default trust is compiled webpki
+  roots and rejects the private test CA. Custom-CA and mutual-TLS handshakes
+  remain the successful isolated coverage. The 2026-09-13 native-trust success
+  is historical Fred evidence.
 
 ## Etcd owning and trusted-bootstrap inputs
 

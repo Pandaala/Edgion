@@ -53,16 +53,16 @@ before allocation. Source/wire capture and mutation analysis recognize it;
 response factories reject it. Every publication failure is BodyAccess500 even
 under Ignore. Security-inspection freeze and canonical framing remain authoritative.
 
-RedisGetBounded uses raw GET/FirstKey on the live LinkSys pool. Positive bound
+RedisGetBounded uses `redis::cmd("GET")` on the live LinkSys client. Cluster
+routing uses `command_route` with key index 1. Positive bound
 admission precedes provider resolution; effective cap is min(requested,maxStringLen,
 65536). Borrowed reply type/length/UTF-8 preflight precedes text allocation. Fixed
 oversize/invalid-response/timeout classes preserve the non-throwing map. Typed
-Fred ErrorKind::Timeout is classified before formatting. Raw SimpleError and
-BlobError frames are dependency failures; classify them using a fixed private
+redis-rs RedisError::is_timeout() is classified before formatting. Raw server errors frames are dependency failures; classify them using a fixed private
 error rather than copying an unbounded or sensitive server message. Successful
 non-string replies remain invalid_response. Existing pool command
 timeouts and caller cancellation apply; the VM has no general wall-clock timeout.
-Fred's full reply aggregation is outside this conversion bound. Old get truncation
+redis-rs's full reply aggregation is outside this conversion bound. Old get truncation
 is unchanged and is not safe for complete stored query records.
 
 ## Evidence and re-evaluation
@@ -74,7 +74,7 @@ late-stage rejection, fixed Ignore failure and raw Redis type/byte/UTF-8 admissi
 Fresh test/check/review results belong in the selected task's implementation record;
 this page does not claim live recipe or response-cache acceptance.
 
-Re-evaluate on serde/Fred upgrades, parser policy/materializer changes, allocation
+Re-evaluate on serde/redis-rs upgrades, parser policy/materializer changes, allocation
 ledger changes, new raw operations, Body publication/stage ownership changes or
 Redis transport memory guarantees. The maintained architecture contract is in
 [the DSL engine security model](../../../01-architecture/02-gateway/dsl-engine-security-model.md#strict-json-reconstruction-and-nontruncating-redis-get).

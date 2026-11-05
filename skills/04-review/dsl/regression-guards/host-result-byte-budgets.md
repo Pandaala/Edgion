@@ -31,36 +31,19 @@ completion checked only the retained header count and each string's length.
 The VM's later `VmState::push` shape/work inspection could not prevent these
 earlier allocations.
 
-The Gateway provider's crate-private `hgetall_bounded` now requests a raw fred
-`Resp3Frame`, checks its borrowed Array/Map through `bounded_hash_result`, then
-converts an admitted frame through Fred's canonical `Value::try_from` and
-`into_map` into owned strings. Both count and byte checks precede Fred's
-additional result Map allocation. Existing public `hgetall` consumers are
-unchanged. `redis_hash_result` preserves the established envelope and truncation.
-`complete_http_call_response` checks cumulative bytes before allocating names
-or `Arc<str>` values while retaining raw-prefix traversal and full-Map stopping.
-
-The 1 MiB ceiling matches the supported maximum DSL string and outbound HTTP
-response-body ceiling without adding a new configuration surface. It bounds
-additional result payload even when per-entry limits are raised. The failure
-shapes follow the existing Redis and HTTP contracts; see
-[Redis failure classes](redis-error-results-bounded-and-redacted.md) and
-[HTTP status-zero failures](../intentional-design/http-call-body-truncate-to-max-string-len.md).
-Canonical authority remains design rules A/B/C/F/U/Z and the sandbox model,
-not this page's regression classification.
+The Gateway provider requests `redis::Value` and checks original entry counts
+and byte lengths before converting to owned strings. RESP2 arrays must have an
+even length; maps use original entry count. Invalid UTF-8 fails conversion only
+after limits have been checked. `checked_hash_bytes` rejects arithmetic overflow.
+The client already aggregates the complete response before this check; this is
+not a wire-frame or total-memory limit. Nested values and error frames never
+become user payload. Revalidate when changing redis-rs decoding or conversion.
 
 ## Alternatives and limits
 
-Fred 10.1.0 `HashesInterface::hgetall` uses `frame_to_map` before returning its
-`Value`, so requesting that Value would still allocate an avoidable full Map
-for an oversized reply. The bounded entry instead uses `ClientLike::custom_raw`
-with `CustomCommand::new_static("HGETALL", ClusterHash::FirstKey, false)` on
-the existing pool. This preserves the command, ACL, key routing, and timeout.
-It checks RESP2 replies represented as flat RESP3 Arrays and native RESP3 Maps
-before additional result conversion. Fred's `_Custom` forces a flush while
-remaining pipeline-capable; more frequent flushing can reduce batching
-efficiency. This limited tradeoff exposes the earliest public preflight seam
-without implementing a second decoder or changing HGETALL into HSCAN/Lua.
+The execution entry requests raw `redis::Value` before owned-string conversion.
+This preserves command ACL, single-node key routing, and the total deadline.
+It introduces no second decoder and does not replace HGETALL with HSCAN/Lua.
 
 The guard cannot cap network buffering or the complete decoded RESP frame,
 including the decoder's native RESP3 Map. No total-process-memory or
@@ -90,7 +73,7 @@ arithmetic overflow, malformed values, fixed failure classes and UTF-8
 truncation. Synthetic HTTP response tests cover exact/over-cap headers,
 cumulative overflow, duplicate replacement in both size directions, and no
 body polling on header overflow. An oversized RESP2 Array containing nested
-error frames returns the limit result even though direct Fred frame conversion
+error frames returns the limit result even though direct redis-rs frame conversion
 fails, locking the count check before additional result conversion. Existing
 HTTP prefix and body tests remain.
 
@@ -98,7 +81,7 @@ Verified on 2026-10-05:
 
 - `cargo test -p edgion-gateway --lib link_sys::providers::redis::ops::tests -- --nocapture`
   passed 12/12 provider tests, including raw RESP2/RESP3 replies, early count
-  rejection before Fred conversion, exact 1 MiB, and checked-overflow cases.
+  rejection before redis-rs conversion, exact 1 MiB, and checked-overflow cases.
 - `cargo test -p edgion-gateway --lib plugins::http::dsl:: -- --nocapture`
   passed 467/467 DSL tests, including the new response-header and Redis result
   regressions and existing prefix, body, sandbox, and failure-policy coverage.
@@ -113,7 +96,7 @@ Verified on 2026-10-05:
   does not alter configuration reload or client-generation resolution;
   existing integration fixtures remain unchanged.
 
-Re-evaluate if fred introduces bounded reply decoding or a bounded HGETALL API,
+Re-evaluate if redis-rs introduces bounded reply decoding or a bounded HGETALL API,
 custom-command routing/flush or HGETALL conversion semantics change,
 the cap or result envelopes change, or response-header
 collection no longer retains the current raw-prefix contract.

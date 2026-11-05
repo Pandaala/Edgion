@@ -142,17 +142,17 @@ spec:
       clientCertificateRef: { name: redis-client-tls }
 ```
 
-- When `topology.mode=sentinel`, `sentinel` is required; otherwise the resource is `Accepted=False/Invalid`. Cluster mode uses Fred defaults when its optional `cluster` block is absent.
+- When `topology.mode=sentinel`, `sentinel` is required; otherwise the resource is `Accepted=False/Invalid`. Cluster mode uses Edgion defaults when its optional `cluster` block is absent.
 - Endpoint forms are `host`, `host:port`, `[IPv6]`, `[IPv6]:port`, `redis://host[:port]`, and `rediss://host[:port]`; the default port is 6379. User information, non-root paths, queries, fragments, unknown schemes, and port 0 are rejected without echoing the submitted value in status or logs.
 - Standalone mode requires exactly one top-level `endpoints` item. Cluster mode requires one or more top-level items. Sentinel mode requires top-level `endpoints` to be absent/empty and uses one or more `topology.sentinel.sentinels` items instead. Inactive topology subobjects are rejected.
-- Every active endpoint is parsed all-or-nothing. Without `tls.enabled=true`, the active list cannot mix `rediss://` with plaintext `redis://`/scheme-less entries. Explicit TLS applies to the complete Fred topology and permits mixed spelling.
-- `pool.size` is a fixed eager connection count in the range 1-64 (default 8).
+- Every active endpoint is parsed all-or-nothing. Without `tls.enabled=true`, the active list cannot mix `rediss://` with plaintext `redis://`/scheme-less entries. Explicit TLS applies to the complete redis-rs topology and permits mixed spelling.
+- `pool.size` is the target standalone/Sentinel connection count in the range 1-64 (default 8); Cluster ignores it.
 - `timeout.connect` and `timeout.command` use GEP-2257 durations. Their defaults are `5s`; the maxima are `10s` and `30s`, respectively.
 - Cluster `maxRedirects` defaults to 5 and accepts 0-64. The `cluster` block is optional when the default is sufficient.
 - Redis retries connection establishment with fixed bounded exponential backoff, but does not transparently replay an ordinary command after an ambiguous connection failure.
 - Redis logging and metrics are owned by the Gateway binary; Redis has no per-connector observability block or arbitrary metric labels.
 - `auth` uses `BasicAuthResolver`: the Secret must provide at least `password`; `username` is optional (Redis 6+ ACL).
-- Fred resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and results use `outbound_egress_dns_cache_ttl_ms`.
+- redis-rs resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and results use `outbound_egress_dns_cache_ttl_ms`.
 
 ### `type: etcd`
 
@@ -626,3 +626,22 @@ invalid. This does not add fields, Secret UID requirements or authorization rule
 Ordinary same-type invalid updates retain an already-published client under the
 existing provider policy; forced replacements, deletion and type changes keep
 their existing retirement behavior.
+
+
+### Redis client runtime contract
+
+Standalone and Sentinel use `pool.size` (1..64, default 8). Cluster uses one
+multiplexed topology client and ignores `pool.size`. Operations have one total
+`timeout.command` budget, including MOVED and NOSCRIPT fallback. Unknown outcomes
+are never replayed; ASK, TRYAGAIN and CLUSTERDOWN fail the operation. Only MOVED
+is followed, up to `maxRedirects` (default 5). Multi-key commands must stay in one
+Cluster hash slot; cross-slot operations do not fan out.
+
+Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling
+and probe duration add latency; coverage may conservatively exclude unvisited
+primaries. System TLS trust uses compiled-in webpki roots. Configure explicit CA
+references for private CAs. Sentinel nodes share data-node credentials. Published
+Cluster recovery dials the current known primaries together with the configured
+seeds. A new generation must establish real connectivity before ordinary
+replacement; failed ordinary updates retain the last published generation.
+Forced refresh keeps retire-first behavior.

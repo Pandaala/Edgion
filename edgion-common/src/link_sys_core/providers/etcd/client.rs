@@ -8,7 +8,7 @@
 //! - Health tracking via AtomicBool
 //! - Namespace prefix support for key isolation
 //!
-//! Unlike fred (Redis), etcd-client uses gRPC multiplexing — a single connection
+//! Unlike redis-rs (Redis), etcd-client uses gRPC multiplexing — a single connection
 //! handles multiple concurrent streams, so no connection pool is needed.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

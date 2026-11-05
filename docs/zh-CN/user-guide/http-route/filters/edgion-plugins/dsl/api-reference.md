@@ -1696,10 +1696,12 @@ if remaining != nil {
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名
 - `key`（Str）— Redis 键名
 
+下标布尔结果使用显式比较：`r["ok"] == false` 或 `r["value"]["allowed"] == false`。当前文法里一元 `!` 先于下标绑定，不要写成 `!r["ok"]`。
+
 **示例 — 快速拒绝**：
 ```
 let r = redis.get("cache", "feature:dark-mode")
-if !r["ok"] {
+if r["ok"] == false {
   log_warn("redis error: " + r["error"])
   return deny(503, "service unavailable")
 }
@@ -1794,7 +1796,7 @@ if r["value"] == "on" {
 **示例 — 累计计数**（没有时间窗口或自动重置；周期限流请使用下方的 `redis.rate_limit`）：
 ```
 let r = redis.incr("cache", "rate:" + req.remote_ip)
-if !r["ok"] {
+if r["ok"] == false {
   return deny(503, "service unavailable")
 }
 if r["value"] > 100 {
@@ -1836,11 +1838,11 @@ spec:
             timeoutMs: 500
         source: |
           let r = redis.rate_limit("cache", "requests", req.remote_ip, 1)
-          if !r["ok"] {
+          if r["ok"] == false {
             log_warn("rate limit unavailable")
             return deny(503, "service unavailable")
           }
-          if !r["value"]["allowed"] {
+          if r["value"]["allowed"] == false {
             return deny(429, "rate limit exceeded")
           }
           return next()
@@ -1959,9 +1961,9 @@ Map 中的失败。
 
 获取哈希的所有字段和值。键不存在时返回空 `Map`。发生连接错误或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`；后者不会构造超大 `Map`，并返回受上述通用分类规则约束的 `result_too_large`。每个条目的键与值字符串都会各自在 `max_string_len`（默认 8 KiB）处被静默截断，与 `redis.get` 一致；调用仍然成功。
 
-原始字段和值的字节合计还必须符合固定的 1 MiB 上限。检查使用未截短的回复，在把 fred 结果转换为拥有独立字符串的表之前执行。条数或累计字节超限时返回 `ok: false`、`value: nil` 和 `error: "result_too_large"`（字符串预算较小时为 `"e"`）。通过检查后仍按上述规则截短单个字符串。提高 `maxStringLen` 不会提高累计上限。
+原始字段和值的字节合计还必须符合固定的 1 MiB 上限。检查使用未截短的回复，在把 redis-rs 结果转换为拥有独立字符串的表之前执行。条数或累计字节超限时返回 `ok: false`、`value: nil` 和 `error: "result_too_large"`（字符串预算较小时为 `"e"`）。通过检查后仍按上述规则截短单个字符串。提高 `maxStringLen` 不会提高累计上限。
 
-**依赖边界**：fred 10.1.0 在 Edgion 能检查结果之前，已接收并聚合完整的 HGETALL 回复。此上限在原始回复上检查，阻止超大结果继续构造额外的 Fred 结果 Map、Edgion 字符串表和 DSL Map，但不限制 Redis 网络缓冲或已解码的 frame（包括原生 RESP3 Map）。服务端哈希本身仍应有大小约束，不能把此检查视为总内存保证。
+**依赖边界**：redis-rs 1.8.1 在 Edgion 能检查结果之前，已接收并聚合完整的 HGETALL 回复。此上限在原始回复上检查，阻止超大结果继续构造额外的 Edgion 字符串表和 DSL Map，但不限制 Redis 网络缓冲或已解码的 frame（包括原生 RESP3 Map）。服务端哈希本身仍应有大小约束，不能把此检查视为总内存保证。
 
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名

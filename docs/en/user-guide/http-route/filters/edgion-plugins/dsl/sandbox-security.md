@@ -47,7 +47,7 @@ Two external-result producers additionally enforce a fixed 1 MiB field/name plus
 value byte cap: `redis.hgetall` checks the original reply before owned-string
 conversion, while `http.call` checks retained response headers before copying
 each entry. These are per-result payload bounds, excluding container overhead.
-They do not limit fred's earlier full Redis reply aggregation. See the
+They do not limit redis-rs's earlier full Redis reply aggregation. See the
 [Redis API boundary](./api-reference.md#redishgetall) and
 [HTTP result contract](./api-reference.md#httpcall).
 
@@ -352,7 +352,7 @@ preserves security-inspection freeze. Every publication failure is fixed HTTP
 published. Canonical transport code remains the framing owner.
 
 `redis.get_bounded` checks raw reply type, bytes and UTF-8 before making a DSL
-string. Fred's preceding complete-frame aggregation is outside this bound. It
+string. redis-rs's preceding complete-frame aggregation is outside this bound. It
 uses the LinkSys pool command timeout and caller cancellation; the VM has no
 general execution wall-clock timeout. Oversized/corrupt records return fixed
 error classes without exposing keys, values, aliases or dependency detail.

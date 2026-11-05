@@ -57,7 +57,7 @@ the re-export no longer "hides" where the definitions live.
 - "Remove the gateway re-export and make callers import from `edgion_common`" — churns
   every gateway call site for no benefit; the re-export's whole point is path stability.
 - "Move the data-plane providers into common too" — would pull gateway-only dependencies
-  (fred, reqwest, etc.) into the controller's dependency tree.
+  (redis-rs, reqwest, etc.) into the controller's dependency tree.
 
 ## Re-evaluation Triggers
 

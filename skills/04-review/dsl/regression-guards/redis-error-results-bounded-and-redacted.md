@@ -45,7 +45,7 @@ Map contract at every supported positive string limit.
 
 This guard does not change Redis command semantics, LinkSys client construction,
 EVALSHA fallback, rate-limit algorithms, or successful Redis value handling. It
-does not claim that every fred error contains credentials; it prevents unreviewed
+does not claim that every redis-rs error contains credentials; it prevents unreviewed
 dependency text from becoming a public script value regardless of its contents.
 
 ## Verification and re-evaluation

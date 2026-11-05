@@ -66,6 +66,10 @@ Step 7: Cleanup     →  kill processes, docker compose down
 # services up, LinkSys/Redis CRDs applied)
 bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh
 bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh --include-lifecycle
+
+# Cluster, Sentinel and standalone topology fixture. It does not start another
+# Controller or Gateway. The aggregate LinkSys run invokes the same script.
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i RedisTopology
 ```
 
 **Etcd / Elasticsearch / Kafka / OTLP (standalone):**
@@ -152,7 +156,7 @@ These endpoints are **only available when Gateway runs with `--integration-testi
 | `GET` | `/api/v1/testing/link-sys/redis/clients` | List all registered Redis client names |
 | `GET` | `/api/v1/testing/link-sys/redis/health` | Health check ALL Redis clients |
 | `GET` | `/api/v1/testing/link-sys/redis/{name}/health` | Health check a single client |
-| `GET` | `/api/v1/testing/link-sys/redis/{name}/ping` | PING with latency measurement; `?all_members=true` checks each fixed Fred pool member and returns `checked_members` |
+| `GET` | `/api/v1/testing/link-sys/redis/{name}/ping` | PING with latency measurement; `?all_members=true` checks each fixed redis-rs pool member and returns `checked_members` |
 
 ### Key-Value Operations
 

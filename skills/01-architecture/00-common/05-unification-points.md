@@ -138,7 +138,7 @@ policy. TLS/client construction failure must never select an unconfigured client
   Common PreparedRedisTls adapter applies the same actual selection/pair checker,
   captured snapshot and inherited encoder before persistent reuse. Enabled local
   TLS or implicit rediss selects transport; disabled refs stay inert. One resolved
-  result feeds the shared rustls conversion core and Fred retains its connector
+  result emits validated PEM roots and client identity for redis-rs
   across reconnect. The reference task has completed the scoped owning transport
   and replay migrations through R12b; fresh live acceptance remains open.
   Redis and Elasticsearch now share PreparedLinkSysTls's immutable actual-owner,
@@ -160,7 +160,7 @@ policy. TLS/client construction failure must never select an unconfigured client
   preconfigured TLS, process bootstrap and live canonical conversion cores remain.
   Scoped source and unit verification does not establish live revocation or conformance.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
-  custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
+  custom hyper connector), ldap_auth (ldap3), the redis provider (redis-rs), the
   kafka provider (rskafka), the etcd link provider, the OTLP LinkSys Tonic 0.14 transport, openid_connect token
   exchange, and health-local HTTPS/GRPCS probes (explicit defaults).
 
@@ -231,7 +231,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   ldap_auth and openid_connect are no longer in this list: ldap_auth resolves
   through `EgressResolver` (`ResolverSpec::System`) and injects the admitted
   stream into ldap3; openid_connect installs the same resolver on both IdP
-  HTTP clients. Redis likewise adapts Fred's resolver hook to `EgressResolver`
+  HTTP clients. Redis likewise adapts redis-rs's resolver hook to `EgressResolver`
   with `ResolverSpec::System`, so every actual topology dial is classified.
 - **Native Service strategy**: ordinary Services dial proven EndpointSlice IPs.
   HTTP/gRPC references to an actual `Service.spec.type: ExternalName` select
@@ -243,7 +243,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
 ### 6. Redis access — Unified
 
 - **Canon**: the LinkSys `RedisLinkClient`
-  (`edgion-gateway/src/link_sys/providers/redis/client.rs`, a fred `Pool`
+  (`edgion-gateway/src/link_sys/providers/redis/client.rs`, an Edgion multiplexed pool
   with reconnection/TLS/cluster/sentinel handling), obtained via
   `get_redis_client` from the LinkSys store. Rate-limit Lua machinery
   (shared local script descriptors / EVALSHA-with-EVAL-fallback, request-rate
@@ -253,12 +253,10 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   credential reservation runtimes, and DSL `redis.*` builtins (client access).
 - **Rule**: never create a direct redis connection; new rate-limit algorithms
   extend the shared core, not a plugin-local copy.
-- **Dial invariant**: install `redis_egress_resolver` before `Pool::init` so Fred
-  routes configured seeds, reconnects, Sentinel discoveries, and Cluster
-  discoveries/redirects through the canonical Gateway `EgressResolver`. The
-  Fred `dns` feature is enabled only to expose this injection hook; its optional
-  Hickory 0.24 implementation is dependency baggage and is not a permitted
-  resolver path. See the LinkSys review compatibility constraint.
+- **Dial invariant**: `transport.rs` injects `RedisEgressResolver` into both
+  direct multiplexed connections and the Cluster builder before dialing. This
+  covers seed/recovery/Sentinel/MOVED targets. ConnectionManager and redis-rs
+  Sentinel helpers are not used because they cannot preserve this injection.
 
 ---
 

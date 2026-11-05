@@ -26,7 +26,7 @@ pub use global::GlobalOutboundTlsSnapshot;
 mod link_sys;
 pub use link_sys::PreparedLinkSysTls;
 mod redis;
-pub use redis::PreparedRedisTls;
+pub use redis::{PreparedRedisTls, RedisTlsMaterial};
 mod otlp;
 pub use otlp::PreparedOtlpTls;
 

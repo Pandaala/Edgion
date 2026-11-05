@@ -1,12 +1,15 @@
 use super::*;
 use crate::link_sys::credential::{CredentialState, InvalidReason};
 use edgion_common::link_sys_core::outbound_tls::PreparedRedisTls;
+use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::redis::*;
 use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec, SystemConfig};
 use std::sync::Arc;
 
-fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
+fn build_transport(crd: &RedisClientConfig, auth: &CredentialState<BasicAuthMaterial>) -> anyhow::Result<Transport> {
+    let errors = crd.validation_errors();
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
     let mut owner = LinkSys::new(
         "redis-mapping",
         LinkSysSpec {
@@ -17,16 +20,7 @@ fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, 
     );
     owner.metadata.namespace = Some("mapping".into());
     let prepared = PreparedRedisTls::from_link_sys(Arc::new(owner))?;
-    let connector = if prepared.uses_tls() {
-        Some(match prepared.rustls_client_config()? {
-            Some(config) => fred::types::config::TlsConnector::from(config),
-            None => fred::types::config::TlsConnector::default_rustls()
-                .map_err(|error| anyhow::anyhow!("default rustls connector: {error:?}"))?,
-        })
-    } else {
-        None
-    };
-    super::build_fred_pool(crd, config, connector)
+    Transport::new(crd, auth, prepared.redis_tls_material()?)
 }
 
 /// Create a minimal RedisClientConfig for testing
@@ -47,15 +41,13 @@ fn no_auth() -> CredentialState<BasicAuthMaterial> {
     CredentialState::NotRequired
 }
 
-fn uses_tls(crd: &RedisClientConfig) -> Result<bool> {
-    let config = build_fred_config(crd, &no_auth())?;
-    let (builder, _) = build_fred_pool(crd, config)?;
-    Ok(builder.get_config().is_some_and(Config::uses_tls))
+fn uses_tls(crd: &RedisClientConfig) -> anyhow::Result<bool> {
+    Ok(build_transport(crd, &no_auth())?.tls.is_some())
 }
 
 fn assert_outbound_tls_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
     const CHILD_ENV: &str = "EDGION_REDIS_TLS_MAPPING_CHILD";
-    const TEST_MODULE: &str = "link_sys::providers::redis::config_mapping::tests";
+    const TEST_MODULE: &str = "link_sys::providers::redis::transport::tests";
 
     if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
         // This process runs only the exact test selected below, so resolving
@@ -84,8 +76,8 @@ fn assert_outbound_tls_in_subprocess(test_name: &str, assertion: impl FnOnce()) 
 #[test]
 fn test_build_server_config_standalone() {
     let crd = minimal_config(vec!["redis://127.0.0.1:6379".to_string()]);
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    assert!(config.server.is_centralized());
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    assert!(matches!(config.mode, RedisTopologyMode::Standalone));
 }
 
 #[test]
@@ -99,8 +91,8 @@ fn test_build_server_config_cluster() {
         }),
         ..minimal_config(vec![])
     };
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    assert!(config.server.is_clustered());
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    assert!(matches!(config.mode, RedisTopologyMode::Cluster));
 }
 
 #[test]
@@ -118,7 +110,7 @@ fn cluster_rejects_the_complete_config_when_one_endpoint_is_invalid() {
         ..minimal_config(vec![])
     };
 
-    let error = build_fred_config(&crd, &no_auth()).unwrap_err().to_string();
+    let error = build_transport(&crd, &no_auth()).err().unwrap().to_string();
     assert!(error.contains("Redis endpoints[1] is invalid"));
     assert!(!error.contains("password"));
 }
@@ -137,8 +129,8 @@ fn test_build_server_config_sentinel() {
         }),
         ..minimal_config(vec![])
     };
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    assert!(config.server.is_sentinel());
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    assert!(matches!(config.mode, RedisTopologyMode::Sentinel));
 }
 
 #[test]
@@ -157,12 +149,8 @@ fn sentinel_endpoints_accept_redis_schemes() {
             ..minimal_config(vec![])
         };
 
-        let config = build_fred_config(&crd, &no_auth()).unwrap();
-        let ServerConfig::Sentinel { hosts, .. } = config.server else {
-            panic!("expected sentinel server config");
-        };
-        assert_eq!(hosts[0].host, "sentinel-1");
-        assert_eq!(hosts[0].port, 26379);
+        let config = build_transport(&crd, &no_auth()).unwrap();
+        assert_eq!(config.endpoints[0], ("sentinel-1".into(), 26379));
         assert!(uses_tls(&crd).unwrap());
     });
 }
@@ -170,7 +158,7 @@ fn sentinel_endpoints_accept_redis_schemes() {
 #[test]
 fn test_empty_endpoints_returns_error() {
     let crd = minimal_config(vec![]);
-    assert!(build_fred_config(&crd, &no_auth()).is_err());
+    assert!(build_transport(&crd, &no_auth()).is_err());
 }
 
 #[test]
@@ -184,7 +172,7 @@ fn test_sentinel_without_config_returns_error() {
         }),
         ..minimal_config(vec![])
     };
-    assert!(build_server_config(&crd).is_err());
+    assert!(build_transport(&crd, &no_auth()).is_err());
 }
 
 fn crd_with_secret_ref() -> RedisClientConfig {
@@ -212,9 +200,9 @@ fn test_config_auth_mapping() {
         username: Some("u".to_string()),
         password: "p".to_string(),
     });
-    let config = build_fred_config(&crd, &state).unwrap();
-    assert_eq!(config.username, Some("u".to_string()));
-    assert_eq!(config.password, Some("p".to_string()));
+    let config = build_transport(&crd, &state).unwrap();
+    assert_eq!(config.settings.username(), Some("u"));
+    assert_eq!(config.settings.password(), Some("p"));
 }
 
 /// Regression guard: auth configured in CRD but state is `Pending` must
@@ -222,7 +210,9 @@ fn test_config_auth_mapping() {
 #[test]
 fn test_config_auth_pending_fails_fast() {
     let crd = crd_with_secret_ref();
-    let err = build_fred_config(&crd, &CredentialState::Pending).expect_err("should refuse pending");
+    let err = build_transport(&crd, &CredentialState::Pending)
+        .err()
+        .expect("should refuse pending");
     assert!(
         err.to_string().contains("has not been resolved"),
         "unexpected error message: {err}"
@@ -235,7 +225,7 @@ fn test_config_auth_pending_fails_fast() {
 fn test_config_auth_invalid_fails_fast() {
     let crd = crd_with_secret_ref();
     let state = CredentialState::Invalid(InvalidReason::ParseFailed("missing keys: [password]".into()));
-    let err = build_fred_config(&crd, &state).expect_err("should refuse invalid");
+    let err = build_transport(&crd, &state).err().expect("should refuse invalid");
     assert!(
         err.to_string().contains("invalid") && err.to_string().contains("missing keys"),
         "unexpected error message: {err}"
@@ -246,14 +236,16 @@ fn test_config_auth_invalid_fails_fast() {
 /// `credential::basic_state` must never return `NotRequired` when the CRD
 /// declares `auth`. If that invariant is ever broken (e.g. future
 /// refactor of resolver dispatch), this test locks the fail-fast arm in
-/// `build_fred_config` so CI catches it instead of silently authenticating
+/// `build_transport` so CI catches it instead of silently authenticating
 /// anonymously.
 #[test]
 fn test_config_crd_has_auth_but_state_not_required_is_internal_bug() {
     let crd = crd_with_secret_ref();
-    let err = build_fred_config(&crd, &CredentialState::NotRequired).expect_err("should refuse");
+    let err = build_transport(&crd, &CredentialState::NotRequired)
+        .err()
+        .expect("should refuse");
     assert!(
-        err.to_string().contains("internal bug"),
+        err.to_string().contains("credentials are unavailable"),
         "unexpected error message: {err}"
     );
 }
@@ -268,9 +260,9 @@ fn test_config_auth_password_only_material_is_accepted() {
         username: None,
         password: "pw".to_string(),
     });
-    let config = build_fred_config(&crd, &state).unwrap();
-    assert_eq!(config.username, None);
-    assert_eq!(config.password, Some("pw".to_string()));
+    let config = build_transport(&crd, &state).unwrap();
+    assert_eq!(config.settings.username(), None);
+    assert_eq!(config.settings.password(), Some("pw"));
 }
 
 #[test]
@@ -279,8 +271,8 @@ fn test_config_db_mapping() {
         db: Some(3),
         ..minimal_config(vec!["redis://localhost:6379".to_string()])
     };
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    assert_eq!(config.database, Some(3));
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    assert_eq!(config.settings.db(), 3);
 }
 
 #[test]
@@ -289,15 +281,15 @@ fn pool_size_above_max_is_rejected() {
         pool: Some(RedisPool { size: Some(200) }),
         ..minimal_config(vec!["redis://localhost:6379".to_string()])
     };
-    let error = build_fred_config(&crd, &no_auth()).unwrap_err();
+    let error = build_transport(&crd, &no_auth()).err().unwrap();
     assert!(error.to_string().contains("pool.size must be between 1 and 64"));
 }
 
 #[test]
 fn test_pool_size_default() {
     let crd = minimal_config(vec!["redis://localhost:6379".to_string()]);
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    let pool_size = config.pool_size;
     assert_eq!(pool_size, REDIS_DEFAULT_POOL_SIZE as usize);
 }
 
@@ -364,7 +356,7 @@ fn standalone_rejects_extra_endpoints() {
         "rediss://unused.example.com:6380".to_string(),
     ]);
 
-    let error = build_fred_config(&crd, &no_auth()).unwrap_err();
+    let error = build_transport(&crd, &no_auth()).err().unwrap();
     assert!(error
         .to_string()
         .contains("Redis standalone mode requires exactly one endpoint"));
@@ -420,7 +412,7 @@ fn mixed_cluster_endpoint_transports_are_rejected_without_explicit_tls() {
         ..minimal_config(vec![])
     };
 
-    let err = build_fred_config(&crd, &no_auth()).unwrap_err();
+    let err = build_transport(&crd, &no_auth()).err().unwrap();
     assert_eq!(
         err.to_string(),
         "Redis active endpoints cannot mix TLS and plaintext transports unless tls.enabled=true"
@@ -445,7 +437,7 @@ fn mixed_sentinel_endpoint_transports_are_rejected_without_explicit_tls() {
         ..minimal_config(vec![])
     };
 
-    let err = build_fred_config(&crd, &no_auth()).unwrap_err();
+    let err = build_transport(&crd, &no_auth()).err().unwrap();
     assert_eq!(
         err.to_string(),
         "Redis active endpoints cannot mix TLS and plaintext transports unless tls.enabled=true"
@@ -490,18 +482,13 @@ fn command_contract_maps_timeouts_retries_and_redirects() {
         }),
         ..minimal_config(vec!["redis://redis.example.com:6379".to_string()])
     };
-    let config = build_fred_config(&crd, &no_auth()).unwrap();
-    let (builder, _) = build_fred_pool(&crd, config).unwrap();
-    let connection = builder.get_connection_config();
-    let performance = builder.get_performance_config();
-
-    assert_eq!(connection.connection_timeout, std::time::Duration::from_secs(3));
-    assert_eq!(connection.max_command_attempts, 1);
-    assert_eq!(connection.max_redirections, 6);
-    assert_eq!(performance.default_command_timeout, std::time::Duration::from_secs(2));
+    let config = build_transport(&crd, &no_auth()).unwrap();
+    assert_eq!(config.connect_timeout, std::time::Duration::from_secs(3));
+    assert_eq!(config.command_timeout, std::time::Duration::from_secs(2));
+    assert_eq!(config.max_redirects, 6);
 }
 
-/// Guard: fred's rustls connector always verifies — verify=false must be
+/// Guard: redis-rs's rustls connector always verifies — verify=false must be
 /// rejected regardless of environment (provider_can_disable=false).
 #[test]
 fn redis_rejects_verify_false_always() {
@@ -522,7 +509,7 @@ fn redis_rejects_verify_false_always() {
         };
         // provider_can_disable=false causes the resolver to reject verify=false
         // (Redis SDK has no skip-verify API) regardless of any environment variable.
-        let err = build_fred_pool(&crd, build_fred_config(&crd, &no_auth()).unwrap()).unwrap_err();
+        let err = build_transport(&crd, &no_auth()).err().unwrap();
         assert!(
             err.to_string().contains("Redis TLS configuration error"),
             "unexpected error: {err}"

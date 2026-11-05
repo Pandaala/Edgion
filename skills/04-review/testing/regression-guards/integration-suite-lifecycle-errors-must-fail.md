@@ -121,16 +121,15 @@ fail closed on an actual startup, readiness, or listener-contract failure.
 `TCPRoute/StreamPlugins::tcp_stream_plugin_conn_rate_limit_redis` exercises
 healthy Redis admission, so it checks the Gateway's Redis pool before opening
 the six measured connections. The existing authenticated testing PING endpoint
-uses `all_members=true` to bind a PING to each concrete Fred client. It must
+uses `all_members=true` to bind a PING to each concrete redis-rs client. It must
 report the declared fixture pool size within an overall ten-second deadline.
-Repeated ordinary pool PINGs do not establish this: Fred advances its routing
-counter multiple times per command and can repeatedly select only a subset.
+Repeated ordinary pool PINGs do not establish this: aggregate success can hide a failed member.
 The default PING and aggregate production health contracts remain unchanged. An unavailable client, invalid response or expired deadline
 fails the case. PING does not consume the rate-limit bucket, and the original
 six-connection admission and rejection assertions remain unchanged.
 
 On 2026-10-08, a default full sweep admitted all six connections and recorded
-four Redis runtime failures. Existing Fred diagnostics showed four EOFs when
+four Redis runtime failures. Historical client diagnostics showed four EOFs when
 the previously idle pool was first used. Four independent read-only connections
 through the same OrbStack-published port also returned EOF after 375 seconds,
 while the Redis container remained running without restart. A paired control

@@ -10,8 +10,9 @@ knowledge_type: regression-guards
 
 Integration Redis TLS and mTLS containers may be reused across work directories
 only when the live server certificate still verifies against the host material
-that the current run will load into Gateway (`SSL_CERT_FILE` and the generated
-`redis-tls-ca` / `redis-tls-client` Secrets). A leftover healthy container is
+that the current run will load into Gateway Secrets (`redis-tls-ca` /
+`redis-tls-client`). Default trust uses compiled webpki roots and does not
+consult `SSL_CERT_FILE`. A leftover healthy container is
 not reuse evidence by itself. Redis reads TLS files at process start, so a
 certificate change must recreate `redis-tls` and `redis-mtls`. Compatible
 material still reuses the running containers.

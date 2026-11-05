@@ -21,7 +21,7 @@ fn kafka_input(
 }
 
 #[test]
-fn owning_kafka_converter_requires_explicit_system_tls_but_keeps_native_fred_fallback() {
+fn owning_kafka_converter_requires_explicit_system_tls_and_redis_default_material() {
     install_test_crypto_provider();
     let defaults = std::sync::Arc::new(outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]));
     for tls in [
@@ -564,16 +564,18 @@ fn incapable_builders_reject_local_and_inherited_identity_policy() {
                 resolved_ca_certificates: None,
                 resolved_client_certificate: None,
             };
-            assert!(redis_input(&tls)
-                .and_then(|input| input.rustls_client_config())
-                .is_err());
+            assert!(redis_input(&tls).and_then(|input| input.redis_tls_material()).is_err());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_err());
             // A local empty validation block shadows inherited identity constraints.
+            // Enabled Redis TLS still emits default-trust material; root_pem None
+            // selects compiled webpki roots inside redis-rs.
             tls.outbound.validation = Some(OutboundTlsValidation::default());
-            assert!(redis_input(&tls)
-                .and_then(|input| input.rustls_client_config())
+            let material = redis_input(&tls)
+                .and_then(|input| input.redis_tls_material())
                 .unwrap()
-                .is_none());
+                .expect("enabled Redis TLS emits material");
+            assert!(material.root_pem.is_none());
+            assert!(material.client_identity.is_none());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok());
         }
     }
@@ -636,4 +638,14 @@ fn http_identity_retains_chain_order_and_last_private_key_selection() {
     assert!(build_http_rustls_client_config(&resolved(format!("{key}\n{other_key}"))).is_err());
     let unsupported = format!("{key}\n-----BEGIN PUBLIC KEY-----\nAQID\n-----END PUBLIC KEY-----\n");
     assert!(http_client_identity(cert.as_bytes(), unsupported.as_bytes()).is_err());
+}
+
+fn build_validated_rustls_client_config(
+    proof: &outbound_tls::ValidatedLocalTlsSelection<'_>,
+    defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
+    provider: &str,
+) -> Result<Option<ClientConfig>> {
+    let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, provider, defaults)
+        .map_err(|error| anyhow::anyhow!("{provider} TLS configuration error: {error:?}"))?;
+    build_effective_rustls_client_config(&resolved)
 }

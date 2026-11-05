@@ -14,8 +14,7 @@ constructor forces local initialization; operations do not preload remote script
 
 All five script families use the same executor: HTTP and Stream rate limiting,
 cumulative AI quota, and credential reservation. Each operation tries `EVALSHA`
-and falls back once to `EVAL` only when Fred reports an `Unknown` error whose first
-ASCII-whitespace-delimited token is exactly `NOSCRIPT`. A timeout, disconnect,
+and falls back once to `EVAL` only when redis-rs reports the typed server code `NOSCRIPT`. A timeout, disconnect,
 authorization error, or arbitrary message containing that word is not permission
 to replay a potentially completed operation.
 
@@ -51,7 +50,7 @@ from the committed evidence and are not a correctness premise for this guard.
 - Concurrent cold operations may each receive `NOSCRIPT` and each execute their
   own operation through `EVAL`. No single-flight or exactly-once transport
   guarantee is implied.
-- There is no added application retry after uncertain execution. Fred's existing
+- There is no added application retry after uncertain execution. redis-rs's existing
   transport behavior is unchanged.
 - Script SHA1 is Redis's content identifier, not a cryptographic security claim.
 - Single-policy Lua atomicity does not make several policies one transaction.

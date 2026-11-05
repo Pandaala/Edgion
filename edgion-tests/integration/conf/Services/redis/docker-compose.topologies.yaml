@@ -1,0 +1,17 @@
+# Test-only unauthenticated fixtures, exposed on host loopback exclusively.
+services:
+  redis-topologies:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:16400-16405:16400-16405"
+      - "127.0.0.1:16410-16412:16410-16412"
+      - "127.0.0.1:16420-16421:16420-16421"
+    volumes:
+      - ./start-topologies.sh:/start-topologies.sh:ro
+    entrypoint: ["sh", "/start-topologies.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 16400 cluster info | grep -q 'cluster_state:ok' && redis-cli -p 16410 sentinel get-master-addr-by-name edgion-primary | grep -q 16420"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: "no"

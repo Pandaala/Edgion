@@ -929,20 +929,15 @@ async fn redis_ping(
         Err(e) => return e,
     };
     if query.all_members {
-        use fred::interfaces::ClientLike;
-
         let start = std::time::Instant::now();
-        // Bind each probe to a concrete client: Pool::inner() advances routing
-        // more than once per command, so repeated pool PINGs can miss members.
-        let results =
-            futures::future::join_all(client.pool().clients().iter().map(|member| member.ping::<String>(None))).await;
-        if results.iter().any(Result::is_err) {
-            return Json(ApiResponse::err_body("Redis pool PING failed".to_string()));
-        }
+        let checked_members = match client.ping_all_members().await {
+            Ok(count) => count,
+            Err(_) => return Json(ApiResponse::err_body("Redis pool PING failed".to_string())),
+        };
         return Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": start.elapsed().as_millis() as u64,
             "healthy": client.healthy(),
-            "checked_members": results.len(),
+            "checked_members": checked_members,
         })));
     }
     match client.ping().await {

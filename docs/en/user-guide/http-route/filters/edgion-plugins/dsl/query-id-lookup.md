@@ -367,7 +367,7 @@ obey the 64 KiB byte bound, depth 32 and 4,096 JSON nodes. Repeated parsing and
 construction share the VM's 16 MiB work account, and physical body/scan limits
 apply separately. A valid smaller document can still exhaust those limits.
 redis.get_bounded never returns a truncated success; its conversion cap does not
-bound Fred's prior Redis frame aggregation. Replies do not reflect stored queries,
+bound redis-rs's prior Redis frame aggregation. Replies do not reflect stored queries,
 variables, credentials or dependency errors.
 
 ## Response caching

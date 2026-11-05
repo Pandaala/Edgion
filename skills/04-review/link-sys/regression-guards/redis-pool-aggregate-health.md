@@ -1,88 +1,50 @@
 ---
 name: redis-pool-aggregate-health
-description: Use when reviewing Redis LinkSys pool health, Fred connection callbacks, or Redis connection-event logging.
+description: Review Redis aggregate health, coverage and recovery.
 knowledge_type: regression-guards
-finding_id: redis-pool-health-logging
 ---
 
-# Redis pool health is aggregate and connection logs are transition-only
+# Redis health belongs to the published generation
 
-## Conclusion and scope
+Redis uses active probes at a nominal five-second cadence. Standalone/Sentinel
+coverage counts successful members against configured pool.size; Cluster counts
+successful primaries against validated known primaries. Any success is usable,
+not proof that every slot or the next command succeeds. Empty topology is never
+healthy. Standalone and Sentinel member selection prefers the last successful
+members. A missing pool member schedules recovery, and recovery reuses healthy
+connections rather than requiring capacity for a second complete pool. Cluster
+recovery runs when the slot map changes or every probed primary is unreachable.
+One missed Cluster primary does not rebuild the connection while another primary
+still answers. A Sentinel ROLE reply that is not master clears coverage and
+schedules recovery. A ROLE timeout or I/O error keeps the PING coverage. A
+command I/O or READONLY error schedules recovery only while its snapshot is
+still the published one. Cluster probe addresses come from CLUSTER SLOTS on a
+node already in that generation's connection map, so an empty or wildcard
+hostname uses that node's address. A Cluster PING counts as live only when
+the reply is PONG.
 
-`RedisLinkClient::healthy` means that at least one Fred pool member is connected.
-The background aggregate probe reads `ClientLike::is_connected()` from every fixed
-pool member and degrades the provider only when no member remains usable. This
-matches Fred's default `prefer_connected` routing, which selects a connected member
-when one exists.
+Sentinel discovery deduplicates parsed configured and learned host/port pairs
+before dialing or counting votes. Repeating a configured endpoint must not
+turn a tie between distinct Sentinel peers into a unique plurality. Distinct
+peers voting for the same primary still count separately. Backend unit tests
+cover equivalent scheme/default-port spellings and configured/learned overlap.
 
-Redis connection callbacks are not used for Edgion health or logging because their
-events describe individual server connections inside a Fred client and can be
-delivered by independent tasks. The aggregate probe feeds the shared LinkSys
-transition path, so INFO/WARN records contain only the validated LinkSys name and
-fixed provider type and are emitted only when aggregate health changes.
+Probe concurrency is 64, individual timeout at most 500 ms, Cluster collection
+budget two seconds plus bounded topology refresh, and the shared driver deadline
+three seconds. Rotate the Cluster start index; unvisited primaries are
+conservatively unavailable. Detection includes probe/scheduling latency, so five
+seconds is not an SLA. Coverage is probe evidence, not a socket census.
 
-## Rationale and evidence
+Use PublishedHealth for metadata-only transitions. Retirement prevents late
+publication. A probe applies coverage and `needs_recovery` only while its
+snapshot is still the published one. A probe of a replaced snapshot reports
+the published live count and must not schedule another recovery. A successful
+Cluster establish publishes one live connection against the learned primary
+count, so the generation stays on the handover path until that snapshot's own
+probe replaces the count. An empty primary map is not published. Candidate
+init proves connectivity before the persistent runner can publish. Ordinary failed
+replacement retains the old publication; forced refresh
+keeps its explicit retire-first semantics. Shutdown cancels and joins background
+owners and releases connections; request cancellation never authorizes replay.
 
-The previous implementation registered callbacks on every `Pool::clients()` member
-but let all of them unconditionally overwrite one `Arc<AtomicBool>`. The most recent
-member event therefore represented the whole pool: one error could reject work even
-while another member remained connected, and one reconnect could hide that every
-other member was down. The same callbacks logged the Fred `Server` and error once per
-member event.
-
-`RedisLinkClient` now starts the canonical `health_probe` driver after Fred
-initialization. Its provider closure derives `any_connected` directly from Fred's
-current client states at a nominal one-second healthy cadence; request-side
-`healthy()` remains one lock-free atomic read. `mark_retired` sets the retired flag
-and signals the probe watch without aborting the task; shutdown then joins the probe
-before quitting the pool, preventing an in-flight result from restoring health after
-the terminal false state. Probes do not write `edgion_link_sys_health`.
-The `/metrics` handler samples the published client's aggregate `healthy()` flag
-on each scrape, so a retired generation's late result cannot overwrite the
-replacement's shared gauge. Flip counters and logs remain transition-only.
-A shared `PublishedHealth` cell serializes aggregate transitions and publication;
-its atomic level remains a lock-free request-side read, while the short writer
-critical section prevents a candidate or retired generation from reporting a
-flip. Replacement activation establishes a baseline rather than a recovery.
-A deletion can leave the accepted stale per-link series.
-`RedisClientConfig.pool.size`, Fred pool construction, command retry semantics, and
-active admin `PING` health checks are unchanged.
-
-The applicable authorities are `skills/00-design-rules.md` sections A through C and
-`skills/03-coding/01-log-safety.md`: backend topology must not be exposed in INFO
-logs, and event observability must be bounded. The existing LinkSys health transition
-helper supplies transition-gated flip metrics and rate-limited metadata-only logs.
-
-## Alternatives and limits
-
-Computing `Pool::clients().any(ClientLike::is_connected)` in every `healthy()` call
-would avoid a cached state but would turn a request-path atomic read into an O(pool
-size) scan. Mirroring `on_error` and `on_reconnect` into per-member bits is also
-incorrect: one Fred client can own multiple Cluster or Sentinel connections, and the
-two event streams have no cross-listener ordering guarantee. Treating health as "all
-connected" would unnecessarily reject work that Fred can route to a connected
-member.
-
-The cached state is sampled at a nominal one-second healthy cadence; scheduling and
-jitter mean this is not a hard detection bound. Unhealthy probes retry with the shared
-bounded backoff. It proves neither that every Redis node or cluster hash slot is
-reachable nor that the next command will succeed. Command errors remain authoritative
-for an individual operation. `health_status()` separately performs a live `PING` and
-is not defined by this cached flag.
-
-## Verification and re-evaluation
-
-Unit tests cover the any-connected predicate and an uninitialized real Fred pool.
-The shared probe driver separately covers transition deduplication, backoff, and
-shutdown signaling. Re-evaluate this rule when upgrading Fred's client-state
-semantics, changing `prefer_connected`, replacing the fixed pool, or changing request
-consumers so `healthy()` no longer gates Redis operations.
-
-The shared metric's deletion-time staleness and same-key generation ownership follow
-the accepted LinkSys health-metric decision in
-`../intentional-design/health-metric-free-function-and-cardinality.md`.
-
-## Resolution references
-
-- `redis-pool-health-logging` — corrected the last-event-wins pool state and
-  per-member endpoint logging in `RedisLinkClient`.
+Re-evaluate when changing publication, probing, recovery or connection ownership.

@@ -148,17 +148,9 @@ percent-encoding = "2.3"
 cookie = "0.18.1"
 
 # Storage / datastores
+redis = { version = "1.8.1", default-features = false, features = ["aio", "tokio-comp", "tokio-rustls-comp", "tls-rustls-webpki-roots", "cluster-async"] }
 etcd-client = { version = "0.21.1", features = ["tls"] }
-fred = { version = "10", default-features = false, features = [
-    "enable-rustls",       # TLS via rustls (consistent with Edgion)
-    "dns",                 # Expose the resolver hook; Edgion still owns DNS resolution
-    "i-std",               # Standard data structures (GET, SET, lists, etc.)
-    "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
-    "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)
-    "i-scripts",           # Lua scripting (for distributed locks)
-    "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
-    "partial-tracing",     # Tracing integration
-] }
+
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 rskafka = { version = "0.6", default-features = false, features = ["transport-tls"] }
@@ -185,6 +177,7 @@ zeroize = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+log = "0.4"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 metrics-util = { version = "0.20", features = ["debugging"] }
