@@ -70,14 +70,8 @@ fn make_ctx(runtime: Arc<ControllerRuntime>) -> HandlerContext {
     )
 }
 
-/// Union of all events' namespaces — useful when assertion does not care
-/// whether dispatch happened in one event or two.
-fn union_dispatched(events: &[HashSet<String>]) -> HashSet<String> {
-    let mut acc: HashSet<String> = HashSet::new();
-    for ev in events {
-        acc.extend(ev.iter().cloned());
-    }
-    acc
+fn backend_only() -> HashSet<String> {
+    HashSet::from(["backend".to_string()])
 }
 
 #[tokio::test]
@@ -109,17 +103,16 @@ async fn beta_conversion_preserves_delete_recreate_dependency_dispatch() {
         ProcessResult::Skip { .. } => panic!("unexpected skip"),
     }
     assert!(runtime.ref_grant_store.get(&key).is_some());
-    let events = listener.snapshot();
-    assert!(events.iter().any(|event| event.contains("app-a")));
-    assert!(events.iter().any(|event| event.contains("app-b")));
+    // Create, delete and recreate each revalidate the grant namespace only.
+    assert_eq!(listener.snapshot(), vec![backend_only(); 3]);
 }
 
-/// Regression: when a ReferenceGrant changes its `spec.from[*].namespace`,
-/// the OLD `from` namespace must be re-dispatched so its routes get
-/// revalidated. Since `parse()` overwrites the cache before `on_change()`
-/// fires, the orphan dispatch must happen inside `parse()` itself.
+/// Dependents are keyed by target namespace, so a `from` change revalidates
+/// only the grant namespace: owners in both the old and new `from` namespaces
+/// are registered there. Dispatching `from` namespaces would requeue unrelated
+/// resources that merely reference into those namespaces.
 #[tokio::test]
-async fn parse_dispatches_orphaned_from_namespace_on_update() {
+async fn from_namespace_update_dispatches_only_grant_namespace() {
     let runtime = Arc::new(ControllerRuntime::default());
     let listener = RecordingListener::new();
     runtime.ref_grant_dispatcher.register_listener(listener.clone());
@@ -127,102 +120,35 @@ async fn parse_dispatches_orphaned_from_namespace_on_update() {
     let ctx = make_ctx(runtime.clone());
     let handler = ReferenceGrantHandler::new();
 
-    // Initial grant: from=app-a, to(=ns)=backend
-    let grant_v1 = build_grant("backend", "g1", &["app-a"]);
-    match handler.parse(grant_v1.clone(), &ctx).await {
-        ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-        ProcessResult::Skip { .. } => panic!("unexpected skip"),
+    for from in ["app-a", "app-b", "app-b"] {
+        let grant = build_grant("backend", "g1", &[from]);
+        match handler.parse(grant, &ctx).await {
+            ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
+            ProcessResult::Skip { .. } => panic!("unexpected skip"),
+        }
     }
 
-    // Update grant: from=app-b (replaces app-a), to(=ns)=backend
-    let grant_v2 = build_grant("backend", "g1", &["app-b"]);
-    match handler.parse(grant_v2.clone(), &ctx).await {
-        ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-        ProcessResult::Skip { .. } => panic!("unexpected skip"),
-    }
-
-    let events = listener.snapshot();
-    assert!(
-        events.len() >= 3,
-        "expected at least 3 dispatches (initial + orphan-of-update + new-of-update), got {}: {:?}",
-        events.len(),
-        events
-    );
-
-    // The events emitted DURING the update (everything after the initial create)
-    // must collectively cover BOTH `app-a` (orphaned) AND `app-b` (new).
-    let update_events = &events[1..];
-    let dispatched = union_dispatched(update_events);
-
-    assert!(
-        dispatched.contains("app-a"),
-        "OLD from-namespace `app-a` must be re-dispatched on update; got {:?}",
-        dispatched
-    );
-    assert!(
-        dispatched.contains("app-b"),
-        "NEW from-namespace `app-b` must be dispatched on update; got {:?}",
-        dispatched
-    );
-    assert!(
-        dispatched.contains("backend"),
-        "to-namespace `backend` must be dispatched on update; got {:?}",
-        dispatched
-    );
+    assert_eq!(listener.snapshot(), vec![backend_only(); 3]);
 }
 
-/// Steady-state: if the spec is unchanged across updates, only the
-/// on_change dispatch fires — no orphan dispatch is emitted because
-/// `old - new` is empty.
 #[tokio::test]
-async fn parse_does_not_dispatch_orphan_when_namespaces_unchanged() {
+async fn delete_dispatches_only_grant_namespace() {
     let runtime = Arc::new(ControllerRuntime::default());
     let listener = RecordingListener::new();
     runtime.ref_grant_dispatcher.register_listener(listener.clone());
 
     let ctx = make_ctx(runtime.clone());
     let handler = ReferenceGrantHandler::new();
-
-    let grant = build_grant("backend", "g1", &["app-a"]);
+    let grant = build_grant("backend", "g1", &["app-a", "app-b"]);
     match handler.parse(grant.clone(), &ctx).await {
         ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
         ProcessResult::Skip { .. } => panic!("unexpected skip"),
     }
-    let events_after_first = listener.snapshot().len();
+    handler.on_delete(&grant, &ctx).await;
 
-    // Re-apply the same grant (no namespace change).
-    match handler.parse(grant.clone(), &ctx).await {
-        ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-        ProcessResult::Skip { .. } => panic!("unexpected skip"),
-    }
-    let events_after_second = listener.snapshot().len();
-
-    // Second update should add exactly one event (the on_change),
-    // NOT two (would mean we also fired an orphan event).
-    let added = events_after_second - events_after_first;
-    assert_eq!(
-        added, 1,
-        "expected exactly 1 dispatch on idempotent update (on_change only), got {}",
-        added
-    );
-}
-
-/// First create has no cached old grant — must not synthesize an orphan
-/// dispatch from a non-existent old state.
-#[tokio::test]
-async fn parse_first_create_emits_no_orphan_dispatch() {
-    let runtime = Arc::new(ControllerRuntime::default());
-    let listener = RecordingListener::new();
-    runtime.ref_grant_dispatcher.register_listener(listener.clone());
-
-    let ctx = make_ctx(runtime.clone());
-    let handler = ReferenceGrantHandler::new();
-
-    let grant = build_grant("backend", "g1", &["app-a"]);
-    match handler.parse(grant.clone(), &ctx).await {
-        ProcessResult::Continue(rg) => handler.on_change(&rg, &ctx).await,
-        ProcessResult::Skip { .. } => panic!("unexpected skip"),
-    }
-
-    assert_eq!(listener.snapshot().len(), 1);
+    assert!(runtime
+        .ref_grant_store
+        .get(&ReferenceGrantHandler::build_key(&grant))
+        .is_none());
+    assert_eq!(listener.snapshot(), vec![backend_only(); 2]);
 }

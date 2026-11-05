@@ -50,9 +50,9 @@ representation. No measured latency or memory improvement is claimed.
 
 ### on_change
 
-1. Collect the set of affected namespaces (including the ReferenceGrant's to namespace and all from namespaces)
+1. The affected namespace is the ReferenceGrant's own (to) namespace only. `CrossNsRefManager` keys every dependency by the referenced target namespace, so owners in both old and new `from` namespaces are already registered there; dispatching `from` namespaces would requeue unrelated resources that reference into those namespaces (on a busy controller this fan-out delayed the actual dependents by many seconds)
 2. Dispatch a change event via `ReferenceGrantChangedEvent`
-3. The event listener (`CrossNsRefManager`), upon receiving the event, requeues all resources within affected namespaces that have cross-namespace references
+3. The event listener (`CrossNsRevalidationListener`), upon receiving the event, requeues every resource registered under the affected namespace in `CrossNsRefManager`
 
 ### on_delete
 

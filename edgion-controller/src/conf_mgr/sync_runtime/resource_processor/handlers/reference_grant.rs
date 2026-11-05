@@ -28,22 +28,16 @@ impl ReferenceGrantHandler {
         format!("{}/{}", namespace, name)
     }
 
-    /// Identify affected namespaces from a ReferenceGrant
-    /// Returns both the grant's namespace (to) and from namespaces
+    /// Identify the namespaces whose dependents a ReferenceGrant change can affect.
+    ///
+    /// A grant only authorizes references whose target lives in the grant's own
+    /// namespace, and `CrossNsRefManager` keys every dependency by that target
+    /// namespace. The `from` namespaces are therefore not dependency keys:
+    /// dispatching them would requeue unrelated resources that reference into
+    /// those namespaces. Owners in old or new `from` namespaces are all
+    /// registered under the grant namespace, so a `from` change is covered too.
     pub(crate) fn identify_affected_namespaces(rg: &ReferenceGrant) -> HashSet<String> {
-        let mut affected = HashSet::new();
-
-        // The namespace where the grant is defined (to_namespace)
-        if let Some(ns) = rg.metadata.namespace.as_ref() {
-            affected.insert(ns.clone());
-        }
-
-        // All from namespaces
-        for from in &rg.spec.from {
-            affected.insert(from.namespace.clone());
-        }
-
-        affected
+        rg.metadata.namespace.iter().cloned().collect()
     }
 
     /// Dispatch change event to listeners
@@ -66,64 +60,22 @@ impl Default for ReferenceGrantHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
     async fn parse(&self, rg: ReferenceGrant, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrant> {
-        // Bug guard: if a ReferenceGrant's `spec.from[*].namespace` (or
-        // `spec.to.namespace` via metadata.namespace) changes, routes that
-        // were permitted by the OLD grant must also be revalidated. The
-        // `on_change` callback only sees the NEW grant, so namespaces that
-        // disappear from the grant would otherwise keep stale
-        // `ResolvedRefs=True` until something else triggers them.
-        //
-        // We compute `old - new` here (before upsert overwrites the cache)
-        // and dispatch a revalidation for those orphaned namespaces. The
-        // subsequent `on_change` dispatches for the NEW grant's namespaces.
-        // In steady state (namespaces unchanged) we send only the on_change
-        // event; downstream listeners are idempotent under duplicates.
+        // Store before publication so on_change revalidation reads the new grant.
         let key = Self::build_key(&rg);
-        let store = &_ctx.runtime().ref_grant_store;
-
-        // Capture orphaned namespaces (in old but not in new) before the upsert.
-        // Note: `get` then `upsert` is not atomic at the store level. We rely on
-        // the FileSystemResourceController processing one ReferenceGrant key at a
-        // time on its receive loop, so no other parse() runs against the same
-        // key concurrently. `ControllerRuntime::reset()` (rare, leader-change
-        // only) is the only other writer; if it interleaves, some orphaned
-        // namespaces may be missed on this pass — they will be re-dispatched
-        // when the next reset reprocesses all ReferenceGrants.
-        let new_affected = Self::identify_affected_namespaces(&rg);
-        let orphaned_namespaces: HashSet<String> = match store.get(&key) {
-            Some(old) => Self::identify_affected_namespaces(&old)
-                .difference(&new_affected)
-                .cloned()
-                .collect(),
-            None => HashSet::new(),
-        };
-
-        store.upsert(key.clone(), Arc::new(rg.clone()));
+        _ctx.runtime().ref_grant_store.upsert(key.clone(), Arc::new(rg.clone()));
 
         tracing::debug!(
             component = "reference_grant_handler",
             key = %key,
-            orphaned_ns_count = orphaned_namespaces.len(),
             "Updated ReferenceGrant in store"
         );
-
-        if !orphaned_namespaces.is_empty() {
-            tracing::info!(
-                component = "reference_grant_handler",
-                key = %key,
-                orphaned_ns_count = orphaned_namespaces.len(),
-                "ReferenceGrant updated, dispatching event for orphaned namespaces"
-            );
-            Self::dispatch_change_event(orphaned_namespaces, _ctx).await;
-        }
 
         ProcessResult::Continue(rg)
     }
 
     async fn on_change(&self, obj: &ReferenceGrant, _ctx: &HandlerContext) {
-        // Collect affected namespaces from the (NEW) grant.
-        // Orphaned namespaces from a changed grant were already dispatched
-        // in `parse()` before the cache was overwritten.
+        // The grant namespace covers dependents of both the old and new
+        // generation, because the namespace is part of the grant key.
         let affected_namespaces = Self::identify_affected_namespaces(obj);
 
         let key = Self::build_key(obj);

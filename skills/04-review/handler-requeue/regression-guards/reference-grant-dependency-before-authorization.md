@@ -83,7 +83,14 @@ Moving authorization to the Gateway would duplicate the Controller-owned store
 and change the established transport boundary.
 
 The dependency key is the target namespace because a ReferenceGrant event is
-dispatched by affected namespace. Authorization still uses the exact declaring
+dispatched by affected namespace. That affected set is exactly the grant's own
+namespace: owners in both old and new `from` namespaces are registered under
+it, so a `from` change needs no separate "orphaned namespace" dispatch.
+Dispatching `from` namespaces is a defect, not extra safety: it requeues every
+unrelated resource that references into those namespaces. In the integration
+suite one grant edit requeued 312 resources onto the single HTTPRoute worker and
+delayed the real dependent past its 15-second status window
+(`Dyn_AiBackendWeighted`). Authorization still uses the exact declaring
 namespace, group, kind, target group/kind, and optional target name. Registration
 does not grant access and remains required when validation is disabled so a
 later policy/configuration transition retains the complete dependency graph.

@@ -232,20 +232,18 @@ async fn beta_watch_stream_reconciles_canonical_raw_store_and_relist_without_sta
         processor
             .get("backend/allow")
             .is_some_and(|grant| grant.spec.from[0].namespace == "app-b")
-            && events.0.lock().len() >= 3
+            && events.0.lock().len() >= 2
     })
     .await;
-    let updates = events.0.lock().clone();
-    assert!(updates[1..].iter().any(|event| event.contains("app-a")));
-    assert!(updates[1..].iter().any(|event| event.contains("app-b")));
 
     tx.send(Ok(Event::Delete(beta_grant("app-b")))).await.unwrap();
-    eventually(|| processor.get("backend/allow").is_none() && events.0.lock().len() >= 4).await;
+    eventually(|| processor.get("backend/allow").is_none() && events.0.lock().len() >= 3).await;
     tx.send(Ok(Event::Apply(beta_grant("app-c")))).await.unwrap();
     eventually(|| {
         processor
             .get("backend/allow")
             .is_some_and(|grant| grant.spec.from[0].namespace == "app-c")
+            && events.0.lock().len() >= 4
     })
     .await;
     tx.send(Err(watcher::Error::NoResourceVersion)).await.unwrap();
@@ -261,10 +259,15 @@ async fn beta_watch_stream_reconciles_canonical_raw_store_and_relist_without_sta
         processor
             .get("backend/allow")
             .is_some_and(|grant| grant.spec.from[0].namespace == "app-d")
+            && events.0.lock().len() >= 5
     })
     .await;
-    assert!(events.0.lock().iter().any(|event| event.contains("app-c")));
-    assert!(events.0.lock().iter().any(|event| event.contains("app-d")));
+    // Every apply/delete revalidates dependents keyed by the grant namespace.
+    assert!(events
+        .0
+        .lock()
+        .iter()
+        .all(|event| *event == std::collections::HashSet::from(["backend".to_string()])));
     assert_eq!(handler.init_done.load(Ordering::SeqCst), 1);
     assert_eq!(tracker.len(), 2, "relist must not spawn another worker");
     assert_eq!(
