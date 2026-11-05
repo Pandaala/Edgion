@@ -273,7 +273,9 @@ impl Store {
             return None;
         };
         header.remove_header("transfer-encoding");
-        header.insert_header("content-length", entry.used.to_string()).ok()?;
+        header
+            .insert_header("content-length", entry.arena.len().to_string())
+            .ok()?;
         self.ledger.readers.fetch_add(1, Ordering::AcqRel);
         let body = Bytes::from_owner(Reader {
             entry: Arc::clone(&entry),
@@ -300,9 +302,9 @@ impl Store {
 }
 
 pub(super) struct Entry {
+    /// Capacity is the admitted body cap; length is the number of body bytes written.
     arena: Vec<u8>,
     metadata: Vec<u8>,
-    used: usize,
     pub(super) freshness: Freshness,
     vary: super::key::VaryCertificate,
     _lease: Lease,
@@ -310,7 +312,7 @@ pub(super) struct Entry {
 
 impl Entry {
     fn decode(&self) -> Option<ResponseHeader> {
-        if self.used > self.arena.len() || self.arena.len() > MAX_BODY || self.metadata.len() > MAX_METADATA {
+        if self.arena.capacity() > MAX_BODY || self.metadata.len() > MAX_METADATA {
             return None;
         }
         let mut header = ResponseHeader::build(200, Some(policy::MAX_FIELDS)).ok()?;
@@ -403,7 +405,7 @@ struct Reader {
 
 impl AsRef<[u8]> for Reader {
     fn as_ref(&self) -> &[u8] {
-        &self.entry.arena[..self.entry.used]
+        &self.entry.arena
     }
 }
 
@@ -461,7 +463,6 @@ impl Pending {
         if arena.capacity() != store.body_cap {
             return None;
         }
-        arena.resize(store.body_cap, 0);
         let mut metadata = Vec::new();
         metadata.try_reserve_exact(store.metadata_cap).ok()?;
         if metadata.capacity() != store.metadata_cap {
@@ -477,7 +478,6 @@ impl Pending {
             entry: Entry {
                 arena,
                 metadata,
-                used: 0,
                 freshness,
                 vary,
                 _lease: lease,
@@ -490,19 +490,12 @@ impl Pending {
     /// Copy only; all backing capacity was admitted before body callbacks started.
     fn push(&mut self, bytes: Option<&Bytes>, eos: bool) -> bool {
         let bytes = bytes.map_or(&[][..], Bytes::as_ref);
-        let Some(end) = self
-            .entry
-            .used
-            .checked_add(bytes.len())
-            .filter(|end| *end <= self.entry.arena.len())
-        else {
-            return false;
-        };
-        if self.complete {
+        let arena = &mut self.entry.arena;
+        if self.complete || bytes.len() > arena.capacity() - arena.len() {
             return false;
         }
-        self.entry.arena[self.entry.used..end].copy_from_slice(bytes);
-        self.entry.used = end;
+        // Bounded by the pre-reserved capacity, so this never reallocates.
+        arena.extend_from_slice(bytes);
         self.complete = eos;
         true
     }

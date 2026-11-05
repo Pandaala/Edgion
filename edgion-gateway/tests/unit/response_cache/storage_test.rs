@@ -18,7 +18,7 @@ fn capture_and_reader_slices_allocate_nothing_and_charge_unused_capacity() {
     let pending = state.pending.as_ref().unwrap();
     assert_eq!(pending.entry.arena.as_ptr(), pointer);
     assert_eq!(pending.entry.arena.capacity(), 1024);
-    assert_eq!(pending.entry.used, 6);
+    assert_eq!(pending.entry.arena.len(), 6);
     assert_eq!(store.stats().1, 1024 + MAX_METADATA + ENTRY_CONTROL);
     assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
@@ -45,6 +45,60 @@ fn capture_and_reader_slices_allocate_nothing_and_charge_unused_capacity() {
     drop(pinned);
     let (total, pending, readers, entries, baseline) = store.stats();
     assert_eq!((total, pending, readers, entries), (baseline, 0, 0, 0));
+}
+
+/// Body chunks and the expected published body; `None` means the fill is rejected.
+type BodyCase<'a> = (&'a [&'a [u8]], Option<&'a [u8]>);
+
+#[test]
+fn arena_starts_empty_and_body_bounds_hold_without_reallocation() {
+    let cases: [BodyCase; 4] = [
+        (&[], Some(b"")),
+        (&[b"abc", b"defgh"], Some(b"abcdefgh")),
+        (&[b"abcdefgh", b"i"], None),
+        (&[b"abcdefghi"], None),
+    ];
+    for (chunks, expected) in cases {
+        let (store, _epoch, mut state) = fixture(8);
+        let header = response();
+        state.capture(&header, Instant::now());
+        let pending = state.pending.as_ref().unwrap();
+        let (pointer, capacity) = (pending.entry.arena.as_ptr(), pending.entry.arena.capacity());
+        assert_eq!(pending.entry.arena.len(), 0, "the arena is reserved, not zero-filled");
+        assert_eq!(capacity, 8);
+        for chunk in chunks {
+            state.push(Some(&Bytes::copy_from_slice(chunk)), false);
+            if let Some(pending) = state.pending.as_ref() {
+                assert_eq!(pending.entry.arena.as_ptr(), pointer);
+                assert_eq!(pending.entry.arena.capacity(), capacity);
+            }
+        }
+        state.push(None, true);
+        let Some(expected) = expected else {
+            assert!(state.pending.is_none(), "overflow past the cap discards the fill");
+            assert_eq!(store.stats().1, 0, "the discarded fill releases its lease");
+            continue;
+        };
+        state.push(Some(&Bytes::from_static(b"x")), false);
+        assert!(state.pending.is_none(), "push after EOS discards the fill");
+        state.capture(&header, Instant::now());
+        for chunk in chunks {
+            state.push(Some(&Bytes::copy_from_slice(chunk)), false);
+        }
+        state.push(None, true);
+        assert!(state.seal_pending_headers(&header));
+        assert!(state.prepare_publication(Some(&header)));
+        state.publish();
+        let hit = state.lookup().unwrap();
+        assert_eq!(&hit.body[..], expected);
+        assert_eq!(
+            hit.header.headers.get("content-length").unwrap().as_bytes(),
+            expected.len().to_string().as_bytes()
+        );
+        drop(hit);
+        drop(state);
+        assert_eq!(store.stats().1, 0);
+    }
 }
 
 #[test]
@@ -314,7 +368,7 @@ fn corrupt_body_bound_and_excess_metadata_fields_are_rejected_before_replay() {
         let mut entry = store.entries.remove(&[7; 32]).unwrap();
         let corrupt = Arc::get_mut(&mut entry).unwrap();
         if corrupt_body {
-            corrupt.used = corrupt.arena.len() + 1;
+            corrupt.arena.reserve_exact(MAX_BODY + 1);
         } else {
             for _ in 0..MAX_FIELDS {
                 corrupt.metadata.extend_from_slice(&[0, 1, 0, 0, 0, 1, b'x', b'a']);
