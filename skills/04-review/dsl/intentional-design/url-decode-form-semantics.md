@@ -65,8 +65,8 @@ policies are distinct from DSL decoding and must not be unified accidentally.
 
 A shared decoder or prepared/reusable decoding interface must first resolve
 malformed-token policy, invalid UTF-8 policy, output limits, failure ordering and
-ownership. The [deferred consolidation task](../../../../task/review-data-panel/dsl-11-url-decoder-consolidation.md)
-records that decision. No runtime defect, selected replacement, new cache or
+ownership. The consolidation proposal was
+the historical task `dsl-11-url-decoder-consolidation` (declined in the 2026-11-05 data-plane triage; the record survives in git history at `a59c3da81`). No runtime defect, selected replacement, new cache or
 measured performance benefit follows from this documentation correction.
 
 Re-evaluate this page when either scanner, query-cache provenance, output-limit

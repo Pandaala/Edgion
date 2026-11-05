@@ -40,7 +40,7 @@ makes downstream liveness checks during backoff cheap and reliable.
 At Edgion `8e03bdfe6`, the locked fork exposes watch_h2_stream_close and the
 Gateway response-callback guard uses canonical closure detection under explicit
 H1/H2 eligibility restrictions. The
-[backoff scope decision](../../../../task/review-data-panel/retry-01-backoff-cancellation-scope.md)
+backoff scope decision, the historical task `retry-01-backoff-cancellation-scope` (declined in the 2026-11-05 data-plane triage; the record survives in git history at `a59c3da81`),
 records this concrete API evidence and required validation. It does not establish
 that response-phase monitoring is safe during retry waits or reverse the accepted
 behavior. The approximately 60 ms H1 pump observation above remains historical,

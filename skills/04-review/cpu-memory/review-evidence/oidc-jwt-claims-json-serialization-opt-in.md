@@ -34,8 +34,8 @@ value judgment, not a measured result or a blanket reason to close new findings.
 A reuse design must preserve independent output behavior and assess retention
 across the intervening Authorization write. Final header/context copies remain.
 
-The user's decision is tracked in
-[shared OIDC claims serialization](../../../../task/review-data-panel/oidc-01-shared-claims-serialization.md).
+The proposal was
+the historical task `oidc-01-shared-claims-serialization` (declined in the 2026-11-05 data-plane triage; the record survives in git history at `a59c3da81`).
 No runtime change or performance measurement accompanies that deferral.
 
 ## Re-evaluation

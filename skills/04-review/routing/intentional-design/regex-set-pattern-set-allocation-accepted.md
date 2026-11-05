@@ -85,7 +85,7 @@ Re-evaluate if:
 ## Resolution references
 
 - `routing-05` — "Evaluate multi-pattern regex route result storage"
-  (`task/review-data-panel/routing-05-regex-result-storage.md`, baseline `d75c4f1c8`),
+  (historical task removed with `task/review-data-panel/`, baseline `d75c4f1c8`),
   deferred as a P3 performance investigation; closed 2026-11-05 as an accepted
   tradeoff by user decision, without code change.
 - Related ancestor-boundary guard used by regex child matching:

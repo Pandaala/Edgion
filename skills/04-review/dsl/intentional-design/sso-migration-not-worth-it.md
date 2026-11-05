@@ -27,8 +27,8 @@ representation. No workload profile here establishes its throughput benefit or
 that DSL allocations are negligible. The historical allocation estimates below
 cannot establish either conclusion.
 
-The scoped follow-up is
-`task/review-data-panel/dsl-01-string-consumer-ownership.md`. It separates ordinary
+The scoped follow-up was
+the historical task `dsl-01-string-consumer-ownership` (declined in the 2026-11-05 data-plane triage; the record survives in git history at `a59c3da81`). It separated ordinary
 argument reads, asynchronous Body byte ownership, and composite URI results.
 
 ## When to apply this memo
