@@ -86,6 +86,10 @@ pub mod names {
     pub const LINK_SYS_HEALTH: &str = "edgion_link_sys_health";
     // Link-sys health flip counter (monotonic): exposes sub-scrape flapping the gauge cannot.
     pub const LINK_SYS_HEALTH_FLIPS_TOTAL: &str = "edgion_link_sys_health_flips_total";
+    // Redis LinkSys connection coverage sampled at scrape time, by state (live/configured).
+    pub const LINK_SYS_REDIS_CONNECTIONS: &str = "edgion_link_sys_redis_connections";
+    // Redis LinkSys topology events from the published generation's recovery loop.
+    pub const LINK_SYS_REDIS_TOPOLOGY_EVENTS_TOTAL: &str = "edgion_link_sys_redis_topology_events_total";
     // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail / tls_san_mismatch)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // Outbound TLS SAN pinning rejection, by plugin. The alerting signal for a
@@ -746,6 +750,47 @@ pub fn record_link_sys_health_flip(name: &str, to_healthy: bool) {
     dynamic_counter!(names::LINK_SYS_HEALTH_FLIPS_TOTAL,
         "link" => name.to_string(),
         "direction" => if to_healthy { "recovered" } else { "degraded" }
+    )
+    .increment(1);
+}
+
+/// Set the Redis LinkSys connection coverage gauges for one published client.
+///
+/// Standalone/Sentinel: live pool members and `pool.size`. Cluster: primaries
+/// answering the probe and known primaries. `state` is a fixed 2-value set;
+/// `link` cardinality is bounded by the configured provider count.
+pub fn record_link_sys_redis_connections(name: &str, live: usize, configured: usize) {
+    dynamic_gauge!(names::LINK_SYS_REDIS_CONNECTIONS, "link" => name.to_string(), "state" => "live").set(live as f64);
+    dynamic_gauge!(names::LINK_SYS_REDIS_CONNECTIONS, "link" => name.to_string(), "state" => "configured")
+        .set(configured as f64);
+}
+
+/// A Redis LinkSys topology event. Labels are a fixed set; no endpoint data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RedisTopologyEvent {
+    /// A recovery attempt failed after the previous one succeeded.
+    RecoveryFailed,
+    /// A recovery attempt succeeded after a failed one.
+    Recovered,
+    /// A recovery replaced the published Sentinel primary with a different one.
+    PrimaryChanged,
+}
+
+impl RedisTopologyEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RecoveryFailed => "recovery_failed",
+            Self::Recovered => "recovered",
+            Self::PrimaryChanged => "primary_changed",
+        }
+    }
+}
+
+/// Count one Redis topology event for a published client.
+pub fn record_link_sys_redis_topology_event(name: &str, event: RedisTopologyEvent) {
+    dynamic_counter!(names::LINK_SYS_REDIS_TOPOLOGY_EVENTS_TOTAL,
+        "link" => name.to_string(),
+        "event" => event.as_str()
     )
     .increment(1);
 }

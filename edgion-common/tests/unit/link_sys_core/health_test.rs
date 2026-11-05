@@ -102,3 +102,26 @@ fn controller_style_health_without_reporter_only_tracks_level() {
     assert!(health.update(false, false));
     assert!(!health.load());
 }
+
+#[test]
+fn report_if_published_runs_only_for_the_published_generation() {
+    let old = PublishedHealth::new(true);
+    let new = PublishedHealth::new(true);
+    let reports = AtomicUsize::new(0);
+    let report = || {
+        reports.fetch_add(1, Ordering::Relaxed);
+    };
+
+    assert!(!old.report_if_published(report), "a candidate must not report");
+    PublishedHealth::transition_publication(None, Some(&old), || {});
+    assert!(old.report_if_published(report));
+    PublishedHealth::transition_publication(Some(&old), Some(&new), || {});
+    assert!(
+        !old.report_if_published(report),
+        "a replaced generation must not report"
+    );
+    assert!(new.report_if_published(report));
+    new.deactivate();
+    assert!(!new.report_if_published(report), "a retired generation must not report");
+    assert_eq!(reports.load(Ordering::Relaxed), 2);
+}

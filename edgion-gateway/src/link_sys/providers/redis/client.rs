@@ -6,6 +6,7 @@ use super::{
 };
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::{new_published_health, spawn_health_probe, ProbeConfig};
+use crate::observe::metrics::registry::{record_link_sys_redis_topology_event, RedisTopologyEvent};
 use anyhow::Result;
 use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
@@ -135,6 +136,7 @@ impl RedisLinkClient {
         let backend = self.backend.clone();
         let mut shutdown = rx;
         let name = self.name.clone();
+        let health = self.healthy.clone();
         let recovery = tokio::spawn(async move {
             let mut delay = Duration::from_millis(100);
             // Log transitions only, with metadata (link name), never endpoints
@@ -163,14 +165,17 @@ impl RedisLinkClient {
                             if failing {
                                 failing = false;
                                 tracing::info!(redis = %name, "Redis topology recovery succeeded");
+                                report_topology_event(&health, &name, RedisTopologyEvent::Recovered);
                             }
                             if primary_changed(primary_before.as_ref(), backend.published_primary().as_ref()) {
                                 tracing::info!(redis = %name, "Redis Sentinel primary changed");
+                                report_topology_event(&health, &name, RedisTopologyEvent::PrimaryChanged);
                             }
                         }
                         Err(_) if !failing => {
                             failing = true;
                             tracing::warn!(redis = %name, "Redis topology recovery failed; retrying");
+                            report_topology_event(&health, &name, RedisTopologyEvent::RecoveryFailed);
                         }
                         Err(_) => {}
                     }
@@ -223,6 +228,12 @@ impl RedisLinkClient {
         self.healthy.update(false, false);
         Ok(())
     }
+}
+
+/// Count a topology event only for the published generation, matching the
+/// health flip counter: candidates and retired generations never report.
+fn report_topology_event(health: &PublishedHealth, name: &str, event: RedisTopologyEvent) {
+    health.report_if_published(|| record_link_sys_redis_topology_event(name, event));
 }
 
 /// A failover is a published Sentinel primary replaced by a different one.

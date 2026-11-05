@@ -1390,6 +1390,42 @@ pub static DEFINITIONS: &[Definition] = &[
         }],
         contribution: false,
     },
+    Definition {
+        name: "edgion_link_sys_redis_connections",
+        kind: MetricType::Gauge,
+        class: MetricClass::Dynamic,
+        labels: &[
+            LabelDefinition {
+                key: "link",
+                domain: LabelDomain::Open,
+                required: true,
+            },
+            LabelDefinition {
+                key: "state",
+                domain: LabelDomain::Closed(&["live", "configured"]),
+                required: true,
+            },
+        ],
+        contribution: false,
+    },
+    Definition {
+        name: "edgion_link_sys_redis_topology_events_total",
+        kind: MetricType::Counter,
+        class: MetricClass::Dynamic,
+        labels: &[
+            LabelDefinition {
+                key: "link",
+                domain: LabelDomain::Open,
+                required: true,
+            },
+            LabelDefinition {
+                key: "event",
+                domain: LabelDomain::Closed(&["recovery_failed", "recovered", "primary_changed"]),
+                required: true,
+            },
+        ],
+        contribution: false,
+    },
 ];
 
 pub fn definition(name: &str) -> Option<&'static Definition> {
@@ -1496,6 +1532,8 @@ pub fn definition(name: &str) -> Option<&'static Definition> {
         "edgion_rr_selector_truncated_total" => Some(&DEFINITIONS[99]),
         "edgion_region_route_overlay_events_total" => Some(&DEFINITIONS[100]),
         "edgion_acme_challenge_lookup_total" => Some(&DEFINITIONS[101]),
+        "edgion_link_sys_redis_connections" => Some(&DEFINITIONS[102]),
+        "edgion_link_sys_redis_topology_events_total" => Some(&DEFINITIONS[103]),
         _ => None,
     }
 }

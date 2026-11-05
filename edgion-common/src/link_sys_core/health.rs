@@ -77,6 +77,18 @@ impl PublishedHealth {
         true
     }
 
+    /// Run `report` only while this generation is published, under the same
+    /// lock as health transitions, so a retired generation can never report.
+    /// Returns whether it ran. `report` must stay short and must not call back
+    /// into this health cell.
+    pub fn report_if_published(&self, report: impl FnOnce()) -> bool {
+        let state = self.transition.lock();
+        if state.published {
+            report();
+        }
+        state.published
+    }
+
     /// Disable reporting for direct retirement/shutdown paths.
     ///
     /// Persistent runners normally use [`Self::transition_publication`] so the

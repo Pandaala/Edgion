@@ -22,7 +22,7 @@ use crate::link_sys::providers::redis::{RedisApply, RedisLinkClient};
 use crate::link_sys::providers::webhook::{WebhookCandidate, WebhookLinkClient};
 use crate::link_sys::runtime::runner::PersistentRunner;
 use crate::link_sys::LinkSysHealth;
-use crate::observe::metrics::registry::record_link_sys_health;
+use crate::observe::metrics::registry::{record_link_sys_health, record_link_sys_redis_connections};
 
 // ============================================================
 // Type aliases
@@ -818,7 +818,11 @@ pub(crate) fn record_published_link_sys_health() {
 fn record_registry_health(registry: &RuntimeRegistry) {
     for (name, entry) in registry.entries.load().iter() {
         let healthy = match &entry.provider {
-            ProviderRuntime::Redis(runner) => runner.current().map(|client| client.healthy()),
+            ProviderRuntime::Redis(runner) => runner.current().map(|client| {
+                let coverage = client.connection_coverage();
+                record_link_sys_redis_connections(name, coverage.live, coverage.configured);
+                client.healthy()
+            }),
             ProviderRuntime::Etcd(runner) => runner.current().map(|client| client.healthy()),
             ProviderRuntime::Elasticsearch(runner) => runner.current().map(|client| client.healthy()),
             ProviderRuntime::Kafka(runner) => runner.current().map(|client| client.healthy()),
