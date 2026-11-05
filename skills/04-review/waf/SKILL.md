@@ -37,15 +37,16 @@ current implementation boundaries; design approval alone does not establish
 implementation or measured adoption. The fused JSON guard records the narrower
 contiguous-input implementation and its verification limits.
 
-## Remaining standalone tasks
+## Untracked validation and optimization
 
-- [WAF validation tasks](../../../tasks/todo/waf-validation/README.md):
-  representative Gateway performance, Kubernetes admission/reload (including
-  the audited language-selection profiles) and x86-64 verification. They
-  require fresh evidence via the
-  [testing guide](../../05-testing/01-integration-testing.md).
+No WAF tasks are tracked. The following were deliberately dropped, not
+completed: representative Gateway performance measurement, Kubernetes
+admission/reload validation (including the audited language-selection
+profiles), and x86-64 hardware verification. Do not cite them as passed; if
+needed, gather fresh evidence via the
+[testing guide](../../05-testing/01-integration-testing.md).
 
 Speculative optimizations (shared raw/structured body inspection, native SIMD
-phrase search, premultiplied DFA state identifiers) are not tracked as tasks.
-Open one only when the performance baseline attributes a material cost to that
-area; they are not unfinished acceptance gates for the delivered request WAF.
+phrase search, premultiplied DFA state identifiers) are likewise untracked.
+Open one only when measured profiling attributes a material cost to that area;
+none of these are acceptance gates for the delivered request WAF.
