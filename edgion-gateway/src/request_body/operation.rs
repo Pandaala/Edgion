@@ -70,6 +70,19 @@ pub trait RawBodyScanner: Send + 'static {
     fn finish(self) -> Result<Self::Output, BodyOperationError>;
 }
 
+/// Owned pull-based scanner for parsers that require `std::io::Read`.
+///
+/// The body subsystem runs `scan` inside one admitted blocking-pool job over
+/// an immutable snapshot (a known-empty body uses an empty reader), so
+/// implementations may block on the reader and must not borrow VM or session
+/// state. Reader errors (scan budget, cancellation,
+/// storage failure) take precedence over the returned output.
+pub trait ReadBodyScanner: Send + 'static {
+    type Output: Send + 'static;
+
+    fn scan<R: std::io::Read>(self, reader: R) -> Self::Output;
+}
+
 /// Owned logical-text scanner. Input chunks are valid UTF-8 and together have
 /// exactly the semantics of `String::from_utf8_lossy` over the complete body.
 pub trait TextBodyScanner: Send + 'static {

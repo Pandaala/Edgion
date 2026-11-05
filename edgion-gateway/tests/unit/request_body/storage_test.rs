@@ -113,6 +113,7 @@ async fn mirror_snapshot_read_output_holds_lane_until_last_clone() {
     assert_eq!(limiter.available_permits(), 1);
 }
 use std::future::{poll_fn, Future};
+use std::io::Read as _;
 use std::task::Poll;
 
 struct SnapshotMemoryOwner {
@@ -1358,6 +1359,133 @@ async fn cancelled_disk_scan_stops_between_chunks() {
         chunks.load(Ordering::Acquire) < 16,
         "cancelled disk scan must not consume the complete snapshot"
     );
+}
+
+/// Reads up to `limit` bytes through the pull reader and records the thread.
+struct ReadPrefixScanner {
+    limit: usize,
+    caller: std::thread::ThreadId,
+}
+
+impl ReadBodyScanner for ReadPrefixScanner {
+    type Output = (io::Result<Vec<u8>>, bool);
+
+    fn scan<R: io::Read>(self, reader: R) -> Self::Output {
+        let mut output = Vec::new();
+        let result = reader.take(self.limit as u64).read_to_end(&mut output).map(|_| output);
+        (result, std::thread::current().id() != self.caller)
+    }
+}
+
+fn read_prefix(limit: usize) -> ReadPrefixScanner {
+    ReadPrefixScanner {
+        limit,
+        caller: std::thread::current().id(),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_read_streams_memory_disk_and_mixed_snapshots_off_the_caller() {
+    let body: Vec<u8> = (0..SCAN_CHUNK_SIZE * 2 + 17).map(|i| (i % 251) as u8).collect();
+    for memory_limit in [body.len(), 1] {
+        let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+        capture(&mut storage, &[&body]).await;
+        let result = view.scan_read(read_prefix(usize::MAX), u64::MAX).await.unwrap();
+        let (bytes, off_caller) = result.value;
+        assert_eq!(bytes.unwrap(), body);
+        assert!(off_caller);
+        assert_eq!(result.bytes_scanned, body.len() as u64);
+    }
+
+    let (mut storage, view) = BodyStorage::with_memory_limit(1);
+    capture(&mut storage, &[&body]).await;
+    view.prepend(Bytes::from_static(b"head:")).unwrap();
+    view.append(Bytes::from_static(b":tail")).unwrap();
+    let result = view.scan_read(read_prefix(usize::MAX), u64::MAX).await.unwrap();
+    let mut expected = b"head:".to_vec();
+    expected.extend_from_slice(&body);
+    expected.extend_from_slice(b":tail");
+    assert_eq!(result.value.0.unwrap(), expected);
+    assert_eq!(result.bytes_scanned, expected.len() as u64);
+}
+
+#[tokio::test]
+async fn scan_read_charges_only_fetched_chunks_when_the_parser_stops_early() {
+    let body = vec![b'x'; SCAN_CHUNK_SIZE * 3];
+    for memory_limit in [body.len(), 1] {
+        let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+        capture(&mut storage, &[&body]).await;
+        let result = view.scan_read(read_prefix(1), u64::MAX).await.unwrap();
+        assert_eq!(result.value.0.unwrap(), b"x");
+        assert_eq!(result.bytes_scanned, SCAN_CHUNK_SIZE as u64);
+    }
+}
+
+#[tokio::test]
+async fn scan_read_budget_exhaustion_overrides_the_parser_result() {
+    let body = vec![b'x'; SCAN_CHUNK_SIZE * 3];
+    let limit = SCAN_CHUNK_SIZE as u64 + 10;
+    for memory_limit in [body.len(), 1] {
+        let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+        capture(&mut storage, &[&body]).await;
+        let result = view.scan_read(read_prefix(usize::MAX), limit).await;
+        assert_eq!(result.unwrap_err(), BodyOperationError::ScanLimitExceeded { limit });
+
+        // A budget that exactly covers the body is not exceeded.
+        let exact = view
+            .scan_read(read_prefix(usize::MAX), body.len() as u64)
+            .await
+            .unwrap();
+        assert_eq!(exact.bytes_scanned, body.len() as u64);
+    }
+}
+
+/// Reads one chunk, reports it, then waits until the caller has dropped the
+/// scan future before attempting the next read.
+struct GatedReadScanner {
+    first_read: std::sync::mpsc::SyncSender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    next_read_failed: std::sync::mpsc::SyncSender<bool>,
+}
+
+impl ReadBodyScanner for GatedReadScanner {
+    type Output = ();
+
+    fn scan<R: io::Read>(self, mut reader: R) -> Self::Output {
+        let mut buffer = vec![0; SCAN_CHUNK_SIZE];
+        assert_eq!(reader.read(&mut buffer).unwrap(), SCAN_CHUNK_SIZE);
+        self.first_read.send(()).unwrap();
+        self.release.recv().unwrap();
+        let _ = self.next_read_failed.send(reader.read(&mut buffer).is_err());
+    }
+}
+
+#[tokio::test]
+async fn cancelled_scan_read_fails_the_next_chunk_fetch() {
+    for memory_limit in [SCAN_CHUNK_SIZE * 4, 1] {
+        let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+        capture(&mut storage, &[&vec![b'x'; SCAN_CHUNK_SIZE * 3]]).await;
+        let (first_tx, first_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let (outcome_tx, outcome_rx) = std::sync::mpsc::sync_channel(1);
+        let scanner = GatedReadScanner {
+            first_read: first_tx,
+            release: release_rx,
+            next_read_failed: outcome_tx,
+        };
+        let task_view = Arc::clone(&view);
+        let task = tokio::spawn(async move { task_view.scan_read(scanner, u64::MAX).await });
+        tokio::task::spawn_blocking(move || first_rx.recv().unwrap())
+            .await
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        let next_read_failed = tokio::task::spawn_blocking(move || outcome_rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(next_read_failed, "a dropped scan must stop before the next chunk fetch");
+    }
 }
 
 #[tokio::test]

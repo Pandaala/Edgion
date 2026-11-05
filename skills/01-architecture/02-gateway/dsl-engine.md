@@ -127,7 +127,11 @@ without accounting retains the reservation; dropping an operation does not
 automatically refund potentially still-running blocking work.
 
 To extend Body behavior, implement an owned scanner using `RawBodyScanner` or
-`TextBodyScanner` and invoke it through the runtime policy boundary. Generic
+`TextBodyScanner` and invoke it through the runtime policy boundary. A parser
+that needs `std::io::Read` (the `json_get`/`json_select` Body scanners)
+implements `ReadBodyScanner` and runs through `DslBodyOps::scan_read_with`:
+one admitted scan-lane job pulls snapshot chunks directly, with no extra
+thread, channel, or per-chunk owned copy. Generic
 storage traversal, lossy decoding, and range mechanics belong in `request_body`;
 DSL values, compiled JSON paths, and regex plans belong in the DSL runtime.
 Scanners moved to blocking workers must remain `Send + 'static` and cannot

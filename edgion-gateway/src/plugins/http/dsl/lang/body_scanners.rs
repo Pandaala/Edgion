@@ -2,10 +2,9 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
+use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::{mpsc, Arc};
-use std::thread::JoinHandle;
 
 use edgion_dsl::json_path::{DefiniteJsonPath, JsonPathSegment};
 use regex_automata::dfa::{dense, Automaton};
@@ -15,7 +14,7 @@ use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, V
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::request_body::BodyReadError;
-use crate::request_body::{BodyOperationError, RawBodyScanner, ScanControl, TextBodyScanner};
+use crate::request_body::{BodyOperationError, ReadBodyScanner, ScanControl, TextBodyScanner};
 
 use edgion_dsl::value::Value;
 
@@ -65,6 +64,8 @@ pub(crate) enum JsonScanValue {
     TooLong,
 }
 
+/// Bounds owned-string JSON scans. Body scans run on the request-body scan
+/// lane and are bounded by its shared permit instead.
 static JSON_SCAN_LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 async fn acquire_json_scan_permit() -> Result<OwnedSemaphorePermit, BodyOperationError> {
@@ -74,25 +75,27 @@ async fn acquire_json_scan_permit() -> Result<OwnedSemaphorePermit, BodyOperatio
         .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))
 }
 
+/// Pull-based definite-path JSON scanner over a request body.
 pub(crate) struct JsonPathScanner {
-    sender: Option<mpsc::SyncSender<Vec<u8>>>,
-    worker: Option<JoinHandle<JsonScanValue>>,
-    disconnected: bool,
+    path: Arc<DefiniteJsonPath>,
+    limit: usize,
 }
 
 impl JsonPathScanner {
-    pub(crate) async fn new(path: Arc<DefiniteJsonPath>, limit: usize) -> Result<Self, BodyOperationError> {
-        let permit = acquire_json_scan_permit().await?;
-        let (sender, receiver) = mpsc::sync_channel(2);
-        let worker = std::thread::Builder::new()
-            .name("edgion-json-path".to_string())
-            .spawn(move || parse_json_stream(receiver, path, limit, permit))
-            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        Ok(Self {
-            sender: Some(sender),
-            worker: Some(worker),
-            disconnected: false,
-        })
+    pub(crate) fn new(path: Arc<DefiniteJsonPath>, limit: usize) -> Self {
+        Self { path, limit }
+    }
+}
+
+impl ReadBodyScanner for JsonPathScanner {
+    type Output = JsonScanValue;
+
+    fn scan<R: Read>(self, reader: R) -> Self::Output {
+        parse_json(
+            serde_json::Deserializer::from_reader(reader),
+            self.path.segments(),
+            self.limit,
+        )
     }
 }
 
@@ -211,132 +214,24 @@ impl JsonSelectPlan {
     }
 }
 
+/// Pull-based multi-path JSON scanner over a request body.
 pub(crate) struct JsonSelectScanner {
-    sender: Option<mpsc::SyncSender<Vec<u8>>>,
-    worker: Option<JoinHandle<Vec<JsonScanValue>>>,
-    disconnected: bool,
+    plan: Arc<JsonSelectPlan>,
+    limit: usize,
 }
 
 impl JsonSelectScanner {
-    pub(crate) async fn new(plan: Arc<JsonSelectPlan>, limit: usize) -> Result<Self, BodyOperationError> {
-        let permit = acquire_json_scan_permit().await?;
-        let (sender, receiver) = mpsc::sync_channel(2);
-        let worker = std::thread::Builder::new()
-            .name("edgion-json-select".to_string())
-            .spawn(move || parse_json_select_stream(receiver, plan, limit, permit))
-            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        Ok(Self {
-            sender: Some(sender),
-            worker: Some(worker),
-            disconnected: false,
-        })
+    pub(crate) fn new(plan: Arc<JsonSelectPlan>, limit: usize) -> Self {
+        Self { plan, limit }
     }
 }
 
-impl RawBodyScanner for JsonSelectScanner {
+impl ReadBodyScanner for JsonSelectScanner {
     type Output = Vec<JsonScanValue>;
 
-    fn requires_blocking_context(&self) -> bool {
-        true
+    fn scan<R: Read>(self, reader: R) -> Self::Output {
+        parse_json_select(reader, &self.plan, self.limit)
     }
-
-    fn push(&mut self, chunk: &[u8]) -> Result<ScanControl, BodyOperationError> {
-        if self.disconnected {
-            return Ok(ScanControl::Stop);
-        }
-        let Some(sender) = self.sender.as_ref() else {
-            return Err(BodyOperationError::Body(BodyReadError::Incomplete));
-        };
-        if sender.send(chunk.to_vec()).is_err() {
-            self.disconnected = true;
-            return Ok(ScanControl::Stop);
-        }
-        Ok(ScanControl::Continue)
-    }
-
-    fn finish(mut self) -> Result<Self::Output, BodyOperationError> {
-        self.sender.take();
-        self.worker
-            .take()
-            .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?
-            .join()
-            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))
-    }
-}
-
-impl RawBodyScanner for JsonPathScanner {
-    type Output = JsonScanValue;
-
-    fn requires_blocking_context(&self) -> bool {
-        true
-    }
-
-    fn push(&mut self, chunk: &[u8]) -> Result<ScanControl, BodyOperationError> {
-        if self.disconnected {
-            return Ok(ScanControl::Stop);
-        }
-        let Some(sender) = self.sender.as_ref() else {
-            return Err(BodyOperationError::Body(BodyReadError::Incomplete));
-        };
-        if sender.send(chunk.to_vec()).is_err() {
-            self.disconnected = true;
-            return Ok(ScanControl::Stop);
-        }
-        Ok(ScanControl::Continue)
-    }
-
-    fn finish(mut self) -> Result<Self::Output, BodyOperationError> {
-        self.sender.take();
-        self.worker
-            .take()
-            .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?
-            .join()
-            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))
-    }
-}
-
-struct ChannelReader {
-    receiver: mpsc::Receiver<Vec<u8>>,
-    current: Cursor<Vec<u8>>,
-    finished: bool,
-}
-
-impl ChannelReader {
-    fn new(receiver: mpsc::Receiver<Vec<u8>>) -> Self {
-        Self {
-            receiver,
-            current: Cursor::new(Vec::new()),
-            finished: false,
-        }
-    }
-}
-
-impl Read for ChannelReader {
-    fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.current.read(target)?;
-            if read != 0 {
-                return Ok(read);
-            }
-            if self.finished {
-                return Ok(0);
-            }
-            match self.receiver.recv() {
-                Ok(chunk) => self.current = Cursor::new(chunk),
-                Err(_) => self.finished = true,
-            }
-        }
-    }
-}
-
-fn parse_json_stream(
-    receiver: mpsc::Receiver<Vec<u8>>,
-    path: Arc<DefiniteJsonPath>,
-    limit: usize,
-    _permit: OwnedSemaphorePermit,
-) -> JsonScanValue {
-    let reader = ChannelReader::new(receiver);
-    parse_json(serde_json::Deserializer::from_reader(reader), path.segments(), limit)
 }
 
 fn parse_json<'de, R>(
@@ -617,13 +512,7 @@ impl JsonSelectState {
     }
 }
 
-fn parse_json_select_stream(
-    receiver: mpsc::Receiver<Vec<u8>>,
-    plan: Arc<JsonSelectPlan>,
-    limit: usize,
-    _permit: OwnedSemaphorePermit,
-) -> Vec<JsonScanValue> {
-    let reader = ChannelReader::new(receiver);
+fn parse_json_select<R: Read>(reader: R, plan: &JsonSelectPlan, limit: usize) -> Vec<JsonScanValue> {
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let state = RefCell::new(JsonSelectState::new(plan.capture_count, limit));
     let result = JsonSelectSeed {

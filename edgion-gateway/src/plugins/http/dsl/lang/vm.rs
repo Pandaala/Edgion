@@ -881,9 +881,7 @@ impl Vm {
                         }
                         Value::Body(_) => {
                             DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
-                                .scan_with(async {
-                                    JsonPathScanner::new(Arc::clone(path), self.limits.max_string_len).await
-                                })
+                                .scan_read_with(JsonPathScanner::new(Arc::clone(path), self.limits.max_string_len))
                                 .await?
                         }
                         _ => JsonScanValue::Missing,
@@ -908,7 +906,7 @@ impl Vm {
                         });
                     };
                     let values = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
-                        .scan_with(async { JsonSelectScanner::new(Arc::clone(plan), self.limits.max_string_len).await })
+                        .scan_read_with(JsonSelectScanner::new(Arc::clone(plan), self.limits.max_string_len))
                         .await?;
 
                     let mut output = indexmap::IndexMap::with_capacity(plan.outputs().len());

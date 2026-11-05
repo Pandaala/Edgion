@@ -29,35 +29,73 @@ fn regex_empty_pattern_matches() {
     assert!(scanner.finish().unwrap());
 }
 
-async fn scan_json(input: &[&[u8]], path: &str, limit: usize) -> JsonScanValue {
-    let path = Arc::new(DefiniteJsonPath::parse(path).unwrap());
-    let mut scanner = JsonPathScanner::new(path, limit).await.unwrap();
-    for chunk in input {
-        if scanner.push(chunk).unwrap() == ScanControl::Stop {
-            break;
-        }
-    }
-    scanner.finish().unwrap()
+/// Feeds fixed chunk boundaries to a pull-based scanner, mirroring the body
+/// snapshot reader without request-body storage.
+struct ChunksReader<'a> {
+    chunks: std::slice::Iter<'a, &'a [u8]>,
+    current: &'a [u8],
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn shared_json_path_scanners_keep_document_results_independent() {
+impl<'a> ChunksReader<'a> {
+    fn new(chunks: &'a [&'a [u8]]) -> Self {
+        Self {
+            chunks: chunks.iter(),
+            current: &[],
+        }
+    }
+}
+
+impl Read for ChunksReader<'_> {
+    fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+        while self.current.is_empty() {
+            match self.chunks.next() {
+                Some(chunk) => self.current = chunk,
+                None => return Ok(0),
+            }
+        }
+        let read = self.current.len().min(target.len());
+        target[..read].copy_from_slice(&self.current[..read]);
+        self.current = &self.current[read..];
+        Ok(read)
+    }
+}
+
+async fn scan_json(input: &[&[u8]], path: &str, limit: usize) -> JsonScanValue {
+    let path = Arc::new(DefiniteJsonPath::parse(path).unwrap());
+    JsonPathScanner::new(path, limit).scan(ChunksReader::new(input))
+}
+
+#[test]
+fn shared_json_path_scanners_keep_document_results_independent() {
     let path = Arc::new(DefiniteJsonPath::parse(r#"$["a.b"][1].value"#).unwrap());
     let weak = Arc::downgrade(&path);
-    let mut valid = JsonPathScanner::new(Arc::clone(&path), 64).await.unwrap();
-    let mut invalid = JsonPathScanner::new(Arc::clone(&path), 64).await.unwrap();
+    let valid = JsonPathScanner::new(Arc::clone(&path), 64);
+    let invalid = JsonPathScanner::new(Arc::clone(&path), 64);
     drop(path);
     assert!(weak.upgrade().is_some());
-    valid.push(br#"{"a.b":[0,{"value":"good"}]}"#).unwrap();
-    invalid.push(br#"{"a.b":[0,{"value":"discard"}]} trailing"#).unwrap();
-    let result = valid.finish().unwrap();
-    assert!(matches!(invalid.finish().unwrap(), JsonScanValue::Missing));
+    let result = valid.scan(&br#"{"a.b":[0,{"value":"good"}]}"#[..]);
+    assert!(matches!(
+        invalid.scan(&br#"{"a.b":[0,{"value":"discard"}]} trailing"#[..]),
+        JsonScanValue::Missing
+    ));
     assert!(weak.upgrade().is_none());
     assert!(matches!(result, JsonScanValue::Value(Value::Str(value)) if value.as_ref() == "good"));
 }
 
+#[tokio::test]
+async fn truncated_and_malformed_json_bodies_return_missing() {
+    for input in [
+        &[br#"{"a":"#.as_slice()][..],
+        &[br#"{"a":1"#.as_slice(), b" ".as_slice()][..],
+        &[br#"{"a":1,}"#.as_slice()][..],
+        &[b"".as_slice()][..],
+    ] {
+        assert!(matches!(scan_json(input, "$.a", 16).await, JsonScanValue::Missing));
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn threaded_json_path_scan_owns_quoted_members_indices_and_root() {
+async fn chunked_json_path_scan_owns_quoted_members_indices_and_root() {
     let chunks: &[&[u8]] = &[br#"{"a.b":[0,{"value":"sel"#, br#"ected"}]}"#];
     let result = scan_json(chunks, r#"$["a.b"][1].value"#, 64).await;
     assert!(matches!(result, JsonScanValue::Value(Value::Str(value)) if &*value == "selected"));
@@ -99,13 +137,7 @@ async fn scan_json_select(
             DefiniteJsonPath::parse(path).expect("test path should be valid"),
         )
     })));
-    let mut scanner = JsonSelectScanner::new(Arc::clone(&plan), limit).await.unwrap();
-    for chunk in input {
-        if scanner.push(chunk).unwrap() == ScanControl::Stop {
-            break;
-        }
-    }
-    let values = scanner.finish().unwrap();
+    let values = JsonSelectScanner::new(Arc::clone(&plan), limit).scan(ChunksReader::new(input));
     (plan, values)
 }
 
@@ -186,7 +218,7 @@ async fn invalid_json_returns_missing() {
 }
 
 #[tokio::test]
-async fn json_select_worker_retains_plan_until_owned_captures_are_complete() {
+async fn json_select_scanner_retains_plan_until_owned_captures_are_complete() {
     let plan = Arc::new(JsonSelectPlan::new(
         [
             ("parent", "$.items[0]"),
@@ -198,12 +230,10 @@ async fn json_select_worker_retains_plan_until_owned_captures_are_complete() {
     ));
     let captures: Vec<_> = plan.outputs().iter().map(|(_, capture)| *capture).collect();
     let weak = Arc::downgrade(&plan);
-    let mut scanner = JsonSelectScanner::new(Arc::clone(&plan), 128).await.unwrap();
+    let scanner = JsonSelectScanner::new(Arc::clone(&plan), 128);
     drop(plan);
     assert!(weak.upgrade().is_some());
-    scanner.push(br#"{"items":[{"name":"al"#).unwrap();
-    scanner.push(br#"ice"},7]}"#).unwrap();
-    let values = scanner.finish().unwrap();
+    let values = scanner.scan(ChunksReader::new(&[br#"{"items":[{"name":"al"#, br#"ice"},7]}"#]));
     assert!(weak.upgrade().is_none());
     assert!(matches!(
         &values[captures[0]],
@@ -587,4 +617,45 @@ async fn invalid_json_discards_every_json_select_capture() {
     let (plan, values) = scan_json_select(&[br#"{"a":1,"b":2} trailing"#], &[("a", "$.a"), ("b", "$.b")], 64).await;
     assert!(matches!(selected(&plan, &values, "a"), JsonScanValue::Missing));
     assert!(matches!(selected(&plan, &values, "b"), JsonScanValue::Missing));
+}
+
+async fn spilled_body(body: &[u8]) -> std::sync::Arc<crate::request_body::BodyStorageView> {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let (mut storage, view) = crate::request_body::BodyStorage::new(1, body.len() as u64);
+    storage.write(&bytes::Bytes::copy_from_slice(body)).await.unwrap();
+    storage.finish().await.unwrap();
+    view
+}
+
+#[tokio::test]
+async fn json_path_scan_over_spilled_storage_keeps_budget_and_validation_policy() {
+    let path = Arc::new(DefiniteJsonPath::parse("$.tail").unwrap());
+    let mut body = br#"{"pad":""#.to_vec();
+    body.resize(body.len() + 200 * 1024, b'x');
+    body.extend_from_slice(br#"","tail":"end"}"#);
+    let view = spilled_body(&body).await;
+
+    let result = view
+        .scan_read(JsonPathScanner::new(Arc::clone(&path), 16), u64::MAX)
+        .await
+        .unwrap();
+    assert!(matches!(result.value, JsonScanValue::Value(Value::Str(value)) if &*value == "end"));
+    assert_eq!(result.bytes_scanned, body.len() as u64);
+
+    // Exhausting the budget mid-document is an error, not a Missing value.
+    let limit = 100 * 1024;
+    assert_eq!(
+        view.scan_read(JsonPathScanner::new(Arc::clone(&path), 16), limit)
+            .await
+            .err(),
+        Some(BodyOperationError::ScanLimitExceeded { limit })
+    );
+
+    // Truncated spilled JSON is a successful Missing scan.
+    let truncated = spilled_body(&body[..body.len() - 2]).await;
+    let result = truncated
+        .scan_read(JsonPathScanner::new(path, 16), u64::MAX)
+        .await
+        .unwrap();
+    assert!(matches!(result.value, JsonScanValue::Missing));
 }
