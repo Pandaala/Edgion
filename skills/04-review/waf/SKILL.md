@@ -39,14 +39,13 @@ contiguous-input implementation and its verification limits.
 
 ## Remaining standalone tasks
 
-- [Trusted language policy profiles](../../../tasks/todo/waf-language-policy-profiles.md)
-- Representative Gateway performance, Kubernetes admission/reload and x86-64
-  verification require fresh evidence via the
-  [testing guide](../../05-testing/01-integration-testing.md). Their historical
-  task records are absent; removal does not establish completed validation.
-- [Shared request-body inspection](../../../tasks/todo/waf-shared-request-body-inspection.md)
-- [Native SIMD phrase search](../../../tasks/todo/waf-native-simd-search.md)
-- [Native DFA state layout](../../../tasks/todo/waf-dfa-state-layout.md)
+- [WAF validation tasks](../../../tasks/todo/waf-validation/README.md):
+  representative Gateway performance, Kubernetes admission/reload (including
+  the audited language-selection profiles) and x86-64 verification. They
+  require fresh evidence via the
+  [testing guide](../../05-testing/01-integration-testing.md).
 
-Conditional optimization tasks require measured evidence before implementation;
-they are not unfinished acceptance gates for the delivered request WAF.
+Speculative optimizations (shared raw/structured body inspection, native SIMD
+phrase search, premultiplied DFA state identifiers) are not tracked as tasks.
+Open one only when the performance baseline attributes a material cost to that
+area; they are not unfinished acceptance gates for the delivered request WAF.
