@@ -133,7 +133,7 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 |------|-------|------|
 | **Proxy core** | `pingora-core`, `pingora-proxy`, `pingora-http`, `pingora-load-balancing` | HTTP proxy engine |
 | **Async** | `tokio`, `tokio-stream`, `futures`, `async-trait` | Async runtime |
-| **gRPC** | `tonic`, `tonic-reflection`, `prost` | Controller ↔ Gateway communication |
+| **gRPC** | `tonic`, `prost` | Controller ↔ Gateway communication |
 | **HTTP API** | `axum`, `tower`, `hyper-util` | Admin API |
 | **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s integration + CRD Schema |
 | **Serialization** | `serde`, `serde_json`, `yaml_serde` | Configuration parsing |

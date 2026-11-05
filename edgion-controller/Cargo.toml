@@ -56,7 +56,6 @@ json-patch.workspace = true
 # Kubernetes conf_client and types
 kube = { workspace = true, features = ["client", "rustls-tls", "ring", "runtime"] }
 k8s-openapi.workspace = true
-schemars.workspace = true
 
 # gRPC (config sync)
 tonic.workspace = true
@@ -85,7 +84,6 @@ dashmap.workspace = true
 regex.workspace = true
 rand.workspace = true
 smallvec.workspace = true
-indexmap.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
@@ -93,13 +91,11 @@ etcd-client.workspace = true
 
 # Metrics
 metrics.workspace = true
-metrics-exporter-prometheus.workspace = true
 
 # CLI
 clap.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 http.workspace = true
 url.workspace = true
@@ -122,7 +118,5 @@ tonic-prost-build.workspace = true
 edgion-common = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
-mockall.workspace = true
-expect-test.workspace = true
-wiremock.workspace = true
-proptest.workspace = true
+metrics-exporter-prometheus.workspace = true
+tracing-subscriber.workspace = true

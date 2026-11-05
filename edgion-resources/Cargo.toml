@@ -39,7 +39,6 @@ k8s-openapi.workspace = true
 
 # Matcher / config helpers
 regex.workspace = true
-smallvec.workspace = true
 parking_lot.workspace = true
 url.workspace = true
 http.workspace = true
