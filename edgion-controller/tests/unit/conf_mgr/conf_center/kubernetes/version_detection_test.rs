@@ -12,31 +12,37 @@ fn tls_route_preflight_matches_the_single_canonical_watch_and_status_type() {
 }
 
 #[test]
-fn unavailable_discovery_results_are_classified_as_absent() {
-    for error in [
-        DiscoveryError::MissingKind("Gateway".into()),
-        DiscoveryError::MissingApiGroup("gateway.networking.k8s.io".into()),
-        DiscoveryError::MissingResource("gateways".into()),
-        DiscoveryError::EmptyApiGroup("gateway.networking.k8s.io/v1".into()),
-    ] {
-        assert!(is_api_unavailable(&kube::Error::Discovery(error)));
-    }
-}
-
-#[test]
-fn invalid_discovery_configuration_is_not_classified_as_absent() {
-    let error = kube::Error::Discovery(DiscoveryError::InvalidGroupVersion("invalid".into()));
-    assert!(!is_api_unavailable(&error));
-}
-
-#[test]
-fn only_api_not_found_is_classified_as_absent() {
-    let response = |code| kube::core::Status::failure("test", "test").with_code(code).boxed();
-    assert!(is_api_unavailable(&kube::Error::Api(response(404))));
-    assert!(!is_api_unavailable(&kube::Error::Api(response(403))));
-}
-
-#[test]
 fn backend_is_a_known_no_watch_kind() {
     assert!(other_known_kind_names().contains("EdgionBackend"));
+}
+
+#[tokio::test]
+async fn discovery_validates_group_version_and_ignores_subresources() {
+    use kube::client::Body;
+    use tower::service_fn;
+    for (group_version, name, expected) in [
+        ("gateway.networking.k8s.io/v1", "gateways", Some(true)),
+        ("invalid/group/version", "gateways", None),
+        ("gateway.networking.k8s.io/v1", "gateways/status", Some(false)),
+    ] {
+        let client = Client::new(
+            service_fn(move |_| async move {
+                Ok::<_, std::convert::Infallible>(http::Response::new(Body::from(
+                    serde_json::json!({
+                        "groupVersion":group_version,"resources":[{
+                            "name":name,"kind":"Gateway","namespaced":true,"singularName":"gateway","verbs":["list"]
+                        }]
+                    })
+                    .to_string()
+                    .into_bytes(),
+                )))
+            }),
+            "default",
+        );
+        let result = is_kind_served(&client, &GroupVersionKind::gvk(GROUP, "v1", "Gateway")).await;
+        match expected {
+            Some(expected) => assert_eq!(result.unwrap(), expected),
+            None => assert!(matches!(result, Err(ConfWriterError::InternalError(_)))),
+        }
+    }
 }

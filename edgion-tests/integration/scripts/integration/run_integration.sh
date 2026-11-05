@@ -1662,24 +1662,10 @@ for item in items:
 }
 
 # =============================================================================
-# Trigger reload via Admin API
+# Restart the owned Controller while retaining the running Gateway.
 # =============================================================================
-trigger_reload() {
-    local controller_url="${1:-http://127.0.0.1:12101}"
-    log_info "Triggering reload via Admin API..."
-    # Controller admin API requires authentication.
-    ensure_ctrl_admin_token || true
-    local response=$(curl -s -X POST \
-        -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
-        "${controller_url}/api/v1/reload" 2>/dev/null)
-    local success=$(echo "$response" | grep -o '"success":true' || echo "")
-    if [ -n "$success" ]; then
-        log_success "Reload triggered successfully"
-        return 0
-    else
-        log_error "Reload failed: $response"
-        return 1
-    fi
+trigger_restart() {
+    python3 "${UTILS_DIR}/restart_controller.py" "$WORK_DIR"
 }
 
 # =============================================================================
@@ -1704,7 +1690,7 @@ show_help() {
     echo "  --isolated-phase-timeout-secs <N> Whole isolated phase deadline (default: 1800)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 12151)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
-    echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
+    echo "  --with-restart          Run tests twice with restart in between (verify server_id changes)"
     echo "  --skip-residue-check   Skip cache residue detection after tests (also set via SKIP_RESIDUE_CHECK=true)"
     echo "                         Set RESIDUE_MODE=warn env to log leaks without failing the build (default: fail — leaks are errors)"
     echo "  -h, --help             Show help"
@@ -1715,7 +1701,7 @@ show_help() {
     echo "  $0 -r HTTPRoute -i Match            # Run HTTPRoute/Match test"
     echo "  $0 -r HTTPRoute -i Backend          # Run HTTPRoute/Backend test"
     echo "  $0 --no-prepare -r HTTPRoute        # Skip build, run HTTPRoute test"
-    echo "  $0 --with-reload                    # Run all tests, reload, verify server_id changed, run again"
+    echo "  $0 --with-restart                    # Run all tests, restart, verify server_id changed, run again"
     echo "  $0 --controller-grpc-port 40051    # Run integration with alternate controller/gateway gRPC port"
 }
 
@@ -1992,6 +1978,10 @@ run_all_tests() {
                     local test_name="EdgionPlugins_${item_safe}"
                     if [ "$G_ITEM" = "DslQueryLookupDynamic" ]; then
                         run_test "Dyn_DslQueryLookupDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslQueryLookupDynamic" || test_failed=true
+                    elif [ "$G_ITEM" = "JwtClaimHeadersDynamic" ]; then
+                        run_test "Dyn_JwtClaimHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario JwtClaimHeadersDynamic" || test_failed=true
+                    elif [ "$G_ITEM" = "HeaderCertHeadersDynamic" ]; then
+                        run_test "Dyn_HeaderCertHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario HeaderCertHeadersDynamic" || test_failed=true
                     elif [ "$G_ITEM" = "DslXmlDynamic" ]; then
                         run_test "Dyn_DslXmlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslXmlDynamic" || test_failed=true
                     elif ! should_skip_test "$test_name"; then
@@ -2008,6 +1998,12 @@ run_all_tests() {
                     fi
                     if [ "$G_ITEM" = "ProxyRewrite" ]; then
                         run_test "Dyn_ProxyRewriteHostDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ProxyRewriteHostDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "JwtAuth" ]; then
+                        run_test "Dyn_JwtClaimHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario JwtClaimHeadersDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "HeaderCertAuth" ]; then
+                        run_test "Dyn_HeaderCertHeadersDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario HeaderCertHeadersDynamic" || test_failed=true
                     fi
                     if [ "$G_ITEM" = "GraphqlGuard" ]; then
                         run_test "Dyn_GraphqlGuardDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlGuardDynamic" || test_failed=true
@@ -2453,7 +2449,7 @@ main() {
     local do_prepare=true
     local do_start=true
     local suites=""
-    local with_reload=false
+    local with_restart=false
 
     # Coverage mode notification (heavy lifting done by prepare.sh / start_all.sh)
     if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
@@ -2519,8 +2515,8 @@ main() {
                 suites="$2"
                 shift 2
                 ;;
-            --with-reload)
-                with_reload=true
+            --with-restart)
+                with_restart=true
                 shift
                 ;;
             --skip-residue-check)
@@ -2541,7 +2537,7 @@ main() {
 
     if $AI_PERFORMANCE; then
         export EDGION_TEST_PROFILE="${EDGION_TEST_PROFILE:-release}"
-        if [ "$EDGION_TEST_PROFILE" != release ] || $AI_CONFORMANCE || $FULL_TEST || $with_reload \
+        if [ "$EDGION_TEST_PROFILE" != release ] || $AI_CONFORMANCE || $FULL_TEST || $with_restart \
             || [ "$G_RESOURCE" != EdgionBackend ] || [ "$G_ITEM" != SingleProvider ] \
             || [ -n "$suites" ] || ! $do_start || ! $DO_CLEANUP || $SKIP_RESIDUE_CHECK \
             || [ "${RESIDUE_MODE:-fail}" != fail ] || [ "$INTEGRATION_JOBS" != 1 ]; then
@@ -2668,6 +2664,10 @@ main() {
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/RateLimitRedis"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/GraphqlRateLimit" ]; then
                     suites="${base_suites},LinkSys/Redis,EdgionPlugins/GraphqlRateLimit"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/JwtClaimHeadersDynamic" ]; then
+                    suites="${base_suites},EdgionPlugins/JwtAuth"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/HeaderCertAuth" ] || [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/HeaderCertHeadersDynamic" ]; then
+                    suites="${base_suites},EdgionTls/mTLS,EdgionPlugins/HeaderCertAuth"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/AiGuard" ]; then
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/AiGuard"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Guardrail" ]; then
@@ -2835,8 +2835,8 @@ main() {
     else
         echo -e "Mode: ${YELLOW}Fast Test${NC} (slow tests skipped, use --full-test to include)"
     fi
-    if $with_reload; then
-        echo -e "Reload Test: ${GREEN}Enabled${NC} (will test reload functionality)"
+    if $with_restart; then
+        echo -e "Restart Test: ${GREEN}Enabled${NC} (will test restart functionality)"
     fi
     echo ""
     
@@ -3009,9 +3009,11 @@ main() {
 
     # These explicitly selected suites use only 127.0.0.1. Do not require the
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
+    # The two exact DNS fixture sets additionally use ::1, never those aliases.
     if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ] || [ "$G_ITEM" = "MetricsLifetime" ]; }; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/DnsResolution" ] && { [ "$suites" = "base,HTTPRoute/Basic,HTTPRoute/Backend/DnsResolution" ] || [ "$suites" = "base,HTTPRoute/Basic,HTTPRoute/Backend/DnsResolution,HTTPRoute/Backend/DnsResolutionFlap/DynamicTest" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ] && [ "$suites" = "base,HTTPRoute/Basic,EdgionPlugins/base,EdgionPlugins/LdapAuthTls" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ] || [ "$G_ITEM" = "ProxyRewrite" ]; }; }; then
@@ -3348,12 +3350,12 @@ main() {
     local controller_url="http://127.0.0.1:12101"
 
     # =============================================================================
-    # Test execution with optional reload
+    # Test execution with optional restart
     # =============================================================================
-    if $with_reload; then
+    if $with_restart; then
         # ========== Round 1: Initial tests ==========
-        REPORT_PHASE="main tests before reload"
-        log_section "📋 Round 1: Initial tests (before reload)"
+        REPORT_PHASE="main tests before restart"
+        log_section "📋 Round 1: Initial tests (before restart)"
 
         local gateway_url="http://127.0.0.1:12001"
         
@@ -3364,27 +3366,27 @@ main() {
         log_info "Initial Gateway server_id:    ${gateway_id_before}"
         
         # Run all tests (round 1)
-        if ! run_all_tests "Round 1 (before reload)"; then
+        if ! run_all_tests "Round 1 (before restart)"; then
             test_failed=true
             log_error "Round 1 tests failed"
         else
             log_success "Round 1 tests passed"
         fi
         
-        # ========== Trigger reload ==========
-        REPORT_PHASE="Controller and Gateway reload"
-        log_section "🔄 Triggering reload"
+        # ========== Trigger restart ==========
+        REPORT_PHASE="Controller restart and Gateway resynchronization"
+        log_section "🔄 Triggering restart"
         
-        if ! trigger_reload "$controller_url"; then
-            log_error "Failed to trigger reload"
-            report_test "Reload_Trigger" "FAIL" "0"
+        if ! trigger_restart; then
+            log_error "Failed to trigger restart"
+            report_test "Restart_Trigger" "FAIL" "0"
             exit 1
         fi
         
-        # Wait for the observable reload state instead of imposing a fixed delay.
+        # Wait for the observable restart state instead of imposing a fixed delay.
         local controller_id_after=""
         local gateway_id_after=""
-        reload_server_ids_synced() {
+        restart_server_ids_synced() {
             controller_id_after=$(get_controller_server_id "$controller_url")
             gateway_id_after=$(get_gateway_server_id "$gateway_url")
             [ "$controller_id_after" != "unknown" ] \
@@ -3393,41 +3395,45 @@ main() {
                 && [ "$gateway_id_after" != "$gateway_id_before" ] \
                 && [ "$controller_id_after" = "$gateway_id_after" ]
         }
-        log_info "Waiting for Controller reload and Gateway resynchronization..."
-        edgion_wait_until 30 1 reload_server_ids_synced || true
-        unset -f reload_server_ids_synced
+        log_info "Waiting for Controller restart and Gateway resynchronization..."
+        if ! edgion_wait_until 60 1 restart_server_ids_synced; then
+            log_error "Controller restart and Gateway resynchronization did not converge"
+            report_test "Restart_ServerID_Convergence" "FAIL" "0"
+            exit 1
+        fi
+        unset -f restart_server_ids_synced
 
         # ========== Verify Controller server_id changed ==========
         log_info "New Controller server_id: ${controller_id_after}"
         
         if [ "$controller_id_before" = "$controller_id_after" ]; then
-            log_error "Controller server_id did not change after reload!"
+            log_error "Controller server_id did not change after restart!"
             log_error "Before: ${controller_id_before}"
             log_error "After:  ${controller_id_after}"
-            report_test "Reload_Controller_ServerID_Changed" "FAIL" "0"
+            report_test "Restart_Controller_ServerID_Changed" "FAIL" "0"
             exit 1
         else
             log_success "Controller server_id changed successfully!"
             log_info "Before: ${controller_id_before}"
             log_info "After:  ${controller_id_after}"
-            report_test "Reload_Controller_ServerID_Changed" "PASS" "0"
+            report_test "Restart_Controller_ServerID_Changed" "PASS" "0"
         fi
         
         # ========== Verify Gateway server_id changed ==========
         log_info "New Gateway server_id: ${gateway_id_after}"
         
         if [ "$gateway_id_before" = "$gateway_id_after" ]; then
-            log_error "Gateway server_id did not change after reload!"
+            log_error "Gateway server_id did not change after restart!"
             log_error "Before: ${gateway_id_before}"
             log_error "After:  ${gateway_id_after}"
-            log_error "This means Gateway did not detect the reload and re-sync!"
-            report_test "Reload_Gateway_ServerID_Changed" "FAIL" "0"
+            log_error "This means Gateway did not detect the restart and re-sync!"
+            report_test "Restart_Gateway_ServerID_Changed" "FAIL" "0"
             exit 1
         else
             log_success "Gateway server_id changed successfully!"
             log_info "Before: ${gateway_id_before}"
             log_info "After:  ${gateway_id_after}"
-            report_test "Reload_Gateway_ServerID_Changed" "PASS" "0"
+            report_test "Restart_Gateway_ServerID_Changed" "PASS" "0"
         fi
         
         # ========== Verify Gateway and Controller have same server_id ==========
@@ -3435,11 +3441,11 @@ main() {
             log_error "Gateway server_id does not match Controller!"
             log_error "Controller: ${controller_id_after}"
             log_error "Gateway:    ${gateway_id_after}"
-            report_test "Reload_ServerID_Match" "FAIL" "0"
+            report_test "Restart_ServerID_Match" "FAIL" "0"
             test_failed=true
         else
             log_success "Gateway and Controller server_id match!"
-            report_test "Reload_ServerID_Match" "PASS" "0"
+            report_test "Restart_ServerID_Match" "PASS" "0"
         fi
         
         # ========== Clear access log before Round 2 ==========
@@ -3450,19 +3456,19 @@ main() {
             > "$EDGION_TEST_ACCESS_LOG_PATH"
         fi
         
-        # ========== Round 2: Tests after reload ==========
-        REPORT_PHASE="main tests after reload"
-        log_section "📋 Round 2: Tests after reload"
+        # ========== Round 2: Tests after restart ==========
+        REPORT_PHASE="main tests after restart"
+        log_section "📋 Round 2: Tests after restart"
         
         # Run all tests (round 2)
-        if ! run_all_tests "Round 2 (after reload)"; then
+        if ! run_all_tests "Round 2 (after restart)"; then
             test_failed=true
             log_error "Round 2 tests failed"
         else
             log_success "Round 2 tests passed"
         fi
     else
-        # Normal test execution (without reload)
+        # Normal test execution (without restart)
         REPORT_PHASE="main tests"
         if ! run_all_tests; then
             test_failed=true
@@ -3486,7 +3492,7 @@ main() {
     # Final Step: No Unknown Config Fields
     # =============================================================================
     # A second pass, distinct from the pre-flight gate above: dynamic/hot-reload
-    # scenarios and --with-reload Round 2 apply more resources mid-run, and only
+    # scenarios and --with-restart Round 2 apply more resources mid-run, and only
     # a second pass sees those. The registry is cumulative within a run, so this
     # re-reports anything the pre-flight gate already found -- acceptable, and it
     # keeps the two call sites independent.

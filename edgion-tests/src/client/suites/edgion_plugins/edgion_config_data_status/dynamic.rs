@@ -1,11 +1,11 @@
 //! RefFlap scenario phase suites.
 //!
-//! Initial phase: EdgionPlugins has overrideRef pointing at existing RegionRouteOverride `data-flap-good`
+//! Initial phase: EdgionPlugins has clusterRegionRef pointing at existing ClusterRegionSetting `data-flap-good`
 //!                → Accepted=True, ResolvedRefs=True.
-//! Invalid phase: EdgionPlugins overrideRef switches to non-existent `data-flap-missing`
+//! Invalid phase: EdgionPlugins clusterRegionRef switches to non-existent `data-flap-missing`
 //!                → Accepted=True (resource is structurally valid),
 //!                  ResolvedRefs=False (reason: InvalidEdgionConfigDataRef).
-//! Valid phase:   EdgionPlugins restored to overrideRef `data-flap-good`
+//! Valid phase:   EdgionPlugins restored to clusterRegionRef `data-flap-good`
 //!                → Accepted=True, ResolvedRefs=True (recovered).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -71,7 +71,7 @@ impl EdgionConfigDataFlapInitialTestSuite {
     fn test_accepted_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_accepted_true",
-            "EdgionPlugins with overrideRef to existing data-flap-good EdgionConfigData should be Accepted=True",
+            "EdgionPlugins with clusterRegionRef to existing data-flap-good EdgionConfigData should be Accepted=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -94,7 +94,7 @@ impl EdgionConfigDataFlapInitialTestSuite {
     fn test_resolved_refs_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_resolved_refs_true",
-            "EdgionPlugins with overrideRef to existing data-flap-good EdgionConfigData should be ResolvedRefs=True",
+            "EdgionPlugins with clusterRegionRef to existing data-flap-good EdgionConfigData should be ResolvedRefs=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -140,7 +140,7 @@ impl EdgionConfigDataFlapInvalidTestSuite {
     fn test_resolved_refs_false() -> TestCase {
         TestCase::new(
             "pmd_flap_invalid_resolved_refs_false",
-            "EdgionPlugins with overrideRef to missing data-flap-missing EdgionConfigData should be \
+            "EdgionPlugins with clusterRegionRef to missing data-flap-missing EdgionConfigData should be \
              ResolvedRefs=False (reason: InvalidEdgionConfigDataRef)",
             |ctx: TestContext| {
                 Box::pin(async move {
@@ -172,7 +172,7 @@ impl EdgionConfigDataFlapInvalidTestSuite {
     fn test_accepted_still_true() -> TestCase {
         TestCase::new(
             "pmd_flap_invalid_accepted_true",
-            "EdgionPlugins is structurally valid even when its overrideRef is missing — \
+            "EdgionPlugins is structurally valid even when its clusterRegionRef is missing — \
              Accepted should remain True; the missing ref surfaces only via ResolvedRefs",
             |ctx: TestContext| {
                 Box::pin(async move {

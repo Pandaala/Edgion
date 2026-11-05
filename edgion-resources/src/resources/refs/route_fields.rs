@@ -343,8 +343,14 @@ macro_rules! route_facade {
         }
     };
 }
-route_facade!(HttpRouteBackendRefs, HTTPRoute, Http, HTTPRoute::effective_rules);
-route_facade!(GrpcRouteBackendRefs, GRPCRoute, Grpc, GRPCRoute::effective_rules);
+route_facade!(HttpRouteBackendRefs, HTTPRoute, Http, |route: &'a HTTPRoute| route
+    .spec
+    .rules
+    .as_ref());
+route_facade!(GrpcRouteBackendRefs, GRPCRoute, Grpc, |route: &'a GRPCRoute| route
+    .spec
+    .rules
+    .as_ref());
 route_facade!(TcpRouteBackendRefs, TCPRoute, Tcp, |route: &'a TCPRoute| route
     .spec
     .rules
@@ -387,8 +393,7 @@ enum ExtensionField<'a> {
 }
 
 /// A filter loan always borrows an actual Route and its actual filter position.
-/// Effective loans describe the published root and existing child-local namespace
-/// stamp; the transport does not carry the original child's UID or generation.
+/// Targets always resolve in the declaring route's own namespace.
 /// ```compile_fail
 /// use edgion_resources::resources::refs::route_fields::RouteExtensionField;
 /// let field = RouteExtensionField {};
@@ -398,7 +403,6 @@ pub struct RouteExtensionField<'a> {
     owner: RouteOwner<'a>,
     slot: RouteFilterSlot,
     field: ExtensionField<'a>,
-    resolved: bool,
 }
 impl<'a> RouteExtensionField<'a> {
     pub fn slot(self) -> RouteFilterSlot {
@@ -416,14 +420,7 @@ impl<'a> RouteExtensionField<'a> {
             ),
         }?;
         let Some(reference) = reference else { return Ok(None) };
-        let namespace = if self.resolved {
-            reference
-                .resolved_namespace
-                .as_deref()
-                .unwrap_or(self.owner.namespace())
-        } else {
-            self.owner.namespace()
-        };
+        let namespace = self.owner.namespace();
         let target = ObjectIdentity::checked(
             &reference.group,
             &reference.kind,
@@ -481,10 +478,10 @@ macro_rules! extension_facade {
                 Ok(Self { route })
             }
             pub fn authored(&self) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
-                Self::fields(self.route, false)
+                Self::fields(self.route)
             }
             pub fn effective(&self) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
-                Self::fields(self.route, self.route.spec.resolved_rules.is_some())
+                Self::fields(self.route)
             }
             pub fn authored_at(
                 &self,
@@ -492,7 +489,7 @@ macro_rules! extension_facade {
                 backend: Option<usize>,
                 filter: usize,
             ) -> Option<RouteExtensionField<'a>> {
-                self.at(rule, backend, filter, false)
+                self.at(rule, backend, filter)
             }
             pub fn effective_at(
                 &self,
@@ -500,21 +497,10 @@ macro_rules! extension_facade {
                 backend: Option<usize>,
                 filter: usize,
             ) -> Option<RouteExtensionField<'a>> {
-                self.at(rule, backend, filter, self.route.spec.resolved_rules.is_some())
+                self.at(rule, backend, filter)
             }
-            fn at(
-                &self,
-                rule: usize,
-                backend: Option<usize>,
-                filter: usize,
-                resolved: bool,
-            ) -> Option<RouteExtensionField<'a>> {
-                let rules = if resolved {
-                    self.route.spec.resolved_rules.as_ref()
-                } else {
-                    self.route.spec.rules.as_ref()
-                };
-                let value = rules?.get(rule)?;
+            fn at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<RouteExtensionField<'a>> {
+                let value = self.route.spec.rules.as_ref()?.get(rule)?;
                 let filters = match backend {
                     Some(index) => value.backend_refs.as_ref()?.get(index)?.filters.as_ref(),
                     None => value.filters.as_ref(),
@@ -527,16 +513,13 @@ macro_rules! extension_facade {
                         filter,
                     },
                     field: ExtensionField::$variant(filters.get(filter)?),
-                    resolved,
                 })
             }
-            fn fields(route: &'a $route, resolved: bool) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
-                let rules = if resolved {
-                    route.spec.resolved_rules.as_ref()
-                } else {
-                    route.spec.rules.as_ref()
-                };
-                rules
+            fn fields(route: &'a $route) -> impl Iterator<Item = RouteExtensionField<'a>> + 'a {
+                route
+                    .spec
+                    .rules
+                    .as_ref()
                     .into_iter()
                     .flatten()
                     .enumerate()
@@ -570,7 +553,6 @@ macro_rules! extension_facade {
                                     filter,
                                 },
                                 field: ExtensionField::$variant(field),
-                                resolved,
                             })
                     })
             }
@@ -755,19 +737,8 @@ impl<'a> HttpRouteMirrorRefs<'a> {
         MirrorOwner::Route(route).source()?;
         Ok(Self { route })
     }
-    fn at(
-        &self,
-        rule: usize,
-        backend: Option<usize>,
-        filter: usize,
-        effective: bool,
-    ) -> Option<EffectiveMirrorField<'a>> {
-        let rules = if effective {
-            self.route.effective_rules()
-        } else {
-            self.route.spec.rules.as_ref()
-        }?;
-        let value = rules.get(rule)?;
+    fn at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<EffectiveMirrorField<'a>> {
+        let value = self.route.spec.rules.as_ref()?.get(rule)?;
         let filters = match backend {
             Some(index) => value.backend_refs.as_ref()?.get(index)?.filters.as_ref(),
             None => value.filters.as_ref(),
@@ -781,54 +752,56 @@ impl<'a> HttpRouteMirrorRefs<'a> {
         })
     }
     pub fn authored_at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<AuthoredMirrorField<'a>> {
-        self.at(rule, backend, filter, false)
+        self.at(rule, backend, filter)
             .map(|field| AuthoredMirrorField { field })
     }
     pub fn effective_at(&self, rule: usize, backend: Option<usize>, filter: usize) -> Option<EffectiveMirrorField<'a>> {
-        self.at(rule, backend, filter, true)
+        self.at(rule, backend, filter)
     }
-    fn fields(&self, effective: bool) -> impl Iterator<Item = EffectiveMirrorField<'a>> + 'a {
+    fn fields(&self) -> impl Iterator<Item = EffectiveMirrorField<'a>> + 'a {
         let route = self.route;
-        let rules = if effective {
-            route.effective_rules()
-        } else {
-            route.spec.rules.as_ref()
-        };
-        rules.into_iter().flatten().enumerate().flat_map(move |(rule, value)| {
-            value
-                .filters
-                .iter()
-                .flatten()
-                .enumerate()
-                .map(move |(filter, value)| (None, filter, value))
-                .chain(
-                    value
-                        .backend_refs
-                        .iter()
-                        .flatten()
-                        .enumerate()
-                        .flat_map(|(backend, value)| {
-                            value
-                                .filters
-                                .iter()
-                                .flatten()
-                                .enumerate()
-                                .map(move |(filter, value)| (Some(backend), filter, value))
-                        }),
-                )
-                .map(move |(backend, filter, value)| EffectiveMirrorField {
-                    owner: MirrorOwner::Route(route),
-                    slot: MirrorSlot::Route(RouteFilterSlot { rule, backend, filter }),
-                    config: value.request_mirror.as_ref(),
-                    is_mirror: value.filter_type == HTTPRouteFilterType::RequestMirror,
-                })
-        })
+        route
+            .spec
+            .rules
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .flat_map(move |(rule, value)| {
+                value
+                    .filters
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .map(move |(filter, value)| (None, filter, value))
+                    .chain(
+                        value
+                            .backend_refs
+                            .iter()
+                            .flatten()
+                            .enumerate()
+                            .flat_map(|(backend, value)| {
+                                value
+                                    .filters
+                                    .iter()
+                                    .flatten()
+                                    .enumerate()
+                                    .map(move |(filter, value)| (Some(backend), filter, value))
+                            }),
+                    )
+                    .map(move |(backend, filter, value)| EffectiveMirrorField {
+                        owner: MirrorOwner::Route(route),
+                        slot: MirrorSlot::Route(RouteFilterSlot { rule, backend, filter }),
+                        config: value.request_mirror.as_ref(),
+                        is_mirror: value.filter_type == HTTPRouteFilterType::RequestMirror,
+                    })
+            })
     }
     pub fn authored(&self) -> impl Iterator<Item = AuthoredMirrorField<'a>> + 'a {
-        self.fields(false).map(|field| AuthoredMirrorField { field })
+        self.fields().map(|field| AuthoredMirrorField { field })
     }
     pub fn effective(&self) -> impl Iterator<Item = EffectiveMirrorField<'a>> + 'a {
-        self.fields(true)
+        self.fields()
     }
 }
 

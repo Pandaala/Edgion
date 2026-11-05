@@ -92,9 +92,9 @@ pub trait ConfigSyncServerProvider: Send + Sync {
 }
 ```
 
-This design solves server-instance switching during reload: when Controller performs a reload, it creates a new ConfigSyncServer instance (new server_id, new WatchObj set), while the gRPC service layer transparently switches to the new instance through the provider, without restarting the gRPC service.
+This design handles server-instance switching during leadership transitions and resource-controller recovery: a replacement resource epoch creates a new ConfigSyncServer (new server_id, new WatchObj set), while the gRPC service layer switches to the new instance through the provider without restarting the gRPC service.
 
-A `None` return indicates that ConfigSyncServer is not yet ready (e.g., Controller is initializing or reloading); the gRPC layer returns `Status::unavailable`.
+A `None` return indicates that ConfigSyncServer is not yet ready (e.g., Controller is initializing or replacing its resource epoch); the gRPC layer returns `Status::unavailable`.
 
 ## Registration timing requirement
 

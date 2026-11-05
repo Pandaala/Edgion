@@ -219,7 +219,7 @@ KEEP_ALIVE=false
 TEST_SERVER_REPLICAS="${TEST_SERVER_REPLICAS:-3}"
 SPEC_PROFILE="${SPEC_PROFILE:-}"
 FULL_TEST=false
-WITH_RELOAD=false
+WITH_RESTART=false
 BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE:-edgion-backend}"
 CLUSTER_MODE="${CLUSTER_MODE:-auto}" # auto|local|remote
 LOCAL_IMAGE_MODE="${LOCAL_IMAGE_MODE:-auto}" # auto|remote-pull|local-existing|build-import|prepare-local-images
@@ -283,7 +283,7 @@ Default flow (two-phase):
   Phase 1 Prepare: validate conf -> deploy (optional) -> strict apply all conf -> restart gateway
   Phase 2 Test: run test_client suites
 Default test rounds:
-  Single round by default; use --with-reload to run two rounds.
+  Single round by default; use --with-restart to run two rounds.
 
 Options:
   --skip-deploy                  Skip deploy step in prepare phase
@@ -306,7 +306,7 @@ Options:
   --prepare-local-images         Build local test images and auto-set TEST_*_IMAGE
   --rebuild-local-images         With --prepare-local-images, force rebuild
   --full-test                    Include slow tests (Timeout/AllEndpointStatus/LdapAuth)
-  --with-reload                  Run test rounds twice with reload in between
+  --with-restart                  Run test rounds twice with Controller restart in between
   --keep-alive                   Preserve the integration cluster after the run
   -h, --help                     Show this help
 
@@ -449,8 +449,8 @@ while [[ $# -gt 0 ]]; do
       FULL_TEST=true
       shift
       ;;
-    --with-reload)
-      WITH_RELOAD=true
+    --with-restart)
+      WITH_RESTART=true
       shift
       ;;
     --keep-alive)
@@ -2062,48 +2062,21 @@ restart_gateway_after_initial_fixtures() {
   echo "Post-fixture Gateway restart converged: before_uid=${before_uid} after_uid=${after_uid} server_id=${server_id} ready=${gateway_ready}"
 }
 
-trigger_reload() {
-  local controller_pod pf_pid local_port pf_log attempt resp
-  controller_pod="$(kubectl get pods -n edgion-system -l app=edgion-controller \
-    --field-selector=status.phase=Running \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  if [[ -z "${controller_pod}" ]]; then
-    echo "reload api unavailable: no running Controller pod"
+trigger_restart() {
+  local gateway_uid_before gateway_uid_after
+  gateway_uid_before="$(get_gateway_pod_uid)"
+  [[ -n "${gateway_uid_before}" ]] || return 1
+  if local_core_binary_mode; then
+    restart_core_binary_in_pods "edgion-system" "app=edgion-controller" "edgion-controller" "edgion-controller"
+  else
+    kubectl rollout restart deployment/edgion-controller -n edgion-system
+    kubectl rollout status deployment/edgion-controller -n edgion-system --timeout=300s
+  fi
+  gateway_uid_after="$(get_gateway_pod_uid)"
+  if [[ "${gateway_uid_before}" != "${gateway_uid_after}" ]]; then
+    echo "Gateway was replaced during Controller-only restart"
     return 1
   fi
-
-  pf_log="$(mktemp)"
-  kubectl port-forward -n edgion-system "pod/${controller_pod}" :12101 >"${pf_log}" 2>&1 &
-  pf_pid="$!"
-  _PF_PIDS+=("${pf_pid}")
-  local_port=""
-  for attempt in $(seq 1 20); do
-    local_port="$(sed -n 's/.*Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\) ->.*/\1/p' "${pf_log}" 2>/dev/null | head -n 1)"
-    [[ -n "${local_port}" ]] && break
-    sleep 0.5
-  done
-  if [[ -z "${local_port}" ]]; then
-    kill "${pf_pid}" >/dev/null 2>&1 || true
-    wait "${pf_pid}" 2>/dev/null || true
-    rm -f "${pf_log}"
-    echo "reload api port-forward failed"
-    return 1
-  fi
-
-  resp="$(curl -fsS -X POST -H "Authorization: Bearer ${CONTROLLER_ADMIN_TOKEN}" \
-    "http://127.0.0.1:${local_port}/api/v1/reload" 2>/dev/null || true)"
-  kill "${pf_pid}" >/dev/null 2>&1 || true
-  wait "${pf_pid}" 2>/dev/null || true
-  rm -f "${pf_log}"
-  if [[ -z "${resp}" ]]; then
-    echo "reload api returned empty response"
-    return 1
-  fi
-  if ! echo "${resp}" | jq -e '.success == true' >/dev/null 2>&1; then
-    echo "reload api failed: ${resp}"
-    return 1
-  fi
-  return 0
 }
 
 is_slow_test() {
@@ -2646,6 +2619,7 @@ run_all_selected_suites() {
     "EdgionPlugins/RequestMirror|EdgionPlugins|RequestMirror"
     "EdgionPlugins/RestToGraphql|EdgionPlugins|RestToGraphql"
     "EdgionPlugins/ResponseRewrite|EdgionPlugins|ResponseRewrite"
+    "EdgionPlugins/ResponseCache|EdgionPlugins|ResponseCache"
     "EdgionPlugins/RequestRestriction|EdgionPlugins|RequestRestriction"
     "EdgionPlugins/IpRestriction|EdgionPlugins|IpRestriction"
     "EdgionPlugins/IpRestrictionPartialGood|EdgionPlugins|IpRestrictionPartialGood"
@@ -3030,32 +3004,33 @@ if [[ "${FILTERED_MODE}" == "false" ]]; then
 else
   echo "Skip isolated K8s scenarios in filtered mode"
 fi
-if [[ "${WITH_RELOAD}" == "true" ]]; then
-  echo "Rounds: 2 (with reload)"
+if [[ "${WITH_RESTART}" == "true" ]]; then
+  echo "Rounds: 2 (with Controller restart)"
   c_before="$(get_server_id)"
   g_before="$(get_gateway_server_id)"
-  echo "Before reload: controller=${c_before} gateway=${g_before}"
+  echo "Before restart: controller=${c_before} gateway=${g_before}"
 
   echo "Test round #1"
   CURRENT_ROUND="round-1"
   run_all_selected_suites "true"
 
-  echo "Triggering reload..."
-  trigger_reload
+  echo "Restarting Controller..."
+  trigger_restart
 
-  reload_deadline=$(( $(date +%s) + 120 ))
+  restart_deadline=$(( $(date +%s) + 120 ))
   c_after="unknown"
   g_after="unknown"
-  while (( $(date +%s) < reload_deadline )); do
+  while (( $(date +%s) < restart_deadline )); do
     c_after="$(get_server_id)"
     g_after="$(get_gateway_server_id)"
     if [[ "${c_after}" != "unknown" && "${g_after}" != "unknown" \
-      && "${c_after}" != "${c_before}" && "${g_after}" != "${g_before}" ]]; then
+      && "${c_after}" != "${c_before}" && "${g_after}" != "${g_before}" \
+      && "${c_after}" == "${g_after}" ]]; then
       break
     fi
     sleep 2
   done
-  echo "After reload: controller=${c_after} gateway=${g_after}"
+  echo "After restart: controller=${c_after} gateway=${g_after}"
 
   # An empty or "unknown" server_id means we never reached the admin API, so the
   # comparison is meaningless. Two "unknown" values would otherwise compare equal on
@@ -3063,13 +3038,13 @@ if [[ "${WITH_RELOAD}" == "true" ]]; then
   # mislead, so treat any unresolved id as a hard error.
   for pair in "controller:${c_before}" "controller:${c_after}" "gateway:${g_before}" "gateway:${g_after}"; do
     if [[ -z "${pair#*:}" || "${pair#*:}" == "unknown" ]]; then
-      echo "reload check failed: ${pair%%:*} server_id unresolved (empty/unknown); cannot verify reload"
+      echo "restart check failed: ${pair%%:*} server_id unresolved (empty/unknown); cannot verify restart"
       exit 1
     fi
   done
 
-  if [[ "${c_before}" == "${c_after}" || "${g_before}" == "${g_after}" ]]; then
-    echo "reload check failed: server_id not changed as expected"
+  if [[ "${c_before}" == "${c_after}" || "${g_before}" == "${g_after}" || "${c_after}" != "${g_after}" ]]; then
+    echo "restart check failed: server_id not changed as expected"
     exit 1
   fi
 
@@ -3160,7 +3135,7 @@ fi
 echo "  Pass rate: ${PASS_RATE}%"
 MODE_STR="fast"
 if [[ "${FULL_TEST}" == "true" ]]; then MODE_STR="full"; fi
-if [[ "${WITH_RELOAD}" == "true" ]]; then MODE_STR="${MODE_STR} + reload"; fi
+if [[ "${WITH_RESTART}" == "true" ]]; then MODE_STR="${MODE_STR} + restart"; fi
 echo "  Mode     : ${MODE_STR}"
 echo "=========================================================="
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then

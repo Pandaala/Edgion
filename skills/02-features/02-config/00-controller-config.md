@@ -356,7 +356,7 @@ integer overflow are rejected at parse time; a bare unitless number (e.g. `36`) 
 rejected — the unit suffix is mandatory.
 
 **Validation invariants** (checked at startup only — `conf_sync_security.rotation` is
-not re-validated on config reload; violation aborts startup):
+loaded at startup; violation aborts startup):
 
 - `leaf_ttl >= 1h`, `ca_ttl >= 1d`, `leaf_ttl < ca_ttl`.
 - `emergency_rotate_below < leaf_ttl` (always).
@@ -469,6 +469,12 @@ division of labor — do not page on everything just because a signal exists:
 **not** revoke anything — the root's public key is unchanged, so old leaves
 still verify against it. A full root **re-key** (new key pair, not just a new
 window) is the only true revocation.
+
+An in-flight renewal cannot restore a deleted root or overwrite a replacement
+generation: renewal is conditional on the source Secret's UID/resourceVersion.
+A rejected renewal stops before publishing leaves and the reconciler retries
+from current state on a later tick. Revocation still requires replica convergence
+and the negative checks below; deleting Secrets is not instantaneous revocation.
 
 - **Kubernetes auto-CA procedure** — use the script. It performs the steps below and then
   asserts the post-conditions, proving **both halves** of a revocation — that the NEW root
@@ -591,7 +597,7 @@ CLI special cases:
 | `gateway_address` | `String?` | — | Address reported in Gateway status |
 | `ha_mode` | `String` | — | `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Vec<String>` | `[]` | Resource kinds (PascalCase) not to probe/watch, e.g., `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`. Skips CRD precheck at startup, does not spawn a watcher, and is excluded from processor readiness. Disabling `GatewayClass` makes Gateway ownership unprovable, so Kubernetes Gateways are not processed |
-| `cache_ready_deadline_secs` | `u64` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` (covers the internal 30 s readiness-poll budget plus the post-ready tail: WatchObj registration, revalidations, leader-job start). **Must be `> 30`** — a startup validation error otherwise. **Restart-bound, not hot-reloadable**: `POST /api/v1/reload` re-arms the deadline every iteration but always with the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value causes a permanent restart loop, not a one-off failure. Worst-case pre-ready wait before a restart fires is ≈2× the configured value (the deadline also wraps `start_event_watchers` itself via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](../../01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism. |
+| `cache_ready_deadline_secs` | `u64` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` (covers the internal 30 s readiness-poll budget plus the post-ready tail: WatchObj registration, revalidations, leader-job start). **Must be `> 30`** — a startup validation error otherwise. **Restart-bound**: each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value causes a permanent restart loop, not a one-off failure. Worst-case pre-ready wait before a restart fires is ≈2× the configured value (the deadline also wraps `start_event_watchers` itself via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](../../01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism. |
 
 ### [conf_center.leader_election]
 
@@ -630,7 +636,7 @@ The Admin API uses **token-only** authentication (Istio-style pre-shared bearer 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `admin_token` | `Option<String>` | `None` | Raw bearer token. A blank/whitespace value is treated as **not configured**. The `EDGION_ADMIN_TOKEN` env var takes precedence over this field. Maps to an allow-all wildcard policy; survives reloads. |
+| `admin_token` | `Option<String>` | `None` | Raw bearer token. A blank/whitespace value is treated as **not configured**. The `EDGION_ADMIN_TOKEN` env var takes precedence over this field. Maps to an allow-all wildcard policy; loaded at process startup. |
 
 The token is resolved from two sources (highest precedence first):
 
@@ -648,18 +654,18 @@ See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and 
 
 ## `[center]` — Federation Client
 
-Connects this Controller to a Federation Center. Omit this section entirely if you are not using federation.
+Connects this Controller to a Federation Center. Omit this section entirely if you are not using federation. This process configuration is read at startup; restart every Controller replica after changing it.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:12251`) |
 | `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
 | `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
-| `enabled` | `bool` | `true` | Hot-reloadable kill-switch. `false` stops the federation client without a restart. Reloaded via `POST /api/v1/reload`. |
+| `enabled` | `bool` | `true` | Startup enable switch. `false` disables the federation client. Changes require a process restart. |
 | `env` | `Vec<String>` | `[]` | Environment tags reported to Center (e.g. `["production"]`). |
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `list`/`failover` on synthetic `RegionRoute`; `server-info`/`reload` on synthetic `NonResource`). Present => the explicit rules fully override the default.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `list`/`failover` on synthetic `RegionRoute`; `server-info` on synthetic `NonResource`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
@@ -670,10 +676,10 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
 | Write (`create`, `update`, `delete`) | `EdgionConfigData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
 | `list`, `failover` | `RegionRoute` (synthetic label): `list` covers the effective read endpoint (`GET /api/v1/region-routes/effective`); `failover` covers the POST failover endpoint. No route classifies as `(get, RegionRoute)`. |
-| `server-info`, `reload` | `NonResource` (synthetic label): read-only server identity/readiness checks, plus the Center reload button arriving as a proxied `POST /api/v1/reload` |
+| `server-info` | `NonResource` (synthetic label): read-only server identity/readiness checks |
 | Everything else (`diagnostics`, `wipe-all`, `debug`, etc.) | Denied |
 
-**When `rbac` is present**, the explicit rules fully override the built-in default. This is how operators grant more (e.g., Secret read or reload) or less than the default.
+**When `rbac` is present**, the explicit rules fully override the built-in default. This is how operators grant more (e.g., Secret read) or less than the default.
 
 > **Security:** There is no server-side Secret backstop on the federation path. A wildcard read (`kinds: ["*"]` with `get`, `list`, or `watch`) lets Center read Secret / EdgionTls private-key material via the blind proxy. Always enumerate concrete kinds for any UI surface. The built-in default avoids this by excluding `Secret` explicitly.
 
@@ -698,29 +704,24 @@ center:
         kinds: [EdgionConfigData]
       - verbs: [failover]
         kinds: [RegionRoute]
-      - verbs: [reload]
-        kinds: ["*"]
 ```
 
 | Rule | Covers |
 |------|--------|
 | `get/list/watch/create/update/delete` on `EdgionConfigData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
 | `failover` on `RegionRoute` | Regional failover endpoint |
-| `reload` on `*` | Config reload (non-resource, wildcard kind is safe for write verbs) |
-
-> **Note on `kinds: ["*"]` with `reload`:** using `*` is safe here because `reload` is a write-only action with no read surface. The wildcard-read prohibition applies to `get`, `list`, and `watch` only.
 
 > **Cross-reference:** this change also fixes review finding `controller-01` -- the federation path now routes through the Admin API authorization layer instead of a bare unauthenticated router. See `skills/04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md` for the prior mTLS fix and the new RBAC fix status.
 
-> **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md` for authorization examples, security notes, and the kill-switch reference.
+> **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md` for authorization examples, security notes, and the startup enable-switch reference.
 
-`FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `conf-sync-rotate`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
+`FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `conf-sync-rotate`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
 
 > **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `edgionconfigdata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
 
 ## `[cli_tokens]` — Static CLI Tokens (Admin API Access)
 
-Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Hot-reloadable.
+Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Changes require restarting every Controller replica.
 
 **Source:** `edgion-controller/src/config/mod.rs` (`CliTokenConfig`).
 
@@ -748,16 +749,13 @@ cli_tokens:
         - verbs: [get, list]
           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionGatewayConfig, EdgionTls]
 
-  # Scoped read-write token — manages plugin metadata and can trigger reload
+  # Scoped read-write token — manages plugin metadata
   - name: plugin-manager
     token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
     rbac:
       allow:
         - verbs: [get, list, watch, create, update, delete]
           kinds: [EdgionConfigData]
-        # reload is a write-only verb; kinds: ["*"] is safe here (no read surface)
-        - verbs: [reload]
-          kinds: ["*"]
 ```
 
 > **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`). Lowercase spellings silently never match.
@@ -781,3 +779,7 @@ Path normalization configuration is read on the Gateway side (`edgion-resources/
 - Select a K8s deployment's owned classes: configure their `spec.controllerName` to match its resolved identity
 - Control cache caps for different kinds: change `conf_sync.capacity_overrides`
 - Tune observability noise: change `logging.log_level`
+
+## DNS family policy
+
+Controller `dns_resolver.lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all`; process-start only. An explicit Service `edgion.io/dns-lookup-family` overrides it live. Invalid annotations withdraw proven owned slices without querying; narrowing removes forbidden families before the query, including when it fails. Gateway/EGC settings do not rewrite Controller publications.

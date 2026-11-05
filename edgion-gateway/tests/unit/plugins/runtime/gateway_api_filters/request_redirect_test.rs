@@ -102,6 +102,7 @@ async fn assert_emitted_redirect(
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.listener_port = listener_port;
     session.expect_ctx().return_const(ctx);
+    session.expect_executing_http_route_unit().return_const(None);
 
     let expected_location = expected_location.to_string();
     session
@@ -149,6 +150,7 @@ async fn prefix_redirect_without_matched_prefix_fails_closed() {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.listener_port = 443;
     session.expect_ctx().return_const(ctx);
+    session.expect_executing_http_route_unit().return_const(None);
     session.expect_write_response_header().times(0);
 
     let filter = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
@@ -250,6 +252,7 @@ async fn redirect_borrows_raw_query_before_writing_owned_location() {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.listener_port = 443;
         session.expect_ctx().return_const(ctx);
+        session.expect_executing_http_route_unit().return_const(None);
         session
             .expect_write_response_header()
             .times(1)

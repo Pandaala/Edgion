@@ -1,15 +1,4 @@
-# RegionRoute - myRegion and failoverTo test (overlay model)
-#
-# Three-region config with myRegion=virginia (local pass-through).
-# failoverTo overrides are embedded directly in the regions table (no separate PM chain).
-#
-# Expected behavior:
-#   virginia (=myRegion)           -> local pass-through -> 200
-#   ohio (failoverTo=virginia)     -> redirect ohio->virginia -> local -> 200
-#   europe (failoverTo=ohio)       -> redirect europe->ohio -> jump (ohio!=myRegion) -> 502
-#
-# routeRules uses only RouteByDirectRegion so test requests with X-Direct-Region
-# route deterministically; no hash routing needed for myRegion tests.
+# ClusterRegionSetting fixtures; routing logic references a separate setting.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -17,32 +6,18 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    - type: RegionRoute
-      dye:
-        request:
-          - name: X-Region
-      config:
-        myRegion: virginia
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        routeRules:
-          - type: RouteByDirectRegion
-            keyFrom:
-              - type: header
-                name: X-Direct-Region
-        regions:
-          - name: virginia
-            hashRange: [0, 598]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: ohio
-            hashRange: [600, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-            failoverTo: virginia
-          - name: europe
-            hashRange: [599, 599]
-            backendEndpoint: "127.0.0.1:30003"
-            tls: false
-            failoverTo: ohio
+  - type: RegionRoute
+    dye:
+      request:
+      - name: X-Region
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      routeRules:
+      - type: RouteByDirectRegion
+        keyFrom:
+        - type: header
+          name: X-Direct-Region
+      clusterRegionRef:
+        name: region-route-myregion-setting

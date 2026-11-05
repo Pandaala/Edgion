@@ -1,0 +1,19 @@
+{
+  "authErrors": [
+    "RefNotPermitted { from_namespace: \"apps\", from_kind: \"HTTPRoute\", target_namespace: \"material\", target_name: \"token\" }"
+  ],
+  "rules": [
+    {
+      "resolvedTerminalRouteUid": "ordinary-uid",
+      "resolvedTerminalRuleIdentity": "name:primary"
+    },
+    {
+      "resolvedTerminalRouteUid": "ordinary-uid",
+      "resolvedTerminalRuleIdentity": "index:1"
+    },
+    {
+      "resolvedTerminalRouteUid": "ordinary-uid",
+      "resolvedTerminalRuleIdentity": "index:2"
+    }
+  ]
+}

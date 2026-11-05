@@ -483,10 +483,11 @@ udp_log:
     "host": "example.com",
     "user_agent": "curl/7.88.0"
   },
-  "match_info": {
-    "route_name": "user-api",
-    "route_namespace": "default"
-  },
+  "match_info": [{
+    "rsc": { "kind": "HTTPRoute", "ns": "default", "name": "user-api" },
+    "rule_id": 0,
+    "match_id": 0
+  }],
   "backend_context": {
     "upstreams": [{
       "ip": "10.0.1.5",

@@ -1,320 +1,152 @@
-# RegionRoute 插件
+# RegionRoute 区域路由
 
-> **🔌 Edgion 扩展**
-> 
-> RegionRoute 是 `EdgionPlugins` CRD 提供的多区域流量路由插件，不属于标准 Gateway API。
+RegionRoute 通过请求字段、哈希和有序规则选择区域。插件必须以 `clusterRegionRef`
+引用 `EdgionConfigData` 的 `ClusterRegionSetting` 变体，不新增 CRD kind。
 
-## 概述
+## 配置归属
 
-RegionRoute 使用有序路由规则将流量分发到多个区域（集群）：直接区域覆盖、key 到区域的映射，以及带可选故障转移的一致性哈希范围路由。
-
-所有路由规则——路由规则本身、key 提取、哈希计算——**以及**默认区域表都位于 `EdgionPlugins` 的插件配置内部。该配置是自足的：一个不引用任何外部资源的 RegionRoute 插件本身就是完整可用的配置。
-
-可选的 `overrideRef` 指向一个 `type: RegionRouteOverride` 的 `EdgionConfigData`。它是一个**纯数据覆盖层**：可以替换区域表，但永远无法改变路由逻辑。Gateway 在**请求时**解析该覆盖层，因此运维人员（或 Center）可以在不改动 `EdgionPlugins` 资源的前提下替换区域表：
-
-```text
-EdgionPlugins.requestPlugins[].config.overrideRef
-  → EdgionConfigData（spec.data.type: RegionRouteOverride）
-      regions?      # 仅数据——绝不包含路由规则
-```
-
-若覆盖层缺失、被禁用、类型不符，或合并后得到的区域表非法，插件将使用 `EdgionPlugins` 中的基础 `regions`——**fail-to-base**，绝不 fail-closed。详见[覆盖层解析与 fail-to-base](#覆盖层解析与-fail-to-base)。
-
-> **安全不变式**：由于任何覆盖层失败都会回退到它，`EdgionPlugins` 中的基础 `regions` 必须按**安全默认值**编写。
-
-## 快速开始
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: example-route
-  namespace: production
-spec:
-  parentRefs:
-    - name: main-gateway
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api/
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: my-region-route-plugin
-      backendRefs:
-        - name: api-service
-          port: 8080
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: my-region-route-plugin
-  namespace: production
-spec:
-  requestPlugins:
-    - type: RegionRoute
-      config:
-        myRegion: us-east
-        keyGet:
-          - type: header
-            name: X-Tenant-Id
-        routeRules:
-          - type: RouteByKeyConfMatch
-            matchMap:
-              tenant-a: us-east
-              tenant-b: eu-west
-          - type: RouteByHashRange
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-        # 基础区域表——任何覆盖层失败都会回退到它，必须是安全默认值
-        regions:
-          - name: us-east
-            hashRange: [0, 499]
-            backendEndpoint: api.us-east.example.com
-          - name: eu-west
-            hashRange: [500, 999]
-            backendEndpoint: api.eu-west.example.com
-        # 可选：可热替换的区域表
-        overrideRef:
-          name: my-region-override
-```
-
----
-
-## 配置参数
-
-### 插件配置（EdgionPlugins）
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `myRegion` | String | `""` | 本 Gateway 实例自身所属的区域名。当规则解析出的区域等于该值时，请求继续走本 Gateway 自身的插件链，而不做跨区域跳转 |
-| `keyGet` | Array | `[]` | 供 `RouteByKeyConfMatch` 与 `RouteByHashRange` 共用的 key 提取来源，按顺序取第一个非空值 |
-| `hashKeyGet` | Array | 无 | 预计算哈希的读取来源，在计算哈希之前先尝试 |
-| `hashCalc` | Object | 无 | 哈希计算配置——见[哈希计算](#哈希计算) |
-| `routeRules` | Array | `[]` | 有序路由规则，自上而下求值，先匹配者优先——见[路由规则](#路由规则) |
-| `routeByKeyConfMatch` | Object | 无 | `RouteByKeyConfMatch` 的集群级覆盖：`matchMap`（key → 区域）与 `bypassClusterKeys`（列入其中的 key 忽略该覆盖，回退到规则自带的 `matchMap`） |
-| `regions` | Array | `[]` | **基础区域表，即安全默认值。** 未配置覆盖层时直接使用，覆盖层任何失败时也回退到它——见[区域定义](#区域定义) |
-| `overrideRef` | Object | 无 | `{ name, namespace? }`，指向一个 `type: RegionRouteOverride` 的 `EdgionConfigData`。省略 `namespace` 表示 `EdgionPlugins` 资源自身的命名空间。跨命名空间引用需要相应的 `ReferenceGrant`，或目标资源标记 `visibility: Cluster` |
-
-`dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（分别使用 `on: [success]` 和 `on: [fallback]` 规则，能力取决于路由规则和覆盖层引用；RegionRoute 没有 `reject` 能力）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
-
-Controller 与 Gateway 使用相同的区域表校验规则。基础配置错误反映在 `EdgionPlugins` 的 `Accepted` 状态中；覆盖层解析或生效表校验失败反映在 `ResolvedRefs` 中，并回退到有效基础表。普通资源写入仍采用状态反馈机制，并非所有错误都会在写入时被拒绝。
-
-`routeRules` 非空时，基础 `regions` 必须非空，即使设置了 `overrideRef`。只有 `routeRules: []` 时才允许空基础表，此时插件为 no-op；非空表仍需通过校验。
-
-### 路由规则
-
-按**顺序求值——先匹配者优先**：
-
-| 规则类型 | 行为 |
-|----------|------|
-| `RouteByDirectRegion` | 通过该规则自带的 `keyFrom` 来源按顺序直接从请求中提取区域名称；使用第一个能在生效区域表中匹配到的值。不匹配时向后穿透 |
-| `RouteByKeyConfMatch` | 通过共享的 `keyGet` 提取 key，并在 `matchMap`（key → 区域）中查找。集群级 `routeByKeyConfMatch.matchMap` 非空时优先生效，除非提取到的 key 列在 `bypassClusterKeys` 中——此时使用规则自带的 `matchMap`。匹配时路由到映射的区域；否则向后穿透 |
-| `RouteByHashRange` | 一致性哈希范围路由。先尝试从 `hashKeyGet` 读取预计算哈希，若存在且有效（在 `[0, modulo)` 范围内）则直接使用，否则通过 `hashCalc` 计算。此规则**终止性**——不会穿透到后续规则 |
-
-### 区域定义
-
-`regions` 中的每个区域（集群）定义：
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` | String | — | 集群标识（用于直接区域匹配和故障转移）。必须非空且在表内唯一 |
-| `hashRange` | `[Integer, Integer]` | — | 闭区间哈希范围 `[low, high]`；须满足 `0 ≤ low ≤ high < modulo` |
-| `backendEndpoint` | String | — | 主机名、IPv4 或方括号 IPv6，可带端口，如 `api.example.com:8443`、`10.0.0.1:8080`、`[2001:db8::1]:443`。不接受 URL；端口必须为 `1–65535`。原始 SNI 和请求头保留不变 |
-| `tls` | Boolean | `true` | 上游连接是否使用 TLS（`true` 时端口默认 `443`，`false` 时默认 `80`） |
-| `failoverTo` | String | 无 | 将该集群的流量重定向到指定集群；必须是同一列表中的有效集群，且不能指向自身 |
-
-名称不能仅含空白。所有区域的闭区间必须互不重叠，包括配置了 `failoverTo` 的区域；允许间隙，哈希落入间隙时透传到正常上游。未配置 `hashCalc` 时，区域表和预计算哈希仍按默认 modulo `1000` 校验。主机名保留原始大小写和结尾的点；端点格式校验不替代 DNS 解析后的地址安全检查。
-
-### 哈希计算
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `algorithm` | Enum | `crc32` | 哈希算法：`crc32`（快速，硬件加速）或 `sha256` |
-| `modulo` | Integer | `1000` | 哈希值域 `[0, modulo-1]`；必须至少为 `2`，且所有区域的 `hashRange[1]` 必须 `< modulo` |
-| `writeBack` | Array | 无 | 将计算出的哈希写回的目标（空 = 不写回） |
-
----
-
-## 覆盖层解析与 fail-to-base
-
-### 覆盖层资源
+设置包含必填的 `clusterName`、`regionName` 和完整 `regions` 表。`regionName`
+是本地区域的唯一来源，必须对应表内一行。Cluster 和 Region 名称区分大小写、
+不进行归一化，不能为空白、不能包含控制字符，最多 63 个 UTF-8 字节。
+插件只保留请求提取、哈希、路由规则和异常策略。
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
-  name: my-region-override
+  name: local-region
   namespace: production
 spec:
-  enable: true            # 信封级开关
+  enable: true
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
-      # 所有字段均为可选；省略的字段保持基础配置的值
-      regions:            # 存在时，对基础区域表做整表替换（不做元素级合并）
+      clusterName: production
+      regionName: us-east
+      regions:
         - name: us-east
           hashRange: [0, 499]
-          backendEndpoint: api.us-east.example.com
+          backendEndpoint: api.us-east.example.com:443
+          tls: true
         - name: eu-west
           hashRange: [500, 999]
-          backendEndpoint: api.eu-west.example.com
-          failoverTo: us-east
-```
-
-| 覆盖层字段 | 作用 |
-|------------|------|
-| `regions` | 对基础区域表做**整表替换**。不存在元素级合并——你提供的表就是最终生效的表 |
-
-省略 `regions` 保留基础表；显式设置 `regions: []` 无效。覆盖表遵守与基础表相同的名称、端点、区间和故障转移规则，并分别按每个引用插件的 modulo 校验，因此同一覆盖表可能对一个插件有效、对另一个插件无效。
-
-`regions` 是唯一有实际作用的字段。`RegionRouteOverride` 类型还声明了 `enable` 与 `active`，但 Gateway 目前两者都不消费——设置它们不产生任何效果。若要让某个覆盖层停止生效，请设置 `EdgionConfigData` 的**信封级**开关 `spec.enable: false`（而不是 `spec.data.config.enable`）；此时插件回退到基础 `regions`，见下文。
-
-路由**逻辑**（`routeRules`、`keyGet`、`hashCalc`、`routeByKeyConfMatch`、`myRegion`）刻意不出现在覆盖层中。逻辑只存在于 `EdgionPlugins`，无法被远程改写。
-
-### fail-to-base
-
-覆盖层在每个请求上解析。以下四条失败路径全部回退到基础 `regions`——流量继续放行，绝不拒绝——并且都会记录一次 cause 为 `overlay-fail-to-base` 的 `fallback` 染色结果，同时打点一个 Prometheus 计数器：
-
-| 情形 | 计数器 |
-|------|--------|
-| 被引用的 `EdgionConfigData` 的 `spec.enable: false` | `overlay_disabled` |
-| 被引用的 `EdgionConfigData` 不存在 | `overlay_missing` |
-| 资源存在但 `spec.data.type` 不是 `RegionRouteOverride` | `overlay_type_mismatch` |
-| 覆盖表校验失败（空表、名称或端点非法、区间颠倒/重叠/超出当前 modulo、故障转移目标非法或成环） | `overlay_invalid` |
-
-覆盖表在配置更新时完成整表校验；请求使用当前发布的结果，并检查当前插件的 modulo。删除或更新为无效覆盖表后，下一次读取该配置的请求回退到基础表，不保留上一次有效覆盖表，也没有基于时间的过期机制。
-
+          backendEndpoint: api.eu-west.example.com:443
+          tls: true
 ---
-
-## 常见配置场景
-
-### 1. 将特定租户固定到区域（直接映射）
-
-使用 `RouteByKeyConfMatch` 规则，将请求头的值映射到区域，使命名租户始终落在同一集群：
-
-```yaml
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: tenant-region-route
+  name: regional-routing
   namespace: production
 spec:
   requestPlugins:
     - type: RegionRoute
       config:
+        clusterRegionRef:
+          name: local-region
+        failOpen: true
+        statusOnError: 503
         keyGet:
           - type: header
-            name: X-Tenant-Id
-        routeRules:
-          - type: RouteByKeyConfMatch
-            matchMap:
-              tenant-a: us-east
-              tenant-b: eu-west
-        regions:
-          - name: us-east
-            hashRange: [0, 499]
-            backendEndpoint: api.us-east.example.com
-          - name: eu-west
-            hashRange: [500, 999]
-            backendEndpoint: api.eu-west.example.com
-```
-
-### 2. 一致性哈希范围分配
-
-为各区域在 `modulo` 上划分 `hashRange` 切片（例如 50/50 分配为 `0–499` 和 `500–999`），并添加 `RouteByHashRange`。请求的计算哈希值落在某区域范围内时，路由到该区域。因为 `RouteByHashRange` 是终止性的，请将其放在最后。
-
-### 3. 区域故障转移
-
-为某个区域设置 `failoverTo`，发往该区域的流量将被透明地重定向到指定的健康区域——HTTPRoute 无需改变。
-
-两种驱动方式：
-
-- **静态**：直接写在 `EdgionPlugins` 基础 `regions` 的某个区域上。
-- **动态**：为插件配置 `overrideRef`，把 `failoverTo` 写入 `RegionRouteOverride` EdgionConfigData。这正是 Center 做多集群故障转移所走的路径，下一个请求即生效，无需改动 `EdgionPlugins`。
-
-目标必须存在，禁止自引用和循环。允许无环链，但每次只执行一跳：配置 `a → b → c` 时，原本选中 `a` 的请求转到 `b`，原本选中 `b` 的请求转到 `c`。专用故障转移 API 会在写入前校验候选表；表非法时返回 `422`，不保存该修改。
-
----
-
-## 染色请求头
-
-完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（启用的条目即使被 conditions 跳过仍执行；外层 `enable: false` 的条目不执行）、请求头名校验，以及安全指引。本节只覆盖 RegionRoute 特有的部分。
-
-`dye` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在请求上（或在 `response` 方向规则的响应上）附加运维自定义的 HTTP 头：
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: my-region-route-plugin
-  namespace: production
-spec:
-  requestPlugins:
-    - type: RegionRoute
-      dye:
-        request:
-          - name: X-Served-Region     # 不设置 value => 最终区域名（默认 on: [success]）
-        response:
-          - name: X-Edgion-Outcome
-            on: [fallback]            # 不设置 value => region_route:fallback:overlay-fail-to-base
-      config:
+            name: X-Account-Id
+        hashCalc:
+          algorithm: crc32
+          modulo: 1000
         routeRules:
           - type: RouteByDirectRegion
             keyFrom:
               - type: header
                 name: X-Region
-        regions:
-          - name: us-east
-            hashRange: [0, 999]
-            backendEndpoint: api.us-east.example.com
-        overrideRef:
-          name: my-region-override
+          - type: RouteByHashRange
 ```
 
-- `request` 条目设置在转发给上游的请求上（对于本地区域直通场景，则设置在继续经过网关自身处理链的请求上）；`response` 条目设置在返回给客户端的响应上。
-- `success` 上不设置 `value` 时携带**最终区域名**——即经过 `failoverTo` 重定向之后的区域，而不是最初匹配到的区域。
-- `success` 染色适用于任何一条规则（`RouteByDirectRegion`、`RouteByKeyConfMatch`，或终止性的 `RouteByHashRange`）实际选中区域的情形，包括**本地区域直通**场景——当解析出的区域正是本网关自身所在区域时，不会发生跨区域跳转，但请求仍然被路由到了一个区域，因此仍会以该区域名染色。
-- RegionRoute 只支持 `success` 和 `fallback` 两种染色能力——**不支持** `reject`：它唯一的失败类分支是 overlay fail-to-base 路径（`RegionRouteOverride` 解析失败后回落到基础路由规则），会以 `fallback`、cause 为 `overlay-fail-to-base` 记录。当其他插件已经锁定了上游跳转，或没有任何规则匹配时，不会染色——这两种情况目前都不是已记录的结果。跳转被拒绝时不记录染色结果。`success` 需要非空 `routeRules` 和区域来源（`regions` 或 `overrideRef`）；`fallback` 需要 `overrideRef`，且 `routeRules` 或 `regions` 至少一个非空。基础配置还必须通过前述区域表校验。不支持的订阅会使整个染色计划无效。
+引用默认使用插件所在命名空间。启用引用授权校验时，跨命名空间引用需要目标命名空间的 ReferenceGrant，
+但目标设置 `spec.visibility: Cluster` 时不需要授权对象。
+旧变体和旧插件字段不提供兼容别名。
 
----
+## 字段与路由
 
-## 常见问题
+| 插件字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `clusterRegionRef` | 必填 | 设置名称及可选命名空间 |
+| `failOpen` | `true` | 配置不可用时继续后续插件和正常代理 |
+| `statusOnError` | `503` | failOpen=false 时返回的 HTTP 状态码，范围 400–599 |
+| `keyGet` | `[]` | 顺序读取的共享请求键来源 |
+| `hashKeyGet` | 无 | 预计算哈希来源 |
+| `hashCalc` | 无 | 算法、模数和 writeBack 目标 |
+| `routeRules` | `[]` | 有序路由规则 |
+| `routeByKeyConfMatch` | 无 | 共享 matchMap 和 bypassClusterKeys |
 
-### Q1：使用 RegionRoute 必须创建 EdgionConfigData 吗？
+规则按顺序执行。`RouteByDirectRegion` 使用自己的 keyFrom 查找已知区域。
+`RouteByKeyConfMatch` 使用共享 keyGet：非空共享 matchMap 优先，bypassClusterKeys
+中的键使用规则自己的映射。`RouteByHashRange` 是终止规则，即使没有匹配也不继续后续规则。
 
-**A**：不需要。`EdgionPlugins` 配置本身就是完整的——路由逻辑和基础区域表都在其中。只有当你希望区域表能在运行时替换而不改动 `EdgionPlugins` 时，才需要添加 `overrideRef`；Center 正是用这条路径驱动多集群故障转移。
+哈希路由优先使用 hashKeyGet 中位于 `[0, modulo)` 的整数；否则在配置了 hashCalc
+时计算 CRC32 或 SHA-256，再写入 writeBack。算法默认为 crc32，模数默认为 1000，
+必须至少为 2。未配置 hashCalc 时，表边界和预计算哈希仍使用模数 1000。
+响应头写回必须符合共享响应头策略。
 
-### Q2：规则的求值顺序是什么？
+区域行保留 name、hashRange、backendEndpoint、tls 和 failoverTo。
+表必须非空，名称非空且唯一，闭区间满足 `0 <= low <= high < modulo` 且互不重叠。
+允许空隙，落入空隙的请求正常代理。端点支持主机名、IPv4 或方括号 IPv6，
+可选端口为 1–65535，不接受 URL 或空主机。tls 默认 true；缺省端口为 TLS 的 443
+或非 TLS 的 80。配置校验不绕过 DNS 解析后的地址安全检查。
 
-**A**：规则从上到下逐条求值，先匹配者优先。`RouteByDirectRegion` 和 `RouteByKeyConfMatch` 不匹配时向后穿透，因此更具体的规则应放在前面。`RouteByHashRange` 是终止性的，应放在最后。
+远程路由保留原始 Host、SNI、路径和请求体。目标等于设置中的 regionName 时，
+使用正常本地上游。failoverTo 必须指向另一行，不允许自引用和循环；执行时只跳一层，
+例如 `a -> b -> c` 中选中 a 的请求实际路由到 b。
 
-### Q3：我更新了 override，但路由没有变化，为什么？
+## 配置异常与动态恢复
 
-**A**：覆盖层在任何解析问题上都会静默回退到基础 `regions`——这是设计使然（fail-to-base，而非 fail-closed）。请按顺序排查：`EdgionPlugins` 的 `ResolvedRefs` status condition（引用是否解析成功？跨命名空间引用是否被放行？）、被引用资源的 `spec.enable` 与 `spec.data.type`，以及 Gateway 的插件日志——日志会记录命中的是 `overlay_disabled` / `overlay_missing` / `overlay_type_mismatch` / `overlay_invalid` 中的哪一种。
+设置缺失、禁用、引用被拒绝、类型不匹配、区域表无效，或消费者哈希配置不可用时，
+插件在读取请求键、写回哈希和设置上游之前执行异常策略。默认 failOpen=true
+完整跳过当前插件，继续后续插件和正常代理；failOpen=false 按 statusOnError 返回错误。
+不保留基础表兜底，也不保留上一次有效表。空规则仍先检查设置可用性，再不执行路由。
 
-### Q4：override 能修改路由规则吗？
+策略只处理可以解析的配置不可用。YAML 无法解析、策略字段类型错误、必填字段缺失、
+结构安全校验失败，不会被转换为宽松放行。Controller 报告配置和引用状态，Gateway
+独立执行运行时约束。
 
-**A**：不能，这是刻意为之。`RegionRouteOverride` 只承载数据，且实际生效的只有 `regions`。路由逻辑只存在于 `EdgionPlugins`，因此远程写入方可以改变流量去向，但无法改写流量的分类方式。
+设置原文与校验证明原子发布；每个请求使用同一代 regionName 和 regions。
+完整表校验发生于配置更新，不在请求热路径重复执行。修复设置后可动态恢复，无需重建插件。
+配置已持久化、Controller 已观察、Gateway 已应用是不同状态。
 
----
+## 诊断与染色
 
-## 相关文档
+插件访问日志记录 setting_reference_unavailable、setting_missing、setting_disabled、
+setting_type_mismatch、setting_invalid 或 hash_modulo_invalid。
+计数器 `edgion_region_route_config_events_total` 使用这些固定原因标签。
 
-- [Dynamic Upstream](./dynamic-upstream.md) — 请求驱动的上游选择
-- [Direct Endpoint](./direct-endpoint.md) — 绕过负载均衡直连指定端点
-- [过滤器总览](../overview.md) — 所有 HTTPRoute 过滤器
+[染色](dye.md) 默认关闭。成功选择区域时可记录最终区域名，包括本地透传。
+配置不可用时，failOpen=true 对应 fallback，否则对应 reject，原因为
+configuration-unavailable。成功能力要求规则非空；没有匹配或上游跳转已被其他插件占用时，
+不记录选择结果。显式启用染色后仍遵守共享防伪和请求头处理策略。
 
-## 响应头策略
+## 原始资源浏览与单设置故障切换
 
-`writeBack` 中类型为 `ResponseHeader` 的目标必须使用允许的响应头名称。
+Controller 提供以下源资源接口：
 
-[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).
+- `GET /api/v1/cluster-region-settings/keys?limit=10&continue=...` 仅返回资源定位与
+  Cluster/Region 身份。匹配结果为空时仍可能存在续页游标。禁用设置及区域表无效但身份可读的
+  设置仍可发现；区域归属来自 `regionName`。
+- `GET /api/v1/cluster-region-settings/{namespace}/{name}` 每次重新读取原始源对象，
+  保留未知字段，不返回加工后的 Store 对象。
+- `GET /api/v1/cluster-region-settings/{namespace}/{name}/consumers` 使用源区域表和
+  Controller 已观察到的消费者引用计算兼容性。`compatibleWithTable` 不是 Gateway 应用确认；
+  `settingEnabled`、`tableObservation`、`consumerObservation` 分别说明这些输入。
+
+单目标操作先向 `/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview`
+POST `{regionName, failoverTo}`，空 `failoverTo` 表示清除目标。预览返回变更、消费者兼容性及
+源 `precondition`。将相同目标字段和该 precondition 提交到
+`/api/v1/cluster-region-settings/{namespace}/{name}/failover`。界面修改目标后应使预览失效。
+
+precondition 绑定规范化源内容、UID、resourceVersion 和未知字段，是内容相等条件，不是授权
+凭据或意图签名。源已变化时返回 409，需要重新预览。状态已匹配时返回 `modified: false`，不
+重复写入。操作不会自动创建、启用或修复缺失、禁用或无效设置。完整的新区域表必须有效；已有的
+消费者特定异常单独展示，不新增所有消费者必须健康的全局门禁。
+
+写入成功仅报告 `persistence: persisted`，无需变更时为 `unchanged`；Controller 观察和
+Gateway 应用仍标记 `not-confirmed`。超时可能发生在持久化之后，应先回读再重新预览，不要自动
+重放。文件模式保证同进程修改持锁到实际文件操作完成，包括取消场景，但不承诺与外部文件编辑
+之间的原子 CAS。Kubernetes 使用原生 resourceVersion 条件替换，etcd 使用修改 revision 事务。
+可靠多目标操作不属于此单设置接口范围。

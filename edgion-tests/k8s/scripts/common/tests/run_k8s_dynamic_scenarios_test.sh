@@ -176,6 +176,24 @@ cat > "${FAKE_BIN}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == get && "${2:-}" == pods && "$*" == *"app=edgion-gateway"* ]]; then
+  uid=gateway-uid
+  restarts=0
+  container=container-id
+  if grep -Fq 'RUN:SharedHttpPolicyAdmission' "${KUBECTL_LOG}"; then
+    case "${FAKE_GATEWAY_IDENTITY_MODE:-stable}" in
+      restart) restarts=1 ;;
+      replacement) uid=replacement-uid ;;
+      container) container=replacement-container ;;
+    esac
+  fi
+  if [[ "${FAKE_GATEWAY_IDENTITY_MODE:-stable}" == missing ]]; then
+    printf '{"items":[]}\n'
+  else
+    printf '{"items":[{"metadata":{"uid":"%s"},"status":{"containerStatuses":[{"name":"edgion-gateway","restartCount":%s,"containerID":"%s","state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}]}\n' "${uid}" "${restarts}" "${container}"
+  fi
+  exit 0
+fi
 if [[ "${1:-}" == get && "${2:-}" == pods && "$*" == *"--output json"* ]]; then
   echo '{"items":[{"metadata":{"name":"fake-pod","uid":"peer-uid"},"status":{"phase":"Running","podIP":"10.244.0.7","conditions":[{"type":"Ready","status":"True"}]}}]}'
   exit 0
@@ -267,7 +285,7 @@ case "$*" in
     scenario_id=""
     for argument in "$@"; do
       case "${argument}" in
-        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitLocalDynamic|GcParamsFlap|SpWeighted)
+        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitLocalDynamic|GcParamsFlap|SpWeighted|SharedHttpPolicyAdmission)
           scenario_id="${argument}"
           ;;
       esac
@@ -532,5 +550,26 @@ assert_contains "${TEMP_DIR}/endpoint-failure.log" "@@DYNAMIC_RESULT SpWeighted 
   || fail "EndpointSlice inventory failure did not restore the scenario"
 [[ "$(grep -c '^INVENTORY:' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "EndpointSlice inventory failure was retried or later phases were read"
+
+SHARED_DYNAMIC_MANIFEST="${TEMP_DIR}/shared-dynamic-scenarios.tsv"
+printf 'SharedHttpPolicyAdmission\tEdgionPlugins/RateLimitLocal/DynamicTest\tinitial\tedgionplugins.edgion.io\tedgionplugins\tedgion-default\trate-limit-dynamic\n' > "${SHARED_DYNAMIC_MANIFEST}"
+for mode in stable restart replacement container missing; do
+  : > "${KUBECTL_LOG}"
+  result=0
+  PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+    DYNAMIC_MANIFEST="${SHARED_DYNAMIC_MANIFEST}" FAKE_DYNAMIC_REGISTRY=SharedHttpPolicyAdmission \
+    FAKE_GATEWAY_IDENTITY_MODE="${mode}" \
+    "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario SharedHttpPolicyAdmission \
+    > "${TEMP_DIR}/gateway-identity-${mode}.log" 2>&1 || result=$?
+  if [[ "${mode}" == stable ]]; then
+    [[ "${result}" == 0 ]] || fail "stable Gateway identity was rejected"
+    assert_contains "${TEMP_DIR}/gateway-identity-${mode}.log" "@@DYNAMIC_RESULT SharedHttpPolicyAdmission PASS 0"
+    assert_contains "${KUBECTL_LOG}" "EDGION_TEST_GATEWAY_RESTART_GUARD=true"
+  else
+    [[ "${result}" != 0 ]] || fail "Gateway identity ${mode} was accepted"
+    assert_contains "${TEMP_DIR}/gateway-identity-${mode}.log" "@@DYNAMIC_RESULT SharedHttpPolicyAdmission FAIL"
+    assert_not_contains "${TEMP_DIR}/gateway-identity-${mode}.log" "@@DYNAMIC_RESULT SharedHttpPolicyAdmission PASS"
+  fi
+done
 
 echo "OK: K8s dynamic scenario runner regression tests passed"

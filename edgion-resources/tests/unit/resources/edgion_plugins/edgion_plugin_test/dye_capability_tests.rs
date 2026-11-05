@@ -302,11 +302,11 @@ fn key_header_names_collects_all_region_route_sources() {
     use crate::resources::plugin_configs::RegionRouteConfig;
 
     let cfg: RegionRouteConfig = yaml_serde::from_str(
-        "myRegion: us\n\
+        "clusterRegionRef: {name: local}\n\
              keyGet:\n  - type: header\n    name: X-Key\n\
              hashKeyGet:\n  - type: header\n    name: X-Hash\n\
              routeRules:\n  - type: RouteByDirectRegion\n    keyFrom:\n      - type: header\n        name: X-Region\n\
-             regions: []\n",
+             ",
     )
     .unwrap();
     let mut names = EdgionPlugin::RegionRoute(cfg).key_header_names();
@@ -317,6 +317,6 @@ fn key_header_names_collects_all_region_route_sources() {
     );
     assert_eq!(
         EdgionPlugin::RegionRoute(RegionRouteConfig::default()).dye_capabilities(DyeStage::Request),
-        &[]
+        &[DyeOutcome::Fallback]
     );
 }

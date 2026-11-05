@@ -3090,3 +3090,31 @@ async fn prepared_auth_challenge_follows_pinned_compiled_generation() {
     drop(pinned);
     assert!(weak.upgrade().is_none());
 }
+
+#[test]
+fn region_route_wrong_stage_and_operational_errors_have_validation_parity() {
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        for modulo in [1, 1000] {
+            let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"stage-parity","namespace":"default"},
+                "spec":{stage:[{"type":"RegionRoute","config":{
+                    "clusterRegionRef":{"name":"setting"},
+                    "hashCalc":{"modulo":modulo},"failOpen":false
+                }}]}
+            }))
+            .unwrap();
+            let compiled = compile_plugins(&resource);
+            assert_eq!(
+                resource.validate_plugins(),
+                compiled.preparse_errors,
+                "{stage}/{modulo}"
+            );
+            assert_eq!(compiled.is_activatable, stage == "requestPlugins");
+        }
+    }
+}

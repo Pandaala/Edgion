@@ -15,4 +15,5 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Certificate identity header projection](regression-guards/certificate-identity-header-projection.md)
 - [Base64 leaf DER ownership and URL PEM boundary](regression-guards/base64-leaf-der-ownership.md)

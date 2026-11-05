@@ -61,10 +61,10 @@ async fn disarmed_deadline_never_fires() {
     let sender = tx.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(600)).await;
-        let _ = sender.send(LifecycleEvent::ReloadRequested).await;
+        let _ = sender.send(LifecycleEvent::LeadershipLost).await;
     });
     let turn = next_loop_turn(&mut rx, &mut watchers, deadline.as_mut(), false).await;
-    assert!(matches!(turn, LoopTurn::Event(LifecycleEvent::ReloadRequested)));
+    assert!(matches!(turn, LoopTurn::Event(LifecycleEvent::LeadershipLost)));
 }
 
 #[tokio::test(start_paused = true)]

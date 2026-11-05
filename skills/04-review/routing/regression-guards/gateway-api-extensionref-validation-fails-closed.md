@@ -23,9 +23,9 @@ keeps its existing unsupported-target wording even when the name is also invalid
 The shared validation result, filter-union priority and zero-plugin-edge behavior
 are unchanged; gRPC retains its generic invalid-rule diagnostic.
 
-The Controller applies this rule to rule and backendRef filters, including raw
-child routes during delegation flattening. Invalid rules are dropped by exact
-index. A surviving sibling produces `PartiallyInvalid=True` with a message
+The Controller applies this rule to rule and backendRef filters of every route,
+including delegation children, which are validated as their own routes. Invalid
+rules are dropped by exact index. A surviving sibling produces `PartiallyInvalid=True` with a message
 starting with `Dropped Rule`; when no rule survives, the attachment is
 `Accepted=False` and `PartiallyInvalid` is absent. The Gateway independently
 seals malformed discriminator/payload unions and invalid filter-list construction
@@ -60,8 +60,8 @@ Routes and indexed fields. Invalid descriptors retain `None` in the rule key
 vector and invoke no target lookup. Valid missing descriptors retain their keys
 and fixed missing-reference error. Publication demand, AI/adaptive discovery,
 CORS/WAF selection and access-log declarations cannot consume invalid same-name
-references. Authored fields ignore stamps; effective stamps apply only to actual
-`resolved_rules`, with canonical namespace validation.
+references. Every field resolves in its declaring route's namespace; there is no
+namespace stamp.
 
 Whole-runtime malformed-union rejection remains separate from invalid-target
 positioning. The latter keeps every original ExtensionRef stage filter and its
@@ -83,7 +83,7 @@ invalid rules, and its message prefix identifies that behavior.
 
 `edgion_resources::resources::refs::extension_ref::validate_extension_ref_filter`
 owns the shared decision. The HTTP and gRPC Controller handlers consume it for
-source rules; delegation calls those same validators against raw children. The
+source rules, delegation children included. The
 Gateway HTTP and gRPC filter builders consume it before constructing any
 filter chain. The matched rule runtime participates in the same preflight gate
 as global, Gateway, and referenced plugin runtimes, preventing a rule-level
@@ -119,7 +119,7 @@ streaming, or access-log ownership.
 ## Verification and re-evaluation
 
 Focused unit coverage exercises the shared decision matrix; HTTP and gRPC
-rule/backendRef status; delegated raw-child filtering; generic Gateway 500
+rule/backendRef status; delegation-child filtering; generic Gateway 500
 behavior for rule and backend scopes; and policy-bypass ordering ahead of
 preflight. Re-evaluate if Edgion supports another
 ExtensionRef group/kind, Gateway API changes the union or partial-validity

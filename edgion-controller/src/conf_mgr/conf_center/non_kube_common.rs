@@ -13,11 +13,11 @@ use kube::Resource;
 use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::conf_mgr::conf_center::etcd::leadership_gate::LeaderHandle;
-use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayClassOwnership;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
@@ -32,6 +32,31 @@ use crate::conf_sync::conf_server::ConfigSyncServer;
 use edgion_resources::prelude_resources::*;
 use edgion_resources::ResourceMeta;
 
+/// Cancellation and descendant ownership for one local-backend iteration.
+/// Register tasks synchronously before they run, including tasks spawned by
+/// other tracked tasks. The center joins the top-level spawner before draining.
+#[derive(Clone, Default)]
+pub struct LocalTaskScope {
+    pub(super) cancel: CancellationToken,
+    pub(super) tracker: TaskTracker,
+}
+
+impl LocalTaskScope {
+    pub(super) fn spawn(
+        &self,
+        future: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) -> JoinHandle<Result<()>> {
+        let cancel = self.cancel.clone();
+        self.tracker.spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Ok(()),
+                result = future => result,
+            }
+        })
+    }
+}
+
 /// Shared state for non-Kubernetes configuration center backends.
 ///
 /// Holds the lifecycle handles and shared runtime that are identical between
@@ -40,7 +65,6 @@ pub struct CenterBase {
     config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>,
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     controller_handle: Mutex<Option<JoinHandle<()>>>,
-    reload_tx: Mutex<Option<mpsc::Sender<()>>>,
     runtime: Arc<ControllerRuntime>,
 }
 
@@ -54,7 +78,6 @@ impl CenterBase {
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             controller_handle: Mutex::new(None),
-            reload_tx: Mutex::new(None),
             runtime,
         }
     }
@@ -85,14 +108,23 @@ impl CenterBase {
         *self.controller_handle.lock() = Some(handle);
     }
 
-    fn abort_controller(&self) {
-        if let Some(handle) = self.controller_handle.lock().take() {
+    async fn stop_iteration(&self, scope: &LocalTaskScope, component: &str) {
+        let old_css = self.config_sync_server();
+        self.set_config_sync_server(None, component);
+        scope.cancel.cancel();
+        let handle = self.controller_handle.lock().take();
+        if let Some(handle) = handle {
             handle.abort();
+            let _ = handle.await;
         }
-    }
-
-    fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
-        *self.reload_tx.lock() = tx;
+        // Closing does not prevent registration. Joining the root spawner and
+        // tracking every child before it runs prevents an empty-set race.
+        scope.tracker.close();
+        scope.tracker.wait().await;
+        if let Some(css) = old_css {
+            css.clear_all();
+        }
+        self.runtime.reset();
     }
 
     async fn wait_registry_ready(&self, timeout_secs: u64, component: &str) -> bool {
@@ -143,16 +175,6 @@ impl CenterBase {
         self.config_sync_server.read().clone()
     }
 
-    /// Send a reload request to the running lifecycle loop.
-    pub fn request_reload(&self) -> Result<(), String> {
-        if let Some(tx) = self.reload_tx.lock().as_ref() {
-            tx.try_send(())
-                .map_err(|e| format!("Failed to send reload signal: {}", e))
-        } else {
-            Err("Center not started or not ready for reload".to_string())
-        }
-    }
-
     /// Get the shared `ControllerRuntime`.
     pub fn runtime(&self) -> Arc<ControllerRuntime> {
         self.runtime.clone()
@@ -168,12 +190,18 @@ impl CenterBase {
     /// - `component`: A `'static` string used as the `component` field in every log line.
     /// - `make_handle`: A synchronous closure that spawns the backend-specific controller
     ///   and returns its `JoinHandle`. Receives the iteration-scoped shutdown signal,
-    ///   the shared runtime, and a oneshot sender for reporting fatal errors.
+    ///   the shared runtime, a oneshot sender for fatal errors, and the task scope
+    ///   that must own every resource-controller and worker descendant.
     pub async fn run_lifecycle(
         &self,
         shutdown_handle: ShutdownHandle,
         component: &'static str,
-        make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
+        make_handle: impl Fn(
+            ShutdownSignal,
+            Arc<ControllerRuntime>,
+            oneshot::Sender<String>,
+            LocalTaskScope,
+        ) -> JoinHandle<()>,
     ) -> Result<()> {
         self.run_lifecycle_gated(shutdown_handle, component, None, make_handle)
             .await
@@ -195,24 +223,25 @@ impl CenterBase {
     /// - `leadership`: Optional leadership handle. `None` = unconditional leader.
     /// - `make_handle`: A synchronous closure that spawns the backend-specific controller
     ///   and returns its `JoinHandle`. Receives the iteration-scoped shutdown signal,
-    ///   the shared runtime, and a oneshot sender for reporting fatal errors.
+    ///   the shared runtime, a oneshot sender for fatal errors, and the task scope
+    ///   that must own every resource-controller and worker descendant.
     pub async fn run_lifecycle_gated(
         &self,
         shutdown_handle: ShutdownHandle,
         component: &'static str,
         leadership: Option<LeaderHandle>,
-        make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
+        make_handle: impl Fn(
+            ShutdownSignal,
+            Arc<ControllerRuntime>,
+            oneshot::Sender<String>,
+            LocalTaskScope,
+        ) -> JoinHandle<()>,
     ) -> Result<()> {
         self.set_shutdown_handle(shutdown_handle.clone());
 
-        let mut reload_start_time: Option<Instant> = None;
-
         loop {
-            // Record reload completion metrics for non-first iterations.
-            if let Some(start_time) = reload_start_time.take() {
-                let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
-                reload_metrics().reload_completed(duration);
-                tracing::info!(component = component, duration_secs = duration, "Reload completed");
+            if shutdown_handle.is_shutdown() {
+                return Ok(());
             }
 
             // 0. Leadership gate (spec §5). `None` ⇒ unconditional leader
@@ -221,6 +250,9 @@ impl CenterBase {
             if let Some(ref lh) = leadership {
                 let mut gate_shutdown = shutdown_handle.signal();
                 loop {
+                    if gate_shutdown.is_shutdown() {
+                        return Ok(());
+                    }
                     if lh.is_leader() {
                         break;
                     }
@@ -231,61 +263,49 @@ impl CenterBase {
                 }
             }
 
-            // 1. Iteration-specific shutdown handle.
+            // Iteration-specific shutdown and descendant ownership.
             let iteration_shutdown = ShutdownHandle::new();
+            let scope = LocalTaskScope::default();
 
-            // 2. Reload channel.
-            let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
-            self.set_reload_tx(Some(reload_tx));
+            // Backend failures share the same teardown barrier.
+            let (error_tx, mut error_rx) = oneshot::channel::<String>();
 
-            // 3. Error channel.
-            let (error_tx, error_rx) = oneshot::channel::<String>();
-
-            // 4. Spawn the backend-specific controller.
-            let handle = make_handle(iteration_shutdown.signal(), self.runtime.clone(), error_tx);
+            // Spawn the backend-specific controller.
+            let handle = make_handle(
+                iteration_shutdown.signal(),
+                self.runtime.clone(),
+                error_tx,
+                scope.clone(),
+            );
             self.set_controller_handle(handle);
 
-            // 5. Wait for processor registry to become ready.
-            if !self.wait_registry_ready(30, component).await {
-                iteration_shutdown.shutdown();
-                self.abort_controller();
-                self.runtime.reset();
-                self.set_reload_tx(None);
-                return Err(anyhow::anyhow!(
-                    "resource controller initialization did not complete before the readiness deadline"
-                ));
-            }
-
-            // 5.5. Post-cache-ready cross-resource revalidations.
-            run_post_cache_ready_revalidations(self.runtime.clone()).await;
-
-            // 6. Create ConfigSyncServer and register all WatchObjs.
-            let config_sync_server = Arc::new(ConfigSyncServer::new());
-            let no_sync_kinds = crate::config::get_no_sync_kinds();
-            let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
-            config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
-
-            // 7. Mark as ready.
-            self.set_config_sync_server(Some(config_sync_server), component);
-
-            tracing::info!(
-                component = component,
-                "ConfigSyncServer is ready, gRPC services can process requests"
-            );
-
-            // Persist-off acquisition on FS/etcd: always-leader (this iteration is
-            // already gated). Kubernetes starts its own kube-backed worker instead.
-            if leadership.as_ref().is_none_or(|leader| leader.is_leader()) {
-                crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
-            }
-
-            // 8. Wait for shutdown, reload, or controller error.
+            // Initialization is part of the iteration: shutdown, leadership
+            // loss, and backend failure can interrupt it as well as serving.
             let mut global_shutdown = shutdown_handle.signal();
-            let mut error_rx = error_rx;
-
+            let mut initialized = false;
+            let initialize_and_serve = async {
+                if !self.wait_registry_ready(30, component).await {
+                    return LoopAction::InitializationFailed;
+                }
+                run_post_cache_ready_revalidations(self.runtime.clone()).await;
+                let config_sync_server = Arc::new(ConfigSyncServer::new());
+                let no_sync_kinds = crate::config::get_no_sync_kinds();
+                let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+                config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
+                self.set_config_sync_server(Some(config_sync_server), component);
+                initialized = true;
+                tracing::info!(
+                    component = component,
+                    "ConfigSyncServer is ready, gRPC services can process requests"
+                );
+                if leadership.as_ref().is_none_or(|leader| leader.is_leader()) {
+                    crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
+                }
+                std::future::pending::<LoopAction>().await
+            };
             let action = tokio::select! {
+                biased;
                 _ = global_shutdown.wait() => LoopAction::Shutdown,
-                _ = reload_rx.recv() => LoopAction::Reload,
                 _ = leadership_lost_wait(&leadership) => LoopAction::LeadershipLost,
                 result = &mut error_rx => {
                     match result {
@@ -293,40 +313,30 @@ impl CenterBase {
                         Err(_) if global_shutdown.is_shutdown() => LoopAction::Shutdown,
                         Err(_) => LoopAction::Error("Backend controller error channel closed unexpectedly".to_string()),
                     }
-                }
+                },
+                action = initialize_and_serve => action,
             };
 
-            // 9. Stop the controller for this iteration.
+            // Stop the controller for this iteration.
             iteration_shutdown.shutdown();
             crate::services::credential_manager::stop_credential_manager_service();
 
-            // 10. Cleanup.
-            // Drop the published CSS before clearing its caches. Clearing wakes
-            // active Federation watchers so they detect EventsLost and exit,
-            // allowing Center to re-watch on the next CSS generation.
-            let old_css = self.config_sync_server();
-            // Stop advertising readiness before clearing the old generation's
-            // caches. Stats and proxy tasks must never observe a live CSS paired
-            // with the transient empty stores created during reload cleanup.
-            self.set_config_sync_server(None, component);
-            if let Some(css) = old_css {
-                css.clear_all();
+            // No task from this iteration may mutate the runtime after reset.
+            self.stop_iteration(&scope, component).await;
+            if shutdown_handle.is_shutdown() {
+                return Ok(());
             }
-            self.abort_controller();
-            self.runtime.reset();
-            self.set_reload_tx(None);
 
-            // 11. Handle the selected action.
+            // Handle the selected action only after shared state is safe to reuse.
             match action {
                 LoopAction::Shutdown => {
                     tracing::info!(component = component, "Normal shutdown, lifecycle completed");
                     return Ok(());
                 }
-                LoopAction::Reload => {
-                    tracing::info!(component = component, "Reload requested, restarting controller");
-                    reload_metrics().reload_started();
-                    reload_start_time = Some(Instant::now());
-                    continue;
+                LoopAction::InitializationFailed => {
+                    return Err(anyhow::anyhow!(
+                        "resource controller initialization did not complete before the readiness deadline"
+                    ))
                 }
                 LoopAction::LeadershipLost => {
                     // Lost leadership mid-term. The teardown above already ran;
@@ -340,6 +350,9 @@ impl CenterBase {
                     continue;
                 }
                 LoopAction::Error(msg) => {
+                    if !initialized {
+                        return Err(anyhow::anyhow!("resource controller initialization failed: {msg}"));
+                    }
                     tracing::error!(
                         component = component,
                         error = %msg,
@@ -362,7 +375,7 @@ impl Default for CenterBase {
 /// Action returned by the `run_lifecycle` select loop.
 enum LoopAction {
     Shutdown,
-    Reload,
+    InitializationFailed,
     Error(String),
     LeadershipLost,
 }

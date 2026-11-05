@@ -17,6 +17,15 @@ are 1 MiB per arena, 16 KiB/64 fields metadata, 16 MiB concurrent pending and
 128 MiB total process ownership. Body callbacks copy bounded chunks without
 allocation or tracing. Overflow, errors, cancellation and trailers discard the
 private fill while the origin response keeps its ordinary forwarding behavior.
+The arena is reserved with `try_reserve_exact(body_cap)` but never zero-filled
+(finding cache-01): its capacity is the admitted cap and its length is the
+written body. `push` rejects any chunk that exceeds the remaining capacity and
+then appends with `extend_from_slice`, which therefore never reallocates; there
+is no separate used-length field, and decode rejects capacity above `MAX_BODY`.
+Ledger charge stays capacity-based. A `resize` to the cap would memset up to
+1 MiB and fault in every page per captured miss; do not reintroduce it.
+Evidence: `storage_test.rs` `arena_starts_empty_and_body_bounds_hold_without_reallocation`
+and the existing zero-allocation push test.
 Seal the actual final onion header at the canonical response_head_will_commit
 boundary, before transport preparation. The seal requires the exact captured
 Cache-Control, Date and Age contract. Terminal publication retains all integrity,

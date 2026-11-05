@@ -11,16 +11,19 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-Default authentication identity outputs overwrite a header only when they write it. Edgion does not reserve a
+Authentication plugins retain per-plugin output ownership. Edgion does not reserve a
 global `X-Consumer-*` family, does not strip complementary Kong-style identity names on every
 success path, and does not define a multi-plugin sanitization order.
 
-This closes D0037 and D0038 as written. AUTH-01 separately corrects configured JwtAuth /
-OpenID Connect `claimsToHeaders` destinations on authenticated paths: they are cleared before
-projection, including skipped claims and exhausted output budgets. Cleanup failure terminates
-forwarding. This narrow configured-destination ownership does not change default identity names,
-anonymous paths, disabled/condition-skipped plugins, JweDecrypt, or cross-plugin order.
-D0052 historically fixed deterministic projection without changing skip-versus-strip behavior.
+This closes D0037 and D0038 as written. It never accepted client-controlled values on
+explicitly configured claim destinations. ISSUE-002 now clears all configured JwtAuth /
+OpenID Connect claim and JweDecrypt payload projection destinations before adding bounded,
+trusted values, including the executing plugins' no-claim successful continuations.
+See the [projection guard](../regression-guards/auth-claim-header-projection.md).
+ISSUE-003 likewise clears HeaderCertAuth's active certificate identity destinations;
+missing SANs and anonymous continuations cannot retain client input there. See the
+[certificate projection guard](../../header-cert-auth/regression-guards/certificate-identity-header-projection.md).
+D0052 historically fixed ordering and collisions without changing skip-vs-strip behavior.
 
 Fix suggestions of the form "unify identity-header sanitization across every auth plugin",
 "always strip client-supplied `X-Consumer-Username` / `X-Anonymous-Consumer` before auth",
@@ -37,11 +40,11 @@ same name when it writes a claim. Envoy `ext_authz` `allowed_upstream_headers` o
 append is a separate `allowed_upstream_headers_to_append` opt-in. Kong
 `kong.service.request.set_header` overrides; `add_header` is the multi-value opt-in.
 
-Envoy additionally strips configured `claim_to_headers` / `forward_payload_header` names
-before applying rules. AUTH-01 adopts clear-before-projection on authenticated JWT/OIDC paths
-only; it does not establish filter-wide sanitation or bypass-path parity. The shared projection
-formatter still skips invalid values, while the authenticated output owners invoke sanitation
-first. See the linked projection regression guard for the current scope.
+Envoy additionally strips every configured `claim_to_headers` / `forward_payload_header`
+name before applying rules, including when the claim is absent. Edgion's
+`set_claims_headers` now clears its complete configured plan before projection (ISSUE-002).
+Disabled or condition-skipped Edgion plugins remain inert, unlike Envoy's filter-wide cleanup
+before bypass. Do not cite this tradeoff as full Envoy sanitization parity.
 
 **2. Multi-plugin stacking is last-write-wins, not a missing reserved-name contract.**
 
@@ -88,7 +91,7 @@ Do not infer sanitize-before-rules behavior from the D0052 projection-order corr
 
 - D0037 / D0038 closed as accepted tradeoff (campaign files deleted)
 - `edgion-gateway/src/plugins/runtime/session_adapter.rs` (`set_request_header` → `insert_header`)
-- `edgion-gateway/src/plugins/http/common/auth_common.rs` (`sanitize_claim_headers` and `set_claims_headers`)
+- `edgion-gateway/src/plugins/http/common/auth_common.rs` (configured-destination cleanup and projection)
 - `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`apply_authenticated_headers` clears the configured anonymous marker)
 - `docs/en/user-guide/http-route/filters/edgion-plugins/jwt-auth.md` (no default consumer header)
 - [D0052 deterministic configured claim projection](../regression-guards/auth-claim-header-projection.md)

@@ -37,8 +37,6 @@ diff center.json client.json
 edgion-cli apply -f config.yaml
 edgion-cli apply -f config-dir/
 
-# Reload all resources
-edgion-cli reload
 
 # Generate conf_sync gRPC mTLS certificates
 edgion-cli gen-certs --output file --output-dir certs/grpc/

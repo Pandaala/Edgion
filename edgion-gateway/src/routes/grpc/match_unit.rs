@@ -2,6 +2,8 @@ use crate::backends::policy::BackendTlsPolicyLookup;
 use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
+use crate::routes::delegation::DelegationSlot;
+use crate::routes::grpc::GrpcMatchEngine;
 use crate::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
@@ -151,7 +153,7 @@ impl CompiledGrpcBackend {
 /// match-item units of that rule. In-memory RateLimitLocal owns per-rule CMS state,
 /// so rebuilding per-unit would split the counter N×.
 pub struct GrpcRuleRuntime {
-    /// Validated lifetime from this effective rule generation, resolved before publication.
+    /// Validated lifetime from this rule generation, resolved before publication.
     pub session_persistence_ttl_secs: Option<u64>,
     /// Rule-level compiled plugin chain.
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -345,7 +347,13 @@ impl GrpcMatchInfo {
 /// gRPC route rule unit
 #[derive(Clone)]
 pub struct GrpcRouteRuleUnit {
-    /// Validated lifetime from this effective rule generation, resolved before publication.
+    /// Slot of this rule's delegation target, obtained at compile time. `None`
+    /// for every ordinary rule; tested only after `deep_match` succeeds.
+    pub delegate: Option<Arc<DelegationSlot<GrpcMatchEngine>>>,
+    /// Bitmask of this rule's standard filter types (spec §6.2), read only
+    /// during descent.
+    pub filter_mask: u32,
+    /// Validated lifetime from this rule generation, resolved before publication.
     pub session_persistence_ttl_secs: Option<u64>,
     pub resource_key: String,
     pub matched_info: GrpcMatchInfo,
@@ -398,7 +406,7 @@ impl GrpcRouteRuleUnit {
         mut backend_factory: impl FnMut(&GRPCRoute, usize, usize) -> Arc<PluginRuntime>,
     ) -> Option<GrpcRuleRuntime> {
         let references = GrpcRouteBackendRefs::from_route(route).ok()?;
-        let rule = route.effective_rules()?.get(rule_index)?;
+        let rule = route.spec.rules.as_ref()?.get(rule_index)?;
         let session_persistence_ttl_secs = rule
             .session_persistence
             .as_ref()
@@ -415,7 +423,7 @@ impl GrpcRouteRuleUnit {
             .map(|(slot, schema)| {
                 let reference = references
                     .effective_at(rule_index, slot)
-                    .expect("the backend came from this actual effective rule");
+                    .expect("the backend came from this rule");
                 let target =
                     CompiledBackendTarget::from_reference(reference, edgion_resources::HTTPBackendRefKind::Unsupported);
                 let plugin_runtime =
@@ -491,11 +499,39 @@ impl GrpcRouteRuleUnit {
         Ok(Some(Arc::clone(matched_gi)))
     }
 
+    /// Child-level match: the unit's own header conditions only.
+    ///
+    /// Service/method candidates were already selected by the subtree engine,
+    /// and child units carry no hostname or Gateway eligibility (decided at
+    /// the root level). The root `deep_match` is unchanged.
+    #[inline]
+    pub fn deep_match_child(&self, session: &Session) -> Result<bool, EdError> {
+        self.match_headers(session.req_header())
+    }
+
+    #[inline]
+    fn match_headers(&self, req_header: &pingora_http::RequestHeader) -> Result<bool, EdError> {
+        if let Some(header_matches) = &self.matched_info.matched.headers {
+            for (idx, header_match) in header_matches.iter().enumerate() {
+                let compiled_regex = self
+                    .matched_info
+                    .compiled_header_regexes
+                    .get(idx)
+                    .and_then(|r| r.as_ref());
+                if !Self::match_header(req_header, header_match, compiled_regex)? {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// Match gRPC header.
     ///
     /// Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
     /// so a missing `compiled_regex` here means controller validation gap or compile-time
     /// invariant violation — fail-closed instead of recompiling on every request.
+    #[inline]
     fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &edgion_resources::GRPCHeaderMatch,

@@ -352,7 +352,20 @@ Kubernetes always decodes the outer Secret `.data` Base64 layer before the Contr
 
 JwtAuth adds no consumer header by default. To forward `sub`, configure an explicit claim mapping such as `claimsToHeaders: {sub: X-Consumer-Username}`. The mapping uses bounded header values and replaces the configured destination header. Destination names are canonicalized case-insensitively before request processing, so mappings such as `X-User` and `x-user` in one plugin configuration are rejected as duplicates. Separate plugins retain normal execution-order, last-write-wins behavior.
 
-After successful authentication, every configured `claimsToHeaders` destination is cleared before claim projection. Missing, empty, unsupported, unsafe, or oversized claims leave that header absent, including when the total output budget is exhausted. A cleanup failure stops forwarding with HTTP 500. This applies only to the authenticated path; anonymous access and skipped or disabled plugins do not gain a global identity-header cleanup policy.
+### Configured identity headers
+When JwtAuth executes, every `claimsToHeaders` destination is cleared before verified
+claims are projected. A missing, empty, unsupported, unsafe, or oversized claim leaves
+its destination absent. All destinations are cleared even when the aggregate budget
+stops projection. Header removal or projection write failure returns a fixed 500 and
+does not forward the request.
+
+Anonymous allowance also clears configured destinations before writing the explicit
+anonymous identity. Missing claims do not by themselves invalidate a JWT; require
+business-critical identity claims through an explicit authorization policy. Headers
+not named in the mapping are unaffected. A disabled or condition-skipped plugin does
+not run this cleanup; do not trust these headers on paths that skip authentication.
+If the token input header is also a mapping destination, verification consumes the
+token first; `hideCredentials` retains its existing final removal behavior.
 
 `claimsToHeaders` cannot target `Host` (case-insensitive). Configuration validation rejects it because HTTP/2 `:authority` can recreate that header during protocol conversion. Use a dedicated identity header such as `X-Tenant`.
 

@@ -18,6 +18,8 @@ pub struct EtcdStatusHandler {
     /// Optional leadership fence. When `Some`, every status write is rejected
     /// unless the gate reports this node is the fresh leader (spec §4.6b).
     gate: Option<LeadershipGate>,
+    #[cfg(test)]
+    read_barrier: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Semaphore>)>,
 }
 
 impl EtcdStatusHandler {
@@ -26,6 +28,8 @@ impl EtcdStatusHandler {
             client,
             key_prefix,
             gate: None,
+            #[cfg(test)]
+            read_barrier: None,
         }
     }
 
@@ -36,7 +40,20 @@ impl EtcdStatusHandler {
             client,
             key_prefix,
             gate: Some(gate),
+            #[cfg(test)]
+            read_barrier: None,
         }
+    }
+
+    /// Pause at the status-read await boundary without changing its result.
+    #[cfg(test)]
+    pub(super) fn with_read_barrier(
+        mut self,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
+    ) -> Self {
+        self.read_barrier = Some((entered, release));
+        self
     }
 
     /// Fail closed when this node is not the fresh leader. A no-op when ungated.
@@ -127,6 +144,11 @@ impl EtcdStatusHandler {
     ///
     /// Returns `None` if key doesn't exist or read/parse fails.
     pub async fn read_status_json(&self, kind: &str, key: &str) -> Option<String> {
+        #[cfg(test)]
+        if let Some((entered, release)) = &self.read_barrier {
+            entered.notify_one();
+            let _permit = release.acquire().await;
+        }
         let status_key = self.build_status_key(kind, key);
 
         match self.client.get_string(&status_key).await {

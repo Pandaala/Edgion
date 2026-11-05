@@ -539,3 +539,13 @@ The Controller resolves permission and diagnostics using actual source/target/fi
 Availability is role-specific: ordinary conditions and Geo require their complete dependency view before shortcuts/MMDB; RAP optional IP data follows its partial-good policy; unavailable RealIp dependencies disable all trust for that decision; optional ACL sources are omitted while authored allowRefs retain whitelist intent. Static typed-invalid generations replace prior runtime policy and fail closed; clean publication recovers. Kubernetes admission-rejected updates never reach this publication boundary and leave the prior admitted generation. ACL denial-group logs retain their explicit security exception; credential-failure attribution remains forbidden.
 
 Disabled standalone ACLs retain passive Controller dependency/status observation without executable proof or Gateway execution. One clear-before-add registry pass preserves all Condition/RealIp/ACL/Geo/Selector edges; no new store, workqueue or runtime IO is introduced.
+
+## Backend DNS address-family policy
+
+`resources::common::DnsLookupFamily` owns exact configuration values and canonical
+IP family classification. Common `dns::resolve` requires `DnsQueryPolicy::Native`
+for infrastructure or `Family(...)` for backend DNS. Service/Gateway annotations
+are parsed at cold publication; queries never parse them. Controller, Gateway DNS
+and native AI reuse this core. Standard All requires complete A/AAAA outcomes;
+typed HTTPDNS has one primary deadline and same-family fallback. No separate
+resolver implementation, address cache, or Happy Eyeballs mechanism is introduced.

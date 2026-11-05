@@ -5,6 +5,7 @@ use bytes::Bytes;
 
 use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, RawBodyScanner,
+    ReadBodyScanner,
 };
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
@@ -85,6 +86,18 @@ impl RequestBodyState {
         S: RawBodyScanner,
     {
         self.0.scan_raw(scanner, max_scan_bytes).await
+    }
+
+    /// Run an owned pull-based scanner over an immutable logical snapshot.
+    pub async fn scan_read<S>(
+        &self,
+        scanner: S,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<S::Output>, BodyOperationError>
+    where
+        S: ReadBodyScanner,
+    {
+        self.0.scan_read(scanner, max_scan_bytes).await
     }
 
     /// Run one of the shared String/Body logical-text operations.

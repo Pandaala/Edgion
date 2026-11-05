@@ -23,13 +23,15 @@ fn empty_policy_denies_all() {
 fn center_policy_matches_exact_and_wildcard() {
     let az = Authorizer::new(policy(vec![
         (&["get", "list"], &["EdgionConfigData"]),
-        (&["reload"], &["*"]),
+        (&["server-info"], &["*"]),
     ]));
     assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionConfigData").allowed());
     assert!(!az
         .authorize(&az.center_role(), Verb::Delete, "EdgionConfigData")
         .allowed());
-    assert!(az.authorize(&az.center_role(), Verb::Reload, "AnythingHere").allowed());
+    assert!(az
+        .authorize(&az.center_role(), Verb::ServerInfo, "AnythingHere")
+        .allowed());
     assert!(!az.authorize(&az.center_role(), Verb::Get, "Secret").allowed());
 }
 
@@ -149,7 +151,7 @@ fn build_admin_token_entry_rejects_blank() {
 }
 
 #[test]
-fn admin_token_survives_apply_reload() {
+fn admin_token_is_merged_with_scoped_tokens() {
     let az = Authorizer::new(CenterPolicy::deny_all());
     az.set_admin_token(build_admin_token_entry(Some("admin-secret")));
 
@@ -161,20 +163,20 @@ fn admin_token_survives_apply_reload() {
     assert_eq!(name, ADMIN_TOKEN_NAME);
     assert!(az.authorize(&role, Verb::Delete, "Secret").allowed());
 
-    // Reload apply rebuilds the map from config (no admin token) — it must
+    // Configuration assembly rebuilds the map from config (no admin token) — it must
     // still be re-merged automatically.
-    let mut reload_map = HashMap::new();
-    reload_map.insert(
+    let mut configured_map = HashMap::new();
+    configured_map.insert(
         sha256_hex("center-bot"),
         CliTokenEntry {
             name: "bot".into(),
             policy: Arc::new(CenterPolicy::deny_all()),
         },
     );
-    az.apply(CenterPolicy::deny_all(), reload_map);
+    az.apply(CenterPolicy::deny_all(), configured_map);
     assert!(
         az.cli_lookup("admin-secret").is_some(),
-        "admin token must survive reload"
+        "admin token must remain available alongside scoped tokens"
     );
     assert!(az.cli_lookup("center-bot").is_some(), "center token also present");
 }

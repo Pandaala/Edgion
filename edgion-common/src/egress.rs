@@ -193,7 +193,9 @@ impl EgressResolver {
         let allowed = match cached {
             Some(hit) => hit,
             None => {
-                let raw = dns_resolve(&self.inner.spec, host).await.map_err(ResolveFailure::Dns)?;
+                let raw = dns_resolve(&self.inner.spec, host, crate::dns::DnsQueryPolicy::Native)
+                    .await
+                    .map_err(ResolveFailure::Dns)?;
                 let allowed = filter_resolved_addrs_with_observer(
                     raw,
                     self.inner.policy,

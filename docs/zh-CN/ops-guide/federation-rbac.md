@@ -1,14 +1,14 @@
 # 联邦 RBAC
 
-Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，对联邦 Center 在 Admin API 上执行的每个操作进行授权。本文档说明授权模型、内置默认策略、可热重载的开关及常见配置示例。
+Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，对联邦 Center 在 Admin API 上执行的每个操作进行授权。本文档说明授权模型、内置默认策略、启动时生效的开关及常见配置示例。
 
 ## 工作原理
 
-每个 Center 请求（盲代理 UI 调用、同步操作、failover、reload）都经过与本地管理请求相同的授权层。Center 被分配受限标识（`CenterRestricted`），其允许的操作由 `[center].rbac` 配置块管理。本地管理员 Token 映射到 allow-all（通配符）策略，Center 授权不影响它。
+每个 Center 请求（盲代理 UI 调用、同步操作、failover）都经过与本地管理请求相同的授权层。Center 被分配受限标识（`CenterRestricted`），其允许的操作由 `[center].rbac` 配置块管理。本地管理员 Token 映射到 allow-all（通配符）策略，Center 授权不影响它。
 
 授权按 `(verb, kind)` 决定：
 
-- **verb**——操作类型：`get`、`list`、`list-keys`、`watch`、`create`、`update`、`delete`、`failover`、`reload`、`server-info`、`diagnostics` 等。
+- **verb**——操作类型：`get`、`list`、`list-keys`、`watch`、`create`、`update`、`delete`、`failover`、`server-info`、`diagnostics` 等。
 - **kind**——PascalCase 资源种类（如 `EdgionConfigData`、`HTTPRoute`、`RegionRoute`）。Kind 匹配**区分大小写**；使用规范 PascalCase 拼写。Verb 不区分大小写。
 
 授权**不是基于对象**的：`EdgionConfigData` 写入授权覆盖所有 EdgionConfigData 对象，而非特定命名对象。
@@ -24,7 +24,7 @@ Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，�
 | `create`、`update`、`delete` | `EdgionConfigData` | 是 |
 | `create`、`update`、`delete` | 任何其他 kind | 否 |
 | `list`、`failover` | `RegionRoute`（合成标签，非资源 kind） | 是 |
-| `server-info`、`reload` | `NonResource`（合成标签，非资源 kind） | 是 |
+| `server-info` | `NonResource`（合成标签，非资源 kind） | 是 |
 | `diagnostics` 及其他 | 任何 | 否 |
 
 关键说明：
@@ -32,7 +32,6 @@ Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，�
 - `EdgionTls` 在默认策略下**可读**（TLS 配置，非通过 Secret 暴露的原始密钥材料），只有 `Secret` kind 被排除。
 - `EdgionConfigData` 写入授权覆盖**所有**插件元数据，而非仅限 region-route 或 IP-restriction 记录。这是 kind 级粒度的已知限制。
 - `RegionRoute` 是合成分类标签（非 `ResourceKind` 变体）。`list` 覆盖 effective 读取端点（`GET /api/v1/region-routes/effective`）；`failover` 覆盖 POST failover 端点。`get` **故意不授予**：没有任何分类器路由产生 `(get, RegionRoute)`，授予它只会是一条死权限。这两个 verb 与 ResourceKind 读取规则分开，因为 `RegionRoute` 不参与穷举性验证。
-- `reload` **包含**在默认策略中，作用于合成的 `NonResource` 标签：Center 的重载按钮以代理的 `POST /api/v1/reload` 到达，由产生 `(server-info, NonResource)` 的同一路由分类器归类为 `(reload, NonResource)`。它不会授予任何资源 kind。
 
 存在显式 `rbac` 块时，它**完全覆盖**内置默认。不进行合并。
 
@@ -43,7 +42,7 @@ center:
   enabled: false   # 默认：true
 ```
 
-将 `enabled: false` 设置可在不重启进程的情况下完全停止联邦客户端。编辑配置文件后使用 `POST /api/v1/reload` 热应用变更。重载也会重新读取 `rbac` 块，并将新策略应用于所有后续 Center 请求，无需断开并重新连接客户端（除非 `enabled` 或 `address` 发生变化）。
+设置 `enabled: false` 后重启 Controller，即可禁用其联邦客户端。`[center]` 下的所有字段（包括 `rbac` 和 `address`）都在启动时读取。修改后需重启所有使用该配置的 Controller 副本。资源更新和证书轮换仍通过各自的 watch 路径动态生效。
 
 ## 授权示例
 
@@ -122,7 +121,7 @@ center:
 适用场景：**仅限受信任的内部部署，Center 运维和 Controller 运维是同一团队，且您已接受以下风险。**
 
 > **警告——启用前请阅读[安全说明](#安全说明)。**
-> `kinds: ["*"]` 与读取 verb 结合时会暴露 `Secret` 和 `EdgionTls` 的私钥材料。`verbs: ["*"]` 允许 Center 修改任何资源或触发重载。`"*":"*"` 等价于授予 Center 对 Controller 的完全控制权。
+> `kinds: ["*"]` 与读取 verb 结合时会暴露 `Secret` 和 `EdgionTls` 的私钥材料。`verbs: ["*"]` 允许 Center 修改任何资源。`"*":"*"` 等价于授予 Center 对 Controller 的完全控制权。
 
 ```yaml
 center:
@@ -169,9 +168,6 @@ center:
       # 仪表板读取：仅枚举特定 kind
       - verbs: [get, list]
         kinds: [HTTPRoute, GRPCRoute, Service, EdgionGatewayConfig]
-      # 允许 Center 触发配置重载
-      - verbs: [reload]
-        kinds: ["*"]
 ```
 
 ## 安全说明
@@ -184,9 +180,8 @@ center:
 
 **对读取授权始终枚举具体 kind。** 使用示例 2 或 5 作为模板，而非 `kinds: ["*"]`。
 
-### 宽泛的写入和 reload 授权
+### 宽泛的写入授权
 
-- `verbs: ["*"]` 或显式 `reload` 授权允许 Center 触发 Controller 配置重载，该重载会从磁盘重新读取并应用 `[center]` 块。Center **无法**修改磁盘上的 YAML（不存在配置写入路由），因此最坏情况是强制重新应用运维人员自己的文件。
 - 写入授权（`create`、`update`、`delete`）允许 Center 修改所授权 kind 的资源。`EdgionConfigData` 写入授权覆盖**所有**插件元数据对象，而非特定对象。
 - `server-info` 和 `diagnostics` 会暴露进程和配置详情。
 
@@ -241,23 +236,20 @@ cli_tokens:
           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
                   EdgionGatewayConfig, EdgionTls, EdgionConfigData]
 
-  # 范围有限的读写——管理插件元数据并触发重载
+  # 范围有限的读写——管理插件元数据
   - name: plugin-manager
     token_sha256: "<gen-token 生成的 SHA-256>"
     rbac:
       allow:
         - verbs: [get, list, watch, create, update, delete]
           kinds: [EdgionConfigData]
-        # reload 是只写的；kinds: ["*"] 在此安全（无读取面）
-        - verbs: [reload]
-          kinds: ["*"]
 ```
 
-热重载（无需重启）：
+修改配置后重启 Controller。标准 Kubernetes 部署可执行：
 
 ```bash
-edgion-cli reload
-# 或：POST /api/v1/reload
+kubectl -n edgion-system rollout restart deployment/edgion-controller
+kubectl -n edgion-system rollout status deployment/edgion-controller
 ```
 
 ### 使用 CLI Token
@@ -278,7 +270,7 @@ edgion-cli get httproute -n production
 ### 安全说明
 
 **1. 宽泛的 verb 授权等于完整管理员权限。**
-`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`conf-sync-rotate`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
+`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `failover`、`acme-trigger`、`conf-sync-rotate`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
 
 **2. 通配符读取会暴露凭据材料。**
 CLI Token 路径上没有服务端 `Secret` 兜底。对读取 verb 使用 `kinds: ["*"]` 允许 Token 通过盲代理读取 `Secret` 和 `EdgionTls` 的私钥材料。对所有读取授权始终枚举具体 kind。见上方[通配符读取会暴露凭据材料](#通配符读取会暴露凭据材料)。
@@ -287,7 +279,7 @@ CLI Token 路径上没有服务端 `Secret` 兜底。对读取 verb 使用 `kind
 Verb 字符串不区分大小写匹配（`get`、`GET`、`Get` 均有效）。Kind 字符串与规范 PascalCase Kind 名称**区分大小写**匹配。大小写错误的 kind（如 `edgionconfigdata`）永远静默不匹配任何请求。始终使用规范 PascalCase：`EdgionConfigData`、`HTTPRoute`、`Service` 等。
 
 **4. Token 轮换。**
-在配置中替换 `token_sha256`，通过 `POST /api/v1/reload` 应用。新哈希对所有后续请求立即生效；旧 Token 从此时起被拒绝。在重载之前或同时将新 `edg_` Token 分发给消费方。
+在配置中替换 `token_sha256`，然后重启每个 Controller 副本。每个实例在退出前仍使用启动时读取的 Token 表；只有所有实例都以新配置重启后，撤销才全部生效。新 `edg_` Token 的分发应与此次滚动更新协调。
 
 **5. `--token` 和 `EDGION_TOKEN` 适用于 CI/自动化。**
 它们**不**修改 `~/.edgion/token`（无缓存——每次调用是临时的）。缓存的登录 Token 不受影响。建议使用 `EDGION_TOKEN` 而非 `--token`，以避免 Token 泄露到 shell 历史记录或进程列表中。

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::super::operation::{
     empty_text_operation, BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult,
-    RawBodyScanner,
+    RawBodyScanner, ReadBodyScanner,
 };
 use super::super::BodyStorageView;
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
@@ -106,6 +106,24 @@ impl Backend {
                     bytes_scanned: 0,
                 })
             }
+            None => Err(BodyOperationError::Body(BodyReadError::NotBuffered)),
+        }
+    }
+
+    pub(super) async fn scan_read<S>(
+        &self,
+        scanner: S,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<S::Output>, BodyOperationError>
+    where
+        S: ReadBodyScanner,
+    {
+        match self.view.as_ref() {
+            Some(view) => view.scan_read(scanner, max_scan_bytes).await,
+            None if self.known_empty => Ok(BodyScanResult {
+                value: super::super::storage::run_blocking_scan(move || Ok(scanner.scan(std::io::empty()))).await?,
+                bytes_scanned: 0,
+            }),
             None => Err(BodyOperationError::Body(BodyReadError::NotBuffered)),
         }
     }

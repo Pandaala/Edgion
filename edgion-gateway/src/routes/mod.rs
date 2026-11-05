@@ -1,4 +1,5 @@
 pub(crate) mod common;
+pub mod delegation;
 pub mod grpc;
 pub mod http;
 mod l4_duplex;

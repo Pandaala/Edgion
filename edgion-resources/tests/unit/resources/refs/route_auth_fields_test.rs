@@ -110,33 +110,6 @@ fn auth_source_target_and_union_fail_before_authored_tokens() {
 }
 
 #[test]
-fn effective_auth_locality_never_defaults_a_missing_child_stamp_to_root() {
-    let mut root = wire();
-    root["metadata"]["namespace"] = json!("root");
-    root["spec"]["resolvedRules"] = root["spec"]["rules"].clone();
-    let unstamped: HTTPRoute = serde_json::from_value(root.clone()).unwrap();
-    assert!(HttpRouteAuthRefs::from_route(&unstamped)
-        .unwrap()
-        .effective_at(0, None, 0)
-        .is_err());
-    root["spec"]["resolvedRules"][0]["filters"][0]["resolvedExternalAuth"] = json!({"namespace":"child"});
-    let stamped: HTTPRoute = serde_json::from_value(root.clone()).unwrap();
-    let refs = HttpRouteAuthRefs::from_route(&stamped).unwrap();
-    let field = refs.effective_at(0, None, 0).unwrap();
-    assert_eq!(field.namespace(), "child");
-    let selection = field.outbound_tls_selection().unwrap();
-    let tls = selection.active_field().unwrap();
-    tls.visit_ca(|pair| assert_eq!(pair.target().unwrap().scope().namespace(), Some("child")));
-    root["spec"]["rules"][0]["filters"][0]["resolvedExternalAuth"] = json!({"namespace":"child"});
-    root["spec"].as_object_mut().unwrap().remove("resolvedRules");
-    let forged: HTTPRoute = serde_json::from_value(root).unwrap();
-    assert!(HttpRouteAuthRefs::from_route(&forged)
-        .unwrap()
-        .effective_at(0, None, 0)
-        .is_err());
-}
-
-#[test]
 fn route_auth_transport_is_schema_hidden_and_disabled_tls_has_no_active_material_loan() {
     let mut value = wire();
     value["spec"]["rules"][0]["filters"][0]["resolvedExternalAuth"] = json!({"namespace":"apps","error":"pending"});

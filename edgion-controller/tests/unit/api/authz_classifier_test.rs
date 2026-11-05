@@ -45,16 +45,19 @@ fn namespaced_post_is_create() {
 
 #[test]
 fn failover_literal_route_is_failover_regionroute() {
-    let (v, k) = classify("POST", Some("/api/v1/cluster-region-routes/failover"), None).unwrap();
+    let (v, k) = classify(
+        "POST",
+        Some("/api/v1/cluster-region-settings/{namespace}/{name}/failover"),
+        None,
+    )
+    .unwrap();
     assert_eq!(v, Verb::Failover);
     assert_eq!(k, "RegionRoute");
 }
 
 #[test]
-fn reload_is_nonresource_kind() {
-    let (v, k) = classify("POST", Some("/api/v1/reload"), None).unwrap();
-    assert_eq!(v, Verb::Reload);
-    assert_eq!(k, NON_RESOURCE_KIND);
+fn removed_reload_route_is_unclassified() {
+    assert!(classify("POST", Some("/api/v1/reload"), None).is_none());
 }
 
 #[test]
@@ -350,4 +353,33 @@ fn every_admin_route_is_classified() {
              from_str()). Non-resource operational endpoints carry NON_RESOURCE_KIND.",
         unclassified.join("\n  ")
     );
+}
+
+#[test]
+fn source_counts_require_list_for_the_actual_resource_including_secrets() {
+    for path in [
+        "/api/v1/count/cluster/{kind}",
+        "/api/v1/count/namespaced/{kind}",
+        "/api/v1/count/namespaced/{kind}/{namespace}",
+    ] {
+        assert_eq!(
+            classify("GET", Some(path), Some("secret")),
+            Some((Verb::List, "Secret".into()))
+        );
+        assert!(classify("POST", Some(path), Some("Secret")).is_none());
+        assert!(classify("GET", Some(path), None).is_none());
+    }
+}
+
+#[test]
+fn old_failover_route_is_not_an_authorized_alias() {
+    assert!(classify("POST", Some("/api/v1/cluster-region-routes/failover"), None).is_none());
+    let (verb, kind) = classify(
+        "POST",
+        Some("/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(verb, Verb::Failover);
+    assert_eq!(kind, "RegionRoute");
 }

@@ -166,6 +166,37 @@ pub(crate) fn filter_accepted_parent_refs(
     }
 }
 
+/// `(namespace, name)` of route-kind (delegation) parentRefs whose owned
+/// Controller status is uniquely `Accepted=True` — the same acceptance rule
+/// ordinary Gateway attachments use, applied to a delegation child's edges.
+pub(crate) fn accepted_route_kind_parents(
+    parent_refs: Option<&[ParentReference]>,
+    status_parents: Option<&[RouteParentStatus]>,
+    route_ns: &str,
+    expected_controller: Option<&str>,
+) -> Vec<(String, String)> {
+    let (Some(parent_refs), Some(status_parents), Some(expected_controller)) = (
+        parent_refs,
+        status_parents,
+        expected_controller.filter(|owner| !owner.is_empty()),
+    ) else {
+        return Vec::new();
+    };
+    parent_refs
+        .iter()
+        .filter(|pr| {
+            !is_gateway_parent_ref(pr)
+                && is_parent_ref_accepted(pr, status_parents, Some(route_ns), expected_controller)
+        })
+        .map(|pr| {
+            (
+                pr.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
+                pr.name.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Extract `(gateway_ns, gateway_name)` pairs from accepted parent_refs.
 /// Filters by both `kind == "Gateway"` and `group == "gateway.networking.k8s.io"`
 /// using Gateway API defaults: an absent group defaults to

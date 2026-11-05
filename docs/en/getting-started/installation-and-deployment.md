@@ -91,7 +91,7 @@ docker run \
   -v "$PWD/config/crd:/usr/local/edgion/config/crd:ro" \
   -v "$PWD/edgion-controller.yaml:/usr/local/edgion/edgion-controller.yaml:ro" \
   docker.io/pandaala/edgion-controller:<tag> \
-  edgion-controller --config-file /usr/local/edgion/edgion-controller.yaml
+  --config-file /usr/local/edgion/edgion-controller.yaml
 ```
 
 The gateway image never loads CRD schemas, so this applies to the controller only.

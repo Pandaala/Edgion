@@ -1,0 +1,67 @@
+{
+  "list": {
+    "records": [
+      {
+        "type": "setting",
+        "data": {
+          "identity": {
+            "key": {
+              "kind": "EdgionConfigData",
+              "namespace": "apps",
+              "name": "fixture"
+            },
+            "uid": null,
+            "resourceVersion": "1"
+          },
+          "enabled": true,
+          "clusterName": "fleet",
+          "regionName": "east",
+          "invalidIdentity": false
+        }
+      }
+    ]
+  },
+  "update": {
+    "changes": [
+      {
+        "version": 2,
+        "key": {
+          "kind": "EdgionConfigData",
+          "namespace": "apps",
+          "name": "fixture"
+        },
+        "record": {
+          "type": "setting",
+          "data": {
+            "identity": {
+              "key": {
+                "kind": "EdgionConfigData",
+                "namespace": "apps",
+                "name": "fixture"
+              },
+              "uid": null,
+              "resourceVersion": "2"
+            },
+            "enabled": true,
+            "clusterName": "fleet",
+            "regionName": "east",
+            "invalidIdentity": false
+          }
+        }
+      }
+    ]
+  },
+  "delete": {
+    "changes": [
+      {
+        "version": 3,
+        "key": {
+          "kind": "EdgionConfigData",
+          "namespace": "apps",
+          "name": "fixture"
+        },
+        "record": null
+      }
+    ]
+  }
+}

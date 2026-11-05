@@ -15,7 +15,7 @@ use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
 use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
-use edgion_resources::resources::http_route::SessionPersistence;
+use edgion_resources::resources::http_route::{RouteTimeout, SessionPersistence};
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::response_header_policy::is_protected_response_header;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPRouteMatch};
@@ -2109,6 +2109,11 @@ pub struct EdgionHttpContext {
     /// Matched HTTP route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
 
+    /// Ancestors of a delegated match (root -> parent) with their inherited
+    /// rule values and per-level ExtensionRef targets. `route_unit` stays the
+    /// leaf. `None`, with no allocation, for every ordinary request.
+    pub delegated: Option<Box<crate::routes::delegation::DelegatedMatch>>,
+
     /// Selected HTTP backend from load balancing (schema + compiled plugin runtime)
     pub selected_backend: Option<SelectedHttpBackend>,
 
@@ -2974,6 +2979,13 @@ impl EdgionHttpContext {
                 .iter()
                 .flat_map(|runtimes| runtimes.iter().flatten())
                 .any(|runtime| runtime.has_unary_body_consumer())
+            || self.delegated.as_ref().is_some_and(|d| {
+                d.ext_refs
+                    .iter()
+                    .flatten()
+                    .flat_map(|runtimes| runtimes.iter().flatten())
+                    .any(|runtime| runtime.has_unary_body_consumer())
+            })
     }
 
     pub(crate) fn install_attached_ext_proc(
@@ -3296,6 +3308,7 @@ impl EdgionHttpContext {
             gateway_request_ids_initialized: false,
             diagnostics: RequestDiagnostics::default(),
             route_unit: None,
+            delegated: None,
             selected_backend: None,
             grpc_route_unit: None,
             selected_grpc_backend: None,
@@ -3658,16 +3671,118 @@ impl EdgionHttpContext {
     /// the gRPC side.
     #[inline]
     pub fn request_timeout(&self) -> Option<Duration> {
-        self.route_unit
-            .as_ref()
-            .and_then(|u| u.rule.parsed_timeouts.as_ref())
-            .and_then(|t| t.request_timeout.as_duration())
+        self.http_route_timeout(|t| t.request_timeout, |i| i.request_timeout)
+            .and_then(|t| t.as_duration())
             .or_else(|| {
-                self.grpc_route_unit
-                    .as_ref()
-                    .and_then(|u| u.rule.parsed_timeouts.as_ref())
-                    .and_then(|t| t.request_timeout.as_duration())
+                self.grpc_route_timeout(|t| t.request_timeout, |i| i.request_timeout)
+                    .and_then(|t| t.as_duration())
             })
+    }
+
+    /// One gRPC route timeout sub-field: the gRPC leaf's value when it sets
+    /// it, otherwise the nearest delegating GRPCRoute ancestor's. `None` for
+    /// HTTP requests (no gRPC leaf), so a chain is never consulted twice.
+    #[inline]
+    fn grpc_route_timeout(
+        &self,
+        leaf: impl Fn(&edgion_resources::resources::http_route::ParsedRouteTimeouts) -> RouteTimeout,
+        inherited: impl Fn(&crate::routes::delegation::InheritedRuleValues) -> Option<RouteTimeout>,
+    ) -> Option<RouteTimeout> {
+        let unit = self.grpc_route_unit.as_ref()?;
+        unit.rule
+            .parsed_timeouts
+            .as_ref()
+            .and_then(|t| crate::routes::delegation::inherit::set_timeout(leaf(t)))
+            .or_else(|| self.delegated.as_ref().and_then(|d| inherited(&d.inherited)))
+    }
+
+    /// One HTTP route timeout sub-field: the leaf's value when it sets it,
+    /// otherwise the nearest delegating ancestor's. Ordinary routes pay one
+    /// null check on `delegated` only when the leaf leaves the field unset.
+    #[inline]
+    fn http_route_timeout(
+        &self,
+        leaf: impl Fn(&edgion_resources::resources::http_route::ParsedRouteTimeouts) -> RouteTimeout,
+        inherited: impl Fn(&crate::routes::delegation::InheritedRuleValues) -> Option<RouteTimeout>,
+    ) -> Option<RouteTimeout> {
+        let unit = self.route_unit.as_ref()?;
+        unit.rule
+            .parsed_timeouts
+            .as_ref()
+            .and_then(|t| crate::routes::delegation::inherit::set_timeout(leaf(t)))
+            .or_else(|| self.delegated.as_ref().and_then(|d| inherited(&d.inherited)))
+    }
+
+    /// Route-level `timeouts.backendRequest` with HTTP leaf -> ancestor ->
+    /// gRPC fallback. `None` and `Some(Unset)` both mean "use the global default".
+    #[inline]
+    pub fn route_backend_request_timeout(&self) -> Option<RouteTimeout> {
+        self.http_route_timeout(|t| t.backend_request_timeout, |i| i.backend_request_timeout)
+            .or_else(|| self.grpc_route_timeout(|t| t.backend_request_timeout, |i| i.backend_request_timeout))
+    }
+
+    /// HTTP status codes that trigger a retry: the leaf's `retry.codes`, else
+    /// the nearest delegating ancestor's. HTTP routes only.
+    #[inline]
+    pub(crate) fn retry_codes(&self) -> Option<&[u16]> {
+        let unit = self.route_unit.as_ref()?;
+        unit.rule
+            .parsed_retry
+            .as_ref()
+            .and_then(|r| r.codes.as_deref())
+            .or_else(|| {
+                let d = self.delegated.as_ref()?;
+                let level = d.ancestors.get(usize::from(d.inherited.retry_codes_level?))?;
+                level.rule.parsed_retry.as_ref()?.codes.as_deref()
+            })
+    }
+
+    /// Number of delegated-chain ancestors (root -> parent); 0 for ordinary
+    /// requests. Ancestor `level` indexes are `0..ancestor_count()`.
+    #[inline]
+    pub(crate) fn ancestor_count(&self) -> usize {
+        self.delegated.as_ref().map_or(0, |d| d.len())
+    }
+
+    /// Rule-level plugin runtime of the matched leaf: the gRPC leaf, else the
+    /// HTTP leaf (only one is ever set). One refcount bump.
+    #[inline]
+    pub(crate) fn leaf_route_runtime(&self) -> Option<Arc<PluginRuntime>> {
+        self.grpc_route_unit
+            .as_ref()
+            .map(|unit| Arc::clone(&unit.plugin_runtime))
+            .or_else(|| self.route_unit.as_ref().map(|unit| Arc::clone(&unit.plugin_runtime)))
+    }
+
+    /// Plugin runtime of ancestor `level` (one refcount bump, like the leaf's).
+    #[inline]
+    pub(crate) fn ancestor_runtime(&self, level: usize) -> Option<Arc<PluginRuntime>> {
+        Some(Arc::clone(self.delegated.as_ref()?.level_runtime(level)?))
+    }
+
+    /// The HTTP rule unit whose `sessionPersistence` block applies: the leaf's
+    /// when it declares one, otherwise the nearest delegating ancestor's.
+    #[inline]
+    pub(crate) fn http_session_persistence_unit(&self) -> Option<&Arc<HttpRouteRuleUnit>> {
+        let unit = self.route_unit.as_ref()?;
+        if unit.rule.session_persistence.is_some() {
+            return Some(unit);
+        }
+        let d = self.delegated.as_ref()?;
+        d.ancestors.get(usize::from(d.inherited.session_persistence_level?))
+    }
+
+    /// The gRPC rule unit whose `sessionPersistence` block applies: the gRPC
+    /// leaf's when it declares one, otherwise the nearest delegating ancestor's.
+    #[inline]
+    pub(crate) fn grpc_session_persistence_unit(&self) -> Option<&Arc<GrpcRouteRuleUnit>> {
+        let unit = self.grpc_route_unit.as_ref()?;
+        if unit.rule.session_persistence.is_some() {
+            return Some(unit);
+        }
+        let d = self.delegated.as_ref()?;
+        d.grpc_ancestors
+            .get(usize::from(d.inherited.session_persistence_level?))
     }
 
     /// True when a route-level `request_timeout` is set and `start_time`
@@ -3710,10 +3825,13 @@ impl EdgionHttpContext {
                     .and_then(|u| u.rule.parsed_retry.as_ref())
                     .and_then(|r| r.attempts)
             })
+            // Only one leaf (HTTP or gRPC) is set, so the chain's fallback
+            // comes after both leaves.
+            .or_else(|| self.delegated.as_ref().and_then(|d| d.inherited.retry_attempts))
     }
 
     /// Resolve the retry `backoff` base duration with field-level fallback
-    /// between HTTP and gRPC route units.
+    /// between HTTP (leaf, then delegating ancestors) and gRPC route units.
     #[inline]
     pub fn retry_backoff(&self) -> Option<Duration> {
         self.route_unit
@@ -3726,6 +3844,9 @@ impl EdgionHttpContext {
                     .and_then(|u| u.rule.parsed_retry.as_ref())
                     .and_then(|r| r.backoff)
             })
+            // Only one leaf (HTTP or gRPC) is set, so the chain's fallback
+            // comes after both leaves.
+            .or_else(|| self.delegated.as_ref().and_then(|d| d.inherited.retry_backoff))
     }
 
     /// Resolve the effective `sessionPersistence` config with field-level
@@ -3743,13 +3864,13 @@ impl EdgionHttpContext {
     #[inline]
     pub(crate) fn effective_session_persistence_with_lifetime(&self) -> Option<(&SessionPersistence, Option<u64>)> {
         pick_effective_sp(
-            self.route_unit.as_ref().and_then(|unit| {
+            self.http_session_persistence_unit().and_then(|unit| {
                 unit.rule
                     .session_persistence
                     .as_ref()
                     .map(|policy| (policy, unit.session_persistence_ttl_secs))
             }),
-            self.grpc_route_unit.as_ref().and_then(|unit| {
+            self.grpc_session_persistence_unit().and_then(|unit| {
                 unit.rule
                     .session_persistence
                     .as_ref()
@@ -3789,6 +3910,7 @@ impl EdgionHttpContext {
     #[inline]
     pub fn retry_configured(&self) -> bool {
         self.route_unit.as_ref().is_some_and(|u| u.rule.parsed_retry.is_some())
+            || self.delegated.as_ref().is_some_and(|d| d.inherited.retry_configured)
             || self
                 .grpc_route_unit
                 .as_ref()

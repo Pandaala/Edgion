@@ -106,6 +106,155 @@ fn waf_selection_retains_only_the_final_winner_after_inputs_are_dropped() {
     assert!(owner.upgrade().is_none());
 }
 
+fn waf_runtime_with(
+    priority: u16,
+    precedence: edgion_resources::resources::edgion_plugins::WafDelegationPrecedence,
+) -> Arc<PluginRuntime> {
+    use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
+
+    let mut runtime = PluginRuntime::new();
+    runtime
+        .add_waf(&WafConfig {
+            rules: "SecAction \"id:1,phase:1,pass\"".to_string(),
+            mode: WafMode::On,
+            priority,
+            delegation_precedence: precedence,
+            ..WafConfig::default()
+        })
+        .expect("test WAF compiles");
+    Arc::new(runtime)
+}
+
+fn parent_waf(priority: u16) -> Arc<PluginRuntime> {
+    waf_runtime_with(
+        priority,
+        edgion_resources::resources::edgion_plugins::WafDelegationPrecedence::Parent,
+    )
+}
+
+fn owns(selection: &crate::ctx::WafSelection, runtime: &Arc<PluginRuntime>) -> bool {
+    Arc::ptr_eq(selection.owner(), &runtime.waf_candidate().unwrap().owner())
+}
+
+type Level = Vec<Option<Arc<PluginRuntime>>>;
+
+fn elect(global: &[Arc<PluginRuntime>], gateway: &[Arc<PluginRuntime>], levels: &[Level]) -> crate::ctx::WafSelection {
+    select_waf_owner_chain(global, gateway, levels.iter().map(Vec::as_slice)).expect("one WAF is selected")
+}
+
+#[test]
+fn delegated_waf_default_child_wins_over_parent() {
+    let parent = waf_runtime(50);
+    let child = waf_runtime(1);
+    let selected = elect(
+        &[],
+        &[],
+        &[vec![Some(Arc::clone(&parent))], vec![Some(Arc::clone(&child))]],
+    );
+    assert!(owns(&selected, &child), "by default the deepest level with a WAF wins");
+
+    // A level without a WAF does not reset the deepest candidate.
+    let selected = elect(
+        &[],
+        &[],
+        &[
+            vec![Some(Arc::clone(&parent))],
+            vec![Some(Arc::clone(&child))],
+            vec![None],
+        ],
+    );
+    assert!(owns(&selected, &child));
+}
+
+#[test]
+fn delegated_waf_parent_precedence_beats_higher_priority_child() {
+    let parent = parent_waf(0);
+    let child = waf_runtime(u16::MAX);
+    let selected = elect(&[], &[], &[vec![Some(Arc::clone(&parent))], vec![Some(child)]]);
+    assert!(owns(&selected, &parent), "priority is compared only within one level");
+}
+
+#[test]
+fn delegated_waf_outermost_parent_precedence_wins() {
+    let root = parent_waf(1);
+    let mid = parent_waf(100);
+    let leaf = parent_waf(200);
+    let selected = elect(
+        &[],
+        &[],
+        &[
+            vec![Some(Arc::clone(&root))],
+            vec![Some(Arc::clone(&mid))],
+            vec![Some(leaf)],
+        ],
+    );
+    assert!(owns(&selected, &root));
+
+    // Without a root WAF the next declaring ancestor is the outermost.
+    let selected = elect(
+        &[],
+        &[],
+        &[vec![None], vec![Some(Arc::clone(&mid))], vec![Some(waf_runtime(9))]],
+    );
+    assert!(owns(&selected, &mid));
+}
+
+#[test]
+fn delegated_waf_level_candidate_is_chosen_by_priority_then_declaration() {
+    // Within one level: the higher-priority non-parent candidate is that
+    // level's candidate, so the lower-priority parent-precedence WAF does not
+    // pin the election to this level.
+    let low_parent = parent_waf(1);
+    let high_child_pref = waf_runtime(10);
+    let leaf = waf_runtime(0);
+    let selected = elect(
+        &[],
+        &[],
+        &[
+            vec![Some(low_parent), Some(Arc::clone(&high_child_pref))],
+            vec![Some(Arc::clone(&leaf))],
+        ],
+    );
+    assert!(owns(&selected, &leaf));
+
+    let first = parent_waf(5);
+    let second = parent_waf(5);
+    let selected = elect(
+        &[],
+        &[],
+        &[vec![Some(Arc::clone(&first)), Some(second)], vec![Some(leaf)]],
+    );
+    assert!(owns(&selected, &first), "ties keep the first declaration");
+}
+
+#[test]
+fn delegated_waf_route_scope_still_beats_gateway_and_global() {
+    let global = parent_waf(u16::MAX);
+    let gateway = parent_waf(u16::MAX);
+    let child = waf_runtime(0);
+    let selected = elect(
+        &[Arc::clone(&global)],
+        &[Arc::clone(&gateway)],
+        &[vec![None], vec![Some(Arc::clone(&child))]],
+    );
+    assert!(owns(&selected, &child));
+
+    // No route-level WAF anywhere on the chain: the flat Gateway/Global election applies.
+    let selected = elect(&[Arc::clone(&global)], &[Arc::clone(&gateway)], &[vec![None], vec![]]);
+    assert!(owns(&selected, &gateway));
+    assert!(select_waf_owner_chain(&[], &[], [&[][..], &[][..]].into_iter()).is_none());
+}
+
+#[test]
+fn ordinary_route_waf_election_unchanged_by_delegation_precedence() {
+    // Ordinary routes use the flat election: precedence is ignored and the
+    // higher priority wins among one route's ExtensionRefs.
+    let parent_low = parent_waf(1);
+    let child_high = waf_runtime(2);
+    let selected = select_waf_owner(&[], &[], &[Some(parent_low), Some(Arc::clone(&child_high))]).unwrap();
+    assert!(owns(&selected, &child_high));
+}
+
 fn install_global_refs(store: &PluginStore, refs: Vec<PluginReference>) -> Arc<PluginScope> {
     let mut config = (**store.scope().config.as_ref().unwrap()).clone();
     config.spec.global_plugins_ref = Some(refs);

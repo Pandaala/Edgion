@@ -21,7 +21,7 @@ use crate::plugins::http::common::outbound::egress::{default_block_private, filt
 use crate::routes::http::proxy_http::{backfill_upstream_addr, configure_peer_timeouts, EdgionHttpProxy};
 use crate::{end_response_500, end_response_503, EdgionHttpContext, PeerTimeoutSource};
 use bytes::Bytes;
-use edgion_common::dns::resolve;
+use edgion_common::dns::{resolve, DnsQueryPolicy};
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -245,8 +245,9 @@ async fn resolve_ai_endpoint(
     domain: &str,
     port: u16,
 ) -> Result<std::net::SocketAddr, AiPeerPredispatchFailure> {
-    let spec = crate::backends::compute_routed_external_resolver(ctx);
-    let addrs = resolve(&spec, domain)
+    let (spec, family) =
+        crate::backends::compute_routed_external_resolver(ctx).map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
+    let addrs = resolve(&spec, domain, DnsQueryPolicy::Family(family))
         .await
         .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
     filter_resolved_addrs(
@@ -402,13 +403,7 @@ pub(crate) fn on_raw_response(
     transport: RetryTransportFacts,
 ) -> pingora_core::Result<()> {
     let status_code = upstream_response.status.as_u16();
-    let wants_retry = status_code != 101
-        && ctx
-            .route_unit
-            .as_ref()
-            .and_then(|route| route.rule.parsed_retry.as_ref())
-            .and_then(|retry| retry.codes.as_ref())
-            .is_some_and(|codes| codes.contains(&status_code));
+    let wants_retry = status_code != 101 && ctx.retry_codes().is_some_and(|codes| codes.contains(&status_code));
     if status_code == 429 {
         crate::ai::http::response::apply_provider_cooldown(ctx, upstream_response);
     }

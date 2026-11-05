@@ -267,6 +267,70 @@ async fn scan_wait_boundary_retains_one_broadcast_for_all_unpolled_watchers() {
 }
 
 #[tokio::test]
+async fn zero_cursor_overflow_reports_error_and_relist_recovers_all_resources() {
+    let cache = ServerCache::<TestResource>::new(10);
+    CacheEventDispatch::set_ready(&cache);
+    let initial = cache.list_owned();
+    assert!(initial.data.is_empty());
+    assert_eq!(initial.sync_version, 0);
+
+    let resources: Vec<_> = (1..=11)
+        .map(|version| {
+            let mut resource = make_resource(&format!("resource-{version}"), version);
+            resource.metadata.name = Some(resource.name.clone());
+            resource
+        })
+        .collect();
+    for resource in &resources {
+        cache.apply_change(ResourceChange::EventAdd, resource.clone(), Some(resource.version));
+    }
+    let mut receiver = cache.watch("overflow".into(), "overflow".into(), initial.sync_version);
+    let response = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.err.as_deref(),
+        Some(edgion_resources::WATCH_ERR_TOO_OLD_VERSION)
+    );
+    assert!(response.events.is_empty(), "must not send an incomplete suffix");
+    assert!(tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+        .await
+        .expect("expired watch must terminate")
+        .is_none());
+
+    let relist = cache.list_owned();
+    assert_eq!(relist.sync_version, 11);
+    assert_eq!(relist.data.len(), resources.len());
+    for resource in resources {
+        assert!(relist.data.contains(&resource));
+    }
+    let (_notification, scan) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, relist.sync_version);
+    assert!(matches!(scan, Ok((11, None))));
+}
+
+#[tokio::test]
+async fn waiting_zero_cursor_detects_overflow_after_notification() {
+    let cache = ServerCache::<TestResource>::new(10);
+    CacheEventDispatch::set_ready(&cache);
+    let cursor = cache.list_owned().sync_version;
+    let (notification, scan) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, cursor);
+    assert!(matches!(scan, Ok((0, None))));
+
+    // Keep the watcher between its empty scan and its rescan for the entire burst.
+    for version in 1..=11 {
+        let mut resource = make_resource(&format!("resource-{version}"), version);
+        resource.metadata.name = Some(resource.name.clone());
+        cache.apply_change(ResourceChange::EventAdd, resource, Some(version));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(1), notification)
+        .await
+        .expect("the waiting watcher must observe the burst");
+    let (_notification, scan) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, cursor);
+    assert_eq!(scan.unwrap_err(), edgion_resources::WATCH_ERR_TOO_OLD_VERSION);
+}
+
+#[tokio::test]
 async fn spawned_watchers_deliver_one_event_and_release_closed_receivers() {
     let cache = ServerCache::<TestResource>::new(10);
     CacheEventDispatch::set_ready(&cache);

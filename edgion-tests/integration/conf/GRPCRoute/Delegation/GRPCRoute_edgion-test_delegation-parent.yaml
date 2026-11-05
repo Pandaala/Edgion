@@ -4,8 +4,8 @@
 # backend, bypassing delegation entirely.
 # Rule 2 delegates the whole test.TestService service (no method — a
 # service-level scope) to every GRPCRoute in the edgion-grpc-deleg namespace
-# (wildcard) and pins a mandatory RequestHeaderModifier filter that children
-# must inherit.
+# that declares this parent (wildcard) and pins a mandatory
+# RequestHeaderModifier filter that runs before every child filter.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:

@@ -58,7 +58,6 @@ fn unrelated_large_match_data_is_outside_the_transform_budget() {
     let rule = rule(json!({"matches": matches}));
 
     assert!(authored_request_transform_violations(&rule).unwrap().is_empty());
-    assert!(effective_request_transform_violations(&rule).unwrap().is_empty());
 }
 
 #[test]
@@ -80,16 +79,14 @@ fn authored_contract_uses_match_defaults_for_prefix_rewrite() {
 }
 
 #[test]
-fn authored_and_effective_validation_include_transport_preparation() {
+fn authored_validation_includes_transport_preparation() {
     let invalid = rule(json!({
         "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {
             "type": "ReplaceFullPath", "replaceFullPath": "relative"
         }}}]
     }));
-    for violations in [
-        authored_request_transform_violations(&invalid).unwrap(),
-        effective_request_transform_violations(&invalid).unwrap(),
-    ] {
+    {
+        let violations = authored_request_transform_violations(&invalid).unwrap();
         assert!(violations.iter().any(|violation| {
             violation.path == "filters/0/urlRewrite/path/replaceFullPath"
                 && violation.message.contains("absolute HTTP path")
@@ -195,7 +192,7 @@ fn edgion_plugin_uses_the_same_config_fragment() {
 }
 
 #[test]
-fn effective_safety_catches_multiple_backend_prefix_transforms() {
+fn authored_safety_catches_multiple_backend_prefix_transforms() {
     let rule = rule(json!({
         "matches": [{"path": {"type": "Exact", "value": "/api"}}],
         "backendRefs": [
@@ -207,10 +204,8 @@ fn effective_safety_catches_multiple_backend_prefix_transforms() {
             }}}]}
         ]
     }));
-    for violations in [
-        authored_request_transform_violations(&rule).unwrap(),
-        effective_request_transform_violations(&rule).unwrap(),
-    ] {
+    {
+        let violations = authored_request_transform_violations(&rule).unwrap();
         assert!(violations
             .iter()
             .any(|violation| violation.message.contains("PathPrefix")));
@@ -242,10 +237,8 @@ fn prefix_context_preserves_absent_empty_default_and_mixed_matches() {
             "backendRefs": [{"name": "backend", "port": 80}]
         }));
         candidate.matches = matches;
-        for violations in [
-            authored_request_transform_violations(&candidate).unwrap(),
-            effective_request_transform_violations(&candidate).unwrap(),
-        ] {
+        {
+            let violations = authored_request_transform_violations(&candidate).unwrap();
             let prefix_rejected = violations.iter().any(|v| {
                 v.path == "matches" && v.message == "prefix request transforms require PathPrefix match context"
             });
@@ -271,5 +264,4 @@ fn prefix_rewrite_accepts_large_unrelated_header_matches() {
         "backendRefs": [{"name": "backend", "port": 80}]
     }));
     assert!(authored_request_transform_violations(&candidate).unwrap().is_empty());
-    assert!(effective_request_transform_violations(&candidate).unwrap().is_empty());
 }

@@ -12,7 +12,7 @@ use crate::authz::Verb;
 use edgion_resources::ResourceKind;
 
 /// Synthetic classifier kind for non-resource operational endpoints
-/// (`server-info`, `diagnostics`, `reload`, `wipe-all`, `debug`). These verbs
+/// (`server-info`, `diagnostics`, `wipe-all`, `debug`). These verbs
 /// never target a `ResourceKind`, so they carry this named sentinel instead of
 /// `"*"`. Using a named kind keeps RBAC policies auditable: a reviewer reading a
 /// rule sees `kinds: [NonResource]` — an explicit "non-resource operations"
@@ -56,10 +56,21 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
 
     // Literal (no-{kind}-param) routes first.
     match (m.as_str(), template) {
+        ("GET", "/api/v1/cluster-region-settings/keys") => return Some((Verb::List, "EdgionConfigData".into())),
+        ("GET", "/api/v1/cluster-region-settings/{namespace}/{name}") => {
+            return Some((Verb::Get, "EdgionConfigData".into()))
+        }
         ("GET", "/api/v1/access") => return Some((Verb::AccessSelf, NON_RESOURCE_KIND.into())),
-        ("POST", "/api/v1/reload") => return Some((Verb::Reload, NON_RESOURCE_KIND.into())),
         ("GET", "/api/v1/server-info") => return Some((Verb::ServerInfo, NON_RESOURCE_KIND.into())),
-        ("POST", "/api/v1/cluster-region-routes/failover") => return Some((Verb::Failover, "RegionRoute".into())),
+        ("POST", "/api/v1/cluster-region-settings/{namespace}/{name}/failover") => {
+            return Some((Verb::Failover, "RegionRoute".into()))
+        }
+        ("POST", "/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview") => {
+            return Some((Verb::Failover, "RegionRoute".into()))
+        }
+        ("GET", "/api/v1/cluster-region-settings/{namespace}/{name}/consumers") => {
+            return Some((Verb::List, "RegionRoute".into()))
+        }
         ("GET", "/api/v1/region-routes/effective") => return Some((Verb::List, "RegionRoute".into())),
         ("POST", "/api/v1/services/acme/{namespace}/{name}/trigger") => {
             return Some((Verb::AcmeTrigger, "Service".into()))
@@ -95,6 +106,9 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
     // axum's MatchedPath retains the `{param}` braces, so these template strings match verbatim.
     let kind = normalize_kind(kind_param?);
     let verb = match (m.as_str(), template) {
+        ("GET", "/api/v1/count/cluster/{kind}")
+        | ("GET", "/api/v1/count/namespaced/{kind}")
+        | ("GET", "/api/v1/count/namespaced/{kind}/{namespace}") => Verb::List,
         ("GET", "/api/v1/cluster/{kind}") => Verb::List,
         ("GET", "/api/v1/cluster/{kind}/{name}") => Verb::Get,
         ("GET", "/api/v1/namespaced/{kind}") => Verb::List,

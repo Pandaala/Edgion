@@ -20,8 +20,9 @@ The check exists at three connected boundaries:
 3. Dispatch resolves the candidate's stable backend slot and rechecks the predicate before
    preparing provider headers or a request body.
 
-This applies equally to direct HTTPRoute rules and flattened delegated rules because both preserve
-the Controller's `ref_denied` stamp in the compiled backend schema.
+This applies equally to direct HTTPRoute rules and delegation leaf rules: a delegation child is
+published as its own route and keeps the Controller's `ref_denied` stamp in its compiled backend
+schema.
 
 ## Why status is insufficient
 

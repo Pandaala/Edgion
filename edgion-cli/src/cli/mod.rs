@@ -104,8 +104,8 @@ pub enum Commands {
         #[arg(long)]
         metadata_only: bool,
 
-        /// Maximum number of items to return per request (K8s-style pagination).
-        /// Has no effect on FS / Etcd backends (architectural no-op).
+        /// Source API page size: default 10, maximum 100. Use --all to follow
+        /// continuation tokens. Processed diagnostic targets retain their own contract.
         #[arg(long)]
         limit: Option<u32>,
 
@@ -136,9 +136,6 @@ pub enum Commands {
         #[arg(short, long)]
         file: Option<String>,
     },
-
-    /// Reload all resources from storage
-    Reload,
 
     /// Generate mTLS certificates for conf_sync gRPC channel
     GenCerts(commands::gen_certs::GenCertsArgs),
@@ -301,12 +298,6 @@ impl Cli {
                     file.as_deref(),
                 )
                 .await
-            }
-            Commands::Reload => {
-                if self.target != TargetType::Center {
-                    anyhow::bail!("reload command only supported for 'center' target");
-                }
-                commands::reload::reload(&client).await
             }
             Commands::GenCerts(_)
             | Commands::Login { .. }

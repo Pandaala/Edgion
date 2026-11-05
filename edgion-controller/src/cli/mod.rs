@@ -28,7 +28,7 @@ pub(crate) fn resolve_admin_token_raw(config: &crate::config::EdgionControllerCo
 /// Provider that wraps ConfMgr to dynamically provide ConfigSyncServer
 ///
 /// This allows the gRPC server to always use the latest ConfigSyncServer
-/// instance, which is important for reload operations.
+/// instance, which is important for leadership transitions.
 struct ConfMgrProvider {
     conf_mgr: Arc<ConfMgr>,
 }
@@ -153,7 +153,7 @@ impl EdgionControllerCli {
     ///
     /// The gRPC server uses a provider pattern to dynamically obtain the latest
     /// ConfigSyncServer instance, which allows it to use the new instance after
-    /// reload operations without restarting the server.
+    /// leadership transitions without restarting the server.
     #[allow(clippy::too_many_arguments)]
     async fn start_services(
         conf_mgr: Arc<ConfMgr>,
@@ -164,9 +164,7 @@ impl EdgionControllerCli {
         metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
         transport: ConfSyncTransport,
-        config_file: Option<String>,
         authorizer: std::sync::Arc<crate::authz::Authorizer>,
-        center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
         allow_admin_ips: Vec<String>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
@@ -196,7 +194,7 @@ impl EdgionControllerCli {
         };
 
         // Create provider that dynamically obtains ConfigSyncServer from ConfMgr
-        // This allows the gRPC server to use the latest instance after reload
+        // This allows the gRPC server to use the latest serving generation
         let provider = Arc::new(ConfMgrProvider {
             conf_mgr: conf_mgr.clone(),
         });
@@ -245,13 +243,7 @@ impl EdgionControllerCli {
 
         // Dedicated probe listener (liveness/readiness) — own socket, no auth.
         {
-            let probe_state = crate::api::build_admin_state(
-                conf_mgr.clone(),
-                schema_validator.clone(),
-                config_file.clone(),
-                authorizer.clone(),
-                center_reload_tx.clone(),
-            );
+            let probe_state = crate::api::build_admin_state(conf_mgr.clone(), schema_validator.clone());
             let mut probe_signal = shutdown_handle.signal();
             tokio::spawn(async move {
                 let app = crate::api::create_probe_router(probe_state);
@@ -308,9 +300,7 @@ impl EdgionControllerCli {
                     conf_mgr.clone(),
                     schema_validator,
                     admin_addr,
-                    config_file,
                     authorizer,
-                    center_reload_tx,
                     allow_admin_ips,
                     admin_shutdown
                 )
@@ -522,11 +512,11 @@ impl EdgionControllerCli {
         // Must happen before federation client so the base admin router can be created.
         let schema_validator = Self::load_schemas(config.is_k8s_mode());
 
-        // 6b. Construct the shared Authorizer and center-reload watch channel ONCE.
+        // 6b. Construct the shared Authorizer from startup configuration.
         // The Authorizer is initialized from `[center].rbac` if present, else the built-in
         // default policy (read-all-except-Secret + EdgionConfigData write + RegionRoute failover)
         // via `center_policy_from`.
-        // Both are cloned into every create_admin_router call site and into the fed path.
+        // The same Authorizer serves local-admin and federation middleware.
         let initial_center_cfg = config.center.clone().unwrap_or_default();
         if let Some(rbac) = &initial_center_cfg.rbac {
             if let Err(e) = rbac.validate() {
@@ -560,7 +550,7 @@ impl EdgionControllerCli {
 
             // Register the local admin token (Istio-style) on the Authorizer. It is
             // held on the Authorizer (not in the config-derived map) so `apply`
-            // merges it at startup AND on every hot-reload. `EDGION_ADMIN_TOKEN`
+            // merges it with the scoped token map. `EDGION_ADMIN_TOKEN`
             // env wins over the `admin_token` config field; blank values are
             // rejected by `build_admin_token_entry`.
             let raw_admin = resolve_admin_token_raw(&config);
@@ -593,19 +583,10 @@ impl EdgionControllerCli {
             authorizer.apply(initial_policy, cli_map);
         }
 
-        // The original receiver is intentionally dropped here. The federation supervisor (Task 7)
-        // will obtain its own receiver via `center_reload_tx.subscribe()`, which works even after
-        // this initial receiver is dropped -- as long as the Sender is alive. The Sender lives for
-        // the duration of the process because it is stored in `AdminState` (via `create_admin_router`)
-        // and cloned into the fed path above.
-        let initial_center_cfg_for_supervisor = initial_center_cfg.clone();
-        let (center_reload_tx, _center_reload_rx) = tokio::sync::watch::channel(initial_center_cfg);
-        let config_file = self.config.config_file.clone();
-
         // 7. Start federation client (via supervisor) if center config is present.
         // Must be after conf_mgr.start() so processor_registry is populated.
         // The supervisor owns the fed client lifecycle: it starts/stops the client
-        // on reload and ensures the prior task is awaited before a new one spawns,
+        // on leadership changes and awaits the prior task before a new one spawns,
         // preventing dual registration at Center.
         if config.center.is_some() {
             // Build the fed router:
@@ -616,13 +597,7 @@ impl EdgionControllerCli {
             // innermost; inject_center_identity is a plain .layer so it wraps everything.
             // Final onion (outer -> inner):
             //   inject_center_identity -> authz_layer -> handler
-            let base_router = create_admin_router(
-                conf_mgr.clone(),
-                schema_validator.clone(),
-                config_file.clone(),
-                authorizer.clone(),
-                center_reload_tx.clone(),
-            );
+            let base_router = create_admin_router(conf_mgr.clone(), schema_validator.clone());
             let fed_router = base_router
                 .route_layer(axum::middleware::from_fn_with_state(
                     authorizer.clone(),
@@ -652,14 +627,6 @@ impl EdgionControllerCli {
                 })
             };
 
-            // Get a reload receiver from the shared sender. The original receiver
-            // constructed above was intentionally dropped (`_center_reload_rx`);
-            // `subscribe()` creates a fresh receiver from the same sender that is
-            // stored in AdminState and used by the reload handler.
-            let reload_rx = center_reload_tx.subscribe();
-            let initial = initial_center_cfg_for_supervisor;
-            let authorizer_for_supervisor = authorizer.clone();
-
             // Leadership gate: the federation session at Center is keyed by
             // `controller_id` (`cluster/name`), identical on every replica, so
             // only the leader may hold it. `None` (FileSystem: no election)
@@ -667,14 +634,12 @@ impl EdgionControllerCli {
             let leader_signal = conf_mgr.leader_signal();
 
             let supervisor = crate::fed_sync::supervisor::FederationSupervisor::new(spawn_client);
-            // Intentionally detached: run_supervisor lives for the process lifetime,
-            // driven by the reload watch channel whose sender is stored in AdminState.
+            // The supervisor observes process shutdown explicitly and stops its client.
             tokio::spawn(crate::fed_sync::supervisor::run_supervisor(
                 supervisor,
-                initial,
-                reload_rx,
+                initial_center_cfg,
                 leader_signal,
-                authorizer_for_supervisor,
+                shutdown_handle.signal(),
             ));
         }
 
@@ -693,9 +658,7 @@ impl EdgionControllerCli {
             metrics_addr,
             config.conf_sync_security,
             transport,
-            config_file,
             authorizer,
-            center_reload_tx,
             config.server.allow_admin_ips.clone(),
             shutdown_handle,
         )

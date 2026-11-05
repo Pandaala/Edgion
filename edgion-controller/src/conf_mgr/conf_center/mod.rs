@@ -19,7 +19,7 @@
 //! ## Traits
 //!
 //! - `CenterApi`: CRUD operations for configuration storage
-//! - `CenterLifeCycle`: Lifecycle management (start, reload, shutdown)
+//! - `CenterLifeCycle`: Lifecycle management (start, leadership, shutdown)
 //! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
 //!
 //! ## Configuration
@@ -35,6 +35,7 @@
 
 pub mod common;
 mod config;
+pub(crate) mod source_query;
 pub mod traits;
 
 // These macros are defined here (rather than in non_kube_common.rs) so that

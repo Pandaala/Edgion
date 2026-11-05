@@ -1,0 +1,6 @@
+HTTPRoute/edgion-default/dsl-query-publisher-dynamic
+HTTPRoute/edgion-default/dsl-query-executor-dynamic
+EdgionPlugins/edgion-default/dsl-query-publisher-dynamic
+EdgionPlugins/edgion-default/dsl-query-executor-dynamic
+Secret/edgion-default/dsl-query-publisher-dynamic
+Secret/edgion-default/dsl-query-executor-dynamic

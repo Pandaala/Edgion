@@ -10,7 +10,7 @@ deny list, `Accepted: True`, and nothing anywhere says the rule was never loaded
 security-relevant plugin that is a fail-open, not a harmless no-op.
 
 For `EdgionConfigData`, the detector checks the typed `KeyList`, `IpList`,
-`RequestAccessUrlAllowList`, `Selector`, and `RegionRouteOverride` payloads. Credential and
+`RequestAccessUrlAllowList` and `Selector` payloads. ClusterRegionSetting rejects unknown payload fields during deserialization. Credential and
 authentication sub-structures within typed policy data remain strict security boundaries.
 `data.type: Misc` is the documented free-form escape hatch, so
 arbitrary keys below `Misc.config` are intentionally not reported. Kubernetes prunes unknown

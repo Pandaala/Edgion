@@ -39,6 +39,7 @@ fn matching_index_with_hostname(hostname: Option<&str>) -> GatewayInfoIndex {
                 None,
                 vec![],
                 None,
+                None,
             )),
             gateway_proof: None,
             hostname: hostname.map(str::to_string),
@@ -90,14 +91,17 @@ async fn compiled_grpc_parent_ports_select_the_matching_gateway_on_shared_listen
     );
     route.spec.current_status = None;
     let route = crate::test_current_status::processed(route);
-    let units = parse_route_to_units("default/port-owner", &Arc::new(route));
+    let units = parse_route_to_units_for_test("default/port-owner", &Arc::new(route));
     assert_eq!(units.len(), 1);
     let engine = GrpcMatchEngine::new(units);
     let (session, ctx) = matching_session("/svc/Get", "example.com", "").await;
     for (port, owner) in [(8080, "default/a"), (8081, "default/b")] {
         let key = ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTP");
         let index = publication.listener_index(&key).unwrap();
-        let (_, gateway) = engine.match_route(&session, &ctx, index, "example.com").unwrap();
+        let gateway = engine
+            .match_route(&session, &ctx, index, "example.com")
+            .unwrap()
+            .matched_gateway;
         assert_eq!(gateway.gateway_key(), owner);
     }
 }
@@ -149,7 +153,7 @@ async fn built_grpc_route_cannot_cross_an_empty_exact_listener_in_another_gatewa
         "*.example.com",
         json!({"method": {"method": "Get"}}),
     );
-    let units = parse_route_to_units("default/broad-owner-route", &route);
+    let units = parse_route_to_units_for_test("default/broad-owner-route", &route);
     assert_eq!(units.len(), 1);
     let unit = Arc::clone(&units[0]);
     let engine = GrpcMatchEngine::new(units);
@@ -172,6 +176,7 @@ async fn built_grpc_route_cannot_cross_an_empty_exact_listener_in_another_gatewa
                     None,
                     Vec::new(),
                     None,
+                    None,
                 )),
                 gateway_proof: None,
                 hostname: Some("api.example.com".into()),
@@ -180,7 +185,11 @@ async fn built_grpc_route_cannot_cross_an_empty_exact_listener_in_another_gatewa
         ),
     ]);
     let (session, ctx) = matching_session("/svc/Get", "api.example.com", "").await;
-    let (selected, owner) = engine.match_route(&session, &ctx, &broad, "api.example.com").unwrap();
+    let crate::routes::grpc::GrpcRouteMatchResult {
+        route_unit: selected,
+        matched_gateway: owner,
+        ..
+    } = engine.match_route(&session, &ctx, &broad, "api.example.com").unwrap();
     assert!(Arc::ptr_eq(&selected, &unit));
     assert_eq!(owner.gateway_key(), "default/test-gw");
     assert!(matches!(
@@ -188,7 +197,11 @@ async fn built_grpc_route_cannot_cross_an_empty_exact_listener_in_another_gatewa
         Err(edgion_resources::EdError::RouteNotFound())
     ));
     let (other_session, other_ctx) = matching_session("/svc/Get", "other.example.com", "").await;
-    let (selected, owner) = engine
+    let crate::routes::grpc::GrpcRouteMatchResult {
+        route_unit: selected,
+        matched_gateway: owner,
+        ..
+    } = engine
         .match_route(&other_session, &other_ctx, &blocked, "other.example.com")
         .unwrap();
     assert!(Arc::ptr_eq(&selected, &unit));
@@ -211,8 +224,8 @@ async fn method_only_matches_through_real_session_and_header_failure_falls_back(
                 "headers":[{"name":"x-version", "value":"v2"}]}),
         );
         let fallback = matching_route("fallback", "*.example.com", json!({}));
-        let mut units = parse_route_to_units("default/method", &route);
-        units.extend(parse_route_to_units("default/fallback", &fallback));
+        let mut units = parse_route_to_units_for_test("default/method", &route);
+        units.extend(parse_route_to_units_for_test("default/fallback", &fallback));
         let engine = GrpcMatchEngine::new(units);
         for service in ["svc.User", "other.Service"] {
             let (session, ctx) =
@@ -221,7 +234,7 @@ async fn method_only_matches_through_real_session_and_header_failure_falls_back(
                 engine
                     .match_route(&session, &ctx, &index, "api.example.com")
                     .unwrap()
-                    .0
+                    .route_unit
                     .resource_key,
                 "default/method"
             );
@@ -231,7 +244,7 @@ async fn method_only_matches_through_real_session_and_header_failure_falls_back(
             engine
                 .match_route(&session, &ctx, &index, "api.example.com")
                 .unwrap()
-                .0
+                .route_unit
                 .resource_key,
             "default/fallback"
         );
@@ -240,7 +253,7 @@ async fn method_only_matches_through_real_session_and_header_failure_falls_back(
             engine
                 .match_route(&session, &ctx, &index, "api.example.com")
                 .unwrap()
-                .0
+                .route_unit
                 .resource_key,
             "default/fallback"
         );
@@ -259,7 +272,7 @@ async fn duplicate_headers_compile_rank_and_match_the_same_canonical_vector() {
             {"name": "x-region", "value": "ignored"}
         ]}),
     );
-    let units = parse_route_to_units("default/duplicate-headers", &route);
+    let units = parse_route_to_units_for_test("default/duplicate-headers", &route);
     assert_eq!(units.len(), 1);
     let unit = &units[0];
     assert_eq!(unit.specificity.header_count, 2);
@@ -300,11 +313,8 @@ fn invalid_method_withdraws_whole_rule_even_without_controller_status() {
             serde_json::from_value(json!({"method":{"method":"List"}})).unwrap()
         ]);
         route.spec.rules.as_mut().unwrap().push(valid);
-        for resolved in [false, true] {
-            if resolved {
-                route.spec.resolved_rules = route.spec.rules.clone();
-            }
-            let units = parse_route_to_units("default/invalid", &Arc::new(route.clone()));
+        {
+            let units = parse_route_to_units_for_test("default/invalid", &Arc::new(route.clone()));
             assert_eq!(units.len(), 1);
             assert_eq!(units[0].matched_info.rule_id, 1);
             assert_eq!(
@@ -338,7 +348,7 @@ async fn exact_listener_intersection_does_not_promote_wildcard_or_hostless_route
     for route in [&mut hostless, &mut wildcard, &mut exact] {
         route.spec.resolved_hostnames = Some(vec!["api.example.com".to_string()]);
         let key = format!("default/{}", route.metadata.name.as_deref().unwrap());
-        units.extend(parse_route_to_units(&key, &Arc::new(route.clone())));
+        units.extend(parse_route_to_units_for_test(&key, &Arc::new(route.clone())));
     }
     let engine = GrpcMatchEngine::new(units);
     let index = matching_index_with_hostname(Some("api.example.com"));
@@ -351,7 +361,7 @@ async fn exact_listener_intersection_does_not_promote_wildcard_or_hostless_route
             engine
                 .match_route(&session, &ctx, &index, "api.example.com")
                 .unwrap()
-                .0
+                .route_unit
                 .resource_key,
             expected
         );
@@ -423,7 +433,7 @@ async fn invalid_authored_hostname_list_withdraws_the_whole_published_route() {
         // Forged/stale resolved projection must not salvage authored invalidity.
         invalid.spec.resolved_hostnames = Some(vec!["grpc".to_string()]);
         let invalid = Arc::new(invalid);
-        assert!(parse_route_to_units(&resource_key, &invalid).is_empty());
+        assert!(parse_route_to_units_for_test(&resource_key, &invalid).is_empty());
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(resource_key.clone(), invalid)]),
@@ -435,7 +445,7 @@ async fn invalid_authored_hostname_list_withdraws_the_whole_published_route() {
     for hosts in [None, Some(Vec::new())] {
         let mut hostless = (*valid).clone();
         hostless.spec.hostnames = hosts;
-        assert!(!parse_route_to_units(&resource_key, &Arc::new(hostless)).is_empty());
+        assert!(!parse_route_to_units_for_test(&resource_key, &Arc::new(hostless)).is_empty());
     }
 }
 
@@ -470,14 +480,14 @@ async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
     assert_eq!(
         old.match_route(&mut session, &ctx, &index, "api.example.com")
             .unwrap()
-            .0
+            .route_unit
             .resource_key,
         "default/first"
     );
     let selected = updated
         .match_route(&mut session, &ctx, &index, "api.example.com")
         .unwrap()
-        .0;
+        .route_unit;
     assert_eq!(selected.resource_key, "default/fallback");
     assert!(Arc::ptr_eq(&selected, &unchanged));
     assert!(Arc::ptr_eq(&selected.plugin_runtime, &unchanged.plugin_runtime));
@@ -487,7 +497,7 @@ async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
         updated
             .match_route(&mut list_session, &list_ctx, &index, "api.example.com")
             .unwrap()
-            .0
+            .route_unit
             .resource_key,
         "default/first"
     );
@@ -612,7 +622,7 @@ fn build_site_resolves_parent_ref_keys_with_the_route_namespace() {
     // The fixture declares `parentRefs: [{ name: "test-gw" }]` with no
     // namespace, so the resolved key must fall back to the route namespace.
     let route = build_grpc_route_with_two_rules("route-ns", "wiring");
-    let units = parse_route_to_units("route-ns/wiring", &Arc::new(route));
+    let units = parse_route_to_units_for_test("route-ns/wiring", &Arc::new(route));
     assert!(!units.is_empty(), "the fixture must compile to at least one unit");
 
     for unit in &units {
@@ -633,59 +643,11 @@ fn build_site_resolves_parent_ref_keys_with_the_route_namespace() {
 }
 
 #[test]
-fn test_grpc_resolved_rules_compiled_instead_of_spec_rules() {
-    // Delegation contract: when resolved_rules is present the gateway
-    // compiles it INSTEAD of spec.rules, including a resolved Service
-    // that is absent from spec.rules entirely (the flattened child).
-    let mut route = build_grpc_route_with_two_rules("test-grpc-deleg", "flat");
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([
-            { "matches": [{ "method": { "service": "svc.Resolved" } }],
-              "backendRefs": [{ "name": "resolved-svc", "namespace": "test-grpc-deleg", "port": 8080 }] }
-        ]))
-        .unwrap(),
-    );
-    route.pre_parse();
-
-    let route = Arc::new(route);
-    let units = parse_route_to_units("test-grpc-deleg/flat", &route);
-    assert_eq!(
-        unit_backend_names(&units),
-        vec!["resolved-svc"],
-        "resolved_rules must replace spec.rules, compiling the resolved service"
-    );
-}
-
-#[test]
-fn test_grpc_invalid_rule_indices_ignored_when_resolved_rules_present() {
-    // invalid_rule_indices refers to spec.rules; a flattened route must
-    // not have its (pre-filtered) resolved_rules dropped by stale indices.
-    let mut route = build_grpc_route_with_two_rules("test-grpc-deleg-inv", "flat");
-    route.spec.invalid_rule_indices = Some(vec![0]);
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([
-            { "matches": [{ "method": { "service": "svc.RA" } }],
-              "backendRefs": [{ "name": "svc-r-a", "port": 8080 }] },
-            { "matches": [{ "method": { "service": "svc.RB" } }],
-              "backendRefs": [{ "name": "svc-r-b", "port": 8080 }] }
-        ]))
-        .unwrap(),
-    );
-    route.pre_parse();
-
-    let route = Arc::new(route);
-    let units = parse_route_to_units("test-grpc-deleg-inv/flat", &route);
-    assert_eq!(
-        unit_backend_names(&units),
-        vec!["svc-r-a", "svc-r-b"],
-        "invalid_rule_indices (index 0) must not apply to resolved_rules"
-    );
-
-    // Control: without resolved_rules the same indices DO drop rule 0.
+fn test_grpc_invalid_rule_indices_drop_spec_rules() {
     let mut plain = build_grpc_route_with_two_rules("test-grpc-deleg-inv", "plain");
     plain.spec.invalid_rule_indices = Some(vec![0]);
     let plain = Arc::new(plain);
-    let units = parse_route_to_units("test-grpc-deleg-inv/plain", &plain);
+    let units = parse_route_to_units_for_test("test-grpc-deleg-inv/plain", &plain);
     assert_eq!(
         unit_backend_names(&units),
         vec!["spec-svc-b"],
@@ -743,7 +705,7 @@ fn metric_handles_are_shared_within_each_rule_only() {
     route.pre_parse();
 
     let route = Arc::new(route);
-    let units = parse_route_to_units("route-ns/metric-sharing", &route);
+    let units = parse_route_to_units_for_test("route-ns/metric-sharing", &route);
     assert_eq!(units.len(), 3);
     assert!(Arc::ptr_eq(&units[0].metric_handles, &units[1].metric_handles));
     assert!(!Arc::ptr_eq(&units[0].metric_handles, &units[2].metric_handles));
@@ -784,7 +746,7 @@ fn metric_handles_are_shared_within_each_rule_only() {
     assert_eq!(units[0].backend_finder.select(), Ok(0));
     assert_eq!(retained.backend_finder.select(), Ok(1));
     assert_eq!(units[0].backend_finder.select(), Ok(0));
-    let replacement = parse_route_to_units("route-ns/metric-sharing", &route);
+    let replacement = parse_route_to_units_for_test("route-ns/metric-sharing", &route);
     assert!(!Arc::ptr_eq(&retained.backend_finder, &replacement[0].backend_finder));
     drop(units);
     assert_eq!(replacement[0].backend_finder.select(), Ok(0));
@@ -800,7 +762,7 @@ fn compiled_grpc_empty_backend_selector_retains_no_backend_error() {
 
 #[test]
 fn session_lifetime_publication_retains_old_grpc_generation() {
-    for resolved in [false, true] {
+    {
         let managers = GlobalGrpcRouteManagers::new();
         let key = "default/session-reload".to_string();
         let make_route = |timeout: Option<&str>| {
@@ -812,9 +774,6 @@ fn session_lifetime_publication_retains_old_grpc_generation() {
             .clone();
             route.spec.rules.as_mut().unwrap()[0].session_persistence =
                 Some(serde_json::from_value(json!({"absoluteTimeout": timeout})).unwrap());
-            if resolved {
-                route.spec.resolved_rules = route.spec.rules.clone();
-            }
             route.pre_parse();
             Arc::new(route)
         };

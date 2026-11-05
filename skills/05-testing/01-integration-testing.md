@@ -196,6 +196,13 @@ The actual responsibilities of `run_integration.sh` are:
 7. Call `test_client -g -r <Resource> -i <Item>` to run the tests
 8. Clean up by default; with `--keep-alive` the processes, logs, and working directory are kept
 
+> The final cache-residue gate runs `wipe-all`, which deletes every Gateway as well as its
+> Routes. Processes preserved with `--keep-alive` therefore cannot serve fixtures reloaded on
+> the same listeners: the original proxy keeps its retired route manager and returns 404
+> `RouteNotFound`. This is the accepted
+> [Gateway recreation boundary](../04-review/listeners/intentional-design/gateway-recreation-requires-restart.md),
+> not a sync defect. Restart the topology before reloading fixtures after a wipe.
+
 A few key facts:
 
 - `--full-test` additionally includes slow tests and requires Docker to be available. In a
@@ -416,8 +423,9 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `CsrfSecretRotation` | `EdgionPlugins/Csrf/DynamicTest` | CSRF signing-key Secret rotation rejects the pre-rotation token, accepts a newly issued token, fail-closes on deletion, and recovers after restore |
 | `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
 | `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |
-| `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `overrideRef` flaps good→missing→good; `ResolvedRefs` tracks it (`False`/`InvalidEdgionConfigDataRef` while missing) |
-| `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Delegation child rule moves /pay → /pay2; parent re-flattens and gateway hot-swaps routing |
+| `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `clusterRegionRef` flaps good→missing→good; `ResolvedRefs` tracks it (`False`/`InvalidEdgionConfigDataRef` while missing) |
+| `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Child-only update moves /pay → /pay2 and the Gateway rebuilds only the child subtree; parent-only narrowing changes the intersected scope (including a regex child rule) |
+| `GrpcRouteDelegationDynamic` | `GRPCRoute/Delegation/DynamicTest` | Child-only update moves the narrowed method SayHello → StreamNumbers; only the child is republished and its subtree hot-swapped |
 | `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
 | `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
 

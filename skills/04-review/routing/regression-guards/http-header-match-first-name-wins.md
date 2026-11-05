@@ -34,10 +34,10 @@ same vector, so deduplicating only one consumer would be insufficient.
 
 Decode precedes `validate_http_route_if_enabled`, which must not reject an
 otherwise valid route because an ignored later predicate has an invalid regex.
-Decode also precedes `route_delegation::merge_scope_constraints`: that function
-merges equal effective constraints and rejects conflicting mandatory parent
-constraints. Gateway conf-sync full and watch decoding cover both declared
-`rules` and controller-generated `resolved_rules`.
+Under the cascading-match delegation model parent and child predicates are never
+merged: each level matches its own decoded vector. (History: the removed Controller
+flattening merged parent and child header constraints after decode.) Gateway
+conf-sync full and watch decoding cover every route's `rules`.
 
 ## Alternatives and limits
 
@@ -45,7 +45,7 @@ Gateway-only preprocessing misses Controller validation and delegation.
 Request-time deduplication repeats configuration work and leaves ranking wrong.
 The schema fields and public types remain unchanged. Rust callers constructing
 matches directly must preserve uniqueness themselves; current production
-constructors either have no headers or merge canonical delegation inputs.
+constructors either have no headers or copy already-decoded vectors.
 Revisit this boundary if a new programmatic producer adds header predicates.
 
 This rule concerns configured HTTPRoute predicates only, not repeated headers

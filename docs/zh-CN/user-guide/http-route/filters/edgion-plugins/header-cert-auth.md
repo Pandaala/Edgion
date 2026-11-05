@@ -7,8 +7,8 @@
 ## 概述
 
 Header Cert Auth 通过验证客户端证书来实现身份认证。支持两种模式：
-- **Header 模式**：从 HTTP Header 中读取客户端证书（适用于前端代理已完成 TLS 终结的场景）
-- **mTLS 模式**：从 mTLS 连接上下文中读取证书（直接 TLS 连接场景）
+- **Header 模式**（`mode: Header`）：从 HTTP Header 中读取客户端证书（适用于前端代理已完成 TLS 终结的场景）
+- **Connection 模式**（`mode: Connection`）：复用 mTLS 连接上下文中已验证的客户端证书（直接 TLS 连接场景）
 
 ## 快速开始
 
@@ -33,7 +33,7 @@ metadata:
   name: cert-auth-plugin
 spec:
   requestPlugins:
-      type: HeaderCertAuth
+    - type: HeaderCertAuth
       config:
         mode: Header
         certificateHeaderName: X-Client-Cert
@@ -47,20 +47,29 @@ spec:
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `mode` | String | ❌ | `Header` | 证书来源模式：`Header` / `Mtls` |
+| `mode` | Enum | ❌ | `Header` | 证书来源模式：`Header` / `Connection` |
 | `certificateHeaderName` | String | ❌ | `"X-Client-Cert"` | Header 模式下包含证书的 header 名 |
-| `certificateHeaderFormat` | String | ❌ | `Base64Encoded` | 证书编码格式：`Base64Encoded` / `UrlEncoded` |
-| `hideCredentials` | Boolean | ❌ | `true` | 是否移除证书 header |
-| `caSecretRefs` | Array | ✅* | `[]` | CA 证书 Secret 引用 |
-| `verifyDepth` | Integer | ❌ | `1` | 证书链验证深度 |
-| `skipConsumerLookup` | Boolean | ❌ | `false` | 是否跳过消费者身份查找 |
-| `consumerBy` | String | ❌ | `SanOrCn` | 消费者身份提取方式：`SanOrCn` / `San` / `Cn` |
-| `allowAnonymous` | Boolean | ❌ | `false` | 是否允许无证书访问 |
-| `errorStatus` | Integer | ❌ | `401` | 验证失败返回的状态码 |
+| `certificateHeaderFormat` | Enum | ❌ | `base64Encoded` | 证书编码格式（Header 模式）：`base64Encoded`（不含分隔行的 base64 PEM 正文）/ `urlEncoded`（URL 编码的完整 PEM） |
+| `hideCredentials` | Boolean | ❌ | `true` | 转发上游前是否移除证书 header |
+| `caSecretRefs` | Array | ✅* | `[]` | 用于验证客户端证书的 CA Secret 引用。所引用 Secret 中的所有证书都作为信任锚加载；若叶证书由中间 CA 签发，请同时包含中间 CA。Connection 模式不需要 |
+| `skipConsumerLookup` | Boolean | ❌ | `false` | 是否跳过消费者映射，直接透传证书 DN/SAN |
+| `consumerBy` | Enum | ❌ | `sanOrCn` | 消费者身份提取方式：`sanOrCn`（首个 SAN，缺失时回退到 CN）/ `cn`（仅 CN）/ `fingerprint`（证书 SHA-256 指纹） |
+| `upstreamHeaders` | Object | ❌ | 见子表 | 向上游传递身份信息的请求头名称 |
+| `allowAnonymous` | Boolean | ❌ | `false` | 认证失败时是否以匿名身份放行 |
+| `errorStatus` | Integer | ❌ | `401` | 验证失败返回的状态码（必须在 400–599 之间） |
 | `errorMessage` | String | ❌ | `"TLS certificate failed verification"` | 验证失败消息 |
-| `authFailureDelayMs` | Integer | ❌ | `0` | 认证失败延迟毫秒数 |
+| `authFailureDelayMs` | Integer | ❌ | `0` | 返回认证失败响应前的固定延迟（毫秒） |
 
 \* Header 模式下必填。
+
+### `upstreamHeaders` 子字段
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `consumerHeader` | String | ❌ | `"X-Consumer-Username"` | 解析出的消费者身份 |
+| `dnHeader` | String | ❌ | `"X-Client-Cert-Dn"` | 证书主题 DN |
+| `sanHeader` | String | ❌ | `"X-Client-Cert-San"` | 首个 SAN 值 |
+| `fingerprintHeader` | String | ❌ | `"X-Client-Cert-Fingerprint"` | 证书 SHA-256 指纹 |
 
 ---
 
@@ -70,24 +79,25 @@ spec:
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
       mode: Header
       certificateHeaderName: X-Client-Cert
       certificateHeaderFormat: urlEncoded
       caSecretRefs:
         - name: client-ca-cert
-      verifyDepth: 2
       hideCredentials: true
 ```
 
-### 场景 2：mTLS 模式
+### 场景 2：Connection（mTLS）模式
+
+复用 TLS 握手阶段已验证的证书，无需配置 `caSecretRefs`。
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
-      mode: Mtls
+      mode: Connection
       consumerBy: sanOrCn
 ```
 
@@ -95,7 +105,7 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
       mode: Header
       caSecretRefs:
@@ -108,9 +118,31 @@ requestPlugins:
 ## 行为细节
 
 - **Header 模式**：从指定 Header 读取 PEM 格式证书，使用 `caSecretRefs` 中的 CA 证书进行验证
-- **mTLS 模式**：从 TLS 握手上下文中直接获取已验证的客户端证书
-- **消费者身份**：根据 `consumerBy` 配置从证书的 SAN 或 CN 提取身份信息，设置为 `X-Consumer-Username`
+- **Connection 模式**：从 mTLS 握手上下文中直接获取已验证的客户端证书
+- **消费者身份**：根据 `consumerBy` 从证书的 SAN、CN 或指纹提取身份信息，写入 `upstreamHeaders.consumerHeader`（默认 `X-Consumer-Username`）
 - 设置 `hideCredentials: true` 后，证书 Header 不会传递给上游
+
+### 证书身份请求头的归属
+
+插件执行时，会先清理当前启用的输出目标，再写入身份值：
+`skipConsumerLookup: true` 时为 `dnHeader`、`sanHeader` 和 `fingerprintHeader`，
+否则为 `consumerHeader` 和 `fingerprintHeader`。清理会移除同名的所有重复输入。
+输出名称互不相同时，证书没有 SAN 会使 SAN 目标头保持不存在；包含 CR、LF 或 NUL 的 DN/SAN 值会被省略，
+不会保留客户端原值。其他非法请求头值会使写入失败并返回 HTTP 500。
+匿名放行也先清理这些目标，再写入匿名消费者标记和身份。
+
+请求头删除或写入失败时返回 HTTP 500，不转发请求，即使配置了 `allowAnonymous: true`。
+认证失败仍采用原有的拒绝或匿名策略。禁用或条件跳过的插件不执行清理；未启用的输出名
+以及无关请求头不属于保留名称。
+
+后端需要分别读取各字段时，请配置不同的输出名称。同名输出仍按原顺序写入
+（DN、首个 SAN、指纹；或消费者身份、指纹）。Header 模式先读取证书，再清理输出，
+因此输入与输出可以同名；但 `hideCredentials: true` 仍会在最后移除该名称。
+后续插件仍可按执行顺序修改这些请求头。
+
+使用 EdgionTls 的 Connection 模式需要在 EdgionTls 上设置
+`edgion.io/expose-client-cert: "true"`。Gateway 的 `frontendValidation` mTLS
+会自动暴露证书元数据。
 
 ---
 

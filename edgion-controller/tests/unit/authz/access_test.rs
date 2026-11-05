@@ -63,7 +63,7 @@ fn default_center_policy_expands_expected_secret_and_operation_boundaries() {
     assert!(secret.verbs.is_empty());
     assert_eq!(
         config_data.verbs,
-        vec!["get", "list", "list-keys", "watch", "create", "update", "delete"]
+        vec!["get", "list", "list-keys", "create", "update", "delete"]
     );
     assert!(
         snapshot
@@ -81,14 +81,5 @@ fn default_center_policy_expands_expected_secret_and_operation_boundaries() {
             .unwrap()
             .allowed
     );
-    // The default Center policy grants `reload` on the non-resource route
-    // so the Center's reload action works without operator configuration.
-    assert!(
-        snapshot
-            .operations
-            .iter()
-            .find(|operation| operation.name == "reload")
-            .unwrap()
-            .allowed
-    );
+    assert!(!snapshot.operations.iter().any(|operation| operation.name == "reload"));
 }

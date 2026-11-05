@@ -32,9 +32,7 @@ use crate::cli::config::{
     resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
 };
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
-use crate::plugins::http::common::auth_common::{
-    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims, PreparedAuthChallenge,
-};
+use crate::plugins::http::common::auth_common::{send_gateway_auth_error_response, Claims, PreparedAuthChallenge};
 use crate::plugins::http::common::outbound::client::extract_ip_literal;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, is_ip_allowed, EgressPolicy, EgressResolver,

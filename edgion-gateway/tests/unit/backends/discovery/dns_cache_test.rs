@@ -1,5 +1,36 @@
 use super::*;
 
+#[test]
+fn family_is_part_of_borrowed_cache_identity_and_deletion_reclaims_all_families() {
+    let cache = cache();
+    let now = Instant::now();
+    for (family, address) in [
+        (DnsLookupFamily::Ipv4Only, "192.0.2.1"),
+        (DnsLookupFamily::Ipv6Only, "2001:db8::1"),
+        (DnsLookupFamily::All, "192.0.2.2"),
+    ] {
+        cache.insert("ns/svc", "example.test", "system", vec![ip(address)], SEC5, now, family);
+    }
+    for (family, address) in [
+        (DnsLookupFamily::Ipv4Only, "192.0.2.1"),
+        (DnsLookupFamily::Ipv6Only, "2001:db8::1"),
+        (DnsLookupFamily::All, "192.0.2.2"),
+    ] {
+        assert_eq!(
+            cache.get("ns/svc", "example.test", "system", now, family),
+            Some(vec![ip(address)])
+        );
+    }
+    cache.invalidate_services(&HashSet::from(["ns/svc".to_owned()]));
+    for family in [
+        DnsLookupFamily::Ipv4Only,
+        DnsLookupFamily::Ipv6Only,
+        DnsLookupFamily::All,
+    ] {
+        assert!(cache.get("ns/svc", "example.test", "system", now, family).is_none());
+    }
+}
+
 /// A TTL long enough that no test hits it accidentally.
 const SEC5: Duration = Duration::from_secs(5);
 /// For entries that must stay live regardless of how long the surrounding
@@ -111,8 +142,22 @@ fn effective_shards_applies_the_floor_without_exceeding_capacity() {
 fn cache_hit_within_ttl() {
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
-    let got = cache.get("ns/svc", "a.example.com", "fp1", now + Duration::from_secs(1));
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    let got = cache.get(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        now + Duration::from_secs(1),
+        DnsLookupFamily::All,
+    );
     assert_eq!(got, Some(vec![ip("1.2.3.4")]));
 }
 
@@ -120,9 +165,23 @@ fn cache_hit_within_ttl() {
 fn cache_miss_after_expiry() {
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp1", now + Duration::from_secs(6)),
+        cache.get(
+            "ns/svc",
+            "a.example.com",
+            "fp1",
+            now + Duration::from_secs(6),
+            DnsLookupFamily::All
+        ),
         None
     );
 }
@@ -133,21 +192,49 @@ fn cache_miss_exactly_at_the_deadline() {
     // is already a miss. Pins the comparison against a `>=` slip.
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp1", now + SEC5 - Duration::from_nanos(1)),
+        cache.get(
+            "ns/svc",
+            "a.example.com",
+            "fp1",
+            now + SEC5 - Duration::from_nanos(1),
+            DnsLookupFamily::All
+        ),
         Some(vec![ip("1.2.3.4")])
     );
-    assert_eq!(cache.get("ns/svc", "a.example.com", "fp1", now + SEC5), None);
+    assert_eq!(
+        cache.get("ns/svc", "a.example.com", "fp1", now + SEC5, DnsLookupFamily::All),
+        None
+    );
 }
 
 #[test]
 fn cache_miss_on_fingerprint_change() {
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     // A different resolver fingerprint must not hit the old entry.
-    assert_eq!(cache.get("ns/svc", "a.example.com", "fp2", now), None);
+    assert_eq!(
+        cache.get("ns/svc", "a.example.com", "fp2", now, DnsLookupFamily::All),
+        None
+    );
 }
 
 #[test]
@@ -156,12 +243,31 @@ fn cache_miss_on_external_name_change() {
     // hostname B must never be served A's addresses, TTL notwithstanding.
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
-    assert_eq!(cache.get("ns/svc", "b.example.com", "fp1", now), None);
-    // The new hostname resolves and caches independently of the old one.
-    cache.insert("ns/svc", "b.example.com", "fp1", vec![ip("5.6.7.8")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(
-        cache.get("ns/svc", "b.example.com", "fp1", now),
+        cache.get("ns/svc", "b.example.com", "fp1", now, DnsLookupFamily::All),
+        None
+    );
+    // The new hostname resolves and caches independently of the old one.
+    cache.insert(
+        "ns/svc",
+        "b.example.com",
+        "fp1",
+        vec![ip("5.6.7.8")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    assert_eq!(
+        cache.get("ns/svc", "b.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("5.6.7.8")])
     );
 }
@@ -172,14 +278,30 @@ fn distinct_fingerprints_for_same_service_coexist() {
     // evict each other — both entries live until their own TTL.
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
-    cache.insert("ns/svc", "a.example.com", "fp2", vec![ip("5.6.7.8")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp2",
+        vec![ip("5.6.7.8")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp1", now),
+        cache.get("ns/svc", "a.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("1.2.3.4")])
     );
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp2", now),
+        cache.get("ns/svc", "a.example.com", "fp2", now, DnsLookupFamily::All),
         Some(vec![ip("5.6.7.8")])
     );
 }
@@ -188,11 +310,27 @@ fn distinct_fingerprints_for_same_service_coexist() {
 fn reinsert_same_key_refreshes_entry() {
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     // Re-resolve under the same identity overwrites with the new address set.
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("9.9.9.9")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("9.9.9.9")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp1", now),
+        cache.get("ns/svc", "a.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("9.9.9.9")])
     );
     assert_eq!(cache.len(), 1);
@@ -206,20 +344,61 @@ fn invalidate_services_drops_only_the_named_services() {
     let now = Instant::now();
     // Two hostnames and two resolvers under the doomed Service, plus a
     // bystander Service that must survive.
-    cache.insert("ns/gone", "a.example.com", "fp1", vec![ip("1.1.1.1")], SEC5, now);
-    cache.insert("ns/gone", "b.example.com", "fp1", vec![ip("2.2.2.2")], SEC5, now);
-    cache.insert("ns/gone", "a.example.com", "fp2", vec![ip("3.3.3.3")], SEC5, now);
-    cache.insert("ns/kept", "c.example.com", "fp1", vec![ip("4.4.4.4")], SEC5, now);
+    cache.insert(
+        "ns/gone",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.1.1.1")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    cache.insert(
+        "ns/gone",
+        "b.example.com",
+        "fp1",
+        vec![ip("2.2.2.2")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    cache.insert(
+        "ns/gone",
+        "a.example.com",
+        "fp2",
+        vec![ip("3.3.3.3")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
+    cache.insert(
+        "ns/kept",
+        "c.example.com",
+        "fp1",
+        vec![ip("4.4.4.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     assert_eq!(cache.len(), 4);
 
     cache.invalidate_services(&HashSet::from(["ns/gone".to_string()]));
 
     assert_eq!(cache.len(), 1);
-    assert_eq!(cache.get("ns/gone", "a.example.com", "fp1", now), None);
-    assert_eq!(cache.get("ns/gone", "b.example.com", "fp1", now), None);
-    assert_eq!(cache.get("ns/gone", "a.example.com", "fp2", now), None);
     assert_eq!(
-        cache.get("ns/kept", "c.example.com", "fp1", now),
+        cache.get("ns/gone", "a.example.com", "fp1", now, DnsLookupFamily::All),
+        None
+    );
+    assert_eq!(
+        cache.get("ns/gone", "b.example.com", "fp1", now, DnsLookupFamily::All),
+        None
+    );
+    assert_eq!(
+        cache.get("ns/gone", "a.example.com", "fp2", now, DnsLookupFamily::All),
+        None
+    );
+    assert_eq!(
+        cache.get("ns/kept", "c.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("4.4.4.4")])
     );
 }
@@ -228,10 +407,18 @@ fn invalidate_services_drops_only_the_named_services() {
 fn invalidate_services_is_a_noop_for_an_empty_set() {
     let cache = cache();
     let now = Instant::now();
-    cache.insert("ns/svc", "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+    cache.insert(
+        "ns/svc",
+        "a.example.com",
+        "fp1",
+        vec![ip("1.2.3.4")],
+        SEC5,
+        now,
+        DnsLookupFamily::All,
+    );
     cache.invalidate_services(&HashSet::new());
     assert_eq!(
-        cache.get("ns/svc", "a.example.com", "fp1", now),
+        cache.get("ns/svc", "a.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("1.2.3.4")])
     );
 }
@@ -243,13 +430,24 @@ fn capacity_bounds_growth_across_unique_services() {
     let now = Instant::now();
     for index in 0..50 {
         let service_key = format!("ns/svc-{index}");
-        cache.insert(&service_key, "a.example.com", "fp1", vec![ip("1.2.3.4")], SEC5, now);
+        cache.insert(
+            &service_key,
+            "a.example.com",
+            "fp1",
+            vec![ip("1.2.3.4")],
+            SEC5,
+            now,
+            DnsLookupFamily::All,
+        );
     }
     assert_eq!(cache.len(), 4);
     // The oldest inserts were evicted; the most recent survive.
-    assert_eq!(cache.get("ns/svc-0", "a.example.com", "fp1", now), None);
     assert_eq!(
-        cache.get("ns/svc-49", "a.example.com", "fp1", now),
+        cache.get("ns/svc-0", "a.example.com", "fp1", now, DnsLookupFamily::All),
+        None
+    );
+    assert_eq!(
+        cache.get("ns/svc-49", "a.example.com", "fp1", now, DnsLookupFamily::All),
         Some(vec![ip("1.2.3.4")])
     );
 }
@@ -262,7 +460,15 @@ fn capacity_bounds_growth_across_resolver_and_hostname_churn() {
         // One Service whose hostname and resolver both keep changing.
         let external_name = format!("h{index}.example.com");
         let fingerprint = format!("fp{index}");
-        cache.insert("ns/svc", &external_name, &fingerprint, vec![ip("1.2.3.4")], SEC5, now);
+        cache.insert(
+            "ns/svc",
+            &external_name,
+            &fingerprint,
+            vec![ip("1.2.3.4")],
+            SEC5,
+            now,
+            DnsLookupFamily::All,
+        );
     }
     assert_eq!(cache.len(), 4);
 }
@@ -283,7 +489,15 @@ fn expired_entry_is_reclaimed_in_preference_to_evicting_a_live_one() {
     // either way, and the test would prove nothing.
     // A 60s TTL (not SEC5) keeps the live entry clear of the LRU's real-clock
     // deadline no matter how long the surrounding test run stalls.
-    cache.insert("ns/live", "b.example.com", "fp1", vec![ip("2.2.2.2")], MIN1, now);
+    cache.insert(
+        "ns/live",
+        "b.example.com",
+        "fp1",
+        vec![ip("2.2.2.2")],
+        MIN1,
+        now,
+        DnsLookupFamily::All,
+    );
     cache.insert(
         "ns/stale",
         "a.example.com",
@@ -291,22 +505,34 @@ fn expired_entry_is_reclaimed_in_preference_to_evicting_a_live_one() {
         vec![ip("1.1.1.1")],
         Duration::from_millis(20),
         now,
+        DnsLookupFamily::All,
     );
     assert_eq!(cache.len(), 2);
 
     std::thread::sleep(Duration::from_millis(40));
     let later = Instant::now();
-    cache.insert("ns/new", "c.example.com", "fp1", vec![ip("3.3.3.3")], MIN1, later);
+    cache.insert(
+        "ns/new",
+        "c.example.com",
+        "fp1",
+        vec![ip("3.3.3.3")],
+        MIN1,
+        later,
+        DnsLookupFamily::All,
+    );
 
     assert_eq!(cache.len(), 2);
-    assert_eq!(cache.get("ns/stale", "a.example.com", "fp1", later), None);
+    assert_eq!(
+        cache.get("ns/stale", "a.example.com", "fp1", later, DnsLookupFamily::All),
+        None
+    );
     // The live entry was not displaced to make room for the new one.
     assert_eq!(
-        cache.get("ns/live", "b.example.com", "fp1", later),
+        cache.get("ns/live", "b.example.com", "fp1", later, DnsLookupFamily::All),
         Some(vec![ip("2.2.2.2")])
     );
     assert_eq!(
-        cache.get("ns/new", "c.example.com", "fp1", later),
+        cache.get("ns/new", "c.example.com", "fp1", later, DnsLookupFamily::All),
         Some(vec![ip("3.3.3.3")])
     );
 }
@@ -330,6 +556,7 @@ fn concurrent_readers_and_invalidation_stay_consistent() {
             vec![ip(&format!("10.0.0.{index}"))],
             MIN1,
             now,
+            DnsLookupFamily::All,
         );
     }
 
@@ -341,7 +568,13 @@ fn concurrent_readers_and_invalidation_stay_consistent() {
                 for index in 0..32 {
                     // Either this key's own address set or nothing — never
                     // another key's value.
-                    let got = cache.get(&format!("ns/svc-{index}"), "a.example.com", "fp1", Instant::now());
+                    let got = cache.get(
+                        &format!("ns/svc-{index}"),
+                        "a.example.com",
+                        "fp1",
+                        Instant::now(),
+                        DnsLookupFamily::All,
+                    );
                     if let Some(addrs) = got {
                         assert_eq!(addrs, vec![ip(&format!("10.0.0.{index}"))]);
                     }
@@ -369,10 +602,11 @@ fn borrowed_query_preserves_owned_key_identity_and_hash() {
     use std::hash::{Hash, Hasher};
 
     #[derive(Hash)]
-    struct PreviousKey {
+    struct ExpectedKey {
         service_key: String,
         external_name: String,
         fingerprint: String,
+        family: DnsLookupFamily,
     }
 
     fn hash(value: &impl Hash) -> u64 {
@@ -393,15 +627,17 @@ fn borrowed_query_preserves_owned_key_identity_and_hash() {
         ("ns/é", "ñ.test", "π"),
     ];
     for (index, &(service_key, external_name, fingerprint)) in cases.iter().enumerate() {
-        let owned = DnsCacheKey::new(service_key, external_name, fingerprint);
-        let previous = PreviousKey {
+        let owned = DnsCacheKey::new(service_key, external_name, fingerprint, DnsLookupFamily::All);
+        let expected = ExpectedKey {
             service_key: service_key.to_string(),
             external_name: external_name.to_string(),
             fingerprint: fingerprint.to_string(),
+            family: DnsLookupFamily::All,
         };
-        assert_eq!(hash(&owned), hash(&previous));
+        assert_eq!(hash(&owned), hash(&expected));
         for (other, &(service_key, external_name, fingerprint)) in cases.iter().enumerate() {
             let query = DnsCacheQuery {
+                family: DnsLookupFamily::All,
                 service_key: Cow::Borrowed(service_key),
                 external_name: Cow::Borrowed(external_name),
                 fingerprint: Cow::Borrowed(fingerprint),
@@ -409,7 +645,7 @@ fn borrowed_query_preserves_owned_key_identity_and_hash() {
             let borrowed: &DnsCacheQuery<'_> = owned.borrow();
             assert_eq!(borrowed == &query, index == other);
             if index == other {
-                assert_eq!(hash(&query), hash(&previous));
+                assert_eq!(hash(&query), hash(&expected));
             }
         }
     }
@@ -420,10 +656,19 @@ fn lookup_allocates_only_the_owned_address_result() {
     let cache = cache();
     let now = Instant::now();
     let addresses = vec![ip("192.0.2.4"), ip("2001:db8::4")];
-    cache.insert("ns/service", "a.test", "system", addresses.clone(), MIN1, now);
+    cache.insert(
+        "ns/service",
+        "a.test",
+        "system",
+        addresses.clone(),
+        MIN1,
+        now,
+        DnsLookupFamily::All,
+    );
     let (_, result_allocations) = crate::test_allocation_counter::count_allocations(|| addresses.clone());
-    let (hit, allocations) =
-        crate::test_allocation_counter::count_allocations(|| cache.get("ns/service", "a.test", "system", now));
+    let (hit, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        cache.get("ns/service", "a.test", "system", now, DnsLookupFamily::All)
+    });
     assert_eq!(hit, Some(addresses));
     assert_eq!(allocations, result_allocations);
 
@@ -432,8 +677,9 @@ fn lookup_allocates_only_the_owned_address_result() {
         ("ns/service", "other.test", "system"),
         ("ns/service", "a.test", "std:192.0.2.53"),
     ] {
-        let (miss, allocations) =
-            crate::test_allocation_counter::count_allocations(|| cache.get(service, host, resolver, now));
+        let (miss, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            cache.get(service, host, resolver, now, DnsLookupFamily::All)
+        });
         assert!(miss.is_none());
         assert_eq!(allocations, 0);
     }

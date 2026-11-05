@@ -34,7 +34,7 @@ Module: `edgion-controller/src/api/cli_token_middleware.rs`. This is the **sole*
 - **One map, two sources**: both the local admin token (allow-all wildcard policy, reserved name `"admin"`) and the scoped Center `cli_tokens` live in the same map, so this one middleware authenticates both.
 - **Additive, no bypass**: a recognized token injects `Role::Restricted` + `CliTokenIdentity`. An unrecognized/absent token injects nothing; `authz_layer` returns `401` with `WWW-Authenticate: Bearer` for the role-less request, except on static public paths.
 
-The local admin token is registered onto the `Authorizer` via `set_admin_token` (built by `build_admin_token_entry`, which rejects a blank/whitespace token → not configured) and merged into the live cli-token map by `Authorizer::apply` — so it **survives every reload** even though reloads rebuild the cli-token map purely from `config.cli_tokens`.
+The local admin token is registered onto the `Authorizer` via `set_admin_token` (built by `build_admin_token_entry`, which rejects a blank/whitespace token → not configured) and merged into the live cli-token map by `Authorizer::apply` during startup. Process configuration, including both admin and scoped tokens, changes only on process restart.
 
 ### Federation mTLS — the Center identity
 
@@ -65,7 +65,7 @@ There is a single role variant. `Restricted` is shared by the local admin token,
 
 ```
 get  list  list-keys  watch  create  update  delete
-failover  acme-trigger  conf-sync-rotate  reload  server-info  diagnostics  wipe-all  debug
+failover  acme-trigger  conf-sync-rotate  server-info  diagnostics  wipe-all  debug
 access-self
 ```
 
@@ -112,7 +112,6 @@ Module: `edgion-controller/src/fed_sync/default_policy.rs`. Applied **only when 
 - **Write** (`create` / `update` / `delete`) on **`EdgionConfigData` only** (the region-route and ip-restriction handlers drive this kind).
 - **`list` / `failover`** on the synthetic **`RegionRoute`** label. `get` is intentionally absent because no classifier route emits `(get, RegionRoute)`.
 - **`server-info`** on synthetic **`NonResource`** for read-only server identity/readiness checks.
-- **`reload`** on synthetic **`NonResource`** — the Center's reload button arrives as a proxied `POST /api/v1/reload`, classified `(reload, NonResource)`; the Command channel that used to carry it is gone.
 - **Nothing else**: no `diagnostics`, `wipe-all`, or `debug`.
 
 A compile-time exhaustiveness gate (`is_default_readable`) forces every new `ResourceKind` to make an explicit readable/excluded decision — adding a kind without updating it is a compile error.
@@ -144,7 +143,7 @@ IP allowlist                   (outermost — rejects unauthorized peers before 
 1. **Mint**: `edgion-cli gen-token` — generates a CSPRNG token with an `edg_` prefix, prints both the token (for the client) and its SHA-256 (for the controller). The hash covers the **full `edg_`-prefixed string** (exactly what the Bearer header carries).
 2. **Configure**: paste the SHA-256 into a `cli_tokens[]` entry with a `name` and an `rbac.allow` rule set. Schema + examples:
    [`../../02-features/02-config/00-controller-config.md` → `[cli_tokens]`](../../02-features/02-config/00-controller-config.md).
-3. **Reload**: `POST /api/v1/reload` hot-swaps the token table — no restart. The local admin token survives the reload (re-merged by `Authorizer::apply`).
+3. **Restart**: restart every Controller instance after changing the token table. Each instance continues using its startup table until it exits.
 4. **Use**: `edgion-cli --token <edg_…>` (long-only; `-t` is taken by `--target`) or the `EDGION_TOKEN` env var, or persist it once with `edgion-cli login --token <edg_…>` (writes `~/.edgion/token`). Token precedence: `--token` → `EDGION_TOKEN` → `~/.edgion/token`.
 
 The local admin token (operator credential) is a distinct concept: it is supplied to the *controller* via `EDGION_ADMIN_TOKEN` / the `admin_token` config field and maps to the allow-all wildcard policy. Operator walkthrough and the full security checklist live in the human-facing ops guide: `docs/en/ops-guide/federation-rbac.md#cli-token-rbac`.

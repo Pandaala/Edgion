@@ -1,3 +1,5 @@
+# Generated from edgion-tests/integration/conf/HTTPRoute/Delegation/*.yaml; child
+# backends point at the shared test-http Service through the ReferenceGrant.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -30,6 +32,354 @@ spec:
       protocol: HTTP
       port: 31932
 ---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: deleg-deny-client-header
+  namespace: edgion-deleg
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "x-parent-filter"
+                  values:
+                    - "off"
+        status: 403
+        message: "child plugin saw the client header"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: deleg-deny-parent-header
+  namespace: edgion-deleg
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "x-parent-filter"
+                  values:
+                    - "on"
+        status: 403
+        message: "child plugin saw the parent header"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-child
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: delegation-parent
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing/pay
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: deleg-deny-client-header
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing/audit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: deleg-deny-parent-header
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /evil
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l2
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l1
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l3
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l3
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l2
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l4
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l4
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l3
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l5
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l5
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l4
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l5
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l6
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l6
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l6
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l5
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l6
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: multi-child
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: billing-v1-parent
+      namespace: edgion-test
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: billing-v2-parent
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/billing/invoice
+        - path:
+            type: PathPrefix
+            value: /v2/billing/invoice
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: precedence-child
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precedence-root-a
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+        - path:
+            type: Exact
+            value: /api/orders
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-served-by
+                value: precedence-child
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-v1-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "multi.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/billing
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent
+                value: v1
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: multi-child
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-v2-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "multi.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v2/billing
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent
+                value: v2
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: multi-child
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l1
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "chain.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l2
+          namespace: edgion-deleg
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -38,6 +388,7 @@ metadata:
 spec:
   parentRefs:
     - name: delegation-gateway
+      namespace: edgion-test
   hostnames:
     - "delegation.example.com"
   rules:
@@ -63,27 +414,64 @@ spec:
           kind: HTTPRoute
           name: "*"
           namespace: edgion-deleg
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-served-by
+                value: platform-api
+      backendRefs:
+        - name: test-http
+          port: 30001
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: billing-child
-  namespace: edgion-deleg
+  name: precedence-root-a
+  namespace: edgion-test
 spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "precedence.delegation.example.com"
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /api/v1/billing/pay
+            value: /api
       backendRefs:
-        - name: test-http
-          namespace: edgion-test
-          port: 30001
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: precedence-child
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: precedence-root-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "precedence.delegation.example.com"
+  rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /evil
+            value: /api/users
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-served-by
+                value: root-b
       backendRefs:
         - name: test-http
-          namespace: edgion-test
           port: 30001

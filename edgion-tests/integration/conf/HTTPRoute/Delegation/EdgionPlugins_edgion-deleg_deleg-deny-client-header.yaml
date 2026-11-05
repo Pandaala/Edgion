@@ -1,0 +1,25 @@
+# Child plugin: deny the client-sent `x-parent-filter: off`. The parent's
+# mandatory RequestHeaderModifier overwrites it with "on" first, so a 200
+# proves the parent filter ran before this child plugin (design §6.1).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: deleg-deny-client-header
+  namespace: edgion-deleg
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "x-parent-filter"
+                  values:
+                    - "off"
+        status: 403
+        message: "child plugin saw the client header"

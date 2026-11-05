@@ -14,8 +14,12 @@ use crate::conf_mgr::conf_center::common::{ensure_expected_resource_version, mer
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
+#[path = "source_query.rs"]
+mod source_query;
+
 /// Etcd-backed configuration storage implementing `CenterApi`.
 pub struct EtcdStorage {
+    source_generation: String,
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
     /// Pre-computed "{key_prefix}/conf/" to avoid per-call allocation in parse_key.
@@ -31,6 +35,7 @@ impl EtcdStorage {
     pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String) -> Self {
         let cached_conf_prefix = format!("{}/conf/", key_prefix);
         Self {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client,
             key_prefix,
             cached_conf_prefix,
@@ -44,6 +49,7 @@ impl EtcdStorage {
     pub fn new_gated(client: Arc<EtcdLinkClient>, key_prefix: String, gate: LeadershipGate) -> Self {
         let cached_conf_prefix = format!("{}/conf/", key_prefix);
         Self {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client,
             key_prefix,
             cached_conf_prefix,
@@ -239,6 +245,21 @@ impl CenterApi for EtcdStorage {
         Ok(())
     }
 
+    async fn update_one_if_source(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+        expected: &crate::conf_mgr::conf_center::source_query::SourcePrecondition,
+    ) -> Result<(), ConfWriterError> {
+        self.replace_source(kind, namespace, name, content, expected).await
+    }
+
+    async fn get_source_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
+        self.source_one(kind, namespace, name).await
+    }
+
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
         self.client
@@ -305,7 +326,10 @@ impl CenterApi for EtcdStorage {
         Ok(())
     }
 
-    async fn get_list_by_kind(&self, kind: &str, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+    async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_page(kind, None, options).await;
+        }
         let prefix = self.kind_prefix(kind);
         let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
@@ -315,11 +339,22 @@ impl CenterApi for EtcdStorage {
         &self,
         kind: &str,
         namespace: &str,
-        _opts: Option<ListOptions>,
+        opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
+        if let Some(options) = opts {
+            return self.source_page(kind, Some(namespace), options).await;
+        }
         let prefix = self.kind_ns_prefix(kind, namespace);
         let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
+    }
+
+    async fn count_by_kind(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+    ) -> Result<crate::conf_mgr::conf_center::traits::SourceCount, ConfWriterError> {
+        self.source_count(kind, namespace).await
     }
 
     async fn list_all(&self, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {

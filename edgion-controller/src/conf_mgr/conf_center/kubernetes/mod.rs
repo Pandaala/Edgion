@@ -39,6 +39,7 @@ mod controller;
 mod leader_election;
 mod namespace;
 mod resource_controller;
+mod source_transport;
 mod storage;
 mod version_detection;
 mod watch_source;

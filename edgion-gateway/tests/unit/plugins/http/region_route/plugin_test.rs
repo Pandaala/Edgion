@@ -3,7 +3,6 @@ use crate::plugins::http::plugin_store::compile_plugins;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
-use bytes::Bytes;
 use edgion_resources::common::{KeyGet, KeySet};
 use edgion_resources::resources::edgion_plugins::{
     EdgionPlugin, EdgionPlugins, HashCalcConfig, RegionDef, RegionRouteConfig, RequestFilterEntry,
@@ -17,158 +16,6 @@ fn make_region(name: &str, low: u16, high: u16, endpoint: &str) -> RegionDef {
         tls: false,
         failover_to: None,
     }
-}
-
-/// A default (empty) config must not panic and must yield no routing logic.
-#[test]
-fn default_config_has_no_routing() {
-    let config = RegionRouteConfig::default();
-    assert!(config.route_rules.is_empty());
-    assert!(config.regions.is_empty());
-    assert!(config.override_ref.is_none());
-}
-
-#[tokio::test]
-async fn constructor_checks_invalid_base_before_any_request_side_effect() {
-    let config = RegionRouteConfig {
-        route_rules: vec![RouteRule::RouteByHashRange],
-        regions: vec![make_region("bad", 0, 999, "bad:invalid")],
-        ..Default::default()
-    };
-    let plugin = RegionRoute::create(&config, "default");
-    let mut session = MockPluginSession::new();
-    let mut log = PluginLog::new("RegionRoute");
-    assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
-        PluginRunningResult::GoodNext
-    );
-    assert_eq!(log.render_for_test(), "err: region_table_invalid");
-}
-
-#[test]
-fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
-    use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, RegionRouteOverride};
-    let key = "unit-test-ns/rr-generation-validation";
-    let store = get_global_edgion_config_data_store();
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".to_string(),
-        init_error: None,
-        base: Arc::new(RegionRouteConfig {
-            regions: vec![
-                make_region("base", 0, 499, "base"),
-                make_region("base-only", 500, 999, "base-only"),
-            ],
-            ..Default::default()
-        }),
-        override_key: Some(key.to_string()),
-    };
-    let mut resource = EdgionConfigData::new(
-        "rr-generation-validation",
-        EdgionConfigDataSpec {
-            current_status: None,
-            enable: true,
-            active: None,
-            visibility: Default::default(),
-            unknown_fields: Vec::new(),
-            data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                enable: Some(false),
-                active: None,
-                regions: Some(vec![make_region("overlay", 0, 999, "overlay")]),
-            }),
-        },
-    );
-    resource.metadata.namespace = Some("unit-test-ns".to_string());
-    store.insert_raw_for_test(key, Arc::new(resource.clone()));
-    let mut session = MockPluginSession::new();
-    let mut log = PluginLog::new("RegionRoute");
-    let held = plugin.compute_effective_regions(&mut session, &mut log);
-    assert_eq!(held.len(), 1, "overlay replaces the entire base table");
-    assert_eq!(held[0].name, "overlay", "variant enable is inert");
-    if let ConfigEntry::RegionRouteOverride(overlay) = &mut resource.spec.data {
-        overlay.regions.as_mut().unwrap()[0].hash_range = [0, 1500];
-    }
-    store.insert_raw_for_test(key, Arc::new(resource.clone()));
-    session
-        .expect_record_outcome()
-        .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
-        .times(1)
-        .return_const(());
-    assert_eq!(plugin.compute_effective_regions(&mut session, &mut log)[0].name, "base");
-    assert_eq!(
-        held[0].hash_range,
-        [0, 999],
-        "held table cannot observe later publication"
-    );
-    session.checkpoint();
-    if let ConfigEntry::RegionRouteOverride(overlay) = &mut resource.spec.data {
-        overlay.regions = None;
-    }
-    store.insert_raw_for_test(key, Arc::new(resource));
-    let inherited = plugin.compute_effective_regions(&mut session, &mut log);
-    assert!(
-        std::ptr::eq(&*inherited, plugin.base.regions.as_slice()),
-        "None borrows the complete base"
-    );
-}
-
-/// When no override_key is set, `compute_effective_regions` returns the base regions.
-#[test]
-fn base_regions_used_when_no_override_ref() {
-    let config = RegionRouteConfig {
-        regions: vec![
-            make_region("us-east", 0, 499, "10.0.0.1:8080"),
-            make_region("us-west", 500, 999, "10.0.0.2:8080"),
-        ],
-        override_ref: None,
-        ..Default::default()
-    };
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".to_string(),
-        init_error: None,
-        base: Arc::new(config),
-        override_key: None,
-    };
-
-    // No overlay configured — the function returns before touching `session`,
-    // so a mock with zero expectations correctly panics if that assumption breaks.
-    let mut session = MockPluginSession::new();
-    let mut log = PluginLog::new("RegionRoute");
-    let regions = plugin.compute_effective_regions(&mut session, &mut log);
-    assert_eq!(regions.len(), 2);
-    assert_eq!(regions[0].name, "us-east");
-    assert_eq!(regions[1].name, "us-west");
-}
-
-/// When override_key is set but not found in the global store, the plugin must
-/// fall back to the base regions (fail-to-base, not fail-closed).
-#[test]
-fn overlay_missing_falls_back_to_base() {
-    let config = RegionRouteConfig {
-        regions: vec![make_region("eu-west", 0, 999, "10.0.1.1:8080")],
-        ..Default::default()
-    };
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".to_string(),
-        init_error: None,
-        base: Arc::new(config),
-        // Key that is not present in the global store in this unit test.
-        override_key: Some("unit-test-ns/rr-override-absent-key".to_string()),
-    };
-
-    let mut session = MockPluginSession::new();
-    session
-        .expect_record_outcome()
-        .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
-        .times(1)
-        .return_const(());
-
-    let mut log = PluginLog::new("RegionRoute");
-    let regions = plugin.compute_effective_regions(&mut session, &mut log);
-    assert_eq!(regions.len(), 1);
-    assert_eq!(regions[0].name, "eu-west");
 }
 
 /// `lookup_by_hash` returns the first region whose hash_range covers the given value.
@@ -198,79 +45,6 @@ fn supported_hash_algorithms_keep_their_existing_vectors() {
     let modulo = NonZeroU16::new(1000).unwrap();
     assert_eq!(compute_hash("routing-key", &HashAlgorithm::Crc32, modulo), 554);
     assert_eq!(compute_hash("routing-key", &HashAlgorithm::Sha256, modulo), 5);
-}
-
-#[tokio::test]
-async fn direct_construction_rejects_invalid_modulo_before_session_side_effects() {
-    for modulo in [0, 1] {
-        let config = RegionRouteConfig {
-            key_get: vec![KeyGet::Header {
-                name: "x-route-key".to_string(),
-            }],
-            hash_calc: Some(HashCalcConfig {
-                algorithm: HashAlgorithm::Crc32,
-                modulo,
-                write_back: vec![KeySet::Ctx {
-                    name: "route-hash".to_string(),
-                }],
-            }),
-            route_rules: vec![RouteRule::RouteByHashRange],
-            regions: vec![make_region("region-a", 0, 1, "region-a:80")],
-            ..RegionRouteConfig::default()
-        };
-        let plugin = RegionRoute::create(&config, "default");
-        // No expectations: an extraction, write-back, or jump would fail the test.
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("RegionRoute");
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert_eq!(log.render_for_test(), "err: hash_modulo_invalid");
-    }
-}
-
-#[tokio::test]
-async fn compile_plugins_seals_invalid_modulo_with_generic_response() {
-    let config = RegionRouteConfig {
-        hash_calc: Some(HashCalcConfig {
-            algorithm: HashAlgorithm::Crc32,
-            modulo: 1,
-            write_back: Vec::new(),
-        }),
-        ..RegionRouteConfig::default()
-    };
-    let mut resource = EdgionPlugins::new("invalid-region-route", Default::default());
-    resource.metadata.namespace = Some("default".to_string());
-    resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(config))]);
-
-    let compiled = compile_plugins(&resource);
-
-    assert!(!compiled.is_activatable);
-    assert!(!compiled.retain_previous_on_invalid_update);
-    assert_eq!(
-        compiled.preparse_errors,
-        vec!["requestPlugins[0] (RegionRoute): hashCalc.modulo must be at least 2"]
-    );
-    assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
-    let filter = compiled
-        .plugin_runtime
-        .request_plugins_iter()
-        .next()
-        .expect("sealed reject filter");
-    assert_eq!(filter.name(), "RejectInvalidConfig");
-
-    let mut session = MockPluginSession::new();
-    let mut log = PluginLog::new(filter.name());
-    let result = filter.run_request(&mut session, &mut log).await;
-    assert_eq!(
-        result,
-        PluginRunningResult::ErrResponse {
-            status: 500,
-            body: Some(Bytes::from_static(br#"{"message":"plugin configuration error"}"#)),
-        }
-    );
-    assert_eq!(log.render_for_test(), "err: invalid plugin config\nerr: RegionRoute");
 }
 
 /// `apply_failover_redirect` with a valid target returns the target region.
@@ -334,146 +108,11 @@ fn apply_failover_redirect_unknown_target_returns_original() {
     assert_eq!(r.name, "a");
 }
 
-/// H1: When the referenced EdgionConfigData has `spec.enable=false` (envelope kill-switch),
-/// the overlay must NOT be applied — base regions must be returned.
-///
-/// The overlay contains regions that differ from base; if the kill-switch were ignored,
-/// the base regions would be replaced. Asserting base regions verifies H1.
-#[test]
-fn overlay_envelope_disabled_falls_back_to_base() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::resources::edgion_config_data::{
-        ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, RegionRouteOverride,
-    };
-    use std::sync::Arc;
-
-    // Unique key — no other test inserts or depends on this key.
-    let test_key = "unit-test-ns/rr-overlay-envelope-disabled-h1-test";
-
-    // Build an EdgionConfigData with spec.enable=false and regions that DIFFER from base.
-    // If the kill-switch is honoured, these regions must NOT replace base.
-    let override_regions = vec![make_region("override-only", 0, 999, "override-ep:9090")];
-    let mut ed = EdgionConfigData::new(
-        "rr-overlay-envelope-disabled-h1-test",
-        EdgionConfigDataSpec {
-            current_status: None,
-            enable: false, // envelope kill-switch
-            active: None,
-            visibility: Default::default(),
-            unknown_fields: Vec::new(),
-            data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                enable: None,
-                active: None,
-                regions: Some(override_regions),
-            }),
-        },
-    );
-    ed.metadata.namespace = Some("unit-test-ns".to_string());
-    get_global_edgion_config_data_store().insert_raw_for_test(test_key, Arc::new(ed));
-
-    // Base: single region distinct from the override.
-    let config = RegionRouteConfig {
-        regions: vec![make_region("base-region", 0, 999, "base-ep:8080")],
-        ..Default::default()
-    };
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".to_string(),
-        init_error: None,
-        base: Arc::new(config),
-        override_key: Some(test_key.to_string()),
-    };
-
-    let mut session = MockPluginSession::new();
-    session
-        .expect_record_outcome()
-        .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
-        .times(1)
-        .return_const(());
-
-    let mut log = PluginLog::new("RegionRoute");
-    let regions = plugin.compute_effective_regions(&mut session, &mut log);
-
-    assert_eq!(regions.len(), 1, "base has exactly 1 region");
-    assert_eq!(
-        regions[0].name, "base-region",
-        "envelope disabled: must return base regions, not override"
-    );
-}
-
-/// H2: When the overlay is applied but the merged effective regions are invalid
-/// (duplicate region names), the plugin must fall back to base regions.
-#[test]
-fn overlay_invalid_regions_falls_back_to_base() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::resources::edgion_config_data::{
-        ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, RegionRouteOverride,
-    };
-    use std::sync::Arc;
-
-    let test_key = "unit-test-ns/rr-overlay-invalid-dup-names-h2-test";
-
-    // Build an EdgionConfigData whose overlay has duplicate region names (invalid).
-    let dup_regions = vec![
-        make_region("dup-name", 0, 499, "ep-a:8080"),
-        make_region("dup-name", 500, 999, "ep-b:8080"), // duplicate — must trigger overlay_invalid
-    ];
-    let mut ed = EdgionConfigData::new(
-        "rr-overlay-invalid-dup-names-h2-test",
-        EdgionConfigDataSpec {
-            current_status: None,
-            enable: true, // envelope enabled — the validation must catch the bad regions
-            active: None,
-            visibility: Default::default(),
-            unknown_fields: Vec::new(),
-            data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
-                enable: None,
-                active: None,
-                regions: Some(dup_regions),
-            }),
-        },
-    );
-    ed.metadata.namespace = Some("unit-test-ns".to_string());
-    get_global_edgion_config_data_store().insert_raw_for_test(test_key, Arc::new(ed));
-
-    let config = RegionRouteConfig {
-        regions: vec![make_region("valid-base", 0, 999, "base:8080")],
-        ..Default::default()
-    };
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".to_string(),
-        init_error: None,
-        base: Arc::new(config),
-        override_key: Some(test_key.to_string()),
-    };
-
-    let mut session = MockPluginSession::new();
-    session
-        .expect_record_outcome()
-        .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
-        .times(1)
-        .return_const(());
-
-    let mut log = PluginLog::new("RegionRoute");
-    let regions = plugin.compute_effective_regions(&mut session, &mut log);
-
-    assert_eq!(regions.len(), 1, "base has exactly 1 region");
-    assert_eq!(
-        regions[0].name, "valid-base",
-        "invalid overlay: must fall back to base regions"
-    );
-}
-
-/// `route_to` on a successful cross-region jump (`SetJumpOutcome::Set`) must
-/// record a `Success` dye outcome with the target region's name — the value
-/// the deleted `apply_dye_headers` call used to pass.
 #[tokio::test]
 async fn route_to_records_success_outcome_with_region_name() {
     let config = RegionRouteConfig {
         // Distinct from the target region so the local-passthrough branch
         // (which does not call set_upstream_jump) is not taken.
-        my_region: "local".to_string(),
         ..Default::default()
     };
     let plugin = RegionRoute {
@@ -481,7 +120,7 @@ async fn route_to_records_success_outcome_with_region_name() {
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
-        override_key: None,
+        setting_key: None,
     };
     let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
 
@@ -501,11 +140,11 @@ async fn route_to_records_success_outcome_with_region_name() {
         .return_const(());
 
     let mut log = PluginLog::new("RegionRoute");
-    let result = plugin.route_to(&mut session, &region, &mut log).await;
+    let result = plugin.route_to(&mut session, &region, "local", &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
 }
 
-/// `route_to` on a local-region pass-through (my_region matches the target,
+/// `route_to` on a local-region pass-through (the setting matches the target,
 /// no jump is set) must still record a `Success` dye outcome with the target
 /// region's name — the value the deleted `apply_dye_headers` call used to pass
 /// at this same branch (old comment: "The request WAS routed to a region, so
@@ -515,7 +154,6 @@ async fn route_to_local_region_pass_records_success_outcome_with_region_name() {
     let config = RegionRouteConfig {
         // Same as the target region so the local-passthrough branch is taken
         // (no set_upstream_jump call).
-        my_region: "us-east".to_string(),
         ..Default::default()
     };
     let plugin = RegionRoute {
@@ -523,7 +161,7 @@ async fn route_to_local_region_pass_records_success_outcome_with_region_name() {
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
-        override_key: None,
+        setting_key: None,
     };
     let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
 
@@ -537,25 +175,21 @@ async fn route_to_local_region_pass_records_success_outcome_with_region_name() {
     // pass-through branch returns before either is reached.
 
     let mut log = PluginLog::new("RegionRoute");
-    let result = plugin.route_to(&mut session, &region, &mut log).await;
+    let result = plugin.route_to(&mut session, &region, "us-east", &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
 }
 
 /// A jump rejected by an earlier plugin (`SetJumpOutcome::Rejected`) must NOT
-/// record any dye outcome — region_route's capability table excludes Reject
-/// for this plugin (pre-existing silent-GoodNext behavior, out of scope here).
+/// record a configuration rejection: jump ownership remains with the earlier plugin.
 #[tokio::test]
 async fn route_to_rejected_jump_records_no_outcome() {
-    let config = RegionRouteConfig {
-        my_region: "local".to_string(),
-        ..Default::default()
-    };
+    let config = RegionRouteConfig { ..Default::default() };
     let plugin = RegionRoute {
         writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(config),
-        override_key: None,
+        setting_key: None,
     };
     let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
 
@@ -567,7 +201,7 @@ async fn route_to_rejected_jump_records_no_outcome() {
     // No `expect_record_outcome()` at all: any call panics the mock.
 
     let mut log = PluginLog::new("RegionRoute");
-    let result = plugin.route_to(&mut session, &region, &mut log).await;
+    let result = plugin.route_to(&mut session, &region, "local", &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
 }
 
@@ -584,13 +218,13 @@ impl RegionRoute {
 }
 
 #[test]
-fn owning_region_invalid_target_keeps_base_but_owner_failure_has_no_constructor() {
+fn owning_region_invalid_target_retains_policy_but_invalid_owner_is_rejected() {
     for reference in [
         serde_json::json!({"name":"bad/name"}),
         serde_json::json!({"name":"overlay","namespace":""}),
     ] {
         let config = RegionRouteConfig {
-            override_ref: Some(serde_json::from_value(reference).unwrap()),
+            cluster_region_ref: serde_json::from_value(reference).unwrap(),
             ..Default::default()
         };
         let owner: EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"region"},"spec":{"requestPlugins":[{"type":"RegionRoute","config":config}]}})).unwrap();
@@ -605,48 +239,13 @@ fn owning_region_invalid_target_keeps_base_but_owner_failure_has_no_constructor(
 }
 
 #[test]
-fn wrong_overlay_type_preserves_the_complete_base_and_reports_fallback() {
-    let key = "unit-test-ns/rr-wrong-type-complete-base";
-    let resource: EdgionConfigData = serde_json::from_value(serde_json::json!({
-        "apiVersion": "edgion.io/v1", "kind": "EdgionConfigData",
-        "metadata": {"name": "rr-wrong-type-complete-base", "namespace": "unit-test-ns"},
-        "spec": {"data": {"type": "Misc", "config": {}}}
-    }))
-    .unwrap();
-    get_global_edgion_config_data_store().insert_raw_for_test(key, Arc::new(resource));
-    let plugin = RegionRoute {
-        writeback_log_targets: String::new(),
-        name: "RegionRoute".into(),
-        init_error: None,
-        base: Arc::new(RegionRouteConfig {
-            regions: vec![
-                make_region("first", 0, 499, "first"),
-                make_region("second", 500, 999, "second"),
-            ],
-            ..Default::default()
-        }),
-        override_key: Some(key.into()),
-    };
-    let mut session = MockPluginSession::new();
-    session
-        .expect_record_outcome()
-        .withf(|outcome, value| *outcome == DyeOutcome::Fallback && value == "overlay-fail-to-base")
-        .times(1)
-        .return_const(());
-    let mut log = PluginLog::new("RegionRoute");
-    let regions = plugin.compute_effective_regions(&mut session, &mut log);
-    assert!(std::ptr::eq(&*regions, plugin.base.regions.as_slice()));
-    assert!(log.render_for_test().contains("overlay_type_mismatch"));
-}
-
-#[test]
 fn extracted_route_values_preserve_source_order_and_ownership() {
     let plugin = RegionRoute {
         writeback_log_targets: String::new(),
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(RegionRouteConfig::default()),
-        override_key: None,
+        setting_key: None,
     };
     for source in [
         KeyGet::Header {
@@ -705,7 +304,6 @@ async fn borrowed_direct_and_configured_map_routes_preserve_selection() {
     for mode in ["direct", "override", "bypass"] {
         let selected = if mode == "override" { "other" } else { "local" };
         let config = RegionRouteConfig {
-            my_region: selected.to_string(),
             key_get: vec![KeyGet::Header {
                 name: "x-key".to_string(),
             }],
@@ -728,10 +326,13 @@ async fn borrowed_direct_and_configured_map_routes_preserve_selection() {
                     vec![]
                 },
             }),
-            regions: vec![
-                make_region("local", 0, 499, "local:80"),
-                make_region("other", 500, 999, "other:80"),
-            ],
+            cluster_region_ref: install_setting(
+                selected,
+                vec![
+                    make_region("local", 0, 499, "local:80"),
+                    make_region("other", 500, 999, "other:80"),
+                ],
+            ),
             ..Default::default()
         };
         let plugin = RegionRoute::create(&config, "default");
@@ -756,7 +357,6 @@ async fn borrowed_direct_and_configured_map_routes_preserve_selection() {
 async fn borrowed_hash_input_preserves_passthrough_and_writeback() {
     for passthrough in [false, true] {
         let config = RegionRouteConfig {
-            my_region: "local".to_string(),
             key_get: vec![KeyGet::Header {
                 name: "x-key".to_string(),
             }],
@@ -771,7 +371,7 @@ async fn borrowed_hash_input_preserves_passthrough_and_writeback() {
                 }],
             }),
             route_rules: vec![RouteRule::RouteByHashRange],
-            regions: vec![make_region("local", 0, 999, "local:80")],
+            cluster_region_ref: install_setting("local", vec![make_region("local", 0, 999, "local:80")]),
             ..Default::default()
         };
         let plugin = RegionRoute::create(&config, "default");
@@ -820,7 +420,7 @@ fn writeback_config(targets: Vec<KeySet>) -> RegionRouteConfig {
         }),
         route_rules: vec![RouteRule::RouteByHashRange],
         // "routing-key" hashes to 554, outside this range.
-        regions: vec![make_region("unused", 0, 10, "unused:80")],
+        cluster_region_ref: install_setting("unused", vec![make_region("unused", 0, 10, "unused:80")]),
         ..Default::default()
     }
 }
@@ -900,7 +500,7 @@ async fn prepared_writeback_logs_keep_generations_modes_failures_and_bypass() {
         || async {
             use edgion_resources::sensitive::SENSITIVE_MODE;
             use std::sync::atomic::Ordering;
-            for bound in [false, true] {
+            for _bound in [true] {
                 for construction_mode in [0, 1, 2] {
                     SENSITIVE_MODE.store(construction_mode, Ordering::SeqCst);
                     let targets = vec![
@@ -911,17 +511,9 @@ async fn prepared_writeback_logs_keep_generations_modes_failures_and_bypass() {
                         KeySet::Header { name: "x-a".into() },
                     ];
                     let mut config = writeback_config(targets.clone());
-                    let old = if bound {
-                        RegionRoute::create(&config, "default")
-                    } else {
-                        RegionRoute::create_inline(&config).unwrap()
-                    };
+                    let old = RegionRoute::create(&config, "default");
                     config.hash_calc.as_mut().unwrap().write_back = vec![KeySet::Ctx { name: "new".into() }];
-                    let new = if bound {
-                        RegionRoute::create(&config, "default")
-                    } else {
-                        RegionRoute::create_inline(&config).unwrap()
-                    };
+                    let new = RegionRoute::create(&config, "default");
                     drop(config);
                     for mode in [0, 1, 2] {
                         SENSITIVE_MODE.store(mode, Ordering::SeqCst);
@@ -989,4 +581,138 @@ async fn prepared_writeback_logs_keep_generations_modes_failures_and_bypass() {
         },
     )
     .await;
+}
+
+fn install_setting(
+    local: &str,
+    regions: Vec<RegionDef>,
+) -> edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let name = format!("setting-unit-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let resource: EdgionConfigData = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":name,"namespace":"default"},
+        "spec":{"data":{"type":"ClusterRegionSetting","config":{
+            "clusterName":"prod","regionName":local,"regions":regions
+        }}}
+    }))
+    .unwrap();
+    get_global_edgion_config_data_store().insert_raw_for_test(format!("default/{name}"), Arc::new(resource));
+    serde_json::from_value(serde_json::json!({"name":name})).unwrap()
+}
+
+#[tokio::test]
+async fn operational_errors_preserve_policy_after_full_compilation() {
+    for (fail_open, status) in [(true, 503), (false, 500), (false, 400), (false, 599)] {
+        let config = RegionRouteConfig {
+            fail_open,
+            status_on_error: status,
+            cluster_region_ref: serde_json::from_value(serde_json::json!({"name":"absent"})).unwrap(),
+            hash_calc: Some(HashCalcConfig {
+                modulo: 1,
+                algorithm: HashAlgorithm::Crc32,
+                write_back: vec![KeySet::Ctx {
+                    name: "must-not-write".into(),
+                }],
+            }),
+            route_rules: vec![RouteRule::RouteByHashRange],
+            ..Default::default()
+        };
+        let mut resource = EdgionPlugins::new("policy-test", Default::default());
+        resource.metadata.namespace = Some("default".into());
+        resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(config))]);
+        let compiled = compile_plugins(&resource);
+        assert!(compiled.is_activatable);
+        let filter = compiled.plugin_runtime.request_plugins_iter().next().unwrap();
+        assert_eq!(filter.name(), "RegionRoute");
+        let mut session = MockPluginSession::new();
+        session.expect_record_outcome().times(1).return_const(());
+        // Any request read/write/jump call is unexpected and fails this mock.
+        let result = filter
+            .run_request(&mut session, &mut PluginLog::new("RegionRoute"))
+            .await;
+        assert_eq!(
+            result,
+            if fail_open {
+                PluginRunningResult::GoodNext
+            } else {
+                PluginRunningResult::ErrResponse { status, body: None }
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn setting_generation_is_atomic_and_unavailable_states_recover() {
+    let reference = install_setting("east", vec![make_region("east", 0, 999, "east:80")]);
+    let key = format!("default/{}", reference.name);
+    let config = RegionRouteConfig {
+        cluster_region_ref: reference,
+        ..Default::default()
+    };
+    let plugin = RegionRoute {
+        name: "RegionRoute".into(),
+        base: Arc::new(config),
+        setting_key: Some(key.clone()),
+        init_error: None,
+        writeback_log_targets: String::new(),
+    };
+    let store = get_global_edgion_config_data_store();
+    let held = plugin.compute_effective_regions().unwrap();
+    let original = store.get_region_route_by_key(&key).unwrap().0;
+    let mut next = (*original).clone();
+    if let ConfigEntry::ClusterRegionSetting(setting) = &mut next.spec.data {
+        setting.region_name = "west".into();
+        setting.regions[0].name = "west".into();
+    }
+    store.insert_raw_for_test(&key, Arc::new(next.clone()));
+    let current = plugin.compute_effective_regions().unwrap();
+    assert_eq!((held.region_name(), held[0].name.as_str()), ("east", "east"));
+    assert_eq!((current.region_name(), current[0].name.as_str()), ("west", "west"));
+    for mode in ["disabled", "identity", "table", "wrong-type"] {
+        let mut broken = next.clone();
+        if mode == "disabled" {
+            broken.spec.enable = false;
+        } else if mode == "wrong-type" {
+            broken.spec.data = ConfigEntry::Unsupported;
+        } else if let ConfigEntry::ClusterRegionSetting(setting) = &mut broken.spec.data {
+            if mode == "identity" {
+                setting.region_name = "absent".into();
+            } else {
+                setting.regions[0].hash_range = [999, 0];
+            }
+        }
+        store.insert_raw_for_test(&key, Arc::new(broken));
+        assert!(plugin.compute_effective_regions().is_err(), "{mode}");
+        let mut session = MockPluginSession::new();
+        session.expect_record_outcome().times(1).return_const(());
+        assert_eq!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("RegionRoute"))
+                .await,
+            PluginRunningResult::GoodNext
+        );
+        store.insert_raw_for_test(&key, Arc::new(next.clone()));
+        assert_eq!(plugin.compute_effective_regions().unwrap().region_name(), "west");
+    }
+}
+
+#[test]
+fn bound_constructor_rejects_structural_errors_but_retains_operational_policy() {
+    for (status, target, accepted) in [
+        (399, "X-Hash", false),
+        (500, "Content-Length", false),
+        (500, "X-Hash", true),
+    ] {
+        let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"cold-constructor","namespace":"default"},
+            "spec":{"requestPlugins":[{"type":"RegionRoute","config":{
+                "clusterRegionRef":{"name":"setting"},"failOpen":false,"statusOnError":status,
+                "hashCalc":{"modulo":1,"writeBack":[{"type":"responseHeader","name":target}]}
+            }}]}
+        }))
+        .unwrap();
+        let entry = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();
+        assert_eq!(RegionRoute::create_bound(entry).is_some(), accepted);
+    }
 }

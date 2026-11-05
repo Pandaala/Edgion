@@ -13,7 +13,7 @@ The user approved rejecting native HTTPRoute CORS configurations where
 entry exactly equal to `*`, including mixed lists. This invalidates the whole rule;
 valid siblings remain active. With no surviving effective rule, an authored policy
 violation rejects the Gateway attachment with `Accepted=False/UnsupportedValue`.
-Delegation drops invalid child rules and retains their diagnostic on the parent.
+A delegation child is validated as its own route; its diagnostic stays on the child.
 False/omitted credentials preserve wildcard output. Explicit names are joined;
 empty/omitted lists emit no exposure header. No browser-mode inference is added.
 
@@ -29,8 +29,7 @@ Cookie/Authorization presence does not reliably identify browser credentials mod
 
 The shared `HTTPCORSFilter::credentialed_expose_headers_error` feeds `validate`
 and `HTTPRouteRule::unsupported_cors_reason`. Controller invalid-rule processing,
-delegation flattening, attachment status, and Gateway effective-rule publication
-use these checks. `GapiCorsFilter::try_new` also validates. Constructor rejection
+attachment status, and Gateway rule publication use these checks. `GapiCorsFilter::try_new` also validates. Constructor rejection
 alone is insufficient: the runtime builder can omit a failed filter, so the Gateway
 must reject the rule before compilation even without Controller invalid indices.
 

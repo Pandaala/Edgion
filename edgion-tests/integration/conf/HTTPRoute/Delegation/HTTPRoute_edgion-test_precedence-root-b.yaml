@@ -1,0 +1,29 @@
+# per_level_precedence, root B: a sibling root on the same hostname with
+# PathPrefix /api/users. Specificity is compared per level, so at the root
+# level B (/api/users) outranks A (/api) and serves /api/users, even though
+# A's child has a more specific Exact /api/users (design §3.2).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: precedence-root-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "precedence.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/users
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-served-by
+                value: root-b
+      backendRefs:
+        - name: test-http
+          port: 30001

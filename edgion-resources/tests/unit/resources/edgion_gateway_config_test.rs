@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn dns_lookup_family_defaults_strictly_and_round_trips() {
+    let default: DnsResolverConfig = serde_json::from_str("{}").unwrap();
+    assert_eq!(default.lookup_family, DnsLookupFamily::Ipv4Only);
+    for (token, family) in [
+        ("ipv4Only", DnsLookupFamily::Ipv4Only),
+        ("ipv6Only", DnsLookupFamily::Ipv6Only),
+        ("all", DnsLookupFamily::All),
+    ] {
+        let config: DnsResolverConfig = serde_json::from_value(serde_json::json!({"lookupFamily":token})).unwrap();
+        assert_eq!(config.lookup_family, family);
+        assert_eq!(serde_json::to_value(&config).unwrap()["lookupFamily"], token);
+    }
+    for token in ["", "ipv4", "ALL", "auto"] {
+        assert!(serde_json::from_value::<DnsResolverConfig>(serde_json::json!({"lookupFamily":token})).is_err());
+    }
+}
+
+#[test]
 fn server_keepalive_request_limit_defaults_to_ten_thousand() {
     let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
         "server": {}

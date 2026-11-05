@@ -63,6 +63,22 @@ onExceeded:
 Quota uses fixed windows selected from each gateway instance's wall clock when a request starts.
 Keep gateway nodes time-synchronized.
 
+An active request continues charging its request-start window, including after that window
+ends. Its Redis lease is refreshed even when no new output units arrive. Shared usage buckets
+retain the longest expiry requested by their updates; finishing one request cannot shorten
+another active request's retention. Final request markers expire independently.
+
+Allow Redis memory for overlapping retained windows. Each aggregate stores one usage counter;
+each charged request has a separate marker. Active updates request retention covering both the
+time left until the request-start window ends plus a 60-second grace and the active lease
+(maximum HTTP request duration plus `tokenQuota.requestTimeout` plus 60 seconds). Final updates
+request the later of that window cleanup deadline and `tokenQuota.requestTimeout` plus 60 seconds
+from the update. Each update preserves any later existing bucket expiry, so a bucket may outlive
+its last active request. Once updates stop, the remaining TTL expires normally.
+There is no fixed fleet-wide memory bound: size for identity/model cardinality, limit count,
+window size, request duration, and request rate. Short windows and long request durations can
+keep multiple old-window buckets alive. These keys contain accounting state, not response bodies.
+
 Streaming provider usage objects are treated as cumulative snapshots. When an OpenAI-compatible
 provider emits usage on multiple chunks, Edgion keeps the highest observed value for each token
 component; a later lower or out-of-order snapshot cannot reduce quota reconciliation, access-log

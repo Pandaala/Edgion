@@ -113,31 +113,37 @@ impl AccessLogEntry {
             .and_then(|v| v.as_str())
     }
 
-    /// Get the matched route namespace
+    /// All `match_info` elements, ordered root -> leaf (one element for an
+    /// ordinary route).
+    pub fn route_chain(&self) -> &[serde_json::Value] {
+        self.data
+            .get("match_info")
+            .and_then(|mi| mi.as_array())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn leaf_rsc_str(&self, key: &str) -> Option<&str> {
+        self.route_chain()
+            .last()
+            .and_then(|mi| mi.get("rsc"))
+            .and_then(|rsc| rsc.get(key))
+            .and_then(|v| v.as_str())
+    }
+
+    /// Get the matched (leaf) route namespace
     pub fn route_namespace(&self) -> Option<&str> {
-        self.data
-            .get("match_info")
-            .and_then(|mi| mi.get("rsc"))
-            .and_then(|rsc| rsc.get("ns"))
-            .and_then(|v| v.as_str())
+        self.leaf_rsc_str("ns")
     }
 
-    /// Get the matched route name
+    /// Get the matched (leaf) route name
     pub fn route_name(&self) -> Option<&str> {
-        self.data
-            .get("match_info")
-            .and_then(|mi| mi.get("rsc"))
-            .and_then(|rsc| rsc.get("name"))
-            .and_then(|v| v.as_str())
+        self.leaf_rsc_str("name")
     }
 
-    /// Get the matched route kind (e.g., "HTTPRoute", "GRPCRoute")
+    /// Get the matched (leaf) route kind (e.g., "HTTPRoute", "GRPCRoute")
     pub fn route_kind(&self) -> Option<&str> {
-        self.data
-            .get("match_info")
-            .and_then(|mi| mi.get("rsc"))
-            .and_then(|rsc| rsc.get("kind"))
-            .and_then(|v| v.as_str())
+        self.leaf_rsc_str("kind")
     }
 
     /// Get backend name

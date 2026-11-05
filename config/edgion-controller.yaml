@@ -151,8 +151,8 @@ conf_sync:
 #   name: "ctrl-1"
 #   cluster: "prod"
 #
-#   # Hot-reloadable kill-switch. false => federation client does not run.
-#   # Reloaded via POST /api/v1/reload without a process restart.
+#   # Startup enable switch. false => federation client does not run.
+#   # Restart every Controller replica after changing process configuration.
 #   # Default: true
 #   enabled: true
 #
@@ -176,9 +176,8 @@ conf_sync:
 #   #     list allows the effective read endpoint
 #   #     (GET /api/v1/region-routes/effective);
 #   #     failover covers the POST failover endpoint
-#   #   - server-info and reload on the NonResource route
-#   #     (GET /api/v1/server-info, POST /api/v1/reload) -- server-info is
-#   #     read-only, reload only re-applies the on-disk config; neither exposes
+#   #   - server-info on the NonResource route
+#   #     (GET /api/v1/server-info) -- read-only process metadata; it does not expose
 #   #     secrets
 #   #   - NO diagnostics, wipe-all, or any other verb beyond the above
 #   #
@@ -204,8 +203,6 @@ conf_sync:
 #         kinds: [EdgionConfigData]
 #       - verbs: [failover]
 #         kinds: [RegionRoute]
-#       - verbs: [reload]
-#         kinds: ["*"]
 
 # ============================================================================
 # Static CLI Tokens (cli_tokens)
@@ -219,7 +216,7 @@ conf_sync:
 #      The command prints an "edg_..." token and its SHA-256 digest.
 #   2. Paste the SHA-256 value into token_sha256 below.
 #   3. Distribute the "edg_..." token to the consumer (use --token or EDGION_TOKEN).
-#   4. Apply the config: POST /api/v1/reload  (hot-reloadable, no restart needed).
+#   4. Restart every Controller replica to apply the updated configuration.
 #
 # RBAC rules use the same (verb, kind) model as [center].rbac.
 # See docs/en/ops-guide/federation-rbac.md#cli-token-rbac for the full guide.
@@ -228,7 +225,7 @@ conf_sync:
 #   - NEVER use kinds: ["*"] with get / list / list-keys: exposes Secret and
 #     EdgionTls private-key material via the blind proxy. Enumerate concrete kinds.
 #   - verbs: ["*"] is equivalent to Superuser — grant narrowly.
-#   - Rotate by replacing token_sha256 + running reload (no restart).
+#   - Rotate by replacing token_sha256 and restarting every Controller replica.
 #   - --token / EDGION_TOKEN do NOT touch ~/.edgion/token (ephemeral per-invocation).
 #
 # cli_tokens:
@@ -242,16 +239,13 @@ conf_sync:
 #           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
 #                   EdgionGatewayConfig, EdgionTls, EdgionConfigData]
 #
-#   # Scoped read-write token — manages plugin metadata + reload only.
+#   # Scoped read-write token — manages plugin metadata only.
 #   - name: plugin-manager
 #     token_sha256: "<64 lowercase hex chars from edgion-cli gen-token>"
 #     rbac:
 #       allow:
 #         - verbs: [get, list, watch, create, update, delete]
 #           kinds: [EdgionConfigData]
-#         # reload is write-only; kinds: ["*"] is safe here (no read surface).
-#         - verbs: [reload]
-#           kinds: ["*"]
 
 # ============================================================================
 # conf_sync Channel Security (mTLS)

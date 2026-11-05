@@ -4,6 +4,14 @@ use crate::conf_mgr::ControllerRuntime;
 use serde_json::json;
 use std::sync::Arc;
 
+fn find_controller_invalid_rule_indices(
+    route: &GRPCRoute,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<usize> {
+    find_controller_invalid_rule_indices_with(route, route_namespace, runtime, &grpc_delegation_facts(route, runtime))
+}
+
 #[tokio::test]
 async fn hostname_validation_clears_stale_attachments_and_recovers() {
     use super::super::GatewayHandler;
@@ -169,11 +177,9 @@ async fn backend_waf_is_controller_invalid_and_registered_for_requeue() {
         find_controller_invalid_rule_indices(&route, "apps", ctx.runtime()),
         vec![0]
     );
-    assert!(
-        backend_plugin_scope_invalid_reason(&route, 0, false, ctx.runtime(), false)
-            .unwrap()
-            .contains("cannot contain WAF")
-    );
+    assert!(backend_plugin_scope_invalid_reason(&route, 0, ctx.runtime(), false)
+        .unwrap()
+        .contains("cannot contain WAF"));
     let accepted = backend_route_wide_scope_errors(&route, ctx.runtime());
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
@@ -206,7 +212,7 @@ async fn backend_jump_invalidates_only_its_rule() {
     let plugins: EdgionPlugins = serde_json::from_value(json!({
         "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
         "metadata": {"namespace": "default", "name": "jump"},
-        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {}}]}
+        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"clusterRegionRef":{"name":"setting"}}}]}
     }))
     .unwrap();
     raw.upsert("default/jump".to_string(), Arc::new(plugins));
@@ -251,7 +257,7 @@ async fn backend_jump_invalidates_only_its_rule() {
 }
 
 #[tokio::test]
-async fn parse_clears_authored_extension_ref_namespace_metadata() {
+async fn parse_ignores_authored_extension_ref_namespace_metadata() {
     let ctx = make_ctx();
     let route: GRPCRoute = serde_json::from_value(json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
@@ -274,19 +280,11 @@ async fn parse_clears_authored_extension_ref_namespace_metadata() {
         ProcessResult::Continue(route) => route,
         other => panic!("unexpected parse result: {other:?}"),
     };
-    let rule = &parsed.spec.rules.as_ref().unwrap()[0];
-    assert!(rule.filters.as_ref().unwrap()[0]
-        .extension_ref
-        .as_ref()
-        .unwrap()
-        .resolved_namespace
-        .is_none());
-    assert!(rule.backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
-        .extension_ref
-        .as_ref()
-        .unwrap()
-        .resolved_namespace
-        .is_none());
+    // `resolvedNamespace` is not a field: an injected value never reaches
+    // the published route.
+    let published = serde_json::to_string(&parsed).unwrap();
+    assert!(!published.contains("resolvedNamespace"));
+    assert!(!published.contains("injected"));
 }
 
 #[tokio::test]
@@ -383,8 +381,8 @@ async fn method_validation_preserves_siblings_publishes_indices_and_recovers() {
     assert!(!conditions.iter().any(|c| c.message.contains("private-marker")));
     let published: GRPCRoute = serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
     assert_eq!(published.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
-    assert_eq!(published.effective_rules().unwrap().len(), 4);
-    assert!(published.effective_rules().unwrap()[2].method_match_error().is_none());
+    assert_eq!(published.spec.rules.as_ref().unwrap().len(), 4);
+    assert!(published.spec.rules.as_ref().unwrap()[2].method_match_error().is_none());
 
     route.spec.rules.as_mut().unwrap().truncate(2);
     handler.update_status(&mut route, &ctx, &[]);
@@ -402,19 +400,6 @@ async fn method_validation_preserves_siblings_publishes_indices_and_recovers() {
     assert!(route.spec.invalid_rule_indices.is_none());
     let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
     assert!(conditions.iter().any(|c| c.type_ == "Accepted" && c.status == "True"));
-    assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
-
-    // Delegation can leave no effective rules even when its authored
-    // parent service scope is valid. That attachment must also reject.
-    route.spec.resolved_rules = Some(vec![]);
-    route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
-        message: "child rule dropped: invalid method matcher".to_string(),
-    }];
-    handler.update_status(&mut route, &ctx, &[]);
-    let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-    assert!(conditions
-        .iter()
-        .any(|c| c.type_ == "Accepted" && c.status == "False" && c.reason == "UnsupportedValue"));
     assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
 }
 
@@ -722,10 +707,7 @@ fn collect_backend_ref_tuples_excludes_delegation_refs() {
 }
 
 #[test]
-fn collect_ref_denied_list_uses_effective_rules() {
-    // Regression: once resolved_rules is present, the parent's status
-    // must scan the flattened copies (which carry the real ref_denied
-    // state the gateway compiles), not the pre-flatten spec.rules.
+fn collect_ref_denied_list_scans_rules() {
     let mut route: GRPCRoute = serde_json::from_value(json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "GRPCRoute",
@@ -733,7 +715,7 @@ fn collect_ref_denied_list_uses_effective_rules() {
         "spec": { "rules": [] }
     }))
     .expect("route should deserialize");
-    route.spec.resolved_rules = Some(
+    route.spec.rules = Some(
         serde_json::from_value(json!([{
             "matches": [{"method": {"service": "svc.Billing"}}],
             "backendRefs": [{
@@ -747,40 +729,18 @@ fn collect_ref_denied_list_uses_effective_rules() {
                 }
             }]
         }]))
-        .expect("resolved_rules fixture should deserialize"),
+        .expect("rules fixture should deserialize"),
     );
     let list = super::collect_ref_denied_list(&route);
     assert_eq!(list.len(), 1);
-    assert!(
-        list[0].is_some(),
-        "ref_denied on resolved_rules must be picked up via effective_rules()"
-    );
-}
-
-#[test]
-fn delegation_accepted_condition_true_when_parent_delegates() {
-    let delegating = vec!["infra/parent".to_string()];
-    let cond = super::delegation_accepted_condition("infra/parent", &delegating, Some(3));
-    assert_eq!(cond.status, "True");
-    assert_eq!(cond.reason, "DelegationAccepted");
-    assert!(cond.message.contains("infra/parent"));
-}
-
-#[test]
-fn delegation_accepted_condition_false_when_parent_does_not_delegate() {
-    let delegating: Vec<String> = vec![];
-    let cond = super::delegation_accepted_condition("infra/parent", &delegating, Some(3));
-    assert_eq!(cond.status, "False");
-    assert_eq!(cond.reason, "NoMatchingParent");
+    assert!(list[0].is_some(), "ref_denied on spec.rules must be picked up");
 }
 
 #[tokio::test]
-async fn parse_marks_ref_denied_before_flatten_copies_siblings() {
-    // Regression (P0): flatten copies non-delegating sibling rules into
-    // resolved_rules, which the gateway compiles INSTEAD of spec.rules.
-    // The ReferenceGrant marking must therefore run BEFORE flatten so the
-    // copies carry ref_denied — otherwise an ungranted cross-ns Service
-    // ref on a delegating parent would be silently routable.
+async fn parse_marks_ref_denied_on_delegating_parent_siblings() {
+    // A delegating parent publishes its own rules only: the non-delegating
+    // sibling's ungranted cross-ns Service ref is denied on spec.rules, and
+    // no flattened copy exists that could escape the denial.
     let route: GRPCRoute = serde_json::from_value(json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "GRPCRoute",
@@ -809,31 +769,8 @@ async fn parse_marks_ref_denied_before_flatten_copies_siblings() {
         panic!("parse must continue");
     };
 
-    // No ReferenceGrant exists in the default runtime → the sibling's
-    // cross-ns Service ref is denied on spec.rules...
     let spec_br = &parsed.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0];
     assert!(spec_br.ref_denied.is_some(), "spec.rules sibling must be ref_denied");
-
-    // ...AND on the resolved_rules copy the gateway actually compiles.
-    let resolved = parsed
-        .spec
-        .resolved_rules
-        .as_ref()
-        .expect("delegating parent has resolved_rules");
-    let resolved_sibling = resolved
-        .iter()
-        .find(|r| {
-            r.matches
-                .iter()
-                .flatten()
-                .any(|m| m.method.as_ref().and_then(|mm| mm.service.as_deref()) == Some("svc.Plain"))
-        })
-        .expect("sibling rule copied into resolved_rules");
-    let resolved_br = &resolved_sibling.backend_refs.as_ref().unwrap()[0];
-    assert!(
-        resolved_br.ref_denied.is_some(),
-        "resolved_rules sibling copy must carry ref_denied (gateway compiles this copy)"
-    );
 }
 
 #[tokio::test]
@@ -878,11 +815,9 @@ async fn parse_never_marks_delegation_refs_ref_denied() {
 }
 
 #[tokio::test]
-async fn parse_updates_grpc_route_delegation_index_and_on_delete_removes_it() {
-    // Handler-level index bookkeeping: parse() must register the
-    // delegation edge in grpc_route_delegation_index (separate instance
-    // from route_delegation_index, so it doesn't collide with HTTPRoute
-    // keys), and on_delete() must clear it via update_parent(∅,∅).
+async fn parse_registers_grpc_delegation_graph_and_on_delete_removes_it() {
+    // The GRPCRoute graph is a separate instance from the HTTPRoute graph,
+    // so equal `ns/name` keys never collide.
     let handler = GrpcRouteHandler::default();
     let ctx = make_ctx();
     let route: GRPCRoute = serde_json::from_value(json!({
@@ -906,69 +841,13 @@ async fn parse_updates_grpc_route_delegation_index_and_on_delete_removes_it() {
         other => panic!("unexpected parse result: {other:?}"),
     };
 
-    assert_eq!(
-        ctx.runtime()
-            .grpc_route_delegation_index
-            .parents_of("billing/child", "billing"),
-        vec!["infra/parent".to_string()],
-        "parse must register the delegation edge in grpc_route_delegation_index"
-    );
+    let graph = &ctx.runtime().grpc_route_delegation_graph;
+    assert_eq!(graph.parents_naming("billing/child"), vec!["infra/parent".to_string()]);
+    assert!(!ctx.runtime().http_route_delegation_graph.is_participant("infra/parent"));
 
     handler.on_delete(&parsed, &ctx).await;
-
-    assert!(
-        ctx.runtime()
-            .grpc_route_delegation_index
-            .parents_of("billing/child", "billing")
-            .is_empty(),
-        "on_delete must remove the parent's delegation edges"
-    );
-}
-
-#[tokio::test]
-async fn delegated_effective_targets_drive_missing_invalid_and_denied_status() {
-    use crate::conf_mgr::sync_runtime::resource_processor::{handlers::ServiceHandler, ResourceProcessor};
-    use k8s_openapi::api::core::v1::Service;
-    let runtime = Arc::new(ControllerRuntime::default());
-    runtime
-        .processor_registry
-        .register(Arc::new(ResourceProcessor::<Service>::new(
-            "Service",
-            16,
-            Arc::new(ServiceHandler::new()),
-            runtime.clone(),
-        )));
-    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime);
-    let mut route:GRPCRoute=serde_json::from_value(json!({
-        "metadata":{"namespace":"apps","name":"root"},
-        "spec":{"parentRefs":[{"name":"gateway"}],
-            "rules":[{"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"GRPCRoute","name":"child"}]}],
-            "resolvedRules":[{"backendRefs":[
-                {"name":"delegated-missing","namespace":"apps","port":80},
-                {"name":"delegated-invalid","namespace":"apps","port":0},
-                {"name":"delegated-denied","namespace":"other","port":80,"refDenied":{"targetNamespace":"other","targetName":"delegated-denied"}}
-            ]}]}
-    })).unwrap();
-    let errors = route_backend_refs::validate_targets(
-        GrpcRouteBackendRefs::from_route(&route).map(|references| references.effective()),
-        ctx.runtime(),
-    );
-    assert_eq!(errors.len(), 2);
-    assert!(errors
-        .iter()
-        .any(|error| matches!(error,ResolvedRefsError::BackendNotFound{name,..} if name=="delegated-missing")));
-    assert!(errors
-        .iter()
-        .any(|error| matches!(error, ResolvedRefsError::InvalidReference { .. })));
-    GrpcRouteHandler::default().update_status(&mut route, &ctx, &[]);
-    let condition = route.status.as_ref().unwrap().parents[0]
-        .conditions
-        .iter()
-        .find(|condition| condition.type_ == "ResolvedRefs")
-        .unwrap();
-    assert_eq!(condition.status, "False");
-    assert!(condition.message.contains("delegated-missing"));
-    assert!(condition.message.contains("delegated-denied"));
+    assert!(graph.parents_naming("billing/child").is_empty());
+    assert!(!graph.is_participant("infra/parent"));
 }
 
 #[tokio::test]
@@ -992,7 +871,7 @@ async fn extension_owner_default_and_invalid_status_paths_never_create_forged_de
         .plugin_ref_mgr
         .get_dependencies(&invalid_owner.key())
         .is_empty());
-    assert!(route.spec.resolved_rules.as_ref().unwrap().is_empty());
+    assert!(route.spec.resolved_listeners.is_none());
     GrpcRouteHandler::register_plugin_refs(&route, &ctx);
     assert!(ctx
         .runtime()
@@ -1032,7 +911,7 @@ async fn grpc_rule_transcoder_priority_precedes_backend_waf_and_request_id() {
     for enabled in [true, false, true] {
         let plugins:EdgionPlugins=serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"bundle"},"spec":{"waf":{"policyRef":{"name":"policy"}},"requestPlugins":[{"type":"RequestId","config":{}},{"type":"GrpcJsonTranscoder","enable":enabled,"config":{"descriptor":{"type":"configMapRef","name":"descriptor","key":"proto"},"services":["test.TestService"]}}]}})).unwrap();
         raw.upsert("apps/bundle".into(), Arc::new(plugins));
-        let error = backend_plugin_scope_invalid_reason(&route, 0, false, &runtime, false).unwrap();
+        let error = backend_plugin_scope_invalid_reason(&route, 0, &runtime, false).unwrap();
         assert_eq!(
             error,
             if enabled {
@@ -1072,7 +951,7 @@ async fn plugin_collision_status_preserves_effective_rule_and_backend_positions(
     })).unwrap();
     let handler = GrpcRouteHandler::default();
     handler.update_status(&mut route, &ctx, &[]);
-    let before_rules = serde_json::to_value(route.effective_rules()).unwrap();
+    let before_rules = serde_json::to_value(route.spec.rules.as_ref()).unwrap();
     let before_indices = route.spec.invalid_rule_indices.clone();
     let admission = |route: &GRPCRoute| {
         route
@@ -1090,7 +969,7 @@ async fn plugin_collision_status_preserves_effective_rule_and_backend_positions(
     source.metadata.namespace = Some("default".into());
     raw.upsert("default/plugins".into(), Arc::new(source));
     handler.update_status(&mut route, &ctx, &[]);
-    assert_eq!(serde_json::to_value(route.effective_rules()).unwrap(), before_rules);
+    assert_eq!(serde_json::to_value(route.spec.rules.as_ref()).unwrap(), before_rules);
     assert_eq!(route.spec.invalid_rule_indices, before_indices);
     assert_eq!(admission(&route), before_admission);
     let parents = &route.status.as_ref().unwrap().parents;

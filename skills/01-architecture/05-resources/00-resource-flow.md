@@ -46,6 +46,11 @@ ResourceProcessor performs the following ordered steps for each resource:
 
 Delete events run **on_delete()** instead of parse/on_change, cleaning up all registered references and indexes.
 
+The separate [CenterWatchStore](../01-controller/12-center-watch-store.md)
+projects allowlisted regional identities after eligibility and before preparse.
+Its source deletion path also runs when the Gateway cache has no entry. Gateway
+publication withdrawal is not a source-view deletion.
+
 After initialization completes, **on_init_done()** runs, used by resources such as Secret to perform a one-time full replacement.
 
 ## Stage 3: gRPC sync (Controller → Gateway)

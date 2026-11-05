@@ -422,6 +422,7 @@ async fn invalid_route_reference_cannot_consume_same_name_log_declaration() {
         let table = build_domain_route_rules_from_routes(
             &HashMap::from([("default/route".into(), Arc::new(source))]),
             &DomainRouteRules::new(),
+            &crate::routes::delegation::DelegationSlotTable::new(),
         );
         let unit = table.catch_all_routes.as_ref().unwrap().route_rules_list[0].clone();
         let mut ctx = EdgionHttpContext::new();

@@ -1194,20 +1194,39 @@ fn collision_denial_survives_policy_bypass_and_raw_owner_replacement() {
 }
 
 #[test]
-fn delegated_rule_and_backend_collision_use_effective_owner_and_pinned_scope() {
+fn default_namespace_rule_and_backend_collision_use_owner_namespace_and_pinned_scope() {
     let publisher = publisher();
+    // The route lives in `default`; the listener admits routes from all namespaces.
+    let cross_ns_gateway: Gateway = crate::test_current_status::from_value(json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+        "metadata": {"name": "a", "namespace": "apps"},
+        "spec": {"gatewayClassName": "a", "listeners": [{"name": "web", "port": 18080, "protocol": "HTTP",
+            "allowedRoutes": {"namespaces": {"from": "All"}}}]},
+    }))
+    .unwrap();
+    publisher.replace_gateways(HashMap::from([(
+        "apps/a".into(),
+        GatewayInput::from_gateway(&cross_ns_gateway),
+    )]));
     let mut cfg = (*config("policy-a", json!({}))).clone();
     cfg.spec.global_plugins_ref = None;
     publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
-    let mut source = (*route()).clone();
-    source.spec.resolved_rules = Some(serde_json::from_value(json!([{
-        "filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins","resolvedNamespace":"default"}}],
-        "backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins","resolvedNamespace":"default"}}]}]
-    }])).unwrap());
+    // ExtensionRefs resolve in the declaring route's namespace.
+    let source: HTTPRoute = crate::test_current_status::from_value(json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+        "metadata": {"namespace": "default", "name": "route"},
+        "spec": {"resolvedStatusController": "edgion.io/gateway-controller",
+            "parentRefs": [{"name": "a", "namespace": "apps"}], "resolvedListeners": ["0.0.0.0:18080/HTTP"],
+            "rules": [{
+                "filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}],
+                "backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"plugins"}}]}]
+            }]},
+    }))
+    .unwrap();
     let input = RouteInput::from_http(Arc::new(source));
     assert!(input.http_keys.contains("default/plugins"));
     assert!(!input.http_keys.contains("apps/plugins"));
-    publisher.replace_routes(RouteKind::Http, HashMap::from([("apps/route".into(), input)]));
+    publisher.replace_routes(RouteKind::Http, HashMap::from([("default/route".into(), input)]));
     publisher.replace_http_plugins(HashMap::from([("plugins".into(), default_source(true, true, "old"))]));
     let mut old_request = crate::EdgionHttpContext::new();
     assert!(old_request.capture_plugin_scope(publisher.snapshot().gateway("apps/a").unwrap()));
@@ -2131,4 +2150,176 @@ async fn acl_stream_actual_publication_replaces_invalid_generation_and_clean_rec
             .await,
         StreamPluginResult::Allow
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Route delegation: child routes contribute to every Gateway scope (spec §6.4)
+// ---------------------------------------------------------------------------
+
+/// Publisher with two Gateway scopes: class `a` (policy-a, empty) and class
+/// `b` (policy-b, `policy_b`).
+fn two_scope_publisher(policy_b: Value) -> PluginPublisher {
+    let publisher = publisher();
+    let mut cfg = (*config("policy-a", json!({}))).clone();
+    cfg.spec.global_plugins_ref = None;
+    publisher.replace_gateway_configs(HashMap::from([
+        ("policy-a".into(), Arc::new(cfg)),
+        ("policy-b".into(), {
+            let mut cfg = (*config("policy-b", policy_b)).clone();
+            cfg.spec.global_plugins_ref = None;
+            Arc::new(cfg)
+        }),
+    ]));
+    publisher.update_gateway_classes(
+        HashMap::from([("b".into(), class("b", Some("policy-b")))]),
+        &HashSet::new(),
+    );
+    publisher.update_gateways(
+        HashMap::from([("apps/b".into(), gateway("b", "b", 18081, None))]),
+        &HashSet::new(),
+    );
+    publisher
+}
+
+fn plugins_extension_ref() -> Value {
+    json!({"type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "plugins"}})
+}
+
+/// A delegation child of `apps/parent`: route-kind parentRef only, no
+/// listeners, carrying the Controller-confirmed delegation key.
+fn delegation_child(rules: Value) -> Arc<HTTPRoute> {
+    use edgion_resources::resources::route_delegation::{
+        key_for, DelegationTarget, DelegationTargetName, RouteKindName,
+    };
+    let mut route: HTTPRoute = crate::test_current_status::from_value(json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+        "metadata": {"namespace": "apps", "name": "child"},
+        "spec": {"resolvedStatusController": "edgion.io/gateway-controller",
+            "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "parent"}],
+            "rules": rules},
+    }))
+    .unwrap();
+    route.spec.resolved_delegation_keys = vec![key_for(
+        RouteKindName::HTTPRoute,
+        "apps",
+        "parent",
+        &DelegationTarget {
+            ns: "apps".into(),
+            name: DelegationTargetName::Named("child".into()),
+        },
+    )];
+    Arc::new(route)
+}
+
+fn publish_http(publisher: &PluginPublisher, routes: &[&Arc<HTTPRoute>]) {
+    publisher.replace_routes(
+        RouteKind::Http,
+        routes
+            .iter()
+            .map(|route| {
+                (
+                    format!("apps/{}", route.metadata.name.as_deref().unwrap()),
+                    RouteInput::from_http(Arc::clone(route)),
+                )
+            })
+            .collect(),
+    );
+}
+
+#[test]
+fn child_plugin_refs_compiled_in_every_gateway_scope() {
+    let publisher = two_scope_publisher(json!({}));
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+    let child = delegation_child(json!([{
+        "filters": [plugins_extension_ref()],
+        "backendRefs": [{"name": "service", "port": 80}],
+    }]));
+    publish_http(&publisher, &[&child]);
+    let a = scope(&publisher, "apps/a")
+        .http("apps/plugins")
+        .expect("child ref in scope a");
+    let b = scope(&publisher, "apps/b")
+        .http("apps/plugins")
+        .expect("child ref in scope b");
+    assert!(a.is_activatable && b.is_activatable);
+    // Each scope admits the child's rule (no AI / GraphQL owner on it).
+    assert!(scope(&publisher, "apps/a").graphql_rule(&child, 0));
+    assert!(scope(&publisher, "apps/b").graphql_rule(&child, 0));
+
+    // A child whose delegation key is withdrawn is no longer published anywhere.
+    let mut orphan = (*child).clone();
+    orphan.spec.resolved_delegation_keys.clear();
+    let orphan = Arc::new(orphan);
+    publish_http(&publisher, &[&orphan]);
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    assert!(scope(&publisher, "apps/b").http("apps/plugins").is_none());
+}
+
+#[tokio::test]
+async fn child_plugin_denied_by_gateway_policy_in_that_scope_only() {
+    let publisher = two_scope_publisher(json!({"deny": [{"name": "http/RateLimitLocal", "blockStatus": 451}]}));
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+    let child = delegation_child(json!([{
+        "filters": [plugins_extension_ref()],
+        "backendRefs": [{"name": "service", "port": 80}],
+    }]));
+    publish_http(&publisher, &[&child]);
+    let a = scope(&publisher, "apps/a").http("apps/plugins").unwrap();
+    let b = scope(&publisher, "apps/b").http("apps/plugins").unwrap();
+    assert!(a
+        .plugin_runtime
+        .request_plugins_iter()
+        .any(|filter| filter.name() == "RateLimitLocal"));
+    assert!(a.is_activatable, "scope a allows the child's plugins");
+    assert!(matches!(
+        first_result(&b).await,
+        PluginRunningResult::ErrResponse { status: 451, .. }
+    ));
+}
+
+#[test]
+fn child_ai_admission_per_scope() {
+    let publisher = two_scope_publisher(json!({"deny": [{"name": "http/AiProxy", "action": "bypass"}]}));
+    let mut source = (*plugin("dsl", true)).clone();
+    source.spec.request_plugins.as_mut().unwrap().push(
+        serde_json::from_value(
+            json!({"type": "AiProxy", "config": {"api": "openaiChat", "usageObservation": "provider"}}),
+        )
+        .unwrap(),
+    );
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), Arc::new(source))]));
+    let child = delegation_child(json!([{
+        "filters": [plugins_extension_ref()],
+        "backendRefs": [{"group": "edgion.io", "kind": "EdgionBackend", "name": "ai"}],
+        "resolvedAiAdmission": {"backends": [{"kind": "edgionBackend", "provider": "OpenAICompatible",
+            "hasCredentialTpm": false, "specValid": true, "canonicalModels": []}]},
+    }]));
+    publish_http(&publisher, &[&child]);
+    assert!(
+        scope(&publisher, "apps/a").ai_rule(&child, 0),
+        "scope a admits the child AI rule"
+    );
+    assert!(
+        !scope(&publisher, "apps/b").ai_rule(&child, 0),
+        "scope b bypasses AiProxy, so the child AI rule is not admitted there"
+    );
+}
+
+#[test]
+fn ordinary_route_scope_membership_unchanged() {
+    let publisher = two_scope_publisher(json!({}));
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+    let mut source = (*route()).clone();
+    source.spec.rules.as_mut().unwrap()[0].filters =
+        Some(serde_json::from_value(json!([plugins_extension_ref()])).unwrap());
+    let ordinary = Arc::new(source);
+    let input = RouteInput::from_http(Arc::clone(&ordinary));
+    assert!(!input.delegation_child);
+    publish_http(&publisher, &[&ordinary]);
+    // Attached to Gateway `a` only: scope `b` gains neither the ref nor an admission.
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_some());
+    assert!(scope(&publisher, "apps/b").http("apps/plugins").is_none());
+    assert!(scope(&publisher, "apps/a").graphql_rule(&ordinary, 0));
+    assert!(!scope(&publisher, "apps/b").graphql_rule(&ordinary, 0));
+    assert_eq!(publisher.snapshot().stats().ai_route_tokens, 1);
 }

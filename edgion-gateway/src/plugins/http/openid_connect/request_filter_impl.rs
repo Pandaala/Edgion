@@ -132,11 +132,7 @@ impl RequestFilter for OpenidConnect {
                                     )
                                     .is_err()
                                 {
-                                    plugin_log.push_err("claim header cleanup failed");
-                                    return PluginRunningResult::ErrResponse {
-                                        status: 500,
-                                        body: None,
-                                    };
+                                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
                                 }
                                 plugin_log.push("session token verified");
                                 if let Err(error) = self.strip_gateway_owned_cookies(session) {
@@ -181,11 +177,7 @@ impl RequestFilter for OpenidConnect {
                                                         )
                                                         .is_err()
                                                     {
-                                                        plugin_log.push_err("claim header cleanup failed");
-                                                        return PluginRunningResult::ErrResponse {
-                                                            status: 500,
-                                                            body: None,
-                                                        };
+                                                        return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
                                                     }
                                                     plugin_log.push("token refresh on expiry");
                                                     if let Err(error) = self.strip_gateway_owned_cookies(session) {
@@ -220,11 +212,7 @@ impl RequestFilter for OpenidConnect {
                                                             )
                                                             .is_err()
                                                         {
-                                                            plugin_log.push_err("claim header cleanup failed");
-                                                            return PluginRunningResult::ErrResponse {
-                                                                status: 500,
-                                                                body: None,
-                                                            };
+                                                            return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
                                                         }
                                                         plugin_log.push(
                                                             "token refresh wait timeout; stale token within leeway",
@@ -258,6 +246,14 @@ impl RequestFilter for OpenidConnect {
 
             match self.config.unauth_action {
                 UnauthAction::Pass => {
+                    if crate::plugins::http::common::auth_common::clear_claim_headers(
+                        session,
+                        &self.claim_header_projection,
+                    )
+                    .is_err()
+                    {
+                        return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                    }
                     plugin_log.push("no token; pass");
                     if let Err(error) = self.strip_gateway_owned_cookies(session) {
                         return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
@@ -308,11 +304,7 @@ impl RequestFilter for OpenidConnect {
                     .apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims)
                     .is_err()
                 {
-                    plugin_log.push_err("claim header cleanup failed");
-                    return PluginRunningResult::ErrResponse {
-                        status: 500,
-                        body: None,
-                    };
+                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
                 }
                 // Skip credential hiding when access_token_in_authorization_header is true:
                 // apply_upstream_headers already wrote a fresh "Bearer <token>" into

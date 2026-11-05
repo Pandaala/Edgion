@@ -206,7 +206,7 @@ side in the alert output, so the page names which job died.
 
 By design there is **no automatic restart** of a dead leader-job worker (a panic usually means corrupted
 state; a blind restart risks a panic loop) — recovery is by alert + operator action
-(`POST /api/v1/reload` or a pod restart). Separately, `/health` now returns `503` if the control-plane
+(a Controller process or pod restart). Separately, `/health` now returns `503` if the control-plane
 lifecycle itself terminates abnormally (a deadman, distinct from this per-worker gauge) — see
 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery)
 for the full lifecycle-recovery design.

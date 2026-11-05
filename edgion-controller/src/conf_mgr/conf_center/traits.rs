@@ -112,22 +112,28 @@ pub(super) fn project_conf_entry_to_key(kind: &str, entry: &ConfEntry) -> Option
 }
 
 /// Project a `ListResult<ConfEntry>` into a `ListResult<ResourceKey>` by
-/// applying [`project_conf_entry_to_key`] to each entry. Invalid entries are
-/// silently dropped (via `filter_map`); `continue_token` passes through.
+/// applying [`project_conf_entry_to_key`] to each entry. Invalid documents fail
+/// the query; successful projections preserve `continue_token`.
 ///
 /// This is the shared body of the trait-default `list_keys_by_kind*` impls
 /// AND the unit test that verifies the chain — keeping them on one code path
 /// prevents the test from drifting away from the production logic.
-pub(super) fn project_conf_entry_list(kind: &str, full: ListResult<ConfEntry>) -> ListResult<ResourceKey> {
+pub(super) fn project_conf_entry_list(
+    kind: &str,
+    full: ListResult<ConfEntry>,
+) -> Result<ListResult<ResourceKey>, ConfWriterError> {
     let items = full
         .items
         .iter()
-        .filter_map(|e| project_conf_entry_to_key(kind, e))
-        .collect();
-    ListResult {
+        .map(|e| {
+            super::source_query::document(e)?;
+            project_conf_entry_to_key(kind, e).ok_or_else(super::source_query::source_error)
+        })
+        .collect::<Result<Vec<_>, ConfWriterError>>()?;
+    Ok(ListResult {
         items,
         continue_token: full.continue_token,
-    }
+    })
 }
 
 /// List options for pagination (K8s style)
@@ -152,9 +158,30 @@ pub struct ListResult<T = ConfEntry> {
     pub continue_token: Option<String>,
 }
 
+/// Count of the complete authorized source scope, independent of any page.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceCount {
+    pub total: u64,
+    pub observed_at: chrono::DateTime<chrono::Utc>,
+    pub consistency: CountConsistency,
+}
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CountConsistency {
+    SourceSnapshot,
+    ObservedScan,
+}
+
 /// Error types for configuration operations
 #[derive(Debug, Error)]
 pub enum ConfWriterError {
+    #[error("Source query budget exceeded")]
+    SourceBudget,
+    #[error("Source query deadline exceeded")]
+    SourceTimeout,
+    #[error("Source query concurrency exhausted")]
+    SourceBusy,
     // ---- domain-semantic variants (String payload is intentional) ----
     #[error("Configuration not found: {0}")]
     NotFound(String),
@@ -330,6 +357,41 @@ pub trait CenterApi: Send + Sync {
     /// * `opts` - Pagination options. `None` returns all items, `Some(opts)` applies pagination.
     async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError>;
 
+    /// Conditional source replacement for preview-bound operations, including
+    /// unversioned filesystem objects. Generic If-Match semantics stay separate.
+    async fn update_one_if_source(
+        &self,
+        _kind: &str,
+        _namespace: Option<&str>,
+        _name: &str,
+        _content: String,
+        _expected: &super::source_query::SourcePrecondition,
+    ) -> Result<(), ConfWriterError> {
+        Err(ConfWriterError::NotSupported(
+            "Source preconditions are unavailable".into(),
+        ))
+    }
+
+    /// Bounded original-source detail. Implementations must not fall back to an
+    /// unbounded read or a processed resource cache.
+    async fn get_source_one(
+        &self,
+        _kind: &str,
+        _namespace: Option<&str>,
+        _name: &str,
+    ) -> Result<String, ConfWriterError> {
+        Err(ConfWriterError::NotSupported(
+            "Bounded source detail is unavailable".into(),
+        ))
+    }
+
+    /// Exact source count; unsupported backends must not fabricate a total.
+    async fn count_by_kind(&self, _kind: &str, _namespace: Option<&str>) -> Result<SourceCount, ConfWriterError> {
+        Err(ConfWriterError::NotSupported(
+            "Source count is unavailable for this backend".into(),
+        ))
+    }
+
     /// List keys (metadata-only) by kind, across all namespaces / cluster-scoped.
     ///
     /// Default implementation delegates to [`get_list_by_kind`] and projects
@@ -342,7 +404,7 @@ pub trait CenterApi: Send + Sync {
         opts: Option<ListOptions>,
     ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
         let full = self.get_list_by_kind(kind, opts).await?;
-        Ok(project_conf_entry_list(kind, full))
+        project_conf_entry_list(kind, full)
     }
 
     /// List keys (metadata-only) by kind within a single namespace.
@@ -356,7 +418,7 @@ pub trait CenterApi: Send + Sync {
         opts: Option<ListOptions>,
     ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
         let full = self.get_list_by_kind_ns(kind, namespace, opts).await?;
-        Ok(project_conf_entry_list(kind, full))
+        project_conf_entry_list(kind, full)
     }
 }
 
@@ -371,7 +433,7 @@ pub trait CenterApi: Send + Sync {
 /// - Handle graceful shutdown
 /// - Provide readiness status
 /// - Access to ConfigSyncServer for gRPC services
-/// - Support reload (re-initialize all processors and stores)
+/// - Recover resource state after leadership transitions
 #[async_trait]
 pub trait CenterLifeCycle: Send + Sync {
     /// Start the configuration center with an external shutdown handle
@@ -393,18 +455,6 @@ pub trait CenterLifeCycle: Send + Sync {
 
     /// Check if running in Kubernetes mode
     fn is_k8s_mode(&self) -> bool;
-
-    /// Request a reload (re-initialize all processors and stores)
-    ///
-    /// This triggers a full restart of the configuration center:
-    /// 1. Stop current controllers
-    /// 2. Clear PROCESSOR_REGISTRY
-    /// 3. Create new ConfigSyncServer (new server_id)
-    /// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
-    ///
-    /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
-    /// Returns Err if the center is not started or not ready.
-    fn request_reload(&self) -> Result<(), String>;
 
     /// Get the ControllerRuntime for this center
     fn runtime(&self) -> Arc<ControllerRuntime>;
@@ -600,6 +650,36 @@ macro_rules! impl_center_api_delegate {
                 self.$field
                     .delete_one_if_version(kind, namespace, name, expected_resource_version)
                     .await
+            }
+
+            async fn update_one_if_source(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+                expected: &$crate::conf_mgr::conf_center::source_query::SourcePrecondition,
+            ) -> Result<(), ConfWriterError> {
+                self.$field
+                    .update_one_if_source(kind, namespace, name, content, expected)
+                    .await
+            }
+
+            async fn get_source_one(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+            ) -> Result<String, ConfWriterError> {
+                self.$field.get_source_one(kind, namespace, name).await
+            }
+
+            async fn count_by_kind(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+            ) -> Result<$crate::conf_mgr::conf_center::traits::SourceCount, ConfWriterError> {
+                self.$field.count_by_kind(kind, namespace).await
             }
 
             async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {

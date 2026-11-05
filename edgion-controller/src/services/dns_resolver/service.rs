@@ -12,7 +12,7 @@
 //! `mode=controller` Services degrade to the gateway self-resolution bridge.
 
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Service, ServicePort};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
-use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, Preconditions};
 use kube::Client;
 use parking_lot::Mutex;
 
@@ -29,10 +29,13 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_common::dns::resolver_select::{
     parse_dns_server_list, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
-use edgion_common::dns::{resolve, HttpDnsCandidate, PreparedHttpDns, ResolverSpec};
+use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, HttpDnsCandidate, PreparedHttpDns, ResolverSpec};
 use edgion_common::time::now_rfc3339;
-use edgion_resources::constants::annotations::edgion::{DNS_RESOLUTION_MODE, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION};
-use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+use edgion_resources::constants::annotations::edgion::{
+    DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION,
+};
+use edgion_resources::constants::labels::dns::{MANAGED_BY_VALUE, SYNTHETIC};
+use edgion_resources::constants::labels::k8s::{ENDPOINTSLICE_MANAGED_BY, SERVICE_NAME};
 use edgion_resources::resources::link_sys::LinkSys;
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 
@@ -155,8 +158,7 @@ async fn run(client: Client, watch_namespaces: Vec<String>, runtime: Arc<Control
 
     loop {
         ticker.tick().await;
-        // Re-read config each tick so a hot reload of `enabled` / default resolver
-        // takes effect without restarting the service.
+        // Controller configuration is loaded once at process startup.
         let config = dns_resolver_config();
         if let Err(e) = reconcile_with_runtime(&client, &watch_namespaces, &config, &mut last_applied, &runtime).await {
             tracing::warn!(
@@ -237,6 +239,7 @@ async fn reconcile_with_runtime(
                 &name,
                 &external_name,
                 &default_candidate,
+                config.lookup_family,
                 last_applied,
                 &observed,
                 runtime,
@@ -287,9 +290,8 @@ async fn list_services(client: &Client, watch_namespaces: &[String]) -> Result<V
 
 /// Resolve one ExternalName Service and apply its EndpointSlice(s).
 ///
-/// On resolution failure the last-good slice is intentionally left in place (we
-/// do NOT delete or empty it) — thrashing to no endpoints would flap the backend
-/// to 503 on a transient DNS blip.
+/// On resolution failure only families allowed by the current policy retain
+/// last-good slices. Policy withdrawals run before resolver or DNS I/O.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_and_apply(
     client: &Client,
@@ -298,11 +300,27 @@ async fn resolve_and_apply(
     name: &str,
     external_name: &str,
     default_candidate: &Option<ResolverCandidate>,
+    default_family: DnsLookupFamily,
     last_applied: &mut HashMap<String, ServiceDnsState>,
     observed: &HashMap<(&str, &str), &EndpointSlice>,
     runtime: &ControllerRuntime,
 ) {
     let service_key = format!("{namespace}/{name}");
+
+    let family = service_lookup_family(svc, default_family);
+    let policy_cleanup_ok = delete_unwanted_slices(client, namespace, name, observed, |v6| {
+        family.is_ok_and(|family| family.allows(family_probe(v6)))
+    })
+    .await;
+    let family = match family {
+        Ok(family) => family,
+        Err(error) => {
+            last_applied.entry(service_key.clone()).or_default().applied_fingerprint = None;
+            tracing::warn!(component = "dns_resolver_service", service = %service_key, error,
+                "Invalid DNS family policy; withdrawing resolver-owned endpoints without querying");
+            return;
+        }
+    };
 
     let ports: Vec<ServicePort> = svc.spec.as_ref().and_then(|s| s.ports.clone()).unwrap_or_default();
     if ports.is_empty() {
@@ -329,7 +347,7 @@ async fn resolve_and_apply(
     let candidate = service_resolver_candidate(svc, runtime);
     let spec = effective_spec(client, candidate, default_candidate, state).await;
 
-    let mut ips = match resolve(&spec, external_name).await {
+    let mut ips = match resolve(&spec, external_name, DnsQueryPolicy::Family(family)).await {
         Ok(ips) => ips,
         Err(e) => {
             tracing::warn!(
@@ -342,15 +360,48 @@ async fn resolve_and_apply(
             return;
         }
     };
-    apply_resolved_slices(client, svc, &ports, &mut ips, last_applied, observed).await;
+    apply_resolved_slices(
+        client,
+        svc,
+        &ports,
+        &mut ips,
+        family,
+        policy_cleanup_ok,
+        last_applied,
+        observed,
+    )
+    .await;
 }
 
-/// Publish one resolved generation, retaining the prior fingerprint on partial failure.
+fn service_lookup_family(service: &Service, default: DnsLookupFamily) -> Result<DnsLookupFamily, &'static str> {
+    DnsLookupFamily::from_annotation(
+        service
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get(DNS_LOOKUP_FAMILY))
+            .map(String::as_str),
+    )
+    .map(|family| family.unwrap_or(default))
+}
+
+fn family_probe(v6: bool) -> IpAddr {
+    if v6 {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    }
+}
+
+/// Publish one resolved generation, invalidating the prior fingerprint before writes.
+#[allow(clippy::too_many_arguments)]
 async fn apply_resolved_slices(
     client: &Client,
     svc: &Service,
     ports: &[ServicePort],
     ips: &mut Vec<IpAddr>,
+    family: DnsLookupFamily,
+    policy_cleanup_ok: bool,
     last_applied: &mut HashMap<String, ServiceDnsState>,
     observed: &HashMap<(&str, &str), &EndpointSlice>,
 ) {
@@ -372,8 +423,8 @@ async fn apply_resolved_slices(
 
     // Unchanged content may skip only when all desired families still belong
     // to the current Service UID; otherwise normal forced SSA repairs ownership.
-    let fingerprint = slice_fingerprint(ips, ports);
-    if can_skip_owned_slices(observed, last_applied, &service_key, &fingerprint, svc, ips) {
+    let fingerprint = slice_fingerprint(ips, ports, family);
+    if policy_cleanup_ok && can_skip_owned_slices(observed, last_applied, &service_key, &fingerprint, svc, ips) {
         return;
     }
 
@@ -383,6 +434,11 @@ async fn apply_resolved_slices(
         return;
     }
 
+    // A partial write (or cancellation) invalidates the old success claim. If DNS
+    // returns to that old answer later, it must repair the intermediate content.
+    if let Some(state) = last_applied.get_mut(&service_key) {
+        state.applied_fingerprint = None;
+    }
     let api: Api<EndpointSlice> = Api::namespaced(client.clone(), namespace);
     let pp = PatchParams::apply(FIELD_MANAGER).force();
     let mut all_ok = true;
@@ -400,9 +456,14 @@ async fn apply_resolved_slices(
         }
     }
 
-    // Only record the fingerprint on a fully successful apply, so a partial
-    // failure is retried (re-applied) on the next tick.
     if all_ok {
+        all_ok = delete_unwanted_slices(client, namespace, name, observed, |v6| {
+            ips.iter().any(|ip| ip.is_ipv6() == v6)
+        })
+        .await;
+    }
+    // Failed publication or withdrawal must retry, even for an unchanged answer.
+    if all_ok && policy_cleanup_ok {
         last_applied.entry(service_key.clone()).or_default().applied_fingerprint = Some(fingerprint);
         tracing::debug!(
             component = "dns_resolver_service",
@@ -434,32 +495,30 @@ fn can_skip_owned_slices(
         return false;
     };
     let namespace = service.metadata.namespace.as_deref().unwrap_or("default");
-    [false, true]
-        .into_iter()
-        .filter(|v6| ips.iter().any(|ip| ip.is_ipv6() == *v6))
-        .all(|v6| {
-            let expected = slice_name(name, v6);
-            observed.get(&(namespace, expected.as_str())).is_some_and(|slice| {
-                slice.address_type == if v6 { "IPv6" } else { "IPv4" }
-                    && slice.metadata.namespace.as_deref() == Some(namespace)
-                    && slice.metadata.name.as_deref() == Some(expected.as_str())
-                    && slice
-                        .metadata
-                        .labels
-                        .as_ref()
-                        .and_then(|labels| labels.get(SERVICE_NAME))
-                        .map(String::as_str)
-                        == Some(name)
-                    && slice.metadata.owner_references.as_ref().is_some_and(|owners| {
-                        owners.iter().any(|owner| {
-                            owner.api_version == "v1"
-                                && owner.kind == "Service"
-                                && owner.name == name
-                                && owner.uid == uid
-                        })
+    [false, true].into_iter().all(|v6| {
+        let expected = slice_name(name, v6);
+        if !ips.iter().any(|ip| ip.is_ipv6() == v6) {
+            return !observed.contains_key(&(namespace, expected.as_str()));
+        }
+        observed.get(&(namespace, expected.as_str())).is_some_and(|slice| {
+            slice.address_type == if v6 { "IPv6" } else { "IPv4" }
+                && proven_owned_slice(slice, namespace, name, v6)
+                && slice.metadata.namespace.as_deref() == Some(namespace)
+                && slice.metadata.name.as_deref() == Some(expected.as_str())
+                && slice
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(SERVICE_NAME))
+                    .map(String::as_str)
+                    == Some(name)
+                && slice.metadata.owner_references.as_ref().is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner.api_version == "v1" && owner.kind == "Service" && owner.name == name && owner.uid == uid
                     })
-            })
+                })
         })
+    })
 }
 
 /// Tenant annotation permission is distinct from administrative default provenance.
@@ -480,14 +539,14 @@ fn service_resolver_candidate(service: &Service, runtime: &ControllerRuntime) ->
 /// Publication identity using the caller's sorted/deduplicated IPs and the
 /// builder's complete EndpointPort projection. JSON preserves optional-field
 /// distinctions; sorting the encoded ports ignores Service port ordering.
-fn slice_fingerprint(ips: &[IpAddr], ports: &[ServicePort]) -> String {
+fn slice_fingerprint(ips: &[IpAddr], ports: &[ServicePort], family: DnsLookupFamily) -> String {
     let ip_part = ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(",");
     let mut port_parts: Vec<String> = endpoint_ports(ports)
         .into_iter()
         .map(|port| serde_json::json!(port).to_string())
         .collect();
     port_parts.sort_unstable();
-    format!("{ip_part}|[{}]", port_parts.join(","))
+    format!("{family:?}|{ip_part}|[{}]", port_parts.join(","))
 }
 
 /// Extract the `namespace/service-name` key of a resolver-owned slice from its
@@ -577,6 +636,80 @@ fn controller_default_candidate(config: &DnsResolverConfig) -> Option<ResolverCa
     None
 }
 
+/// Prove ownership independently of the current Service UID: a recreated Service
+/// must also be able to retire a sibling left by its previous incarnation.
+fn proven_owned_slice(slice: &EndpointSlice, namespace: &str, service: &str, v6: bool) -> bool {
+    let expected = slice_name(service, v6);
+    slice.metadata.namespace.as_deref() == Some(namespace)
+        && slice.metadata.name.as_deref() == Some(expected.as_str())
+        && slice.metadata.labels.as_ref().is_some_and(|labels| {
+            labels.get(SERVICE_NAME).map(String::as_str) == Some(service)
+                && labels.get(ENDPOINTSLICE_MANAGED_BY).map(String::as_str) == Some(MANAGED_BY_VALUE)
+                && labels.get(SYNTHETIC).map(String::as_str) == Some("true")
+        })
+        && slice.metadata.owner_references.as_ref().is_some_and(|owners| {
+            owners.iter().any(|owner| {
+                owner.api_version == "v1" && owner.kind == "Service" && owner.name == service && !owner.uid.is_empty()
+            })
+        })
+}
+
+/// Delete only the exact observed object. A concurrent replacement must survive.
+async fn delete_owned_slice(client: &Client, slice: &EndpointSlice, namespace: &str, service: &str, v6: bool) -> bool {
+    let name = slice_name(service, v6);
+    let metadata = &slice.metadata;
+    let proof = proven_owned_slice(slice, namespace, service, v6);
+    let identity = metadata
+        .uid
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .zip(metadata.resource_version.as_ref().filter(|value| !value.is_empty()));
+    let Some((uid, resource_version)) = identity.filter(|_| proof) else {
+        tracing::warn!(component = "dns_resolver_service", namespace, service, slice = %name,
+            "Cannot prove resolver EndpointSlice ownership and deletion identity; preserving object");
+        return false;
+    };
+    let params = DeleteParams {
+        preconditions: Some(Preconditions {
+            uid: Some(uid.clone()),
+            resource_version: Some(resource_version.clone()),
+        }),
+        ..Default::default()
+    };
+    match Api::<EndpointSlice>::namespaced(client.clone(), namespace)
+        .delete(&name, &params)
+        .await
+    {
+        Ok(_) => true,
+        Err(kube::Error::Api(error)) if error.code == 404 => true,
+        Err(error) => {
+            tracing::warn!(component = "dns_resolver_service", namespace, service, slice = %name, error = %error,
+                "Failed to delete resolver EndpointSlice; retrying on next reconciliation");
+            false
+        }
+    }
+}
+
+async fn delete_unwanted_slices(
+    client: &Client,
+    namespace: &str,
+    service: &str,
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
+    keep: impl Fn(bool) -> bool,
+) -> bool {
+    let mut complete = true;
+    for v6 in [false, true] {
+        if keep(v6) {
+            continue;
+        }
+        let name = slice_name(service, v6);
+        if let Some(slice) = observed.get(&(namespace, name.as_str())) {
+            complete &= delete_owned_slice(client, slice, namespace, service, v6).await;
+        }
+    }
+    complete
+}
+
 /// GC every resolver-owned EndpointSlice (from the pre-listed `owned` set) whose
 /// backing Service is not in `desired` (mode switched away, type changed off
 /// ExternalName, disabled, or Service deleted). Deletes are best-effort (logged,
@@ -595,25 +728,19 @@ async fn gc_orphaned_slices(
         if desired.contains(&service_key) {
             continue;
         }
-        let (Some(ns), Some(slice_name)) = (slice.metadata.namespace.as_deref(), slice.metadata.name.as_deref()) else {
+        let (Some(ns), Some(name)) = (slice.metadata.namespace.as_deref(), slice.metadata.name.as_deref()) else {
             continue;
         };
-        let sapi: Api<EndpointSlice> = Api::namespaced(client.clone(), ns);
-        match sapi.delete(slice_name, &DeleteParams::default()).await {
-            Ok(_) => tracing::debug!(
-                component = "dns_resolver_service",
-                service = %service_key,
-                slice = %slice_name,
-                "Garbage-collected orphaned resolver EndpointSlice"
-            ),
-            Err(e) => tracing::warn!(
-                component = "dns_resolver_service",
-                service = %service_key,
-                slice = %slice_name,
-                error = %e,
-                "Failed to delete orphaned resolver EndpointSlice"
-            ),
-        }
+        let Some(service) = slice
+            .metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(SERVICE_NAME))
+        else {
+            continue;
+        };
+        let v6 = name == slice_name(service, true);
+        delete_owned_slice(client, slice, ns, service, v6).await;
     }
 
     last_applied.retain(|k, _| desired.contains(k));

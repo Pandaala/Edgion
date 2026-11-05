@@ -71,6 +71,7 @@ async fn prefix_rewrite_without_matched_prefix_fails_closed() {
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const("/api/orders".to_string());
     session.expect_ctx().return_const(crate::ctx::EdgionHttpContext::new());
+    session.expect_executing_http_route_unit().return_const(None);
     session.expect_set_upstream_uri().times(0);
 
     let mut log = PluginLog::new("test");

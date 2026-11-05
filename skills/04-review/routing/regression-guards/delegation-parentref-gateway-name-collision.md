@@ -9,7 +9,8 @@ finding_id: delegation-parentref-gateway-name-collision
 
 ## Required behavior
 
-HTTPRoute and GRPCRoute delegation reverse-lock parentRefs use the Gateway API
+HTTPRoute and GRPCRoute delegation child parentRefs (mandatory under the
+cascading-match model; formerly an optional reverse lock) use the Gateway API
 group with `kind: HTTPRoute` or `kind: GRPCRoute`. They are not Gateway
 attachments even when a Gateway exists with the same namespace and name. The
 Gateway must publish only parentRefs whose normalized identity is the Gateway
@@ -32,11 +33,12 @@ The local dynamic scenarios
 `DelegationParentRefGatewayCollisionHttp` and
 `DelegationParentRefGatewayCollisionGrpc` add live Controller/Gateway evidence.
 Each fixture deliberately gives the Gateway and delegating parent Route the same
-namespace/name. The child has only a route-kind reverse-lock parentRef at those
+namespace/name. The child has only a route-kind parentRef at those
 coordinates. A wildcard listener admits both the parent's sole hostname and a
 distinct direct-probe hostname, so a direct 404 or gRPC UNIMPLEMENTED result
 cannot be explained by listener hostname rejection. The same child rule succeeds
-through the delegating parent, and the access log identifies that parent Route.
+through the delegating parent; the access-log `match_info` chain lists the parent
+Route first and the child (leaf) last, and the scenario checks the leaf identity.
 
 Both scenario registrations use
 `<RouteKind>/Delegation/ParentRefGatewayCollision/DynamicTest` as `conf_path`

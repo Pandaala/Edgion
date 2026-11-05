@@ -18,7 +18,7 @@ pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
 pub use contracts::{BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader};
 pub use operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, LossyTextScanner,
-    RawBodyScanner, ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,
+    RawBodyScanner, ReadBodyScanner, ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,
 };
 pub use state::RequestBodyState;
 pub(crate) use storage::run_blocking_scan;

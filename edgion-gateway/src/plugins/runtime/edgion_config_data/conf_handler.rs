@@ -228,10 +228,10 @@ impl EdgionConfigDataStore {
         if !data.spec.enable {
             return None;
         }
-        let ConfigEntry::RegionRouteOverride(overlay) = &data.spec.data else {
+        let ConfigEntry::ClusterRegionSetting(overlay) = &data.spec.data else {
             return None;
         };
-        RegionTableValidation::new(overlay.regions.as_deref()?).ok()
+        overlay.validation_proof().ok()
     }
 
     // ── Index rebuild ───────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ impl EdgionConfigDataStore {
                     // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
                     // plugin reads it via `get_raw_by_key` and type-guards inline.
                 }
-                ConfigEntry::RegionRouteOverride(_) => {
+                ConfigEntry::ClusterRegionSetting(_) => {
                     if let Some(proof) = Self::validate_region_table(ed) {
                         region_tables.insert(key.clone(), proof);
                     }
@@ -364,7 +364,7 @@ impl EdgionConfigDataStore {
                     indexes.ip_list.insert(key, matcher);
                 }
             }
-            ConfigEntry::RegionRouteOverride(_) => {
+            ConfigEntry::ClusterRegionSetting(_) => {
                 if let Some(proof) = Self::validate_region_table(&value) {
                     indexes.region_tables.insert(key, proof);
                 }
@@ -448,10 +448,10 @@ impl EdgionConfigDataStore {
     }
 
     fn update(&self, add: RawMap, update: RawMap, remove: &HashSet<String>) {
-        let current = self.snapshot.load();
-        if let Some(next) = Self::build_incremental_snapshot(&current, &add, &update, remove) {
-            self.snapshot.store(next);
-        }
+        // Compare-and-swap so a concurrent writer's entries are never lost.
+        self.snapshot.rcu(|current| {
+            Self::build_incremental_snapshot(current, &add, &update, remove).unwrap_or_else(|| Arc::clone(current))
+        });
     }
 }
 

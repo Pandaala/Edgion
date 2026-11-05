@@ -535,11 +535,7 @@ impl EdgionPlugin {
                 selection_policy_dye(!c.domain_map.is_empty(), &[c.on_missing, c.on_no_match])
             }
             EdgionPlugin::DirectEndpoint(c) => selection_policy_dye(true, &[c.on_missing, c.on_invalid]),
-            EdgionPlugin::RegionRoute(c) => selection_dye(
-                !c.route_rules.is_empty() && (!c.regions.is_empty() || c.override_ref.is_some()),
-                c.override_ref.is_some() && (!c.route_rules.is_empty() || !c.regions.is_empty()),
-                false,
-            ),
+            EdgionPlugin::RegionRoute(c) => selection_dye(!c.route_rules.is_empty(), c.fail_open, !c.fail_open),
             // Dependency-failure plugins.
             EdgionPlugin::RateLimitRedis(c) => match c.on_redis_failure {
                 OnRedisFailure::Allow => DYE_FAIL_OPEN_ONLY,

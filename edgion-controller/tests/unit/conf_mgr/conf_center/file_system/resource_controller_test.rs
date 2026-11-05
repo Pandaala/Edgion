@@ -383,8 +383,7 @@ fn make_route(ns: &str, name: &str) -> HTTPRoute {
             resolved_listeners: None,
             invalid_rule_indices: None,
             rules: None,
-            resolved_rules: None,
-            delegation_issues: Vec::new(),
+            resolved_delegation_keys: Vec::new(),
             use_default_gateways: None,
         },
         status: None,
@@ -421,6 +420,7 @@ fn fs_worker_test_harness(conf_dir: &std::path::Path) -> FsWorkerTestHarness {
         None,
         raw_store.clone(),
         invalid_envelopes.clone(),
+        &super::LocalTaskScope::default(),
     );
     (
         processor,
@@ -606,6 +606,7 @@ async fn imported_controller_envelope_status_is_never_cleared() {
         None,
         raw_store.clone(),
         Arc::new(RuntimeInvalidEnvelopes::default()),
+        &super::LocalTaskScope::default(),
     );
 
     let key = "default/p1";

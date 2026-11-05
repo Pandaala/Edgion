@@ -61,6 +61,7 @@ fn listener_entry(
             None,
             Vec::new(),
             None,
+            None,
         )),
         gateway_proof: None,
         hostname: hostname.map(str::to_string),

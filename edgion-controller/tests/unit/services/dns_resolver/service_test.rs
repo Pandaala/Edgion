@@ -35,9 +35,13 @@ async fn actual_owner_failure_with_same_rv_publishes_fallback_reuses_failure_and
     assert_eq!(original.metadata.resource_version, malformed.metadata.resource_version);
     let failed = state.prepare(&key, Arc::clone(&malformed)).unwrap();
     assert!(!failed.is_ready() && !Arc::ptr_eq(&ready, &failed));
-    assert!(resolve(&ResolverSpec::HttpDns(Arc::clone(&failed)), "localhost")
-        .await
-        .is_err());
+    assert!(resolve(
+        &ResolverSpec::HttpDns(Arc::clone(&failed)),
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native
+    )
+    .await
+    .is_err());
     assert!(Arc::ptr_eq(&failed, &state.prepare(&key, malformed).unwrap()));
     let repaired = state.prepare(&key, original).unwrap();
     assert!(repaired.is_ready() && !Arc::ptr_eq(&failed, &repaired));
@@ -110,9 +114,13 @@ async fn service_preparation_reuses_failures_independently_of_applied_slice() {
     };
     let first = state.prepare(&key, httpdns_owner(config)).unwrap();
     assert!(!first.is_ready());
-    assert!(resolve(&ResolverSpec::HttpDns(first.clone()), "localhost")
-        .await
-        .is_err());
+    assert!(resolve(
+        &ResolverSpec::HttpDns(first.clone()),
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native
+    )
+    .await
+    .is_err());
     let config = serde_json::from_value(
         serde_json::json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
     )
@@ -217,7 +225,7 @@ async fn controller_ticks_reuse_failed_preparation_and_clear_changed_or_removed_
                     vec![json!({"apiVersion": "v1", "kind": "Service", "metadata": {
                         "namespace": "test", "name": "svc", "uid": "service-uid",
                         "annotations": {"edgion.io/dns-resolution-mode": "controller", "edgion.io/dns-resolver-ref": if mode == 0 { "test/dns" } else { "" }}
-                        }, "spec": {"type": "ExternalName", "externalName": "1.2.3.4", "ports": [{"port": 80}]}})]
+                        }, "spec": {"type": "ExternalName", "externalName": if mode == 0 { "unresolvable.invalid" } else { "1.2.3.4" }, "ports": [{"port": 80}]}})]
                 };
                 json!({"apiVersion": "v1", "kind": "ServiceList", "metadata": {}, "items": items})
             };
@@ -322,12 +330,15 @@ fn slice_fingerprint_stable_and_discriminating() {
             })
             .collect::<Vec<_>>()
     };
-    let fp = slice_fingerprint(&a, &ports(&[80]));
+    let fp = slice_fingerprint(&a, &ports(&[80]), DnsLookupFamily::All);
     // Same inputs → same fingerprint (no spurious re-apply).
-    assert_eq!(fp, slice_fingerprint(&a, &ports(&[80])));
+    assert_eq!(fp, slice_fingerprint(&a, &ports(&[80]), DnsLookupFamily::All));
     // A changed IP set or port set → different fingerprint (re-apply).
-    assert_ne!(fp, slice_fingerprint(&[IpAddr::from([10, 0, 0, 1])], &ports(&[80])));
-    assert_ne!(fp, slice_fingerprint(&a, &ports(&[80, 443])));
+    assert_ne!(
+        fp,
+        slice_fingerprint(&[IpAddr::from([10, 0, 0, 1])], &ports(&[80]), DnsLookupFamily::All)
+    );
+    assert_ne!(fp, slice_fingerprint(&a, &ports(&[80, 443]), DnsLookupFamily::All));
 }
 
 #[test]
@@ -337,30 +348,33 @@ fn slice_fingerprint_tracks_published_optional_fields_and_ignores_target_port() 
         port: 80,
         ..Default::default()
     };
-    let fingerprint = slice_fingerprint(&ips, std::slice::from_ref(&base));
+    let fingerprint = slice_fingerprint(&ips, std::slice::from_ref(&base), DnsLookupFamily::All);
     for field in ["name", "protocol", "appProtocol"] {
         let mut absent = serde_json::to_value(&base).unwrap();
         absent[field] = json!("");
         let empty: ServicePort = serde_json::from_value(absent.clone()).unwrap();
         absent[field] = json!("value");
         let present: ServicePort = serde_json::from_value(absent).unwrap();
-        let empty_fp = slice_fingerprint(&ips, &[empty]);
-        let present_fp = slice_fingerprint(&ips, &[present]);
+        let empty_fp = slice_fingerprint(&ips, &[empty], DnsLookupFamily::All);
+        let present_fp = slice_fingerprint(&ips, &[present], DnsLookupFamily::All);
         assert_ne!(fingerprint, empty_fp, "{field}");
         assert_ne!(fingerprint, present_fp, "{field}");
         assert_ne!(empty_fp, present_fp, "{field}");
     }
     let mut target_only = base.clone();
     target_only.target_port = Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080));
-    assert_eq!(fingerprint, slice_fingerprint(&ips, &[target_only]));
+    assert_eq!(
+        fingerprint,
+        slice_fingerprint(&ips, &[target_only], DnsLookupFamily::All)
+    );
     let sibling = ServicePort {
         port: 443,
         name: Some("https".into()),
         ..base.clone()
     };
     assert_eq!(
-        slice_fingerprint(&ips, &[base.clone(), sibling.clone()]),
-        slice_fingerprint(&ips, &[sibling, base]),
+        slice_fingerprint(&ips, &[base.clone(), sibling.clone()], DnsLookupFamily::All),
+        slice_fingerprint(&ips, &[sibling, base], DnsLookupFamily::All),
     );
 }
 
@@ -406,6 +420,8 @@ async fn published_port_edits_reapply_both_families_then_skip_unchanged_generati
             &service,
             &original_ports,
             &mut ips,
+            DnsLookupFamily::All,
+            true,
             &mut states,
             &HashMap::new(),
         )
@@ -432,7 +448,17 @@ async fn published_port_edits_reapply_both_families_then_skip_unchanged_generati
         });
         let changed: Vec<ServicePort> = serde_json::from_value(changed).unwrap();
         service.spec.as_mut().unwrap().ports = Some(changed.clone());
-        apply_resolved_slices(&client, &service, &changed, &mut ips, &mut states, &observed).await;
+        apply_resolved_slices(
+            &client,
+            &service,
+            &changed,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
         assert_eq!(requests.lock().len(), before + 4, "{field}");
         let repaired = requests.lock()[before + 2..].to_vec();
         for slice in &repaired {
@@ -455,11 +481,31 @@ async fn published_port_edits_reapply_both_families_then_skip_unchanged_generati
                 )
             })
             .collect();
-        apply_resolved_slices(&client, &service, &changed, &mut ips, &mut states, &observed).await;
+        apply_resolved_slices(
+            &client,
+            &service,
+            &changed,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
         let mut reordered = changed;
         reordered.reverse();
         ips.reverse();
-        apply_resolved_slices(&client, &service, &reordered, &mut ips, &mut states, &observed).await;
+        apply_resolved_slices(
+            &client,
+            &service,
+            &reordered,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
         assert_eq!(requests.lock().len(), before + 4, "unchanged/reordered {field}");
     }
 }
@@ -467,6 +513,7 @@ async fn published_port_edits_reapply_both_families_then_skip_unchanged_generati
 #[test]
 fn controller_default_candidate_prefers_ref_then_servers() {
     let ref_cfg = DnsResolverConfig {
+        lookup_family: DnsLookupFamily::default(),
         enabled: true,
         refresh_interval: "15s".to_string(),
         link_sys_ref: Some("dns/aliyun".to_string()),
@@ -481,6 +528,7 @@ fn controller_default_candidate_prefers_ref_then_servers() {
     );
 
     let servers_cfg = DnsResolverConfig {
+        lookup_family: DnsLookupFamily::default(),
         enabled: true,
         refresh_interval: "15s".to_string(),
         link_sys_ref: None,
@@ -702,7 +750,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
     }];
     for address in ["192.0.2.1", "2001:db8::1"] {
         let ips = [address.parse().unwrap()];
-        let fingerprint = slice_fingerprint(&ips, &ports);
+        let fingerprint = slice_fingerprint(&ips, &ports, DnsLookupFamily::All);
         let mut states = HashMap::from([(
             "app/source".into(),
             ServiceDnsState {
@@ -772,6 +820,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
                 "source",
                 address,
                 &None,
+                DnsLookupFamily::All,
                 &mut states,
                 &observed,
                 &runtime,
@@ -798,15 +847,13 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
             "source",
             address,
             &None,
+            DnsLookupFamily::All,
             &mut states,
             &HashMap::new(),
             &runtime,
         )
         .await;
-        assert_eq!(
-            states["app/source"].applied_fingerprint.as_deref(),
-            Some("previous-fingerprint")
-        );
+        assert!(states["app/source"].applied_fingerprint.is_none());
         fail.store(false, std::sync::atomic::Ordering::SeqCst);
         resolve_and_apply(
             &client,
@@ -815,6 +862,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
             "source",
             address,
             &None,
+            DnsLookupFamily::All,
             &mut states,
             &HashMap::new(),
             &runtime,
@@ -843,7 +891,7 @@ fn dual_family_skip_requires_both_current_owned_records() {
         &ips,
         "fixture",
     );
-    let fingerprint = slice_fingerprint(&ips, &ports);
+    let fingerprint = slice_fingerprint(&ips, &ports, DnsLookupFamily::All);
     let states = HashMap::from([(
         "app/source".into(),
         ServiceDnsState {
@@ -948,7 +996,7 @@ async fn producer_validation_off_still_rejects_invalid_identity_before_get() {
 }
 
 #[tokio::test]
-async fn dual_family_partial_apply_preserves_fingerprint_until_complete_retry() {
+async fn dual_family_partial_apply_invalidates_fingerprint_until_complete_retry() {
     for failed_family in ["IPv4", "IPv6"] {
         let records = Arc::new(Mutex::new(Vec::<EndpointSlice>::new()));
         let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -997,10 +1045,20 @@ async fn dual_family_partial_apply_preserves_fingerprint_until_complete_retry() 
                 ..Default::default()
             },
         )]);
-        apply_resolved_slices(&client, &source, ports, &mut ips, &mut states, &HashMap::new()).await;
+        apply_resolved_slices(
+            &client,
+            &source,
+            ports,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &HashMap::new(),
+        )
+        .await;
         assert_eq!(records.lock().len(), 2, "both families attempted for {failed_family}");
         assert_eq!(ips.len(), 2, "production publication deduplicates addresses");
-        assert_eq!(states["app/source"].applied_fingerprint.as_deref(), Some("previous"));
+        assert!(states["app/source"].applied_fingerprint.is_none());
         let accepted: Vec<_> = records
             .lock()
             .iter()
@@ -1020,11 +1078,21 @@ async fn dual_family_partial_apply_preserves_fingerprint_until_complete_retry() 
             })
             .collect();
         fail.store(false, std::sync::atomic::Ordering::SeqCst);
-        apply_resolved_slices(&client, &source, ports, &mut ips, &mut states, &observed).await;
+        apply_resolved_slices(
+            &client,
+            &source,
+            ports,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
         assert_eq!(records.lock().len(), 4, "complete retry re-applies both families");
         assert_eq!(
             states["app/source"].applied_fingerprint.as_deref(),
-            Some(slice_fingerprint(&ips, ports).as_str())
+            Some(slice_fingerprint(&ips, ports, DnsLookupFamily::All).as_str())
         );
         let complete = records.lock()[2..].to_vec();
         let observed = complete
@@ -1039,11 +1107,551 @@ async fn dual_family_partial_apply_preserves_fingerprint_until_complete_retry() 
                 )
             })
             .collect();
-        apply_resolved_slices(&client, &source, ports, &mut ips, &mut states, &observed).await;
+        apply_resolved_slices(
+            &client,
+            &source,
+            ports,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
         assert_eq!(
             records.lock().len(),
             4,
             "matching complete generation performs no PATCH"
         );
     }
+}
+
+fn observed_dns_slices(service: &Service) -> Vec<EndpointSlice> {
+    let mut slices = build_endpoint_slices(
+        "source",
+        "app",
+        service_owner_ref(service).unwrap(),
+        service.spec.as_ref().unwrap().ports.as_ref().unwrap(),
+        &["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()],
+        "fixture",
+    );
+    for (index, slice) in slices.iter_mut().enumerate() {
+        slice.metadata.uid = Some(format!("slice-{index}"));
+        slice.metadata.resource_version = Some(format!("rv-{index}"));
+    }
+    slices
+}
+
+fn observations(slices: &[EndpointSlice]) -> HashMap<(&str, &str), &EndpointSlice> {
+    slices
+        .iter()
+        .map(|slice| {
+            (
+                (
+                    slice.metadata.namespace.as_deref().unwrap(),
+                    slice.metadata.name.as_deref().unwrap(),
+                ),
+                slice,
+            )
+        })
+        .collect()
+}
+
+type SliceRequests = Arc<Mutex<Vec<(http::Method, String, serde_json::Value)>>>;
+
+fn slice_client(
+    requests: SliceRequests,
+    patch_code: Arc<std::sync::atomic::AtomicU16>,
+    delete_code: Arc<std::sync::atomic::AtomicU16>,
+) -> Client {
+    Client::new(
+        service_fn(move |request: http::Request<Body>| {
+            let (requests, patch_code, delete_code) = (requests.clone(), patch_code.clone(), delete_code.clone());
+            async move {
+                let method = request.method().clone();
+                let path = request.uri().path().to_string();
+                assert!(
+                    method == http::Method::PATCH || method == http::Method::DELETE,
+                    "unexpected I/O: {method} {path}"
+                );
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request.into_body().collect_bytes().await.unwrap()).unwrap();
+                let code = if method == http::Method::PATCH {
+                    patch_code.load(std::sync::atomic::Ordering::SeqCst)
+                } else {
+                    delete_code.load(std::sync::atomic::Ordering::SeqCst)
+                };
+                requests.lock().push((method.clone(), path, body.clone()));
+                let payload = if code == 200 && method == http::Method::PATCH {
+                    body
+                } else {
+                    json!({"kind":"Status","apiVersion":"v1","status":if code == 200 {"Success"} else {"Failure"},"reason":"Fixture","message":"fixture","code":code})
+                };
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(code)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                        .unwrap(),
+                )
+            }
+        }),
+        "app",
+    )
+}
+
+#[tokio::test]
+async fn partial_publication_cannot_skip_when_dns_returns_to_previous_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for failure in ["DELETE", "IPv4", "IPv6"] {
+        let service = dns_service("");
+        let ports = service.spec.as_ref().unwrap().ports.as_ref().unwrap();
+        let live = Arc::new(Mutex::new(Vec::<EndpointSlice>::new()));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let failing = Arc::new(AtomicBool::new(false));
+        let (stored, events, reject) = (live.clone(), writes.clone(), failing.clone());
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                let (stored, events, reject) = (stored.clone(), events.clone(), reject.clone());
+                async move {
+                    let method = request.method().clone();
+                    let name = request.uri().path().rsplit('/').next().unwrap().to_string();
+                    let body = request.into_body().collect_bytes().await.unwrap();
+                    events.lock().push(method.clone());
+                    let mut code = 200;
+                    let payload = if method == http::Method::PATCH {
+                        let mut slice: EndpointSlice = serde_json::from_slice(&body).unwrap();
+                        if reject.load(Ordering::SeqCst) && slice.address_type == failure {
+                            code = 500;
+                        } else {
+                            slice.metadata.uid = Some(format!("uid-{name}"));
+                            slice.metadata.resource_version = Some("1".into());
+                            let mut slices = stored.lock();
+                            slices.retain(|old| old.metadata.name.as_deref() != Some(name.as_str()));
+                            slices.push(slice.clone());
+                        }
+                        serde_json::to_value(slice).unwrap()
+                    } else {
+                        assert_eq!(method, http::Method::DELETE);
+                        if reject.load(Ordering::SeqCst) && failure == "DELETE" {
+                            code = 409;
+                        } else {
+                            stored
+                                .lock()
+                                .retain(|old| old.metadata.name.as_deref() != Some(name.as_str()));
+                        }
+                        json!({"kind":"Status","apiVersion":"v1","status":"Success","code":200})
+                    };
+                    let payload = if code == 200 {
+                        payload
+                    } else {
+                        json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Fixture","message":"fixture","code":code})
+                    };
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(code)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "app",
+        );
+        let original: Vec<IpAddr> = vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()];
+        let mut states = HashMap::new();
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut original.clone(),
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &HashMap::new(),
+        )
+        .await;
+        let original_fingerprint = states["app/source"].applied_fingerprint.clone();
+        assert!(original_fingerprint.is_some());
+        failing.store(true, Ordering::SeqCst);
+        let snapshot = live.lock().clone();
+        let mut changed = vec!["192.0.2.2".parse().unwrap()];
+        if failure != "DELETE" {
+            changed.push("2001:db8::2".parse().unwrap());
+        }
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut changed,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observations(&snapshot),
+        )
+        .await;
+        let partial = live.lock().clone();
+        assert_eq!(partial.len(), 2, "both families still exist after {failure}");
+        assert!(partial
+            .iter()
+            .flat_map(|slice| &slice.endpoints)
+            .flat_map(|endpoint| &endpoint.addresses)
+            .any(|ip| ip.ends_with('2')));
+
+        // Returning to the old DNS answer must repair the partially changed content,
+        // even though both family slices still have the expected owner and identity.
+        failing.store(false, Ordering::SeqCst);
+        let before = writes.lock().len();
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut original.clone(),
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observations(&partial),
+        )
+        .await;
+        assert_eq!(writes.lock().len(), before + 2, "repair both families after {failure}");
+        let repaired = live.lock().clone();
+        let mut addresses: Vec<IpAddr> = repaired
+            .iter()
+            .flat_map(|slice| &slice.endpoints)
+            .flat_map(|endpoint| &endpoint.addresses)
+            .map(|ip| ip.parse().unwrap())
+            .collect();
+        addresses.sort();
+        assert_eq!(addresses, original);
+        assert_eq!(states["app/source"].applied_fingerprint, original_fingerprint);
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut original.clone(),
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observations(&repaired),
+        )
+        .await;
+        assert_eq!(writes.lock().len(), before + 2, "fully repaired generation may skip");
+    }
+}
+
+#[tokio::test]
+async fn issue_008_complete_family_replacement_deletes_obsolete_sibling_and_retries() {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    for survivor in ["192.0.2.1", "2001:db8::1"] {
+        let service = dns_service("");
+        let ports = service.spec.as_ref().unwrap().ports.as_ref().unwrap();
+        let mut ips = vec![survivor.parse().unwrap()];
+        let slices = observed_dns_slices(&service);
+        let observed = observations(&slices);
+        let expected = slice_fingerprint(&ips, ports, DnsLookupFamily::All);
+        let mut states = HashMap::from([(
+            "app/source".into(),
+            ServiceDnsState {
+                applied_fingerprint: Some(expected.clone()),
+                ..Default::default()
+            },
+        )]);
+        assert!(!can_skip_owned_slices(
+            &observed,
+            &states,
+            "app/source",
+            &expected,
+            &service,
+            &ips
+        ));
+        states.get_mut("app/source").unwrap().applied_fingerprint = Some("previous".into());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let delete_code = Arc::new(AtomicU16::new(409));
+        let client = slice_client(requests.clone(), Arc::new(AtomicU16::new(200)), delete_code.clone());
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
+        assert!(states["app/source"].applied_fingerprint.is_none());
+        delete_code.store(200, Ordering::SeqCst);
+        apply_resolved_slices(
+            &client,
+            &service,
+            ports,
+            &mut ips,
+            DnsLookupFamily::All,
+            true,
+            &mut states,
+            &observed,
+        )
+        .await;
+        assert_eq!(
+            states["app/source"].applied_fingerprint.as_deref(),
+            Some(expected.as_str())
+        );
+        let events = requests.lock();
+        assert_eq!(
+            events.iter().map(|event| event.0.clone()).collect::<Vec<_>>(),
+            [
+                http::Method::PATCH,
+                http::Method::DELETE,
+                http::Method::PATCH,
+                http::Method::DELETE
+            ]
+        );
+        let obsolete_index = usize::from(ips[0].is_ipv4());
+        assert!(events[1]
+            .1
+            .ends_with(slices[obsolete_index].metadata.name.as_deref().unwrap()));
+        assert_eq!(events[1].2["preconditions"]["uid"], format!("slice-{obsolete_index}"));
+        assert_eq!(
+            events[1].2["preconditions"]["resourceVersion"],
+            format!("rv-{obsolete_index}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_patch_preserves_allowed_sibling_and_404_delete_completes() {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    let service = dns_service("");
+    let ports = service.spec.as_ref().unwrap().ports.as_ref().unwrap();
+    let slices = observed_dns_slices(&service);
+    let observed = observations(&slices);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let patch_code = Arc::new(AtomicU16::new(500));
+    let client = slice_client(requests.clone(), patch_code.clone(), Arc::new(AtomicU16::new(404)));
+    let mut states = HashMap::new();
+    let mut ips = vec!["192.0.2.2".parse().unwrap()];
+    apply_resolved_slices(
+        &client,
+        &service,
+        ports,
+        &mut ips,
+        DnsLookupFamily::All,
+        true,
+        &mut states,
+        &observed,
+    )
+    .await;
+    assert!(requests.lock().iter().all(|event| event.0 == http::Method::PATCH));
+    assert!(states.is_empty());
+    patch_code.store(200, Ordering::SeqCst);
+    apply_resolved_slices(
+        &client,
+        &service,
+        ports,
+        &mut ips,
+        DnsLookupFamily::All,
+        true,
+        &mut states,
+        &observed,
+    )
+    .await;
+    assert!(states["app/source"].applied_fingerprint.is_some());
+    assert_eq!(requests.lock().last().unwrap().0, http::Method::DELETE);
+}
+
+#[tokio::test]
+async fn obsolete_slice_deletion_requires_proven_ownership_and_observed_identity() {
+    use std::sync::atomic::AtomicU16;
+    let service = dns_service("");
+    for case in [
+        "old-service-uid",
+        "namespace",
+        "name",
+        "service-label",
+        "managed-label",
+        "synthetic-label",
+        "owner-kind",
+        "owner-version",
+        "owner-name",
+        "owner-uid",
+        "slice-uid",
+        "slice-rv",
+    ] {
+        let mut slice = observed_dns_slices(&service).remove(1);
+        match case {
+            "old-service-uid" => slice.metadata.owner_references.as_mut().unwrap()[0].uid = "old-incarnation".into(),
+            "namespace" => slice.metadata.namespace = Some("other".into()),
+            "name" => slice.metadata.name = Some("other".into()),
+            "service-label" => {
+                slice
+                    .metadata
+                    .labels
+                    .as_mut()
+                    .unwrap()
+                    .insert(SERVICE_NAME.into(), "other".into());
+            }
+            "managed-label" => {
+                slice.metadata.labels.as_mut().unwrap().remove(ENDPOINTSLICE_MANAGED_BY);
+            }
+            "synthetic-label" => {
+                slice.metadata.labels.as_mut().unwrap().remove(SYNTHETIC);
+            }
+            "owner-kind" => slice.metadata.owner_references.as_mut().unwrap()[0].kind = "Secret".into(),
+            "owner-version" => slice.metadata.owner_references.as_mut().unwrap()[0].api_version = "other/v1".into(),
+            "owner-name" => slice.metadata.owner_references.as_mut().unwrap()[0].name = "other".into(),
+            "owner-uid" => slice.metadata.owner_references.as_mut().unwrap()[0].uid.clear(),
+            "slice-uid" => slice.metadata.uid = None,
+            "slice-rv" => slice.metadata.resource_version = None,
+            _ => unreachable!(),
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let client = slice_client(
+            requests.clone(),
+            Arc::new(AtomicU16::new(200)),
+            Arc::new(AtomicU16::new(200)),
+        );
+        assert_eq!(
+            delete_owned_slice(&client, &slice, "app", "source", true).await,
+            case == "old-service-uid",
+            "{case}"
+        );
+        assert_eq!(requests.lock().len(), usize::from(case == "old-service-uid"), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn policy_withdrawal_precedes_failed_dns_and_invalid_policy_permits_no_query() {
+    use std::sync::atomic::AtomicU16;
+    for (policy, forbidden_literal, removed) in [
+        ("ipv4Only", "2001:db8::2", 1),
+        ("ipv6Only", "192.0.2.2", 1),
+        ("", "invalid.example", 2),
+    ] {
+        let mut service = dns_service("");
+        service
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(DNS_LOOKUP_FAMILY.into(), policy.into());
+        let slices = observed_dns_slices(&service);
+        let observed = observations(&slices);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let client = slice_client(
+            requests.clone(),
+            Arc::new(AtomicU16::new(200)),
+            Arc::new(AtomicU16::new(200)),
+        );
+        let mut states = HashMap::new();
+        resolve_and_apply(
+            &client,
+            &service,
+            "app",
+            "source",
+            forbidden_literal,
+            &None,
+            DnsLookupFamily::All,
+            &mut states,
+            &observed,
+            &ControllerRuntime::default(),
+        )
+        .await;
+        assert_eq!(requests.lock().len(), removed, "{policy}");
+        assert!(requests.lock().iter().all(|event| event.0 == http::Method::DELETE));
+        assert!(states["app/source"].applied_fingerprint.is_none());
+    }
+}
+
+#[test]
+fn controller_family_override_is_strict_and_independent_of_resolver_selection() {
+    let mut service = dns_service("");
+    assert_eq!(
+        service_lookup_family(&service, DnsLookupFamily::Ipv6Only),
+        Ok(DnsLookupFamily::Ipv6Only)
+    );
+    service
+        .metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(DNS_LOOKUP_FAMILY.into(), "all".into());
+    assert_eq!(
+        service_lookup_family(&service, DnsLookupFamily::Ipv4Only),
+        Ok(DnsLookupFamily::All)
+    );
+    for invalid in ["", "ipv4", " all", "ALL"] {
+        service
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(DNS_LOOKUP_FAMILY.into(), invalid.into());
+        assert!(service_lookup_family(&service, DnsLookupFamily::Ipv4Only).is_err());
+    }
+}
+
+#[tokio::test]
+async fn failed_policy_withdrawal_stays_pending_while_allowed_family_is_published() {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    let service = dns_service("");
+    let slices = observed_dns_slices(&service);
+    let observed = observations(&slices);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let delete_code = Arc::new(AtomicU16::new(409));
+    let client = slice_client(requests.clone(), Arc::new(AtomicU16::new(200)), delete_code.clone());
+    let mut states = HashMap::new();
+    resolve_and_apply(
+        &client,
+        &service,
+        "app",
+        "source",
+        "192.0.2.2",
+        &None,
+        DnsLookupFamily::Ipv4Only,
+        &mut states,
+        &observed,
+        &ControllerRuntime::default(),
+    )
+    .await;
+    assert_eq!(
+        requests.lock().iter().map(|event| event.0.clone()).collect::<Vec<_>>(),
+        [http::Method::DELETE, http::Method::PATCH, http::Method::DELETE]
+    );
+    assert!(states["app/source"].applied_fingerprint.is_none());
+    delete_code.store(200, Ordering::SeqCst);
+    resolve_and_apply(
+        &client,
+        &service,
+        "app",
+        "source",
+        "192.0.2.2",
+        &None,
+        DnsLookupFamily::Ipv4Only,
+        &mut states,
+        &observed,
+        &ControllerRuntime::default(),
+    )
+    .await;
+    assert!(states["app/source"].applied_fingerprint.is_some());
+}
+
+#[tokio::test]
+async fn orphan_gc_uses_guarded_deletion_and_preserves_desired_or_foreign_objects() {
+    use std::sync::atomic::AtomicU16;
+    let service = dns_service("");
+    let mut slices = observed_dns_slices(&service);
+    slices[1].metadata.owner_references.as_mut().unwrap()[0].kind = "Secret".into();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let client = slice_client(
+        requests.clone(),
+        Arc::new(AtomicU16::new(200)),
+        Arc::new(AtomicU16::new(200)),
+    );
+    let mut states = HashMap::from([("app/source".into(), ServiceDnsState::default())]);
+    gc_orphaned_slices(&client, &slices, &HashSet::from(["app/source".into()]), &mut states).await;
+    assert!(requests.lock().is_empty());
+    gc_orphaned_slices(&client, &slices, &HashSet::new(), &mut states).await;
+    assert_eq!(requests.lock().len(), 1);
+    assert_eq!(requests.lock()[0].2["preconditions"]["uid"], "slice-0");
+    assert!(states.is_empty());
 }

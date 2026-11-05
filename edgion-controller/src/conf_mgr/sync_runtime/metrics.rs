@@ -4,7 +4,7 @@
 //! - Initial sync duration
 //! - Active controllers count
 //! - Leader election status
-//! - Reload operations
+//! - Configuration generation notifications
 
 use edgion_common::observe::metrics_facade::{
     fixed_counter, fixed_gauge, FixedCounter as Counter, FixedGauge as Gauge,
@@ -26,10 +26,6 @@ pub mod names {
     /// a flapping election is invisible on the boolean gauge and obvious in this
     /// transition rate (spec §9).
     pub const LEADER_TRANSITIONS_TOTAL: &str = "edgion_controller_leader_transitions_total";
-    /// Total reload operations triggered
-    pub const RELOAD_TOTAL: &str = "edgion_controller_reload_total";
-    /// Last reload duration in seconds
-    pub const RELOAD_DURATION: &str = "edgion_controller_reload_duration_seconds_last";
     /// Total client notifications sent for reload
     pub const RELOAD_CLIENT_NOTIFICATIONS: &str = "edgion_controller_reload_client_notifications_total";
     /// Total status writes (with labels: kind, backend, result)
@@ -180,12 +176,8 @@ pub fn reload_metrics() -> &'static ReloadMetrics {
     &RELOAD_METRICS
 }
 
-/// Reload operation metrics
+/// Notifications when the configuration server generation changes
 pub struct ReloadMetrics {
-    /// Total reload operations triggered
-    reload_total: Counter,
-    /// Last reload duration
-    reload_duration: Gauge,
     /// Total client notifications sent
     client_notifications: Counter,
 }
@@ -193,22 +185,8 @@ pub struct ReloadMetrics {
 impl ReloadMetrics {
     fn new() -> Self {
         Self {
-            reload_total: fixed_counter!(names::RELOAD_TOTAL),
-            reload_duration: fixed_gauge!(names::RELOAD_DURATION),
             client_notifications: fixed_counter!(names::RELOAD_CLIENT_NOTIFICATIONS),
         }
-    }
-
-    /// Record a reload operation started
-    #[inline]
-    pub fn reload_started(&self) {
-        self.reload_total.increment(1);
-    }
-
-    /// Record reload duration
-    #[inline]
-    pub fn reload_completed(&self, duration_secs: f64) {
-        self.reload_duration.set(duration_secs);
     }
 
     /// Record a client notification sent

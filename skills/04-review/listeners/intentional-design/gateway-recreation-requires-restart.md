@@ -122,4 +122,15 @@ configured. The last case is outside this acceptance and needs investigation.
 - `replace-gateway-backend-tls-identities-authoritatively`: accepted residual
   Gateway identity-store ownership in the same unsupported deletion lifecycle;
   supported in-place certificate removal and replacement remain unchanged.
+- `wipe-recreate-http-listener-route-handle` (2026-10-30 DNS family run):
+  the final cache-residue `wipe-all` removed all three Gateways and retired
+  their HTTP managers (`removed_stale_listeners=3`); reloading the base and
+  DnsResolutionFlap fixtures into the `--keep-alive` processes allocated a new
+  manager, and every later `flap.dns.test` request on port 31361 returned
+  404/`RouteNotFound`. Gateway resources were deleted, so the Route-only
+  re-evaluation trigger does not apply. Classified as this accepted boundary on
+  2026-11-03; no production fix. The same day, a fresh
+  `run_integration.sh -r Gateway -i RetainedListenerHandles` run on macOS
+  passed, including its final cache-residue gate, and its Gateway log showed
+  the same retirement on Gateway removal.
 - Source task: `listener-route-manager-lifecycle`.

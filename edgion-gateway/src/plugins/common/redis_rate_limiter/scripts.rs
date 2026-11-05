@@ -24,7 +24,8 @@
 /// windows. The marker stores `revision`, `target`, and `final` and expires on a
 /// separately bounded request/retry horizon. A retry after marker expiry is no
 /// longer idempotent; callers must size that TTL for the maximum request and
-/// retry lifetime.
+/// retry lifetime. Bucket expiry is extended, never shortened by an update;
+/// otherwise a shorter final update could erase another active marker's charge.
 ///
 /// KEYS[1] = opaque aggregate bucket key for the caller-selected window
 /// KEYS[2] = opaque marker key derived from the internal logical request ID
@@ -108,7 +109,10 @@ if state_fields ~= 0 and state_fields ~= 3 then
 end
 
 local function refresh_expiry()
-    redis.call('PEXPIRE', key, bucket_ttl_ms)
+    local current_ttl = redis.call('PTTL', key)
+    if current_ttl < bucket_ttl_ms then
+        redis.call('PEXPIRE', key, bucket_ttl_ms)
+    end
     redis.call('PEXPIRE', marker_key, marker_ttl_ms)
 end
 

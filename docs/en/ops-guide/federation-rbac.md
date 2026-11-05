@@ -3,11 +3,11 @@
 The Controller authorizes each operation that a Federation Center performs on the
 Admin API by evaluating a `(verb, kind)` pair derived from the actual matched
 route. This document explains the authorization model, the built-in default
-policy, the hot-reloadable kill-switch, and common configuration examples.
+policy, the startup enable switch, and common configuration examples.
 
 ## How it works
 
-Every Center request (blind-proxy UI calls, sync operations, failover, reload)
+Every Center request (blind-proxy UI calls, sync operations, failover)
 passes through the same authorization layer as local admin requests. Center is
 assigned a restricted identity (`CenterRestricted`) whose allowed operations are
 governed by the `[center].rbac` configuration block. The local admin token maps to
@@ -16,7 +16,7 @@ an allow-all (wildcard) policy — Center authorization does not affect it.
 Authorization is decided per `(verb, kind)`:
 
 - **verb** — the operation type: `get`, `list`, `list-keys`, `watch`, `create`,
-  `update`, `delete`, `failover`, `reload`, `server-info`, `diagnostics`, etc.
+  `update`, `delete`, `failover`, `server-info`, `diagnostics`, etc.
 - **kind** — the PascalCase resource Kind (e.g., `EdgionConfigData`, `HTTPRoute`,
   `RegionRoute`). Kind matching is **case-sensitive**; use the canonical PascalCase
   spelling. Verbs are case-insensitive.
@@ -36,7 +36,7 @@ default policy applies automatically:
 | `create`, `update`, `delete` | `EdgionConfigData` | Yes |
 | `create`, `update`, `delete` | Any other kind | No |
 | `list`, `failover` | `RegionRoute` (synthetic label, not a resource kind) | Yes |
-| `server-info`, `reload` | `NonResource` (synthetic label, not a resource kind) | Yes |
+| `server-info` | `NonResource` (synthetic label, not a resource kind) | Yes |
 | `diagnostics`, and everything else | Any | No |
 
 Key notes:
@@ -54,11 +54,6 @@ Key notes:
   be a dead permission. These verbs are kept in a separate rule from the
   ResourceKind read rule because `RegionRoute` is not part of the
   exhaustiveness gate.
-- `reload` **is** included in the default, scoped to the synthetic
-  `NonResource` label: the Center's reload button arrives as a proxied
-  `POST /api/v1/reload`, classified `(reload, NonResource)` by the same route
-  classifier that emits `(server-info, NonResource)`. It is not granted on any
-  actual resource kind.
 
 When an explicit `rbac` block is present it **fully overrides** the built-in
 default. There is no merging.
@@ -70,11 +65,10 @@ center:
   enabled: false   # default: true
 ```
 
-Setting `enabled: false` stops the federation client entirely without a process
-restart. Use `POST /api/v1/reload` to hot-apply the change after editing the
-config file. The reload also re-reads the `rbac` block and applies the new policy
-to all subsequent Center requests without disconnecting and reconnecting the client
-(unless `enabled` or `address` changed).
+Set `enabled: false` and restart the Controller to disable its federation client.
+All `[center]` fields, including `rbac` and `address`, are read at startup.
+Restart every Controller replica that uses the changed configuration. Resource
+updates and certificate rotation continue through their existing watch paths.
 
 ## Authorization examples
 
@@ -160,7 +154,7 @@ Controller operator are the same team and you accept the risks listed below.**
 
 > **WARNING — read the [Security notes](#security-notes) before enabling this.**
 > `kinds: ["*"]` with read verbs exposes `Secret` and `EdgionTls` private-key
-> material. `verbs: ["*"]` lets Center mutate any resource or trigger reloads.
+> material. `verbs: ["*"]` lets Center mutate any resource.
 > `"*":"*"` is equivalent to granting Center full control of the Controller.
 
 ```yaml
@@ -209,9 +203,6 @@ center:
       # Dashboard read: enumerate specific kinds only
       - verbs: [get, list]
         kinds: [HTTPRoute, GRPCRoute, Service, EdgionGatewayConfig]
-      # Allow Center to trigger config reload
-      - verbs: [reload]
-        kinds: ["*"]
 ```
 
 ## Security notes
@@ -229,12 +220,8 @@ The built-in default avoids this by excluding the `Secret` kind. Any explicit
 **Always enumerate concrete kinds for read grants.** Use example 2 or 5 as a
 template rather than `kinds: ["*"]`.
 
-### Wide write and reload grants
+### Wide write grants
 
-- `verbs: ["*"]` or an explicit `reload` grant lets Center trigger a Controller
-  config reload, which re-reads and applies the `[center]` block from disk.
-  Center **cannot** modify the on-disk YAML (no config-writing route exists), so
-  the worst case is forcing re-application of the operator's own file.
 - Write grants (`create`, `update`, `delete`) let Center mutate resources of the
   granted kinds. A `EdgionConfigData` write grant covers **all** plugin metadata
   objects, not only specific ones.
@@ -308,23 +295,20 @@ cli_tokens:
           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
                   EdgionGatewayConfig, EdgionTls, EdgionConfigData]
 
-  # Scoped read-write — manages plugin metadata and triggers reload
+  # Scoped read-write — manages plugin metadata
   - name: plugin-manager
     token_sha256: "<SHA-256 from gen-token>"
     rbac:
       allow:
         - verbs: [get, list, watch, create, update, delete]
           kinds: [EdgionConfigData]
-        # reload is write-only; kinds: ["*"] is safe here (no read surface)
-        - verbs: [reload]
-          kinds: ["*"]
 ```
 
-Hot-reload (no restart required):
+Restart the Controller after editing its configuration. For the standard Kubernetes deployment:
 
 ```bash
-edgion-cli reload
-# or: POST /api/v1/reload
+kubectl -n edgion-system rollout restart deployment/edgion-controller
+kubectl -n edgion-system rollout status deployment/edgion-controller
 ```
 
 ### Using a CLI token
@@ -349,7 +333,7 @@ token) or `403 Forbidden` (permission denied). The only public auth endpoint is
 
 **1. Wide verb grants equal full admin access.**
 A token whose `rbac` grants `verbs: ["*"]` on the full admin router — including
-`reload`, `failover`, `acme-trigger`, `conf-sync-rotate`, `server-info`, and `diagnostics` — is
+`failover`, `acme-trigger`, `conf-sync-rotate`, `server-info`, and `diagnostics` — is
 effectively equivalent to the allow-all admin token. Grant the minimum set of
 verbs the consumer actually needs.
 
@@ -366,10 +350,10 @@ Kind name. A miscased kind (e.g. `edgionconfigdata`) silently never matches any
 request. Always use canonical PascalCase: `EdgionConfigData`, `HTTPRoute`, `Service`, etc.
 
 **4. Token rotation.**
-Replace `token_sha256` in the config and apply via `POST /api/v1/reload`. The
-new hash takes effect immediately for all subsequent requests; old tokens are
-rejected from that point forward. Distribute the new `edg_` token to the
-consumer before or concurrently with the reload.
+Replace `token_sha256` in the config and restart every Controller replica.
+Each instance uses its startup token table until it exits; revocation is complete
+only after all instances have restarted with the new configuration. Coordinate
+distribution of the new `edg_` token with that rollout.
 
 **5. `--token` and `EDGION_TOKEN` are intended for CI/automation.**
 They do **not** touch `~/.edgion/token` (no caching — they are ephemeral

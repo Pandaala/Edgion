@@ -38,8 +38,9 @@ became an impossible AND predicate, while equal duplicates inflated route
 precedence.
 
 Typed decoding precedes every production consumer, including JSON/YAML config
-backends, Controller-to-Gateway conf-sync, and controller-generated
-`resolved_rules`. This keeps validation, delegation, positional regex indexes,
+backends and Controller-to-Gateway conf-sync. Under delegation each level matches
+its own decoded vector; nothing is merged across levels. This keeps validation,
+delegation, positional regex indexes,
 specificity, and request matching aligned on one vector.
 
 ## Alternatives and limits

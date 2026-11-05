@@ -435,7 +435,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
     .unwrap();
     assert_eq!(calls, 1);
     assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
-    route.spec.resolved_rules = Some(vec![serde_json::from_value(json!({"backendRefs":[
+    route.spec.rules = Some(vec![serde_json::from_value(json!({"backendRefs":[
         {"name":"api","namespace":"child","port":1,"weight":0},
         {"name":"api","namespace":"child","port":65535,"weight":3},
         {"name":"denied","namespace":"child","port":80,"weight":5,"refDenied":{"targetNamespace":"child","targetName":"denied"}}
@@ -472,7 +472,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
 
 #[test]
 fn session_lifetime_direct_compile_uses_effective_rule_without_preparse() {
-    for resolved in [false, true] {
+    {
         for (policy, expected, valid) in [
             (serde_json::json!(null), None, true),
             (serde_json::json!({}), None, true),
@@ -492,11 +492,7 @@ fn session_lifetime_direct_compile_uses_effective_rule_without_preparse() {
             }))
             .unwrap();
             let rule = serde_json::from_value(serde_json::json!({"sessionPersistence": policy})).unwrap();
-            if resolved {
-                route.spec.resolved_rules = Some(vec![rule]);
-            } else {
-                route.spec.rules = Some(vec![rule]);
-            }
+            route.spec.rules = Some(vec![rule]);
             // conf_sync transports only policy text; compilation derives the scalar anew.
             let wire = serde_json::to_string(&route).unwrap();
             assert!(!wire.contains("session_persistence_ttl_secs"));

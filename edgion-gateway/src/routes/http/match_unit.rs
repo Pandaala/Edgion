@@ -1,18 +1,14 @@
-use super::match_engine::radix_path::RadixPath;
+use super::routes_mgr::RouteRules;
 use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::ctx::EdgionHttpContext;
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
+use crate::routes::delegation::{DelegatedMatch, DelegationSlot};
 use crate::runtime::matching::route::{check_gateway_listener_match, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
-use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use edgion_resources::err::EdError;
-use edgion_resources::path_normalization::{
-    get_path_normalization_config, normalize_config_path, PathNormalizationConfig,
-};
-use edgion_resources::resources::http_route::{ParentMatch, ResolvedParentMatch, MAX_HTTP_ROUTE_DELEGATION_DEPTH};
 use edgion_resources::resources::refs::route_fields::HttpRouteBackendRefs;
 use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
@@ -76,8 +72,12 @@ impl MatchSpecificity {
 /// Result of a successful route match, bundling the matched route and the
 /// gateway/listener context that satisfied the parentRef constraints.
 pub struct RouteMatchResult {
+    /// The terminal unit: the matched rule itself, or the leaf of a delegated chain.
     pub route_unit: Arc<HttpRouteRuleUnit>,
+    /// Gateway/listener resolved by the root level's `deep_match`.
     pub matched_gateway: Arc<GatewayInfo>,
+    /// Ancestors of a delegated match; `None` for every ordinary match.
+    pub delegated: Option<Box<DelegatedMatch>>,
 }
 
 /// A backend ref paired with its compiled plugin runtime. The LB selector stores
@@ -168,97 +168,15 @@ impl std::ops::Deref for CompiledBackend {
     }
 }
 
-/// Canonical PathPrefix conjunction for one delegated effective match.
-/// At most eight root-to-terminal paths bound the radix DFS frontier below
-/// inline capacity 16; matching reduces visited values directly into scalars.
-pub struct CompiledParentMatch {
-    tree: PathRadixTree,
-    required: usize,
-}
-
-impl CompiledParentMatch {
-    /// Returns the guard and whether every canonical ancestor is literal.
-    fn compile(scope: &ParentMatch, config: &PathNormalizationConfig) -> Option<(Self, bool)> {
-        if scope.raw_path_prefixes.is_empty() || scope.raw_path_prefixes.len() > MAX_HTTP_ROUTE_DELEGATION_DEPTH {
-            return None;
-        }
-        let mut builder = PathRadixBuilder::new();
-        let mut all_literal = true;
-        for (id, prefix) in scope.raw_path_prefixes.iter().enumerate() {
-            if !prefix.starts_with('/') {
-                return None;
-            }
-            let normalized = normalize_config_path(prefix, config);
-            let path = RadixPath::new(&normalized, 0, true);
-            all_literal &= !path.tree_key().contains("/:");
-            builder.insert(path.tree_key(), id).ok()?;
-        }
-        Some((
-            Self {
-                tree: builder.freeze().ok()?,
-                required: scope.raw_path_prefixes.len(),
-            },
-            all_literal,
-        ))
-    }
-
-    fn matches(&self, path: &str) -> bool {
-        let mut count = 0;
-        let mut all_boundaries = true;
-        self.tree.for_each_match_ext(path, |_, kind| {
-            count += 1;
-            all_boundaries &= kind != PathMatchKind::PartialSegment;
-        });
-        count == self.required && all_boundaries
-    }
-}
-
-/// Validate provenance before constructing any plugins or publishing any units.
-fn compile_parent_matches(
-    route: &HTTPRoute,
-    rule: &HTTPRouteRule,
-    config: &PathNormalizationConfig,
-) -> Option<Vec<Option<Arc<CompiledParentMatch>>>> {
-    match (&rule.resolved_parent_match, route.spec.resolved_rules.is_some()) {
-        (None, false) | (Some(ResolvedParentMatch::Direct {}), _) => Some(Vec::new()),
-        (Some(ResolvedParentMatch::Delegated { matches }), true) => {
-            let effective = rule.matches.as_ref()?;
-            if effective.is_empty() || matches.len() != effective.len() {
-                return None;
-            }
-            matches
-                .iter()
-                .zip(effective)
-                .map(|(scope, child)| {
-                    let (guard, all_literal) = CompiledParentMatch::compile(scope, config)?;
-                    let redundant = all_literal
-                        && child.path.as_ref().is_some_and(|path| {
-                            let kind = path.match_type.as_deref().unwrap_or("PathPrefix");
-                            if !matches!(kind, "Exact" | "PathPrefix") {
-                                return false;
-                            }
-                            // Child paths already passed Gateway preparse. Reuse the
-                            // canonical matcher, without another BASE decode. For
-                            // literal prefixes, matching the child root proves every
-                            // slash-delimited extension stays inside all ancestors.
-                            let child = RadixPath::new(path.value.as_deref().unwrap_or("/"), 0, kind == "PathPrefix");
-                            child.tree_key().starts_with('/')
-                                && !child.tree_key().contains("/:")
-                                && guard.matches(child.tree_key())
-                        });
-                    Some(if redundant { None } else { Some(Arc::new(guard)) })
-                })
-                .collect()
-        }
-        _ => None,
-    }
-}
-
 #[derive(Clone)]
 pub struct HttpRouteRuleUnit {
-    /// Parent path constraints from the same immutable effective rule generation.
-    pub parent_match: Option<Arc<CompiledParentMatch>>,
-    /// Validated lifetime from this effective rule generation, resolved before publication.
+    /// Delegation slot of this rule's target subtree, obtained at compile time.
+    /// `None` for every ordinary rule; the request path never hashes a key.
+    pub delegate: Option<Arc<DelegationSlot<RouteRules>>>,
+    /// Standard-filter bitmask of this rule (`standard_filter_mask_http`),
+    /// precomputed for the mandatory-filter conflict check at descent time.
+    pub filter_mask: u32,
+    /// Validated lifetime from this rule generation, resolved before publication.
     pub session_persistence_ttl_secs: Option<u64>,
     pub resource_key: String,
     /// Match info containing namespace, name and match item
@@ -310,10 +228,7 @@ pub struct HttpRouteRuleUnit {
 /// state, so a fresh runtime per match-item would split that state. See
 /// `compile_http_rule`.
 pub struct HttpRuleRuntime {
-    /// Empty for direct rules; otherwise aligned with effective matches.
-    /// A None entry is a proven redundant guard, never an omitted scope.
-    pub parent_matches: Vec<Option<Arc<CompiledParentMatch>>>,
-    /// Validated lifetime from this effective rule generation, resolved before publication.
+    /// Validated lifetime from this rule generation, resolved before publication.
     pub session_persistence_ttl_secs: Option<u64>,
     /// Rule-level compiled plugin chain (one per rule, shared across all units).
     pub plugin_runtime: Arc<PluginRuntime>,
@@ -334,13 +249,15 @@ impl HttpRouteRuleUnit {
         rule_index: usize,
     ) -> Result<HttpRuleRuntime, edgion_resources::RequestTransformViolation> {
         let rule = route
-            .effective_rules()
+            .spec
+            .rules
+            .as_ref()
             .and_then(|rules| rules.get(rule_index))
             .ok_or_else(|| edgion_resources::RequestTransformViolation {
                 path: "spec.rules".to_string(),
-                message: "effective rule is unavailable".to_string(),
+                message: "rule is unavailable".to_string(),
             })?;
-        let violations = edgion_resources::effective_request_transform_violations(rule).map_err(|_| {
+        let violations = edgion_resources::authored_request_transform_violations(rule).map_err(|_| {
             edgion_resources::RequestTransformViolation {
                 path: String::new(),
                 message: "request transform validation contract is unavailable".to_string(),
@@ -352,7 +269,7 @@ impl HttpRouteRuleUnit {
         Self::compile_prevalidated_http_rule(route, rule_index).ok_or_else(|| {
             edgion_resources::RequestTransformViolation {
                 path: String::new(),
-                message: "invalid effective rule or Route reference source".to_string(),
+                message: "invalid rule or Route reference source".to_string(),
             }
         })
     }
@@ -363,7 +280,9 @@ impl HttpRouteRuleUnit {
             rule_index,
             |route, rule_index| {
                 let tuning = route
-                    .effective_rules()
+                    .spec
+                    .rules
+                    .as_ref()
                     .and_then(|rules| rules.get(rule_index))
                     .and_then(|rule| rule.parsed_mirror_tuning.clone())
                     .unwrap_or_default();
@@ -373,7 +292,9 @@ impl HttpRouteRuleUnit {
             },
             |route, rule_index, backend_index| {
                 let tuning = route
-                    .effective_rules()
+                    .spec
+                    .rules
+                    .as_ref()
                     .and_then(|rules| rules.get(rule_index))
                     .and_then(|rule| rule.parsed_mirror_tuning.clone())
                     .unwrap_or_default();
@@ -394,8 +315,7 @@ impl HttpRouteRuleUnit {
         mut backend_factory: impl FnMut(&HTTPRoute, usize, usize) -> Arc<PluginRuntime>,
     ) -> Option<HttpRuleRuntime> {
         let references = HttpRouteBackendRefs::from_route(route).ok()?;
-        let rule = route.effective_rules()?.get(rule_index)?;
-        let parent_matches = compile_parent_matches(route, rule, get_path_normalization_config())?;
+        let rule = route.spec.rules.as_ref()?.get(rule_index)?;
         let session_persistence_ttl_secs = rule
             .session_persistence
             .as_ref()
@@ -405,34 +325,44 @@ impl HttpRouteRuleUnit {
             .flatten();
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let plugin_runtime = rule_factory(route, rule_index);
-        let backends = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
-            let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
-            refs.iter()
-                .zip(identities)
-                .enumerate()
-                .map(|(slot, (schema, identity))| {
-                    let reference = references
-                        .effective_at(rule_index, slot)
-                        .expect("the backend came from this actual effective rule");
-                    let target = CompiledBackendTarget::from_reference(reference, schema.backend_kind());
-                    let plugin_runtime =
-                        if schema.ref_denied.is_none() && !matches!(target, CompiledBackendTarget::Invalid { .. }) {
+        // A delegating rule terminates in its child subtree, never in a backend.
+        let delegates = rule
+            .backend_refs
+            .iter()
+            .flatten()
+            .any(|backend| backend.is_route_delegation_ref());
+        let backends = rule
+            .backend_refs
+            .as_ref()
+            .filter(|_| !delegates)
+            .map_or_else(Vec::new, |refs| {
+                let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
+                refs.iter()
+                    .zip(identities)
+                    .enumerate()
+                    .map(|(slot, (schema, identity))| {
+                        let reference = references
+                            .effective_at(rule_index, slot)
+                            .expect("the backend came from this rule");
+                        let target = CompiledBackendTarget::from_reference(reference, schema.backend_kind());
+                        let plugin_runtime = if schema.ref_denied.is_none()
+                            && !matches!(target, CompiledBackendTarget::Invalid { .. })
+                        {
                             backend_factory(route, rule_index, slot)
                         } else {
                             Arc::new(PluginRuntime::new())
                         };
-                    CompiledBackend {
-                        schema: schema.clone(),
-                        slot,
-                        identity,
-                        target,
-                        plugin_runtime,
-                    }
-                })
-                .collect::<Vec<_>>()
-        });
+                        CompiledBackend {
+                            schema: schema.clone(),
+                            slot,
+                            identity,
+                            target,
+                            plugin_runtime,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            });
         Some(HttpRuleRuntime {
-            parent_matches,
             session_persistence_ttl_secs,
             plugin_runtime,
             backends: backends.into(),
@@ -528,13 +458,6 @@ impl HttpRouteRuleUnit {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
     ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
-        if self
-            .parent_match
-            .as_ref()
-            .is_some_and(|parent| !parent.matches(ctx.path()))
-        {
-            return Ok(None);
-        }
         let req_header = session.req_header();
         Self::deep_match_common(
             &self.matched_info,
@@ -548,8 +471,47 @@ impl HttpRouteRuleUnit {
         )
     }
 
+    /// Child-level deep match: the unit's own method, header and query
+    /// conditions only (its path already matched in the subtree engine).
+    ///
+    /// Child units carry no Gateway parentRefs; listener/Gateway eligibility is
+    /// decided once by the root unit's [`Self::deep_match`].
+    pub fn deep_match_child(&self, session: &Session, ctx: &EdgionHttpContext) -> Result<bool, EdError> {
+        let req_header = session.req_header();
+        let match_item = &self.matched_info.m;
+
+        if let Some(match_method) = &match_item.method {
+            if req_header.method.as_str() != match_method.as_str() {
+                return Ok(false);
+            }
+        }
+
+        if let Some(header_matches) = &match_item.headers {
+            for (idx, header_match) in header_matches.iter().enumerate() {
+                let pre = self.compiled_header_regexes.get(idx).and_then(|r| r.as_ref());
+                if !Self::match_header(req_header, header_match, pre)? {
+                    return Ok(false);
+                }
+            }
+        }
+
+        if self.has_query_matchers {
+            if let Some(query_param_matches) = &match_item.query_params {
+                for (idx, query_param_match) in query_param_matches.iter().enumerate() {
+                    let pre = self.compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
+                    if !Self::match_query_param(ctx.query_param(&query_param_match.name), query_param_match, pre)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
     /// Match HTTP header.
     /// `compiled_regex`: pre-compiled regex for this header matcher (if RegularExpression).
+    #[inline]
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &edgion_resources::HTTPHeaderMatch,
@@ -574,6 +536,7 @@ impl HttpRouteRuleUnit {
 
     /// Match query parameter.
     /// `compiled_regex`: pre-compiled regex for this query matcher (if RegularExpression).
+    #[inline]
     pub(crate) fn match_query_param(
         param_value: Option<&str>,
         query_param_match: &edgion_resources::HTTPQueryParamMatch,

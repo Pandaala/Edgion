@@ -13,11 +13,14 @@ reporter and active watch. Dropping that future must signal both tasks, includin
 when shutdown wins the outer select and skips normal-tail cleanup. The active
 watch has its own drop guard: replacing it cancels only the previous watch.
 
-The stats report, watch event and ServerReload sends select cancellation against
-bounded-channel capacity. Live sessions keep awaited backpressure; cancellation
-may abandon an unsent message of an ended session or replaced watch. Already
-queued messages are not revoked. Authentication snapshots, request IDs, versions,
-stats generation checks, and normal EOF/error cleanup retain their existing order.
+Stats sends select cancellation against channel capacity. Dedicated Center view
+sends reserve capacity with a five-second deadline, then recheck cancellation,
+current policy, serving readiness and store generation before serialization/send.
+If an error cannot be delivered, the session is cancelled: a failed Watch must
+not leave heartbeats advertising a healthy connection. The main receive loop and
+its in-flight message handler both select this session cancellation, including
+when a Ping response is blocked on the same full channel. Already queued frames
+cannot be revoked; Center must isolate sessions/requests and reauthorize reads.
 
 ## Rationale and evidence
 
@@ -29,11 +32,16 @@ send awaited inside an already selected branch.
 
 `fed_sync/fed_client/mod.rs::run` uses `until_shutdown` to own and drop the
 connection future. `connect_and_run` awaits `run_session`; its stats guard and
-active-watch guard are installed before spawning their tasks. Normal completion
-still explicitly drops the watch guard and cancels stats. The real
-`ConfigSyncServer::watch` converter propagates downstream closure upstream;
-`ServerCache` serialization and watcher tasks already observe receiver closure.
-No cache lifecycle redesign is required.
+WatchSession are installed before spawning their tasks. Normal completion drops
+the WatchSession and cancels stats. Watch replacement cancels only the old child;
+one producer permit prevents overlapping snapshot serialization. The dedicated
+store's notification receiver carries no resource bodies or borrowed guards.
+
+ARCH-084 originally covered the ConfigSyncServer reverse-watch converter. That
+federation data source has been replaced by CenterWatchStore; Gateway's ordinary
+configuration-sync converter remains independent. The cancellation requirement
+and tests now exercise the dedicated view while retaining the original shutdown,
+EOF/error, blocked-send and lifecycle-replacement scenarios.
 
 ## Alternatives and limits
 
@@ -55,9 +63,10 @@ permit no-network tests under `tests/unit/fed_sync/fed_client/mod_test.rs`.
 Regressions cover quiet producer release, three blocked sends with the outbound
 receiver kept open/full, live backpressure, replacement isolation and normal
 EOF/error cleanup. The shutdown assertion polls the parent to completion before
-allowing descendant cleanup; receiver release is asserted separately. Test
-negative controls remove each inner send cancellation branch independently to
-ensure its blocked-send regression actually requires that branch.
+allowing descendant cleanup; receiver release is asserted separately. Historical ARCH-084 test
+negative controls removed each inner send cancellation branch independently to
+verify those original regressions. This is not fresh negative-control evidence
+for the dedicated CenterWatchStore transport.
 
 Fresh command results belong to the implementation verification record. Revisit
 this contract when adding session-owned tasks, new blocking sends, or changing

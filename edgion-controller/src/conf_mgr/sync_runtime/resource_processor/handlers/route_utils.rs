@@ -287,17 +287,6 @@ fn scope_error(field: RouteExtensionField<'_>, plugin: &'static str) -> String {
     }
 }
 
-/// Delegation always registers valid declarations before drops. Structurally
-/// ineligible rules register recovery edges without reading plugin content.
-pub(super) fn delegated_extension_ref_error(
-    runtime: &ControllerRuntime,
-    root: &ResourceRef,
-    field: RouteExtensionField<'_>,
-    inspect: bool,
-) -> Option<String> {
-    extension_scope_violation(runtime, root, field, inspect).map(|(plugin, _)| scope_error(field, plugin))
-}
-
 pub(super) fn backend_request_scope_extension_ref_error(
     runtime: &ControllerRuntime,
     root: &ResourceRef,
@@ -1058,21 +1047,13 @@ pub(super) fn http_route_only_plugin(
 pub(super) fn graphql_router_rule_error(
     route: &edgion_resources::HTTPRoute,
     rule_index: usize,
-    effective: bool,
     runtime: &ControllerRuntime,
     delegated: bool,
 ) -> Option<String> {
     let references = edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs::from_route(route).ok()?;
-    let rule = if effective {
-        route.effective_rules()?
-    } else {
-        route.spec.rules.as_ref()?
-    }
-    .get(rule_index)?;
+    let rule = route.spec.rules.as_ref()?.get(rule_index)?;
     let plugins: Vec<_> = references
         .authored()
-        .filter(|_| !effective)
-        .chain(references.effective().filter(|_| effective))
         .filter(|field| field.slot().rule() == rule_index && field.slot().backend().is_none())
         .filter_map(|field| {
             let reference = field.validated().ok()??;

@@ -155,13 +155,21 @@ async fn blocked_endpoint_preserves_configured_fallback() {
         fallback: HttpDnsFallback::None,
         connection: None,
     };
-    assert!(resolve(&ResolverSpec::HttpDns(prepare(config.clone())), "localhost")
-        .await
-        .is_err());
+    assert!(resolve(
+        &ResolverSpec::HttpDns(prepare(config.clone())),
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native
+    )
+    .await
+    .is_err());
     config.fallback = HttpDnsFallback::System;
-    let addresses = resolve(&ResolverSpec::HttpDns(prepare(config)), "localhost")
-        .await
-        .unwrap();
+    let addresses = resolve(
+        &ResolverSpec::HttpDns(prepare(config)),
+        "localhost",
+        edgion_common::dns::DnsQueryPolicy::Native,
+    )
+    .await
+    .unwrap();
     assert!(addresses.iter().any(|ip| ip.is_loopback()));
 }
 
@@ -247,9 +255,14 @@ async fn end_to_end_preset_parse_via_stub() {
         connection: Some(local_connection()),
     };
     let fetcher = new_fetcher(cfg.connection.as_ref()).unwrap();
-    let ips = edgion_common::dns::httpdns::resolve_http_dns_with(&fetcher, &cfg, "api.example.com")
-        .await
-        .unwrap();
+    let ips = edgion_common::dns::httpdns::resolve_http_dns_with(
+        &fetcher,
+        &cfg,
+        "api.example.com",
+        edgion_common::dns::DnsQueryPolicy::Native,
+    )
+    .await
+    .unwrap();
     assert_eq!(ips.len(), 2);
 }
 
@@ -333,7 +346,9 @@ async fn prepared_queries_reuse_native_pool_and_config_can_disable_it() {
         let spec = ResolverSpec::HttpDns(prepared);
         for domain in ["first.example", "second.example"] {
             assert_eq!(
-                resolve(&spec, domain).await.unwrap(),
+                resolve(&spec, domain, edgion_common::dns::DnsQueryPolicy::Native)
+                    .await
+                    .unwrap(),
                 vec!["1.2.3.4".parse::<std::net::IpAddr>().unwrap()]
             );
         }
@@ -414,7 +429,10 @@ async fn cancelled_query_does_not_poison_shared_prepared_generation() {
     .unwrap();
     let prepared = prepare(config);
     let first_spec = ResolverSpec::HttpDns(prepared.clone());
-    let first = tokio::spawn(async move { resolve(&first_spec, "first.example").await });
+    let first =
+        tokio::spawn(
+            async move { resolve(&first_spec, "first.example", edgion_common::dns::DnsQueryPolicy::Native).await },
+        );
     tokio::time::timeout(Duration::from_secs(2), request_started)
         .await
         .unwrap()
@@ -423,10 +441,14 @@ async fn cancelled_query_does_not_poison_shared_prepared_generation() {
     assert!(first.await.unwrap_err().is_cancelled());
     assert!(prepared.is_ready());
     assert_eq!(
-        resolve(&ResolverSpec::HttpDns(prepared), "second.example")
-            .await
-            .unwrap()
-            .len(),
+        resolve(
+            &ResolverSpec::HttpDns(prepared),
+            "second.example",
+            edgion_common::dns::DnsQueryPolicy::Native
+        )
+        .await
+        .unwrap()
+        .len(),
         1
     );
     server.await.unwrap();
@@ -471,7 +493,11 @@ async fn invalid_preparation_uses_the_latest_explicit_dns_fallback() {
     assert!(!prepared.is_ready());
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        resolve(&ResolverSpec::HttpDns(prepared), "fallback.example"),
+        resolve(
+            &ResolverSpec::HttpDns(prepared),
+            "fallback.example",
+            edgion_common::dns::DnsQueryPolicy::Native,
+        ),
     )
     .await;
     server.abort();
@@ -534,7 +560,12 @@ async fn signed_urls_are_sent_unchanged_but_transport_errors_are_redacted() {
                 },
                 connection: Some(local_connection()),
             };
-            let result = resolve(&ResolverSpec::HttpDns(prepare(config)), "localhost").await;
+            let result = resolve(
+                &ResolverSpec::HttpDns(prepare(config)),
+                "localhost",
+                edgion_common::dns::DnsQueryPolicy::Native,
+            )
+            .await;
             let request = String::from_utf8(server.await.unwrap()).unwrap();
             assert_eq!(
                 request.lines().next().unwrap(),
@@ -611,11 +642,304 @@ async fn response_metadata_changes_with_generation_while_borrowed_generation_sur
     assert!(new.is_ready());
     for (generation, expected) in [(&old, "192.0.2.1"), (&new, "192.0.2.2"), (&old, "192.0.2.1")] {
         assert_eq!(
-            resolve(&ResolverSpec::HttpDns(generation.clone()), "example.com")
-                .await
-                .unwrap(),
+            resolve(
+                &ResolverSpec::HttpDns(generation.clone()),
+                "example.com",
+                edgion_common::dns::DnsQueryPolicy::Native
+            )
+            .await
+            .unwrap(),
             vec![expected.parse::<std::net::IpAddr>().unwrap()]
         );
     }
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn standard_family_requires_terminal_negative_evidence() {
+    use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+    use hickory_resolver::proto::{
+        op::Message,
+        rr::{
+            rdata::{A, AAAA, CNAME, NS, SOA},
+            Name, RData, Record, RecordType,
+        },
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    for empty_family in [RecordType::A, RecordType::AAAA] {
+        for mode in [
+            "nodata",
+            "alias-nodata",
+            "empty",
+            "referral",
+            "chain",
+            "chain-soa",
+            "loop",
+        ] {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let address = socket.local_addr().unwrap();
+            let queries = Arc::new(AtomicUsize::new(0));
+            let count = queries.clone();
+            let server = tokio::spawn(async move {
+                let mut bytes = [0; 2048];
+                loop {
+                    let (len, peer) = socket.recv_from(&mut bytes).await.unwrap();
+                    let query = Message::from_vec(&bytes[..len]).unwrap();
+                    let mut response = Message::response(query.id, query.op_code);
+                    response.metadata.recursion_available = true;
+                    response.metadata.authoritative = mode != "referral";
+                    for question in &query.queries {
+                        response.add_query(question.clone());
+                        if question.query_type() != empty_family {
+                            let data = if question.query_type() == RecordType::A {
+                                RData::A(A("192.0.2.1".parse().unwrap()))
+                            } else {
+                                RData::AAAA(AAAA("2001:db8::1".parse().unwrap()))
+                            };
+                            response.add_answer(Record::from_rdata(question.name().clone(), 30, data));
+                            continue;
+                        }
+                        let hop = count.fetch_add(1, Ordering::SeqCst);
+                        if matches!(mode, "chain" | "chain-soa" | "loop") || (mode == "alias-nodata" && hop == 0) {
+                            let target = if mode == "loop" {
+                                "loop.family.example.".into()
+                            } else {
+                                format!("hop{hop}.family.example.")
+                            };
+                            response.add_answer(Record::from_rdata(
+                                question.name().clone(),
+                                30,
+                                RData::CNAME(CNAME(Name::from_ascii(target).unwrap())),
+                            ));
+                        }
+                        if mode == "nodata" || mode == "chain-soa" || (mode == "alias-nodata" && hop > 0) {
+                            response.add_authority(Record::from_rdata(
+                                Name::from_ascii("family.example.").unwrap(),
+                                30,
+                                RData::SOA(SOA::new(
+                                    Name::from_ascii("ns.family.example.").unwrap(),
+                                    Name::from_ascii("hostmaster.family.example.").unwrap(),
+                                    1,
+                                    60,
+                                    60,
+                                    60,
+                                    30,
+                                )),
+                            ));
+                        } else if mode == "referral" {
+                            response.add_authority(Record::from_rdata(
+                                Name::from_ascii("family.example.").unwrap(),
+                                30,
+                                RData::NS(NS(Name::from_ascii("ns.family.example.").unwrap())),
+                            ));
+                        }
+                    }
+                    socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
+                }
+            });
+            let spec = ResolverSpec::StandardDns {
+                servers: vec![address.to_string()],
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                resolve(
+                    &spec,
+                    "start.family.example.",
+                    DnsQueryPolicy::Family(DnsLookupFamily::All),
+                ),
+            )
+            .await;
+            server.abort();
+            let _ = server.await;
+            let result = result.expect("bounded local DNS query");
+            if matches!(mode, "nodata" | "alias-nodata") {
+                let expected = if empty_family == RecordType::A {
+                    "2001:db8::1"
+                } else {
+                    "192.0.2.1"
+                };
+                assert_eq!(
+                    result.unwrap(),
+                    vec![expected.parse::<std::net::IpAddr>().unwrap()],
+                    "{mode}/{empty_family}"
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{mode}/{empty_family} is not proven NODATA: {result:?}"
+                );
+            }
+            if matches!(mode, "chain" | "chain-soa" | "loop") {
+                assert!(queries.load(Ordering::SeqCst) >= 8, "exercise CNAME exhaustion");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn standard_family_all_requires_both_complete_answers() {
+    use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+    use hickory_resolver::proto::{
+        op::{Message, ResponseCode},
+        rr::{
+            rdata::{A, SOA},
+            Name, RData, Record, RecordType,
+        },
+    };
+    for failed_family in [None, Some(RecordType::A), Some(RecordType::AAAA)] {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut bytes = [0; 2048];
+            loop {
+                let (len, peer) = socket.recv_from(&mut bytes).await.unwrap();
+                let query = Message::from_vec(&bytes[..len]).unwrap();
+                let mut response = Message::response(query.id, query.op_code);
+                response.metadata.recursion_available = true;
+                response.metadata.authoritative = true;
+                for question in &query.queries {
+                    response.add_query(question.clone());
+                    if failed_family == Some(question.query_type()) {
+                        response.metadata.response_code = ResponseCode::ServFail;
+                    } else if question.query_type() == RecordType::A {
+                        response.add_answer(Record::from_rdata(
+                            question.name().clone(),
+                            30,
+                            RData::A(A(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+                        ));
+                    } else if failed_family == Some(RecordType::A) {
+                        response.add_answer(Record::from_rdata(
+                            question.name().clone(),
+                            30,
+                            RData::AAAA(hickory_resolver::proto::rr::rdata::AAAA("2001:db8::1".parse().unwrap())),
+                        ));
+                    } else {
+                        response.add_authority(Record::from_rdata(
+                            Name::from_ascii("family.example.").unwrap(),
+                            30,
+                            RData::SOA(SOA::new(
+                                Name::from_ascii("ns.family.example.").unwrap(),
+                                Name::from_ascii("hostmaster.family.example.").unwrap(),
+                                1,
+                                60,
+                                60,
+                                60,
+                                30,
+                            )),
+                        ));
+                    }
+                }
+                socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
+            }
+        });
+        let spec = ResolverSpec::StandardDns {
+            servers: vec![address.to_string()],
+        };
+        let result = resolve(&spec, "family.example.", DnsQueryPolicy::Family(DnsLookupFamily::All)).await;
+        server.abort();
+        if failed_family.is_some() {
+            assert!(
+                result.is_err(),
+                "a failed family query must not publish a partial answer"
+            );
+        } else {
+            assert_eq!(result.unwrap(), vec!["192.0.2.1".parse::<std::net::IpAddr>().unwrap()]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn httpdns_typed_requests_share_primary_deadline() {
+    use edgion_common::dns::{
+        httpdns::{resolve_http_dns_with, HttpDnsFetcher},
+        DnsError, DnsLookupFamily, DnsQueryPolicy,
+    };
+    struct SlowFetcher;
+    #[async_trait::async_trait]
+    impl HttpDnsFetcher for SlowFetcher {
+        async fn get(&self, url: &str) -> Result<String, DnsError> {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            Ok(if url.ends_with("=A") {
+                r#"{"ips":["192.0.2.1"]}"#
+            } else {
+                r#"{"ips":["2001:db8::1"]}"#
+            }
+            .into())
+        }
+    }
+    let cfg = serde_json::from_value(serde_json::json!({
+        "urlTemplate": "https://dns.test/{domain}?type={recordType}",
+        "connection": {"timeoutMs": 100}, "fallback": {"type": "none"}
+    }))
+    .unwrap();
+    assert!(
+        matches!(resolve_http_dns_with(&SlowFetcher, &cfg, "backend.test", DnsQueryPolicy::Family(DnsLookupFamily::All)).await,
+        Err(DnsError::Http(message)) if message == "primary DNS deadline exceeded")
+    );
+}
+
+#[tokio::test]
+async fn standard_family_queries_preserve_cname_and_ipv6_answers() {
+    use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+    use hickory_resolver::proto::{
+        op::Message,
+        rr::{
+            rdata::{A, AAAA, CNAME},
+            Name, RData, Record, RecordType,
+        },
+    };
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = socket.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut bytes = [0; 2048];
+        loop {
+            let (len, peer) = socket.recv_from(&mut bytes).await.unwrap();
+            let query = Message::from_vec(&bytes[..len]).unwrap();
+            let mut response = Message::response(query.id, query.op_code);
+            response.metadata.recursion_available = true;
+            response.metadata.authoritative = true;
+            for question in &query.queries {
+                response.add_query(question.clone());
+                let target = Name::from_ascii("target.family.example.").unwrap();
+                if question.name() != &target {
+                    response.add_answer(Record::from_rdata(
+                        question.name().clone(),
+                        30,
+                        RData::CNAME(CNAME(target.clone())),
+                    ));
+                }
+                let data = match question.query_type() {
+                    RecordType::A => RData::A(A("192.0.2.1".parse().unwrap())),
+                    RecordType::AAAA => RData::AAAA(AAAA("2001:db8::1".parse().unwrap())),
+                    _ => continue,
+                };
+                response.add_answer(Record::from_rdata(target, 30, data));
+            }
+            socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
+        }
+    });
+    let spec = ResolverSpec::StandardDns {
+        servers: vec![address.to_string()],
+    };
+    for (family, expected) in [
+        (DnsLookupFamily::Ipv4Only, vec!["192.0.2.1"]),
+        (DnsLookupFamily::Ipv6Only, vec!["2001:db8::1"]),
+        (DnsLookupFamily::All, vec!["192.0.2.1", "2001:db8::1"]),
+    ] {
+        let actual = resolve(&spec, "alias.family.example.", DnsQueryPolicy::Family(family))
+            .await
+            .unwrap();
+        assert_eq!(
+            actual,
+            expected
+                .into_iter()
+                .map(|ip| ip.parse::<std::net::IpAddr>().unwrap())
+                .collect::<Vec<_>>()
+        );
+    }
+    server.abort();
 }

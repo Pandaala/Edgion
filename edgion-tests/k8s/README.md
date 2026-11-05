@@ -117,7 +117,7 @@ Run full mode and reload-two-round mode (aligned with old integration script):
 
 ```bash
 ./edgion-tests/k8s/scripts/run_k8s_integration.sh --full-test
-./edgion-tests/k8s/scripts/run_k8s_integration.sh --with-reload
+./edgion-tests/k8s/scripts/run_k8s_integration.sh --with-restart
 ```
 
 Run test_client directly:

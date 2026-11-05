@@ -138,6 +138,11 @@ and unavailable-engine coverage without retaining obsolete key APIs.
 Re-evaluate if preload gains another entry point, owned inputs move before the
 claim, or cache identity, slot creation, retry, or cancellation semantics change.
 
+The recorded reload-mode run above predates removal of the administrative reload
+API. Current two-round recovery runs use `--with-restart`, which restarts only
+the Controller and preserves the Gateway process. No new live run is claimed
+by this documentation update.
+
 ## Resolution references
 
 - `avoid-wasm-response-inflight-cache-key-allocation` / `D0098`: fixed

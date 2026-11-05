@@ -13,7 +13,6 @@ pub(super) fn unconnected_center() -> KubernetesCenter {
         writer: KubernetesStorage::new_unconnected_for_test(),
         config_sync_server: RwLock::new(None),
         shutdown_handle: Mutex::new(None),
-        reload_tx: Mutex::new(None),
         runtime,
         leader_flag: Arc::new(watch::channel(false).0),
     }

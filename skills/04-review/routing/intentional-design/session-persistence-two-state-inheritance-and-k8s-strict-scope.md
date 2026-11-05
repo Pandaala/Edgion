@@ -29,19 +29,18 @@ strict in K8s" are **not accepted** as of this decision.
 
 **1. `session_persistence` is not special — it inherits exactly like `timeouts` and `retry`.**
 
-In HTTPRoute/GRPCRoute delegation flattening (`route_delegation.rs` /
-`grpc_route_delegation.rs`), `InheritedAttrs` carries three rule-level attributes
-with one uniform "child-first-else-inherited" rule:
+Under the cascading-match delegation model the Gateway folds the matched
+ancestors once at match time (`edgion-gateway/src/routes/delegation/inherit.rs`,
+`InheritedRuleValues::fold` / `fold_grpc`), and `ctx` accessors read the leaf first
+and fall back to the folded ancestor value only when the leaf leaves it unset.
+The same two-state "child-first-else-inherited" rule covers all three
+attributes: `timeouts` and `retry` fall back per sub-field (`request`,
+`backendRequest`, `attempts`, `backoff`, `codes`), and `session_persistence` falls
+back as a whole block (`session_persistence_level`, the index of the nearest
+ancestor that sets it; Task 8 ruling, matching the earlier block-level precedence).
+(History: the removed Controller flattening implemented the same rule with
+`rule.session_persistence.clone().or_else(...)` over an `InheritedAttrs` struct.)
 
-```rust
-struct InheritedAttrs {
-    timeouts: Option<HTTPRouteTimeouts>,
-    retry: Option<HTTPRouteRetry>,
-    session_persistence: Option<SessionPersistence>,
-}
-```
-
-The merge is `rule.session_persistence.clone().or_else(|| attrs.session_persistence.clone())`.
 None of the three has an explicit opt-out — a child cannot turn off an inherited
 timeout or retry either. Adding a three-state disable *only* for session
 persistence would make it inconsistent with its two siblings. A real per-attribute
@@ -89,7 +88,7 @@ Reopen only if:
 
 - Origin task (closed without a spec/build): `tasks/todo/session-persistence-disable-and-strict-semantics.md`, brainstorming 2026-07-18. Envoy `StatefulSessionPerRoute` oneof (`disabled` | `stateful_session`) was the reference model; rejected because Edgion delegation inheritance (an Edgion extension, not in upstream Gateway API) makes the three-state cost/benefit different.
 - Related fixed finding: [routing/sp-strict-mode-fail-close.md](../regression-guards/sp-strict-mode-fail-close.md) (route-09) — strict runtime fail-close semantics.
-- Delegation inheritance model: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_delegation.rs` (`InheritedAttrs`, `flatten`), mirrored in `grpc_route_delegation.rs`.
+- Delegation inheritance model: `edgion-gateway/src/routes/delegation/inherit.rs` (`InheritedRuleValues`), shared by HTTPRoute and GRPCRoute; see the [cascading-match guard](../regression-guards/delegation-cascading-match-issue-010.md).
 
 ## Resolution references
 

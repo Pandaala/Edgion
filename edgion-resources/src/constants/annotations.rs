@@ -155,6 +155,10 @@ pub mod edgion {
     /// Set on a Service. Invalid values fall back to `controller`.
     pub const DNS_RESOLUTION_MODE: &str = "edgion.io/dns-resolution-mode";
 
+    /// Backend DNS family override on Service or Gateway: ipv4Only, ipv6Only, or all.
+    /// Absence inherits; invalid values fail DNS dispatch closed.
+    pub const DNS_LOOKUP_FAMILY: &str = "edgion.io/dns-lookup-family";
+
     /// Inline standard-DNS resolver override. Value: a comma/space-separated
     /// server list (`ip[:port]`). Set on a Service (spans both planes) or a
     /// Gateway (data-plane only). Mutually exclusive with `DNS_RESOLVER_REF`.

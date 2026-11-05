@@ -569,7 +569,7 @@ The category tables below are a conceptual guide, not an exhaustive registry.
 | DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
 | DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
-| RegionRoute | `region_route` | Multi-region traffic routing. All logic AND the base `regions` table live in the plugin config: ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). An optional `overrideRef` names a `RegionRouteOverride` EdgionConfigData, looked up in EdgionConfigDataGatewayStore per request; it is data-only and never carries logic — the type declares `enable`/`active`/`regions` but only `regions` is consumed (whole-replace); the envelope `spec.enable` is what takes an overlay out of service. Fail-to-base on disabled/missing/type-mismatched/invalid overlay. No auto failover. |
+| RegionRoute | `region_route` | Request extraction, hashing and ordered region rules. Required clusterRegionRef names ClusterRegionSetting, the sole owner of local identity and destination table. One raw/proof snapshot per request; unavailable configuration follows failOpen/statusOnError. See the resource knowledge for authorization, publication and status. |
 
 ### Other (8)
 
@@ -706,12 +706,11 @@ actual rule/backend/filter loans from `refs::route_auth_fields`. This is distinc
 from unsupported native Gateway API `backendRef`/`protocol` ExternalAuth; mixed
 payloads keep the native classification and fail closed. No vendored CRD is relaxed.
 
-The Controller resolves each original declaring HTTPRoute's TLS/template fields
-before delegation inheritance. Secret/ConfigMap and ReferenceGrant recovery keys
-belong to the published root, while authorization uses the actual declaring route.
-Incoming root and raw-child resolved material/locality is cleared. Effective
-filters carry schema-hidden declaring namespace and failure state; that locality
-cannot mint a child Grant query or claim a child UID/generation.
+The Controller resolves each HTTPRoute's own TLS/template fields; under
+delegation every level is a separate published route, so Secret/ConfigMap and
+ReferenceGrant recovery keys and authorization both belong to the declaring route.
+Incoming resolved material/locality is cleared. Filters carry schema-hidden
+declaring namespace and failure state; that locality cannot mint a Grant query.
 
 Gateway `PreparedRouteAuth` retains the actual effective config loan through TLS
 proof and ForwardAuth construction, using the same captured global TLS defaults.

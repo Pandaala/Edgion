@@ -20,7 +20,6 @@ fn reference(group: &str, kind: &str) -> LocalObjectReference {
         group: group.to_string(),
         kind: kind.to_string(),
         name: "plugins".to_string(),
-        resolved_namespace: None,
     }
 }
 

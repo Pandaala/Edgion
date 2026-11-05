@@ -1,0 +1,30 @@
+# matchless child (gRPC): delegates test.TestService to matchless-child and
+# stamps x-parent-filter=matchless on delegated calls.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-matchless-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-matchless.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: matchless
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: matchless-child
+          namespace: edgion-grpc-deleg

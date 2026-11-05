@@ -472,3 +472,155 @@ fn invalid_document_parser_has_fixed_deduplicated_error() {
     assert!(super::parse_etcd_document::<HTTPRoute>(&route_document("valid.example.com")).is_ok());
     assert!(super::parse_etcd_document::<HTTPRoute>(&super::EtcdDocument::Text("not: [yaml".into())).is_err());
 }
+
+// This consumer publishes the Secret value into its processed object so the
+// test checks both shared material and the result consumed by a current owner.
+struct SecretConsumer;
+
+#[async_trait::async_trait]
+impl ProcessorHandler<HTTPRoute> for SecretConsumer {
+    async fn parse(&self, mut route: HTTPRoute, ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+        let value = ctx
+            .runtime()
+            .secret_store
+            .get(Some("default"), "credential")
+            .and_then(|secret| secret.data.as_ref().and_then(|data| data.get("ca.crt")).cloned())
+            .map(|bytes| String::from_utf8(bytes.0).unwrap())
+            .unwrap_or_else(|| "absent".to_owned());
+        route
+            .metadata
+            .annotations
+            .get_or_insert_with(Default::default)
+            .insert("test-material".to_owned(), value);
+        ProcessResult::Continue(route)
+    }
+}
+
+#[test]
+fn retired_secret_worker_cannot_restore_rotated_or_removed_ca_after_leadership_change() {
+    use crate::conf_mgr::conf_center::etcd::leadership_gate::{LeaderHandle, LeaderState};
+    use crate::conf_mgr::conf_center::non_kube_common::{CenterBase, LocalTaskScope};
+    use crate::conf_mgr::sync_runtime::resource_processor::{ResourceRef, SecretHandler};
+    use crate::conf_mgr::sync_runtime::ShutdownHandle;
+    use edgion_common::link_sys_core::providers::etcd::{EtcdBootstrapConfig, EtcdLinkClient};
+    use edgion_resources::ResourceKind;
+    use k8s_openapi::api::core::v1::Secret;
+    use std::cell::{Cell, RefCell};
+    use std::time::Duration;
+
+    let _guard = crate::services::credential_manager::lock_test_service();
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        // Rotation replaces bytes; revocation removes the old CA entirely.
+        for replacement in [Some("new-ca"), None] {
+            let base = CenterBase::new();
+            let shutdown = ShutdownHandle::new();
+            let leader = LeaderState::new(Duration::from_secs(30));
+            leader.set_leader(true);
+            let generation = Cell::new(0);
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Semaphore::new(0));
+            let ready = Arc::new(tokio::sync::Notify::new());
+            let old_scope = RefCell::<Option<LocalTaskScope>>::new(None);
+            let old_processor = RefCell::new(None);
+            let ingress = RefCell::new(None);
+            let current_consumer = RefCell::new(None);
+            let document = |value: Option<&str>| {
+                let mut secret = Secret::default();
+                secret.metadata.namespace = Some("default".into());
+                secret.metadata.name = Some("credential".into());
+                secret.string_data = Some(value.into_iter().map(|value| ("ca.crt".into(), value.into())).collect());
+                super::EtcdDocument::Text(yaml_serde::to_string(&secret).unwrap())
+            };
+            let lifecycle = base.run_lifecycle_gated(
+                shutdown.clone(), "secret-generation-test", Some(LeaderHandle::from_state(leader.clone())),
+                |mut signal, runtime, error_tx, scope| {
+                    let number = generation.get() + 1;
+                    generation.set(number);
+                    let processor = Arc::new(ResourceProcessor::<Secret>::new(
+                        "Secret", 100, Arc::new(SecretHandler::new()), runtime.clone(),
+                    ));
+                    runtime.processor_registry.register(processor.clone());
+                    let consumer = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+                        "HTTPRoute", 100, Arc::new(SecretConsumer), runtime.clone(),
+                    ));
+                    runtime.processor_registry.register(consumer.clone());
+                    *current_consumer.borrow_mut() = Some(consumer.clone());
+                    let client = EtcdLinkClient::from_bootstrap("test/retired-secret", EtcdBootstrapConfig {
+                        endpoints: vec!["http://127.0.0.1:2379".into()],
+                        auth: None, tls: None, timeout: None, keep_alive: None, namespace: None,
+                    }).unwrap();
+                    // The uninitialized client never opens a connection. Its
+                    // normal not-connected result is retained after the pause.
+                    let mut status = super::EtcdStatusHandler::new(Arc::new(client), "/edgion".into());
+                    if number == 1 {
+                        status = status.with_read_barrier(entered.clone(), release.clone());
+                        *old_scope.borrow_mut() = Some(scope.clone());
+                        *old_processor.borrow_mut() = Some(Arc::downgrade(&processor));
+                    }
+                    let (tx, rx) = tokio::sync::mpsc::channel(8);
+                    *ingress.borrow_mut() = Some(tx.clone());
+                    let controller = super::EtcdResourceController::new(
+                        "Secret", processor, Arc::new(status), rx, Arc::from(CONF_PREFIX),
+                    ).with_shutdown(signal.clone()).with_scope(scope.clone());
+                    let controller_task = scope.spawn(controller.run());
+                    let ready = ready.clone();
+                    let seed = document(replacement);
+                    tokio::spawn(async move {
+                        let _error_tx = error_tx;
+                        let _controller = tokio_util::task::AbortOnDropHandle::new(controller_task);
+                        tx.send(super::EtcdEvent::Init).await.unwrap();
+                        if number == 2 {
+                            tx.send(super::EtcdEvent::InitApply {
+                                key: "/edgion/conf/Secret/default/credential".into(), content: seed,
+                            }).await.unwrap();
+                        }
+                        tx.send(super::EtcdEvent::InitDone).await.unwrap();
+                        assert!(runtime.processor_registry.wait_kinds_ready(&["Secret"], Duration::from_secs(2)).await);
+                        let route = parse_resource_content::<HTTPRoute>("apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: consumer\n  namespace: default\nspec:\n  rules: []\n").unwrap();
+                        consumer.on_init_apply(route, None).await;
+                        consumer.on_init_done();
+                        runtime.secret_ref_manager.add_ref("default/credential".into(), ResourceRef::new(
+                            ResourceKind::HTTPRoute, Some("default".into()), "consumer".into(),
+                        ));
+                        runtime.processor_registry.mark_registration_complete();
+                        ready.notify_one();
+                        signal.wait().await;
+                    })
+                },
+            );
+            let driver = async {
+                ready.notified().await;
+                let tx = ingress.borrow().as_ref().unwrap().clone();
+                tx.send(super::EtcdEvent::Apply {
+                    key: "/edgion/conf/Secret/default/credential".into(), content: document(Some("revoked-ca")),
+                }).await.unwrap();
+                entered.notified().await;
+                leader.set_leader(false);
+                let scope = old_scope.borrow().as_ref().unwrap().clone();
+                scope.cancel.cancelled().await;
+                // Reacquisition may arrive during teardown. It must not admit
+                // a successor until the old worker has actually been dropped.
+                leader.set_leader(true);
+                ready.notified().await;
+                assert_eq!(generation.get(), 2);
+                assert!(scope.tracker.is_empty());
+                assert!(old_processor.borrow().as_ref().unwrap().upgrade().is_none());
+                let consumer = current_consumer.borrow().as_ref().unwrap().clone();
+                assert!(consumer.workqueue().is_empty());
+                release.add_permits(1);
+                tokio::task::yield_now().await;
+                let value = base.runtime().secret_store.get(Some("default"), "credential").unwrap();
+                assert_eq!(value.data.as_ref().and_then(|data| data.get("ca.crt"))
+                    .map(|bytes| bytes.0.as_slice()), replacement.map(str::as_bytes));
+                assert!(consumer.workqueue().is_empty(), "old Secret must not requeue the current consumer");
+                assert_eq!(consumer.get("default/consumer").unwrap().metadata.annotations.as_ref().unwrap()["test-material"],
+                    replacement.unwrap_or("absent"));
+                shutdown.shutdown();
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(lifecycle, driver) })
+                .await.expect("leadership transition must converge without releasing the old status read");
+            result.unwrap();
+            assert!(!base.is_ready());
+        }
+    });
+}

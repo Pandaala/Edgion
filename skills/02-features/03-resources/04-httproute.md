@@ -251,10 +251,9 @@ rules:
 
 Controller validation checks the actual rule/backend filter and owning Route.
 Malformed identities do not register plugin dependencies or read plugin content.
-Valid missing bundles retain recovery dependencies. Delegation preserves the
-original child's locality in controller-owned derived rules; authored namespace
-stamps cannot override it. Gateway migration of all early lookup consumers is a
-separate pending R3a2 slice, beyond the existing execution-time rejection gates.
+Valid missing bundles retain recovery dependencies. Under delegation every
+level is compiled from its own route, so each ExtensionRef always resolves in
+the namespace of the route that declares it; there is no namespace stamp.
 
 `ExtensionRef` is a standard Gateway API local reference: `group: edgion.io`, `kind: EdgionPlugins`, and a valid required resource `name`. It has no operator namespace selector. The declaring Route namespace supplies locality; omission means `default`. **The `type: ExtensionRef` (the "plugin referencing plugin" nested form) inside `EdgionPlugins.spec.\*Plugins` was removed in release `<version>`.** Multi-plugin reuse is expressed in two ways:
 
@@ -339,15 +338,18 @@ backendRefs:
 A rule delegates its path prefix to child HTTPRoutes (possibly in other
 namespaces) by pointing its **single** `backendRef` at
 `group: gateway.networking.k8s.io, kind: HTTPRoute` (`name: "*"` = every route
-in the target namespace). The controller flattens the tree at parse time into
-the controller-resolved `resolved_rules` field; the data plane never sees the
-nesting.
+in the target namespace that declares this parent). The child names the parent
+in its own `parentRefs` (`kind: HTTPRoute`). The Controller validates and
+publishes every route once, unchanged, and writes the confirmed edges on the
+child as the schema-hidden `resolved_delegation_keys`; the Gateway matches the
+tree as a cascade through per-target subtrees.
 
 ```yaml
+# parent rule
 rules:
   - matches:
       - path: { type: PathPrefix, value: /api/v1/billing }   # PathPrefix only
-    filters:              # mandatory, inherited by all child rules
+    filters:              # mandatory for all delegated traffic
       - type: RequestHeaderModifier
         requestHeaderModifier: { set: [{ name: x-tenant, value: billing }] }
     backendRefs:
@@ -355,34 +357,38 @@ rules:
         kind: HTTPRoute
         name: "*"
         namespace: billing
+# child route
+parentRefs:
+  - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: root, namespace: infra }
 ```
 
-Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); architecture: [`../../01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md)):
+Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); architecture: [`../../01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md); design: [`tasks/todo/route-delegation-cascading-match-design.md`](../../../tasks/todo/route-delegation-cascading-match-design.md)):
 
-- Child paths are absolute. Out-of-prefix `Exact` / `PathPrefix` child rules
-  fail static segment-boundary containment, are dropped, and are reported
-  (`PartiallyInvalid`).
-- A `RegularExpression` child matches only when its regex and every ancestor's
-  `PathPrefix` match the same normalized request path. A failed parent check
-  skips that candidate and continues route selection. A regex disjoint from
-  its parent scope is valid but never matches; it does not produce an
-  out-of-prefix status error. Incompatible parent header/query/method OR branches
-  are skipped for terminal regex matches; compatible branches remain. A child
-  match with no compatible parent branch still causes its rule to be dropped.
-- Children must not set `hostnames`; children may delegate further (cycle
-  detection, depth cap 8); children may reverse-lock parents via
-  `parentRefs {kind: HTTPRoute}`.
-- Parent standard filters are mandatory (same-type child filter ⇒ rule
-  dropped); ExtensionRef chains concatenate (parent first). `timeouts` /
-  `retry` / `sessionPersistence`: child-first-else-inherit.
-- Parent and child ExtensionRefs resolve EdgionPlugins in the Namespace of the
-  HTTPRoute that declares each filter; flattening never changes that locality.
-- Child backendRef namespace defaults to the child's namespace; cross-ns
-  Service refs are ReferenceGrant-checked with the child as referrer.
-- Additive: `backendRef {kind: HTTPRoute}` was previously invalid config;
-  `allowedRoutes` semantics are untouched.
+- parentRefs are exclusive: Gateway refs (root) or 1–3 same-kind route refs
+  (child); a mix, >3 route refs or a wrong kind invalidates the route. Children
+  must not set `hostnames`. No parentRefs = inert.
+- Bidirectional confirmation: the parent delegates to the child AND the child
+  declares the parent. No ReferenceGrant on the edge.
+- At most 5 levels counting the root (`MAX_ROUTE_DELEGATION_LEVELS`). Cycles are
+  not detected; the Gateway visited set and depth cap make them harmless.
+- Child paths are absolute; the scope is the intersection with the parent
+  prefix. Disjoint child paths never match and are not reported.
+- Precedence is per level (each subtree is its own engine); a child never
+  outranks a sibling root route. A subtree miss backtracks; each subtree is
+  entered at most once per request ("first entry wins").
+- Parent standard filters are mandatory (a same-type child filter skips that
+  child rule under that parent); EdgionPlugins run parent first; each level's
+  ExtensionRefs resolve in its own namespace. `timeouts` / `retry` fall back per
+  sub-field to the deepest level; `sessionPersistence` falls back as a whole
+  block. Backends are leaf only.
+- Backend-selecting plugins are rejected on delegating rules.
+- Child status: one entry per route-kind parentRef with `DelegationAccepted`,
+  `NoMatchingParent`, `NotAttached`, `DepthExceeded`, `InvalidParentRefs`
+  or `UnsupportedValue`. Parent: `BackendNotFound` / `RefNotPermitted` for named
+  children, `PartiallyInvalid` for its own malformed delegating rules.
+- Access-log `match_info` is an array root → leaf; metrics label the leaf.
 
-Internal processing: [`01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md).
+Review knowledge: [cascading match (ISSUE-010)](../../04-review/routing/regression-guards/delegation-cascading-match-issue-010.md).
 
 ## Edgion Extension Annotations
 

@@ -1,12 +1,5 @@
-//! RegionRoute plugin configuration
-//!
-//! Routes traffic across multiple regions using ordered route rules.
-//! Supports direct region override, key-to-region conf match, consistent hash-range routing,
-//! and pre-computed hash passthrough.
-//!
-//! `RegionRouteConfig` in EdgionPlugins holds ALL routing logic plus the default region table.
-//! An optional `override_ref` points to a `RegionRouteOverride` EdgionConfigData which can
-//! whole-replace the `regions` at request time (fail-to-base on any overlay error).
+//! RegionRoute request selection rules and required regional setting reference.
+//! Local identity and routing destinations belong to ClusterRegionSetting.
 
 use crate::gwapi_types::is_valid_header_token;
 use crate::gwapi_types::HEADER_NAME_MAX_LEN;
@@ -21,18 +14,10 @@ use crate::common::{KeyGet, KeySet};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
 use crate::resources::edgion_config_data::RegionTableValidation;
 
-/// RegionRoute plugin: flat base configuration.
-///
-/// Holds ALL routing logic and the default region table.
-/// An optional `override_ref` points to a `RegionRouteOverride` EdgionConfigData that can
-/// whole-replace the `regions` at request time (fail-to-base on any overlay error).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+/// Request selection rules. The setting is resolved from one immutable generation.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegionRouteConfig {
-    /// Name of this gateway instance's own region.
-    #[serde(default)]
-    pub my_region: String,
-
     /// Shared key extraction for RouteByKeyConfMatch and RouteByHashRange.
     #[serde(default)]
     pub key_get: Vec<KeyGet>,
@@ -53,14 +38,16 @@ pub struct RegionRouteConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
 
-    /// Default region table (safe default). Applied directly when no overlay is set.
-    #[serde(default)]
-    pub regions: Vec<RegionDef>,
+    /// Required setting reference; namespace defaults to the owning plugin's namespace.
+    pub cluster_region_ref: EdgionConfigDataRef,
 
-    /// Optional overlay reference. When set, the gateway looks up this EdgionConfigData at
-    /// request time and applies a `RegionRouteOverride` on top of the base `regions`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub override_ref: Option<EdgionConfigDataRef>,
+    /// Skip this plugin when its operational configuration is unavailable.
+    #[serde(default = "default_true")]
+    pub fail_open: bool,
+
+    /// Fixed error response status when failOpen is false.
+    #[serde(default = "default_status_on_error")]
+    pub status_on_error: u16,
 }
 
 /// RouteByKeyConfMatch configuration with bypass support.
@@ -176,6 +163,9 @@ pub enum RouteRule {
 fn default_true() -> bool {
     true
 }
+fn default_status_on_error() -> u16 {
+    503
+}
 fn default_modulo() -> u16 {
     1000
 }
@@ -258,8 +248,12 @@ impl RegionRouteConfig {
 
 use crate::resources::edgion_plugins::PluginValidation;
 
-impl PluginValidation for RegionRouteConfig {
-    fn validation_error(&self) -> Option<String> {
+impl RegionRouteConfig {
+    /// Errors that cannot use the operational failure policy.
+    pub fn structural_validation_error(&self) -> Option<String> {
+        if !(400..=599).contains(&self.status_on_error) {
+            return Some("statusOnError must be in 400..=599".to_string());
+        }
         for target in self.hash_calc.iter().flat_map(|calc| &calc.write_back) {
             if let KeySet::ResponseHeader { name } = target {
                 if name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name) {
@@ -272,14 +266,33 @@ impl PluginValidation for RegionRouteConfig {
                 }
             }
         }
-        if self.hash_calc.as_ref().is_some_and(|calc| calc.modulo < 2) {
-            return Some("hashCalc.modulo must be at least 2".to_string());
-        }
+        None
+    }
 
-        if self.regions.is_empty() && self.route_rules.is_empty() {
-            return None;
+    pub fn operational_validation_error(&self) -> Option<String> {
+        (self.effective_modulo() < 2).then(|| "hashCalc.modulo must be at least 2".to_string())
+    }
+}
+
+impl Default for RegionRouteConfig {
+    fn default() -> Self {
+        Self {
+            key_get: Vec::new(),
+            hash_key_get: None,
+            hash_calc: None,
+            route_rules: Vec::new(),
+            route_by_key_conf_match: None,
+            cluster_region_ref: EdgionConfigDataRef::default(),
+            fail_open: true,
+            status_on_error: default_status_on_error(),
         }
-        self.validate_effective_regions(&self.regions).err()
+    }
+}
+
+impl PluginValidation for RegionRouteConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.structural_validation_error()
+            .or_else(|| self.operational_validation_error())
     }
 }
 

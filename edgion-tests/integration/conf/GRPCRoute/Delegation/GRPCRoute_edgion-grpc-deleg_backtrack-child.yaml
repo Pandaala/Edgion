@@ -1,0 +1,21 @@
+# backtracking (gRPC): serves only SayHello inside the delegated service.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: backtrack-child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-backtrack-parent
+      namespace: edgion-test
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: child-grpc-svc
+          port: 30021

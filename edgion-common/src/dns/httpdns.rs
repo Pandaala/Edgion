@@ -8,12 +8,11 @@ use edgion_resources::resources::link_sys::httpdns::{
     HttpDnsBodyKind, HttpDnsFallback, HttpDnsResolverConfig, HttpDnsResponseFormat,
 };
 
-use super::{standard, strip_brackets, system, DnsError};
+use super::{require_addresses, standard, strip_brackets, system, DnsError, DnsLookupFamily, DnsQueryPolicy};
 
-/// Hard cap on the number of IPs accepted from a single HTTP DNS response.
-/// Once reached, further candidates are silently dropped (not an error) —
-/// this bounds memory/response processing against a malicious or buggy
-/// upstream that returns an unbounded IP list.
+/// Hard cap on unique HTTP DNS addresses. Native queries retain their historical
+/// prefix truncation; family-aware queries reject overflow before filtering, so
+/// a truncated family can never be interpreted as an authoritative removal.
 const MAX_HTTP_DNS_ADDRS: usize = 256;
 
 /// Isolates the network fetch so rendering/parsing/fallback stay unit-testable.
@@ -61,6 +60,36 @@ pub fn render_url(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<String, D
         return Ok(preset.url_template().replace("{domain}", domain));
     }
     Err(DnsError::Parse("no urlTemplate and no preset configured".into()))
+}
+
+/// Query capability and deadline are compiled once with the provider generation.
+pub(super) struct PreparedQuery {
+    response: PreparedResponse,
+    mode: QueryMode,
+    timeout: std::time::Duration,
+}
+
+#[derive(Clone, Copy)]
+enum QueryMode {
+    Typed,
+    Combined,
+    Ipv4Preset,
+}
+
+impl PreparedQuery {
+    pub(super) fn from_config(cfg: &HttpDnsResolverConfig) -> Self {
+        let mode = match cfg.url_template.as_deref().filter(|url| !url.is_empty()) {
+            Some(url) if url.contains("{recordType}") => QueryMode::Typed,
+            Some(_) => QueryMode::Combined,
+            None if cfg.preset.is_some() => QueryMode::Ipv4Preset,
+            None => QueryMode::Combined,
+        };
+        Self {
+            response: PreparedResponse::from_config(cfg),
+            mode,
+            timeout: primary_timeout(cfg),
+        }
+    }
 }
 
 /// Immutable interpretation metadata owned by one prepared query generation.
@@ -190,10 +219,75 @@ fn parse_ip_candidates<'a>(raw: impl Iterator<Item = &'a str>) -> Result<Vec<IpA
     }
 }
 
-async fn apply_fallback(fallback: &HttpDnsFallback, domain: &str) -> Result<Vec<IpAddr>, DnsError> {
+/// One deadline covers the complete primary query, including both typed requests.
+pub(super) fn primary_timeout(cfg: &HttpDnsResolverConfig) -> std::time::Duration {
+    use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
+    std::time::Duration::from_millis(
+        cfg.connection
+            .as_ref()
+            .and_then(|c| c.timeout_ms)
+            .unwrap_or(HttpDnsConnection::DEFAULT_TIMEOUT_MS),
+    )
+}
+
+impl PreparedResponse {
+    /// Complete family-aware answers reject malformed values and overflow before filtering.
+    fn parse_complete(&self, body: &str) -> Result<Vec<IpAddr>, DnsError> {
+        let mut addresses = Vec::new();
+        let mut insert = |raw: &str| -> Result<(), DnsError> {
+            let ip = strip_brackets(raw.trim())
+                .parse::<IpAddr>()
+                .map_err(|_| DnsError::Parse("invalid IP address in DNS response".into()))?
+                .to_canonical();
+            if !addresses.contains(&ip) {
+                addresses.push(ip);
+            }
+            if addresses.len() > MAX_HTTP_DNS_ADDRS {
+                return Err(DnsError::Parse("DNS address limit exceeded".into()));
+            }
+            Ok(())
+        };
+        let mut parse_string = |value: &str, delimiter: Option<&str>| -> Result<(), DnsError> {
+            let delimiter = require_non_empty_delimiter(delimiter)?;
+            if !value.trim().is_empty() {
+                for part in value.split(delimiter) {
+                    insert(part)?;
+                }
+            }
+            Ok(())
+        };
+        match self {
+            Self::Delimited { delimiter } => parse_string(body, delimiter.as_deref())?,
+            Self::Json { pointer, delimiter, .. } => {
+                let value: serde_json::Value =
+                    serde_json::from_str(body).map_err(|_| DnsError::Parse("invalid JSON DNS response".into()))?;
+                match value.pointer(pointer) {
+                    Some(serde_json::Value::String(value)) => parse_string(value, delimiter.as_deref())?,
+                    Some(serde_json::Value::Array(values)) => {
+                        for value in values {
+                            insert(
+                                value
+                                    .as_str()
+                                    .ok_or_else(|| DnsError::Parse("DNS address must be a string".into()))?,
+                            )?;
+                        }
+                    }
+                    _ => return Err(DnsError::Parse("missing or invalid DNS address container".into())),
+                }
+            }
+        }
+        Ok(addresses)
+    }
+}
+
+async fn apply_fallback(
+    fallback: &HttpDnsFallback,
+    domain: &str,
+    policy: DnsQueryPolicy,
+) -> Result<Vec<IpAddr>, DnsError> {
     match fallback {
         HttpDnsFallback::System => {
-            let a = system::resolve_system(domain)
+            let a = system::resolve_system(domain, policy)
                 .await
                 .map_err(|e| DnsError::Io(e.to_string()))?;
             if a.is_empty() {
@@ -210,7 +304,7 @@ async fn apply_fallback(fallback: &HttpDnsFallback, domain: &str) -> Result<Vec<
             if servers.is_empty() {
                 return Err(DnsError::NoAddresses);
             }
-            standard::resolve_standard(servers, domain).await
+            standard::resolve_standard(servers, domain, policy).await
         }
         HttpDnsFallback::None => Err(DnsError::NoAddresses),
     }
@@ -222,8 +316,12 @@ async fn apply_fallback(fallback: &HttpDnsFallback, domain: &str) -> Result<Vec<
 /// client failed to build from bad resolved TLS material. Without this the caller
 /// would surface the build error and silently skip the operator's configured
 /// `fallback: system|dns`, which would be a fail-open surprise.
-pub async fn resolve_via_fallback(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<Vec<IpAddr>, DnsError> {
-    apply_fallback(&cfg.fallback, domain).await
+pub async fn resolve_via_fallback(
+    cfg: &HttpDnsResolverConfig,
+    domain: &str,
+    policy: DnsQueryPolicy,
+) -> Result<Vec<IpAddr>, DnsError> {
+    apply_fallback(&cfg.fallback, domain, policy).await
 }
 
 /// Core logic with an injectable fetcher (used by tests and the real entry point).
@@ -231,28 +329,69 @@ pub async fn resolve_http_dns_with<F: HttpDnsFetcher + ?Sized>(
     fetcher: &F,
     cfg: &HttpDnsResolverConfig,
     domain: &str,
+    policy: DnsQueryPolicy,
 ) -> Result<Vec<IpAddr>, DnsError> {
-    let response = PreparedResponse::from_config(cfg);
-    resolve_http_dns_prepared(fetcher, cfg, &response, domain).await
+    let query = PreparedQuery::from_config(cfg);
+    resolve_http_dns_prepared(fetcher, cfg, &query, domain, policy).await
 }
 
 pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
     fetcher: &F,
     cfg: &HttpDnsResolverConfig,
-    response: &PreparedResponse,
+    query: &PreparedQuery,
     domain: &str,
+    policy: DnsQueryPolicy,
 ) -> Result<Vec<IpAddr>, DnsError> {
-    let attempt = async {
+    let primary = async {
         let url = render_url(cfg, domain)?;
-        let body = fetcher.get(&url).await?;
-        drop(url);
-        response.parse(&body)
-    }
-    .await;
+        if policy == DnsQueryPolicy::Native {
+            let body = fetcher.get(&url.replace("{recordType}", "A")).await?;
+            return query.response.parse(&body);
+        }
+        if matches!(query.mode, QueryMode::Ipv4Preset) && policy != DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only) {
+            return Err(DnsError::Parse("preset requires a custom URL for IPv6 queries".into()));
+        }
+        let mut addresses = Vec::new();
+        if matches!(query.mode, QueryMode::Typed) {
+            let families: &[(DnsLookupFamily, &str)] = match policy {
+                DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only) => &[(DnsLookupFamily::Ipv4Only, "A")],
+                DnsQueryPolicy::Family(DnsLookupFamily::Ipv6Only) => &[(DnsLookupFamily::Ipv6Only, "AAAA")],
+                _ => &[(DnsLookupFamily::Ipv4Only, "A"), (DnsLookupFamily::Ipv6Only, "AAAA")],
+            };
+            for &(family, record_type) in families {
+                let body = fetcher.get(&url.replace("{recordType}", record_type)).await?;
+                let parsed = query.response.parse_complete(&body)?;
+                if parsed.iter().any(|ip| !DnsQueryPolicy::Family(family).accepts(*ip)) {
+                    return Err(DnsError::Parse(
+                        "typed DNS response contains the wrong address family".into(),
+                    ));
+                }
+                for ip in parsed {
+                    if !addresses.contains(&ip) {
+                        addresses.push(ip);
+                    }
+                }
+                if addresses.len() > MAX_HTTP_DNS_ADDRS {
+                    return Err(DnsError::Parse("DNS address limit exceeded".into()));
+                }
+            }
+        } else {
+            let body = fetcher.get(&url).await?;
+            addresses = query.response.parse_complete(&body)?;
+        }
+        require_addresses(policy.select(addresses))
+    };
+    let attempt = if policy == DnsQueryPolicy::Native {
+        primary.await
+    } else {
+        tokio::time::timeout(query.timeout, primary)
+            .await
+            .unwrap_or_else(|_| Err(DnsError::Http("primary DNS deadline exceeded".into())))
+    };
 
     match attempt {
         Ok(ips) => Ok(ips),
-        Err(primary) => match apply_fallback(&cfg.fallback, domain).await {
+        Err(primary) => match apply_fallback(&cfg.fallback, domain, policy).await {
             Ok(ips) => Ok(ips),
             Err(_) => Err(primary),
         },

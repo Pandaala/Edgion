@@ -73,32 +73,58 @@ a bucketing aid, not authorization for another parent on a shared socket. See th
 - `RouteRules.match_route` tries the radix Exact/PathPrefix engine first and uses the regex engine
   only as a fallback, preserving `Exact > PathPrefix > RegularExpression`.
 
-## Delegated parent path constraints (ARCH-156)
+## Delegation (cascading match)
 
-Rule compilation validates `resolvedParentMatch` before building plugins.
-Resolved rules require explicit `direct` or `delegated` provenance. Delegated
-scope counts must match effective match counts; each scope contains 1..8 absolute
-authored ancestor prefixes (`rawPathPrefixes`). Gateway BASE-normalizes these
-once under its actual startup policy. Each guarded candidate holds an immutable
-shared compiled radix tree from its own rule generation. Canonical `RadixPath`
-trailing-slash handling and the shared radix parser preserve segment boundaries,
-parameters, and escaped colons.
+HTTPRoute delegation is matched level by level in the data plane; the Controller
+publishes each route once plus each child's `resolved_delegation_keys`. Design:
+[`tasks/todo/route-delegation-cascading-match-design.md`](../../../../tasks/todo/route-delegation-cascading-match-design.md);
+Controller side: [HTTPRoute resource](../../05-resources/04-http-route.md#delegation-cascading-match);
+review guard: [cascading match (ISSUE-010)](../../../04-review/routing/regression-guards/delegation-cascading-match-issue-010.md).
 
-For literal Exact/Prefix children with only literal ancestors, compilation tests
-the canonical child against the ancestor conjunction. Success proves containment
-and omits the runtime guard. Regex, `/:` syntax (including escaped colons), and
-unproven relationships retain the full guard. Optional guards remain aligned
-with effective match indices; all metadata is validated before publication.
+Modules: `routes/delegation/` (shared with GRPCRoute: `slot.rs`, `index.rs`,
+`descent.rs`, `inherit.rs`) and `routes/http/delegation_build.rs`.
 
-For guarded candidates, `deep_match` checks every ancestor against `ctx.path()` before choosing a winner,
-for radix, RegexSet, and linear fallback alike. Failure continues selection.
-Inherited header/query/method predicates are already merged and are not duplicated.
-At most eight inserted IDs bound both inline match results (capacity eight) and
-DFS frontier (capacity sixteen); this guard adds no request heap allocation,
-locks, regex compilation, tracing, or global parent lookup. It introduces no
-new store or independently published state. Old candidates keep their own guards
-across reload. Typed-valid malformed scopes withdraw the affected effective rule;
-raw serde failures retain the existing transport error boundary.
+- **Slot table.** `DelegationSlotTable<RouteRules>` maps each `DelegationKey` to
+  an `Arc<DelegationSlot>` holding an `ArcSwapOption` subtree. It is touched only
+  under the route rebuild lock. A delegating rule unit stores its slot in
+  `HttpRouteRuleUnit::delegate` at compile time, so the request path does no hash
+  lookup. Slots are created by whichever side arrives first and collected when
+  neither side references them; slot work is scoped to the touched keys.
+- **Subtrees.** `build_subtree` compiles the current children of one key into a
+  `RouteRules` (radix engine + regex engine, radix first) with its own build-time
+  precedence ranks. Child units are compiled once per child (`DelegationChildIndex`)
+  and `Arc`-shared into every subtree of that child's ≤6 keys. A child change
+  rebuilds only those subtrees; the root listener table is not rebuilt.
+- **Descent.** Root matching is unchanged. Only after a candidate's own
+  `deep_match` succeeds and `delegate` is `Some` does the matcher create a lazy
+  `DescentState` (visited slots inline capacity 8, chain mask, depth) and descend:
+  `slot.load()` once, run the subtree engine with the child entry point
+  (`match_child_unit`: chain-mask check, then the unit's own method/header/query
+  conditions; child units carry no Gateway/listener check). A miss restores the
+  chain position and the caller continues with its next candidate (backtracking).
+  `DescentState::enter` refuses a visited slot, a full chain
+  (`MAX_ROUTE_DELEGATION_LEVELS`) or a mask conflict. One state is shared across
+  all hostname groups and the regex fallback of a request, so each slot is entered
+  at most once per request ("first entry wins"). Regex engines never hold
+  delegating units (delegating matches are PathPrefix only).
+- **Result.** `RouteMatchResult.route_unit` is always the leaf;
+  `RouteMatchResult.delegated: Option<Box<DelegatedMatch>>` holds the ancestors
+  (root first) and the folded `InheritedRuleValues`. It is `None` and
+  allocation-free for ordinary routes. The chain holds `Arc`s, so a request keeps
+  its generation even if slots swap.
+- **Execution.** `ctx.delegated` drives every stage: ancestors' standard filters
+  and EdgionPlugins run first in chain order, then the leaf exactly as for an
+  ordinary route. Each ancestor resolves its ExtensionRefs from its own per-level
+  array (`DelegatedMatch::ext_refs`) in the root-matched Gateway's plugin scope.
+  Exclusive-owner checks (`route_owner_conflict`) and WAF owner selection run over
+  the whole chain only when `ctx.delegated` is present.
+- **Inherited values.** `ctx` accessors for `timeouts`, `retry` and
+  `sessionPersistence` read the leaf first and consult
+  `ctx.delegated.inherited` only when the leaf leaves the value unset: per
+  sub-field for timeouts/retry, whole block for sessionPersistence.
+- **Not inherited.** Backends, `edgion.io/forward-raw-path` and
+  `edgion.io/retry-non-idempotent` come from the leaf only. The response cache
+  bypasses delegated requests entirely (`response_cache/storage.rs`).
 
 ## proxy_http implementation
 

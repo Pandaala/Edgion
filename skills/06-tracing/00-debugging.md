@@ -144,7 +144,6 @@ Or specify the addresses:
 ### Controller side
 
 - `/api/v1/server-info`
-- `/api/v1/reload`
 - `/api/v1/namespaced/{kind}`
 - `/api/v1/cluster/{kind}`
 - `/configserver/{kind}/list`

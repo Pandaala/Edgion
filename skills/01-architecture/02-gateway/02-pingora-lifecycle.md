@@ -395,7 +395,7 @@ Each upstream attempt creates an `UpstreamInfo` recording fine-grained timings:
 pub struct AccessLogEntry<'a> {
     pub timestamp: i64,                      // millisecond timestamp
     pub request_info: &'a RequestInfo,        // borrowed
-    pub match_info: Option<RouteMatchInfo<'a>>, // HTTP or gRPC match info
+    pub match_info: Option<MatchInfoChain<'a>>, // array root -> leaf, HTTP or gRPC
     pub diagnostics: &'a [RequestDiagnostic], // borrowed
     pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>, // borrowed (includes upstreams list)

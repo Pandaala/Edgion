@@ -1,7 +1,7 @@
 //! Generic authorization primitives shared by the Admin API.
 //!
 //! `Authorizer` decides `(role, verb, kind) -> Decision`. The Center role's
-//! policy is held behind an `ArcSwap` so it can be hot-swapped on reload without
+//! policy is held behind an `ArcSwap` so requests can share a policy snapshot without
 //! restarting the federation client. Default-deny: an empty policy authorizes
 //! nothing. Pure, no I/O.
 
@@ -33,7 +33,6 @@ pub enum Verb {
     Failover,
     AcmeTrigger,
     ConfSyncRotate,
-    Reload,
     ServerInfo,
     Diagnostics,
     WipeAll,
@@ -54,7 +53,6 @@ impl Verb {
             Verb::Failover => "failover",
             Verb::AcmeTrigger => "acme-trigger",
             Verb::ConfSyncRotate => "conf-sync-rotate",
-            Verb::Reload => "reload",
             Verb::ServerInfo => "server-info",
             Verb::Diagnostics => "diagnostics",
             Verb::WipeAll => "wipe-all",
@@ -77,7 +75,6 @@ impl Verb {
             "failover" => Verb::Failover,
             "acme-trigger" => Verb::AcmeTrigger,
             "conf-sync-rotate" => Verb::ConfSyncRotate,
-            "reload" => Verb::Reload,
             "server-info" => Verb::ServerInfo,
             "diagnostics" => Verb::Diagnostics,
             "wipe-all" => Verb::WipeAll,
@@ -225,7 +222,7 @@ pub struct Authorizer {
     /// Key = `sha256_hex(raw_token)`.  Value = name + per-token policy.
     cli_tokens: ArcSwap<HashMap<String, CliTokenEntry>>,
     /// The local admin token entry, if configured. Held here (rather than in the
-    /// config-derived map) so it survives every `apply` — including hot-reloads,
+    /// config-derived map) so it survives every `apply` — including repeated configuration assembly,
     /// which rebuild the cli-token map purely from `config.cli_tokens` and would
     /// otherwise silently drop it.
     admin_token: ArcSwapOption<(String, CliTokenEntry)>,
@@ -244,7 +241,7 @@ impl Authorizer {
 
     /// Install (or clear) the local admin token entry. Must be called BEFORE the
     /// first `apply` at startup so the admin token is merged into the live map.
-    /// Subsequent `apply` calls (reloads) re-merge it automatically.
+    /// Subsequent `apply` calls re-merge it automatically.
     pub fn set_admin_token(&self, entry: Option<(String, CliTokenEntry)>) {
         self.admin_token.store(entry.map(Arc::new));
     }
@@ -256,7 +253,7 @@ impl Authorizer {
 
     /// Atomically replace both the Center policy and the cli-token map.
     ///
-    /// This is the single writer path used at startup and on every hot-reload.
+    /// This is the single writer path used for startup configuration assembly.
     /// The configured admin token (if any) is merged into `cli` so it always
     /// remains live; an existing map entry with the same hash (operator reusing
     /// the same raw token as a cli_token) is left untouched.
@@ -272,7 +269,7 @@ impl Authorizer {
     /// Snapshot the current Center policy as a `Role::Restricted`.
     ///
     /// The snapshot is load-once per call (ArcSwap `load_full`), so it is
-    /// stable across the lifetime of a single request even if a reload races.
+    /// stable across the lifetime of a single request across authorization checks.
     pub fn center_role(&self) -> Role {
         Role::Restricted(self.center_policy.load_full())
     }

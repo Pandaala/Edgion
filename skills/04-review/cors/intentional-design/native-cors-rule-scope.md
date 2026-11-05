@@ -12,7 +12,7 @@ Edgion supports native Gateway API `type: CORS` only in `HTTPRouteRule.filters`.
 Any CORS filter in `HTTPBackendRef.filters` invalidates the whole rule, including
 zero-weight references, mixed rule/backend policies, and weighted backends with
 different policies. No policies are merged, promoted, or silently ignored. Other
-valid rules remain active. This policy covers authored and delegated effective rules.
+valid rules remain active. This policy covers every route, including delegation children.
 It does not change the separate EdgionPlugins CORS extension's semantics.
 
 The user selected this bounded support policy after reviewing the Gateway API
@@ -35,13 +35,13 @@ Ordinary requests nevertheless used the backend CORS response filter.
   An authored backend CORS violation with no surviving effective rule rejects the
   Gateway attachment with `Accepted=False/UnsupportedValue`; any stale
   `PartiallyInvalid=True` clears with an unsupported-value reason, not AllRulesValid.
-  `handlers/route_delegation.rs` already uses that same rule validation for parents
-  and children, so invalid child rules never enter `resolved_rules`. The parent's
-  delegation diagnostic retains the child rule and backend CORS reason in
-  `PartiallyInvalid`, or in `Accepted` when the whole attachment is rejected; child-side
-  HTTPRoute parentRefs retain their separate delegation-relationship acceptance.
+  Under the cascading-match delegation model a child is validated as its own route:
+  its invalid rule lands in the child's `invalid_rule_indices` and the diagnostic in
+  the child's own route-kind parentRef entries. The parent never reports a
+  child-caused CORS problem. (History: the removed flattening reported child CORS
+  violations on the parent.)
 - Gateway: `routes/http/conf_handler_impl.rs::parse_http_routes_to_domain_rules`
-  checks effective rules independently of status before building their runtimes.
+  checks each route's rules independently of status before building their runtimes.
   Surviving rules retain original IDs and share one runtime across hostnames/matches.
 - A rejected rule no longer matches either preflight or actual requests. Other valid
   routes may match; without one the ordinary route-not-found response is 404.

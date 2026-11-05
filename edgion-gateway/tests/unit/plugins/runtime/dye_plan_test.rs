@@ -40,7 +40,8 @@ fn dye_producer_inventory_matches_declared_capability_union() {
         (
             "RegionRoute",
             &[
-                r#"{"myRegion":"a","routeRules":[{"type":"RouteByDirectRegion","keyFrom":[{"type":"header","name":"X-Region"}]}],"overrideRef":{"name":"regions"}}"#,
+                r#"{"routeRules":[{"type":"RouteByDirectRegion","keyFrom":[{"type":"header","name":"X-Region"}]}],"clusterRegionRef":{"name":"regions"}}"#,
+                r#"{"routeRules":[{"type":"RouteByDirectRegion","keyFrom":[{"type":"header","name":"X-Region"}]}],"failOpen":false,"clusterRegionRef":{"name":"regions"}}"#,
             ],
             &[include_str!("../../../../src/plugins/http/region_route/plugin.rs")],
         ),

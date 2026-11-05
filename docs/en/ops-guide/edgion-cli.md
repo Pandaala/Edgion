@@ -41,7 +41,7 @@ Validation is lazy: the first request returns `401` (unknown token) or `403`
 
 | Target | Component | Default Port | Supported Commands | Description |
 |--------|----------|-------------|-------------------|-------------|
-| `center` | Controller/ConfCenter | 12101 | get, apply, delete, reload | Full CRUD operations |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete | Full CRUD operations |
 | `server` | Controller/ConfigServer | 12101 | get (read-only) | View ConfigServer cache |
 | `client` | Gateway/ConfigClient | 12001 | get (read-only) | View Gateway cache |
 
@@ -233,14 +233,6 @@ edgion-cli delete httproute my-route -n default
 edgion-cli delete -f route.yaml
 ```
 
-### reload - Reload
-
-Reload all resources from storage. **Only supported with the center target.**
-
-```bash
-edgion-cli reload
-```
-
 ### gen-certs - Generate mTLS Certificates
 
 Generate a self-signed certificate bundle for securing the conf_sync gRPC channel with mTLS. This command does not require a running Controller or Gateway.
@@ -317,7 +309,7 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 1. Run `edgion-cli gen-token` to mint a token.
 2. Paste the SHA-256 line into `cli_tokens[].token_sha256` in the Controller
    configuration file.
-3. Hot-reload: `edgion-cli reload` (or `POST /api/v1/reload`).
+3. Restart each Controller instance that uses this configuration.
 4. Distribute the `edg_...` token to the consumer via a secret manager or
    environment variable — never in plaintext files or shell history.
 5. The consumer uses it via `--token edg_...` or `export EDGION_TOKEN=edg_...`.
@@ -425,7 +417,7 @@ Hint: edgion-cli is trying to connect to: http://localhost:12101
 
 1. **"apply command only supported for 'center' target"**
    
-   The `apply`, `delete`, and `reload` commands can only be used with the `center` target. The `server` and `client` targets support read-only operations only.
+   The `apply` and `delete` commands can only be used with the `center` target. The `server` and `client` targets support read-only operations only.
 
 2. **Resource not found**
    

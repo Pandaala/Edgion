@@ -77,23 +77,67 @@ the pod so another replica can take over. All-serve mode previously had no give-
 (fixed 1 s/5 s sleep loop forever); it now shares the same failure-counter + backoff +
 give-up logic via an `ServingFlowExit` failure-vs-benign split.
 
-## Local backend error-channel closure
+## Local backend iteration teardown and administrative reload removal
 
-ARCH-092 applies the existing local-backend failure cleanup to an unexpectedly
-closed backend error channel in `CenterBase::run_lifecycle_gated`. After readiness,
-closure without process shutdown selects the existing Error action with a fixed
-reason. The iteration signals shutdown, stops its credential service, withdraws
-the CSS before clearing stores, aborts the controller, resets runtime state and
-clears reload admission before waiting for process shutdown. Closure during an
-already-requested shutdown keeps the normal Shutdown action. There is no new
-automatic restart or live-task watchdog.
+ISSUE-005 identified an etcd Secret worker that captured old material, waited in
+`read_status_json`, then resumed after the next iteration had initialized newer
+material. `SecretHandler::parse` wrote the old value into the process-scoped
+`ControllerRuntime.secret_store`; its dependency callbacks could requeue current
+consumers through the same runtime's processor registry. Aborting the top-level
+controller alone did not stop independently spawned workers.
 
-The mirrored `non_kube_common` tests drive the actual lifecycle with a spawned
-backend owning the sender. They check unexpected closure and reported failure,
-orderly shutdown, readiness withdrawal and fresh CSS identity after reload.
-A real ready HTTPRoute processor with no objects isolates lifecycle behavior without network I/O;
-the tests share the credential service's existing test mutex. Abort requests do
-not prove descendant drain, and this correction does not extend teardown guarantees.
+The correction introduces an iteration-scoped `LocalTaskScope` using the existing
+Tokio cancellation/TaskTracker pattern. Both local backends register kind tasks
+before execution; their workers are tracked and cancellable across the entire
+processing future, including initialization and status IO. `CenterBase` withdraws
+CSS publication, cancels the iteration, aborts and joins its root spawner, then
+closes and drains tracked descendants before clearing the old CSS and resetting
+runtime stores. A stalled drain cannot time out into runtime reuse. Shutdown is
+checked again before any successor starts. Startup failure, backend failure,
+leadership loss and normal shutdown use this same boundary.
+
+One serial worker per kind and inline status IO remain unchanged. This is a
+local-backend resource-task ownership guarantee, not a redesign of leader jobs,
+federation client shutdown, or status transaction leadership fencing.
+
+The user also approved removal of administrative full reload: Controller process
+configuration is loaded at startup; changing scoped CLI tokens or Center settings
+requires restarting every affected replica. Ordinary resource watches, Secret and
+certificate updates, Kubernetes recovery, leadership transitions, and
+`server_id`/`ServerReload` synchronization remain supported. Removing the endpoint
+alone would not repair ISSUE-005 because etcd leadership transitions reuse the
+same runtime. The separate Center consumer migration remains tracked as
+`edgion-center-remove-controller-reload`, outside this repository with the
+extracted EdgionCenter work; this tree has no copy of that task.
+
+### Earlier ARCH-092 evidence
+
+ARCH-092 added cleanup when the local backend error channel closes unexpectedly.
+Its tests established readiness withdrawal and reset behavior, but did not prove
+descendant drain. That historical limitation is superseded only for the local
+resource-task boundary described above; it never accepted stale Secret writes.
+The current lifecycle tests retain unexpected closure, reported failure and
+orderly shutdown coverage.
+
+### Current verification
+
+The targeted Controller suites passed: `conf_mgr::conf_center::` (301 passed,
+6 ignored), `fed_sync::` (64), `authz::` (23), `api::` (166), and `config::` (92).
+The CLI suite passed 101 tests. The local lifecycle regressions exercise revoked
+and rotated CA material, cancellation during status IO, descendant drain before
+reset, initialization failure, and shutdown during leadership turnover.
+The local restart helper's real-subprocess regression passed, verifying retained
+argv/environment/cwd, old-process exit before replacement, rejected stale owner
+identity, and an untouched Gateway process. A second subprocess regression covers
+cleanup during an in-flight restart: cleanup must stop the launch owner before
+reading child PID files, so reaping the old child cannot launch a replacement
+after cleanup. Both subprocess tests passed. Shell and Python syntax checks passed.
+
+`cargo fmt --all`, workspace/all-targets check and clippy, agent-doc validation,
+SSA force, metrics inventory, Pingora source policy, Gateway API transform
+contract, and unit-test layout guards passed. Clippy retains unrelated existing
+warnings. These results do not claim a live Kubernetes or etcd end-to-end run;
+historical test results elsewhere on this page are not reruns.
 
 ## Fix Suggestions Not Accepted
 
@@ -112,7 +156,7 @@ not prove descendant drain, and this correction does not extend teardown guarant
 - **Per-leader-job auto-restart on death** — rejected at the design-decision stage (P3
   depth = metric + alert only). A worker panic usually means corrupted state; a blind
   restart risks a panic loop. Recovery is by alert + operator action
-  (`/api/v1/reload` or pod restart).
+  (Controller process restart).
 - **Watcher-driven token cancel in all-serve mode** — `LeadershipLost` is routine and non-
   fatal there (the loop stops leader services and continues serving as a follower); a
   `CancellationToken` is not resettable, so wiring the all-serve leadership watcher to
@@ -167,7 +211,7 @@ Re-open this decision only if:
   `is_leader()` recheck" rejection above.
 - The bounded workqueue's per-kind capacity (5000) changes, or the sizing rule of thumb in
   the config docs stops holding — `cache_ready_deadline_secs` is restart-bound (a
-  `/api/v1/reload` always re-arms with the boot-time value), so an undersized deadline
+  each recovery iteration re-arms with the boot-time value), so an undersized deadline
   becomes a *permanent* crash loop, not a one-time failure.
 
 ## Reference Cases

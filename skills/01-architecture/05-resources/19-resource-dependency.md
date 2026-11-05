@@ -75,8 +75,8 @@ flowchart LR
 | **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
 | **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |
 | **GatewayRouteIndex** | Route family / EdgionTls / EdgionAcme (write on reconcile) | GatewayHandler (requeue route and attachment-proof consumers), BackendTLSPolicy (read in resolve_ancestor_gateways) |
-| **RouteDelegationIndex** (`route_delegation_index`) | HTTPRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | HTTPRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: HTTPRoute` parentRefs) |
-| **RouteDelegationIndex** (`grpc_route_delegation_index`, second instance, same type, disjoint `"ns/name"` keys) | GRPCRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | GRPCRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: GRPCRoute` parentRefs) |
+| **DelegationGraph** (`http_route_delegation_graph`, participants only) | HTTPRoute (`sync_http_delegation_graph` during parse: own delegating targets + masks, declared route-kind parents, root flag, minimum level) | HTTPRoute (parse requeues target children, declared parents and level dependents; on_change `parents_naming` and on_delete `on_route_deleted` requeue affected participants; update_status reads confirmed edges and levels for child entries and parent `BackendNotFound`/`RefNotPermitted`; child `resolved_delegation_keys` from `confirmed_keys`) |
+| **DelegationGraph** (`grpc_route_delegation_graph`, second instance, same type, `kind: GRPCRoute` keys) | GRPCRoute (same as HTTPRoute) | GRPCRoute (same as HTTPRoute) |
 | **BackendTLSPolicyTargetManager** | BackendTLSPolicy (register targetRef during parse) | BackendTLSPolicy (conflict detection in update_status) |
 | **BackendRefManager** (`backend_ref_mgr`) | HTTPRoute, BackendTLSPolicy, and EdgionBackendTrafficPolicy (clear-before-add typed refs during parse) | EdgionBackend handler (requeue typed dependents on apply/delete); HTTPRoute recomputes current AI capability semantics |
 | **PluginRefManager** | Gateway, HTTPRoute, and GRPCRoute (register rule- and backend-level EdgionPlugins ExtensionRefs during parse) | EdgionPlugins handler (requeue typed dependents on apply/delete) |
@@ -94,8 +94,8 @@ queue or direct handler invocation.
 `HTTPRoute.backendRefs` is the only typed EdgionBackend destination graph. Route reconcile validates
 supported kind, object existence, cross-namespace authorization, and current variant semantics.
 AI rules additionally enforce homogeneous AI forwarding and exactly one rule-level AiProxy.
-Delegation carries terminal typed targets and
-their resolved namespace. Plugins do not own a service reference or a second dependency graph.
+Under delegation each route validates and registers only its own backendRefs
+(the leaf owns the terminal targets). Plugins do not own a service reference or a second dependency graph.
 
 An existing EdgionBackend satisfies the route's `ResolvedRefs` independently of the service's
 credential status. The service reports partial-good or zero-good credential resolution on its own

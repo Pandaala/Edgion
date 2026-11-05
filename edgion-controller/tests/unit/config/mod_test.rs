@@ -384,7 +384,7 @@ rbac:
   allow:
     - verbs: [get, list]
       kinds: [EdgionConfigData]
-    - verbs: [reload]
+    - verbs: [create]
       kinds: ["*"]
 "#,
     )
@@ -556,5 +556,21 @@ fn shipped_controller_bare_auto_ca_configs_keep_provisioning_choice() {
         assert!(security.auto_ca, "{path}");
         assert!(security.certs.is_empty(), "{path}");
         assert!(security.resolve_active_tls().is_none(), "{path}");
+    }
+}
+
+#[test]
+fn dns_lookup_family_defaults_and_strict_yaml_values() {
+    assert_eq!(DnsResolverConfig::default().lookup_family, DnsLookupFamily::Ipv4Only);
+    for (value, family) in [
+        ("ipv4Only", DnsLookupFamily::Ipv4Only),
+        ("ipv6Only", DnsLookupFamily::Ipv6Only),
+        ("all", DnsLookupFamily::All),
+    ] {
+        let config: DnsResolverConfig = yaml_serde::from_str(&format!("lookup_family: {value}")).unwrap();
+        assert_eq!(config.lookup_family, family);
+    }
+    for value in ["ipv4", "ALL", "true", "''"] {
+        assert!(yaml_serde::from_str::<DnsResolverConfig>(&format!("lookup_family: {value}")).is_err());
     }
 }

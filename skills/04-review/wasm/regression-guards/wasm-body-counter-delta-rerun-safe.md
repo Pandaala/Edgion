@@ -32,18 +32,19 @@ without assuming a fresh gateway or zeroed module state. Checked subtraction
 turns any unexpected counter reset into a diagnostic test failure instead of an
 unsigned-underflow panic.
 
-**3. Reload verification protects the real failure mode**
+**3. Recovery verification protects the real failure mode**
 
-The focused `BodyPlugins` suite passes twice against one unchanged Gateway PID
-and also passes both before and after a Controller and Gateway reload. Together
-these checks verify that prior requests and reconstructed runtime state cannot
-produce a false failure.
+Historical verification ran the focused `BodyPlugins` suite twice against one
+unchanged Gateway PID and before/after the former administrative reload. Current
+two-round recovery runs use `--with-restart`, restarting only the Controller.
+The invariant remains that prior requests and reconstructed runtime state must
+not produce a false failure; this documentation update claims no new live run.
 
 ## Fix Suggestions Not Accepted
 
 - Reset shared counters before every test — that adds a test-only mutation path
   and can hide state-lifetime defects.
-- Require a fresh gateway process — repeated and reload-mode runs are supported
+- Require a fresh gateway process — repeated and Controller-restart runs are supported
   integration workflows.
 - Assert only the byte delta — callback count and terminal state are part of
   the whole-body delivery contract.

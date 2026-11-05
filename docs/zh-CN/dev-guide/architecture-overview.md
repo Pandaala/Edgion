@@ -96,6 +96,10 @@ graph TD
    - 后端选择与负载均衡
    - access log 输出
 
+初始为空的资源种类可能返回版本为 `0` 的 List，Watch 会正常使用该版本。
+如果快照之后的变更已被 Controller 的有限事件历史覆盖，Watch 会返回
+`TooOldVersion`，Gateway 会自动重新执行 List，恢复当前完整的资源集合。
+
 ## 排障时最有用的入口
 
 - Controller CRUD 和 server cache：

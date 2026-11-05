@@ -8,7 +8,7 @@
 fail-open（失败即放行），而不是无害的空操作。
 
 对于 `EdgionConfigData`，检测器覆盖 `KeyList`、`IpList`、`RequestAccessUrlAllowList`、
-`Selector` 和 `RegionRouteOverride` 类型化 payload。类型化策略数据内部的凭据与认证子结构仍然是
+`Selector` 类型化 payload。ClusterRegionSetting 的未知字段会在反序列化时被拒绝。类型化策略数据内部的凭据与认证子结构仍然是
 严格的安全边界。`data.type: Misc` 是文档明确声明的自由格式逃生口，因此
 `Misc.config` 下的任意键不会被报告。Kubernetes 会在 Controller 看到对象之前裁剪结构化
 `spec` 和 `data` 层的未知 sibling；FileSystem、etcd、Admin 写入及 validate 这些能读取原始

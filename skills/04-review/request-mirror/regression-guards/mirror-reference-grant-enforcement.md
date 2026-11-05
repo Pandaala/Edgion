@@ -43,13 +43,12 @@ description. The existing named-jump fix did not cover mirror references.
 - Controller `handlers/request_mirror.rs`: shared marking, filter traversal,
   exact declaring-resource identity, and standard reference errors, using the
   existing ReferenceGrant store rather than a second authorization implementation.
-- `handlers/http_route.rs`: own-rule mirrors are marked before delegation copies
-  are made. Rule/backend mirrors contribute to status and cross-namespace refs.
-- `handlers/route_delegation.rs`: raw child rules are marked and implicit mirror
-  namespaces made explicit before filter inheritance. Intermediate-route mirrors
-  retain their original authorization when inherited by deeper descendants.
-  Cross-namespace targets join the parent's existing revalidation dependency set,
-  including a child reference back into the root parent's own namespace.
+- `handlers/http_route.rs`: each route marks its own rule/backend mirrors.
+  Rule/backend mirrors contribute to status and cross-namespace refs.
+- Delegation (cascading match): every level is its own published route, so a
+  parent's mandatory mirror filter is authorized as the parent's and a child's
+  mirror as the child's, each under its own owner and dependency set. Nothing is
+  inherited by copying. (History: the removed Controller flattening authorized child fields before cloning them into the parent; that path no longer exists.)
 - `handlers/edgion_plugins.rs`: request-stage mirror markers, dependencies and
   `ResolvedRefs` status participate in existing parse/delete lifecycle. Disabled
   entries do not contribute reference errors.
@@ -63,8 +62,8 @@ queue or a data-plane grant store.
 
 Mirror dependencies are registered before reading the grant store. HTTPRoute
 clears the previous set once at parse entry and only extends it afterwards;
-delegated reads register the root owner's dependency while authorizing the
-declaring child's identity. Thus a concurrent grant revocation either precedes
+each route registers its own owner's dependency while authorizing its own
+identity. Thus a concurrent grant revocation either precedes
 the authorization read or finds the registered owner for requeue. The later
 `reference-grant-dependency-registration-race` correction moved ordinary HTTPRoute
 and GRPCRoute backend authorization onto the same shared register-before-read
@@ -161,9 +160,9 @@ delegation inheritance, grant identity rules, or request-snapshot revocation pol
 Only a validated authored mirror loan can mint the ReferenceGrant query. HTTP
 loans retain the original declaring Route and rule/backend/filter slot; plugin
 loans retain the actual EdgionPlugins and request-entry ordinal. UID/generation
-are borrowed where present, without adding transport metadata. Delegation borrows
-child fields before cloning or dropping rules, authorizes that child, and registers
-Service plus Grant-namespace recovery under the actual published root wake key.
+are borrowed where present, without adding transport metadata. Under delegation
+each route authorizes its own fields and registers Service plus Grant-namespace
+recovery under its own wake key.
 Valid Service and cross-namespace dependencies precede the Grant read. Disabled
 plugin mirrors still refresh denial and Grant-namespace dependencies, while Service
 dependencies and status remain enabled-entry-only.

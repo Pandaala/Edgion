@@ -1,0 +1,31 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "GRPCRoute",
+  "metadata": {"namespace": "apps", "name": "ordinary", "uid": "ordinary-uid", "generation": 3},
+  "spec": {
+    "parentRefs": [{"name": "gw", "sectionName": "grpc"}],
+    "hostnames": ["grpc.example.com"],
+    "resolvedDelegationKeys": [{"kind": "GRPCRoute", "parent_ns": "x", "parent_name": "y", "target_ns": "apps", "target_name": "*"}],
+    "rules": [
+      {
+        "name": "primary",
+        "matches": [{"method": {"type": "Exact", "service": "pkg.Svc", "method": "Get"}, "headers": [{"name": "x-tenant", "value": "a"}]}],
+        "filters": [
+          {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-a", "value": "1"}]}},
+          {"type": "ExtensionRef", "extensionRef": {
+            "group": "edgion.io", "kind": "EdgionPlugins", "name": "plug", "resolvedNamespace": "injected"
+          }}
+        ],
+        "backendRefs": [
+          {"name": "svc", "port": 50051, "weight": 3},
+          {"name": "other", "namespace": "secret-ns", "port": 50052}
+        ]
+      },
+      {
+        "matches": [{"method": {"service": "pkg.Other"}}],
+        "backendRefs": [{"name": "svc", "port": 50051}]
+      },
+      {"backendRefs": [{"name": "fallback", "port": 8080}]}
+    ]
+  }
+}

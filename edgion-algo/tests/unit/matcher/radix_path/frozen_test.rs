@@ -6,6 +6,69 @@ fn ext_has(results: &[(u32, PathMatchKind)], val: u32, kind: PathMatchKind) -> b
 }
 
 #[test]
+fn escaped_segments_preserve_the_complete_path() {
+    for (pattern, request) in [
+        ("/::literal/test", "/:literal/test"),
+        ("/api/::literal/test", "/api/:literal/test"),
+        ("/api/::first/::second/:id/tail", "/api/:first/:second/value/tail"),
+        ("/:tenant/::literal/test", "/customer/:literal/test"),
+        ("/::literal/:id", "/:literal/value"),
+    ] {
+        for reversed in [false, true] {
+            let mut routes = [(pattern, 1), ("/test", 2), ("/api", 3)];
+            if reversed {
+                routes.reverse();
+            }
+            let mut builder = PathRadixBuilder::new();
+            for (path, value) in routes {
+                builder.insert(path, value).unwrap();
+            }
+            let tree = builder.freeze().unwrap();
+            assert!(
+                ext_has(&tree.match_all_ext(request), 1, PathMatchKind::FullyConsumed),
+                "{pattern}"
+            );
+            assert!(ext_has(
+                &tree.match_all_ext(&format!("{request}/child")),
+                1,
+                PathMatchKind::SegmentBoundary
+            ));
+            assert_eq!(
+                tree.match_all_ext("/test").as_slice(),
+                &[(2, PathMatchKind::FullyConsumed)],
+                "{pattern}"
+            );
+            assert!(
+                !tree.match_all_ext("/value").iter().any(|&(value, _)| value == 1),
+                "{pattern}"
+            );
+        }
+    }
+}
+
+#[test]
+fn distinct_escaped_prefixes_keep_all_terminal_values() {
+    for reversed in [false, true] {
+        let mut ids: Vec<usize> = (1..=256).collect();
+        if reversed {
+            ids.reverse();
+        }
+        let mut builder = PathRadixBuilder::new();
+        for id in ids {
+            builder.insert(&format!("/::prefix{id}/:name{id}/tail"), id).unwrap();
+        }
+        let tree = builder.freeze().unwrap();
+        for id in 1..=256 {
+            assert_eq!(
+                tree.match_all_ext(&format!("/:prefix{id}/value/tail")).as_slice(),
+                &[(id, PathMatchKind::FullyConsumed)]
+            );
+        }
+        assert!(tree.match_all_ext("/value/tail").is_empty());
+    }
+}
+
+#[test]
 fn test_ext_fully_consumed() {
     let mut builder = PathRadixBuilder::new();
     builder.insert("/api", 1).unwrap();

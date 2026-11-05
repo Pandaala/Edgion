@@ -238,3 +238,8 @@ required-features = ["test-util"]
 name = "request_cookie"
 path = "tests/benches/request_cookie.rs"
 harness = false
+
+[[bench]]
+name = "service_slot_lookup"
+path = "tests/benches/service_slot_lookup.rs"
+harness = false

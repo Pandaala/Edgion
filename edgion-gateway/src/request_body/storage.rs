@@ -20,7 +20,8 @@ use super::budget::{self, CaptureLease, MemoryBuffer, Reservation, SharedReserva
 use super::config::DEFAULT_STORAGE_OPERATION_TIMEOUT;
 use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextCollector, BoundedTextResult,
-    BytesScanner, LossyTextScanner, RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
+    BytesScanner, LossyTextScanner, RawBodyScanner, ReadBodyScanner, ScanControl, TextOperationScanner,
+    MAX_BODY_SEGMENTS,
 };
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
@@ -772,28 +773,25 @@ impl BodyStorageView {
             return scan_snapshot_owned(snapshot, scanner, max_scan_bytes, None);
         }
 
-        // Every job submitted to the blocking pool owns one scan permit for
-        // its full scanner lifetime. This bounds CPU-only memory scans as well
-        // as disk scans without conflating either with the per-operation
-        // storage-I/O deadline lane.
-        let permit = Arc::clone(scan_limiter())
-            .acquire_owned()
+        run_cancellable_scan(move |cancelled| scan_snapshot_owned(snapshot, scanner, max_scan_bytes, Some(cancelled)))
             .await
-            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let task_cancelled = Arc::clone(&cancelled);
-        let mut guard = CancellationGuard {
-            cancelled,
-            completed: false,
-        };
-        let result = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            scan_snapshot_owned(snapshot, scanner, max_scan_bytes, Some(&task_cancelled))
+    }
+
+    /// Run an owned pull-based scanner over the current immutable snapshot in
+    /// one admitted blocking-pool job.
+    pub async fn scan_read<S>(
+        &self,
+        scanner: S,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<S::Output>, BodyOperationError>
+    where
+        S: ReadBodyScanner,
+    {
+        let (snapshot, _) = self.snapshot().map_err(BodyOperationError::Body)?;
+        run_cancellable_scan(move |cancelled| {
+            scan_snapshot_read_owned(snapshot, scanner, max_scan_bytes, Some(cancelled))
         })
         .await
-        .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        guard.completed = true;
-        result
     }
 
     pub async fn text_operation(
@@ -1357,6 +1355,35 @@ fn operation_to_body_error(error: BodyOperationError) -> BodyReadError {
     }
 }
 
+/// Every job submitted to the blocking pool owns one scan permit for its full
+/// scanner lifetime. This bounds CPU-only memory scans as well as disk scans
+/// without conflating either with the per-operation storage-I/O deadline lane.
+/// Dropping the returned future cancels the job between chunks.
+async fn run_cancellable_scan<T, F>(work: F) -> Result<T, BodyOperationError>
+where
+    T: Send + 'static,
+    F: FnOnce(&AtomicBool) -> Result<T, BodyOperationError> + Send + 'static,
+{
+    let permit = Arc::clone(scan_limiter())
+        .acquire_owned()
+        .await
+        .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task_cancelled = Arc::clone(&cancelled);
+    let mut guard = CancellationGuard {
+        cancelled,
+        completed: false,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work(&task_cancelled)
+    })
+    .await
+    .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+    guard.completed = true;
+    result
+}
+
 struct CancellationGuard {
     cancelled: Arc<AtomicBool>,
     completed: bool,
@@ -1379,26 +1406,121 @@ fn scan_snapshot_owned<S>(
 where
     S: RawBodyScanner,
 {
-    let mut bytes_scanned = 0u64;
-    let mut disk_scratch: Option<MemoryBuffer> = None;
-    for segment in &snapshot.segments {
-        let segment_len = segment.len()?;
-        let mut local_offset = 0u64;
-        while local_offset < segment_len {
-            if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+    let mut chunks = SnapshotChunks::new(&snapshot, max_scan_bytes, cancelled);
+    while chunks.advance()? {
+        if scanner.push(chunks.chunk())? == ScanControl::Stop {
+            break;
+        }
+    }
+    Ok(BodyScanResult {
+        value: scanner.finish()?,
+        bytes_scanned: chunks.bytes_scanned,
+    })
+}
+
+fn scan_snapshot_read_owned<S>(
+    snapshot: Arc<BodySnapshot>,
+    scanner: S,
+    max_scan_bytes: u64,
+    cancelled: Option<&AtomicBool>,
+) -> Result<BodyScanResult<S::Output>, BodyOperationError>
+where
+    S: ReadBodyScanner,
+{
+    let mut reader = SnapshotRead {
+        chunks: SnapshotChunks::new(&snapshot, max_scan_bytes, cancelled),
+        position: 0,
+        error: None,
+    };
+    let value = scanner.scan(&mut reader);
+    // A parser sees a chunk failure only as an opaque I/O error; the retained
+    // body error keeps budget, cancellation and storage policy intact.
+    if let Some(error) = reader.error {
+        return Err(error);
+    }
+    Ok(BodyScanResult {
+        value,
+        bytes_scanned: reader.chunks.bytes_scanned,
+    })
+}
+
+enum CurrentChunk<'a> {
+    None,
+    Memory(&'a [u8]),
+    Disk,
+}
+
+/// Bounded chunk cursor over one immutable snapshot. Memory segments are
+/// borrowed and disk segments are read into one reusable budgeted scratch
+/// buffer. Cancellation and the scan budget are checked before every fetch,
+/// and each fetched chunk is charged before its consumer sees it.
+struct SnapshotChunks<'a> {
+    snapshot: &'a BodySnapshot,
+    max_scan_bytes: u64,
+    cancelled: Option<&'a AtomicBool>,
+    segment_index: usize,
+    local_offset: u64,
+    bytes_scanned: u64,
+    disk_scratch: Option<MemoryBuffer>,
+    current: CurrentChunk<'a>,
+}
+
+impl<'a> SnapshotChunks<'a> {
+    fn new(snapshot: &'a BodySnapshot, max_scan_bytes: u64, cancelled: Option<&'a AtomicBool>) -> Self {
+        Self {
+            snapshot,
+            max_scan_bytes,
+            cancelled,
+            segment_index: 0,
+            local_offset: 0,
+            bytes_scanned: 0,
+            disk_scratch: None,
+            current: CurrentChunk::None,
+        }
+    }
+
+    /// The most recently fetched chunk, or an empty slice before the first
+    /// fetch and after the end of the snapshot.
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        match self.current {
+            CurrentChunk::None => &[],
+            CurrentChunk::Memory(chunk) => chunk,
+            CurrentChunk::Disk => self.disk_scratch.as_ref().map_or(&[], MemoryBuffer::as_slice),
+        }
+    }
+
+    /// Fetch the next chunk. Returns `false` at the end of the snapshot.
+    fn advance(&mut self) -> Result<bool, BodyOperationError> {
+        self.current = CurrentChunk::None;
+        let snapshot = self.snapshot;
+        loop {
+            let Some(segment) = snapshot.segments.get(self.segment_index) else {
+                return Ok(false);
+            };
+            let segment_len = segment.len()?;
+            if self.local_offset >= segment_len {
+                self.segment_index += 1;
+                self.local_offset = 0;
+                continue;
+            }
+            if self.cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
                 return Err(BodyOperationError::Body(BodyReadError::Incomplete));
             }
-            if bytes_scanned == max_scan_bytes {
-                return Err(BodyOperationError::ScanLimitExceeded { limit: max_scan_bytes });
+            if self.bytes_scanned == self.max_scan_bytes {
+                return Err(BodyOperationError::ScanLimitExceeded {
+                    limit: self.max_scan_bytes,
+                });
             }
-            let remaining_budget = max_scan_bytes - bytes_scanned;
+            let remaining_budget = self.max_scan_bytes - self.bytes_scanned;
+            let local_offset = self.local_offset;
             let wanted = usize::try_from(
                 (segment_len - local_offset)
                     .min(SCAN_CHUNK_SIZE as u64)
                     .min(remaining_budget),
             )
             .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-            let control = match segment {
+            self.current = match segment {
                 Segment::SourceRange { source, offset, len } if matches!(source.as_ref(), BodySource::Disk { .. }) => {
                     let end = local_offset
                         .checked_add(wanted as u64)
@@ -1418,13 +1540,18 @@ where
                     {
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
-                    if disk_scratch.as_ref().is_none_or(|buffer| buffer.capacity() < wanted) {
-                        disk_scratch = Some(MemoryBuffer::new(wanted, Arc::clone(&file.lease))?);
+                    if self
+                        .disk_scratch
+                        .as_ref()
+                        .is_none_or(|buffer| buffer.capacity() < wanted)
+                    {
+                        self.disk_scratch = Some(MemoryBuffer::new(wanted, Arc::clone(&file.lease))?);
                     }
-                    let scratch = disk_scratch.as_mut().ok_or(BodyReadError::Incomplete)?;
+                    let scratch = self.disk_scratch.as_mut().ok_or(BodyReadError::Incomplete)?;
                     read_exact_at_into(file, &mut scratch.writable()[..wanted], source_offset)
                         .map_err(|error| BodyOperationError::Body(io_body_error(&error)))?;
-                    scanner.push(&scratch.writable()[..wanted])?
+                    scratch.set_len(wanted);
+                    CurrentChunk::Disk
                 }
                 _ => {
                     let memory = BodySnapshotReader::memory_segment(segment)
@@ -1441,28 +1568,54 @@ where
                     if chunk.is_empty() {
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
-                    scanner.push(chunk)?
+                    CurrentChunk::Memory(chunk)
                 }
             };
             let chunk_len = wanted as u64;
-            bytes_scanned = bytes_scanned
+            self.bytes_scanned = self
+                .bytes_scanned
                 .checked_add(chunk_len)
                 .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-            local_offset = local_offset
+            self.local_offset = local_offset
                 .checked_add(chunk_len)
                 .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-            if control == ScanControl::Stop {
-                return Ok(BodyScanResult {
-                    value: scanner.finish()?,
-                    bytes_scanned,
-                });
+            return Ok(true);
+        }
+    }
+}
+
+/// `std::io::Read` over [`SnapshotChunks`]. The first chunk error is retained
+/// and reported on every later read.
+struct SnapshotRead<'a> {
+    chunks: SnapshotChunks<'a>,
+    position: usize,
+    error: Option<BodyOperationError>,
+}
+
+impl io::Read for SnapshotRead<'_> {
+    fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+        if target.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if let Some(error) = &self.error {
+                return Err(io::Error::other(error.clone()));
+            }
+            let chunk = self.chunks.chunk();
+            if let Some(mut rest) = chunk.get(self.position..).filter(|rest| !rest.is_empty()) {
+                // serde_json pulls one byte per call; the slice reader keeps
+                // std's single-byte fast path.
+                let read = io::Read::read(&mut rest, target)?;
+                self.position += read;
+                return Ok(read);
+            }
+            match self.chunks.advance() {
+                Ok(true) => self.position = 0,
+                Ok(false) => return Ok(0),
+                Err(error) => self.error = Some(error),
             }
         }
     }
-    Ok(BodyScanResult {
-        value: scanner.finish()?,
-        bytes_scanned,
-    })
 }
 
 fn read_segment_chunk(segment: &Segment, local_offset: u64, wanted: usize) -> Result<Bytes, BodyOperationError> {

@@ -93,7 +93,6 @@ fn cors_extension_ref_scan_skips_missing_ref_and_finds_later_config() {
                 group: "edgion.io".to_string(),
                 kind: "EdgionPlugins".to_string(),
                 name: "cors".to_string(),
-                resolved_namespace: None,
             }),
         },
     ]);

@@ -813,7 +813,8 @@ fn native_admission_route() -> Arc<crate::routes::http::match_unit::HttpRouteRul
     use crate::{MatchInfo, Rsc};
     use edgion_resources::{HTTPRouteMatch, HTTPRouteRule};
     Arc::new(HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "tenant-a/native-route".into(),
         matched_info: MatchInfo {

@@ -403,7 +403,7 @@ Edgion compresses the complete lifecycle of each request into a single line of J
 |-------|------|-------------|
 | `ts` | i64 | UTC timestamp in milliseconds (`chrono::Utc::now().timestamp_millis()`) |
 | `request_info` | RequestInfo | Request metadata: method, path, status, client IP, protocol, X-Trace-Id, etc. |
-| `match_info` | RouteMatchInfo | Route match result, supporting both HTTP and gRPC route types (`#[serde(untagged)]` enum) |
+| `match_info` | MatchInfoChain | Route match result as an array ordered root → leaf (one element for an ordinary route, one per level for a delegated route); HTTP and gRPC share the shape |
 | `diagnostics` | `[{kind, code}]` | Ordered request diagnostics, including recovered failures and noteworthy information |
 | `backend_context` | BackendContext | Backend upstream information: service name, namespace, upstream IP/port, response body size, write wait time |
 | `stage_logs` | \[StageLogs\] | Execution logs for each plugin phase — which plugins were executed, how long they took, and what results they returned |

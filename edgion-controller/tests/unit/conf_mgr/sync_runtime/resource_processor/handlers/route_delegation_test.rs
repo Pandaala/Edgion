@@ -1,2076 +1,774 @@
 use super::*;
-use std::collections::HashMap;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::HttpRouteHandler;
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+use crate::conf_mgr::ControllerRuntime;
+use edgion_resources::resources::route_delegation::{DelegationTargetName, RouteKindName};
+use std::sync::Arc;
 
 // =====================================================================
-// Test fixtures
+// Fixtures
 // =====================================================================
 
-struct FakeLookup {
-    routes: HashMap<String, Arc<HTTPRoute>>,
-    /// (from_ns, to_ns) pairs that are grant-allowed.
-    allowed_cross_ns: HashSet<(String, String)>,
+fn ctx_with(runtime: Arc<ControllerRuntime>) -> HandlerContext {
+    HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
 }
 
-impl FakeLookup {
-    fn new(routes: Vec<HTTPRoute>) -> Self {
-        let mut map = HashMap::new();
-        for r in routes {
-            let key = format!(
-                "{}/{}",
-                r.metadata.namespace.as_deref().unwrap_or("default"),
-                r.metadata.name.as_deref().unwrap_or("")
-            );
-            map.insert(key, Arc::new(r));
-        }
-        Self {
-            routes: map,
-            allowed_cross_ns: HashSet::new(),
-        }
-    }
-
-    fn allow_cross_ns(mut self, from_ns: &str, to_ns: &str) -> Self {
-        self.allowed_cross_ns.insert((from_ns.to_string(), to_ns.to_string()));
-        self
-    }
-}
-
-impl DelegationLookup for FakeLookup {
-    fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
-        None
-    }
-
-    fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-        self.routes.get(key).cloned()
-    }
-    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
-        let prefix = format!("{ns}/");
-        let mut keys: Vec<String> = self.routes.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
-        keys.sort_unstable();
-        keys
-    }
-    fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-        let query = terminal.grant_query();
-        let source = query.source().scope().namespace().unwrap();
-        let target = query.target().scope().namespace().unwrap();
-        (source != target
-            && !self
-                .allowed_cross_ns
-                .contains(&(source.to_string(), target.to_string())))
-        .then(|| RefDenied {
-            target_namespace: target.to_string(),
-            target_name: query.target().name().to_string(),
-            reason: Some("NoMatchingReferenceGrant".to_string()),
-        })
-    }
-    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-        let query = terminal.grant_query();
-        let source = query.source().scope().namespace().unwrap();
-        let target = query.target().scope().namespace().unwrap();
-        (source != target
-            && !self
-                .allowed_cross_ns
-                .contains(&(source.to_string(), target.to_string())))
-        .then(|| RefDenied {
-            target_namespace: target.to_string(),
-            target_name: query.target().name().to_string(),
-            reason: Some("NoMatchingReferenceGrant".into()),
-        })
-    }
+fn make_ctx() -> HandlerContext {
+    ctx_with(Arc::new(ControllerRuntime::default()))
 }
 
 fn route(ns: &str, name: &str, spec: serde_json::Value) -> HTTPRoute {
     serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
-        "metadata": {"name": name, "namespace": ns},
+        "metadata": {"namespace": ns, "name": name},
         "spec": spec
     }))
-    .expect("route fixture should deserialize")
+    .expect("HTTPRoute fixture must deserialize")
 }
 
-fn delegating_rule(prefix: &str, ns: &str, name: &str) -> serde_json::Value {
+fn delegating_rule(prefix: &str, target_ns: &str, target_name: &str) -> serde_json::Value {
     serde_json::json!({
         "matches": [{"path": {"type": "PathPrefix", "value": prefix}}],
         "backendRefs": [{
             "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": name, "namespace": ns
+            "namespace": target_ns, "name": target_name
         }]
     })
 }
 
-fn parent_with_rules(rules: serde_json::Value) -> HTTPRoute {
-    route("infra", "parent", serde_json::json!({"rules": rules}))
+fn root_parent(ns: &str, name: &str, rules: serde_json::Value) -> HTTPRoute {
+    route(
+        ns,
+        name,
+        serde_json::json!({"parentRefs": [{"name": "gw"}], "rules": rules}),
+    )
 }
 
-fn simple_parent(prefix: &str, child_ns: &str, child_name: &str) -> HTTPRoute {
-    parent_with_rules(serde_json::json!([delegating_rule(prefix, child_ns, child_name)]))
+fn route_parent_ref(ns: &str, name: &str) -> serde_json::Value {
+    serde_json::json!({"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": ns, "name": name})
 }
 
-fn service_rule(path: &str, svc: &str) -> serde_json::Value {
-    serde_json::json!({
-        "matches": [{"path": {"type": "PathPrefix", "value": path}}],
-        "backendRefs": [{"name": svc, "port": 80}]
-    })
+fn child(ns: &str, name: &str, parents: &[(&str, &str)]) -> HTTPRoute {
+    let refs: Vec<_> = parents.iter().map(|(ns, name)| route_parent_ref(ns, name)).collect();
+    route(
+        ns,
+        name,
+        serde_json::json!({
+            "parentRefs": refs,
+            "rules": [{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api/v1"}}],
+                "backendRefs": [{"name": format!("{name}-svc"), "port": 80}]
+            }]
+        }),
+    )
 }
 
-fn rule_paths(rules: &[HTTPRouteRule]) -> Vec<&str> {
-    rules
-        .iter()
-        .flat_map(|r| r.matches.iter().flatten())
-        .filter_map(|m| m.path.as_ref().and_then(|p| p.value.as_deref()))
-        .collect()
-}
-
-fn dropped_messages(outcome: &FlattenOutcome) -> Vec<&str> {
-    outcome
-        .issues
-        .iter()
-        .filter_map(|i| match i {
-            DelegationIssue::RuleDropped { message } => Some(message.as_str()),
-            _ => None,
-        })
-        .collect()
-}
-
-// =====================================================================
-// Activation & passthrough
-// =====================================================================
-
-#[test]
-fn external_auth_response_header_policy_delegation_and_recovery() {
-    for parent_scope in [false, true] {
-        for backend_scope in [false, true] {
-            // Delegation references cannot carry backend filters at all;
-            // backend-scoped auth belongs to the child's Service backend.
-            if parent_scope && backend_scope {
-                continue;
-            }
-            for header in ["Content-Length", "WWW-Authenticate"] {
-                let filter = serde_json::json!({"type": "ExternalAuth", "externalAuth": {
-                    "target": {"name": "auth", "port": 8080},
-                    "decision": {"clientHeaders": [header]}
-                }});
-                let mut delegation = delegating_rule("/api", "infra", "child");
-                let mut terminal = service_rule("/api/child", "child-svc");
-                let target = if parent_scope { &mut delegation } else { &mut terminal };
-                if backend_scope {
-                    target["backendRefs"][0]["filters"] = serde_json::json!([filter]);
-                } else {
-                    target["filters"] = serde_json::json!([filter]);
-                }
-                let parent = parent_with_rules(serde_json::json!([delegation, service_rule("/health", "healthy")]));
-                let child = route("infra", "child", serde_json::json!({"rules": [terminal]}));
-                let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-                let rules = outcome.resolved_rules.as_ref().unwrap();
-                let valid = header == "WWW-Authenticate";
-                assert_eq!(rules.len(), if valid { 2 } else { 1 });
-                assert!(rules
-                    .iter()
-                    .any(|rule| rule.backend_refs.as_ref().unwrap()[0].name == "healthy"));
-                if !valid && !parent_scope {
-                    assert!(dropped_messages(&outcome)
-                        .iter()
-                        .any(|message| message.contains("ExternalAuth")));
-                }
-            }
-        }
+async fn parse(route: HTTPRoute, ctx: &HandlerContext) -> HTTPRoute {
+    match HttpRouteHandler::default().parse(route, ctx).await {
+        ProcessResult::Continue(route) => route,
+        other => panic!("unexpected parse result: {other:?}"),
     }
 }
 
-#[test]
-fn malformed_parent_header_modifier_drops_only_its_delegating_rule() {
-    let mut bad = delegating_rule("/api", "infra", "child");
-    bad["filters"] = serde_json::json!([{"type": "RequestHeaderModifier"}]);
-    let parent = parent_with_rules(serde_json::json!([bad, service_rule("/health", "healthy")]));
-    let child = route(
-        "infra",
-        "child",
-        serde_json::json!({"rules": [service_rule("/api", "child-svc")]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
-    assert!(outcome.expanded_children.is_empty());
-}
-
-#[test]
-fn malformed_child_header_modifiers_drop_only_offending_rules() {
-    let parent = simple_parent("/api", "infra", "child");
-    let mut bad_rule = service_rule("/api/bad-rule", "bad-rule");
-    bad_rule["filters"] = serde_json::json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
-        "set": [{"name": "bad name", "value": "yes"}]
-    }}]);
-    let mut bad_backend = service_rule("/api/bad-backend", "bad-backend");
-    bad_backend["backendRefs"][0]["filters"] = serde_json::json!([{"type": "ResponseHeaderModifier"}]);
-    let child = route(
-        "infra",
-        "child",
-        serde_json::json!({"rules": [
-            bad_rule, bad_backend, service_rule("/api/good", "healthy")
-        ]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.as_ref().unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 2);
-    assert!(drops[0].contains("rules[0]") && drops[1].contains("rules[1]"));
-}
-
-#[test]
-fn inherited_prefix_transform_drops_only_child_with_non_prefix_match() {
-    let mut delegation = delegating_rule("/api", "infra", "child");
-    delegation["filters"] = serde_json::json!([{
-        "type": "URLRewrite",
-        "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"}}
-    }]);
-    let parent = parent_with_rules(serde_json::json!([delegation]));
-    let exact = serde_json::json!({
-        "matches": [{"path": {"type": "Exact", "value": "/api/exact"}}],
-        "backendRefs": [{"name": "exact", "port": 80}]
-    });
-    let child = route(
-        "infra",
-        "child",
-        serde_json::json!({"rules": [exact, service_rule("/api/healthy", "healthy")]}),
-    );
-
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-
-    let rules = outcome.resolved_rules.as_ref().unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
-    assert!(drops[0].contains("child 'infra/child' rules[0]"));
-    assert!(drops[0].contains("prefix request transforms require PathPrefix"));
-}
-
-#[test]
-fn credentialed_expose_headers_delegation_diagnostic_and_recovery() {
-    let parent = simple_parent("/api", "infra", "child");
-    for exposed in ["*", "X-Request-Id"] {
-        let mut rule = service_rule("/api/child", "svc");
-        rule["filters"] = serde_json::json!([{"type": "CORS", "cors": {
-            "allowOrigins": ["https://app.example"], "allowCredentials": true,
-            "exposeHeaders": [exposed]
-        }}]);
-        let child = route("infra", "child", serde_json::json!({"rules": [rule]}));
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-        if exposed == "*" {
-            assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
-            assert!(dropped_messages(&outcome)
-                .iter()
-                .any(|message| message.contains("child 'infra/child' rules[0]") && message.contains("exposeHeaders")));
+fn key(parent: (&str, &str), target_ns: &str, target_name: &str) -> DelegationKey {
+    DelegationKey {
+        kind: RouteKindName::HTTPRoute,
+        parent_ns: parent.0.to_string(),
+        parent_name: parent.1.to_string(),
+        target_ns: target_ns.to_string(),
+        target_name: if target_name == "*" {
+            DelegationTargetName::Wildcard
         } else {
-            assert_eq!(rule_paths(outcome.resolved_rules.as_ref().unwrap()), ["/api/child"]);
-            assert!(outcome.issues.is_empty());
-        }
+            DelegationTargetName::Named(target_name.to_string())
+        },
     }
-}
-
-#[test]
-fn native_cors_validation_detail_survives_delegation() {
-    let parent = simple_parent("/api", "infra", "child");
-    for (cors, expected_field) in [
-        (serde_json::json!({"allowMethods": ["get"]}), "allowMethods"),
-        (serde_json::json!({"allowHeaders": ["bad header"]}), "allowHeaders"),
-        (serde_json::json!({"maxAge": 0}), "maxAge"),
-    ] {
-        let mut rule = service_rule("/api/child", "svc");
-        rule["filters"] = serde_json::json!([{"type": "CORS", "cors": cors}]);
-        let child = route("infra", "child", serde_json::json!({"rules": [rule]}));
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-        assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
-        assert!(dropped_messages(&outcome)
-            .iter()
-            .any(|message| { message.contains("child 'infra/child' rules[0]") && message.contains(expected_field) }));
-    }
-}
-
-#[test]
-fn no_delegation_yields_none() {
-    let parent = parent_with_rules(serde_json::json!([service_rule("/a", "svc")]));
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![]));
-    assert!(outcome.resolved_rules.is_none());
-    assert!(outcome.issues.is_empty());
-}
-
-#[test]
-fn non_delegating_sibling_rules_preserved_in_order() {
-    let parent = parent_with_rules(serde_json::json!([
-        service_rule("/plain", "svc-plain"),
-        delegating_rule("/api", "billing", "child"),
-    ]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [service_rule("/api/pay", "svc-pay")]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.expect("delegation present");
-    assert_eq!(rule_paths(&rules), vec!["/plain", "/api/pay"]);
 }
 
 // =====================================================================
-// Prefix containment
+// Publication without flattening
 // =====================================================================
 
-#[test]
-fn prefix_containment_matrix() {
-    // Segment boundary: /api does not contain /apix
-    assert!(prefix_contains("/api", "PathPrefix", "/api"));
-    assert!(prefix_contains("/api", "PathPrefix", "/api/v1"));
-    assert!(!prefix_contains("/api", "PathPrefix", "/apix"));
-    assert!(!prefix_contains("/api", "PathPrefix", "/other"));
-    // Root delegates everything
-    assert!(prefix_contains("/", "PathPrefix", "/anything"));
-    assert!(prefix_contains("/", "Exact", "/x"));
-    // Exact must still be under the prefix
-    assert!(prefix_contains("/api", "Exact", "/api/v1"));
-    assert!(!prefix_contains("/api", "Exact", "/ap"));
-    // Trailing slash on prefix is tolerated
-    assert!(prefix_contains("/api/", "PathPrefix", "/api/v1"));
-    // Regex containment is deliberately not decided by this helper.
-    assert!(!prefix_contains("/api", "RegularExpression", "^/api/[0-9]+"));
-    // Unknown match type is never contained
-    assert!(!prefix_contains("/api", "Bogus", "/api/x"));
-}
-
-#[test]
-fn regex_alternation_cannot_escape_prefix() {
-    for pattern in [
-        "^/api/x|/evil",
-        "^/api/(x|y)",
-        "^/a|/b",
-        r"^/api/x\|y",
-        "^/api/?secret$",
-        "^/api",
-        "secret",
-        "(?i)^/API",
-        "^/elsewhere$",
-    ] {
-        let parent = simple_parent("/api", "billing", "child");
-        let child = route(
-            "billing",
-            "child",
-            serde_json::json!({"rules": [{
-                "matches": [{"path": {"type": "RegularExpression", "value": pattern}}],
-                "resolvedParentMatch": {"kind": "direct"},
-                "backendRefs": [{"name": "svc", "port": 8080}]
-            }]}),
-        );
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-        assert!(outcome.issues.is_empty(), "{pattern}: {:?}", outcome.issues);
-        let rules = outcome.resolved_rules.unwrap();
-        assert_eq!(rule_paths(&rules), vec![pattern]);
-        let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
-            panic!("regex must retain runtime parent scope");
-        };
-        assert_eq!(matches[0].raw_path_prefixes, ["/api"]);
-    }
-}
-
-#[test]
-fn dot_segment_child_path_cannot_escape_prefix() {
-    // Containment must be decided on the NORMALIZED value: the gateway
-    // normalizes resolved_rules paths, so `/api/../admin` would compile as
-    // `/admin` — outside the delegated `/api` prefix.
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            service_rule("/api/../admin", "svc"),
-            service_rule("/api/./ok", "svc"),
-        ]}),
+#[tokio::test]
+async fn parse_publishes_authored_rules_without_copies() {
+    let ctx = make_ctx();
+    let authored = root_parent(
+        "infra",
+        "parent",
+        serde_json::json!([
+            delegating_rule("/api", "t", "*"),
+            {"matches": [{"path": {"type": "PathPrefix", "value": "/plain"}}],
+             "backendRefs": [{"name": "plain", "port": 80}]}
+        ]),
     );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    // The escape attempt is dropped; the benign dot-segment path survives
-    // and is stored raw for one Gateway normalization pass.
-    assert_eq!(rule_paths(&rules), vec!["/api/./ok"]);
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
-    assert!(drops[0].contains("rules[0]"), "drop message: {}", drops[0]);
-}
+    let parsed = parse(authored.clone(), &ctx).await;
 
-#[test]
-fn delegating_prefix_is_normalized_before_containment() {
-    // A parent prefix carrying dot-segments must be normalized too, or the
-    // child's (normalized) paths would never match it.
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api/v1/./billing"}}],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [service_rule("/api/v1/billing/pay", "svc")]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert_eq!(
-        rule_paths(&outcome.resolved_rules.clone().unwrap()),
-        vec!["/api/v1/billing/pay"]
-    );
-}
-
-#[test]
-fn out_of_prefix_child_rule_dropped_with_issue() {
-    let parent = simple_parent("/api/v1/billing", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            service_rule("/api/v1/billing/pay", "svc-pay"),
-            service_rule("/evil", "svc-evil"),
-        ]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rule_paths(&rules), vec!["/api/v1/billing/pay"]);
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
     assert!(
-        drops[0].contains("rules[1]"),
-        "drop message should name the rule: {}",
-        drops[0]
+        parsed.spec.resolved_delegation_keys.is_empty(),
+        "a parent carries no keys"
+    );
+    let published = parsed.spec.rules.as_ref().unwrap();
+    let authored_rules = authored.spec.rules.as_ref().unwrap();
+    assert_eq!(published.len(), authored_rules.len());
+    for (published, authored) in published.iter().zip(authored_rules) {
+        assert_eq!(
+            serde_json::to_value(&published.matches).unwrap(),
+            serde_json::to_value(&authored.matches).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&published.backend_refs).unwrap(),
+            serde_json::to_value(&authored.backend_refs).unwrap()
+        );
+        assert_eq!(published.filters.is_some(), authored.filters.is_some());
+    }
+
+    for i in 0..50 {
+        let parsed_child = parse(child("t", &format!("c{i}"), &[("infra", "parent")]), &ctx).await;
+        assert_eq!(
+            parsed_child.spec.resolved_delegation_keys,
+            vec![key(("infra", "parent"), "t", "*")],
+            "child c{i} carries exactly its wildcard key"
+        );
+        assert_eq!(parsed_child.spec.rules.as_ref().unwrap().len(), 1);
+    }
+    // The parent republished after its children still carries only its rules.
+    let reparsed = parse(authored.clone(), &ctx).await;
+    assert_eq!(reparsed.spec.rules.as_ref().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn parse_clears_authored_resolved_delegation_keys() {
+    let ctx = make_ctx();
+    let mut forged = child("t", "c", &[("infra", "parent")]);
+    forged.spec.resolved_delegation_keys = vec![key(("infra", "parent"), "t", "c")];
+    let parsed = parse(forged, &ctx).await;
+    assert!(
+        parsed.spec.resolved_delegation_keys.is_empty(),
+        "an unconfirmed edge must not survive from authored input"
     );
 }
 
-#[test]
-fn child_match_without_path_inherits_prefix() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [{
-            "matches": [{"method": "GET"}],
-            "backendRefs": [{"name": "svc", "port": 80}]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rule_paths(&rules), vec!["/api"]);
-    assert_eq!(rules[0].matches.as_ref().unwrap()[0].method.as_deref(), Some("GET"));
-}
+#[tokio::test]
+async fn child_keys_require_bidirectional_confirmation() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([delegating_rule("/api", "t", "other")]),
+        ),
+        &ctx,
+    )
+    .await;
+    let parsed = parse(child("t", "c", &[("infra", "parent")]), &ctx).await;
+    assert!(parsed.spec.resolved_delegation_keys.is_empty());
 
-#[test]
-fn child_rule_without_matches_inherits_prefix() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
+    // The parent delegates, but the child does not declare it.
+    parse(
+        root_parent(
+            "infra",
+            "p2",
+            serde_json::json!([delegating_rule("/api", "t", "lonely")]),
+        ),
+        &ctx,
+    )
+    .await;
+    let lonely = route(
+        "t",
+        "lonely",
         serde_json::json!({"rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}),
     );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rule_paths(&rules), vec!["/api"]);
+    assert!(parse(lonely, &ctx).await.spec.resolved_delegation_keys.is_empty());
 }
 
-// =====================================================================
-// Constraint merge
-// =====================================================================
-
-#[test]
-fn parent_constraints_merged_into_child_matches() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{
-            "path": {"type": "PathPrefix", "value": "/api"},
-            "headers": [{"name": "x-tenant", "value": "b"}],
-            "method": "GET"
-        }],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [{
-            "matches": [{
-                "path": {"type": "PathPrefix", "value": "/api/pay"},
-                "headers": [{"name": "x-extra", "value": "1"}]
-            }],
-            "backendRefs": [{"name": "svc", "port": 80}]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    let m = &rules[0].matches.as_ref().unwrap()[0];
-    let header_names: Vec<&str> = m.headers.as_ref().unwrap().iter().map(|h| h.name.as_str()).collect();
-    assert!(header_names.contains(&"x-extra") && header_names.contains(&"x-tenant"));
-    assert_eq!(m.method.as_deref(), Some("GET"));
-}
-
-#[test]
-fn duplicate_headers_preserve_effective_parent_and_child_constraints() {
-    for child_value in ["one", "two"] {
-        let parent = parent_with_rules(serde_json::json!([{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api"}, "headers": [
-                {"name": "X-Mode", "value": "one"},
-                {"name": "x-mode", "value": "ignored-parent"}
-            ]}],
-            "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                "name": "child", "namespace": "billing"}]
-        }]));
-        let child = route(
-            "billing",
-            "child",
-            serde_json::json!({"rules": [{
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}, "headers": [
-                    {"name": "x-mode", "value": child_value},
-                    {"name": "X-Mode", "type": "RegularExpression", "value": "["},
-                    {"name": "X-Other", "value": "west"}
-                ]}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            }]}),
-        );
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-        let rules = outcome.resolved_rules.as_ref().unwrap();
-        if child_value == "one" {
-            assert!(dropped_messages(&outcome).is_empty());
-            let headers = rules[0].matches.as_ref().unwrap()[0].headers.as_ref().unwrap();
-            assert_eq!(headers.len(), 2);
-            assert_eq!(headers[0].value, "one");
-            assert_eq!(headers[1].name, "X-Other");
-        } else {
-            assert!(rules.is_empty());
-            assert_eq!(dropped_messages(&outcome).len(), 1);
-        }
+#[tokio::test]
+async fn child_with_three_parents_gets_keys_for_each() {
+    let ctx = make_ctx();
+    for name in ["p1", "p2", "p3"] {
+        parse(
+            root_parent("infra", name, serde_json::json!([delegating_rule("/api", "t", "c")])),
+            &ctx,
+        )
+        .await;
     }
-}
-
-#[test]
-fn conflicting_header_or_method_drops_child_rule() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{
-            "path": {"type": "PathPrefix", "value": "/api"},
-            "headers": [{"name": "x-tenant", "value": "b"}],
-            "method": "GET"
-        }],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            {
-                "matches": [{
-                    "path": {"type": "PathPrefix", "value": "/api/a"},
-                    "headers": [{"name": "X-Tenant", "value": "OTHER"}]
-                }],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            },
-            {
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/b"}, "method": "POST"}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            }
-        ]}),
+    let parsed = parse(
+        child("t", "c", &[("infra", "p3"), ("infra", "p1"), ("infra", "p2")]),
+        &ctx,
+    )
+    .await;
+    assert_eq!(
+        parsed.spec.resolved_delegation_keys,
+        vec![
+            key(("infra", "p1"), "t", "c"),
+            key(("infra", "p2"), "t", "c"),
+            key(("infra", "p3"), "t", "c"),
+        ],
+        "keys are sorted for a deterministic payload"
     );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert_eq!(dropped_messages(&outcome).len(), 2);
 }
 
-// =====================================================================
-// Filter inheritance
-// =====================================================================
+#[tokio::test]
+async fn child_with_named_and_wildcard_from_same_parent_gets_two_keys() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([
+                delegating_rule("/a", "t", "c"),
+                delegating_rule("/b", "t", "*"),
+                delegating_rule("/c", "t", "c")
+            ]),
+        ),
+        &ctx,
+    )
+    .await;
+    let parsed = parse(child("t", "c", &[("infra", "parent")]), &ctx).await;
+    let keys = &parsed.spec.resolved_delegation_keys;
+    assert_eq!(keys.len(), 2, "rules sharing a target share one key: {keys:?}");
+    assert!(keys.contains(&key(("infra", "parent"), "t", "c")));
+    assert!(keys.contains(&key(("infra", "parent"), "t", "*")));
+}
 
-#[test]
-fn malformed_extension_ref_in_child_drops_only_that_http_rule() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            {
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/bad"}}],
-                "filters": [{"type": "ExtensionRef"}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            },
-            {
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/good"}}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            }
-        ]}),
+#[tokio::test]
+async fn mixed_parent_refs_route_gets_no_keys() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([delegating_rule("/api", "t", "c")]),
+        ),
+        &ctx,
+    )
+    .await;
+    let mixed = route(
+        "t",
+        "c",
+        serde_json::json!({
+            "parentRefs": [{"name": "gw", "namespace": "infra"}, route_parent_ref("infra", "parent")],
+            "rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]
+        }),
     );
-
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert_eq!(outcome.resolved_rules.as_ref().unwrap().len(), 1);
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
-    assert!(drops[0].contains("rules[0]"));
+    let parsed = parse(mixed, &ctx).await;
+    assert!(parsed.spec.resolved_delegation_keys.is_empty());
+    assert!(matches!(
+        http_delegation_facts(&parsed, ctx.runtime()).shape,
+        ParentRefShape::Invalid(_)
+    ));
 }
 
-#[test]
-fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children() {
-    for backend_filter in [false, true] {
-        for target_ns in [None, Some("infra"), Some("shadow")] {
-            let mirror = serde_json::json!({"type": "RequestMirror", "requestMirror": {
-                "backendRef": {"name": "copy", "namespace": target_ns, "port": 80,
-                    "refDenied": {"targetNamespace": "forged", "targetName": "forged"}}
-            }});
-            let mut terminal = service_rule("/api", "primary");
-            if backend_filter {
-                terminal["backendRefs"][0]["filters"] = serde_json::json!([mirror]);
-            } else {
-                terminal["filters"] = serde_json::json!([mirror]);
-            }
-            let parent = simple_parent("/api", "billing", "child");
-            let child = route("billing", "child", serde_json::json!({"rules": [terminal]}));
-            for allowed in [false, true] {
-                let mut lookup = FakeLookup::new(vec![child.clone()]);
-                if allowed {
-                    lookup = lookup.allow_cross_ns("billing", target_ns.unwrap_or("billing"));
-                }
-                let result = flatten_route(&parent, &lookup);
-                let rules = result.resolved_rules.as_ref().unwrap();
-                assert_eq!(rules.len(), 1);
-                let backend = mirror_backends(&rules[0]).next().unwrap();
-                assert_eq!(backend.namespace.as_deref(), Some(target_ns.unwrap_or("billing")));
-                assert_eq!(backend.ref_denied.is_some(), target_ns.is_some() && !allowed);
-                if let Some(ns) = target_ns {
-                    assert!(result.cross_ns_target_namespaces.contains(ns));
-                }
-            }
-        }
-    }
+#[tokio::test]
+async fn child_with_hostnames_gets_no_keys() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([delegating_rule("/api", "t", "c")]),
+        ),
+        &ctx,
+    )
+    .await;
+    let mut with_hostnames = child("t", "c", &[("infra", "parent")]);
+    with_hostnames.spec.hostnames = Some(vec!["child.example.com".to_string()]);
+    let parsed = parse(with_hostnames, &ctx).await;
+    assert!(parsed.spec.resolved_delegation_keys.is_empty());
 }
 
-#[test]
-fn mirror_inherited_from_intermediate_route_keeps_its_identity() {
-    let parent = simple_parent("/api", "billing", "middle");
-    let mut middle_rule = delegating_rule("/api", "leaf", "terminal");
-    middle_rule["filters"] = serde_json::json!([{"type": "RequestMirror", "requestMirror": {
-        "backendRef": {"name": "copy", "namespace": "shadow", "port": 80}
+#[tokio::test]
+async fn delegating_rule_with_canary_plugin_is_invalid_rule() {
+    assert_backend_plugin_on_delegating_rule_is_invalid(
+        "Canary",
+        serde_json::json!({"enable": true, "activeProfile": "base", "profiles": {"base": {"name": "backend"}}}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn delegating_rule_with_ai_proxy_plugin_is_invalid_rule() {
+    assert_backend_plugin_on_delegating_rule_is_invalid("AiProxy", serde_json::json!({"api": "openaiChat"})).await;
+}
+
+/// A delegating rule whose ExtensionRef carries `plugin_type` (a
+/// backend-selecting plugin) is an invalid rule and publishes no edge.
+async fn assert_backend_plugin_on_delegating_rule_is_invalid(plugin_type: &str, config: serde_json::Value) {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use edgion_resources::prelude_resources::EdgionPlugins;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        16,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionPlugins",
+        "metadata": {"namespace": "infra", "name": "canary"},
+        "spec": {"requestPlugins": [{"type": plugin_type, "config": config}]}
+    }))
+    .expect("plugin fixture must deserialize");
+    let raw = Arc::new(LocalRawStore::new());
+    raw.upsert("infra/canary".to_string(), Arc::new(plugins));
+    processor.set_raw_store(raw);
+    runtime.processor_registry.register(processor);
+    let ctx = ctx_with(runtime);
+
+    let mut rule = delegating_rule("/api", "t", "c");
+    rule["filters"] = serde_json::json!([{"type": "ExtensionRef", "extensionRef": {
+        "group": "edgion.io", "kind": "EdgionPlugins", "name": "canary"
     }}]);
-    let middle = route("billing", "middle", serde_json::json!({"rules": [middle_rule]}));
-    let leaf = route(
-        "leaf",
-        "terminal",
-        serde_json::json!({"rules": [service_rule("/api", "primary")]}),
+    let parent = root_parent(
+        "infra",
+        "parent",
+        serde_json::json!([rule, delegating_rule("/ok", "t", "c2")]),
     );
-    for grant_from in ["infra", "leaf", "billing"] {
-        let lookup = FakeLookup::new(vec![middle.clone(), leaf.clone()]).allow_cross_ns(grant_from, "shadow");
-        let result = flatten_route(&parent, &lookup);
-        let rules = result.resolved_rules.as_ref().unwrap();
-        assert_eq!(rules.len(), 1);
-        let backend = mirror_backends(&rules[0]).next().unwrap();
-        assert_eq!(backend.ref_denied.is_none(), grant_from == "billing");
-        assert!(result.cross_ns_target_namespaces.contains("shadow"));
+    let mut parsed = parse(parent, &ctx).await;
+
+    let facts = http_delegation_facts(&parsed, ctx.runtime());
+    assert_eq!(facts.backend_plugin_on_delegating_rule.len(), 1);
+    assert_eq!(facts.backend_plugin_on_delegating_rule[0].0, 0);
+    assert!(facts.backend_plugin_on_delegating_rule[0].1.contains(plugin_type));
+    assert_eq!(
+        facts.targets,
+        vec![DelegationTarget {
+            ns: "t".into(),
+            name: DelegationTargetName::Named("c2".into())
+        }],
+        "an invalid delegating rule publishes no edge"
+    );
+
+    HttpRouteHandler::default().update_status(&mut parsed, &ctx, &[]);
+    assert_eq!(parsed.spec.invalid_rule_indices, Some(vec![0]));
+
+    // The edge of the invalid rule is not confirmed for its child.
+    let parsed_child = parse(child("t", "c", &[("infra", "parent")]), &ctx).await;
+    assert!(parsed_child.spec.resolved_delegation_keys.is_empty());
+}
+
+#[tokio::test]
+async fn malformed_delegating_rule_is_invalid_rule() {
+    let ctx = make_ctx();
+    let mut exact = delegating_rule("/api", "t", "c");
+    exact["matches"][0]["path"]["type"] = serde_json::json!("Exact");
+    let mut parsed = parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([exact, {"backendRefs": [{"name": "svc", "port": 80}]}]),
+        ),
+        &ctx,
+    )
+    .await;
+    let facts = http_delegation_facts(&parsed, ctx.runtime());
+    assert_eq!(facts.malformed_rules.len(), 1);
+    assert!(facts.targets.is_empty());
+    HttpRouteHandler::default().update_status(&mut parsed, &ctx, &[]);
+    assert_eq!(parsed.spec.invalid_rule_indices, Some(vec![0]));
+}
+
+#[tokio::test]
+async fn ordinary_route_payload_unchanged() {
+    let ctx = make_ctx();
+    // The input fixture carries authored values for fields a route must never
+    // set, each a drop-on-parse probe: `resolvedDelegationKeys` (cleared by
+    // parse), forged resolved ExternalAuth/terminal fields, and an
+    // ExtensionRef `resolvedNamespace` (no longer a field at all: serde
+    // ignores it as an unknown key). The byte-identical parsed fixture proves
+    // none of them reaches the conf_sync payload.
+    let input: HTTPRoute =
+        serde_json::from_str(include_str!("../../../../../fixtures/http-route-ordinary-input.json")).unwrap();
+    let handler = HttpRouteHandler::default();
+    let mut parsed = parse(input, &ctx).await;
+    handler.finalize_transport(&mut parsed, &ctx);
+    let payload = serde_json::to_string_pretty(&parsed).unwrap() + "\n";
+    assert!(
+        !payload.contains("resolvedNamespace") && !payload.contains("injected"),
+        "the unknown ExtensionRef resolvedNamespace probe must be dropped on parse"
+    );
+    assert_eq!(
+        payload,
+        include_str!("../../../../../fixtures/http-route-ordinary-parsed.json"),
+        "the ordinary-route conf_sync payload must stay byte-identical"
+    );
+    assert!(
+        !ctx.runtime()
+            .http_route_delegation_graph
+            .is_participant("apps/ordinary"),
+        "an ordinary route never enters the delegation graph"
+    );
+}
+
+#[tokio::test]
+async fn diamond_and_fanout_work_is_linear() {
+    const PARENTS: usize = 3;
+    const CHILDREN: usize = 200;
+    let ctx = make_ctx();
+    let parents: Vec<String> = (0..PARENTS).map(|i| format!("p{i}")).collect();
+    for name in &parents {
+        parse(
+            root_parent("infra", name, serde_json::json!([delegating_rule("/api", "t", "*")])),
+            &ctx,
+        )
+        .await;
+    }
+    let declared: Vec<(&str, &str)> = parents.iter().map(|p| ("infra", p.as_str())).collect();
+    let mut total_keys = 0;
+    for i in 0..CHILDREN {
+        let parsed = parse(child("t", &format!("c{i}"), &declared), &ctx).await;
+        total_keys += parsed.spec.resolved_delegation_keys.len();
+    }
+    // Every child confirms every parent: Σ confirmed edges = PARENTS × CHILDREN.
+    assert_eq!(total_keys, PARENTS * CHILDREN);
+    // A child-only event (unchanged reprocess) issues no parent requeues.
+    let mut requeued = 0;
+    for i in 0..CHILDREN {
+        let c = child("t", &format!("c{i}"), &declared);
+        let facts = http_delegation_facts(&c, ctx.runtime());
+        requeued += sync_http_delegation_graph(&ctx.runtime().http_route_delegation_graph, &c, &facts, false, || false)
+            .expect("a child is a participant")
+            .len();
+    }
+    assert_eq!(requeued, 0, "unchanged children must not requeue their parents");
+    // Every parent and child is a participant; the per-participant (not
+    // per-pair) storage bound is pinned in `delegation_graph_test`.
+    let graph = &ctx.runtime().http_route_delegation_graph;
+    assert!(parents.iter().all(|p| graph.is_participant(&format!("infra/{p}"))));
+    assert!((0..CHILDREN).all(|i| graph.is_participant(&format!("t/c{i}"))));
+    for name in &parents {
+        assert_eq!(graph.children_of(&format!("infra/{name}")).len(), CHILDREN);
     }
 }
 
-#[test]
-fn parent_filters_prepended_and_extension_refs_concatenate() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "filters": [
-            {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-p", "value": "1"}]}},
-            {"type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "parent-plugin"}}
-        ],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}}],
-            "filters": [
-                {"type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "child-plugin"}}
-            ],
-            "backendRefs": [{
-                "name": "svc", "port": 80,
-                "filters": [{"type": "ExtensionRef", "extensionRef": {
-                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "child-backend-plugin"
-                }}]
-            }]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    let filters = rules[0].filters.as_ref().unwrap();
-    // Order: inherited standard, inherited extension, child's own
-    assert_eq!(filters.len(), 3);
-    assert_eq!(filters[0].filter_type, HTTPRouteFilterType::RequestHeaderModifier);
-    assert_eq!(
-        filters[1].extension_ref.as_ref().map(|e| e.name.as_str()),
-        Some("parent-plugin")
-    );
-    assert_eq!(
-        filters[2].extension_ref.as_ref().map(|e| e.name.as_str()),
-        Some("child-plugin")
-    );
-    assert_eq!(
-        filters[1]
-            .extension_ref
-            .as_ref()
-            .and_then(|e| e.resolved_namespace.as_deref()),
-        Some("infra")
-    );
-    assert_eq!(
-        filters[2]
-            .extension_ref
-            .as_ref()
-            .and_then(|e| e.resolved_namespace.as_deref()),
-        Some("billing")
-    );
-    assert_eq!(
-        rules[0].backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
-            .extension_ref
-            .as_ref()
-            .and_then(|e| e.resolved_namespace.as_deref()),
-        Some("billing")
-    );
+#[tokio::test]
+async fn deleting_a_parent_clears_graph_participation() {
+    let ctx = make_ctx();
+    let parent = parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([delegating_rule("/api", "t", "c")]),
+        ),
+        &ctx,
+    )
+    .await;
+    parse(child("t", "c", &[("infra", "parent")]), &ctx).await;
+    let graph = &ctx.runtime().http_route_delegation_graph;
+    assert_eq!(graph.level("t/c"), Some(2));
+
+    HttpRouteHandler::default().on_delete(&parent, &ctx).await;
+    assert!(!graph.is_participant("infra/parent"));
+    assert!(graph.confirmed_keys("t/c").is_empty());
+
+    // A route that stops delegating leaves the graph on its next parse.
+    let ordinary = parse(
+        root_parent(
+            "infra",
+            "parent",
+            serde_json::json!([{"backendRefs": [{"name": "svc", "port": 80}]}]),
+        ),
+        &ctx,
+    )
+    .await;
+    assert!(ordinary.spec.resolved_delegation_keys.is_empty());
+    assert!(!graph.is_participant("infra/parent"));
 }
 
 #[test]
-fn child_backend_ref_filter_cannot_smuggle_mandatory_override() {
-    // A child must not evade the mandatory-filter conflict check by
-    // declaring the same-type standard filter at backendRef level.
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "filters": [
-            {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-p", "value": "1"}]}}
-        ],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}}],
-            "backendRefs": [{
-                "name": "svc", "port": 80,
-                "filters": [
-                    {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-p", "value": "override"}]}}
-                ]
-            }]
-        }]}),
+fn sync_requeues_target_children_parents_and_level_dependents() {
+    let graph = DelegationGraph::new(RouteKindName::HTTPRoute);
+    let runtime = ControllerRuntime::default();
+    let parent = root_parent(
+        "infra",
+        "parent",
+        serde_json::json!([delegating_rule("/api", "t", "c")]),
     );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
-    assert!(drops[0].contains("RequestHeaderModifier"));
-}
+    let c = child("t", "c", &[("infra", "parent")]);
 
-#[test]
-fn child_standard_filter_conflicting_with_inherited_type_drops_rule() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "filters": [
-            {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-p", "value": "1"}]}}
-        ],
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "child", "namespace": "billing"
-        }]
-    }]));
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}}],
-            "filters": [
-                {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-c", "value": "2"}]}}
-            ],
-            "backendRefs": [{"name": "svc", "port": 80}]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    let drops = dropped_messages(&outcome);
-    assert_eq!(drops.len(), 1);
-    assert!(drops[0].contains("RequestHeaderModifier"));
-}
+    // Child first: the parent is not in the graph yet (it names nobody), so
+    // nothing is requeued; it reads the declaration when it is processed.
+    let child_facts = http_delegation_facts(&c, &runtime);
+    let requeue = sync_http_delegation_graph(&graph, &c, &child_facts, false, || false).unwrap();
+    assert!(requeue.is_empty());
+    assert!(graph.confirmed_keys("t/c").is_empty());
 
-// =====================================================================
-// Attribute inheritance
-// =====================================================================
-
-#[test]
-fn attrs_child_first_else_inherited_across_two_levels() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "timeouts": {"request": "30s"},
-        "retry": {"attempts": 5},
-        "backendRefs": [{
-            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-            "name": "mid", "namespace": "billing"
-        }]
-    }]));
-    // Mid level overrides retry, delegates deeper.
-    let mid = route(
-        "billing",
-        "mid",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}}],
-            "retry": {"attempts": 2},
-            "backendRefs": [{
-                "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                "name": "leaf", "namespace": "billing"
-            }]
-        }]}),
-    );
-    let leaf = route(
-        "billing",
-        "leaf",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay/now"}}],
-            "backendRefs": [{"name": "svc", "port": 80}]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![mid, leaf]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rules.len(), 1);
-    // timeouts from root, retry from mid (nearest ancestor override)
+    // Parent second: its added target requeues the declaring child.
+    let parent_facts = http_delegation_facts(&parent, &runtime);
+    let requeue = sync_http_delegation_graph(&graph, &parent, &parent_facts, true, || false).unwrap();
+    assert_eq!(requeue, vec!["t/c".to_string()]);
     assert_eq!(
-        rules[0].timeouts.as_ref().and_then(|t| t.request.as_deref()),
-        Some("30s")
+        resolve_child_keys(&graph, "t/c"),
+        vec![key(("infra", "parent"), "t", "c")]
     );
-    assert_eq!(rules[0].retry.as_ref().and_then(|r| r.attempts), Some(2));
-    // Transitive dependency registration: root depends on both mid and leaf
-    assert!(outcome.named_children.contains("billing/mid"));
-    assert!(outcome.named_children.contains("billing/leaf"));
+
+    // Unchanged parent reprocess: no target delta and no level change.
+    let requeue = sync_http_delegation_graph(&graph, &parent, &parent_facts, true, || false).unwrap();
+    assert!(requeue.is_empty());
+
+    // Child reprocess picks up its level and has no children to requeue.
+    sync_http_delegation_graph(&graph, &c, &child_facts, false, || false).unwrap();
+    assert_eq!(graph.level("t/c"), Some(2));
+
+    // Root detach changes the parent's level: its confirmed children requeue.
+    let requeue = sync_http_delegation_graph(&graph, &parent, &parent_facts, false, || false).unwrap();
+    assert_eq!(requeue, vec!["t/c".to_string()]);
+
+    // An ordinary route is a single probe and requeues nothing.
+    let ordinary = route(
+        "apps",
+        "plain",
+        serde_json::json!({"parentRefs": [{"name": "gw"}], "rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}),
+    );
+    let facts = http_delegation_facts(&ordinary, &runtime);
+    assert!(sync_http_delegation_graph(&graph, &ordinary, &facts, true, || false).is_none());
 }
 
-// =====================================================================
-// Wildcard, reverse lock, hostnames
-// =====================================================================
+#[test]
+fn two_cycle_settles_without_requeue_ping_pong() {
+    let graph = DelegationGraph::new(RouteKindName::HTTPRoute);
+    let runtime = ControllerRuntime::default();
+    let cyclic = |name: &str, other: &str| {
+        route(
+            "t",
+            name,
+            serde_json::json!({
+                "parentRefs": [route_parent_ref("t", other)],
+                "rules": [delegating_rule("/api", "t", other)]
+            }),
+        )
+    };
+    let a = cyclic("a", "b");
+    let b = cyclic("b", "a");
+    let facts_a = http_delegation_facts(&a, &runtime);
+    let facts_b = http_delegation_facts(&b, &runtime);
+    // First round registers both sides.
+    sync_http_delegation_graph(&graph, &a, &facts_a, false, || false).unwrap();
+    sync_http_delegation_graph(&graph, &b, &facts_b, false, || false).unwrap();
+    // After one processing round, reprocessing either side requeues nothing.
+    assert!(sync_http_delegation_graph(&graph, &a, &facts_a, false, || false)
+        .unwrap()
+        .is_empty());
+    assert!(sync_http_delegation_graph(&graph, &b, &facts_b, false, || false)
+        .unwrap()
+        .is_empty());
+    assert_eq!(graph.level("t/a"), None);
+    assert_eq!(graph.level("t/b"), None);
+}
 
 #[test]
-fn wildcard_expands_all_children_sorted_excluding_parent() {
+fn child_declared_parent_change_requeues_only_naming_parents() {
+    let graph = DelegationGraph::new(RouteKindName::HTTPRoute);
+    let runtime = ControllerRuntime::default();
+    for (name, target) in [("p1", "c"), ("p2", "*"), ("p3", "other")] {
+        let parent = root_parent("infra", name, serde_json::json!([delegating_rule("/api", "t", target)]));
+        let facts = http_delegation_facts(&parent, &runtime);
+        sync_http_delegation_graph(&graph, &parent, &facts, true, || false).unwrap();
+    }
+    let first = child("t", "c", &[("infra", "p1")]);
+    let facts = http_delegation_facts(&first, &runtime);
+    assert_eq!(
+        sync_http_delegation_graph(&graph, &first, &facts, false, || false).unwrap(),
+        vec!["infra/p1".to_string()],
+        "a parent naming the child refreshes its RefNotPermitted"
+    );
+    // Moving to a wildcard parent and a parent that targets another name:
+    // only the old naming parent depends on the change.
+    let moved = child("t", "c", &[("infra", "p2"), ("infra", "p3")]);
+    let facts = http_delegation_facts(&moved, &runtime);
+    assert_eq!(
+        sync_http_delegation_graph(&graph, &moved, &facts, false, || false).unwrap(),
+        vec!["infra/p1".to_string()]
+    );
+}
+
+/// Round 3 M-1: a parent with no level (not attached) that becomes blocked
+/// or unblocked requeues its children, whose message differs ("not
+/// accepted" vs "not reachable") although the level stays `None`.
+#[test]
+fn blocked_flip_on_unlevelled_parent_requeues_children() {
+    let graph = DelegationGraph::new(RouteKindName::HTTPRoute);
+    let runtime = ControllerRuntime::default();
     let parent = route(
         "infra",
         "parent",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-            "backendRefs": [{
-                "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                "name": "*", "namespace": "infra"
-            }]
-        }]}),
+        serde_json::json!({"rules": [delegating_rule("/api", "t", "c")]}),
     );
-    let a = route(
-        "infra",
-        "a-child",
-        serde_json::json!({"rules": [service_rule("/api/a", "svc-a")]}),
-    );
-    let b = route(
-        "infra",
-        "b-child",
-        serde_json::json!({"rules": [service_rule("/api/b", "svc-b")]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![parent.clone(), a, b]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    // Sorted by key; the parent itself (also in ns) is excluded
-    assert_eq!(rule_paths(&rules), vec!["/api/a", "/api/b"]);
-    assert!(outcome.wildcard_namespaces.contains("infra"));
-    assert!(outcome.issues.is_empty(), "issues: {:?}", outcome.issues);
+    let c = child("t", "c", &[("infra", "parent")]);
+    let child_facts = http_delegation_facts(&c, &runtime);
+    sync_http_delegation_graph(&graph, &c, &child_facts, false, || false).unwrap();
+    let parent_facts = http_delegation_facts(&parent, &runtime);
+    sync_http_delegation_graph(&graph, &parent, &parent_facts, false, || false).unwrap();
+    assert_eq!(graph.level("infra/parent"), None);
+
+    let sync = |blocked: bool| sync_http_delegation_graph(&graph, &parent, &parent_facts, false, || blocked).unwrap();
+    assert_eq!(sync(true), vec!["t/c".to_string()], "blocking requeues the child");
+    assert_eq!(graph.level("infra/parent"), None);
+    assert!(sync(true).is_empty(), "an unchanged blocked flag requeues nothing");
+    assert_eq!(sync(false), vec!["t/c".to_string()], "unblocking requeues the child");
+    assert!(sync(false).is_empty());
 }
 
-#[test]
-fn wildcard_zero_children_is_silent() {
-    let parent = simple_parent("/api", "empty-ns", "*");
-    let mut parent = parent;
-    parent.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].name = "*".to_string();
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(outcome.issues.is_empty());
-}
-
-#[test]
-fn reverse_lock_denies_unlisted_parent_and_allows_listed() {
-    let parent = simple_parent("/api", "billing", "locked");
-    let locked_to_other = route(
-        "billing",
-        "locked",
-        serde_json::json!({
-            "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                             "name": "someone-else", "namespace": "infra"}],
-            "rules": [service_rule("/api/pay", "svc")]
-        }),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![locked_to_other]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome)[0].contains("parentRefs restrict delegation"));
-
-    let locked_to_us = route(
-        "billing",
-        "locked",
-        serde_json::json!({
-            "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                             "name": "parent", "namespace": "infra"}],
-            "rules": [service_rule("/api/pay", "svc")]
-        }),
-    );
-    let parent2 = simple_parent("/api", "billing", "locked");
-    let outcome2 = flatten_route(&parent2, &FakeLookup::new(vec![locked_to_us]));
-    assert_eq!(rule_paths(&outcome2.resolved_rules.clone().unwrap()), vec!["/api/pay"]);
-}
-
-#[test]
-fn gateway_parent_refs_do_not_reverse_lock() {
-    // A child that (only) attaches to a Gateway is still delegatable.
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({
-            "parentRefs": [{"name": "some-gateway"}],
-            "rules": [service_rule("/api/pay", "svc")]
-        }),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert_eq!(rule_paths(&outcome.resolved_rules.clone().unwrap()), vec!["/api/pay"]);
-}
-
-#[test]
-fn child_with_hostnames_is_skipped() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({
-            "hostnames": ["evil.example.com"],
-            "rules": [service_rule("/api/pay", "svc")]
-        }),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome)[0].contains("hostnames"));
-}
-
-// =====================================================================
-// Cycles, depth, missing children
-// =====================================================================
-
-#[test]
-fn self_cycle_and_two_cycle_dropped() {
-    // parent delegates to itself (named)
-    let self_parent = simple_parent("/api", "infra", "parent");
-    let outcome = flatten_route(&self_parent, &FakeLookup::new(vec![self_parent.clone()]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome)[0].contains("DelegationLoop"));
-
-    // a → b → a
-    let a = route(
-        "infra",
-        "a",
-        serde_json::json!({"rules": [delegating_rule("/api", "infra", "b")]}),
-    );
-    let b = route(
-        "infra",
-        "b",
-        serde_json::json!({"rules": [delegating_rule("/api/x", "infra", "a")]}),
-    );
-    let outcome2 = flatten_route(&a, &FakeLookup::new(vec![a.clone(), b]));
-    assert!(outcome2.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome2).iter().any(|m| m.contains("DelegationLoop")));
-}
-
-#[test]
-fn diamond_is_legal() {
-    // parent → {mid1, mid2} → leaf : leaf expanded twice, no loop issue.
-    let parent = parent_with_rules(serde_json::json!([
-        delegating_rule("/api/a", "infra", "mid1"),
-        delegating_rule("/api/b", "infra", "mid2"),
-    ]));
-    let mid1 = route(
-        "infra",
-        "mid1",
-        serde_json::json!({"rules": [delegating_rule("/api/a/leaf", "infra", "leaf")]}),
-    );
-    let mid2 = route(
-        "infra",
-        "mid2",
-        serde_json::json!({"rules": [delegating_rule("/api/b/leaf", "infra", "leaf")]}),
-    );
-    let leaf = route(
-        "infra",
-        "leaf",
-        serde_json::json!({"rules": [
-            service_rule("/api/a/leaf/x", "svc"),
-            service_rule("/api/b/leaf/y", "svc"),
-        ]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![mid1, mid2, leaf]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    // Each mid admits exactly one of the leaf's rules (the other is out of
-    // its prefix and dropped with an issue).
-    assert_eq!(rule_paths(&rules), vec!["/api/a/leaf/x", "/api/b/leaf/y"]);
-    assert!(!dropped_messages(&outcome).iter().any(|m| m.contains("DelegationLoop")));
-}
-
-#[test]
-fn depth_cap_enforced() {
-    // Chain of 10 delegations: r0 → r1 → ... ; edges beyond depth 8 dropped.
-    let mut routes = Vec::new();
-    for i in 0..10 {
-        routes.push(route(
+/// Task 1 ledger: a route-kind parentRef outside the Gateway API group is
+/// not a delegation parentRef. The route is classified as a root (its
+/// parentRefs are all non-route refs), declares no parent, takes no part
+/// in delegation and gets no keys, even under a parent naming it.
+#[tokio::test]
+async fn route_kind_parent_ref_with_foreign_group_is_not_a_delegation_parent() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
             "infra",
-            &format!("r{i}"),
-            serde_json::json!({"rules": [delegating_rule("/api", "infra", &format!("r{}", i + 1))]}),
-        ));
-    }
-    routes.push(route(
-        "infra",
-        "r10",
-        serde_json::json!({"rules": [service_rule("/api/deep", "svc")]}),
-    ));
-    let root = routes[0].clone();
-    let outcome = flatten_route(&root, &FakeLookup::new(routes));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome)
-        .iter()
-        .any(|m| m.contains("DelegationDepthExceeded")));
-}
-
-#[test]
-fn missing_named_child_reported_and_registered() {
-    let parent = simple_parent("/api", "billing", "ghost");
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert_eq!(
-        outcome.issues,
-        vec![DelegationIssue::MissingChild {
-            namespace: "billing".to_string(),
-            name: "ghost".to_string()
-        }]
-    );
-    // Still registered so the child's later creation requeues the parent
-    assert!(outcome.named_children.contains("billing/ghost"));
-}
-
-// =====================================================================
-// Malformed delegating rules
-// =====================================================================
-
-#[test]
-fn malformed_delegating_rules_dropped() {
-    // Mixing a delegation ref with a Service ref
-    let mixed = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "backendRefs": [
-            {"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "c", "namespace": "billing"},
-            {"name": "svc", "port": 80}
-        ]
-    }]));
-    let outcome = flatten_route(&mixed, &FakeLookup::new(vec![]));
-    assert!(outcome.resolved_rules.clone().unwrap().is_empty());
-    assert!(dropped_messages(&outcome)[0].contains("exactly one backendRef"));
-
-    // Port set on the delegation ref
-    let with_port = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-        "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                          "name": "c", "namespace": "billing", "port": 80}]
-    }]));
-    let outcome2 = flatten_route(&with_port, &FakeLookup::new(vec![]));
-    assert!(dropped_messages(&outcome2)[0].contains("'port'"));
-
-    // Non-PathPrefix match on the delegating rule
-    let exact_match = parent_with_rules(serde_json::json!([{
-        "matches": [{"path": {"type": "Exact", "value": "/api"}}],
-        "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                          "name": "c", "namespace": "billing"}]
-    }]));
-    let outcome3 = flatten_route(&exact_match, &FakeLookup::new(vec![]));
-    assert!(dropped_messages(&outcome3)[0].contains("PathPrefix"));
-}
-
-// =====================================================================
-// BackendRef namespace explicitation + ReferenceGrant
-// =====================================================================
-
-#[test]
-fn child_backend_ns_made_explicit_and_grant_checked_from_child_ns() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            // Implicit ns → must become explicit "billing", no grant needed
-            service_rule("/api/local", "svc-local"),
-            // Cross-ns to shared: grant present for billing→shared
-            {"matches": [{"path": {"type": "PathPrefix", "value": "/api/shared"}}],
-             "backendRefs": [{"name": "svc-shared", "namespace": "shared", "port": 80}]},
-            // Cross-ns to secret-ns: no grant → ref_denied
-            {"matches": [{"path": {"type": "PathPrefix", "value": "/api/denied"}}],
-             "backendRefs": [{"name": "svc-denied", "namespace": "secret-ns", "port": 80}]}
-        ]}),
-    );
-    let lookup = FakeLookup::new(vec![child]).allow_cross_ns("billing", "shared");
-    let outcome = flatten_route(&parent, &lookup);
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rules.len(), 3);
-
-    let br0 = &rules[0].backend_refs.as_ref().unwrap()[0];
-    assert_eq!(
-        br0.namespace.as_deref(),
-        Some("billing"),
-        "implicit ns must be explicit"
-    );
-    assert!(br0.ref_denied.is_none());
-
-    let br1 = &rules[1].backend_refs.as_ref().unwrap()[0];
-    assert!(br1.ref_denied.is_none(), "granted cross-ns ref must not be denied");
-
-    let br2 = &rules[2].backend_refs.as_ref().unwrap()[0];
-    let denied = br2.ref_denied.as_ref().expect("ungranted cross-ns ref must be denied");
-    assert_eq!(denied.target_namespace, "secret-ns");
-
-    // Service receipts retain the declaring child namespace
-    assert!(outcome
-        .backend_dependencies
-        .iter()
-        .any(|receipt| receipt.service_key() == Some("billing/svc-local")));
-}
-
-// =====================================================================
-// Rule naming
-// =====================================================================
-
-#[test]
-fn flattened_rule_names_carry_provenance() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            {"name": "user-named",
-             "matches": [{"path": {"type": "PathPrefix", "value": "/api/a"}}],
-             "backendRefs": [{"name": "svc", "port": 80}]},
-            service_rule("/api/b", "svc")
-        ]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-    let rules = outcome.resolved_rules.clone().unwrap();
-    assert_eq!(rules[0].name.as_deref(), Some("user-named"));
-    assert_eq!(rules[1].name.as_deref(), Some("billing.child.r1"));
-}
-
-#[test]
-fn delegated_terminal_identity_uses_child_uid_and_original_rule_identity() {
-    let parent = simple_parent("/api", "billing", "child");
-    let mut child = route(
-        "billing",
-        "child",
-        serde_json::json!({"rules": [
-            {"name": "user-named",
-             "matches": [{"path": {"type": "PathPrefix", "value": "/api/a"}}],
-             "backendRefs": [{"name": "svc", "port": 80}]},
-            service_rule("/api/b", "svc")
-        ]}),
-    );
-    child.metadata.uid = Some("child-uid".to_string());
-
-    let rules = flatten_route(&parent, &FakeLookup::new(vec![child]))
-        .resolved_rules
-        .expect("delegation should produce resolved rules");
-    assert_eq!(rules[0].resolved_terminal_route_uid.as_deref(), Some("child-uid"));
-    assert_eq!(
-        rules[0].resolved_terminal_rule_identity.as_deref(),
-        Some("name:user-named")
-    );
-    assert_eq!(rules[1].resolved_terminal_route_uid.as_deref(), Some("child-uid"));
-    assert_eq!(rules[1].resolved_terminal_rule_identity.as_deref(), Some("index:1"));
-}
-
-#[test]
-fn delegated_terminal_identity_changes_after_uid_delete_create() {
-    let parent = simple_parent("/api", "billing", "child");
-    let child_spec = serde_json::json!({"rules": [service_rule("/api/a", "svc")]});
-    let mut first = route("billing", "child", child_spec.clone());
-    first.metadata.uid = Some("child-generation-1".to_string());
-    let first_identity = flatten_route(&parent, &FakeLookup::new(vec![first]))
-        .resolved_rules
-        .expect("first child generation should flatten")[0]
-        .resolved_terminal_route_uid
-        .clone();
-
-    let mut recreated = route("billing", "child", child_spec);
-    recreated.metadata.uid = Some("child-generation-2".to_string());
-    let recreated_identity = flatten_route(&parent, &FakeLookup::new(vec![recreated]))
-        .resolved_rules
-        .expect("recreated child generation should flatten")[0]
-        .resolved_terminal_route_uid
-        .clone();
-
-    assert_eq!(first_identity.as_deref(), Some("child-generation-1"));
-    assert_eq!(recreated_identity.as_deref(), Some("child-generation-2"));
-    assert_ne!(first_identity, recreated_identity);
-}
-
-#[test]
-fn ordinary_rules_get_uid_or_typed_key_and_deterministic_rule_identity() {
-    let mut uid_route = route(
-        "apps",
-        "ordinary",
-        serde_json::json!({"rules": [
-            {"name": "primary", "backendRefs": [{"name": "svc", "port": 80}]},
-            {"backendRefs": [{"name": "fallback", "port": 80}]}
-        ]}),
-    );
-    uid_route.metadata.uid = Some("ordinary-uid".to_string());
-    populate_terminal_rule_identities(&mut uid_route);
-    let rules = uid_route.spec.rules.as_ref().expect("ordinary route should keep rules");
-    assert_eq!(rules[0].resolved_terminal_route_uid.as_deref(), Some("ordinary-uid"));
-    assert_eq!(
-        rules[0].resolved_terminal_rule_identity.as_deref(),
-        Some("name:primary")
-    );
-    assert_eq!(rules[1].resolved_terminal_rule_identity.as_deref(), Some("index:1"));
-
-    let mut uidless = route(
-        "apps",
-        "file-route",
-        serde_json::json!({"rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}),
-    );
-    populate_terminal_rule_identities(&mut uidless);
-    let rule = &uidless.spec.rules.as_ref().expect("UID-less route should keep rules")[0];
-    assert_eq!(
-        rule.resolved_terminal_route_uid.as_deref(),
-        Some("HTTPRoute/apps/file-route")
-    );
-    assert_eq!(rule.resolved_terminal_rule_identity.as_deref(), Some("index:0"));
-}
-
-struct NativeReadSpy {
-    inner: FakeLookup,
-    reads: std::cell::Cell<usize>,
-    lists: std::cell::Cell<usize>,
-    queries: std::cell::Cell<usize>,
-}
-impl NativeReadSpy {
-    fn new(inner: FakeLookup) -> Self {
-        Self {
-            inner,
-            reads: Default::default(),
-            lists: Default::default(),
-            queries: Default::default(),
-        }
-    }
-}
-impl DelegationLookup for NativeReadSpy {
-    fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
-        None
-    }
-
-    fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-        self.reads.set(self.reads.get() + 1);
-        self.inner.get_route(key)
-    }
-    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
-        self.lists.set(self.lists.get() + 1);
-        self.inner.list_route_keys_in_namespace(ns)
-    }
-    fn mirror_ref_denied(&self, _terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-        panic!("no mirror in native fixtures")
-    }
-    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-        self.queries.set(self.queries.get() + 1);
-        let source = terminal.source();
-        let key = format!("{}/{}", source.scope().namespace().unwrap(), terminal.source_name());
-        let original = &self.inner.routes[&key];
-        let actual = HttpRouteBackendRefs::from_route(original)
-            .unwrap()
-            .authored_at(terminal.slot().rule(), terminal.slot().backend())
-            .unwrap()
-            .target_view();
-        assert!(
-            std::ptr::eq(actual.name().as_ptr(), terminal.grant_query().target().name().as_ptr()),
-            "authorize original child field before clone"
-        );
-        assert_eq!(terminal.source_uid(), original.metadata.uid.as_deref());
-        assert_eq!(terminal.source_generation(), original.metadata.generation);
-        self.inner.terminal_ref_denied(terminal)
-    }
-}
-
-#[test]
-fn native_invalid_sources_and_selectors_do_not_authorize_or_discover_targets() {
-    let mut parent = simple_parent("/api", "billing", "child");
-    let lookup = NativeReadSpy::new(FakeLookup::new(vec![]));
-    parent.metadata.name = Some("bad/name".into());
-    let outcome = flatten_route(&parent, &lookup);
-    assert!(outcome.resolved_rules.unwrap().is_empty());
-    assert_eq!(lookup.reads.get(), 0);
-    assert_eq!(lookup.lists.get(), 0);
-    assert_eq!(lookup.queries.get(), 0);
-    assert!(outcome.backend_dependencies.is_empty());
-    for (name, namespace, port) in [
-        ("bad/name", "billing", None),
-        ("child", "", None),
-        ("child", "billing", Some(80)),
-        ("*", "billing", Some(80)),
-    ] {
-        let mut parent = simple_parent("/api", namespace, name);
-        parent.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].port = port;
-        let outcome = flatten_route(&parent, &lookup);
-        assert_eq!(lookup.reads.get(), 0);
-        assert_eq!(lookup.lists.get(), 0);
-        assert_eq!(lookup.queries.get(), 0);
-        assert!(outcome.named_children.is_empty());
-        assert!(outcome.wildcard_namespaces.is_empty());
-        assert!(outcome.backend_dependencies.is_empty());
-        assert!(!outcome.issues.is_empty());
-    }
-    // A valid selection remains a recovery edge even if its current child owner is invalid.
-    for selector in ["child", "*"] {
-        let parent = simple_parent("/api", "billing", selector);
-        let mut child = route(
-            "billing",
-            "child",
-            serde_json::json!({"rules":[service_rule("/api","service"),delegating_rule("/api","hidden","grandchild")]}),
-        );
-        child.metadata.name = Some("bad/name".into());
-        let mut fake = FakeLookup::new(vec![]);
-        fake.routes.insert("billing/child".into(), Arc::new(child));
-        let lookup = NativeReadSpy::new(fake);
-        let outcome = flatten_route(&parent, &lookup);
-        assert_eq!(lookup.reads.get(), 1);
-        assert_eq!(lookup.queries.get(), 0);
-        assert!(outcome.resolved_rules.unwrap().is_empty());
-        assert!(outcome.backend_dependencies.is_empty());
-        assert!(outcome.expanded_children.is_empty());
-        if selector == "*" {
-            assert!(outcome.wildcard_namespaces.contains("billing"));
-        } else {
-            assert!(outcome.named_children.contains("billing/child"));
-        }
-        assert!(!outcome.named_children.contains("hidden/grandchild"));
-    }
-}
-
-#[test]
-fn native_child_to_root_authority_and_invalid_weight_slots_preserve_declaring_owner() {
-    let parent = simple_parent("/api", "billing", "child");
-    for allowed in [false, true] {
-        let mut child = route(
-            "billing",
-            "child",
-            serde_json::json!({"rules":[{"backendRefs":[
-                {"name":"root-service","namespace":"infra","port":80,"weight":3},
-                {"name":"root-service","namespace":"infra","port":0,"weight":7},
-                {"name":"root-service","namespace":"infra","port":443,"weight":2}
-            ]}]}),
-        );
-        child.metadata.uid = Some("original-child-uid".into());
-        child.metadata.generation = Some(9);
-        let mut fake = FakeLookup::new(vec![child]);
-        if allowed {
-            fake = fake.allow_cross_ns("billing", "infra");
-        } else {
-            fake = fake.allow_cross_ns("infra", "infra");
-        }
-        let lookup = NativeReadSpy::new(fake);
-        let outcome = flatten_route(&parent, &lookup);
-        assert_eq!(lookup.queries.get(), 2, "invalid port must not reach Grant callback");
-        assert_eq!(
-            outcome.backend_dependencies.len(),
-            2,
-            "same key, separate valid port/slot receipts"
-        );
-        assert!(outcome.cross_ns_target_namespaces.contains("infra"));
-        let refs = outcome.resolved_rules.as_ref().unwrap()[0]
-            .backend_refs
-            .as_ref()
-            .unwrap();
-        assert_eq!(
-            refs.iter().map(|reference| reference.weight).collect::<Vec<_>>(),
-            vec![Some(3), Some(7), Some(2)]
-        );
-        assert_eq!(
-            refs.iter().map(|reference| reference.port).collect::<Vec<_>>(),
-            vec![Some(80), Some(0), Some(443)]
-        );
-        assert_eq!(refs[0].ref_denied.is_some(), !allowed);
-        assert_eq!(refs[2].ref_denied.is_some(), !allowed);
-        assert!(refs[1].ref_denied.is_none());
-    }
-}
-
-struct ExtensionReadSpy {
-    inner: FakeLookup,
-    registered: std::cell::RefCell<HashSet<(usize, Option<usize>, usize)>>,
-    inspected: std::cell::Cell<usize>,
-}
-impl DelegationLookup for ExtensionReadSpy {
-    fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-        self.inner.get_route(key)
-    }
-    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
-        self.inner.list_route_keys_in_namespace(ns)
-    }
-    fn mirror_ref_denied(&self, _terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-        panic!("no mirror in extension fixture")
-    }
-    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-        self.inner.terminal_ref_denied(terminal)
-    }
-    fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
-        let reference = field.validated().ok().flatten()?;
-        let source = reference.source();
-        assert_eq!(source.name(), "child");
-        assert_eq!(source.scope().namespace(), Some("children"));
-        assert_eq!(reference.source_uid(), Some("child-uid"));
-        assert_eq!(reference.source_generation(), Some(8));
-        assert_eq!(reference.target().scope().namespace(), Some("children"));
-        let slot = reference.slot();
-        let actual = HttpRouteExtensionRefs::from_route(&self.inner.routes["children/child"])
-            .unwrap()
-            .authored_at(slot.rule(), slot.backend(), slot.filter())
-            .unwrap()
-            .validated()
-            .unwrap()
-            .unwrap();
-        assert!(
-            std::ptr::eq(actual.target().name().as_ptr(), reference.target().name().as_ptr()),
-            "lookup borrows original child before clone"
-        );
-        if inspect {
-            assert_eq!(
-                self.registered.borrow().len(),
-                3,
-                "all valid child edges, including structurally dropped rules, precede inspection"
-            );
-            assert_eq!(slot.rule(), 0, "invalid rule material is never inspected");
-            self.inspected.set(self.inspected.get() + 1);
-            if slot.backend().is_some() {
-                return Some("backend scope rejected".into());
-            }
-        } else {
-            self.registered
-                .borrow_mut()
-                .insert((slot.rule(), slot.backend(), slot.filter()));
-        }
-        None
-    }
-}
-
-#[test]
-fn child_extension_loans_register_before_scope_drops_and_preserve_source_identity() {
-    let extension = serde_json::json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bundle","resolvedNamespace":"forged"}});
-    let mut valid = service_rule("/api", "service");
-    valid["filters"] = serde_json::json!([extension.clone()]);
-    valid["backendRefs"][0]["filters"] = serde_json::json!([extension.clone()]);
-    let mut invalid = service_rule("/api", "service");
-    invalid["filters"] = serde_json::json!([{"type":"ExtensionRef"},extension]);
-    let mut child = route("children", "child", serde_json::json!({"rules":[valid,invalid]}));
-    child.metadata.uid = Some("child-uid".into());
-    child.metadata.generation = Some(8);
-    let spy = ExtensionReadSpy {
-        inner: FakeLookup::new(vec![child.clone()]),
-        registered: Default::default(),
-        inspected: Default::default(),
-    };
-    let parent = simple_parent("/api", "children", "child");
-    let outcome = flatten_route(&parent, &spy);
-    assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
-    assert_eq!(outcome.extension_dependencies.len(), 3);
-    assert_eq!(spy.registered.borrow().len(), 3);
-    assert_eq!(spy.inspected.get(), 2);
-    assert!(dropped_messages(&outcome)
-        .iter()
-        .any(|message| message.contains("backend scope rejected")));
-    assert!(outcome.named_children.contains("children/child"));
-
-    // Valid declarations retain recovery edges even if route-level child gates drop them.
-    child.spec.hostnames = Some(vec!["example.test".into()]);
-    let spy = ExtensionReadSpy {
-        inner: FakeLookup::new(vec![child.clone()]),
-        registered: Default::default(),
-        inspected: Default::default(),
-    };
-    let outcome = flatten_route(&parent, &spy);
-    assert!(outcome.resolved_rules.unwrap().is_empty());
-    assert_eq!(spy.registered.borrow().len(), 3);
-    assert_eq!(spy.inspected.get(), 0);
-    child.metadata.namespace = Some("bad/ns".into());
-    let mut inner = FakeLookup::new(vec![]);
-    inner.routes.insert("children/child".into(), Arc::new(child));
-    let spy = ExtensionReadSpy {
-        inner,
-        registered: Default::default(),
-        inspected: Default::default(),
-    };
-    assert!(flatten_route(&parent, &spy).resolved_rules.unwrap().is_empty());
-    assert!(spy.registered.borrow().is_empty());
-    assert_eq!(spy.inspected.get(), 0);
-    let mut invalid_parent = parent;
-    invalid_parent.metadata.name = Some("bad/name".into());
-    assert!(flatten_route(&invalid_parent, &spy).resolved_rules.unwrap().is_empty());
-    assert!(spy.registered.borrow().is_empty());
-}
-
-#[test]
-fn delegated_invalid_extension_names_preserve_name_diagnostic_and_create_no_plugin_edges() {
-    for name in ["", "bad/name"] {
-        for backend_scope in [false, true] {
-            let filter = serde_json::json!({"type":"ExtensionRef","extensionRef":{
-                "group":"edgion.io","kind":"EdgionPlugins","name":name
-            }});
-            let mut invalid = service_rule("/api/bad", "service");
-            if backend_scope {
-                invalid["backendRefs"][0]["filters"] = serde_json::json!([filter]);
-            } else {
-                invalid["filters"] = serde_json::json!([filter]);
-            }
-            let child = route(
-                "billing",
-                "child",
-                serde_json::json!({"rules":[invalid,service_rule("/api/good","service")]}),
-            );
-            let parent = simple_parent("/api", "billing", "child");
-            let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-            assert_eq!(outcome.resolved_rules.as_ref().unwrap().len(), 1);
-            assert!(outcome.extension_dependencies.is_empty());
-            let expected = if backend_scope {
-                "child 'billing/child' rules[0] dropped: backendRefs[0] ExtensionRef name must be a valid Kubernetes object name"
-            } else {
-                "child 'billing/child' rules[0] dropped: ExtensionRef name must be a valid Kubernetes object name"
-            };
-            assert_eq!(dropped_messages(&outcome), vec![expected]);
-            assert!(outcome.named_children.contains("billing/child"));
-        }
-    }
-}
-
-fn mirror_backends(
-    rule: &edgion_resources::HTTPRouteRule,
-) -> impl Iterator<Item = &edgion_resources::resources::http_route::BackendObjectReference> {
-    rule.filters
-        .iter()
-        .flatten()
-        .chain(
-            rule.backend_refs
-                .iter()
-                .flatten()
-                .flat_map(|backend| backend.filters.iter().flatten()),
-        )
-        .filter_map(|filter| filter.request_mirror.as_ref().map(|mirror| &mirror.backend_ref))
-}
-
-#[test]
-fn mirror_child_owner_is_borrowed_before_dropped_rule_and_uid_replacement() {
-    struct MirrorSpy {
-        inner: FakeLookup,
-        seen: std::cell::RefCell<Vec<(String, i64, String, MirrorSlot)>>,
-    }
-    impl DelegationLookup for MirrorSpy {
-        fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-            self.inner.get_route(key)
-        }
-        fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
-            self.inner.list_route_keys_in_namespace(ns)
-        }
-        fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-            self.inner.terminal_ref_denied(terminal)
-        }
-        fn extension_ref_error(&self, _field: RouteExtensionField<'_>, _inspect: bool) -> Option<String> {
-            None
-        }
-        fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-            let reference = terminal.reference();
-            let field = reference.field();
-            let original = &self.inner.routes["billing/child"];
-            let MirrorSlot::Route(slot) = field.slot() else {
-                panic!("actual route slot required")
-            };
-            let actual = HttpRouteMirrorRefs::from_route(original)
-                .unwrap()
-                .authored_at(slot.rule(), slot.backend(), slot.filter())
-                .unwrap();
-            assert!(std::ptr::eq(actual.field().config().unwrap(), reference.config()));
-            self.seen.borrow_mut().push((
-                field.source_uid().unwrap().into(),
-                field.source_generation().unwrap(),
-                terminal.grant_query().source().scope().namespace().unwrap().into(),
-                field.slot(),
-            ));
-            self.inner.mirror_ref_denied(terminal)
-        }
-    }
-    let parent = simple_parent("/api", "billing", "child");
-    for uid in ["old-child", "recreated-child"] {
-        let mut child = route(
-            "billing",
-            "child",
-            serde_json::json!({"rules":[{"filters":[
-            {"type":"RequestMirror","requestMirror":{"backendRef":{"name":"copy","namespace":"target","port":80}}},
-            {"type":"ExtensionRef"}
-        ],"backendRefs":[{"name":"primary","port":80}]}]}),
-        );
-        child.metadata.uid = Some(uid.into());
-        child.metadata.generation = Some(4);
-        let spy = MirrorSpy {
-            inner: FakeLookup::new(vec![child]),
-            seen: Default::default(),
-        };
-        let result = flatten_route(&parent, &spy);
-        assert!(result.resolved_rules.as_ref().unwrap().is_empty());
-        let seen = spy.seen.borrow();
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].0, uid);
-        assert_eq!(seen[0].1, 4);
-        assert_eq!(seen[0].2, "billing");
-    }
-}
-
-#[test]
-fn internal_auth_inheritance_uses_root_intermediate_leaf_and_backend_declaring_fields() {
-    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
-    use crate::conf_mgr::ControllerRuntime;
-    use edgion_resources::resources::refs::route_auth_fields::{AuthoredRouteAuthField, HttpRouteAuthRefs};
-    use k8s_openapi::api::core::v1::Secret;
-    use serde_json::json;
-    struct AuthLookup<'a> {
-        base: FakeLookup,
-        root: &'a HTTPRoute,
-        ctx: &'a HandlerContext,
-    }
-    impl DelegationLookup for AuthLookup<'_> {
-        fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-            self.base.get_route(key)
-        }
-        fn list_route_keys_in_namespace(&self, namespace: &str) -> Vec<String> {
-            self.base.list_route_keys_in_namespace(namespace)
-        }
-        fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-            self.base.mirror_ref_denied(terminal)
-        }
-        fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-            self.base.terminal_ref_denied(terminal)
-        }
-        fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
-            self.base.extension_ref_error(field, inspect)
-        }
-        fn auth_decision(&self, field: &AuthoredRouteAuthField<'_>) -> super::super::route_auth::AuthDecision {
-            super::super::route_auth::resolve(self.root, field, self.ctx, true)
-        }
-    }
-    for (declaring, backend_scope) in [("root", false), ("middle", false), ("leaf", false), ("leaf", true)] {
-        let runtime = Arc::new(ControllerRuntime::default());
-        let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
-        let auth = json!({"type":"ExternalAuth","resolvedExternalAuth":{"namespace":"forged"},"externalAuth":{
-            "target":{"name":"auth","port":8080},"decision":{},"request":{"path":{"template":format!("/check/${{secretRef:{declaring}/token:key}}")}},
-            "tls":{"enabled":true,"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{"metadata":{"name":"decoy","namespace":"forged"}}},
-            "resolvedSecrets":{"forged/token:key":"forged-value"}
-        }});
-        let mut values = HashMap::new();
-        for (namespace, child) in [("root", Some("middle")), ("middle", Some("leaf")), ("leaf", None)] {
-            let backend = match child {
-                Some(child) => {
-                    json!({"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":child,"name":"route"})
-                }
-                None => json!({"name":"backend","port":80}),
-            };
-            let mut route = json!({"metadata":{"name":"route","namespace":namespace},"spec":{"rules":[{"matches":[{"path":{"type":"PathPrefix","value":"/"}}],"backendRefs":[backend]}]}});
-            if namespace == declaring {
-                if backend_scope {
-                    route["spec"]["rules"][0]["backendRefs"][0]["filters"] = json!([auth.clone()]);
-                } else {
-                    route["spec"]["rules"][0]["filters"] = json!([auth.clone()]);
-                }
-            }
-            values.insert(namespace, serde_json::from_value::<HTTPRoute>(route).unwrap());
-        }
-        let token: Secret = serde_json::from_value(
-            json!({"metadata":{"name":"token","namespace":declaring},"stringData":{"key":"fresh-value"}}),
-        )
-        .unwrap();
-        let client: Secret = serde_json::from_value(
-            json!({"metadata":{"name":"client","namespace":declaring},"type":"kubernetes.io/tls"}),
-        )
-        .unwrap();
-        runtime.secret_store.replace_all(HashMap::from([
-            (format!("{declaring}/token"), token),
-            (format!("{declaring}/client"), client),
-        ]));
-        let root = values.remove("root").unwrap();
-        let lookup = AuthLookup {
-            base: FakeLookup::new(vec![values.remove("middle").unwrap(), values.remove("leaf").unwrap()])
-                .allow_cross_ns("root", "middle")
-                .allow_cross_ns("middle", "leaf"),
-            root: &root,
-            ctx: &ctx,
-        };
-        let outcome = flatten_route(&root, &lookup);
-        assert!(outcome.auth_errors.is_empty());
-        assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
-        let mut effective = root.clone();
-        effective.spec.resolved_rules = outcome.resolved_rules;
-        let references = HttpRouteAuthRefs::from_route(&effective).unwrap();
-        let field = references.effective_at(0, backend_scope.then_some(0), 0).unwrap();
-        assert_eq!(field.namespace(), declaring);
-        assert_eq!(
-            field
-                .config()
-                .resolved_secrets
-                .as_ref()
-                .unwrap()
-                .0
-                .get(&format!("{declaring}/token:key"))
-                .unwrap(),
-            "fresh-value"
-        );
-        assert_eq!(
-            field
-                .config()
-                .conn
-                .tls
-                .as_ref()
-                .unwrap()
-                .resolved_client_certificate
-                .as_ref()
-                .unwrap()
-                .metadata
-                .namespace
-                .as_deref(),
-            Some(declaring)
-        );
-        let root_owner = ResourceRef::new(
-            edgion_resources::ResourceKind::HTTPRoute,
-            Some("root".into()),
-            "route".into(),
-        );
-        assert_eq!(
-            runtime.secret_ref_manager.get_refs(&format!("{declaring}/token")),
-            vec![root_owner.clone()]
-        );
-        assert_eq!(
-            runtime.secret_ref_manager.get_refs(&format!("{declaring}/client")),
-            vec![root_owner]
-        );
-    }
-}
-
-#[test]
-fn independently_dropped_auth_rule_keeps_root_recovery_dependencies() {
-    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
-    use crate::conf_mgr::ControllerRuntime;
-    use edgion_resources::resources::refs::route_auth_fields::AuthoredRouteAuthField;
-    struct Lookup<'a> {
-        root: &'a HTTPRoute,
-        ctx: &'a HandlerContext,
-    }
-    impl DelegationLookup for Lookup<'_> {
-        fn get_route(&self, _: &str) -> Option<Arc<HTTPRoute>> {
-            None
-        }
-        fn list_route_keys_in_namespace(&self, _: &str) -> Vec<String> {
-            vec![]
-        }
-        fn terminal_ref_denied(&self, _: TerminalBackendReference<'_>) -> Option<RefDenied> {
-            None
-        }
-        fn mirror_ref_denied(&self, _: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-            None
-        }
-        fn extension_ref_error(&self, _: RouteExtensionField<'_>, _: bool) -> Option<String> {
-            None
-        }
-        fn auth_decision(&self, field: &AuthoredRouteAuthField<'_>) -> super::super::route_auth::AuthDecision {
-            super::super::route_auth::resolve(self.root, field, self.ctx, true)
-        }
-    }
-    let root = route(
-        "apps",
-        "root",
-        serde_json::json!({"rules":[
-            {"retry":{"attempts":0},"filters":[{"type":"ExternalAuth","externalAuth":{"target":{"name":"auth","port":80},"decision":{},"request":{"path":{"template":"/${secretRef:apps/missing:key}"}}}}],"backendRefs":[{"name":"backend","port":80}]},
-            {"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"missing-child"}]}
-        ]}),
-    );
-    assert!(super::super::http_route::find_invalid_rule_details(&root, "apps")
-        .iter()
-        .any(|(index, reason)| *index == 0 && reason.contains("at least 1")));
-    let runtime = Arc::new(ControllerRuntime::default());
-    let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
-    let outcome = flatten_route(&root, &Lookup { root: &root, ctx: &ctx });
-    assert!(outcome.resolved_rules.unwrap().is_empty());
-    assert!(!outcome.auth_errors.is_empty());
-    assert_eq!(
-        runtime.secret_ref_manager.get_refs("apps/missing"),
-        vec![ResourceRef::new(
-            edgion_resources::ResourceKind::HTTPRoute,
-            Some("apps".into()),
-            "root".into()
-        )]
-    );
-}
-
-#[test]
-fn session_lifetime_child_first_else_inherited_across_two_levels() {
-    for (mid_policy, child_policy, expected) in [
-        (None, None, Some("30s")),
-        (Some(serde_json::json!({"absoluteTimeout":"5s"})), None, Some("5s")),
-        (
-            Some(serde_json::json!({"absoluteTimeout":"5s"})),
-            Some(serde_json::json!({})),
-            None,
+            "parent",
+            serde_json::json!([delegating_rule("/api", "t", "c")]),
         ),
-        (None, Some(serde_json::json!({"absoluteTimeout":"1ms"})), Some("1ms")),
+        &ctx,
+    )
+    .await;
+    let foreign = route(
+        "t",
+        "c",
+        serde_json::json!({
+            "parentRefs": [{"group": "example.com", "kind": "HTTPRoute", "namespace": "infra", "name": "parent"}],
+            "rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]
+        }),
+    );
+    let facts = http_delegation_facts(&foreign, ctx.runtime());
+    assert_eq!(facts.shape, ParentRefShape::Root);
+    assert!(facts.declared_parents.is_empty());
+    assert!(!facts.inert);
+    let parsed = parse(foreign, &ctx).await;
+    assert!(parsed.spec.resolved_delegation_keys.is_empty());
+    let graph = &ctx.runtime().http_route_delegation_graph;
+    assert!(!graph.is_participant("t/c"));
+    assert!(graph.declared_parents("t/c").is_empty());
+}
+
+/// Security I4: a route in a foreign namespace declaring the platform root
+/// must not requeue it on create, update or delete.
+#[tokio::test]
+async fn foreign_child_churn_never_requeues_platform_root() {
+    let ctx = make_ctx();
+    parse(
+        root_parent(
+            "platform",
+            "root",
+            serde_json::json!([
+                delegating_rule("/api", "team", "*"),
+                delegating_rule("/b", "team", "billing")
+            ]),
+        ),
+        &ctx,
+    )
+    .await;
+    let graph = &ctx.runtime().http_route_delegation_graph;
+    for round in 0..3 {
+        let evil = child("evil", &format!("c{round}"), &[("platform", "root")]);
+        let facts = http_delegation_facts(&evil, ctx.runtime());
+        assert!(sync_http_delegation_graph(graph, &evil, &facts, false, || false)
+            .unwrap()
+            .is_empty());
+        assert!(graph.on_route_deleted(&format!("evil/c{round}")).is_empty());
+    }
+}
+
+#[test]
+fn backend_selecting_plugins_use_the_shared_upstream_jump_classifier() {
+    for name in [
+        "Canary",
+        "DynamicInternalUpstream",
+        "DynamicExternalUpstream",
+        "DirectEndpoint",
+        "RegionRoute",
+        "GraphqlOperationRouter",
+        "AllEndpointStatus",
+        "AiProxy",
     ] {
-        let parent = parent_with_rules(serde_json::json!([{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-            "sessionPersistence": {"absoluteTimeout": "30s"},
-            "timeouts": {"request": "30s"},
-            "retry": {"attempts": 5},
-            "backendRefs": [{
-                "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                "name": "mid", "namespace": "billing"
-            }]
-        }]));
-        // Mid level overrides retry, delegates deeper.
-        let mut mid = route(
-            "billing",
-            "mid",
-            serde_json::json!({"rules": [{
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}}],
-                "retry": {"attempts": 2},
-                "backendRefs": [{
-                    "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                    "name": "leaf", "namespace": "billing"
-                }]
-            }]}),
-        );
-        let mut leaf = route(
-            "billing",
-            "leaf",
-            serde_json::json!({"rules": [{
-                "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay/now"}}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            }]}),
-        );
-        mid.spec.rules.as_mut().unwrap()[0].session_persistence =
-            mid_policy.map(|p| serde_json::from_value(p).unwrap());
-        leaf.spec.rules.as_mut().unwrap()[0].session_persistence =
-            child_policy.map(|p| serde_json::from_value(p).unwrap());
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![mid, leaf]));
-        let rules = outcome.resolved_rules.clone().unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(
-            rules[0]
-                .session_persistence
-                .as_ref()
-                .unwrap()
-                .absolute_timeout
-                .as_deref(),
-            expected
-        );
-        // timeouts from root, retry from mid (nearest ancestor override)
-        assert_eq!(
-            rules[0].timeouts.as_ref().and_then(|t| t.request.as_deref()),
-            Some("30s")
-        );
-        assert_eq!(rules[0].retry.as_ref().and_then(|r| r.attempts), Some(2));
-        // Transitive dependency registration: root depends on both mid and leaf
-        assert!(outcome.named_children.contains("billing/mid"));
-        assert!(outcome.named_children.contains("billing/leaf"));
+        assert!(is_backend_selecting_plugin(name), "{name}");
+    }
+    for name in ["RequestId", "BasicAuth", "RateLimitLocal", "AiGuard", "Guardrail"] {
+        assert!(!is_backend_selecting_plugin(name), "{name}");
     }
 }
 
+// =====================================================================
+// Static scope check helpers
+// =====================================================================
+
 #[test]
-fn arch156_cascading_parent_scopes_preserve_or_branch_pairing() {
-    let parent = parent_with_rules(serde_json::json!([{
-        "matches": [
-            {"path": {"value": "/api"}, "headers": [{"name": "x-tenant", "value": "a"}]},
-            {"path": {"value": "/api/v1"}, "headers": [{"name": "x-tenant", "value": "b"}]}
-        ],
-        "backendRefs": [{"group": GATEWAY_API_GROUP, "kind": "HTTPRoute", "namespace": "billing", "name": "middle"}]
-    }]));
-    let middle = route(
-        "billing",
-        "middle",
-        serde_json::json!({"rules": [delegating_rule("/api/v1", "billing", "leaf")]}),
+fn prefix_covers_uses_segment_boundaries() {
+    assert!(prefix_covers("/api/v1/billing", "/api/v1/billing"));
+    assert!(prefix_covers("/api/v1/billing", "/api/v1/billing/x"));
+    assert!(!prefix_covers("/api/v1/billing", "/api/v1/billingx"));
+    assert!(!prefix_covers("/api/v1/billing", "/api/v1"));
+    assert!(prefix_covers("/", "/anything"));
+}
+
+#[test]
+fn canonical_http_path_matches_gateway_canonicalization() {
+    assert_eq!(canonical_http_path("/api//v1/", true).as_deref(), Some("/api/v1"));
+    assert_eq!(canonical_http_path("/api/v1/", false).as_deref(), Some("/api/v1/"));
+    assert_eq!(canonical_http_path("/", true).as_deref(), Some("/"));
+    for unchecked in ["/users/:id", "/a%2Fb", "/a;x", "relative"] {
+        assert_eq!(canonical_http_path(unchecked, true), None, "{unchecked}");
+    }
+}
+
+fn scoped(mask: u32, scopes: &[&str]) -> DelegatingRule {
+    DelegatingRule {
+        mask,
+        scopes: Some(scopes.iter().map(|s| s.to_string()).collect()),
+    }
+}
+
+fn child_rule(mask: u32, matches: Vec<ChildMatch>) -> ChildRuleFacts {
+    ChildRuleFacts { mask, matches }
+}
+
+#[test]
+fn classify_child_rules_reports_scope_and_per_rule_conflicts() {
+    let edge = [scoped(0b1, &["/a"]), scoped(0, &["/b"])];
+    let rules = [
+        // Reachable through /a only, conflicts with it.
+        child_rule(0b1, vec![ChildMatch::HttpPrefix("/a/x".into())]),
+        // Reachable through /b (mask 0): serves.
+        child_rule(0b1, vec![ChildMatch::HttpPrefix("/b/x".into())]),
+        // Reachable through both: serves through /b.
+        child_rule(0b1, vec![]),
+        // Out of scope, exact and prefix.
+        child_rule(0, vec![ChildMatch::HttpExact("/c".into())]),
+        child_rule(0, vec![ChildMatch::HttpPrefix("/ab".into())]),
+        // A broader child prefix intersects the delegated prefix.
+        child_rule(0, vec![ChildMatch::HttpPrefix("/".into())]),
+        // Uncheckable match: never reported.
+        child_rule(0, vec![ChildMatch::HttpExact("/c".into()), ChildMatch::Unchecked]),
+    ];
+    assert_eq!(classify_child_rules(&edge, &rules), (vec![0], vec![3, 4]));
+
+    // An unscoped delegating rule reaches everything.
+    let edge = [DelegatingRule::unscoped(0b1)];
+    assert_eq!(classify_child_rules(&edge, &rules), (vec![0, 1, 2], vec![]));
+
+    // gRPC: service equality.
+    let edge = [scoped(0, &["pkg.Api"])];
+    let rules = [
+        child_rule(0, vec![ChildMatch::GrpcService("pkg.Api".into())]),
+        child_rule(0, vec![ChildMatch::GrpcService("pkg.Other".into())]),
+    ];
+    assert_eq!(classify_child_rules(&edge, &rules), (vec![], vec![1]));
+}
+
+#[test]
+fn edge_message_lists_scope_then_conflict_segments() {
+    assert_eq!(edge_message(RouteKindName::HTTPRoute, "a/p", &[], &[]), None);
+    assert_eq!(
+        edge_message(RouteKindName::HTTPRoute, "a/p", &[2], &[0, 1]).as_deref(),
+        Some(
+            "Rule(s) outside parent HTTPRoute 'a/p' scope: rules[0], rules[1]; \
+             Conflicting Rule(s) with parent HTTPRoute 'a/p': rules[2]: a standard filter conflicts with a mandatory filter of the same type"
+        )
     );
-    let leaf = route(
-        "billing",
-        "leaf",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "RegularExpression", "value": "^/api/v1/?secret$"},
-                         "method": "GET", "queryParams": [{"name": "version", "value": "1"}]}],
-            "backendRefs": [{"name": "svc", "port": 8080}]
-        }]}),
-    );
-    let outcome = flatten_route(&parent, &FakeLookup::new(vec![middle, leaf]));
-    assert!(outcome.issues.is_empty());
-    assert_eq!(outcome.named_children.len(), 2);
-    let rules = outcome.resolved_rules.unwrap();
-    let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
-        panic!("delegated")
-    };
-    assert_eq!(matches.len(), 2);
-    assert_eq!(matches[0].raw_path_prefixes, ["/api", "/api/v1"]);
-    assert_eq!(matches[1].raw_path_prefixes, ["/api/v1", "/api/v1"]);
-    for (matched, tenant) in rules[0].matches.as_ref().unwrap().iter().zip(["a", "b"]) {
-        assert_eq!(matched.headers.as_ref().unwrap()[0].value, tenant);
-        assert_eq!(matched.method.as_deref(), Some("GET"));
-        assert_eq!(matched.query_params.as_ref().unwrap()[0].value, "1");
-    }
-}
-
-#[test]
-fn arch156_eight_delegation_edges_retain_all_ancestor_prefixes() {
-    let parent = simple_parent("/api", "billing", "node1");
-    let mut routes = Vec::new();
-    let mut prefix = "/api".to_string();
-    let mut expected = vec![prefix.clone()];
-    for depth in 1..8 {
-        prefix.push_str(&format!("/{depth}"));
-        expected.push(prefix.clone());
-        routes.push(route(
-            "billing",
-            &format!("node{depth}"),
-            serde_json::json!({
-                "rules": [delegating_rule(&prefix, "billing", &format!("node{}", depth + 1))]
-            }),
-        ));
-    }
-    routes.push(route(
-        "billing",
-        "node8",
-        serde_json::json!({"rules": [{
-            "matches": [{"path": {"type": "RegularExpression", "value": format!("^{prefix}/?secret$")}}],
-            "backendRefs": [{"name": "svc", "port": 80}]
-        }]}),
-    ));
-    let outcome = flatten_route(&parent, &FakeLookup::new(routes));
-    assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
-    assert_eq!(outcome.named_children.len(), 8);
-    let rules = outcome.resolved_rules.unwrap();
-    assert_eq!(rules.len(), 1);
-    let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
-        panic!("terminal candidate must carry its full ancestry");
-    };
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].raw_path_prefixes, expected);
-}
-
-#[test]
-fn arch156_regex_conflicts_skip_only_incompatible_parent_branches() {
-    for field in ["method", "headers", "queryParams"] {
-        for reverse in [false, true] {
-            for all_conflict in [false, true] {
-                let constraint = |value: &str| match field {
-                    "method" => serde_json::json!(value),
-                    _ => serde_json::json!([{"name": "tenant", "value": value}]),
-                };
-                let mut compatible = serde_json::json!({"path": {"value": "/api"}});
-                compatible[field] = constraint(if all_conflict { "POST" } else { "GET" });
-                let mut incompatible = serde_json::json!({"path": {"value": "/admin"}});
-                incompatible[field] = constraint("POST");
-                let mut alternatives = vec![compatible, incompatible];
-                if reverse {
-                    alternatives.reverse();
-                }
-                let mut delegation = delegating_rule("/", "infra", "child");
-                delegation["matches"] = serde_json::json!(alternatives);
-                let parent = parent_with_rules(serde_json::json!([delegation]));
-                let mut terminal = service_rule("^/api/x$", "svc");
-                terminal["matches"][0]["path"]["type"] = serde_json::json!("RegularExpression");
-                terminal["matches"][0][field] = constraint("GET");
-                let child = route("infra", "child", serde_json::json!({"rules": [terminal]}));
-                let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-                let rules = outcome.resolved_rules.as_ref().unwrap();
-                if all_conflict {
-                    assert!(rules.is_empty(), "{field}, reverse={reverse}");
-                    assert_eq!(dropped_messages(&outcome).len(), 1);
-                    assert!(dropped_messages(&outcome)[0].contains("contradicts"));
-                    continue;
-                }
-                assert!(
-                    outcome.issues.is_empty(),
-                    "{field}, reverse={reverse}: {:?}",
-                    outcome.issues
-                );
-                assert_eq!(rules.len(), 1);
-                let matches = rules[0].matches.as_ref().unwrap();
-                assert_eq!(matches.len(), 1);
-                assert_eq!(serde_json::to_value(&matches[0]).unwrap()[field], constraint("GET"));
-                let Some(ResolvedParentMatch::Delegated { matches: parents }) = &rules[0].resolved_parent_match else {
-                    panic!("retained regex branch must carry its parent scope");
-                };
-                assert_eq!(parents.len(), matches.len());
-                assert_eq!(parents[0].raw_path_prefixes, ["/api"]);
-            }
-        }
-    }
-}
-
-#[test]
-fn arch156_parent_prefix_transport_preserves_authored_values() {
-    for authored in ["/%%32%66", "/%%34%31", "/api;tenant=admin"] {
-        let parent = simple_parent(authored, "infra", "child");
-        let child = route(
-            "infra",
-            "child",
-            serde_json::json!({"rules": [{
-                "matches": [{"path": {"type": "RegularExpression", "value": "^/evil$"}}],
-                "backendRefs": [{"name": "svc", "port": 80}]
-            }]}),
-        );
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
-        assert!(outcome.issues.is_empty());
-        let rules = outcome.resolved_rules.unwrap();
-        let wire = serde_json::to_vec(&rules).unwrap();
-        let received: Vec<HTTPRouteRule> = serde_json::from_slice(&wire).unwrap();
-        let Some(ResolvedParentMatch::Delegated { matches }) = &received[0].resolved_parent_match else {
-            panic!("serialized rule must preserve delegation scope");
-        };
-        assert_eq!(matches[0].raw_path_prefixes, [authored]);
-    }
-}
-
-#[test]
-fn arch156_raw_paths_survive_cascade_and_terminal_inheritance() {
-    for raw in ["/%%32%66", "/%%34%31", "/api;tenant=admin"] {
-        let parent = simple_parent(raw, "billing", "middle");
-        let middle_raw = format!("{raw}/v1;scope=read");
-        let middle = route(
-            "billing",
-            "middle",
-            serde_json::json!({
-                "rules": [delegating_rule(&middle_raw, "billing", "leaf")]
-            }),
-        );
-        let child_raw = format!("{middle_raw}/item;id=1");
-        let leaf = route(
-            "billing",
-            "leaf",
-            serde_json::json!({
-                "rules": [service_rule("/", "svc"), service_rule(&child_raw, "svc")]
-            }),
-        );
-        let outcome = flatten_route(&parent, &FakeLookup::new(vec![middle, leaf]));
-        assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
-        let wire = serde_json::to_vec(&outcome.resolved_rules.unwrap()).unwrap();
-        let received: Vec<HTTPRouteRule> = serde_json::from_slice(&wire).unwrap();
-        assert_eq!(rule_paths(&received), [middle_raw.as_str(), child_raw.as_str()]);
-        for rule in received {
-            let Some(ResolvedParentMatch::Delegated { matches }) = rule.resolved_parent_match else {
-                panic!("delegated");
-            };
-            assert_eq!(matches[0].raw_path_prefixes, [raw, middle_raw.as_str()]);
-        }
-    }
 }

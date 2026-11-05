@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use edgion_resources::resources::route_delegation::RouteKindName;
 use parking_lot::RwLock;
 
 use super::conf_center::CenterApi;
@@ -19,6 +20,7 @@ use super::sync_runtime::resource_processor::{
     backend_tls_policy_ref::BackendTLSPolicyState,
     configmap_utils::ConfigMapStore,
     credential_source_state::CredentialSourceRegistry,
+    delegation_graph::DelegationGraph,
     edgion_config_data_utils::{EdgionConfigDataRefManager, EdgionConfigDataStore},
     frontend_ca_ref::FrontendCaRefManager,
     gateway_route_index::GatewayRouteIndex,
@@ -30,7 +32,6 @@ use super::sync_runtime::resource_processor::{
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
-    route_delegation_index::RouteDelegationIndex,
     secret_utils::{new_secret_ref_manager, SecretRefManager, SecretStore},
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
@@ -42,6 +43,8 @@ use crate::services::credential_manager::memory::CredentialMemoryStore;
 /// All fields are plain (non-Arc) values; the struct itself is shared as
 /// `Arc<ControllerRuntime>` so cloning is cheap and all owners see the same data.
 pub struct ControllerRuntime {
+    /// Dedicated, credential-free Center projections; never a Gateway cache alias.
+    pub center_watch: crate::fed_sync::center_watch::CenterWatchStore,
     status_identity: RwLock<Option<KubernetesStatusIdentity>>,
     pub(crate) processor_registry: ProcessorRegistry,
     pub(crate) namespace_store: NamespaceStore,
@@ -57,14 +60,14 @@ pub struct ControllerRuntime {
     pub(crate) frontend_ca_ref_manager: FrontendCaRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
-    /// child HTTPRoute → delegating parent HTTPRoutes reverse index; a child
-    /// change requeues its parents for delegation re-flattening.
-    pub(crate) route_delegation_index: RouteDelegationIndex,
-    /// child GRPCRoute → delegating parent GRPCRoutes reverse index. Kept as
-    /// a separate `RouteDelegationIndex` instance (same type, reused
-    /// unchanged) so HTTPRoute and GRPCRoute `"ns/name"` keys never collide
-    /// and a GRPCRoute change only requeues gRPC parents.
-    pub(crate) grpc_route_delegation_index: RouteDelegationIndex,
+    /// Participants-only HTTPRoute delegation graph: parent targets, declared
+    /// children, confirmed edges and levels. Drives child
+    /// `resolved_delegation_keys` and delegation requeues.
+    pub(crate) http_route_delegation_graph: DelegationGraph,
+    /// Participants-only GRPCRoute delegation graph. A separate instance so
+    /// HTTPRoute and GRPCRoute `"ns/name"` keys never collide and a GRPCRoute
+    /// change only requeues gRPC routes.
+    pub(crate) grpc_route_delegation_graph: DelegationGraph,
     pub(crate) attached_route_tracker: AttachedRouteTracker,
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) proxy_protocol_listener_policy: ProxyProtocolListenerPolicyManager,
@@ -113,6 +116,7 @@ pub struct ControllerRuntime {
 impl ControllerRuntime {
     pub fn new() -> Self {
         Self {
+            center_watch: Default::default(),
             status_identity: RwLock::new(None),
             processor_registry: ProcessorRegistry::new(),
             namespace_store: NamespaceStore::new(),
@@ -125,8 +129,8 @@ impl ControllerRuntime {
             frontend_ca_ref_manager: BidirectionalRefManager::with_component("frontend_ca_ref_manager"),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
-            route_delegation_index: RouteDelegationIndex::new(),
-            grpc_route_delegation_index: RouteDelegationIndex::new(),
+            http_route_delegation_graph: DelegationGraph::new(RouteKindName::HTTPRoute),
+            grpc_route_delegation_graph: DelegationGraph::new(RouteKindName::GRPCRoute),
             attached_route_tracker: AttachedRouteTracker::new(),
             listener_port_manager: ListenerPortManager::new(),
             proxy_protocol_listener_policy: ProxyProtocolListenerPolicyManager::new(),
@@ -207,6 +211,7 @@ impl ControllerRuntime {
     /// is process-scoped and never dropped. `clear_processors()` breaks the first cycle
     /// on each restart; dispatcher listeners are left alive by design (see above).
     pub fn reset(&self) {
+        self.center_watch.reset();
         self.listener_port_manager.clear();
         *self.status_identity.write() = None;
         self.processor_registry.clear_processors();
@@ -233,14 +238,11 @@ impl ControllerRuntime {
         self.gateway_route_index.clear();
         tracing::info!(component = "controller_runtime", "Cleared GatewayRouteIndex");
 
-        self.route_delegation_index.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RouteDelegationIndex");
+        self.http_route_delegation_graph.clear();
+        tracing::info!(component = "controller_runtime", "Cleared HTTPRoute DelegationGraph");
 
-        self.grpc_route_delegation_index.clear();
-        tracing::info!(
-            component = "controller_runtime",
-            "Cleared GRPCRoute RouteDelegationIndex"
-        );
+        self.grpc_route_delegation_graph.clear();
+        tracing::info!(component = "controller_runtime", "Cleared GRPCRoute DelegationGraph");
 
         self.attached_route_tracker.clear();
         tracing::info!(component = "controller_runtime", "Cleared AttachedRouteTracker");

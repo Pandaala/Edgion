@@ -1,0 +1,19 @@
+# matchless child (gRPC): a rule with no matches is a catch-all inside the
+# subtree. It is safe because the parent level already fixed the service:
+# every test.TestService method reaches this child, any other service is
+# rejected at the root level (design §9). No rewrite of the child happens.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: matchless-child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-matchless-parent
+      namespace: edgion-test
+  rules:
+    - backendRefs:
+        - name: child-grpc-svc
+          port: 30021

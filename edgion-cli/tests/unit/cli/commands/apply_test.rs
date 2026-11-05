@@ -137,3 +137,128 @@ async fn batch_dry_run_propagates_directory_and_single_file_failures() {
     let error = apply(&client, bad_file.to_str().unwrap(), true).await.unwrap_err();
     assert!(error.to_string().contains("Empty YAML file"));
 }
+
+// ---- create/update race: create 409 falls back to update ----
+
+/// The existence probe reads the Controller's processed cache, which can trail
+/// a write that just reached storage. A create that answers 409 Conflict must
+/// fall back to an update instead of failing the apply.
+#[tokio::test]
+async fn create_conflict_falls_back_to_update() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/namespaced/secret/edgion-test"))
+        .respond_with(ResponseTemplate::new(409).set_body_string("already exists"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/namespaced/secret/edgion-test/race"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let file = std::env::temp_dir().join(format!("edgion-apply-race-{}.yaml", std::process::id()));
+    std::fs::write(
+        &file,
+        "apiVersion: v1\nkind: Secret\nmetadata:\n  name: race\n  namespace: edgion-test\n",
+    )
+    .unwrap();
+    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let result = apply(&client, file.to_str().unwrap(), false).await;
+    let _ = std::fs::remove_file(&file);
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// A create rejected for any other reason still fails the apply.
+#[tokio::test]
+async fn create_validation_error_is_not_retried_as_update() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("invalid"))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let file = std::env::temp_dir().join(format!("edgion-apply-invalid-{}.yaml", std::process::id()));
+    std::fs::write(
+        &file,
+        "apiVersion: v1\nkind: Secret\nmetadata:\n  name: bad\n  namespace: edgion-test\n",
+    )
+    .unwrap();
+    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let result = apply(&client, file.to_str().unwrap(), false).await;
+    let _ = std::fs::remove_file(&file);
+    assert!(result.is_err());
+}
+
+/// A follower Controller answers every write with the not-leader 409. That
+/// is not an "already exists" answer: the apply reports it (with the leader
+/// address) and never retries the write as an update.
+#[tokio::test]
+async fn not_leader_conflict_is_reported_and_not_retried_as_update() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let not_leader = serde_json::json!({"error": "not leader", "leader": "10.0.0.7:5800"});
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(not_leader.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(not_leader))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let file = std::env::temp_dir().join(format!("edgion-apply-not-leader-{}.yaml", std::process::id()));
+    std::fs::write(
+        &file,
+        "apiVersion: v1\nkind: Secret\nmetadata:\n  name: standby\n  namespace: edgion-test\n",
+    )
+    .unwrap();
+    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let result = apply(&client, file.to_str().unwrap(), false).await;
+    let _ = std::fs::remove_file(&file);
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("not leader"), "{error}");
+    assert!(error.contains("10.0.0.7:5800"), "{error}");
+}
+
+#[test]
+fn not_leader_error_recognizes_only_the_not_leader_body() {
+    assert_eq!(
+        not_leader_error(r#"{"error":"not leader","leader":null}"#).as_deref(),
+        Some("API error: not leader; the leader is currently unknown, retry later")
+    );
+    assert!(not_leader_error(r#"{"error":"not leader","leader":"h:1"}"#)
+        .unwrap()
+        .contains("h:1"));
+    assert_eq!(not_leader_error("already exists"), None);
+    assert_eq!(not_leader_error(r#"{"error":"AlreadyExists"}"#), None);
+}

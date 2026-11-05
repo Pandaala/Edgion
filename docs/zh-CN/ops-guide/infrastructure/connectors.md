@@ -1537,3 +1537,17 @@ LinkSys key。Gauge 在每次指标采集时读取已发布的客户端。健康
 
 此连接器仅支持 OTLP/gRPC 日志导出，没有 `protocol` 字段，也不保留旧内联 OTLP
 输出格式。不提供 OTLP/HTTP、trace 或应用指标导出。
+
+### 地址族与完整答案
+
+自定义 `urlTemplate` 可使用 `{recordType}`，例如
+`https://dns.example/resolve?host={domain}&type={recordType}`，运行时替换为 `A` 或 `AAAA`。
+`all` 顺序发送两次请求，共用一次 `connection.timeoutMs` 主查询期限。没有该占位符的
+自定义 URL 表示固定或组合的完整答案，操作者须确认服务商支持所需地址族。无自定义 URL
+的内置 preset 仅支持 IPv4 主查询，IPv6/`all` 使用配置的 fallback 或失败。
+
+地址族查询在过滤前拒绝非法地址、错误容器、typed 查询返回错误族以及超过 256 个去重规范
+地址的结果（含两次查询合并）。空数组、空字符串或空分隔文本是有效的空地址族；一族非空、
+另一族有效为空可以成功，两族均空失败。查询失败不能当成该族已消失；fallback 保持原地址族。
+系统 DNS 无法识别被操作系统隐藏的部分失败；固定/组合 HTTPDNS 的完整性由服务商保证。
+HTTPDNS 自身域名仍使用原生系统解析，改变后端地址族不会重建客户端或复制 TLS 材料。

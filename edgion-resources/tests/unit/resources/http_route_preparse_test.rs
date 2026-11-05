@@ -64,7 +64,7 @@ fn http_route_path_match_pathprefix_normalized() {
 }
 
 #[test]
-fn prefix_trailing_slash_is_canonical_in_declared_and_resolved_rules() {
+fn prefix_trailing_slash_is_canonical_and_idempotent() {
     for (kind, input, expected) in [
         ("PathPrefix", "/abc/", "/abc"),
         ("PathPrefix", "/abc///", "/abc"),
@@ -77,18 +77,9 @@ fn prefix_trailing_slash_is_canonical_in_declared_and_resolved_rules() {
         ("RegularExpression", "/abc/", "/abc/"),
     ] {
         let mut route = make_route_with_path(kind, input);
-        route.spec.resolved_rules = route.spec.rules.clone();
         for _ in 0..2 {
             route.normalize_path_matchers();
             assert_eq!(get_path_value(&route), expected, "{kind} {input}");
-            let resolved = route.spec.resolved_rules.as_ref().unwrap()[0].matches.as_ref().unwrap()[0]
-                .path
-                .as_ref()
-                .unwrap()
-                .value
-                .as_deref()
-                .unwrap();
-            assert_eq!(resolved, expected, "resolved {kind} {input}");
         }
     }
 }
@@ -119,13 +110,12 @@ fn http_route_path_match_dot_segment_normalized() {
 }
 
 // =========================================================================
-// resolved_rules preparse coverage (delegation)
+// preparse pipeline coverage
 // =========================================================================
 
 #[test]
-fn resolved_rules_covered_by_preparse_pipeline() {
-    // A route whose delegation flatten produced resolved_rules must get the
-    // same load-time processing as spec.rules: path normalization,
+fn rules_covered_by_preparse_pipeline() {
+    // spec.rules get the full load-time processing: path normalization,
     // timeouts, retry, and annotation copies.
     let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
@@ -135,24 +125,20 @@ fn resolved_rules_covered_by_preparse_pipeline() {
             "annotations": {"edgion.io/forward-raw-path": "true"}
         },
         "spec": {
-            "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]}]
+            "rules": [{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api//billing/./pay"}}],
+                "timeouts": {"request": "10s"},
+                "retry": {"attempts": 2}
+            }]
         }
     }))
     .unwrap();
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api//billing/./pay"}}],
-            "timeouts": {"request": "10s"},
-            "retry": {"attempts": 2}
-        }]))
-        .unwrap(),
-    );
 
     route.preparse();
     route.parse_timeouts();
     route.parse_retry();
 
-    let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+    let rule = &route.spec.rules.as_ref().unwrap()[0];
     assert_eq!(
         rule.matches.as_ref().unwrap()[0]
             .path
@@ -161,18 +147,18 @@ fn resolved_rules_covered_by_preparse_pipeline() {
             .value
             .as_deref(),
         Some("/api/billing/pay"),
-        "resolved_rules paths must be normalized"
+        "rule paths must be normalized"
     );
-    assert!(rule.parsed_timeouts.is_some(), "resolved_rules timeouts must be parsed");
+    assert!(rule.parsed_timeouts.is_some(), "rule timeouts must be parsed");
     assert_eq!(
         rule.parsed_retry.as_ref().and_then(|r| r.attempts),
         Some(2),
-        "resolved_rules retry must be parsed"
+        "rule retry must be parsed"
     );
     assert_eq!(
         rule.parsed_forward_raw_path,
         Some(true),
-        "annotation copies must reach resolved_rules"
+        "annotation copies must reach rules"
     );
 }
 
@@ -532,8 +518,7 @@ fn parses_mirror_tuning_capacity_fallback_preserves_valid_fields() {
 }
 
 #[test]
-fn mirror_tuning_reaches_resolved_rules() {
-    // Delegation-flattened rules must receive the same annotation copies.
+fn mirror_tuning_reaches_rules() {
     let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
@@ -546,18 +531,12 @@ fn mirror_tuning_reaches_resolved_rules() {
         }
     }))
     .unwrap();
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([{
-            "matches": [{"path": {"type": "PathPrefix", "value": "/api/child"}}]
-        }]))
-        .unwrap(),
-    );
     route.preparse();
-    let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+    let rule = &route.spec.rules.as_ref().unwrap()[0];
     assert_eq!(
         rule.parsed_mirror_tuning.as_ref().map(|t| t.max_concurrent),
         Some(16),
-        "annotation copies must reach resolved_rules"
+        "annotation copies must reach rules"
     );
 }
 

@@ -5,20 +5,16 @@
 //! useless out of the box), we install a minimal allow set that covers the
 //! normal Center workflows:
 //!
-//!  - Read (get / list / watch / list-keys) on every ResourceKind except Secret.
+//!  - Read (get / list / list-keys) on every ResourceKind except Secret.
 //!  - Write (create / update / delete) on EdgionConfigData only
 //!    (region-route and ip-restriction handlers drive this).
-//!  - List and failover on RegionRoute (synthetic classifier label, not a
+//!  - List, dedicated watch and failover on RegionRoute (synthetic classifier label, not a
 //!    ResourceKind): list allows the effective read endpoint
 //!    (GET /api/v1/region-routes/effective), and failover covers the POST
 //!    failover endpoint.
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
-//!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
-//!    it is safe to read by default; Center uses it to verify reload propagation.
-//!  - reload on the NonResource route (POST /api/v1/reload). The Center's
-//!    reload button arrives as a proxied request classified on the same
-//!    synthetic NonResource label; the Command channel that used to carry it
-//!    is gone.
+//!    only a serving generation (server_id), readiness, and mode -- no secrets -- so
+//!    it is safe to read by default; Center uses it to observe serving generations.
 //!
 //! Nothing else is allowed: no diagnostics, wipe-all.
 //!
@@ -116,9 +112,9 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 /// Build the built-in default Center policy.
 ///
 /// Rules:
-///   1. read (get, list, watch, list-keys) on all ResourceKinds except Secret.
+///   1. read (get, list, list-keys) on all ResourceKinds except Secret.
 ///   2. write (create, update, delete) on EdgionConfigData.
-///   3. list, failover on RegionRoute (synthetic label -- not a ResourceKind).
+///   3. list, watch, failover on RegionRoute (synthetic label -- not a ResourceKind).
 ///      `list` covers the effective read endpoint
 ///      (GET /api/v1/region-routes/effective), which classifies as
 ///      (list, "RegionRoute"). `failover` covers the POST failover endpoint.
@@ -127,13 +123,9 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///      widens the default boundary for any future single-resource read route.
 ///      RegionRoute is intentionally kept as its own rule because it is NOT part
 ///      of the ResourceKind exhaustiveness gate -- it is a synthetic classifier
-///      label only used on the fed-proxy routing layer.
+///      label used for dedicated business APIs and the Center view Watch.
 ///   4. server-info on the NonResource route. Read-only and non-sensitive
-///      (server_id / ready / mode only); Center reads it to verify reloads.
-///   5. reload on the NonResource route. The Center's reload button arrives
-///      as a proxied POST /api/v1/reload, classified (reload, NonResource) by
-///      the same synthetic label as rule 4; the Command channel that used to
-///      carry it is gone.
+///      (server_id / ready / mode only); Center reads it to observe serving generations.
 pub(crate) fn default_center_policy() -> CenterPolicy {
     let read_kinds: Vec<String> = DEFAULT_READ_KINDS.iter().map(|s| s.to_string()).collect();
 
@@ -141,12 +133,7 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
         allow: vec![
             // Rule 1: read verbs on all non-Secret ResourceKind variants.
             FedAllowRule {
-                verbs: vec![
-                    "get".to_string(),
-                    "list".to_string(),
-                    "watch".to_string(),
-                    "list-keys".to_string(),
-                ],
+                verbs: vec!["get".to_string(), "list".to_string(), "list-keys".to_string()],
                 kinds: read_kinds,
             },
             // Rule 2: write verbs on EdgionConfigData only.
@@ -154,25 +141,18 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 verbs: vec!["create".to_string(), "update".to_string(), "delete".to_string()],
                 kinds: vec![ResourceKind::EdgionConfigData.as_str().to_string()],
             },
-            // Rule 3: list and failover on RegionRoute (synthetic label).
+            // Rule 3: list, dedicated watch and failover on RegionRoute (synthetic label).
             // list covers the effective region-route read endpoint;
             // failover covers the POST failover operation. `get` is omitted
             // because no classifier route emits (get, "RegionRoute").
             FedAllowRule {
-                verbs: vec!["list".to_string(), "failover".to_string()],
+                verbs: vec!["list".to_string(), "watch".to_string(), "failover".to_string()],
                 kinds: vec!["RegionRoute".to_string()],
             },
             // Rule 4: server-info on the NonResource route. Read-only and
-            // non-sensitive (server_id / ready / mode); used to verify reloads.
+            // non-sensitive (server_id / ready / mode); used to observe serving generations.
             FedAllowRule {
                 verbs: vec!["server-info".to_string()],
-                kinds: vec![NON_RESOURCE_KIND.to_string()],
-            },
-            // Rule 5: reload on the non-resource route. The Center's reload
-            // button arrives as a proxied POST /api/v1/reload; the Command
-            // channel that used to carry it is gone.
-            FedAllowRule {
-                verbs: vec!["reload".to_string()],
                 kinds: vec![NON_RESOURCE_KIND.to_string()],
             },
         ],

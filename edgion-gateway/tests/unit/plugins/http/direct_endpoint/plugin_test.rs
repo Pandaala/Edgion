@@ -96,7 +96,8 @@ fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRule
         })
         .collect::<Vec<_>>();
     HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: format!("{}/test-route", ns),
         matched_info: MatchInfo {
@@ -114,7 +115,6 @@ fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRule
             annotations_meta: None,
         },
         rule: Arc::new(HTTPRouteRule {
-            resolved_parent_match: None,
             name: None,
             resolved_terminal_route_uid: None,
             resolved_ai_admission: None,

@@ -78,6 +78,7 @@ impl crate::plugins::runtime::traits::AiSessionCapability for PingoraSessionAdap
         {
             return false;
         }
+        let processor = self.scope_processor_to_level(processor);
         let state = self.ctx.ensure_ai_state();
         state.semantic_processor = Some(processor);
         if let Some(claim) = state.response_head_hold_claim.as_mut() {

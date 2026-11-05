@@ -7,6 +7,10 @@
 //! 4. Loop: handle CenterMessage (Ping, RegisterAck, HttpProxyRequest, WatchRequest)
 //! 5. On error: exponential backoff, reconnect
 
+mod center_watch;
+mod proxy;
+use center_watch::WatchSession;
+
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +25,7 @@ use crate::config::CenterClientConfig;
 use crate::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, ControllerMessage, FedWatchEventResponse,
-    FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
+    FedWatchListResponse, Pong, RegisterRequest, StatsReport,
 };
 use edgion_common::observe::fed_metrics;
 
@@ -49,7 +53,7 @@ const ALLOWED_PROXY_HEADERS: &[&str] = &["accept", "content-type", "if-match", "
 /// Path prefixes the federation proxy may reach on the admin router. Anything
 /// outside this set is rejected with 404 before it touches the router, so a
 /// compromised channel cannot probe arbitrary admin paths.
-const ALLOWED_PROXY_PATH_PREFIXES: &[&str] = &["/api/v1/", "/configserver/", "/health", "/ready", "/metrics"];
+const ALLOWED_PROXY_PATH_PREFIXES: &[&str] = &["/api/v1/", "/health", "/ready", "/metrics"];
 
 /// Stats coalescing interval. Controller pushes a StatsReport at most once
 /// per `STATS_COALESCE_INTERVAL` when its resource counts change.
@@ -319,7 +323,9 @@ async fn connect_and_run(
     // blocks the reconnect loop on NAT black-holes. Mirrors conf_sync grpc_client.rs.
     let channel = endpoint.connect_timeout(Duration::from_secs(10)).connect().await?;
 
-    let mut client = FederationSyncClient::new(channel);
+    let mut client = FederationSyncClient::new(channel)
+        .max_decoding_message_size(proxy::MAX_MESSAGE_BYTES)
+        .max_encoding_message_size(proxy::MAX_MESSAGE_BYTES);
 
     let (tx, rx) = tokio::sync::mpsc::channel::<ControllerMessage>(32);
     let tx = Arc::new(tx);
@@ -440,13 +446,15 @@ async fn run_session(
 
     // Owns cancellation on drop for the active watch forwarding task, if any.
     // A new WatchRequest cancels the previous one before starting a new task.
-    let mut active_watch_cancel: Option<DropGuard> = None;
+    let mut watch_session = WatchSession::default();
+    let session_cancel = watch_session.cancelled.clone();
 
     // Limit concurrent HttpProxy tasks to prevent Center from overwhelming Controller.
     let proxy_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PROXY));
 
     let result: Result<()> = loop {
         tokio::select! {
+            _ = session_cancel.cancelled() => break Err(anyhow::anyhow!("Center watch delivery failed")),
             msg = inbound.next() => {
                 match msg {
                     Some(Err(e)) => break Err(e.into()),
@@ -455,17 +463,15 @@ async fn run_session(
                         break Ok(());
                     }
                     Some(Ok(CenterMessage { payload: Some(payload) })) => {
-                        if let Err(e) = handle_center_message(
-                            payload,
-                            tx.clone(),
-                            admin_router.clone(),
-                            conf_mgr.clone(),
-                            &mut active_watch_cancel,
-                            proxy_semaphore.clone(),
-                            authorizer.clone(),
-                        ).await {
-                            break Err(e);
-                        }
+                        let handled = tokio::select! {
+                            biased;
+                            _ = session_cancel.cancelled() => break Err(anyhow::anyhow!("Center watch delivery failed")),
+                            result = handle_center_message(
+                                payload, tx.clone(), admin_router.clone(), conf_mgr.clone(),
+                                &mut watch_session, proxy_semaphore.clone(), authorizer.clone(),
+                            ) => result,
+                        };
+                        if let Err(error) = handled { break Err(error); }
                     }
                     Some(Ok(_)) => {} // empty payload, ignore
                 }
@@ -476,7 +482,7 @@ async fn run_session(
     // Cleanup: cancel any active watch forwarding task on disconnect.
     // Without this, old forwarding tasks linger until the gRPC stream's
     // internal channels detect the disconnect asynchronously.
-    drop(active_watch_cancel.take());
+    drop(watch_session);
     // Stop the stats coalescing task tied to this session. A new session
     // will start a fresh one, and `stats_dirty=true` initial state ensures
     // the next register emits an up-to-date report.
@@ -505,7 +511,7 @@ async fn handle_center_message(
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
-    active_watch_cancel: &mut Option<DropGuard>,
+    watch_session: &mut WatchSession,
     proxy_semaphore: Arc<Semaphore>,
     authorizer: Arc<Authorizer>,
 ) -> Result<()> {
@@ -528,386 +534,30 @@ async fn handle_center_message(
         }
 
         CenterPayload::HttpProxy(proxy_req) => {
-            tracing::debug!(
-                component = "fed_client",
-                request_id = %proxy_req.request_id,
-                method = %proxy_req.method,
-                path = %proxy_req.path,
-                "HttpProxyRequest received"
-            );
-            // Limit concurrent proxy tasks to prevent Center from overwhelming Controller.
+            let deadline = tokio::time::Instant::now() + proxy::PROXY_TIMEOUT;
             let Ok(permit) = proxy_semaphore.clone().try_acquire_owned() else {
-                tracing::warn!(
-                    component = "fed_client",
-                    request_id = %proxy_req.request_id,
-                    "HttpProxy rejected: too many concurrent requests"
-                );
-                let _ = tx
-                    .send(ControllerMessage {
-                        payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                            request_id: proxy_req.request_id,
-                            status_code: 429,
-                            headers: Default::default(),
-                            body: b"Too many concurrent proxy requests".to_vec(),
-                        })),
-                    })
-                    .await;
+                let response = proxy::error(proxy_req.request_id, 429, "Proxy capacity exhausted");
+                proxy::send(&tx, response, deadline).await;
                 return Ok(());
             };
             let tx = tx.clone();
-            // Spawn as a separate task so proxy requests don't block Ping/Pong handling
             tokio::spawn(async move {
-                let _permit = permit; // held until task completes
+                let _permit = permit;
                 let request_id = proxy_req.request_id.clone();
-
-                // Sanitise the Center-supplied request before it reaches the admin
-                // router. The mTLS channel + injected RBAC role authenticate the peer,
-                // but the request envelope is still attacker-controlled if the channel
-                // is ever compromised or misconfigured, so apply defence-in-depth:
-                // reject malformed methods, cap the body, allowlist headers and paths.
-
-                // Reject an unparseable method instead of silently falling back to GET
-                // (a malformed payload must not become a side-effecting GET).
-                let method: http::Method = match proxy_req.method.parse() {
-                    Ok(m) => m,
-                    Err(_) => {
-                        let _ = tx
-                            .send(ControllerMessage {
-                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                    request_id,
-                                    status_code: 400,
-                                    headers: Default::default(),
-                                    body: format!("Invalid HTTP method: {}", proxy_req.method).into_bytes(),
-                                })),
-                            })
-                            .await;
-                        return;
-                    }
+                let response = match tokio::time::timeout_at(deadline, proxy::execute(admin_router, proxy_req)).await {
+                    Ok(response) => response,
+                    Err(_) => proxy::error(
+                        request_id,
+                        504,
+                        "Proxy deadline exceeded; mutation outcome may be unknown",
+                    ),
                 };
-
-                // Cap the inbound body so a multi-GB payload cannot exhaust memory.
-                if proxy_req.body.len() > MAX_PROXY_REQUEST_BODY {
-                    let _ = tx
-                        .send(ControllerMessage {
-                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                request_id,
-                                status_code: 413,
-                                headers: Default::default(),
-                                body: format!("Proxy request body exceeds {} bytes", MAX_PROXY_REQUEST_BODY)
-                                    .into_bytes(),
-                            })),
-                        })
-                        .await;
-                    return;
-                }
-
-                // Restrict reachable admin paths to a static prefix allowlist.
-                let path_only = proxy_req.path.split(['?', '#']).next().unwrap_or("");
-                if !ALLOWED_PROXY_PATH_PREFIXES.iter().any(|p| path_only.starts_with(p)) {
-                    let _ = tx
-                        .send(ControllerMessage {
-                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                request_id,
-                                status_code: 404,
-                                headers: Default::default(),
-                                body: b"Proxy path not allowed".to_vec(),
-                            })),
-                        })
-                        .await;
-                    return;
-                }
-
-                let mut builder = http::Request::builder().method(method).uri(&proxy_req.path);
-
-                // Forward only allowlisted headers; drop auth/forwarding/hop-by-hop.
-                for (k, v) in &proxy_req.headers {
-                    if ALLOWED_PROXY_HEADERS.iter().any(|h| k.eq_ignore_ascii_case(h)) {
-                        builder = builder.header(k.as_str(), v.as_str());
-                    }
-                }
-
-                let request = match builder.body(axum::body::Body::from(proxy_req.body)) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!(
-                            component = "fed_client",
-                            request_id = %request_id,
-                            error = %e,
-                            "Failed to build proxy request"
-                        );
-                        let _ = tx
-                            .send(ControllerMessage {
-                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                    request_id,
-                                    status_code: 400,
-                                    headers: Default::default(),
-                                    body: format!("Bad proxy request: {}", e).into_bytes(),
-                                })),
-                            })
-                            .await;
-                        return;
-                    }
-                };
-
-                // Call the router directly (no network) using tower::ServiceExt::oneshot
-                use tower::ServiceExt;
-                match admin_router.oneshot(request).await {
-                    Ok(response) => {
-                        let status = response.status().as_u16() as u32;
-                        let headers: std::collections::HashMap<String, String> = response
-                            .headers()
-                            .iter()
-                            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                            .collect();
-                        let body_bytes = match axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024).await {
-                            Ok(b) => b.to_vec(),
-                            Err(e) => {
-                                tracing::warn!(
-                                    component = "fed_client",
-                                    request_id = %request_id,
-                                    error = %e,
-                                    "Failed to read proxy response body"
-                                );
-                                format!("Failed to read response body: {}", e).into_bytes()
-                            }
-                        };
-                        tracing::debug!(
-                            component = "fed_client",
-                            request_id = %request_id,
-                            status_code = status,
-                            "HttpProxyResponse sent"
-                        );
-                        let _ = tx
-                            .send(ControllerMessage {
-                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                    request_id,
-                                    status_code: status,
-                                    headers,
-                                    body: body_bytes,
-                                })),
-                            })
-                            .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            component = "fed_client",
-                            request_id = %request_id,
-                            error = %e,
-                            "Internal proxy error"
-                        );
-                        let _ = tx
-                            .send(ControllerMessage {
-                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                    request_id,
-                                    status_code: 502,
-                                    headers: Default::default(),
-                                    body: format!("Internal proxy error: {}", e).into_bytes(),
-                                })),
-                            })
-                            .await;
-                    }
-                }
+                proxy::send(&tx, response, deadline).await;
             });
         }
 
         CenterPayload::WatchRequest(req) => {
-            tracing::debug!(
-                component = "fed_client",
-                request_id = %req.request_id,
-                kind = %req.kind,
-                from_version = req.from_version,
-                "FedWatchRequest received"
-            );
-
-            // Normalize the requested kind once. The normalized (canonical) value is
-            // used for BOTH the authz check AND the store ops below so that the
-            // authorized kind is provably identical to the operated kind. A
-            // lowercase or otherwise non-canonical request kind works consistently:
-            // normalize is a no-op for already-canonical kinds.
-            //
-            // Note: a policy swap / kill-switch does NOT retroactively terminate an
-            // already-running watch stream. It only gates new WatchRequests (per-request
-            // snapshot semantics). The running forwarding task keeps its original
-            // authorization for the lifetime of the current stream.
-            let kind = crate::api::authz_classifier::normalize_kind(&req.kind);
-
-            // RBAC check: authorize Center for Watch on the normalized kind before
-            // touching any store state. This check runs BEFORE the ConfigSyncServer
-            // lookup so a denied request never touches internal state.
-            if !authorizer
-                .authorize(&authorizer.center_role(), Verb::Watch, &kind)
-                .allowed()
-            {
-                let kind_label = crate::api::authz_classifier::bounded_kind_label(&kind);
-                edgion_common::observe::fed_metrics::record_rbac_denied(
-                    "watch",
-                    kind_label,
-                    edgion_common::observe::fed_metrics::labels::rbac_source::CENTER,
-                );
-                // Mirror the existing watch-error frame shape: CtrlPayload::WatchEventResponse
-                // with a non-empty `error` field and all other fields defaulted to zero/empty.
-                // The Center treats the exact string "Forbidden" as terminal: it stops
-                // watching for this session and does not re-watch. Any other non-empty
-                // error is treated as transient: the Center backoff (3s) re-watches.
-                let err_msg = ControllerMessage {
-                    payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                        request_id: req.request_id,
-                        error: "Forbidden".to_string(),
-                        ..Default::default()
-                    })),
-                };
-                let _ = tx.send(err_msg).await;
-                return Ok(());
-            }
-
-            // If ConfigSyncServer is not ready, return NotReady immediately.
-            // The ready gate in run() ensures CSS is ready before first connection.
-            // Center-side backoff (3s) handles transient unavailability during reload.
-            // We must NOT block here -- this would stall Ping/Pong and cause heartbeat timeout.
-            let Some(css) = conf_mgr.config_sync_server() else {
-                tracing::info!(
-                    component = "fed_client",
-                    request_id = %req.request_id,
-                    "ConfigSyncServer not ready, returning NotReady (Center will retry with backoff)"
-                );
-                let err_msg = ControllerMessage {
-                    payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                        request_id: req.request_id,
-                        error: "NotReady".to_string(),
-                        ..Default::default()
-                    })),
-                };
-                let _ = tx.send(err_msg).await;
-                return Ok(());
-            };
-
-            // Step 1: if from_version == 0, send list first
-            // Use the pre-normalized `kind` so the store op matches what authz authorized.
-            let watch_from = if req.from_version == 0 {
-                match css.list_sync_cached(&kind).await {
-                    Ok(list_data) => {
-                        let list_msg = ControllerMessage {
-                            payload: Some(CtrlPayload::WatchListResponse(FedWatchListResponse {
-                                request_id: req.request_id.clone(),
-                                data: list_data.data,
-                                sync_version: list_data.sync_version,
-                                server_id: list_data.server_id,
-                            })),
-                        };
-                        if tx.send(list_msg).await.is_err() {
-                            return Ok(());
-                        }
-                        list_data.sync_version
-                    }
-                    Err(e) => {
-                        let err_msg = ControllerMessage {
-                            payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                                request_id: req.request_id,
-                                error: e,
-                                ..Default::default()
-                            })),
-                        };
-                        let _ = tx.send(err_msg).await;
-                        return Ok(());
-                    }
-                }
-            } else {
-                req.from_version
-            };
-
-            // Step 2: start watch forwarding task
-            // Cancel any previously active watch task before starting a new one.
-            drop(active_watch_cancel.take());
-
-            let watch_id = format!("center-{}", req.request_id);
-            // Use the pre-normalized `kind` for the same reason as css.list above.
-            match css.watch(&kind, watch_id, "center".to_string(), watch_from) {
-                Ok(mut event_rx) => {
-                    let cancel = CancellationToken::new();
-                    *active_watch_cancel = Some(cancel.clone().drop_guard());
-
-                    let tx = tx.clone();
-                    let request_id = req.request_id.clone();
-                    let watch_kind = crate::api::authz_classifier::bounded_kind_label(&kind);
-                    let initial_server_id = css.server_id();
-                    let reload_conf_mgr = conf_mgr.clone();
-                    tokio::spawn(async move {
-                        let mut reload_check = tokio::time::interval(Duration::from_secs(1));
-                        loop {
-                            tokio::select! {
-                                _ = cancel.cancelled() => {
-                                    break; // Session ended or a new WatchRequest replaced this watch
-                                }
-                                event = event_rx.recv() => {
-                                    match event {
-                                        Some(event) => {
-                                            let msg = ControllerMessage {
-                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                                                    request_id: request_id.clone(),
-                                                    data: event.data,
-                                                    sync_version: event.sync_version,
-                                                    server_id: event.server_id,
-                                                    error: event.err.unwrap_or_default(),
-                                                })),
-                                            };
-                                            fed_metrics::record_watch_event(
-                                                watch_kind,
-                                                fed_metrics::labels::direction::SENT,
-                                            );
-                                            tokio::select! {
-                                                _ = cancel.cancelled() => break,
-                                                result = tx.send(msg) => {
-                                                    if result.is_err() { break; }
-                                                }
-                                            }
-                                        }
-                                        None => break, // channel closed
-                                    }
-                                }
-                                _ = reload_check.tick() => {
-                                    // Detect Controller reload: new CSS has a different server_id.
-                                    // Without this, the forwarding task sits idle forever after reload
-                                    // because the old EventStore stops receiving events.
-                                    if let Some(new_css) = reload_conf_mgr.config_sync_server() {
-                                        if new_css.server_id() != initial_server_id {
-                                            tracing::info!(
-                                                component = "fed_client",
-                                                request_id = %request_id,
-                                                old_server_id = %initial_server_id,
-                                                new_server_id = %new_css.server_id(),
-                                                "Controller reloaded, sending ServerReload to trigger Center re-watch"
-                                            );
-                                            let msg = ControllerMessage {
-                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                                                    request_id: request_id.clone(),
-                                                    error: "ServerReload".to_string(),
-                                                    ..Default::default()
-                                                })),
-                                            };
-                                            tokio::select! {
-                                                _ = cancel.cancelled() => {},
-                                                _ = tx.send(msg) => {},
-                                            }
-                                            break;
-                                        }
-                                    }
-                                    // If config_sync_server() returns None, reload is in progress -- keep waiting
-                                }
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    let err_msg = ControllerMessage {
-                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                            request_id: req.request_id,
-                            error: e,
-                            ..Default::default()
-                        })),
-                    };
-                    let _ = tx.send(err_msg).await;
-                }
-            }
+            watch_session.start(req, tx, conf_mgr, authorizer);
         }
     }
     Ok(())

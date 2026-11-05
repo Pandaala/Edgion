@@ -429,20 +429,17 @@ EOF
   [[ -s "${dir}/client.crt" ]]
 }
 
-# The controller writes both managed Secrets with server-side apply under the
-# field manager `edgion-conf-sync-ca` (see edgion-controller/src/services/
-# conf_sync_ca/secret_io.rs) and FORCES conflicts. Forcing is load-bearing:
-# SSA only overwrites fields the SAME manager owns, and both Secrets routinely
-# have a foreign owner —
-#   * `edgion-conf-sync-ca` is POST-created by `ensure_ca`, so the API server
-#     records its `data` under the client's default manager (`unknown`);
-#   * either Secret can be `kubectl create`d / `kubectl patch`ed out of band.
-# Without `.force()` every subsequent apply 409-Conflicts forever (this WAS a
-# real product bug: CA renewal wedged in backoff until the root expired).
+# The controller renews the root with a UID/resourceVersion-conditioned Merge
+# patch and writes the leaf with forced SSA under `edgion-conf-sync-ca` (see
+# edgion-controller/src/services/conf_sync_ca/secret_io.rs). Both must work when
+# kubectl owns the data fields. Unforced SSA previously wedged CA renewal on
+# foreign ownership; Merge avoids ownership conflicts while fencing stale roots.
+# Leaf SSA still requires force to take over fields owned by another manager.
 #
 # This harness therefore deliberately injects crafted material with PLAIN
 # kubectl (foreign field manager) — that is the condition under test. A passing
-# run proves the controller reclaims ownership instead of 409-wedging.
+# run proves renewal succeeds without ownership conflicts; the leaf case also
+# asserts that forced SSA reclaims ownership.
 readonly CTRL_FIELD_MANAGER="edgion-conf-sync-ca"
 
 # kubectl_put_secret <name> <key=file> ...
@@ -871,7 +868,7 @@ p2_4() {  # manual API 202 on leader, 409 on non-leader
   fi
 }
 
-p2_5() {  # CA renewal same-key  (ALSO the regression test for the SSA-force fix)
+p2_5() {  # Same-key CA renewal must work with foreign-owned data fields.
   step "P2.5 CA renewal (same-key re-sign of a near-expiry root, foreign field manager)"
   if ! "$OPENSSL" version 2>/dev/null | grep -q "^OpenSSL 3"; then
     record P2.5 SKIP "needs OpenSSL 3 (-not_before/-not_after)"
@@ -908,7 +905,7 @@ EOF
   if ! wait_for_ctrl_log "conf_sync_ca_renewed" 360; then
     errln "CA renewal never happened. Conflict evidence from controller logs:"
     ctrl_conflict_grep | head -5 >&2
-    record P2.5 FAIL "no conf_sync_ca_renewed within 6m (SSA conflict? see log above)"
+    record P2.5 FAIL "no conf_sync_ca_renewed within 6m (see conflict evidence above)"
     return
   fi
   sleep 5
@@ -921,12 +918,12 @@ EOF
   info "CA Secret f:data owner AFTER renewal:  ${owner_after}"
   info "CA notAfter ${na_before} -> ${na_after}"
 
-  local same_key=0 later=0 reclaimed=0 no_conflict=0 leaf_ok=0
+  local same_key=0 later=0 no_conflict=0 leaf_ok=0
   [[ "$spki_after" == "$spki_before" && "$key_after" == "$key_before" ]] && same_key=1
   # ISO-8601 sorts lexicographically, so `>` is a valid chronological compare.
   [[ -n "$na_after" && -n "$na_before" && "$na_after" > "$na_before" ]] && later=1
-  # The forced apply must have RECLAIMED f:data from the foreign manager.
-  echo "$owner_after" | grep -q "${CTRL_FIELD_MANAGER}/Apply" && reclaimed=1
+  # Root renewal uses Merge, not Apply. Its success is proved by the actual
+  # renewed certificate and unchanged key, not an SSA managedFields entry.
   [[ -z "$(ctrl_conflict_grep)" ]] && no_conflict=1
   # Leaves must be re-signed against the renewed root (leaf ca.crt == new ca.crt).
   local leaf_ca; leaf_ca="$(secret_field "$LEAF_SECRET" ca.crt)"
@@ -935,11 +932,11 @@ EOF
   local gw_ready
   gw_ready="$(kc get deploy "$GW_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)"
 
-  if [[ "$same_key" == 1 && "$later" == 1 && "$reclaimed" == 1 && "$no_conflict" == 1 \
+  if [[ "$same_key" == 1 && "$later" == 1 && "$no_conflict" == 1 \
         && "$leaf_ok" == 1 && "${gw_ready:-0}" -ge 1 ]]; then
-    record P2.5 PASS "CA renewed same-key (SPKI+ca.key identical, notAfter advanced); f:data reclaimed ${owner_before} -> ${owner_after}; no 409; leaves re-signed; gw Ready=${gw_ready}"
+    record P2.5 PASS "CA renewed same-key (SPKI+ca.key identical, notAfter advanced); no 409 despite foreign ownership; leaves re-signed; gw Ready=${gw_ready}"
   else
-    record P2.5 FAIL "same_key=${same_key} later=${later} reclaimed=${reclaimed} no_409=${no_conflict} leaf_resigned=${leaf_ok} gw_ready=${gw_ready} (owner ${owner_before} -> ${owner_after})"
+    record P2.5 FAIL "same_key=${same_key} later=${later} no_409=${no_conflict} leaf_resigned=${leaf_ok} gw_ready=${gw_ready} (owner ${owner_before} -> ${owner_after})"
   fi
 }
 

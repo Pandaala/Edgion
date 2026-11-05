@@ -85,6 +85,7 @@ fn service_inline_wins_over_gateway_and_egc() {
     let service = candidate_from_annotations(&ann(&[(DNS_RESOLVER, "9.9.9.9")]));
     let gateway = candidate_from_annotations(&ann(&[(DNS_RESOLVER, "1.1.1.1")]));
     let egc = candidate_from_egc_default(&EgcDnsResolver {
+        lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
         cache_ttl: "5s".to_string(),
@@ -100,6 +101,7 @@ fn service_inline_wins_over_gateway_and_egc() {
 fn gateway_wins_when_service_absent() {
     let gateway = candidate_from_annotations(&ann(&[(DNS_RESOLVER, "1.1.1.1")]));
     let egc = candidate_from_egc_default(&EgcDnsResolver {
+        lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
         cache_ttl: "5s".to_string(),
@@ -114,6 +116,7 @@ fn gateway_wins_when_service_absent() {
 #[test]
 fn egc_default_wins_when_service_and_gateway_absent() {
     let egc = candidate_from_egc_default(&EgcDnsResolver {
+        lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
         cache_ttl: "5s".to_string(),
@@ -152,6 +155,7 @@ fn ref_beats_servers_on_the_same_layer() {
 #[test]
 fn egc_link_sys_ref_candidate_built_from_struct() {
     let egc = candidate_from_egc_default(&EgcDnsResolver {
+        lookup_family: Default::default(),
         link_sys_ref: Some(LinkSysRef {
             namespace: "dns".to_string(),
             name: "aliyun".to_string(),
@@ -265,6 +269,7 @@ fn owning_candidate_reference_failures_preserve_only_independent_inline_settings
     ));
     let mut egc = edgion_resources::EdgionGatewayConfig::new("source", Default::default());
     egc.spec.dns_resolver = Some(EgcDnsResolver {
+        lookup_family: Default::default(),
         link_sys_ref: Some(LinkSysRef {
             namespace: "dns".into(),
             name: "resolver".into(),

@@ -10,9 +10,47 @@ pub mod resolver_select;
 pub mod standard;
 pub mod system;
 
+pub use edgion_resources::resources::common::DnsLookupFamily;
 use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::Arc;
+
+/// Explicit query intent: infrastructure preserves its native resolver behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsQueryPolicy {
+    Native,
+    Family(DnsLookupFamily),
+}
+
+impl DnsQueryPolicy {
+    pub fn select(self, ips: Vec<IpAddr>) -> Vec<IpAddr> {
+        if self == Self::Native {
+            return ips;
+        }
+        let mut out = Vec::new();
+        for ip in ips {
+            let ip = ip.to_canonical();
+            if self.accepts(ip) && !out.contains(&ip) {
+                out.push(ip);
+            }
+        }
+        out
+    }
+    pub fn accepts(self, ip: IpAddr) -> bool {
+        match self {
+            Self::Native => true,
+            Self::Family(family) => family.allows(ip),
+        }
+    }
+}
+
+pub(super) fn require_addresses(ips: Vec<IpAddr>) -> Result<Vec<IpAddr>, DnsError> {
+    if ips.is_empty() {
+        Err(DnsError::NoAddresses)
+    } else {
+        Ok(ips)
+    }
+}
 
 use crate::link_sys_core::outbound_tls::{
     validate_active_tls_inheritance, validate_local_tls_selection, GlobalOutboundTlsSnapshot, TlsMaterialProofError,
@@ -24,7 +62,7 @@ use edgion_resources::LinkSys;
 /// Configuration-owned HTTP DNS generation. Querying never builds clients or
 /// reads inherited TLS policy; an unusable generation retains its own fallback.
 pub struct PreparedHttpDns {
-    response: httpdns::PreparedResponse,
+    query: httpdns::PreparedQuery,
     config: HttpDnsResolverConfig,
     fetcher: Option<http_fetcher::ReqwestHttpDnsFetcher>,
     address_fingerprint: String,
@@ -133,7 +171,7 @@ impl HttpDnsCandidate {
             connection: None,
         };
         Arc::new(PreparedHttpDns {
-            response: httpdns::PreparedResponse::from_config(config),
+            query: httpdns::PreparedQuery::from_config(config),
             config: query,
             fetcher,
             address_fingerprint,
@@ -271,10 +309,15 @@ impl std::fmt::Display for DnsError {
 impl std::error::Error for DnsError {}
 
 /// Resolve `domain` per `spec`. Returns all resolved addresses.
-pub async fn resolve(spec: &ResolverSpec, domain: &str) -> Result<Vec<IpAddr>, DnsError> {
+pub async fn resolve(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<Vec<IpAddr>, DnsError> {
+    if policy != DnsQueryPolicy::Native {
+        if let Ok(ip) = strip_brackets(domain).parse::<IpAddr>() {
+            return require_addresses(policy.select(vec![ip]));
+        }
+    }
     match spec {
         ResolverSpec::System => {
-            let addrs = system::resolve_system(domain)
+            let addrs = system::resolve_system(domain, policy)
                 .await
                 .map_err(|e| DnsError::Io(e.to_string()))?;
             if addrs.is_empty() {
@@ -283,12 +326,12 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str) -> Result<Vec<IpAddr>, D
                 Ok(addrs)
             }
         }
-        ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain).await,
+        ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain, policy).await,
         ResolverSpec::HttpDns(prepared) => match prepared.fetcher.as_ref() {
             Some(fetcher) => {
-                httpdns::resolve_http_dns_prepared(fetcher, &prepared.config, &prepared.response, domain).await
+                httpdns::resolve_http_dns_prepared(fetcher, &prepared.config, &prepared.query, domain, policy).await
             }
-            None => httpdns::resolve_via_fallback(&prepared.config, domain).await,
+            None => httpdns::resolve_via_fallback(&prepared.config, domain, policy).await,
         },
     }
 }

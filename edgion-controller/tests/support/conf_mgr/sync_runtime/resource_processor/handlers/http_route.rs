@@ -54,7 +54,7 @@ pub(super) fn source_ai_admission(
         if !is_supported_edgion_plugins_ref(reference) {
             continue;
         }
-        let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
+        let namespace = route_namespace;
         match lookup(namespace, &reference.name) {
             Some(state) => {
                 count += state.active_count;

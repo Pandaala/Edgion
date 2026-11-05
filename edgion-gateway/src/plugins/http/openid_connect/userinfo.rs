@@ -43,7 +43,9 @@ impl OpenidConnect {
         userinfo_json: Option<&str>,
         claims: &Value,
     ) -> crate::plugins::runtime::PluginSessionResult<()> {
-        crate::plugins::http::common::auth_common::sanitize_claim_headers(session, &self.claim_header_projection)?;
+        // Clear configured claim destinations before any upstream header write, so a
+        // cleanup failure leaves the request unmodified.
+        crate::plugins::http::common::auth_common::clear_claim_headers(session, &self.claim_header_projection)?;
         let mut total_added: usize = 0;
         let max_total = self.config.max_total_header_bytes as usize;
         let max_value = self.config.max_header_value_bytes as usize;
@@ -88,19 +90,14 @@ impl OpenidConnect {
             }
         }
 
-        if !self.claim_header_projection.entries().is_empty() {
-            let remaining_total = max_total.saturating_sub(total_added);
-            if remaining_total > 0 {
-                set_common_claims_headers(
-                    session,
-                    claims,
-                    &self.claim_header_projection,
-                    max_value,
-                    remaining_total,
-                );
-            }
-        }
-        Ok(())
+        // Destinations were cleared above, so a zero remaining budget retains no input.
+        crate::plugins::http::common::auth_common::project_cleared_claim_headers(
+            session,
+            claims,
+            &self.claim_header_projection,
+            max_value,
+            max_total.saturating_sub(total_added),
+        )
     }
 
     pub(super) async fn fetch_userinfo_json(&self, access_token: &str, plugin_log: &mut PluginLog) -> Option<String> {

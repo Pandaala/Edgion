@@ -156,9 +156,7 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 | `edgion_controller_leader` | Gauge | none | Leader 选举状态（1 = leader，0 = standby） |
 | `edgion_controller_resources_watched` | Gauge | `kind` | 按 kind 分类的当前被监控资源数 |
 | `edgion_controller_init_sync_duration_seconds_last` | Gauge | `kind` | 按 kind 分类的最近一次初始同步时长 |
-| `edgion_controller_reload_total` | Counter | none | 触发的总重载次数 |
-| `edgion_controller_reload_duration_seconds_last` | Gauge | none | 最近一次重载时长 |
-| `edgion_controller_reload_client_notifications_total` | Counter | none | 重载发送的客户端通知数 |
+| `edgion_controller_reload_client_notifications_total` | Counter | none | ConfigSyncServer 代际变化发送的客户端通知数 |
 | `edgion_controller_status_writes_total` | Counter | `kind`、`backend`、`result` | 状态写入次数（`backend` ∈ kubernetes/filesystem，`result` ∈ success/error） |
 | `edgion_controller_status_writes_skipped_total` | Counter | `kind` | 语义差异检查后跳过的状态写入次数 |
 | `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | 初始化期间收到的 Apply 事件（应保持为 0；非零表示 watcher 流排序异常） |
@@ -198,7 +196,7 @@ edgion_controller_leader_job_alive == 0
 左侧的 `leader_job` 标签，使告警输出能直接指明是哪个 job 死亡。
 
 按设计，**不会自动重启**死亡的 leader-job worker（panic 通常意味着状态已损坏，盲目重启有陷入 panic 循环
-的风险）——恢复方式是告警 + 运维介入（`POST /api/v1/reload` 或重启 Pod）。另外，如果控制面 lifecycle 本身
+的风险）——恢复方式是告警 + 运维介入（重启 Controller 进程或 Pod）。另外，如果控制面 lifecycle 本身
 异常终止，`/health` 现在会返回 `503`（这是一个 deadman 机制，与本节这个逐 worker 的 Gauge 是不同的信号）——
 完整的 lifecycle 恢复设计参见
 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery)。

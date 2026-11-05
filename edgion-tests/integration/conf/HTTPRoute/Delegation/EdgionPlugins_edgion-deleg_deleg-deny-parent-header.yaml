@@ -1,0 +1,24 @@
+# Child plugin: deny `x-parent-filter: on`, the value the parent filter sets.
+# A 403 proves this child plugin is live and observes the parent's write.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: deleg-deny-parent-header
+  namespace: edgion-deleg
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "x-parent-filter"
+                  values:
+                    - "on"
+        status: 403
+        message: "child plugin saw the parent header"

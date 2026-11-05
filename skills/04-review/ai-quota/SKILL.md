@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Shared cumulative buckets preserve active-marker retention](regression-guards/shared-cumulative-bucket-retention.md)
 - [Anthropic translation owns usage and fallback estimation](regression-guards/anthropic-usage-observation-is-estimation-only.md)
 - [A gateway-terminated AI stream settles its credential reservation and is not an upstream truncation — FIXED](regression-guards/gateway-terminated-stream-settles-its-reservation.md)
 - [A gateway-injected SSE error event must carry its own event boundary — FIXED](regression-guards/injected-error-event-needs-its-own-sse-boundary.md)

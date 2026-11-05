@@ -28,9 +28,10 @@ without granting serving authority. The same projection handles both policy
 ancestor families. Raw spec removal can consistently clear this controller's
 removed parent entries without erasing another controller's entries.
 
-HTTP/GRPC reverse-lock diagnostics keep their local meaning but use one persisted
-writer selected from the first sorted canonical explicit parentRef before lookup.
-Missing, invalid, cyclic or over-depth chains do not select another visible branch.
+HTTP/GRPC delegation child-entry diagnostics (one entry per route-kind parentRef)
+keep their local meaning but use one persisted writer selected from the first
+sorted canonical explicit parentRef before lookup. Missing, unattached or
+over-depth parents do not select another visible branch.
 
 ## Transport and Gateway consumption
 

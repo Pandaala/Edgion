@@ -23,8 +23,10 @@ fn default_allows_list_gateway() {
 }
 
 #[test]
-fn default_allows_watch_edgionconfigdata() {
-    assert!(allows(&az(), Verb::Watch, "EdgionConfigData"));
+fn default_watch_is_dedicated_regionroute_only() {
+    assert!(!allows(&az(), Verb::Watch, "EdgionConfigData"));
+    assert!(!allows(&az(), Verb::Watch, "EdgionTls"));
+    assert!(allows(&az(), Verb::Watch, "RegionRoute"));
 }
 
 #[test]
@@ -89,17 +91,6 @@ fn default_denies_get_secret() {
 #[test]
 fn default_denies_list_secret() {
     assert!(!allows(&az(), Verb::List, "Secret"));
-}
-
-#[test]
-fn default_allows_reload_on_non_resource() {
-    assert!(allows(&az(), Verb::Reload, NON_RESOURCE_KIND));
-}
-
-#[test]
-fn default_denies_reload_on_resource_kinds() {
-    assert!(!allows(&az(), Verb::Reload, "Gateway"));
-    assert!(!allows(&az(), Verb::Reload, "*"));
 }
 
 #[test]

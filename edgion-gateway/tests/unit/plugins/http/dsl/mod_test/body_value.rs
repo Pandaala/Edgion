@@ -200,6 +200,28 @@ async fn body_facade_cancelled_factory_does_not_refund_pending_work() {
     assert_eq!(budget.reserve(3, 1).unwrap(), 0);
 }
 
+#[tokio::test]
+async fn body_facade_failed_pull_scan_keeps_the_scan_reservation() {
+    use super::super::lang::body_scanners::JsonPathScanner;
+
+    let cap = 64;
+    let mut ctx = crate::EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = cap;
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(ctx);
+    let mut budget = BodyScanBudget::default();
+    let limits = VmLimits::default();
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+    let path = std::sync::Arc::new(edgion_dsl::json_path::DefiniteJsonPath::parse("$.a").unwrap());
+    let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+    let result = ops.scan_read_with(JsonPathScanner::new(path, 16)).await;
+    assert!(matches!(result, Err(RuntimeError::BodyAccess { .. })));
+    assert_eq!(budget.reserve(cap, 1).unwrap(), 0);
+}
+
 fn available_body_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_declares_body().return_const(Some(true));

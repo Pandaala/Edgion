@@ -159,3 +159,40 @@ These keys are often useful during debugging, but should not usually be hand-aut
 - [Backend Active Health Check](../user-guide/http-route/backends/health-check.md)
 - [Stream Plugins User Guide](../user-guide/tcp-route/stream-plugins.md)
 - [knowledge-source-map.md](./knowledge-source-map.md)
+
+## DNS address families
+
+DNS-derived backend addresses default to `ipv4Only`. Set `ipv6Only` for IPv6 only
+or `all` for both families. These are the only accepted values; an empty or unknown
+annotation fails DNS dispatch rather than inheriting or widening the policy.
+`all` does not enable Happy Eyeballs or connection racing. IPv6 requires a working
+upstream IPv6 network.
+
+Controller publication uses the ExternalName Service annotation
+`edgion.io/dns-lookup-family`, then Controller `dns_resolver.lookup_family`, then
+`ipv4Only`. The Controller setting takes effect after restarting the Controller.
+Gateway self-resolution uses Service annotation, Gateway annotation, selected global
+`EdgionGatewayConfig.spec.dnsResolver.lookupFamily`, then `ipv4Only`, in that order.
+Native AI external hostnames use Gateway then EGC policy. Resource updates are live.
+Resolver selection and family inheritance are independent: setting only the family
+does not replace a chosen DNS server or HTTPDNS provider.
+
+Controller EndpointSlices are shared. Gateway/EGC defaults affect self-resolution
+and the empty-slice bridge, not already-published Controller endpoints. Set the
+Service annotation to pin both planes; its explicit family also gates stale
+ExternalName slice membership, including L4. Ordinary Service slices, literal
+non-DNS backends, listeners, DNS-server transport and HTTPDNS bootstrap are outside
+this policy. TCP/UDP/TLS still require published EndpointSlices.
+
+```yaml
+# ExternalName Service or Gateway metadata
+metadata:
+  annotations:
+    edgion.io/dns-lookup-family: ipv6Only
+```
+
+Successful complete nonempty Controller answers replace the owned family set,
+including deleting an obsolete IPv4/IPv6 sibling. Same-policy resolution errors
+retain allowed last-good addresses; narrowing the policy withdraws forbidden
+families even if the next query fails. Gateway address-cache keys include the
+family, so live policy changes cannot read the old policy's cached answer.

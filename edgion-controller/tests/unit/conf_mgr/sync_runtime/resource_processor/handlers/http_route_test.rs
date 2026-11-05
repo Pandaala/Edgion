@@ -3,6 +3,14 @@ use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::conf_mgr::ControllerRuntime;
 use std::sync::Arc;
 
+fn find_controller_invalid_rule_details(
+    route: &HTTPRoute,
+    route_ns: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<(usize, String)> {
+    find_controller_invalid_rule_details_with(route, route_ns, runtime, &http_delegation_facts(route, runtime))
+}
+
 #[test]
 fn v16_cors_and_retry_drift_invalidates_only_the_affected_rules() {
     let route: HTTPRoute = serde_json::from_value(serde_json::json!({
@@ -556,7 +564,7 @@ async fn ai_source_errors_do_not_claim_gateway_api_rule_drops() {
 }
 
 #[tokio::test]
-async fn ai_admission_facts_replace_injected_metadata_after_flattening() {
+async fn ai_admission_facts_replace_injected_metadata() {
     let ctx = make_ctx_with_raw_ai_backend("default", "chat");
     let mut route = route_with_bad_ai_rule(false);
     let rule = &mut route.spec.rules.as_mut().unwrap()[0];
@@ -566,10 +574,7 @@ async fn ai_admission_facts_replace_injected_metadata_after_flattening() {
     rule.resolved_ai_admission = Some(ResolvedAiAdmission {
         backends: vec![ResolvedForwardingTarget::Incompatible],
     });
-    rule.resolved_parent_match =
-        Some(edgion_resources::resources::http_route::ResolvedParentMatch::Delegated { matches: vec![] });
-    // An empty wildcard delegation makes the original AI rule a flattened
-    // sibling. Its intrinsic retry error must not erase the future gate.
+    // A delegating sibling must not change the AI rule's admission facts.
     route.spec.rules.as_mut().unwrap().push(ai_rule(
         serde_json::json!([{
             "group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "*", "namespace": "children"
@@ -580,27 +585,12 @@ async fn ai_admission_facts_replace_injected_metadata_after_flattening() {
         panic!("parse must continue");
     };
     let source = &parsed.spec.rules.as_ref().unwrap()[0];
-    let resolved = parsed.spec.resolved_rules.as_ref().unwrap();
-    assert!(
-        source.resolved_parent_match.is_none(),
-        "authored scope metadata is cleared"
-    );
-    assert!(
-        matches!(
-            resolved[0].resolved_parent_match,
-            Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {})
-        ),
-        "root-owned sibling receives fresh direct provenance"
-    );
-    assert_eq!(resolved.len(), 1, "the invalid AI sibling must remain matchable");
-    for rule in [source, &resolved[0]] {
-        let facts = rule.resolved_ai_admission.as_ref().unwrap();
-        assert_eq!(facts.backends.len(), 2, "include the zero-weight slot");
-        assert!(facts
-            .backends
-            .iter()
-            .all(|fact| matches!(fact, ResolvedForwardingTarget::EdgionBackend { spec_valid: true, .. })));
-    }
+    let facts = source.resolved_ai_admission.as_ref().unwrap();
+    assert_eq!(facts.backends.len(), 2, "include the zero-weight slot");
+    assert!(facts
+        .backends
+        .iter()
+        .all(|fact| matches!(fact, ResolvedForwardingTarget::EdgionBackend { spec_valid: true, .. })));
     HttpRouteHandler::default().update_status(&mut parsed, &ctx, &[]);
     assert!(!parsed
         .spec
@@ -664,8 +654,7 @@ fn ai_rule_requires_homogeneous_backends_and_exactly_one_ai_proxy() {
         "extensionRef": {
             "group": "edgion.io",
             "kind": "EdgionPlugins",
-            "name": "ai",
-            "resolvedNamespace": "child"
+            "name": "ai"
         }
     }]);
     let pure_ai = ai_rule(
@@ -676,7 +665,7 @@ fn ai_rule_requires_homogeneous_backends_and_exactly_one_ai_proxy() {
     );
     assert_eq!(
         ai_rule_invalid_reason(&pure_ai, "parent", |namespace, name| {
-            assert_eq!((namespace, name), ("child", "ai"));
+            assert_eq!((namespace, name), ("parent", "ai"));
             Some(active_ai_proxies(1))
         }),
         None
@@ -1014,104 +1003,52 @@ fn ai_rule_rejects_more_than_seven_explicit_retries() {
 }
 
 #[tokio::test]
-async fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
+async fn backend_and_plugin_reverse_refs_replace_old_dependencies() {
     let ctx = make_ctx();
-    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
-        "apiVersion": "gateway.networking.k8s.io/v1",
-        "kind": "HTTPRoute",
-        "metadata": {"name": "parent", "namespace": "infra"},
-        "spec": {
-            "rules": [{
-                "filters": [{
-                    "type": "ExtensionRef",
-                    "extensionRef": {
-                        "group": "edgion.io", "kind": "EdgionPlugins",
-                        "name": "parent-plugins"
-                    }
-                }]
-            }],
-            "resolvedRules": [{
-                "backendRefs": [{
-                    "group": "edgion.io", "kind": "EdgionBackend",
-                    "name": "models-a", "namespace": "child",
-                    "filters": [{
-                        "type": "ExtensionRef",
-                        "extensionRef": {
-                            "group": "edgion.io", "kind": "EdgionPlugins",
-                            "name": "backend-plugins", "resolvedNamespace": "child"
-                        }
-                    }]
-                }],
-                "filters": [{
-                    "type": "ExtensionRef",
-                    "extensionRef": {
-                        "group": "edgion.io", "kind": "EdgionPlugins",
-                        "name": "ai-plugins", "resolvedNamespace": "child"
-                    }
-                }]
-            }]
-        }
-    }))
-    .unwrap();
-    let route_ref = HttpRouteHandler::create_resource_ref(&route);
-
-    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
-        "metadata": {"namespace": "child", "name": "declaring-child"},
-        "spec": {"rules": [{"backendRefs": [{
-            "group": "edgion.io", "kind": "EdgionBackend", "name": "models-a"
-        }]}]}
-    }))
-    .unwrap();
-    let first_tuples =
-        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
-    // Parse owns generation replacement; this pass tests the existing effective
-    // projection's additive registration after that real entry boundary.
-    HttpRouteHandler::default().parse(route.clone(), &ctx).await;
-    let first = HttpRouteHandler::register_backend_refs(&route, &first_tuples, &ctx);
+    let route_with = |backend: &str, plugins: bool| -> HTTPRoute {
+        let filters = if plugins {
+            serde_json::json!([{"type": "ExtensionRef", "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "parent-plugins"
+            }}])
+        } else {
+            serde_json::Value::Null
+        };
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "parent", "namespace": "infra"},
+            "spec": {"rules": [{
+                "filters": filters,
+                "backendRefs": [{"group": "edgion.io", "kind": "EdgionBackend", "name": backend}]
+            }]}
+        }))
+        .unwrap()
+    };
+    let first = route_with("models-a", true);
+    let route_ref = HttpRouteHandler::create_resource_ref(&first);
+    HttpRouteHandler::default().parse(first.clone(), &ctx).await;
     assert_eq!(
-        first.affected,
-        vec!["edgion.io/EdgionBackend/child/models-a".to_string()]
+        ctx.runtime().backend_ref_mgr.get_dependencies(&route_ref.key()),
+        vec!["edgion.io/EdgionBackend/infra/models-a".to_string()]
     );
-    HttpRouteHandler::register_plugin_refs(&route, &ctx);
-    let mut dependencies = ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key());
-    dependencies.sort();
-    assert_eq!(
-        dependencies,
-        vec![
-            "child/ai-plugins".to_string(),
-            "child/backend-plugins".to_string(),
-            "infra/parent-plugins".to_string()
-        ]
-    );
-
-    let resolved = route.spec.resolved_rules.as_mut().unwrap();
-    resolved[0].backend_refs.as_mut().unwrap()[0].name = "models-b".to_string();
-    resolved[0].backend_refs.as_mut().unwrap()[0].filters = None;
-    resolved[0].filters = None;
-    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
-        "metadata": {"namespace": "child", "name": "declaring-child"},
-        "spec": {"rules": [{"backendRefs": [{
-            "group": "edgion.io", "kind": "EdgionBackend", "name": "models-b"
-        }]}]}
-    }))
-    .unwrap();
-    let second_tuples =
-        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
-    let second = HttpRouteHandler::register_backend_refs(&route, &second_tuples, &ctx);
-    assert_eq!(
-        second.dropped,
-        vec!["edgion.io/EdgionBackend/child/models-a".to_string()]
-    );
-    assert_eq!(second.affected.len(), 2);
-    // Parse owns generation replacement; this pass tests the existing effective
-    // projection's additive registration after that real entry boundary.
-    HttpRouteHandler::default().parse(route.clone(), &ctx).await;
-    HttpRouteHandler::register_plugin_refs(&route, &ctx);
     assert_eq!(
         ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
-        vec!["infra/parent-plugins".to_string()],
-        "operator-declared refs must survive removal from effective rules"
+        vec!["infra/parent-plugins".to_string()]
     );
+
+    let second = route_with("models-b", false);
+    let delta = HttpRouteHandler::register_backend_refs(&second, &ctx);
+    assert_eq!(
+        delta.dropped,
+        vec!["edgion.io/EdgionBackend/infra/models-a".to_string()]
+    );
+    assert_eq!(delta.affected.len(), 2);
+    HttpRouteHandler::default().parse(second, &ctx).await;
+    assert!(ctx
+        .runtime()
+        .plugin_ref_mgr
+        .get_dependencies(&route_ref.key())
+        .is_empty());
 }
 
 #[tokio::test]
@@ -1169,7 +1106,7 @@ async fn backend_jump_invalidates_only_its_rule() {
     let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
         "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
         "metadata": {"namespace": "default", "name": "jump"},
-        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {}}]}
+        "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"clusterRegionRef":{"name":"setting"}}}]}
     }))
     .unwrap();
     raw.upsert("default/jump".to_string(), Arc::new(plugins));
@@ -1212,7 +1149,7 @@ async fn backend_jump_invalidates_only_its_rule() {
 }
 
 #[tokio::test]
-async fn parse_clears_authored_extension_ref_namespace_metadata() {
+async fn parse_ignores_authored_extension_ref_namespace_metadata() {
     let ctx = make_ctx();
     let route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
@@ -1235,62 +1172,17 @@ async fn parse_clears_authored_extension_ref_namespace_metadata() {
         ProcessResult::Continue(route) => route,
         other => panic!("unexpected parse result: {other:?}"),
     };
-    let rule = &parsed.spec.rules.as_ref().unwrap()[0];
-    assert!(rule.filters.as_ref().unwrap()[0]
-        .extension_ref
-        .as_ref()
-        .unwrap()
-        .resolved_namespace
-        .is_none());
-    assert!(rule.backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
-        .extension_ref
-        .as_ref()
-        .unwrap()
-        .resolved_namespace
-        .is_none());
-}
-
-#[test]
-fn flattened_backend_refs_remain_registered_after_rule_withdrawal() {
-    let ctx = make_ctx();
-    let route: HTTPRoute = serde_json::from_value(serde_json::json!({
-        "apiVersion": "gateway.networking.k8s.io/v1",
-        "kind": "HTTPRoute",
-        "metadata": {"name": "parent", "namespace": "infra"},
-        "spec": {"resolvedRules": []}
-    }))
-    .unwrap();
-    let child: HTTPRoute = serde_json::from_value(serde_json::json!({
-        "metadata": {"namespace": "child", "name": "declaring-child"},
-        "spec": {"rules": [{"backendRefs": [{
-            "group": "edgion.io", "kind": "EdgionBackend", "name": "missing-or-denied"
-        }]}]}
-    }))
-    .unwrap();
-    let flattened_tuples =
-        route_backend_refs::collect_dependencies(HttpRouteBackendRefs::from_route(&child).unwrap().authored());
-
-    let delta = HttpRouteHandler::register_backend_refs(&route, &flattened_tuples, &ctx);
-
-    assert_eq!(
-        delta.affected,
-        vec!["edgion.io/EdgionBackend/child/missing-or-denied".to_string()]
-    );
-    assert_eq!(
-        ctx.runtime()
-            .backend_ref_mgr
-            .get_dependencies(&HttpRouteHandler::create_resource_ref(&route).key()),
-        delta.affected
-    );
+    // `resolvedNamespace` is not a field: an injected value never reaches
+    // the published route.
+    let published = serde_json::to_string(&parsed).unwrap();
+    assert!(!published.contains("resolvedNamespace"));
+    assert!(!published.contains("injected"));
 }
 
 #[tokio::test]
-async fn parse_marks_ref_denied_before_flatten_copies_siblings() {
-    // Regression (P0): flatten copies non-delegating sibling rules into
-    // resolved_rules, which the gateway compiles INSTEAD of spec.rules.
-    // The ReferenceGrant marking must therefore run BEFORE flatten so the
-    // copies carry ref_denied — otherwise an ungranted cross-ns Service
-    // ref on a delegating parent would be silently routable.
+async fn parse_marks_ref_denied_on_delegating_parent_siblings() {
+    // Regression (P0): an ungranted cross-ns Service ref on a delegating
+    // parent's sibling rule must stay ref_denied in the published rules.
     let route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
@@ -1320,30 +1212,9 @@ async fn parse_marks_ref_denied_before_flatten_copies_siblings() {
     };
 
     // No ReferenceGrant exists in the default runtime → the sibling's
-    // cross-ns Service ref is denied on spec.rules...
+    // cross-ns Service ref is denied on spec.rules.
     let spec_br = &parsed.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0];
     assert!(spec_br.ref_denied.is_some(), "spec.rules sibling must be ref_denied");
-
-    // ...AND on the resolved_rules copy the gateway actually compiles.
-    let resolved = parsed
-        .spec
-        .resolved_rules
-        .as_ref()
-        .expect("delegating parent has resolved_rules");
-    let resolved_sibling = resolved
-        .iter()
-        .find(|r| {
-            r.matches
-                .iter()
-                .flatten()
-                .any(|m| m.path.as_ref().and_then(|p| p.value.as_deref()) == Some("/plain"))
-        })
-        .expect("sibling rule copied into resolved_rules");
-    let resolved_br = &resolved_sibling.backend_refs.as_ref().unwrap()[0];
-    assert!(
-        resolved_br.ref_denied.is_some(),
-        "resolved_rules sibling copy must carry ref_denied (gateway compiles this copy)"
-    );
 }
 
 #[tokio::test]
@@ -1636,46 +1507,6 @@ fn backend_cors_scope_status_clears_after_policy_moves_to_rule() {
         .conditions
         .iter()
         .any(|condition| condition.type_ == "PartiallyInvalid" && condition.status == "True"));
-}
-
-#[test]
-fn backend_cors_scope_delegation_diagnostic_survives_attachment_rejection() {
-    let mut route = route_with_one_cors_rule(&["https://app.example"]);
-    let valid = route.spec.rules.as_ref().unwrap()[0].clone();
-    route.spec.parent_refs = Some(serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap());
-    route.spec.rules = Some(
-        serde_json::from_value(serde_json::json!([{
-            "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "child"}]
-        }]))
-        .unwrap(),
-    );
-    route.spec.resolved_rules = Some(vec![]);
-    let diagnostic = "child 'default/child' rules[0] dropped: backendRefs[0] CORS is not supported; configure CORS in rules[].filters instead";
-    route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
-        message: diagnostic.to_string(),
-    }];
-    let handler = HttpRouteHandler::default();
-    let ctx = make_ctx();
-    handler.update_status(&mut route, &ctx, &[]);
-    let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-    let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
-    assert_eq!(accepted.status, "False");
-    assert!(accepted.message.contains(diagnostic));
-    assert!(!conditions.iter().any(|c| c.reason == "AllRulesValid"));
-
-    // With a surviving effective rule, diagnostics belong to PartiallyInvalid.
-    route.spec.resolved_rules = Some(vec![valid]);
-    handler.update_status(&mut route, &ctx, &[]);
-    assert!(route.status.as_ref().unwrap().parents[0]
-        .conditions
-        .iter()
-        .any(|c| c.type_ == "PartiallyInvalid" && c.status == "True" && c.message.contains(diagnostic)));
-    route.spec.delegation_issues.clear();
-    handler.update_status(&mut route, &ctx, &[]);
-    assert!(!route.status.as_ref().unwrap().parents[0]
-        .conditions
-        .iter()
-        .any(|c| c.message.contains("CORS is not supported")));
 }
 
 #[test]
@@ -2399,12 +2230,9 @@ fn native_ai_facts_keep_slots_and_skip_invalid_or_denied_target_reads() {
         assert_eq!(matches!(fact, ResolvedForwardingTarget::Service), slot.backend() == 0);
     }
     assert_eq!(reads, 1);
-    route.spec.resolved_rules = route.spec.rules.clone();
     populate_ai_admission(&mut route, &ControllerRuntime::default());
-    for rule in [
-        &route.spec.rules.as_ref().unwrap()[0],
-        &route.spec.resolved_rules.as_ref().unwrap()[0],
-    ] {
+    {
+        let rule = &route.spec.rules.as_ref().unwrap()[0];
         let facts = &rule.resolved_ai_admission.as_ref().unwrap().backends;
         assert_eq!(facts.len(), 6);
         assert!(matches!(facts[0], ResolvedForwardingTarget::Service));
@@ -2423,10 +2251,8 @@ fn native_ai_facts_keep_slots_and_skip_invalid_or_denied_target_reads() {
     }
     route.metadata.name = Some("bad/name".into());
     populate_ai_admission(&mut route, &ControllerRuntime::default());
-    for rule in [
-        &route.spec.rules.as_ref().unwrap()[0],
-        &route.spec.resolved_rules.as_ref().unwrap()[0],
-    ] {
+    {
+        let rule = &route.spec.rules.as_ref().unwrap()[0];
         assert_eq!(rule.resolved_ai_admission.as_ref().unwrap().backends.len(), 6);
         assert!(rule
             .resolved_ai_admission
@@ -2459,7 +2285,7 @@ async fn extension_owner_default_and_invalid_status_paths_never_create_forged_de
         .plugin_ref_mgr
         .get_dependencies(&invalid_owner.key())
         .is_empty());
-    assert!(route.spec.resolved_rules.as_ref().unwrap().is_empty());
+    assert!(route.spec.resolved_listeners.is_none());
     HttpRouteHandler::register_plugin_refs(&route, &ctx);
     assert!(ctx
         .runtime()
@@ -2615,7 +2441,7 @@ async fn plugin_collision_status_preserves_effective_rule_and_backend_positions(
     })).unwrap();
     let handler = HttpRouteHandler::default();
     handler.update_status(&mut route, &ctx, &[]);
-    let before_rules = serde_json::to_value(route.effective_rules()).unwrap();
+    let before_rules = serde_json::to_value(route.spec.rules.as_ref()).unwrap();
     let before_indices = route.spec.invalid_rule_indices.clone();
     let admission = |route: &HTTPRoute| {
         route
@@ -2633,7 +2459,7 @@ async fn plugin_collision_status_preserves_effective_rule_and_backend_positions(
     source.metadata.namespace = Some("default".into());
     raw.upsert("default/plugins".into(), Arc::new(source));
     handler.update_status(&mut route, &ctx, &[]);
-    assert_eq!(serde_json::to_value(route.effective_rules()).unwrap(), before_rules);
+    assert_eq!(serde_json::to_value(route.spec.rules.as_ref()).unwrap(), before_rules);
     assert_eq!(route.spec.invalid_rule_indices, before_indices);
     assert_eq!(admission(&route), before_admission);
     let parents = &route.status.as_ref().unwrap().parents;
@@ -2689,8 +2515,12 @@ async fn graphql_router_uses_raw_desired_membership_and_preserves_sibling_rules(
     assert!(errors[0].1.contains("not declared"));
     raw.upsert("apps/routing".into(), source("orders"));
     assert!(find_controller_invalid_rule_details(&route, "apps", &runtime).is_empty());
+    // A delegating rule never hosts an operation router.
     let mut delegated = route.clone();
-    delegated.spec.resolved_rules = delegated.spec.rules.clone();
+    delegated.spec.rules.as_mut().unwrap()[0].backend_refs = Some(vec![serde_json::from_value(serde_json::json!({
+        "group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "child"
+    }))
+    .unwrap()]);
     assert!(find_controller_invalid_rule_details(&delegated, "apps", &runtime)[0]
         .1
         .contains("delegation"));
@@ -2733,7 +2563,7 @@ async fn merged_graphql_bare_target_collision_and_survivor_keep_canonical_diagno
 }
 
 #[tokio::test]
-async fn delegated_internal_auth_recovers_via_secret_and_grant_queues_and_clears_removed_refs() {
+async fn internal_auth_recovers_via_secret_and_grant_queues_and_clears_removed_refs() {
     use super::super::{ReferenceGrantHandler, SecretHandler};
     use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNsRevalidationListener;
     use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
@@ -2804,12 +2634,6 @@ async fn delegated_internal_auth_recovers_via_secret_and_grant_queues_and_clears
             seen
         }};
     }
-    let delegation: ReferenceGrant = serde_json::from_value(json!({"metadata":{"name":"delegation","namespace":"child"},"spec":{
-        "from":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"root"}],"to":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute"}]
-    }})).unwrap();
-    runtime
-        .ref_grant_store
-        .upsert("child/delegation".into(), Arc::new(delegation));
     let grant: ReferenceGrant = serde_json::from_value(json!({"metadata":{"name":"material","namespace":"material"},"spec":{
         "from":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"child"}],"to":[{"group":"","kind":"Secret","name":"token"}]
     }})).unwrap();
@@ -2821,26 +2645,14 @@ async fn delegated_internal_auth_recovers_via_secret_and_grant_queues_and_clears
             "target":{"name":"auth","port":8080},"decision":{},"request":{"path":{"template":"/check/${secretRef:material/token:key}"}},"resolvedSecrets":{"material/token:key":"forged-value"}
         }}],"backendRefs":[{"name":"backend","port":80}]
     }]}})).unwrap();
-    let root: HTTPRoute = serde_json::from_value(json!({"metadata":{"name":"root","namespace":"root"},"spec":{"rules":[{
-        "matches":[{"path":{"type":"PathPrefix","value":"/"}}],"backendRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","namespace":"child","name":"leaf"}]
-    }]}})).unwrap();
     route_raw.upsert("child/leaf".into(), Arc::new(child.clone()));
     routes.on_event_key("child/leaf".into()).await;
     drain_routes!();
-    route_raw.upsert("root/root".into(), Arc::new(root));
-    routes.on_event_key("root/root".into()).await;
-    drain_routes!();
-    let root_owner = ResourceRef::new(ResourceKind::HTTPRoute, Some("root".into()), "root".into());
-    assert!(runtime
-        .secret_ref_manager
-        .get_refs("material/token")
-        .contains(&root_owner));
+    let owner = ResourceRef::new(ResourceKind::HTTPRoute, Some("child".into()), "leaf".into());
+    assert!(runtime.secret_ref_manager.get_refs("material/token").contains(&owner));
     let assert_material = |expected: Option<&str>| {
-        let current = routes.get("root/root").unwrap();
-        let filter = &current.spec.resolved_rules.as_ref().unwrap()[0]
-            .filters
-            .as_ref()
-            .unwrap()[0];
+        let current = routes.get("child/leaf").unwrap();
+        let filter = &current.spec.rules.as_ref().unwrap()[0].filters.as_ref().unwrap()[0];
         let config = filter.external_auth.as_ref().unwrap().edgion_config().unwrap();
         assert_eq!(
             config
@@ -2866,33 +2678,36 @@ async fn delegated_internal_auth_recovers_via_secret_and_grant_queues_and_clears
     secret_raw.upsert("material/token".into(), Arc::new(secret));
     secrets.on_event_key("material/token".into()).await;
     step!(secrets, secret_raw, "material/token");
-    assert!(drain_routes!().contains(&"root/root".to_string()));
+    assert!(drain_routes!().contains(&"child/leaf".to_string()));
     assert_material(Some("fresh-value"));
     grant_raw.remove("material/material");
     grants.on_event_key("material/material".into()).await;
     step!(grants, grant_raw, "material/material");
-    assert!(drain_routes!().contains(&"root/root".to_string()));
+    assert!(drain_routes!().contains(&"child/leaf".to_string()));
     assert_material(None);
-    let mut removed = child;
+    let mut removed = child.clone();
     removed.spec.rules.as_mut().unwrap()[0].filters = None;
     route_raw.upsert("child/leaf".into(), Arc::new(removed));
     routes.on_event_key("child/leaf".into()).await;
     drain_routes!();
-    assert!(runtime
-        .secret_ref_manager
-        .get_dependencies(&root_owner.key())
-        .is_empty());
+    assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
     assert!(!runtime
         .cross_ns_ref_mgr
-        .get_dependencies(&root_owner.key())
+        .get_dependencies(&owner.key())
         .contains(&"material".to_string()));
-    route_raw.remove("root/root");
-    routes.on_event_key("root/root".into()).await;
+    // Restore the filter, then delete the route: every edge clears.
+    route_raw.upsert("child/leaf".into(), Arc::new(child));
+    routes.on_event_key("child/leaf".into()).await;
     drain_routes!();
-    assert!(runtime
-        .secret_ref_manager
-        .get_dependencies(&root_owner.key())
-        .is_empty());
+    assert!(runtime.secret_ref_manager.get_refs("material/token").contains(&owner));
+    route_raw.remove("child/leaf");
+    routes.on_event_key("child/leaf".into()).await;
+    drain_routes!();
+    assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    assert!(!runtime
+        .cross_ns_ref_mgr
+        .get_dependencies(&owner.key())
+        .contains(&"material".to_string()));
 }
 
 #[tokio::test]

@@ -1,7 +1,3 @@
-# RegionRouteOverride EdgionConfigData for data-managed test
-#
-# Pre-created by administrators before applying the EdgionPlugins data-managed resource.
-# The EdgionPlugins overrideRef points here; when this resource exists, ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -9,22 +5,24 @@ metadata:
   namespace: edgion-default
 spec:
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
       regions:
-        - name: east
-          hashRange: [0, 499]
-          backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30001"
-          tls: false
-        - name: west
-          hashRange: [500, 999]
-          backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30002"
-          tls: false
+      - name: east
+        hashRange:
+        - 0
+        - 499
+        backendEndpoint: edgion-test-server.edgion-test.svc.cluster.local:30001
+        tls: false
+      - name: west
+        hashRange:
+        - 500
+        - 999
+        backendEndpoint: edgion-test-server.edgion-test.svc.cluster.local:30002
+        tls: false
+      clusterName: integration
+      regionName: east
 ---
-# RegionRouteOverride EdgionConfigData for data-validated test
-#
-# Pre-created by administrators before applying the EdgionPlugins data-validated resource.
-# The EdgionPlugins overrideRef points here; when this resource exists, ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -32,25 +30,24 @@ metadata:
   namespace: edgion-default
 spec:
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
       regions:
-        - name: east
-          hashRange: [0, 499]
-          backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30001"
-          tls: false
-        - name: west
-          hashRange: [500, 999]
-          backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30002"
-          tls: false
+      - name: east
+        hashRange:
+        - 0
+        - 499
+        backendEndpoint: edgion-test-server.edgion-test.svc.cluster.local:30001
+        tls: false
+      - name: west
+        hashRange:
+        - 500
+        - 999
+        backendEndpoint: edgion-test-server.edgion-test.svc.cluster.local:30002
+        tls: false
+      clusterName: integration
+      regionName: east
 ---
-# EdgionConfigDataManagedRegionRoute - Scenario 1: pre-created RegionRouteOverride overlay
-#
-# An EdgionPlugins with overrideRef pointing to a pre-created RegionRouteOverride EdgionConfigData.
-# The EdgionConfigData "data-managed" must be created by administrators before applying this file.
-#
-# Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=data-managed
-# should return data with status.conditions Accepted=True and ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -58,36 +55,20 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    - type: RegionRoute
-      config:
-        regions:
-          - name: east
-            hashRange: [0, 499]
-            backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30001"
-            tls: false
-          - name: west
-            hashRange: [500, 999]
-            backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30002"
-            tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-        routeRules:
-          - type: RouteByHashRange
-        overrideRef:
-          name: "data-managed"
-          namespace: edgion-default
+  - type: RegionRoute
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+      routeRules:
+      - type: RouteByHashRange
+      clusterRegionRef:
+        name: data-managed
+        namespace: edgion-default
 ---
-# EdgionConfigDataManagedRegionRoute - Scenario 2: pre-created RegionRouteOverride overlay (data-validated)
-#
-# An EdgionPlugins with overrideRef pointing to a pre-created RegionRouteOverride EdgionConfigData.
-# The EdgionConfigData "data-validated" must be created by administrators before applying this file.
-#
-# Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=data-validated
-# should return data with status.conditions Accepted=True and ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -95,31 +76,20 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    - type: RegionRoute
-      config:
-        regions:
-          - name: east
-            hashRange: [0, 499]
-            backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30001"
-            tls: false
-          - name: west
-            hashRange: [500, 999]
-            backendEndpoint: "edgion-test-server.edgion-test.svc.cluster.local:30002"
-            tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-        routeRules:
-          - type: RouteByHashRange
-        overrideRef:
-          name: "data-validated"
-          namespace: edgion-default
+  - type: RegionRoute
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+      routeRules:
+      - type: RouteByHashRange
+      clusterRegionRef:
+        name: data-validated
+        namespace: edgion-default
 ---
-# HTTPRoute for EdgionConfigDataManagedRegionRoute tests.
-# Normal backend test-http:30001 used for pass-through tests.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -127,19 +97,19 @@ metadata:
   namespace: edgion-default
 spec:
   parentRefs:
-    - name: edgion-plugins-gateway
-      namespace: edgion-test
-      sectionName: http  # Port 31180
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+    sectionName: http
   hostnames:
-    - "data-managed.example.com"
+  - data-managed.example.com
   rules:
-    - backendRefs:
-        - name: test-http
-          namespace: edgion-test
-          port: 30001
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: data-managed
+  - backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: data-managed

@@ -432,13 +432,27 @@ async fn process_response_body_event(
     }
 }
 
-fn run_read_only_body_plugins(
+pub(super) fn run_read_only_body_plugins(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     body: &Option<bytes::Bytes>,
     end_of_stream: bool,
 ) -> Option<Duration> {
     let mut max_delay: Option<Duration> = None;
+    // Delegated chains: ancestors first (root -> parent), each as its own level.
+    // Index loop: one refcount bump per level per chunk, the same as the leaf.
+    for level in 0..ctx.ancestor_count() {
+        if ctx.ip_body_denied() {
+            break;
+        }
+        let Some(runtime) = ctx.ancestor_runtime(level) else {
+            break;
+        };
+        merge_max_delay(
+            &mut max_delay,
+            runtime.run_upstream_response_body_plugins_at(session, ctx, body, end_of_stream, Some(level)),
+        );
+    }
     if let Some(runtime) = prefer_plugin_runtime(
         ctx.grpc_route_unit
             .as_ref()
@@ -473,6 +487,11 @@ fn run_read_only_body_plugins(
 }
 
 fn check_read_only_ip_dependencies(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    for level in 0..ctx.ancestor_count() {
+        if let Some(runtime) = ctx.ancestor_runtime(level) {
+            runtime.check_body_ip_dependencies_at(session, ctx, Some(level));
+        }
+    }
     if let Some(runtime) = prefer_plugin_runtime(
         ctx.grpc_route_unit
             .as_ref()

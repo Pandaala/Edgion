@@ -513,7 +513,7 @@ impl RouteAdaptiveFacts {
         let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
             return facts;
         };
-        for (rule_index, rule) in route.effective_rules().into_iter().flatten().enumerate() {
+        for (rule_index, rule) in route.spec.rules.as_ref().into_iter().flatten().enumerate() {
             let (Some(route_uid), Some(rule_identity)) = (
                 rule.resolved_terminal_route_uid.as_ref(),
                 rule.resolved_terminal_rule_identity.as_ref(),

@@ -110,6 +110,8 @@ fn make_route(
         parsed_allow_non_idempotent_retry: None,
     });
     Arc::new(GrpcRouteRuleUnit {
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: format!("default/{}", name),
         matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
@@ -385,6 +387,8 @@ fn make_header_only_route(
         parsed_allow_non_idempotent_retry: None,
     });
     Arc::new(GrpcRouteRuleUnit {
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: format!("default/{}", name),
         matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),

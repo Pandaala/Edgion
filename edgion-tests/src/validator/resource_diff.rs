@@ -141,12 +141,13 @@ impl DiffResult {
     }
 }
 
-/// Controller and Gateway API list response (both have the same format)
+/// Admin list envelope; only source reads use the continuation token.
 #[derive(Deserialize, Debug)]
 struct ListApiResponse {
     success: bool,
     data: Option<Vec<serde_json::Value>>,
     count: usize,
+    continue_token: Option<String>,
     error: Option<String>,
 }
 
@@ -203,23 +204,76 @@ impl AdminClient {
         }
     }
 
-    /// Fetch resources from controller with retry
+    /// Traverse source pages completely; any incomplete scan fails the comparison.
     async fn fetch_from_controller(&self, endpoint: &str) -> Result<Vec<Resource>, String> {
-        let url = format!("{}{}", self.controller_url, endpoint);
+        const MAX_PAGES: usize = 1_000;
+        const MAX_ROWS: usize = 100_000;
+        let mut remaining_bytes = 64 * 1024 * 1024;
+        let mut cursor = None;
+        let mut cursors = HashSet::new();
+        let mut identities = HashSet::new();
+        let mut resources = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let page = self
+                .fetch_controller_page(endpoint, cursor.as_deref(), &mut remaining_bytes)
+                .await?;
+            if page.count > 100 {
+                return Err("Controller source page exceeds requested limit".into());
+            }
+            let next = page.continue_token.clone();
+            let items = deserialize_list_response(page, "controller", endpoint)?;
+            if resources.len() + items.len() > MAX_ROWS {
+                return Err("Controller source scan exceeds row budget".into());
+            }
+            for item in items {
+                if !identities.insert((item.metadata.namespace.clone(), item.metadata.name.clone())) {
+                    return Err("Controller source scan returned a duplicate identity".into());
+                }
+                resources.push(item);
+            }
+            match next {
+                None => return Ok(resources),
+                Some(next) => {
+                    if next.is_empty() || next.len() > 8192 || !cursors.insert(next.clone()) {
+                        return Err("Controller source scan returned an invalid or repeated cursor".into());
+                    }
+                    cursor = Some(next);
+                }
+            }
+        }
+        Err("Controller source scan exceeds page budget".into())
+    }
 
+    async fn fetch_controller_page(
+        &self,
+        endpoint: &str,
+        cursor: Option<&str>,
+        remaining_bytes: &mut usize,
+    ) -> Result<ListApiResponse, String> {
+        let url = format!("{}{}", self.controller_url, endpoint);
         for attempt in 1..=self.max_retries {
-            let mut rb = self.client.get(&url);
+            let mut rb = self.client.get(&url).query(&[("limit", "100")]);
+            if let Some(cursor) = cursor {
+                rb = rb.query(&[("continue", cursor)]);
+            }
             if let Some(token) = &self.controller_token {
                 rb = rb.bearer_auth(token);
             }
             match rb.send().await {
-                Ok(response) => {
+                Ok(mut response) => {
                     if response.status().is_success() {
-                        match response.json::<ListApiResponse>().await {
-                            Ok(api_resp) => return deserialize_list_response(api_resp, "controller", endpoint),
-                            Err(e) => return Err(format!("JSON parse error: {}", e)),
+                        let mut body = Vec::new();
+                        while let Some(chunk) =
+                            response.chunk().await.map_err(|_| "Controller page body read failed")?
+                        {
+                            if chunk.len() > *remaining_bytes || body.len() + chunk.len() > 16 * 1024 * 1024 {
+                                return Err("Controller source scan exceeds byte budget".into());
+                            }
+                            *remaining_bytes -= chunk.len();
+                            body.extend_from_slice(&chunk);
                         }
-                    } else if attempt == self.max_retries {
+                        return serde_json::from_slice(&body).map_err(|e| format!("JSON parse error: {e}"));
+                    } else if response.status() == reqwest::StatusCode::GONE || attempt == self.max_retries {
                         return Err(format!("HTTP error: {}", response.status()));
                     }
                 }
@@ -231,7 +285,6 @@ impl AdminClient {
             }
             tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
         }
-
         Err("Max retries exceeded".to_string())
     }
 
@@ -996,6 +1049,7 @@ mod tests {
             success: true,
             data: None,
             count: 0,
+            continue_token: None,
             error: None,
         };
         let error = deserialize_list_response(missing_data, "controller", "/resources")
@@ -1006,11 +1060,105 @@ mod tests {
             success: true,
             data: Some(vec![serde_json::json!({"metadata": {"name": "one"}})]),
             count: 0,
+            continue_token: None,
             error: None,
         };
         let error =
             deserialize_list_response(wrong_count, "gateway", "/resources").expect_err("a mismatched count must fail");
         assert!(error.contains("count 0 does not match 1 data items"));
+    }
+
+    #[tokio::test]
+    async fn controller_scan_follows_encoded_cursors_and_empty_pages() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/resources"))
+            .and(header("authorization", "Bearer correct-token"))
+            .respond_with(|request: &wiremock::Request| {
+                let query: std::collections::HashMap<_, _> = request.url.query_pairs().into_owned().collect();
+                assert_eq!(query.get("limit").map(String::as_str), Some("100"));
+                let (data, next) = match query.get("continue").map(String::as_str) {
+                    None => (
+                        (0..10)
+                            .map(|i| serde_json::json!({"metadata":{"name":format!("r{i}")}}))
+                            .collect::<Vec<_>>(),
+                        Some("opaque+&=/ cursor"),
+                    ),
+                    Some("opaque+&=/ cursor") => (vec![], Some("last")),
+                    Some("last") => (vec![serde_json::json!({"metadata":{"name":"r10"}})], None),
+                    other => panic!("unexpected cursor: {other:?}"),
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success":true,"count":data.len(),"data":data,"continue_token":next
+                }))
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+        let client = test_client(server.uri(), Some("correct-token".into()));
+        let items = client.fetch_from_controller("/resources").await.unwrap();
+        let gateway = (0..11).map(|i| res(&format!("r{i}"), None)).collect::<Vec<_>>();
+        let diff = compute_resource_diff("HTTPRoute", &items, &gateway);
+        assert!(diff.missing_in_gateway.is_empty());
+        assert!(diff.extra_in_gateway.is_empty());
+        assert_eq!(items.len(), 11);
+    }
+
+    #[tokio::test]
+    async fn controller_scan_rejects_incomplete_or_inconsistent_later_pages() {
+        for (case, expected) in [
+            ("loop", "repeated cursor"),
+            ("duplicate", "duplicate identity"),
+            ("count", "does not match"),
+            ("failure", "503"),
+            ("expired", "410"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/resources"))
+                .respond_with(move |request: &wiremock::Request| {
+                    if !request.url.query_pairs().any(|(key, _)| key == "continue") {
+                        return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                            "success":true,"count":1,"data":[{"metadata":{"name":"one"}}],"continue_token":"next"
+                        }));
+                    }
+                    match case {
+                        "failure" => ResponseTemplate::new(503),
+                        "expired" => ResponseTemplate::new(410),
+                        "loop" => ResponseTemplate::new(200).set_body_json(
+                            serde_json::json!({"success":true,"count":0,"data":[],"continue_token":"next"}),
+                        ),
+                        "duplicate" => ResponseTemplate::new(200).set_body_json(
+                            serde_json::json!({"success":true,"count":1,"data":[{"metadata":{"name":"one"}}]}),
+                        ),
+                        "count" => ResponseTemplate::new(200)
+                            .set_body_json(serde_json::json!({"success":true,"count":1,"data":[]})),
+                        _ => unreachable!(),
+                    }
+                })
+                .expect(2)
+                .mount(&server)
+                .await;
+            let error = test_client(server.uri(), None)
+                .fetch_from_controller("/resources")
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected), "{case}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_scan_enforces_remaining_byte_budget() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("0123456789"))
+            .mount(&server)
+            .await;
+        let error = test_client(server.uri(), None)
+            .fetch_controller_page("/resources", None, &mut 9)
+            .await
+            .unwrap_err();
+        assert!(error.contains("byte budget"));
     }
 
     #[tokio::test]

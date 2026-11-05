@@ -79,7 +79,7 @@ Gateway ──► Secret (TLS certificates)
 HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP plugins)
                     ──► EdgionStreamPlugins (Stream plugins)
 
-EdgionPlugins/EdgionStreamPlugins ──► EdgionConfigData (overlay/data primitive via overrideRef)
+EdgionPlugins/EdgionStreamPlugins ──► EdgionConfigData (overlay/data primitive via clusterRegionRef)
 
 EdgionBackend ──► Secret (bounded credential pool)
 HTTPRoute.backendRefs ──► EdgionBackend (sole candidate/order/weight source)

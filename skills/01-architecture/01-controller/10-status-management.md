@@ -303,10 +303,10 @@ Several simple resources register outbound references during `parse` via indices
 |---------|---------------|--------------|-------------------------|
 | EdgionPlugins | Secret / ConfigMap credential material | `SecretRefManager::get_dependencies(ep_key)` with kind-preserving ConfigMap keys | `SecretNotFound` / `ConfigMapNotFound` |
 | EdgionStreamPlugins | EdgionConfigData (Selector) | iterate GCIR entries' `activeProfileRef` → `edgion_config_data_store.get(ns, name)` with matching `Selector` type | `InvalidEdgionConfigDataRef` |
-| EdgionPlugins | EdgionConfigData (RegionRouteOverride) | `edgion_config_data_store.get` via `overrideRef` with type guard | `InvalidEdgionConfigDataRef` |
+| EdgionPlugins | EdgionConfigData (ClusterRegionSetting) | `edgion_config_data_store.get` via `clusterRegionRef` with type guard | `InvalidEdgionConfigDataRef` |
 | EdgionTls | Secret | `secret_store.get` | `SecretNotFound` |
 
-When the referenced object changes, a reverse requeue is performed via `edgion_config_data_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor. (The old PM→PM cross-ref chain — ServiceRegionRoute → ClusterRegionRoute — was removed in the EdgionConfigData refactor; `overrideRef` is now a direct EdgionPlugins → EdgionConfigData reference.)
+When the referenced object changes, a reverse requeue is performed via `edgion_config_data_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor. (The old PM→PM cross-ref chain — ServiceRegionRoute → ClusterRegionRoute — was removed in the EdgionConfigData refactor; `clusterRegionRef` is now a direct EdgionPlugins → EdgionConfigData reference.)
 
 ## 5. The set_parent_conditions_full Contract
 

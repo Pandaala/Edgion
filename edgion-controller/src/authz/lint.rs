@@ -3,7 +3,7 @@
 //! These checks are advisory WARNINGs (never fatal): the enforcement path is
 //! already fail-closed (an unmatched verb/kind simply grants nothing). The goal
 //! is to surface operator typos that would otherwise become invisible
-//! zero-permission rules. Shared by the startup loader and the reload path.
+//! zero-permission rules. Used by the startup configuration loader.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -16,14 +16,14 @@ use edgion_resources::resource::kind::ResourceKind;
 ///
 /// - `RegionRoute`: the effective region-route read endpoint and the failover endpoint.
 /// - `NonResource`: non-resource operational endpoints (server-info, diagnostics,
-///   reload, ...) — see `api::authz_classifier::NON_RESOURCE_KIND`. Having a named
+///   wipe-all, ...) — see `api::authz_classifier::NON_RESOURCE_KIND`. Having a named
 ///   kind lets policies scope these without resorting to `kinds: ["*"]`.
 const SYNTHETIC_KINDS: &[&str] = &["RegionRoute", "NonResource"];
 
 /// Lint one policy's verbs/kinds and emit advisory WARNs.
 ///
 /// `identity` is the cli-token name or "center".
-/// `context` is "startup" or "reload" (for log correlation).
+/// `context` identifies the configuration loading phase for log correlation.
 pub fn lint_rbac_policy(rbac: &FedRbacConfig, context: &str, identity: &str) {
     for rule in &rbac.allow {
         for k in &rule.kinds {
@@ -69,7 +69,7 @@ pub fn lint_rbac_policy(rbac: &FedRbacConfig, context: &str, identity: &str) {
                 );
             }
         }
-        // Dangerous-grant WARNs — folded here so both startup AND reload emit them.
+        // Dangerous-grant WARNs — emitted during configuration loading.
         // `watch` is included alongside the point-read verbs: it streams the same
         // credential data and goes through the identical `authorize()` gate, so a
         // `watch Secret` / `watch *` grant is just as dangerous as a `get`/`list`.

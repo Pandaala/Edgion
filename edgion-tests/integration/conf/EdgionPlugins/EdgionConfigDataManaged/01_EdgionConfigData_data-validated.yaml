@@ -1,7 +1,4 @@
-# RegionRouteOverride EdgionConfigData for data-validated test
-#
-# Pre-created by administrators before applying the EdgionPlugins data-validated resource.
-# The EdgionPlugins overrideRef points here; when this resource exists, ResolvedRefs=True.
+# ClusterRegionSetting fixtures; routing logic references a separate setting.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -9,14 +6,20 @@ metadata:
   namespace: edgion-default
 spec:
   data:
-    type: RegionRouteOverride
+    type: ClusterRegionSetting
     config:
       regions:
-        - name: east
-          hashRange: [0, 499]
-          backendEndpoint: "127.0.0.1:30001"
-          tls: false
-        - name: west
-          hashRange: [500, 999]
-          backendEndpoint: "127.0.0.1:30002"
-          tls: false
+      - name: east
+        hashRange:
+        - 0
+        - 499
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: west
+        hashRange:
+        - 500
+        - 999
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+      clusterName: integration
+      regionName: east

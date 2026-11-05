@@ -1,0 +1,76 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "dsl-query-executor-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "KeyAuth",
+        "config": {
+          "keySources": [
+            {
+              "type": "header",
+              "name": "x-dsl-query-key"
+            }
+          ],
+          "hideCredentials": true,
+          "upstreamHeaderFields": [],
+          "secretGroups": [
+            {
+              "name": "default",
+              "secretRefs": [
+                {
+                  "name": "dsl-query-executor-dynamic",
+                  "namespace": "edgion-default"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "Dsl",
+        "config": {
+          "name": "query-method-rewrite",
+          "errorPolicy": "deny",
+          "source": "if req.path == \"/graphql/rewritten-get\" { req.set_method(\"POST\")\nreq.set_uri(\"/graphql/by-id\") }\nreturn next()"
+        }
+      },
+      {
+        "type": "Dsl",
+        "config": {
+          "name": "dsl-query-executor-dynamic",
+          "source": "resp.set_header(\"X-Dsl-Query-Stage\", \"executor\")\nreq.set_header(\"x-response-cache-fixture\", \"dsl-query-lookup-dynamic\")\nif req.request_method != \"POST\" { return deny(405, \"Method not allowed\") }\nif req.content_type != \"application/json\" { return deny(415, \"Unsupported media type\") }\nlet encoding = req.header(\"Content-Encoding\")\nif encoding != nil && encoding != \"identity\" { return deny(415, \"Unsupported media type\") }\nif req.query_string != nil && req.query_string != \"\" { return deny(400, \"Invalid input\") }\nif req.body.byte_len() > 65536 { return deny(413, \"Payload too large\") }\nlet input = json.read(req.body)\nif input == nil { return deny(400, \"Invalid input\") }\nlet keys = json.keys(input)\nif input == nil || keys == nil { return deny(400, \"Invalid input\") }\nlet by_id = req.path == \"/graphql/by-id\"\nfor key in keys {\n  if by_id {\n    if key != \"id\" && key != \"variables\" { return deny(400, \"Invalid input\") }\n  } else {\n    if key != \"query\" && key != \"operationName\" && key != \"variables\" { return deny(400, \"Invalid input\") }\n  }\n}\nlet variables = json.get_raw(input, \"variables\")\nif variables != nil && variables != \"null\" && json.keys(variables) == nil { return deny(400, \"Invalid input\") }\nlet mut record = \"{}\"\nif by_id {\n  let id = json.get_string(input, \"id\")\n  if id == nil || regex_find(id, \"^[0-9a-f]{64}$\") == nil { return deny(400, \"Invalid input\") }\n  let result = redis.get_bounded(\"redis-test\", \"edgion:dsl:query:v1:example-dynamic:\" + id, 65536)\n  if result[\"ok\"] == false {\n    if result[\"error\"] == \"result_too_large\" || result[\"error\"] == \"invalid_response\" { return deny(502, \"Invalid query mapping\") }\n    return deny(503, \"Query store unavailable\")\n  }\n  if result[\"value\"] == nil { return deny(404, \"Query mapping not found\") }\n  if sha256(result[\"value\"]) != id { return deny(502, \"Invalid query mapping\") }\n  record = json.read(result[\"value\"])\n  if record == nil { return deny(502, \"Invalid query mapping\") }\n  let stored_keys = json.keys(record)\n  if record == nil || stored_keys == nil { return deny(502, \"Invalid query mapping\") }\n  for key in stored_keys {\n    if key != \"query\" && key != \"operationName\" { return deny(502, \"Invalid query mapping\") }\n  }\n  let query = json.get_string(record, \"query\")\n  let selection = json.get_raw(record, \"operationName\")\n  let name = json.get_string(record, \"operationName\")\n  if query == nil || query == \"\" || (selection != nil && (name == nil || name == \"\")) { return deny(502, \"Invalid query mapping\") }\n} else {\n  let query = json.get_string(input, \"query\")\n  let selection = json.get_raw(input, \"operationName\")\n  let name = json.get_string(input, \"operationName\")\n  if query == nil || query == \"\" || (selection != nil && (name == nil || name == \"\")) { return deny(400, \"Invalid input\") }\n  record = json.set_string(\"{}\", \"query\", query)\n  if selection != nil { record = json.set_string(record, \"operationName\", name) }\n}\nlet mut envelope = record\nif variables != nil { envelope = json.set_raw(record, \"variables\", variables) }\njson.set_body(envelope)\nreq.set_header(\"Content-Type\", \"application/json\")\nreq.set_uri(\"/graphql\")\nreturn next()\n",
+          "maxStringLen": 65536,
+          "maxBodyScanPasses": 4,
+          "errorPolicy": "deny",
+          "linkSysRefs": [
+            {
+              "namespace": "default",
+              "name": "redis-test"
+            }
+          ]
+        }
+      },
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "maxDepth": 8,
+          "maxFields": 64,
+          "maxAliases": 16,
+          "maxRootFields": 16
+        }
+      },
+      {
+        "type": "ResponseCache",
+        "config": {
+          "maxTtl": "60s",
+          "graphqlQueries": true
+        }
+      }
+    ]
+  }
+}

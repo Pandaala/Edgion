@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use edgion_algo::cache::ShardedLruCache;
+use edgion_common::dns::DnsLookupFamily;
 
 /// Default TTL for a self-resolved address set (EGC `dnsResolver.cacheTtl`
 /// default). Kept in sync with the EGC schema default.
@@ -100,6 +101,8 @@ pub fn decide_external_name_path(mode: DnsResolutionMode, slice_has_ready: bool)
 /// - `fingerprint` — the effective resolver identity (see
 ///   [`edgion_common::dns::ResolverSpec::fingerprint`]), so a resolver change
 ///   invalidates rather than serving addresses resolved by another resolver.
+/// - `family` — the effective address-family policy; a narrowed policy cannot
+///   read a previously cached answer containing a forbidden family.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DnsCacheKey(DnsCacheQuery<'static>);
 
@@ -109,14 +112,16 @@ struct DnsCacheQuery<'a> {
     service_key: Cow<'a, str>,
     external_name: Cow<'a, str>,
     fingerprint: Cow<'a, str>,
+    family: DnsLookupFamily,
 }
 
 impl DnsCacheKey {
-    fn new(service_key: &str, external_name: &str, fingerprint: &str) -> Self {
+    fn new(service_key: &str, external_name: &str, fingerprint: &str, family: DnsLookupFamily) -> Self {
         Self(DnsCacheQuery {
             service_key: Cow::Owned(service_key.to_string()),
             external_name: Cow::Owned(external_name.to_string()),
             fingerprint: Cow::Owned(fingerprint.to_string()),
+            family,
         })
     }
 }
@@ -161,7 +166,7 @@ struct DnsCacheEntry {
 ///   TTL governs how long an unchanged answer is reused and is deliberately not
 ///   part of the identity.
 /// - **A Service update needs no explicit invalidation** — `external_name` and
-///   `fingerprint` are part of the key, so the previous generation's entry is
+///   `fingerprint` and `family` are part of the key, so the previous generation's entry is
 ///   already unreachable and is reclaimed by TTL or capacity.
 pub struct DnsCache {
     entries: ShardedLruCache<DnsCacheKey, DnsCacheEntry>,
@@ -229,11 +234,19 @@ impl DnsCache {
     /// disagree by that gap. The disagreement is one-directional and safe: it can
     /// only make a live entry read as a miss, never make an expired one read as a
     /// hit.
-    pub fn get(&self, service_key: &str, external_name: &str, fingerprint: &str, now: Instant) -> Option<Vec<IpAddr>> {
+    pub fn get(
+        &self,
+        service_key: &str,
+        external_name: &str,
+        fingerprint: &str,
+        now: Instant,
+        family: DnsLookupFamily,
+    ) -> Option<Vec<IpAddr>> {
         let key = DnsCacheQuery {
             service_key: Cow::Borrowed(service_key),
             external_name: Cow::Borrowed(external_name),
             fingerprint: Cow::Borrowed(fingerprint),
+            family,
         };
         let entry = self.entries.get(&key)?;
         if entry.expires_at > now {
@@ -251,6 +264,7 @@ impl DnsCache {
     /// `edgion.io/dns-resolver` annotations), and evicting those would make them
     /// thrash each other's cache every request. Bounding is the LRU's job, not a
     /// per-insert sweep's.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &self,
         service_key: &str,
@@ -259,6 +273,7 @@ impl DnsCache {
         addrs: Vec<IpAddr>,
         ttl: Duration,
         now: Instant,
+        family: DnsLookupFamily,
     ) {
         // `checked_add` rather than `+`: this is a public API taking an arbitrary
         // `Duration`, and the layer underneath already guards the same way. A
@@ -267,7 +282,7 @@ impl DnsCache {
         let Some(expires_at) = now.checked_add(ttl) else {
             return;
         };
-        let key = DnsCacheKey::new(service_key, external_name, fingerprint);
+        let key = DnsCacheKey::new(service_key, external_name, fingerprint, family);
         self.entries.insert(key, DnsCacheEntry { addrs, expires_at }, Some(ttl));
     }
 

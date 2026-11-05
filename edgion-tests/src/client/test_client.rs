@@ -46,6 +46,8 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GatewayDynamic",
     "DslDynamic",
     "ProxyRewriteHostDynamic",
+    "JwtClaimHeadersDynamic",
+    "HeaderCertHeadersDynamic",
     "DslXmlDynamic",
     "DslQueryLookupDynamic",
     "DslTerminateDynamic",
@@ -2056,6 +2058,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "OidcSessionExpiry"
         | "DslDynamic"
         | "ProxyRewriteHostDynamic"
+        | "JwtClaimHeadersDynamic"
         | "DslXmlDynamic"
         | "DslQueryLookupDynamic"
         | "DslTerminateDynamic"
@@ -2104,6 +2107,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "PreflightPolicyHotReload" => Some(("Gateway/PreflightPolicyHotReload", PortKind::Http)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
+        "HeaderCertHeadersDynamic" => Some(("EdgionTls/mTLS", PortKind::Https)),
         "AllowedSanRegexIgnoreCase" => Some(("EdgionTls/mTLS", PortKind::Https)),
         "AcmeGatewayRefOwnership" => Some(("Gateway/AcmeGatewayRefOwnership", PortKind::Http)),
         // This scenario only inspects control-plane status and intentionally has

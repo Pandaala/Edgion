@@ -27,7 +27,7 @@ use super::file_watcher::{FileSystemWatcher, KindEventReceiver};
 use super::path_registry::PathRegistry;
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
-use crate::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
+use crate::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend, LocalTaskScope};
 use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::conf_mgr::ControllerRuntime;
@@ -37,6 +37,7 @@ use edgion_resources::ResourceMeta;
 /// `FileSystemResourceController` into the shared [`LocalControllerBackend`]
 /// interface.
 struct FileSystemControllerBackend {
+    scope: LocalTaskScope,
     watcher: Arc<FileSystemWatcher>,
     registry: Arc<PathRegistry>,
 }
@@ -69,8 +70,9 @@ impl LocalControllerBackend for FileSystemControllerBackend {
     {
         let conf_dir = self.watcher.conf_dir().to_path_buf();
         let ctrl = FileSystemResourceController::new(kind, processor, conf_dir, self.registry.clone(), event_rx)
-            .with_shutdown(shutdown_signal);
-        tokio::spawn(async move { ctrl.run().await })
+            .with_shutdown(shutdown_signal)
+            .with_scope(self.scope.clone());
+        self.scope.spawn(async move { ctrl.run().await })
     }
 }
 
@@ -105,7 +107,12 @@ impl FileSystemController {
     }
 
     /// Run the controller
-    pub async fn run(&self, shutdown_signal: ShutdownSignal, runtime: Arc<ControllerRuntime>) -> Result<()> {
+    pub async fn run(
+        &self,
+        shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
+        scope: LocalTaskScope,
+    ) -> Result<()> {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %self.conf_dir.display(),
@@ -142,6 +149,7 @@ impl FileSystemController {
         ));
 
         let backend = FileSystemControllerBackend {
+            scope,
             watcher: watcher.clone(),
             registry: self.registry.clone(),
         };

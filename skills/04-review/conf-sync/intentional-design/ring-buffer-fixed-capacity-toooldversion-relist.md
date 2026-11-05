@@ -27,7 +27,9 @@ Fix suggestions of the form "add a per-kind capacity setting" (already exists),
 "replace the ring buffer with explicit per-resource add/remove and no expiry like
 Delta xDS / maintain a compacted current-state + change journal" (large feature),
 or "treat the fixed default as a regression vs Envoy" are **not accepted** as a
-narrow review fix.
+narrow review fix. This acceptance covers bounded retention and the cost of
+authoritative relisting; it does not accept missing expiry detection or silent
+configuration omissions, including for a version-zero List snapshot.
 
 ## Core Rationale
 
@@ -74,6 +76,50 @@ this design "defect." It can be filed on its own merits; it does not gate closin
 this finding, and bundling new metrics plumbing into a low-severity Envoy-parity
 finding would exceed the narrow review-fix scope.
 
+## Zero-version snapshot boundary (ISSUE-006)
+
+An initialized kind with no initial resources has `EventStore.sync_version == 0`.
+List returns that version, and Gateway forwards it unchanged as Watch
+`from_version`. Zero is a valid snapshot cursor, not a request to ignore expiry.
+`expire_sync_version` records the last evicted event version. Every cursor below
+that watermark must receive `TooOldVersion`; equality is valid because that
+event has already been consumed. Without eviction, a zero cursor remains valid.
+
+ISSUE-006 identified an explicit `from_version != 0` exemption in
+`EventStore::get_events_from_sync_version`. After more than the ring capacity of
+events arrived before the first nonempty scan, it returned only the retained
+suffix. `ServerCache::start_watcher_task` then advanced the cursor to the current
+version. Gateway accepted the suffix without relisting, leaving live resources
+absent until a later update or resync. The trigger also applies when an idle
+zero-cursor watcher is notified but cannot rescan until after the burst.
+
+The correction applies the existing expiry comparison to zero as well. The
+Controller sends the existing error response and terminates that Watch. Gateway
+`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` already returns to
+its full-List loop on a server error; no protocol or Gateway change is required.
+The authoritative `EventStore.data` map retains all current resources despite
+event-ring eviction. This defect was outside the accepted retention tradeoff.
+
+Regression coverage lives in
+`edgion-controller/tests/unit/conf_sync/cache_server/store_test.rs`
+(`zero_cursor_expires_only_after_history_is_evicted`) and
+`edgion-controller/tests/unit/conf_sync/cache_server/cache_test.rs`
+(`zero_cursor_overflow_reports_error_and_relist_recovers_all_resources` and
+`waiting_zero_cursor_detects_overflow_after_notification`). The latter boundary
+test deliberately holds the empty-scan notification across the entire burst;
+it does not rely on scheduler timing. These are in-process runtime tests, not
+cross-process or network reproduction.
+
+Verification in this fix:
+
+- Before the production change, `cargo test -p edgion-controller --lib zero_cursor`
+  failed all three new tests: the expired zero cursor received a retained suffix
+  instead of `TooOldVersion`.
+- After the change, `cargo test -p edgion-controller --lib conf_sync::cache_server`
+  passed all 23 tests, including the three regressions and existing nonzero
+  overflow, empty-store, notification, and concurrent-update coverage.
+- No cross-process recovery test or full workspace test run was performed.
+
 ## Fix Suggestions Not Accepted
 
 - "Add a per-kind capacity setting so high-churn kinds get a larger buffer" —
@@ -93,7 +139,7 @@ finding would exceed the narrow review-fix scope.
 
 ## Re-evaluation Triggers
 
-Re-open (as a `tasks/todo/` feature, not a review fix) only if:
+Reconsider the accepted retention/capacity design as a `tasks/todo/` feature if:
 
 - A production incident shows that even with tuned `capacity_overrides`, a rolling
   deploy still drives a fleet-wide `TooOldVersion` thundering-herd of full Lists
@@ -105,9 +151,16 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
   unrelated reason, making event compaction an incremental rather than greenfield
   change.
 
+Incorrect expiry detection, incomplete deltas accepted as complete, or broken
+List recovery remain correctness findings regardless of those feature triggers.
+Re-evaluate the zero-cursor regression boundary if List cursor semantics, ring
+watermark rules, Watch cursor advancement, or Gateway error recovery changes.
+
 ## Reference Cases
 
 - `tasks/review-envoy/sync-06-ring-buffer-capacity-is-per-kind-fixed.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
+- `ISSUE-006` — zero-version Watch expiry omission; corrected in the current fix,
+  with verification tracked above. The earlier sync-06 acceptance did not cover it.
 - `edgion-controller/src/conf_sync/cache_server/store.rs:177-201` (`mut_update` eviction + `expire_sync_version`; `get_events_from_sync_version` TooOldVersion gate)
 - `edgion-common/src/conf_sync/config.rs:21-67` (`ConfSyncConfig.default_capacity` + `capacity_overrides`, `get_capacity` resolution)
 - `edgion-common/src/conf_sync/payload.rs` (current transport budget and compression;

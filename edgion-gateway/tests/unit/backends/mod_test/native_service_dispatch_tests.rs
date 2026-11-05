@@ -1,4 +1,96 @@
 use super::*;
+
+#[test]
+fn dns_family_precedence_is_independent_and_invalid_overrides_fail_closed() {
+    let mut ctx = EdgionHttpContext::default();
+    assert_eq!(
+        compute_lookup_family(None, &ctx, None).unwrap(),
+        DnsLookupFamily::Ipv4Only
+    );
+    let gateway = GatewayInfo::new(
+        None,
+        "family".into(),
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+        Some(Ok(DnsLookupFamily::Ipv6Only)),
+    );
+    ctx.gateway_info = Some(Arc::new(gateway));
+    assert_eq!(
+        compute_lookup_family(None, &ctx, Some(DnsLookupFamily::All)).unwrap(),
+        DnsLookupFamily::Ipv6Only
+    );
+    assert_eq!(
+        compute_lookup_family(Some(Ok(DnsLookupFamily::Ipv4Only)), &ctx, Some(DnsLookupFamily::All)).unwrap(),
+        DnsLookupFamily::Ipv4Only
+    );
+    assert!(compute_lookup_family(Some(Err("invalid DNS family")), &ctx, None).is_err());
+    ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
+        None,
+        "family".into(),
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+        Some(Err("invalid DNS family")),
+    )));
+    assert!(compute_lookup_family(None, &ctx, Some(DnsLookupFamily::All)).is_err());
+    assert_eq!(
+        compute_lookup_family(Some(Ok(DnsLookupFamily::All)), &ctx, None).unwrap(),
+        DnsLookupFamily::All
+    );
+}
+
+#[tokio::test]
+async fn family_switch_cannot_hit_previous_family_cache_and_literals_obey_policy() {
+    let cache = DnsCache::with_capacity(8, 1);
+    let queries = Cell::new(0);
+    let spec = ResolverSpec::System;
+    for family in [
+        DnsLookupFamily::Ipv4Only,
+        DnsLookupFamily::Ipv6Only,
+        DnsLookupFamily::Ipv4Only,
+    ] {
+        let ips = resolve_external_ips_with(
+            "backend.test",
+            &spec,
+            "ns/svc",
+            true,
+            Duration::from_secs(60),
+            &cache,
+            family,
+            |_, _, policy| {
+                queries.set(queries.get() + 1);
+                assert_eq!(policy, DnsQueryPolicy::Family(family));
+                std::future::ready(Ok(
+                    policy.select(vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()])
+                ))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ips.len(), 1);
+        assert!(family.allows(ips[0]));
+    }
+    assert_eq!(queries.get(), 2);
+    assert!(resolve_external_ips_with(
+        "2001:db8::1",
+        &spec,
+        "ns/svc",
+        true,
+        Duration::from_secs(60),
+        &cache,
+        DnsLookupFamily::Ipv4Only,
+        |_, _, _| std::future::ready(Ok(Vec::new()))
+    )
+    .await
+    .is_err());
+}
 use crate::backends::discovery::ServiceDiscoveryCoordinator;
 use crate::routes::grpc::{GrpcBackendHandle, GrpcRouteRuleUnit, SelectedGrpcBackend};
 use crate::routes::http::match_unit::HttpRouteRuleUnit;
@@ -386,6 +478,7 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let dns = ExternalNameResolution {
+        family: DnsLookupFamily::All,
         spec: &spec,
         dns_cache: &cache,
         cache: true,
@@ -399,7 +492,7 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
         &captured,
         None,
         dns,
-        |seen_spec, hostname| async move {
+        |seen_spec, hostname, _policy| async move {
             assert!(std::ptr::eq(seen_spec, spec_ref));
             assert!(matches!(seen_spec,ResolverSpec::StandardDns{servers} if servers==&["192.0.2.53"]));
             assert_eq!(hostname, "old.example.test");
@@ -455,7 +548,8 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
             "default/backend",
             "new.example.test",
             &spec.fingerprint(),
-            Instant::now()
+            Instant::now(),
+            DnsLookupFamily::All
         )
         .is_none());
     coordinator.replace_services(&HashMap::new());
@@ -487,7 +581,8 @@ async fn actual_dns_cache_query_boundary_preserves_identity_modes_ttl_and_no_neg
             cached,
             Duration::from_secs(ttl),
             &cache,
-            |_, seen| {
+            DnsLookupFamily::All,
+            |_, seen, _policy| {
                 assert_eq!(seen, name);
                 queries.set(queries.get() + 1);
                 std::future::ready(Ok(vec!["192.0.2.4".parse().unwrap()]))
@@ -507,7 +602,8 @@ async fn actual_dns_cache_query_boundary_preserves_identity_modes_ttl_and_no_neg
                 true,
                 Duration::from_secs(30),
                 &cache,
-                |_, _| {
+                DnsLookupFamily::All,
+                |_, _, _policy| {
                     queries.set(queries.get() + 1);
                     std::future::ready(Err(DnsError::NoAddresses))
                 }
@@ -526,7 +622,8 @@ async fn actual_dns_cache_query_boundary_preserves_identity_modes_ttl_and_no_neg
             true,
             Duration::from_secs(30),
             &cache,
-            |_, _| {
+            DnsLookupFamily::All,
+            |_, _, _policy| {
                 queries.set(queries.get() + 1);
                 std::future::ready(Err(DnsError::NoAddresses))
             }
@@ -545,7 +642,8 @@ async fn actual_dns_cache_query_boundary_preserves_identity_modes_ttl_and_no_neg
         true,
         Duration::from_secs(30),
         &cache,
-        |_, _| {
+        DnsLookupFamily::All,
+        |_, _, _policy| {
             queries.set(queries.get() + 1);
             std::future::ready(Ok(vec!["192.0.2.99".parse().unwrap()]))
         },
@@ -659,6 +757,7 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
                 None,
                 Vec::new(),
                 None,
+                None,
             )));
             let peer = build_peer_from_lb_selection(
                 &mut ctx,
@@ -738,6 +837,7 @@ fn resolver_precedence_uses_captured_service_then_gateway_then_egc_and_system() 
         None,
         Vec::new(),
         Some(ResolverCandidate::Servers(vec!["192.0.2.2".into()])),
+        None,
     )));
     let egc = ResolverCandidate::Servers(vec!["192.0.2.3".into()]);
     let annotations = BTreeMap::from([(edgion_annotations::DNS_RESOLVER.to_owned(), "192.0.2.1".to_owned())]);
@@ -829,14 +929,15 @@ async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_quer
         &captured,
         None,
         ExternalNameResolution {
+            family: DnsLookupFamily::All,
             spec: &spec,
             dns_cache: &cache,
             cache: false,
             ttl: Duration::ZERO,
         },
-        |spec, name| {
+        |spec, name, policy| {
             calls.set(calls.get() + 1);
-            resolve(spec, name)
+            resolve(spec, name, policy)
         },
     )
     .await;
@@ -855,12 +956,13 @@ async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_quer
             &captured,
             None,
             ExternalNameResolution {
+                family: DnsLookupFamily::All,
                 spec: &spec,
                 dns_cache: &cache,
                 cache: true,
                 ttl: Duration::ZERO,
             },
-            |_, _| {
+            |_, _, _policy| {
                 calls.set(calls.get() + 1);
                 std::future::ready(Err(DnsError::NoAddresses))
             },
@@ -906,12 +1008,13 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
             &captured,
             None,
             ExternalNameResolution {
+                family: DnsLookupFamily::All,
                 spec: &spec,
                 dns_cache: &cache,
                 cache: false,
                 ttl: Duration::ZERO,
             },
-            |_, _| {
+            |_, _, _policy| {
                 calls.set(calls.get() + 1);
                 std::future::ready(Ok(ips.iter().map(|ip| ip.parse().unwrap()).collect()))
             },
@@ -933,12 +1036,13 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
         &captured,
         None,
         ExternalNameResolution {
+            family: DnsLookupFamily::All,
             spec: &spec,
             dns_cache: &cache,
             cache: false,
             ttl: Duration::ZERO,
         },
-        |_, _| std::future::ready(Ok(vec!["192.0.2.46".parse().unwrap()])),
+        |_, _, _policy| std::future::ready(Ok(vec!["192.0.2.46".parse().unwrap()])),
     )
     .await
     .unwrap();
@@ -1008,6 +1112,7 @@ fn cold_captured_reference_selection_does_not_parse_or_clone_unselected_layers()
         None,
         Vec::new(),
         Some(ResolverCandidate::Servers(vec!["192.0.2.2".into()])),
+        None,
     )));
     let egc = ResolverCandidate::Servers(vec!["192.0.2.3".into()]);
     let iterations = Cell::new(0usize);

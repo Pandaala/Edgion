@@ -194,16 +194,25 @@ pub async fn response_filter(
     // Phase-7 plugins from running on top of a Phase-6 reply.
 
     if !response_stage_settled(ctx) {
-        if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
-            grpc_route_unit
-                .plugin_runtime
-                .run_upstream_response_plugins_async(session, ctx, upstream_response)
-                .await;
-        } else if let Some(route_unit) = ctx.route_unit.clone() {
-            route_unit
-                .plugin_runtime
-                .run_upstream_response_plugins_async(session, ctx, upstream_response)
-                .await;
+        if let Some(leaf) = ctx.leaf_route_runtime() {
+            // Delegated chains (HTTPRoute or GRPCRoute): ancestors first
+            // (root -> parent), each as its own level; a level that settles
+            // the stage stops the chain.
+            for level in 0..ctx.ancestor_count() {
+                let Some(runtime) = ctx.ancestor_runtime(level) else {
+                    break;
+                };
+                runtime
+                    .run_upstream_response_plugins_async_at(session, ctx, upstream_response, Some(level))
+                    .await;
+                if response_stage_settled(ctx) {
+                    break;
+                }
+            }
+            if !response_stage_settled(ctx) {
+                leaf.run_upstream_response_plugins_async(session, ctx, upstream_response)
+                    .await;
+            }
         }
     }
 

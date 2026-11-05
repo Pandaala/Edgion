@@ -162,7 +162,7 @@ kubectl -n edgion-system get secret edgion-admin-credentials \
 
 Edit the Secret directly; the controller picks up the new value on restart (or via a
 rolling update). All previously issued requests using the old token are immediately
-rejected once the controller reloads.
+rejected once every Controller replica has restarted with the updated token.
 
 ```bash
 kubectl -n edgion-system patch secret edgion-admin-credentials \

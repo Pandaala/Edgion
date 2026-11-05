@@ -19,7 +19,7 @@ Do not add a broad negated ignore rule for one scenario. It would make future
 generated Secrets eligible for accidental commits.
 
 Dynamic scenarios share one Controller and Gateway and may run twice under
-`--with-reload`. A mutation scenario must establish its initial state and
+`--with-restart`. A mutation scenario must establish its initial state and
 restore it before returning, including after a failed transition assertion, so
 later suites and later sweeps do not inherit its final state.
 

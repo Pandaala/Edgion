@@ -13,8 +13,10 @@ Omitted type means Exact; only an omitted outer method matcher is unconstrained.
 Explicit empty matchers and empty/invalid Exact names are invalid. Regex may omit
 one field, or leave it empty, only when the other is non-empty. Either invalid
 pattern invalidates the entire predicate and rule, never becoming Exact/catch-all.
-Valid sibling rules remain usable. Delegation still rejects regex children and
-inherits the parent service only for omitted matchers or valid method-only ones.
+Valid sibling rules remain usable. Delegation children use the same ordinary
+validation; their matches intersect with the delegated service at match time (a
+child without `service` matches the delegated one). Only the delegating rule
+itself is restricted to Exact service-only matchers.
 Exact service validation reproduces the vendored CEL Unicode simple case-fold
 character set. Exact method validation remains ASCII, and runtime Exact matching
 remains literal and case-sensitive.
@@ -50,7 +52,8 @@ contract defines the precedence chain and per-rule invalidity behavior.
 - Controller `handlers/grpc_route.rs` classifies invalid rules and reports
   `PartiallyInvalid`, or `Accepted=False / UnsupportedValue` for all-invalid
   effective rules. Method errors do not use route-wide advisory validation.
-  `grpc_route_delegation.rs` applies the same validation before flattening.
+  Delegation children are validated by the same per-rule path; `grpc_route_delegation.rs`
+  only checks the delegating-rule shape.
 - Gateway `routes/grpc/conf_handler_impl.rs` compiles each match once and rejects
   the whole rule before constructing rule runtimes if any method is invalid,
   including status-less/stale configuration. Match units share rule runtime.

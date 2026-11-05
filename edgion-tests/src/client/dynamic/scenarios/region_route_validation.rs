@@ -54,10 +54,6 @@ fn backend_ip() -> String {
     }
 }
 
-fn base_regions() -> Value {
-    json!([region("base", 0, 99, 30001)])
-}
-
 impl Phase {
     fn resource(self) -> Option<Value> {
         if matches!(self, Self::Absent | Self::Missing) {
@@ -95,8 +91,12 @@ impl Phase {
         let data = match self {
             Self::Unsupported => json!({"type": "FutureOverlay", "config": {"discarded": true}}),
             Self::WrongType => json!({"type": "Selector", "config": {"active": "unused"}}),
-            Self::Omitted => json!({"type": "RegionRouteOverride", "config": {}}),
-            _ => json!({"type": "RegionRouteOverride", "config": {"regions": regions}}),
+            Self::Omitted => {
+                json!({"type": "ClusterRegionSetting", "config": {"clusterName":"integration","regionName":"missing","regions":regions}})
+            }
+            _ => {
+                json!({"type": "ClusterRegionSetting", "config": {"clusterName":"integration","regionName":"c","regions": regions}})
+            }
         };
         Some(json!({
             "apiVersion": "edgion.io/v1", "kind": "EdgionConfigData",
@@ -115,6 +115,7 @@ impl Phase {
                 | Self::Cycle
                 | Self::Empty
                 | Self::Unsupported
+                | Self::Omitted
         )
     }
 
@@ -124,7 +125,7 @@ impl Phase {
     }
 
     fn refs_resolved(self, small: bool) -> bool {
-        self.applies(small) || self == Self::Omitted
+        self.applies(small)
     }
 
     fn selected(self, small: bool) -> &'static str {
@@ -278,7 +279,8 @@ fn assert_overlay(actual: &Value, expected: &Value) -> Result<()> {
         "/spec/enable",
         "/spec/data/type",
         "/spec/data/config/regions",
-        "/spec/data/config/active",
+        "/spec/data/config/clusterName",
+        "/spec/data/config/regionName",
     ] {
         ensure!(
             actual.pointer(pointer) == expected.pointer(pointer),
@@ -339,12 +341,6 @@ async fn check_phase(ctx: &TestContext, phase: Phase) -> Result<()> {
     .await?
     .context("effective API has no data")?;
     let entries = effective.as_array().context("effective data is not an array")?;
-    ensure!(
-        !entries
-            .iter()
-            .any(|e| e["namespace"] == NS && e["pluginName"] == "rrv-bad"),
-        "effective API exposed an invalid base"
-    );
     if phase == Phase::Absent {
         for name in ["rrv-small", "rrv-large", "rrv-bad"] {
             for gateway in [false, true] {
@@ -371,8 +367,14 @@ async fn check_phase(ctx: &TestContext, phase: Phase) -> Result<()> {
 
     let invalid = resource(ctx, "EdgionPlugins", "rrv-bad", false)
         .await?
-        .context("invalid base sample missing")?;
+        .context("invalid consumer sample missing")?;
     condition(&invalid, "Accepted", false)?;
+    ensure!(
+        entries
+            .iter()
+            .any(|e| e["pluginName"] == "rrv-bad" && e["configurationAvailable"] == false),
+        "invalid consumer must remain observable"
+    );
     for (index, name) in CONSUMERS.iter().enumerate() {
         let small = index == 0;
         let plugin = resource(ctx, "EdgionPlugins", name, false)
@@ -387,13 +389,13 @@ async fn check_phase(ctx: &TestContext, phase: Phase) -> Result<()> {
         ensure!(matches.len() == 1, "expected one effective entry for {name}");
         let entry = matches[0];
         ensure!(
-            entry["overrideApplied"] == phase.applies(small),
-            "wrong overrideApplied for {name}"
+            entry["configurationAvailable"] == phase.applies(small),
+            "wrong configurationAvailable for {name}"
         );
         let expected_regions = if phase.applies(small) {
             expected.as_ref().context("applied overlay absent")?["spec"]["data"]["config"]["regions"].clone()
         } else {
-            base_regions()
+            Value::Null
         };
         ensure!(
             entry["regions"] == expected_regions,
@@ -461,7 +463,7 @@ async fn check_traffic(ctx: &TestContext, name: &str, phase: Phase, small: bool)
     ensure!(logs.len() == 1, "expected one RegionRoute execution");
     let log = logs[0].to_string();
     if target == "base" {
-        ensure!(log.contains("local_region, pass"), "base was not selected: {log}");
+        ensure!(log.contains("setting_"), "configuration error was not recorded: {log}");
     } else {
         let port = if target == "a" { 30001 } else { 30002 };
         if k8s_mode() {
@@ -545,9 +547,12 @@ async fn failover(ctx: &TestContext, from: &str, to: &str, expected_status: u16)
     let response = authed(
         ctx,
         ctx.http_client
-            .post(format!("{}/api/v1/cluster-region-routes/failover", ctx.admin_api_url()))
+            .post(format!(
+                "{}/api/v1/cluster-region-settings/{NS}/{OVERLAY}/failover/preview",
+                ctx.admin_api_url()
+            ))
             .timeout(Duration::from_secs(5))
-            .json(&json!({"namespace": NS, "name": OVERLAY, "regionName": from, "failoverTo": to})),
+            .json(&json!({"regionName": from, "failoverTo": to})),
     )
     .send()
     .await?;
@@ -574,17 +579,43 @@ async fn failover(ctx: &TestContext, from: &str, to: &str, expected_status: u16)
             );
         }
     } else {
+        let preview: Value = response.json().await?;
+        ensure!(preview["success"] == true, "failover preview failed");
+        let precondition = preview
+            .pointer("/data/precondition")
+            .context("preview omitted precondition")?;
+        let response = authed(
+            ctx,
+            ctx.http_client
+                .post(format!(
+                    "{}/api/v1/cluster-region-settings/{NS}/{OVERLAY}/failover",
+                    ctx.admin_api_url()
+                ))
+                .timeout(Duration::from_secs(5))
+                .json(&json!({"regionName":from,"failoverTo":to,"precondition":precondition})),
+        )
+        .send()
+        .await?;
+        ensure!(
+            response.status().as_u16() == 200,
+            "failover apply failed: {}",
+            response.status()
+        );
         let body: Value = response.json().await?;
         ensure!(
-            body["success"] == true && body["modified"] == true,
-            "failover did not report a write"
+            body["success"] == true && body["modified"] == true && body["persistence"] == "persisted",
+            "failover did not report a persisted write"
+        );
+        ensure!(
+            body["controllerObservation"] == "not-confirmed" && body["gatewayApplication"] == "not-confirmed",
+            "source persistence must not claim Controller or Gateway application"
         );
     }
     Ok(())
 }
 
 async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
-    // Consumers are applied once. Every subsequent mutation targets only the overlay.
+    // Consumers are applied once. Every subsequent mutation targets only the setting.
     let initial = Phase::Initial.resource().context("initial overlay missing")?;
     ctx.test_ctx
         .apply_yaml(&yaml_serde::to_string(&initial)?)
@@ -625,7 +656,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         (Phase::Unsupported, "unsupported"),
         (Phase::Omitted, "omitted"),
     ] {
-        // A distinct previous target b detects accidental retention of a last-good overlay.
+        // A distinct previous target b detects accidental retention of a last-good setting.
         publish(ctx, Phase::Replacement, "replacement").await?;
         publish(ctx, phase, name).await?;
         if phase.standalone_invalid() && !matches!(phase, Phase::Empty | Phase::Unsupported) {
@@ -649,7 +680,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
             .context("consumer disappeared")?;
         ensure!(
             current["spec"] == spec,
-            "consumer {name} changed during overlay-only transitions"
+            "consumer {name} changed during setting-only transitions"
         );
     }
     Ok(())
@@ -722,11 +753,13 @@ mod tests {
             assert_eq!(route["spec"]["rules"][0]["backendRefs"][0]["name"], backend_name);
             assert_eq!(route["spec"]["rules"][0]["backendRefs"][0]["port"], 30001);
         }
+        let _ = endpoint_host;
         for plugin in plugins {
             assert_eq!(
-                plugin["spec"]["requestPlugins"][0]["config"]["regions"][0]["backendEndpoint"],
-                format!("{endpoint_host}:30001")
+                plugin["spec"]["requestPlugins"][0]["config"]["clusterRegionRef"]["name"],
+                "rrv-overlay"
             );
+            assert!(plugin["spec"]["requestPlugins"][0]["config"].get("regions").is_none());
         }
     }
 

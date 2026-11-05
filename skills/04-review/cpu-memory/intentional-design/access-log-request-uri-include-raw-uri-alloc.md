@@ -58,5 +58,5 @@ page does not authorize independent masking logic or promise zero allocations.
 Re-evaluate proposals against frozen URI bytes, JSON escaping, omission rules,
 serialization-time Off/Replace/Wrap behavior, failure fallback and final-output
 ownership. A measured, bounded serialization proposal must not be dismissed
-solely because the final JSON also allocates. The deferred task is
-task/review-data-panel/log-01-raw-uri-fragment-serialization.md.
+solely because the final JSON also allocates. The proposal was
+the historical task `log-01-raw-uri-fragment-serialization` (declined in the 2026-11-05 data-plane triage; the record survives in git history at `a59c3da81`).

@@ -215,6 +215,14 @@ GATEWAY_SOURCE_LOCAL = {
 # These branches and fields must stay in their owning production items so the
 # test configuration can exercise the same function or preserve struct shape.
 SCOPED_EXCEPTIONS = {
+    ("edgion-controller", Path("conf_mgr/conf_center/etcd/status.rs"), re.compile(r"read_barrier: Option<\(Arc<tokio::sync::Notify>, Arc<tokio::sync::Semaphore>\)>,")):
+        "per-handler scheduling barrier for the retired Secret worker regression; no production field",
+    ("edgion-controller", Path("conf_mgr/conf_center/etcd/status.rs"), re.compile(r"read_barrier: None,")):
+        "test scheduling barrier initializer in the production constructor",
+    ("edgion-controller", Path("conf_mgr/conf_center/etcd/status.rs"), re.compile(r"pub\(super\) fn with_read_barrier\(")):
+        "associated helper installs the per-handler status-read scheduling barrier",
+    ("edgion-controller", Path("conf_mgr/conf_center/etcd/status.rs"), re.compile(r"if let Some\(\(entered, release\)\) = &self\.read_barrier \{")):
+        "pause at the real status-read await boundary without replacing the read result",
     ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: bool,")):
         "test-only switch for the unpruned inspection oracle",
     ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: self\.force_unpruned_inspection,")):

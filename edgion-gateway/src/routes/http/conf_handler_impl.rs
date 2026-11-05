@@ -1,9 +1,11 @@
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
 use crate::routes::common::{filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs};
+use crate::routes::delegation::{DelegationSlot, DelegationSlotTable};
+use crate::routes::http::delegation_build::is_delegation_child;
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::routes::http::match_unit::{CompiledBackend, CompiledParentMatch, HttpRuleRuntime, MatchSpecificity};
+use crate::routes::http::match_unit::{CompiledBackend, HttpRuleRuntime, MatchSpecificity};
 use crate::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
@@ -12,6 +14,9 @@ use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_algo::matcher::radix_hostname::{RadixHostnameChange, RadixHostnameMatcher, RadixHostnamePattern};
 use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resources::route_delegation::{
+    delegation_target_of_http_rule, key_for, standard_filter_mask_http, RouteKindName,
+};
 use edgion_resources::{HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +29,10 @@ type DomainStr = String;
 type RouteRulesPair = (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>);
 /// Domain -> (normal_routes, regex_routes) mapping
 type DomainRouteRulesMap = HashMap<DomainStr, RouteRulesPair>;
+
+/// Hostname group key used for the single group of a delegation child.
+/// Children carry no hostnames; the root level owns hostname selection.
+const CHILD_GROUP: &str = "";
 
 fn canonicalize_unchanged_routes(
     current: &dashmap::DashMap<String, Arc<HTTPRoute>>,
@@ -125,7 +134,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         let mut canonical = data.clone();
 
         let guard = self.lock_rebuild();
-        {
+        let slot_garbage = {
             // A conf-sync replay may deserialize an unchanged Route into a new
             // Arc. Keep the canonical source identity shared by the route table
             // and plugin publisher so the replay does not create a false
@@ -133,6 +142,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             canonicalize_unchanged_routes(&self.route_cache, &mut canonical);
 
             // Step 1: Replace route cache with shared Arcs (no deep clone).
+            let previous: Vec<Arc<HTTPRoute>> = self.route_cache.iter().map(|e| Arc::clone(e.value())).collect();
             self.route_cache.clear();
             for (key, route) in &canonical {
                 self.route_cache.insert(key.clone(), route.clone()); // Arc clone
@@ -140,7 +150,14 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
             // Step 2: Rebuild all per-listener managers (lock already held above).
             self.rebuild_all_listener_managers_locked();
-        }
+
+            // Step 3: Rebuild every delegation slot from scratch.
+            self.rebuild_all_delegation_locked(
+                previous.iter(),
+                &canonical,
+                crate::routes::http::delegation_build::process_gateway_identities,
+            )
+        };
 
         let elapsed = Instant::now().saturating_duration_since(start_time);
         tracing::info!(
@@ -160,6 +177,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                 .collect(),
             self.publication_tables(),
         );
+        // After the previous tables are released, so dropped parents no longer pin slots.
+        self.collect_delegation_slots(&slot_garbage);
         drop(guard);
         if std::ptr::eq(self, get_global_http_route_managers()) {
             crate::ai::replace_adaptive_route_contributions(data);
@@ -188,7 +207,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         );
 
         let guard = self.lock_rebuild();
-        {
+        let slot_garbage = {
             canonicalize_unchanged_routes(&self.route_cache, &mut add_or_update);
 
             // Compute affected listeners BEFORE updating cache.
@@ -198,7 +217,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             for (key, route) in &add_or_update {
                 changes.record(key, route);
                 let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
-                if listeners.is_empty() {
+                if listeners.is_empty() && !is_delegation_child(route) {
                     tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
                 } else {
                     for lk in listeners {
@@ -225,6 +244,13 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                 }
             }
 
+            // Previous generations of every changed route, for delegation routing.
+            let delegation_changes: Vec<(String, Option<Arc<HTTPRoute>>)> = add_or_update
+                .keys()
+                .chain(&remove)
+                .map(|key| (key.clone(), self.route_cache.get(key).map(|e| Arc::clone(e.value()))))
+                .collect();
+
             // Update route cache (store shared Arcs)
             for (key, route) in &add_or_update {
                 self.route_cache.insert(key.clone(), Arc::clone(route));
@@ -233,8 +259,13 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                 self.route_cache.remove(key);
             }
 
+            // Child-only changes leave `affected_listeners` empty: no listener rebuild.
             self.rebuild_affected_listener_managers(&affected_listeners, &changes);
-        }
+            self.apply_delegation_changes_locked(
+                &delegation_changes,
+                crate::routes::http::delegation_build::process_gateway_identities,
+            )
+        };
 
         tracing::info!(
             component = "http_route_manager",
@@ -255,6 +286,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             &policy_removed,
             self.publication_tables(),
         );
+        self.collect_delegation_slots(&slot_garbage);
         drop(guard);
         if std::ptr::eq(self, get_global_http_route_managers()) {
             crate::ai::update_adaptive_route_contributions(&add_or_update, &remove);
@@ -312,7 +344,8 @@ fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
 
 /// Shared context for building one `HttpRouteRuleUnit` (normal or regex).
 struct RouteUnitCtx<'a> {
-    parent_match: Option<Arc<CompiledParentMatch>>,
+    delegate: Option<Arc<DelegationSlot<RouteRules>>>,
+    filter_mask: u32,
     session_persistence_ttl_secs: Option<u64>,
     namespace: &'a str,
     name: &'a str,
@@ -363,7 +396,8 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     Ok(HttpRouteRuleUnit {
-        parent_match: ctx.parent_match,
+        delegate: ctx.delegate.clone(),
+        filter_mask: ctx.filter_mask,
         session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
@@ -403,7 +437,8 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     HttpRouteRuleUnit {
-        parent_match: ctx.parent_match,
+        delegate: ctx.delegate.clone(),
+        filter_mask: ctx.filter_mask,
         session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
@@ -459,6 +494,9 @@ fn append_match_to_domains(domain_rules: &mut DomainRouteRulesMap, hostnames: &[
 struct SharedHttpRule {
     rule_id: usize,
     rule: Arc<HTTPRouteRule>,
+    /// Slot of the rule's delegation target; `None` for ordinary rules.
+    delegate: Option<Arc<DelegationSlot<RouteRules>>>,
+    filter_mask: u32,
     runtime: HttpRuleRuntime,
     metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
 }
@@ -471,8 +509,9 @@ fn append_route_to_domains(
     validated: &ValidatedHttpRoute<'_>,
     resource_key: &str,
     // Resolved once per route by the caller and shared across every hostname
-    // bucket, like the runtimes in `shared_rules`.
-    resolved_parent_refs: &Arc<[ResolvedParentRef]>,
+    // bucket, like the runtimes in `shared_rules`. `None` for a delegation
+    // child: Gateway/listener eligibility is decided at the root level.
+    resolved_parent_refs: Option<&Arc<[ResolvedParentRef]>>,
     creation_ts_ms: i64,
     route_sv: u64,
     shared_rules: &[SharedHttpRule],
@@ -502,7 +541,8 @@ fn append_route_to_domains(
                 domain_rules,
                 hostnames,
                 RouteUnitCtx {
-                    parent_match: rule_rt.parent_matches.get(match_id).cloned().flatten(),
+                    delegate: shared_rule.delegate.clone(),
+                    filter_mask: shared_rule.filter_mask,
                     session_persistence_ttl_secs: rule_rt.session_persistence_ttl_secs,
                     namespace: &validated.namespace,
                     name: &validated.name,
@@ -511,7 +551,7 @@ fn append_route_to_domains(
                     resource_key,
                     match_item,
                     rule: Arc::clone(rule),
-                    parent_refs: Some(Arc::clone(resolved_parent_refs)),
+                    parent_refs: resolved_parent_refs.cloned(),
                     creation_ts_ms,
                     route_sv,
                     metric_handles: Arc::clone(&shared_rule.metric_handles),
@@ -527,11 +567,88 @@ fn append_route_to_domains(
     }
 }
 
+/// Compile every accepted rule of one route once, ahead of the hostname/match
+/// fan-out. A delegating rule obtains its target slot here (compile time), so
+/// the request path never looks a key up.
+fn compile_shared_rules(
+    route: &HTTPRoute,
+    validated: &ValidatedHttpRoute<'_>,
+    resource_key: &str,
+    attached_gateways: &[(String, String)],
+    slots: &DelegationSlotTable<RouteRules>,
+) -> Vec<SharedHttpRule> {
+    let invalid_rule_indices = route.spec.invalid_rule_indices.as_ref();
+    validated
+        .rules
+        .iter()
+        .enumerate()
+        .filter(|(rule_id, _)| !invalid_rule_indices.is_some_and(|inv| inv.contains(rule_id)))
+        .filter_map(|(rule_id, rule)| {
+            // Check rules independently of Controller status before compiling or
+            // publishing a runtime.
+            if let Some(reason) = rule.unsupported_cors_reason() {
+                tracing::warn!(route = %resource_key, rule_id, %reason, "skipping unsupported HTTPRoute rule");
+                return None;
+            }
+            if let Some(reason) = rule.request_mirror_validation_error() {
+                tracing::warn!(route = %resource_key, rule_id, %reason, "skipping invalid HTTPRoute rule");
+                return None;
+            }
+            let transform_violations = edgion_resources::authored_request_transform_violations(rule);
+            if !matches!(transform_violations, Ok(violations) if violations.is_empty()) {
+                return None;
+            }
+            // Delegation shape is re-checked locally, not trusted from the Controller.
+            let target = match delegation_target_of_http_rule(rule, &validated.namespace) {
+                None => None,
+                Some(Ok(target)) => Some(target),
+                Some(Err(reason)) => {
+                    tracing::warn!(route = %resource_key, rule_id, %reason, "skipping malformed delegating HTTPRoute rule");
+                    return None;
+                }
+            };
+            // Share one runtime across every hostname and match of this rule.
+            let runtime = HttpRouteRuleUnit::compile_prevalidated_http_rule(route, rule_id)?;
+            let delegate = target.map(|target| {
+                slots.get_or_create(&key_for(
+                    RouteKindName::HTTPRoute,
+                    &validated.namespace,
+                    &validated.name,
+                    &target,
+                ))
+            });
+            let rule = Arc::new(rule.clone());
+            let metric_backends = if delegate.is_some() {
+                Vec::new()
+            } else {
+                http_backends_from_rule(&rule, &validated.namespace)
+            };
+            let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
+                attached_gateways,
+                &validated.namespace,
+                &validated.name,
+                &metric_backends,
+            ));
+            Some(SharedHttpRule {
+                rule_id,
+                filter_mask: standard_filter_mask_http(&rule),
+                delegate,
+                rule,
+                runtime,
+                metric_handles,
+            })
+        })
+        .collect()
+}
+
 /// Parse all HTTPRoutes and collect rules into a domain->rules structure.
 ///
 /// Routes are merged into a single table keyed by hostname.
 /// Each route unit carries its parentRefs so gateway validation happens at match time.
-fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> DomainRouteRulesMap {
+fn parse_http_routes_to_domain_rules(
+    data: &HashMap<String, Arc<HTTPRoute>>,
+    slots: &DelegationSlotTable<RouteRules>,
+) -> DomainRouteRulesMap {
     let mut domain_rules: DomainRouteRulesMap = HashMap::new();
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -560,62 +677,14 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
         let resolved_parent_refs: Arc<[ResolvedParentRef]> =
             resolve_parent_refs(&accepted_refs, &validated.namespace).into();
 
-        // invalid_rule_indices refers to spec.rules; when resolved_rules is
-        // compiled (delegation), flattening already dropped invalid rules and
-        // the indices do not apply.
-        let invalid_rule_indices = if route.spec.resolved_rules.is_some() {
-            None
-        } else {
-            route.spec.invalid_rule_indices.as_ref()
-        };
         let attached_gateways = gateways_from_parent_refs(&accepted_refs, &validated.namespace);
-        let shared_rules: Vec<SharedHttpRule> = validated
-            .rules
-            .iter()
-            .enumerate()
-            .filter(|(rule_id, _)| !invalid_rule_indices.is_some_and(|inv| inv.contains(rule_id)))
-            .filter_map(|(rule_id, rule)| {
-                // Check effective rules independently of Controller status, including
-                // resolved delegation rules, before compiling or publishing a runtime.
-                if let Some(reason) = rule.unsupported_cors_reason() {
-                    tracing::warn!(route = %resource_key, rule_id, %reason, "skipping unsupported HTTPRoute rule");
-                    return None;
-                }
-                if let Some(reason) = rule.request_mirror_validation_error() {
-                    tracing::warn!(route = %resource_key, rule_id, %reason, "skipping invalid HTTPRoute rule");
-                    return None;
-                }
-                let transform_violations = if route.spec.resolved_rules.is_some() {
-                    edgion_resources::effective_request_transform_violations(rule)
-                } else {
-                    edgion_resources::authored_request_transform_violations(rule)
-                };
-                if !matches!(transform_violations, Ok(violations) if violations.is_empty()) {
-                    return None;
-                }
-                // Share one runtime across every hostname and match of this rule.
-                let runtime = HttpRouteRuleUnit::compile_prevalidated_http_rule(route, rule_id)?;
-                let rule = Arc::new(rule.clone());
-                let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-                    &attached_gateways,
-                    &validated.namespace,
-                    &validated.name,
-                    &http_backends_from_rule(&rule, &validated.namespace),
-                ));
-                Some(SharedHttpRule {
-                    rule_id,
-                    rule,
-                    runtime,
-                    metric_handles,
-                })
-            })
-            .collect();
+        let shared_rules = compile_shared_rules(route, &validated, &resource_key, &attached_gateways, slots);
         append_route_to_domains(
             &mut domain_rules,
             &get_declared_hostnames(route),
             &validated,
             &resource_key,
-            &resolved_parent_refs,
+            Some(&resolved_parent_refs),
             creation_ts_ms,
             route_sv,
             &shared_rules,
@@ -635,6 +704,38 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
     domain_rules
 }
 
+/// Compile one delegation child's units once. The units carry the child's own
+/// namespace/identity and no hostname or Gateway eligibility; they are
+/// `Arc`-shared into every subtree whose key the child holds.
+///
+/// `process_gateways` is every Gateway in the process: a child can be reached
+/// through any of them, so its leaf metric handles are prebuilt for each, with
+/// the child's own route labels (spec §8.3).
+pub(super) fn compile_child_units(
+    route: &Arc<HTTPRoute>,
+    slots: &DelegationSlotTable<RouteRules>,
+    process_gateways: &[(String, String)],
+) -> RouteRulesPair {
+    let Some(validated) = validate_http_route(route) else {
+        return RouteRulesPair::default();
+    };
+    let resource_key = route.key_name();
+    let shared_rules = compile_shared_rules(route, &validated, &resource_key, process_gateways, slots);
+    let mut groups = DomainRouteRulesMap::new();
+    append_route_to_domains(
+        &mut groups,
+        &[CHILD_GROUP.to_string()],
+        &validated,
+        &resource_key,
+        None,
+        extract_creation_ts_ms(route),
+        route.get_sync_version(),
+        &shared_rules,
+        route,
+    );
+    groups.remove(CHILD_GROUP).unwrap_or_default()
+}
+
 /// Validate HTTPRoute and extract required fields, returning None if any required field is missing.
 fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     edgion_resources::resources::refs::route_fields::HttpRouteBackendRefs::from_route(route).ok()?;
@@ -648,9 +749,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    // Delegation: when the controller flattened a delegation tree into
-    // resolved_rules, compile those INSTEAD of the operator-authored rules.
-    let rules = match route.effective_rules() {
+    let rules = match route.spec.rules.as_ref() {
         Some(rules) if !rules.is_empty() => rules,
         _ => {
             tracing::warn!(route=%route.key_name(),"no rules");
@@ -676,8 +775,9 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     })
 }
 
-/// Compile the path predicates for one touched hostname group.
-fn build_route_rules(domain: &str, split: RouteRulesPair) -> Option<Arc<RouteRules>> {
+/// Compile the path predicates for one touched hostname group (or one
+/// delegation subtree, which reuses the same radix + regex shape).
+pub(super) fn build_route_rules(domain: &str, split: RouteRulesPair) -> Option<Arc<RouteRules>> {
     if split.0.is_empty() && split.1.is_empty() {
         return None;
     }
@@ -712,10 +812,11 @@ fn build_route_rules(domain: &str, split: RouteRulesPair) -> Option<Arc<RouteRul
 pub(crate) fn build_domain_route_rules_from_routes(
     data: &HashMap<String, Arc<HTTPRoute>>,
     previous: &DomainRouteRules,
+    slots: &DelegationSlotTable<RouteRules>,
 ) -> DomainRouteRules {
     let mut groups = HashMap::new();
     let mut catch_all_routes = None;
-    for (domain, split) in parse_http_routes_to_domain_rules(data) {
+    for (domain, split) in parse_http_routes_to_domain_rules(data, slots) {
         let Some(rules) = build_route_rules(&domain, split) else {
             continue;
         };
@@ -735,16 +836,17 @@ pub(crate) fn patch_domain_route_rules(
     data: &HashMap<String, Arc<HTTPRoute>>,
     previous: &DomainRouteRules,
     changes: &HttpRouteChanges,
+    slots: &DelegationSlotTable<RouteRules>,
 ) -> DomainRouteRules {
     if previous.hostname_build_failed {
-        return build_domain_route_rules_from_routes(data, previous);
+        return build_domain_route_rules_from_routes(data, previous, slots);
     }
     let changed_routes = data
         .iter()
         .filter(|(key, _)| changes.resource_keys.contains(*key))
         .map(|(key, route)| (key.clone(), Arc::clone(route)))
         .collect();
-    let mut additions = parse_http_routes_to_domain_rules(&changed_routes);
+    let mut additions = parse_http_routes_to_domain_rules(&changed_routes, slots);
     let mut updates = Vec::new();
     let mut catch_all_routes = previous.catch_all_routes.clone();
     for domain in &changes.hostnames {

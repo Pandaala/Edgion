@@ -12,7 +12,7 @@ use bytes::Bytes;
 use crate::plugins::runtime::PluginSession;
 use crate::request_body::{
     BodyOperationError, BodyReadError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult,
-    HmacSha256Scanner, Md5Scanner, RawBodyScanner,
+    HmacSha256Scanner, Md5Scanner, RawBodyScanner, ReadBodyScanner,
 };
 
 use super::super::runtime::DslRuntime;
@@ -192,7 +192,7 @@ impl<'a> DslBodyOps<'a> {
     }
 
     /// Construct the owned scanner after reserving, preserving constructor-error
-    /// accounting for asynchronous JSON parsers and fallible regex scanners.
+    /// accounting for fallible scanners.
     pub(crate) async fn scan_with<S, F>(&mut self, factory: F) -> Result<S::Output, RuntimeError>
     where
         S: RawBodyScanner,
@@ -205,6 +205,23 @@ impl<'a> DslBodyOps<'a> {
             .ctx()
             .request_body
             .scan_raw(scanner, reserved)
+            .await
+            .map_err(map_body_error)?;
+        Ok(self.settle(reserved, scan))
+    }
+
+    /// Run an owned pull-based scanner (for example a JSON parser) in one
+    /// admitted request-body scan job.
+    pub(crate) async fn scan_read_with<S>(&mut self, scanner: S) -> Result<S::Output, RuntimeError>
+    where
+        S: ReadBodyScanner,
+    {
+        let reserved = self.reserve()?;
+        let scan = self
+            .session
+            .ctx()
+            .request_body
+            .scan_read(scanner, reserved)
             .await
             .map_err(map_body_error)?;
         Ok(self.settle(reserved, scan))

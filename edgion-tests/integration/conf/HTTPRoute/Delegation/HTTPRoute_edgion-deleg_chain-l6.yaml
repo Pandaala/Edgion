@@ -1,0 +1,21 @@
+# five_level_chain, level 6: one level past the cap. Status reports
+# Accepted=False / DepthExceeded and the Gateway never serves it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l6
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l5
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l6
+      backendRefs:
+        - name: child-svc
+          port: 30001

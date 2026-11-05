@@ -189,6 +189,8 @@ cleanup_work_dir() {
     case "$suffix" in ''|*[!0-9_]*) return 2 ;; esac
     [ -d "$work_dir" ] && [ ! -L "$work_dir" ] || return 2
     log_info "Workdirectory: ${work_dir}"
+    # Stop the owner first so cleanup cannot race a pending replacement.
+    python3 "${SCRIPT_DIR}/restart_controller.py" --stop "$work_dir" || return $?
     stop_recorded_service "$work_dir" gateway edgion-gateway
     stop_recorded_service "$work_dir" controller edgion-controller
     stop_recorded_service "$work_dir" test_server test_server
@@ -208,6 +210,7 @@ stop_owned_release() {
     edgion_validate_owned_work_dir "$work_dir" || return 2
     [ -f "$work_dir/artifact-profile" ] || return 0
     [ "$(cat "$work_dir/artifact-profile")" = release ] || return 2
+    python3 "${SCRIPT_DIR}/restart_controller.py" --stop "$work_dir" || return $?
     local role binary pid pid_file waited failed=0
     for role in gateway controller test_server; do
         case "$role" in
@@ -288,6 +291,7 @@ main() {
         case "$current_work_dir" in
             "${PROJECT_ROOT}/tmp/integration_testing/"*)
                 log_info "Workdirectory: ${current_work_dir}"
+                python3 "${SCRIPT_DIR}/restart_controller.py" --stop "$current_work_dir" || return $?
                 stop_recorded_external_ext_proc "$current_work_dir"
                 ;;
             *)

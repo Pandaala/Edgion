@@ -1,0 +1,30 @@
+# per_level_precedence child under precedence-root-a. Exact /api/users never
+# wins against root B; Exact /api/orders proves the delegation itself works.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: precedence-child
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precedence-root-a
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+        - path:
+            type: Exact
+            value: /api/orders
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-served-by
+                value: precedence-child
+      backendRefs:
+        - name: child-svc
+          port: 30001

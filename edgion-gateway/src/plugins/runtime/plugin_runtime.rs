@@ -113,6 +113,8 @@ pub(crate) struct WafCandidate {
     owner: Arc<()>,
     priority: u16,
     mode: crate::ctx::WafLogMode,
+    /// Owner election across the levels of a delegated route chain.
+    delegation_precedence: edgion_resources::resources::edgion_plugins::WafDelegationPrecedence,
 }
 
 impl WafCandidate {
@@ -126,6 +128,15 @@ impl WafCandidate {
 
     pub(crate) const fn mode(&self) -> crate::ctx::WafLogMode {
         self.mode
+    }
+
+    /// Whether this level's WAF wins over every deeper level of a delegated chain.
+    #[inline]
+    pub(crate) fn takes_parent_precedence(&self) -> bool {
+        matches!(
+            self.delegation_precedence,
+            edgion_resources::resources::edgion_plugins::WafDelegationPrecedence::Parent
+        )
     }
 }
 
@@ -461,6 +472,7 @@ impl PluginRuntime {
                             crate::ctx::WafLogMode::DetectionOnly
                         }
                     },
+                    delegation_precedence: config.delegation_precedence,
                 });
                 // The selected WAF owns its inspection policy; these hooks are
                 // not an independent complete-body consumer.
@@ -691,7 +703,7 @@ impl PluginRuntime {
     ) -> Self {
         let mut runtime = Self::new();
         let owned = HttpRouteExtensionRefs::from_route(route).ok().and_then(|references| {
-            let value = route.effective_rules()?.get(rule)?;
+            let value = route.spec.rules.as_ref()?.get(rule)?;
             let filters = match backend {
                 Some(index) => value
                     .backend_refs
@@ -889,7 +901,7 @@ impl PluginRuntime {
     fn from_grpc_route_slot(route: &GRPCRoute, rule: usize, backend: Option<usize>) -> Self {
         let mut runtime = Self::new();
         let owned = GrpcRouteExtensionRefs::from_route(route).ok().and_then(|references| {
-            let value = route.effective_rules()?.get(rule)?;
+            let value = route.spec.rules.as_ref()?.get(rule)?;
             let filters = match backend {
                 Some(index) => value
                     .backend_refs
@@ -1419,7 +1431,7 @@ impl PluginRuntime {
                 let data_ref_bearing = match &entry.plugin {
                     EdgionPlugin::RequestAccessPolicy(config) => request_access_has_external_data(config),
                     EdgionPlugin::Canary(config) => config.active_profile_ref.is_some(),
-                    EdgionPlugin::RegionRoute(config) => config.override_ref.is_some(),
+                    EdgionPlugin::RegionRoute(_) => true,
                     _ => false,
                 };
                 if data_ref_bearing && data_entry.is_none_or(|entry| entry.validate_owner().is_err()) {
@@ -1454,6 +1466,12 @@ impl PluginRuntime {
                         errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                         entry_runtime.invalid_plugins.record(&entry.plugin);
                         break 'build_entry;
+                    }
+
+                    if let EdgionPlugin::RegionRoute(config) = &entry.plugin {
+                        if let Some(error) = config.operational_validation_error() {
+                            errors.push(format!("requestPlugins[{index}] (RegionRoute): {error}"));
+                        }
                     }
 
                     // A Deny restriction with any unresolved condition reference
@@ -2508,7 +2526,10 @@ impl PluginRuntime {
     /// resolved-key guard below). DSL VM init remains covered by
     /// `seal_fail_closed` at construction time.
     fn response_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
-        if matches!(plugin, EdgionPlugin::GrpcJsonTranscoder(_)) {
+        if matches!(
+            plugin,
+            EdgionPlugin::GrpcJsonTranscoder(_) | EdgionPlugin::RegionRoute(_)
+        ) {
             return edgion_resources::resources::edgion_plugins::validate::response_stage_plugin_validation_error(
                 plugin,
             );
@@ -2517,6 +2538,9 @@ impl PluginRuntime {
     }
 
     fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+        if let EdgionPlugin::RegionRoute(config) = plugin {
+            return config.structural_validation_error();
+        }
         if let Some(e) = plugin.validation_error() {
             return Some(e);
         }
@@ -3033,7 +3057,7 @@ impl PluginRuntime {
         self.upstream_response_plugins.push(Arc::from(filter));
     }
 
-    fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
+    pub(crate) fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
         self.requires_complete_request_body = true;
         self.upstream_response_body_plugins.push(Arc::from(filter));
     }
@@ -3146,7 +3170,19 @@ impl PluginRuntime {
 
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Normal)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Normal, None)
+            .await;
+    }
+
+    /// Run request stage filters on behalf of `level` (a delegated-chain
+    /// ancestor) or, with `None`, of the matched leaf / ordinary route.
+    pub(crate) async fn run_request_plugins_at(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        level: Option<usize>,
+    ) {
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Normal, level)
             .await;
     }
 
@@ -3157,19 +3193,29 @@ impl PluginRuntime {
     /// Enforce a sealed policy or invalid-config gate before preflight or body work.
     /// The normal runner owns the response, access-log record and metric.
     pub(crate) async fn run_preflight_gate(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        self.run_preflight_gate_at(s, ctx, None).await;
+    }
+
+    /// `run_preflight_gate` for a delegated-chain ancestor (`None`: the leaf).
+    pub(crate) async fn run_preflight_gate_at(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        level: Option<usize>,
+    ) {
         if !ctx.plugin_terminated()
             && self
                 .request_plugins
                 .first()
                 .is_some_and(|filter| matches!(filter.name(), "PluginPolicyBlock" | "RejectInvalidConfig"))
         {
-            self.run_request_plugins(s, ctx).await;
+            self.run_request_plugins_at(s, ctx, level).await;
         } else if !ctx.plugin_terminated() {
             if let Some(gate) = &self.invalid_extension_gate {
-                self.run_request_plugins_impl(std::slice::from_ref(gate), s, ctx, false, RequestIdPhase::Normal)
+                self.run_request_plugins_impl(std::slice::from_ref(gate), s, ctx, false, RequestIdPhase::Normal, level)
                     .await;
             } else if self.ip_unavailable_gate.is_some() {
-                self.run_request_plugins_impl(&[], s, ctx, false, RequestIdPhase::Normal)
+                self.run_request_plugins_impl(&[], s, ctx, false, RequestIdPhase::Normal, level)
                     .await;
             }
         }
@@ -3179,7 +3225,7 @@ impl PluginRuntime {
     /// Only a first-attempt read-only mirror tee may be installed after the
     /// request-body policy freeze; capture and mutation remain unavailable.
     pub(crate) async fn run_backend_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(&self.request_plugins, s, ctx, true, RequestIdPhase::Normal)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, true, RequestIdPhase::Normal, None)
             .await;
     }
 
@@ -3187,13 +3233,13 @@ impl PluginRuntime {
         if self.invalid_early_request_id || (self.has_request_id && !self.invalid_plugins.is_empty()) {
             return false;
         }
-        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Early)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Early, None)
             .await;
         !ctx.plugin_terminated()
     }
 
     pub(crate) async fn run_request_plugins_after_early_ids(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::AfterEarly)
+        self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::AfterEarly, None)
             .await;
     }
 
@@ -3204,6 +3250,7 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         backend_request: bool,
         phase: RequestIdPhase,
+        level: Option<usize>,
     ) {
         if filters.is_empty() {
             return;
@@ -3221,7 +3268,7 @@ impl PluginRuntime {
         let mut session_adapter = if backend_request {
             PingoraSessionAdapter::for_backend_request(s, ctx)
         } else {
-            PingoraSessionAdapter::new(s, ctx)
+            PingoraSessionAdapter::new(s, ctx).with_level(level)
         };
 
         let unavailable = !self.policy_blocked() && !self.ip_dependencies_available(&mut session_adapter);
@@ -3361,8 +3408,20 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
+        self.run_upstream_response_plugins_sync_at(s, ctx, response_header, None);
+    }
+
+    /// `run_upstream_response_plugins_sync` for a delegated-chain ancestor.
+    pub(crate) fn run_upstream_response_plugins_sync_at(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        response_header: &mut ResponseHeader,
+        level: Option<usize>,
+    ) {
         let mut filter_logs = Vec::new();
-        let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+        let mut session_adapter =
+            PingoraSessionAdapter::with_response_header(s, ctx, response_header).with_level(level);
         if !self.ip_dependencies_available(&mut session_adapter) {
             let mut log = PluginLog::new("IpList");
             check_response_stage_terminate(
@@ -3445,7 +3504,19 @@ impl PluginRuntime {
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
     ) -> Option<Duration> {
-        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
+        self.run_upstream_response_body_plugins_at(s, ctx, body, end_of_stream, None)
+    }
+
+    /// `run_upstream_response_body_plugins` for a delegated-chain ancestor.
+    pub(crate) fn run_upstream_response_body_plugins_at(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        body: &Option<bytes::Bytes>,
+        end_of_stream: bool,
+        level: Option<usize>,
+    ) -> Option<Duration> {
+        let mut session_adapter = PingoraSessionAdapter::new(s, ctx).with_level(level);
         if !self.ip_dependencies_available(&mut session_adapter) {
             session_adapter.mark_ip_body_denied();
             return None;
@@ -3477,7 +3548,19 @@ impl PluginRuntime {
     }
 
     pub(crate) fn check_body_ip_dependencies(&self, session: &mut Session, ctx: &mut EdgionHttpContext) {
-        let mut adapter = PingoraSessionAdapter::new(session, ctx);
+        self.check_body_ip_dependencies_at(session, ctx, None);
+    }
+
+    /// `check_body_ip_dependencies` for a delegated-chain ancestor (`None`:
+    /// the leaf). The level makes this runtime's ExtensionRef availability
+    /// checks resolve against its own level's ExtensionRef array.
+    pub(crate) fn check_body_ip_dependencies_at(
+        &self,
+        session: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        level: Option<usize>,
+    ) {
+        let mut adapter = PingoraSessionAdapter::new(session, ctx).with_level(level);
         if !self.ip_dependencies_available(&mut adapter) {
             adapter.mark_ip_body_denied();
         }
@@ -3490,8 +3573,21 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
+        self.run_upstream_response_plugins_async_at(s, ctx, response_header, None)
+            .await;
+    }
+
+    /// `run_upstream_response_plugins_async` for a delegated-chain ancestor.
+    pub(crate) async fn run_upstream_response_plugins_async_at(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        response_header: &mut ResponseHeader,
+        level: Option<usize>,
+    ) {
         let mut filter_logs = Vec::new();
-        let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+        let mut session_adapter =
+            PingoraSessionAdapter::with_response_header(s, ctx, response_header).with_level(level);
         if !self.ip_dependencies_available(&mut session_adapter) {
             let mut log = PluginLog::new("IpList");
             check_response_stage_terminate(

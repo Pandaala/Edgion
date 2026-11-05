@@ -592,6 +592,41 @@ fn priority_defaults_to_zero_and_rejects_out_of_range_values() {
 }
 
 #[test]
+fn delegation_precedence_parses_from_yaml_and_omits_the_default() {
+    let parent: WafConfig = yaml_serde::from_str("policyRef:\n  name: policy\ndelegationPrecedence: parent\n")
+        .expect("`parent` is a valid precedence");
+    assert_eq!(parent.delegation_precedence, WafDelegationPrecedence::Parent);
+    let wire = serde_json::to_value(&parent).unwrap();
+    assert_eq!(wire["delegationPrecedence"], "parent");
+    let restored: WafConfig = serde_json::from_value(wire).unwrap();
+    assert_eq!(restored.delegation_precedence, WafDelegationPrecedence::Parent);
+
+    let explicit_child: WafConfig =
+        yaml_serde::from_str("policyRef:\n  name: policy\ndelegationPrecedence: child\n").unwrap();
+    let omitted: WafConfig = yaml_serde::from_str("policyRef:\n  name: policy\n").unwrap();
+    for config in [&explicit_child, &omitted] {
+        assert_eq!(config.delegation_precedence, WafDelegationPrecedence::Child);
+        assert!(
+            serde_json::to_value(config)
+                .unwrap()
+                .get("delegationPrecedence")
+                .is_none(),
+            "the default `child` is omitted on the wire"
+        );
+    }
+
+    for unknown in ["Parent", "outermost", "\"\""] {
+        assert!(
+            yaml_serde::from_str::<WafConfig>(&format!(
+                "policyRef:\n  name: policy\ndelegationPrecedence: {unknown}\n"
+            ))
+            .is_err(),
+            "{unknown} is rejected"
+        );
+    }
+}
+
+#[test]
 fn dynamic_integration_generations_compile_with_the_production_profile() {
     let generations = [
         concat!(

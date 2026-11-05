@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-policy-b
+  namespace: edgion-test
+  annotations:
+    edgion.io/enable-http2: "false"
+spec:
+  gatewayClassName: shared-policy-b
+  listeners:
+    - name: shared
+      protocol: HTTP
+      port: 32002
+      hostname: shared-policy-b.sandbox.example.com
+    - name: healthy
+      protocol: HTTP
+      port: 32003
+      hostname: shared-policy-b.sandbox.example.com

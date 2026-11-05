@@ -2,7 +2,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use super::{hickory, strip_brackets, system, DnsError};
+use super::{hickory, require_addresses, strip_brackets, system, DnsError, DnsLookupFamily, DnsQueryPolicy};
 
 /// Parse a `ip` or `ip:port` server string into a SocketAddr (default port 53).
 /// Accepts a bracketed IPv6 literal without a port (e.g. `"[::1]"`).
@@ -22,9 +22,13 @@ fn parse_servers(servers: &[String]) -> Vec<SocketAddr> {
 }
 
 /// Resolve `domain` against the given DNS servers. Empty list ⇒ system resolver.
-pub async fn resolve_standard(servers: &[String], domain: &str) -> Result<Vec<IpAddr>, DnsError> {
+pub async fn resolve_standard(
+    servers: &[String],
+    domain: &str,
+    policy: DnsQueryPolicy,
+) -> Result<Vec<IpAddr>, DnsError> {
     if servers.is_empty() {
-        let addrs = system::resolve_system(domain)
+        let addrs = system::resolve_system(domain, policy)
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?;
         return if addrs.is_empty() {
@@ -48,6 +52,53 @@ pub async fn resolve_standard(servers: &[String], domain: &str) -> Result<Vec<Ip
         .build()
         .map_err(|e| DnsError::Io(e.to_string()))?;
 
+    if let DnsQueryPolicy::Family(family) = policy {
+        use hickory_resolver::proto::{
+            op::ResponseCode,
+            rr::{RData, RecordType},
+        };
+        let query = async |record_type| match resolver.lookup(domain, record_type).await {
+            Ok(records) => Ok(records
+                .answers()
+                .iter()
+                .filter_map(|r| match &r.data {
+                    hickory_resolver::proto::rr::RData::A(a) => Some(IpAddr::V4(a.0)),
+                    hickory_resolver::proto::rr::RData::AAAA(a) => Some(IpAddr::V6(a.0)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()),
+            // Hickory 0.26.1 also synthesizes NoError on exhausted CNAME chains,
+            // possibly with an SOA but without preserved authorities. Only wire
+            // negative responses retain matching SOA authority evidence. Treat
+            // ambiguous no-SOA empties conservatively; recheck on dependency upgrades.
+            Err(NetError::Dns(HickoryDnsError::NoRecordsFound(records)))
+                if records.response_code == ResponseCode::NoError
+                    && records.soa.as_ref().is_some_and(|soa| {
+                        records.authorities.as_ref().is_some_and(|authorities| {
+                            authorities.iter().any(|record| {
+                                record.name == soa.name
+                                    && record.dns_class == soa.dns_class
+                                    && matches!(&record.data, RData::SOA(data) if data == &soa.data)
+                            })
+                        })
+                    }) =>
+            {
+                Ok(Vec::new())
+            }
+            Err(error) => Err(DnsError::Io(error.to_string())),
+        };
+        let addresses = match family {
+            DnsLookupFamily::Ipv4Only => query(RecordType::A).await?,
+            DnsLookupFamily::Ipv6Only => query(RecordType::AAAA).await?,
+            DnsLookupFamily::All => {
+                let (v4, v6) = tokio::join!(query(RecordType::A), query(RecordType::AAAA));
+                let mut out = v4?;
+                out.extend(v6?);
+                out
+            }
+        };
+        return require_addresses(policy.select(addresses));
+    }
     let lookup = resolver.lookup_ip(domain).await.map_err(|e| {
         if matches!(e, NetError::Dns(HickoryDnsError::NoRecordsFound(_))) {
             DnsError::NoAddresses

@@ -684,17 +684,32 @@ start_controller() {
     # Start controller with --test-mode to enable:
     # - Both endpoint mode (sync both Endpoints and EndpointSlice)
     # - Metrics test features (test_key, test_data)
-    "${BIN_DIR}/edgion-controller" \
-        -c "$CONTROLLER_CONFIG" \
-        --work-dir "${WORK_DIR}" \
-        --conf-dir "$CONFIG_DIR" \
-        --grpc-listen "0.0.0.0:${CONTROLLER_GRPC_PORT}" \
-        --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
-        --test-mode \
+    local controller_args=(
+        "${BIN_DIR}/edgion-controller"
+        -c "$CONTROLLER_CONFIG"
+        --work-dir "${WORK_DIR}"
+        --conf-dir "$CONFIG_DIR"
+        --grpc-listen "0.0.0.0:${CONTROLLER_GRPC_PORT}"
+        --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}"
+        --test-mode
+    )
+    python3 "${SCRIPT_DIR}/restart_controller.py" --start "$WORK_DIR" "${controller_args[@]}" \
         > "${LOG_DIR}/controller.log" 2>&1 &
-    
-    local pid=$!
-    echo $pid > "${PID_DIR}/controller.pid"
+    local owner_pid=$! pid="" attempt
+    for attempt in $(seq 1 100); do
+        if [ -s "${PID_DIR}/controller-state.json" ] && python3 -c \
+            'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(s.get("owner_pid") != int(sys.argv[2]))' \
+            "${PID_DIR}/controller-state.json" "$owner_pid"; then
+            pid=$(cat "${PID_DIR}/controller.pid")
+            break
+        fi
+        kill -0 "$owner_pid" 2>/dev/null || break
+        sleep 0.05
+    done
+    if [ -z "$pid" ]; then
+        log_error "Controller launch owner failed before publishing its child PID"
+        return 1
+    fi
     
     # Waitport
     if ! wait_for_port $CONTROLLER_ADMIN_PORT "edgion-controller" $pid 30; then

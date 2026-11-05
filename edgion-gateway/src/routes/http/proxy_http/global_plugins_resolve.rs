@@ -16,6 +16,7 @@ use std::sync::Arc;
 use crate::ctx::{WafLogSource, WafSelection};
 use crate::plugins::publication::PluginScope;
 use crate::plugins::runtime::PluginRuntime;
+use crate::plugins::runtime::WafCandidate;
 #[cfg(test)]
 use edgion_resources::resources::edgion_gateway_config::PluginReference;
 
@@ -37,7 +38,7 @@ pub(crate) fn resolve_route_ext_refs(store: &PluginScope, keys: &[Option<String>
     resolve_route_ext_refs_with(keys, |key| store.http_runtime(key))
 }
 
-fn resolve_route_ext_refs_with(
+pub(crate) fn resolve_route_ext_refs_with(
     keys: &[Option<String>],
     mut lookup: impl FnMut(&str) -> Option<Arc<PluginRuntime>>,
 ) -> Vec<Option<Arc<PluginRuntime>>> {
@@ -104,6 +105,55 @@ pub(crate) fn select_waf_owner(
         };
         WafSelection::new(candidate.owner(), source, priority, mode)
     })
+}
+
+/// One level's WAF candidate: highest priority, ties keep the first declaration.
+#[inline]
+fn level_waf_candidate(refs: &[Option<Arc<PluginRuntime>>]) -> Option<&WafCandidate> {
+    let mut winner: Option<&WafCandidate> = None;
+    for candidate in refs
+        .iter()
+        .filter_map(Option::as_deref)
+        .filter_map(PluginRuntime::waf_candidate)
+    {
+        if winner.is_none_or(|selected| candidate.priority() > selected.priority()) {
+            winner = Some(candidate);
+        }
+    }
+    winner
+}
+
+/// Select one request-wide WAF for a delegated chain without allocating.
+///
+/// `levels` yields each level's resolved route ExtensionRefs, root first and
+/// the leaf last. Priority is compared only within one level. Walking root to
+/// leaf, the outermost level whose candidate declares `parent` precedence
+/// wins; otherwise the deepest level with a candidate wins. Any Route-scope
+/// winner beats Gateway and Global exactly as in [`select_waf_owner`], which
+/// handles the request when no level declares a WAF.
+pub(crate) fn select_waf_owner_chain<'a>(
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    levels: impl Iterator<Item = &'a [Option<Arc<PluginRuntime>>]>,
+) -> Option<WafSelection> {
+    let mut route_winner: Option<&WafCandidate> = None;
+    for refs in levels {
+        if let Some(candidate) = level_waf_candidate(refs) {
+            route_winner = Some(candidate);
+            if candidate.takes_parent_precedence() {
+                break;
+            }
+        }
+    }
+    match route_winner {
+        Some(candidate) => Some(WafSelection::new(
+            candidate.owner(),
+            WafLogSource::Route,
+            candidate.priority(),
+            candidate.mode(),
+        )),
+        None => select_waf_owner(global, gateway, &[]),
+    }
 }
 
 #[cfg(test)]

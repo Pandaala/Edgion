@@ -88,7 +88,7 @@ ConfigSyncClient triggers a reconnection in the following situations:
 
 | Trigger condition | Behavior |
 |---------|------|
-| Watch stream receives `WATCH_ERR_SERVER_RELOAD` | Controller performed a reload, full relist |
+| Watch stream receives `WATCH_ERR_SERVER_RELOAD` | Controller replaced the serving resource epoch; perform a full relist |
 | Watch/server generation changes | End that loop's stream and relist the kind |
 | gRPC connection broken | Reconnect with exponential backoff and List before the next Watch |
 | TooOld / unexpected version / not-ready | Relist the affected kind |

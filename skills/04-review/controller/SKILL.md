@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [DNS-owned family slice convergence](regression-guards/dns-owned-family-slice-convergence.md)
+
 - [FS initialization delivery and backpressure](regression-guards/fs-initial-delivery-backpressure.md)
 
 - [Structured file initialization envelopes](regression-guards/structured-file-init-envelope.md)

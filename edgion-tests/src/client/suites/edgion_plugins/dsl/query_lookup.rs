@@ -962,9 +962,9 @@ impl TestSuite for QueryLookupPhase {
                                 ensure!(
                                     tokens.contains(&json!("err: invalid plugin config"))
                                         && tokens.contains(&json!("err: Dsl"))
-                                        && log.data["match_info"]["rsc"]["name"] == "dsl-query-executor-dynamic"
-                                        && log.data["match_info"]["rsc"]["ns"] == "edgion-default"
-                                        && log.data["match_info"]["rsc"]["kind"] == "HTTPRoute"
+                                        && log.data["match_info"][0]["rsc"]["name"] == "dsl-query-executor-dynamic"
+                                        && log.data["match_info"][0]["rsc"]["ns"] == "edgion-default"
+                                        && log.data["match_info"][0]["rsc"]["kind"] == "HTTPRoute"
                                         && log.data["request_info"]["host"] == DYNAMIC_HOST
                                         && log.data["request_info"]["path"] == "/graphql/by-id",
                                     "Fresh invalid DSL gate lacks canonical execution evidence"

@@ -1,4 +1,4 @@
-use super::{resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy};
+use super::{resolve_route_ext_refs, select_waf_owner, select_waf_owner_chain, EdgionHttpProxy};
 use crate::ctx::NormalizedHostname;
 use crate::plugins::PluginRuntime;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
@@ -226,11 +226,7 @@ pub async fn request_filter(
     if !ctx.is_grpc_route_matched {
         let port_routes = publication.http_routes(&edgion_http.http_route_manager);
         match port_routes.match_route(session, ctx, gateway_index) {
-            Ok(result) => {
-                ctx.gateway_info = Some(result.matched_gateway);
-                ctx.capture_matched_path_params(&result.route_unit.matched_info.m);
-                ctx.route_unit = Some(result.route_unit);
-            }
+            Ok(result) => install_match_result(ctx, result),
             Err(_) => {
                 ctx.record_error(EdgionErrorCode::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
@@ -264,63 +260,46 @@ pub async fn request_filter(
     if !keys.is_empty() {
         ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&owner.scope, keys));
     }
+    // Ancestors of a delegated chain resolve their own ExtensionRefs in the
+    // root-matched Gateway's scope. Ordinary requests skip this (one null check).
+    if ctx.delegated.is_some() {
+        install_delegated_ext_refs(ctx, |key| owner.scope.http_runtime(key));
+    }
     // Later-stage restrictions already have a request admission gate. Run it
     // before AI validation, CORS, ordinary plugins, WAF or body access. Global
     // and Gateway request IDs may already have run in Pingora's early hook.
     let global = ctx.resolved_global_plugins();
     let gateway = ctx.resolved_gateway_plugins();
     let route = ctx.resolved_route_ext_refs();
+    // Delegated chains only: every ancestor's resolved ExtensionRefs (root first).
+    let ancestor_refs = ctx.delegated.as_ref().map(|d| d.ext_refs.clone());
     let invalid_http_route_scope = global
         .iter()
         .chain(gateway.iter())
         .flat_map(|p| p.iter())
         .any(|runtime| runtime.requires_http_route_rule_scope());
-    let conversion_owners = route
-        .iter()
-        .flat_map(|plugins| plugins.iter().flatten())
-        .filter(|runtime| runtime.has_grpc_transcoder())
-        .count();
-    let has_ai_owner = global
-        .iter()
-        .chain(gateway.iter())
-        .flat_map(|plugins| plugins.iter())
-        .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
-        .any(|runtime| runtime.has_ai_conversion_owner());
 
-    for runtime in global
-        .iter()
-        .flat_map(|plugins| plugins.iter())
-        .chain(gateway.iter().flat_map(|plugins| plugins.iter()))
-        .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
+    if run_preflight_gates(
+        session,
+        ctx,
+        global.as_deref().unwrap_or_default(),
+        gateway.as_deref().unwrap_or_default(),
+        ancestor_refs.as_deref().unwrap_or_default(),
+        route.as_deref().unwrap_or_default(),
+    )
+    .await
     {
-        runtime.run_preflight_gate(session, ctx).await;
-        if ctx.plugin_terminated() {
-            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
-            return Ok(true);
-        }
-    }
-    let matched_route_runtime = ctx
-        .grpc_route_unit
-        .as_ref()
-        .map(|unit| Arc::clone(&unit.plugin_runtime))
-        .or_else(|| ctx.route_unit.as_ref().map(|unit| Arc::clone(&unit.plugin_runtime)));
-    if let Some(runtime) = matched_route_runtime {
-        runtime.run_preflight_gate(session, ctx).await;
-        if ctx.plugin_terminated() {
-            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
-            return Ok(true);
-        }
-    }
-    let has_router = route
-        .iter()
-        .flat_map(|p| p.iter().flatten())
-        .any(|runtime| runtime.has_graphql_operation_router());
-    if conversion_owners > 1 || conversion_owners != 0 && (has_ai_owner || ctx.grpc_route_unit.is_some()) {
-        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Ok(true);
     }
     if invalid_http_route_scope
-        || has_router && (has_ai_owner || conversion_owners != 0 || ctx.grpc_route_unit.is_some())
+        || route_owner_conflict(
+            global.as_deref().unwrap_or_default(),
+            gateway.as_deref().unwrap_or_default(),
+            ancestor_refs.as_deref(),
+            route.as_deref().unwrap_or_default(),
+            ctx.grpc_route_unit.is_some(),
+        )
     {
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
@@ -334,6 +313,20 @@ pub async fn request_filter(
             return Ok(true);
         }
     }
+    // Delegated chains: every level is scope-checked with its own route and
+    // rule index.
+    if let Some(d) = ctx.delegated.as_deref() {
+        let ancestors_in_scope = d.ancestors.iter().all(|unit| {
+            unit.route.as_ref().is_some_and(|source| {
+                owner.scope.ai_rule(source, unit.specificity.rule_index as usize)
+                    && owner.scope.graphql_rule(source, unit.specificity.rule_index as usize)
+            })
+        });
+        if !ancestors_in_scope {
+            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+            return Ok(true);
+        }
+    }
     super::pg_early_request_filter::initialize_gateway_request_ids(session, ctx).await?;
 
     // Step 1.5: Handle preflight requests (before plugin execution)
@@ -341,19 +334,27 @@ pub async fn request_filter(
     if edgion_http.preflight_handler.is_preflight(session, preflight_policy) {
         // If route has a native CORS filter (type: CORS), skip this preflight handler.
         // GapiCorsFilter in Step 3 already has full preflight support and will handle it.
-        let has_native_cors = ctx
-            .route_unit
-            .as_ref()
-            .and_then(|ru| ru.rule.filters.as_ref())
-            .map(|filters| filters.iter().any(|f| f.filter_type == HTTPRouteFilterType::CORS))
-            .unwrap_or(false);
+        let has_native_cors = ctx.route_unit.as_deref().is_some_and(unit_has_native_cors)
+            || ctx
+                .delegated
+                .as_ref()
+                .is_some_and(|d| d.ancestors.iter().any(|unit| unit_has_native_cors(unit)));
 
         if !has_native_cors {
             // Get CORS config dynamically from matched route's EdgionPlugins
             // This ensures we always get the latest config even if EdgionPlugin is updated
             let route_ext_refs = ctx.resolved_route_ext_refs();
             let cors_config = if ctx.route_unit.is_some() {
-                extract_cors_config_from_route_filters(route_ext_refs.as_deref().unwrap_or_default())
+                // Leaf first, then the nearest delegating ancestor (if any).
+                extract_cors_config_from_route_filters(route_ext_refs.as_deref().unwrap_or_default()).or_else(|| {
+                    ctx.delegated.as_ref().and_then(|d| {
+                        d.ext_refs
+                            .iter()
+                            .rev()
+                            .flatten()
+                            .find_map(|refs| extract_cors_config_from_route_filters(refs))
+                    })
+                })
             } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
                 // gRPC routes don't have CORS config yet, so None
                 None
@@ -383,7 +384,8 @@ pub async fn request_filter(
     let gateway_plugins = ctx.resolved_gateway_plugins();
     let route_ext_refs = ctx.resolved_route_ext_refs();
 
-    let selected_waf = select_waf_owner(
+    let selected_waf = elect_request_waf(
+        ctx,
         global_plugins.as_deref().unwrap_or_default(),
         gateway_plugins.as_deref().unwrap_or_default(),
         route_ext_refs.as_deref().unwrap_or_default(),
@@ -414,6 +416,17 @@ pub async fn request_filter(
                 &route.plugin_runtime,
                 route.backends.iter().map(|backend| backend.plugin_runtime.as_ref()),
             )
+        })
+        && ctx.delegated.as_ref().is_none_or(|d| {
+            d.ancestors.iter().enumerate().all(|(index, unit)| {
+                allows_partial_body_capture(
+                    global_plugins.as_deref().unwrap_or_default(),
+                    gateway_plugins.as_deref().unwrap_or_default(),
+                    d.ext_refs.get(index).cloned().flatten().as_deref().unwrap_or_default(),
+                    &unit.plugin_runtime,
+                    std::iter::empty(),
+                )
+            })
         });
 
     ctx.set_waf_partial_capture_allowed(waf_partial_capture_allowed);
@@ -450,18 +463,10 @@ pub async fn request_filter(
     }
 
     // Step 3: Run route-level plugins based on matched route type
-    if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
-        grpc_route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_terminated() {
-            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
-            return Ok(true);
-        }
-    } else if let Some(route_unit) = ctx.route_unit.clone() {
-        route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_terminated() {
-            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
-            return Ok(true);
-        }
+    run_route_request_plugins(session, ctx).await;
+    if ctx.plugin_terminated() {
+        let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+        return Ok(true);
     }
 
     // Body policy is request-scoped. Global, Gateway, and route request
@@ -484,6 +489,203 @@ pub async fn request_filter(
 
     crate::response_cache::lifecycle::bind_request(session, ctx).await;
     respond_from_cache(edgion_http, session, ctx).await
+}
+
+/// Install a route match. `route_unit` always holds the leaf; a delegated
+/// chain's ancestors go to `ctx.delegated` (`None` for every ordinary match).
+#[inline]
+pub(super) fn install_match_result(
+    ctx: &mut EdgionHttpContext,
+    result: crate::routes::http::match_unit::RouteMatchResult,
+) {
+    ctx.gateway_info = Some(result.matched_gateway);
+    ctx.capture_matched_path_params(&result.route_unit.matched_info.m);
+    ctx.route_unit = Some(result.route_unit);
+    ctx.delegated = result.delegated;
+}
+
+/// Elect the request-wide WAF owner. A delegated chain elects level by level
+/// over every ancestor's resolved ExtensionRefs (root first) and then the
+/// leaf's (see `select_waf_owner_chain`); ordinary routes keep the flat
+/// single-level election over the leaf array.
+#[inline]
+pub(super) fn elect_request_waf(
+    ctx: &EdgionHttpContext,
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    leaf_route_refs: &[Option<Arc<PluginRuntime>>],
+) -> Option<crate::ctx::WafSelection> {
+    match ctx.delegated.as_deref() {
+        None => select_waf_owner(global, gateway, leaf_route_refs),
+        Some(d) => select_waf_owner_chain(
+            global,
+            gateway,
+            d.ext_refs
+                .iter()
+                .map(|refs| refs.as_deref().unwrap_or_default())
+                .chain(std::iter::once(leaf_route_refs)),
+        ),
+    }
+}
+
+/// Resolve every ancestor's ExtensionRef keys (its own route namespace) into
+/// per-level runtime arrays. Delegated chains only; the leaf's array is the
+/// ordinary `resolved_route_ext_refs`.
+pub(super) fn install_delegated_ext_refs(
+    ctx: &mut EdgionHttpContext,
+    mut lookup: impl FnMut(&str) -> Option<Arc<PluginRuntime>>,
+) {
+    let Some(d) = ctx.delegated.as_deref_mut() else {
+        return;
+    };
+    let ext_refs = d
+        .level_ext_ref_keys()
+        .map(|keys| {
+            (!keys.is_empty()).then(|| {
+                Arc::from(super::global_plugins_resolve::resolve_route_ext_refs_with(
+                    keys,
+                    &mut lookup,
+                ))
+            })
+        })
+        .collect();
+    d.ext_refs = ext_refs;
+}
+
+/// Run every preflight gate (policy block, invalid config/extension, IP
+/// availability) root to leaf: Global, Gateway, then each delegated ancestor
+/// level's ExtensionRef gates followed by that level's own rule gate, then the
+/// leaf's ExtensionRef gates and finally the leaf rule gate. Returns `true`
+/// when a gate terminated the request; the caller writes the fallback.
+///
+/// An ordinary route (no ancestors) keeps its order: Global, Gateway, leaf
+/// ExtensionRefs, leaf rule.
+pub(super) async fn run_preflight_gates(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    ancestor_refs: &[Option<crate::routes::delegation::descent::LevelExtRefs>],
+    route: &[Option<Arc<PluginRuntime>>],
+) -> bool {
+    // Preflight gates render no templates and resolve no ExtensionRefs, so
+    // ExtensionRef target runtimes run here without a level.
+    for runtime in global.iter().chain(gateway.iter()) {
+        runtime.run_preflight_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            return true;
+        }
+    }
+    // Delegated chains: each ancestor level, root first, before the leaf.
+    for level in 0..ctx.ancestor_count() {
+        let level_refs = ancestor_refs.get(level).and_then(Option::as_deref).unwrap_or_default();
+        for runtime in level_refs.iter().flatten() {
+            runtime.run_preflight_gate(session, ctx).await;
+            if ctx.plugin_terminated() {
+                return true;
+            }
+        }
+        let Some(runtime) = ctx.ancestor_runtime(level) else {
+            break;
+        };
+        runtime.run_preflight_gate_at(session, ctx, Some(level)).await;
+        if ctx.plugin_terminated() {
+            return true;
+        }
+    }
+    for runtime in route.iter().flatten() {
+        runtime.run_preflight_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            return true;
+        }
+    }
+    if let Some(runtime) = ctx.leaf_route_runtime() {
+        runtime.run_preflight_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Exclusive-owner rules for the matched route, evaluated over the whole
+/// delegated chain (`ancestors`, root first, then the leaf's `route` refs):
+/// at most one gRPC-JSON transcoder; a transcoder excludes AI owners and a
+/// GRPCRoute; a GraphQL operation router excludes AI owners, transcoders and a
+/// GRPCRoute. These are the ordinary-route rules unchanged; several AI plugins
+/// (AiGuard, Guardrail, one AiProxy) may still coexist, and a second AiProxy is
+/// refused at runtime by the request-wide AI plan. As defense in depth a
+/// router may sit on only one level (Controller validation already rejects a
+/// router on a delegating rule). Ordinary routes pass `ancestors = None`.
+pub(super) fn route_owner_conflict(
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    ancestors: Option<&[Option<crate::routes::delegation::descent::LevelExtRefs>]>,
+    route: &[Option<Arc<PluginRuntime>>],
+    grpc_route: bool,
+) -> bool {
+    let ancestor_runtimes = || {
+        ancestors
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|refs| refs.iter().flatten())
+    };
+    let route_runtimes = || ancestor_runtimes().chain(route.iter().flatten());
+    let conversion_owners = route_runtimes().filter(|runtime| runtime.has_grpc_transcoder()).count();
+    let has_ai_owner = global
+        .iter()
+        .chain(gateway)
+        .chain(route_runtimes())
+        .any(|runtime| runtime.has_ai_conversion_owner());
+    let has_router = route_runtimes().any(|runtime| runtime.has_graphql_operation_router());
+    if conversion_owners > 1 || conversion_owners != 0 && (has_ai_owner || grpc_route) {
+        return true;
+    }
+    if has_router && (has_ai_owner || conversion_owners != 0 || grpc_route) {
+        return true;
+    }
+    let Some(ancestors) = ancestors else {
+        return false;
+    };
+    let router_levels = ancestors
+        .iter()
+        .map(|refs| refs.as_deref().unwrap_or_default())
+        .chain(std::iter::once(route))
+        .filter(|refs| {
+            refs.iter()
+                .flatten()
+                .any(|runtime| runtime.has_graphql_operation_router())
+        })
+        .count();
+    router_levels > 1
+}
+
+/// Run the matched route's request-stage chain: for a delegated chain each
+/// ancestor (root first, with its own level), then the leaf exactly as for an
+/// ordinary route. Stops at the first level that terminates the request.
+pub(super) async fn run_route_request_plugins(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    let Some(leaf) = ctx.leaf_route_runtime() else {
+        return;
+    };
+    // Delegated chains (HTTPRoute or GRPCRoute): ancestors root first.
+    for level in 0..ctx.ancestor_count() {
+        let Some(runtime) = ctx.ancestor_runtime(level) else {
+            break;
+        };
+        runtime.run_request_plugins_at(session, ctx, Some(level)).await;
+        if ctx.plugin_terminated() {
+            return;
+        }
+    }
+    leaf.run_request_plugins(session, ctx).await;
+}
+
+fn unit_has_native_cors(unit: &crate::routes::http::HttpRouteRuleUnit) -> bool {
+    unit.rule
+        .filters
+        .as_ref()
+        .is_some_and(|filters| filters.iter().any(|f| f.filter_type == HTTPRouteFilterType::CORS))
 }
 
 /// The optional hit enters the same response onion and final-writer claim as an
@@ -899,3 +1101,7 @@ pub(super) fn capture_tls_metadata(session: &Session, ctx: &mut EdgionHttpContex
 #[cfg(test)]
 #[path = "../../../../tests/unit/routes/http/proxy_http/pg_request_filter_test/request_entry_tests.rs"]
 mod request_entry_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/routes/http/proxy_http/pg_request_filter_test/delegation_tests.rs"]
+mod delegation_tests;

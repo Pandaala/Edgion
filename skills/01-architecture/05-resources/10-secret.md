@@ -43,7 +43,7 @@ and DNS credentials are instead consumed by the Kubernetes-only Controller AcmeS
 ## Runtime-owned SecretStore
 
 `ControllerRuntime` owns one SecretStore per ConfCenter lifecycle. Handlers access it through
-`HandlerContext::runtime()`. `ControllerRuntime::reset()` clears reload-scoped Secret state,
+`HandlerContext::runtime()`. `ControllerRuntime::reset()` clears resource-epoch-scoped Secret state,
 preventing data from leaking between center generations.
 
 ## Secret → Material resolution layer

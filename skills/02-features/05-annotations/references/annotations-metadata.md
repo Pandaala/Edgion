@@ -29,6 +29,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/edgion-stream-plugins` | `name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. The resource is resolved in the Gateway's namespace; slash-containing values are rejected by the Controller and fail closed defensively in the Gateway. Current verified runtime path is in `listener_builder.rs`. |
 | `edgion.io/edgion-plugins` | comma/space-separated refs | none | Ordered HTTP plugins applied to every request on this Gateway before route plugins. Bare names use the Gateway namespace; duplicates preserve first occurrence. |
 | `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.securityProtect.requireSniHostMatch` | Explicit true or false overrides the global value for this Gateway; absent inherits. HTTPS mismatch returns 421. |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | inherits, ultimately `ipv4Only` | Independent family policy. Service overrides both planes and gates stale ExternalName membership; Gateway overrides self-resolution/AI only. Empty/unknown values fail closed. |
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for native HTTP/gRPC references to Services with `spec.type: ExternalName`. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway httpdns LinkSys resolver reference. Explicit namespace required (bare names rejected). **Data-plane only**. A cross-namespace ref is ReferenceGrant-gated (from-kind `Gateway`, to-kind `edgion.io/LinkSys`); a denied ref is reported via `ResolvedRefs=False` and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
@@ -112,6 +113,7 @@ Notes:
 ### `edgion.io/retry-non-idempotent`
 
 - **Granularity**: HTTPRoute / GRPCRoute (applied to all rules under the route).
+  Under delegation only the leaf route's value applies; ancestors' values are ignored.
 - **Valid values**:
   - `"true"` — allow the reused-connection retry to replay a non-idempotent request body (restores the pre-guard behavior).
   - `"false"` / absent / any other value — keep the safe default.
@@ -123,10 +125,12 @@ Notes:
 ### `edgion.io/mirror-*` (RequestMirror tuning)
 
 - **Granularity**: HTTPRoute (applied to every `RequestMirror` filter under the route,
-  both rule-level and backendRef-level filters). Under delegation, the parent route's
-  annotations apply to the flattened `resolved_rules`; a child route's own mirror-*
-  annotations are not carried over (same semantics as `forward-raw-path` /
-  `retry-non-idempotent`).
+  both rule-level and backendRef-level filters). Under delegation every level is
+  preparsed from its own route, so each route's mirror-* annotations tune only the
+  `RequestMirror` filters that route declares (a parent's mandatory mirror filter
+  keeps the parent's tuning). By contrast, `forward-raw-path` and
+  `retry-non-idempotent` are request-wide and are read from the leaf route only;
+  ancestors' values are ignored for delegated requests.
 - **Why annotations, not filter fields**: Edgion installs the unmodified vendored
   Gateway API CRD, a structural schema — in K8s conf-center mode the API server
   silently prunes any `requestMirror` field the schema does not declare (no admission
@@ -145,6 +149,7 @@ Notes:
 ### `edgion.io/forward-raw-path`
 
 - **Granularity**: HTTPRoute (applied to all rules under this HTTPRoute).
+  Under delegation only the leaf route's value applies; ancestors' values are ignored.
 - **Valid values**:
   - `"true"` — force raw forwarding (overrides the global `forward_normalized_path` / region_route default).
   - `"false"` — force normalized forwarding (overrides region_route-style `preserve_raw_path = true`).
@@ -215,6 +220,7 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/dns-resolution-mode` | `controller` / `gateway` / `per-request` | `controller` | Per-ExternalName Service DNS resolution mode for native HTTP/gRPC `Service` references. `controller`: use the controller-resolved EndpointSlice when it has a ready backend, else the gateway bridges via self-resolution + EGC-configured cache (5s default). `gateway`: gateway resolves via the effective resolver + EGC-configured cache (5s default) (authoritative). `per-request`: resolve on every request, no cache. Invalid values fall back to `controller`. |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | inherits, ultimately `ipv4Only` | Independent family policy. Service overrides both planes and gates stale ExternalName membership; Gateway overrides self-resolution/AI only. Empty/unknown values fail closed. |
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits Gateway / EGC / system | Per-Service inline standard-DNS resolver (most specific; applies to **both** planes). Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits Gateway / EGC / system | Per-Service httpdns LinkSys resolver reference (most specific; applies to **both** planes). Explicit namespace required (bare names rejected). A cross-namespace ref is ReferenceGrant-gated (from-kind `Service`, to-kind `edgion.io/LinkSys`); a denied ref is logged and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 

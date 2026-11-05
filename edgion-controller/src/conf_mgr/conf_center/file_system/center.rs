@@ -105,10 +105,7 @@ impl CenterLifeCycle for FileSystemCenter {
     /// 3. Wait for PROCESSOR_REGISTRY to be ready
     /// 4. Create ConfigSyncServer and register WatchObjs
     /// 5. Set config_sync_server = Some (services become available)
-    /// 6. Wait for shutdown signal or reload request
-    ///
-    /// Supports reload: when reload is requested, the controller is restarted
-    /// and a new ConfigSyncServer is created (with new server_id).
+    /// 6. Wait for shutdown and drain all resource tasks before clearing state.
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         tracing::info!(
             component = "file_system_center",
@@ -138,7 +135,7 @@ impl CenterLifeCycle for FileSystemCenter {
             .run_lifecycle(
                 shutdown_handle,
                 "file_system_center",
-                move |shutdown, runtime, error_tx| {
+                move |shutdown, runtime, error_tx, scope| {
                     let ctrl = FileSystemController::new(
                         conf_dir.clone(),
                         registry.clone(),
@@ -146,7 +143,7 @@ impl CenterLifeCycle for FileSystemCenter {
                         controller_name.clone(),
                     );
                     tokio::spawn(async move {
-                        if let Err(e) = ctrl.run(shutdown, runtime).await {
+                        if let Err(e) = ctrl.run(shutdown, runtime, scope).await {
                             tracing::error!(
                                 component = "file_system_center",
                                 error = %e,
@@ -173,11 +170,6 @@ impl CenterLifeCycle for FileSystemCenter {
     /// Check if running in Kubernetes mode
     fn is_k8s_mode(&self) -> bool {
         false
-    }
-
-    /// Request a reload (re-initialize all processors and stores)
-    fn request_reload(&self) -> Result<(), String> {
-        self.base.request_reload()
     }
 
     fn runtime(&self) -> Arc<ControllerRuntime> {

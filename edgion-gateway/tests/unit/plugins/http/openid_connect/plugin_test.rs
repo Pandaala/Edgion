@@ -19,6 +19,68 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[test]
+fn exhausted_fixed_header_budget_still_clears_all_claim_destinations() {
+    let mut cfg = base_config();
+    cfg.set_access_token_header = true;
+    cfg.max_header_value_bytes = 15;
+    cfg.max_total_header_bytes = 15;
+    cfg.claims_to_headers = Some(HashMap::from([("sub".into(), "X-Sub".into())]));
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header_value()
+        .withf(|name, _| name == "X-Access-Token")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-sub")
+        .times(1)
+        .returning(|_| Ok(()));
+    plugin
+        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub":"trusted"}))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn unauthenticated_pass_clears_claim_destinations_and_fails_closed_on_mutation_error() {
+    for fail in [false, true] {
+        let mut cfg = base_config();
+        cfg.bearer_only = false;
+        cfg.unauth_action = UnauthAction::Pass;
+        cfg.claims_to_headers = Some(HashMap::from([("sub".into(), "X-Sub".into())]));
+        let plugin = OpenidConnect::new(&cfg, "default".into());
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().return_const("/protected".to_string());
+        install_request_cookies(&mut session, "");
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-sub")
+            .times(1)
+            .returning(move |_| {
+                if fail {
+                    Err(std::io::Error::other("private error").into())
+                } else {
+                    Ok(())
+                }
+            });
+        let mut log = PluginLog::new("OpenidConnect");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            if fail {
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+        assert!(!log.contains("private"));
+    }
+}
+
 fn actual_oidc(config: &OpenidConnectConfig, namespace: String) -> Result<OpenidConnect, String> {
     use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
     let owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
@@ -3300,11 +3362,7 @@ fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_
     cfg.max_total_header_bytes = 15;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
-    session
-        .expect_remove_request_header()
-        .withf(|name| name == "x-sub")
-        .times(1)
-        .returning(|_| Ok(()));
+    session.expect_remove_request_header().returning(|_| Ok(()));
     let mut sequence = mockall::Sequence::new();
 
     session
@@ -3349,11 +3407,7 @@ fn authorization_length_limits_preserve_publication_order_and_remaining_budget()
         cfg.max_total_header_bytes = total_cap;
         let plugin = OpenidConnect::new(&cfg, "default".to_string());
         let mut session = MockPluginSession::new();
-        session
-            .expect_remove_request_header()
-            .withf(|name| name == "x-sub")
-            .times(1)
-            .returning(|_| Ok(()));
+        session.expect_remove_request_header().returning(|_| Ok(()));
         let events = Arc::new(Mutex::new(Vec::new()));
         let header_events = events.clone();
         session.expect_set_request_header_value().returning(move |name, value| {

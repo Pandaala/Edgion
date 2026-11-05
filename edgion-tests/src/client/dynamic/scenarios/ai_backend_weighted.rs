@@ -93,7 +93,7 @@ fn route_yaml() -> String {
 
 fn child_route_yaml() -> String {
     format!(
-        "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: {CHILD_ROUTE}\n  namespace: {ROUTE_NS}\nspec:\n  rules:\n    - filters:\n        - type: ExtensionRef\n          extensionRef:\n            group: edgion.io\n            kind: EdgionPlugins\n            name: {PLUGIN}\n      backendRefs:\n        - group: edgion.io\n          kind: EdgionBackend\n          name: {BACKEND_A}\n          namespace: {BACKEND_NS}\n          weight: 1\n        - group: edgion.io\n          kind: EdgionBackend\n          name: {BACKEND_B}\n          namespace: {BACKEND_NS}\n          weight: 3\n        - kind: Service\n          name: {ZERO_SERVICE}\n          port: 30001\n          weight: 0\n"
+        "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: {CHILD_ROUTE}\n  namespace: {ROUTE_NS}\nspec:\n  parentRefs:\n    - group: gateway.networking.k8s.io\n      kind: HTTPRoute\n      name: {ROUTE}\n  rules:\n    - filters:\n        - type: ExtensionRef\n          extensionRef:\n            group: edgion.io\n            kind: EdgionPlugins\n            name: {PLUGIN}\n      backendRefs:\n        - group: edgion.io\n          kind: EdgionBackend\n          name: {BACKEND_A}\n          namespace: {BACKEND_NS}\n          weight: 1\n        - group: edgion.io\n          kind: EdgionBackend\n          name: {BACKEND_B}\n          namespace: {BACKEND_NS}\n          weight: 3\n        - kind: Service\n          name: {ZERO_SERVICE}\n          port: 30001\n          weight: 0\n"
     )
 }
 
@@ -142,6 +142,25 @@ async fn controller_resource(ctx: &ScenarioCtx, kind: &str, namespace: &str, nam
     Ok(body["data"].clone())
 }
 
+/// Condition on the child's status entry for its delegating parent route. A
+/// delegated child owns its backends, so backend reference problems are
+/// reported here, not on the parent.
+fn has_child_condition(value: &Value, status: &str, reason: Option<&str>) -> Result<bool> {
+    has_child_entry_condition(value, "ResolvedRefs", status, reason)
+}
+
+fn has_child_entry_condition(value: &Value, type_: &str, status: &str, reason: Option<&str>) -> Result<bool> {
+    let parent = ParentReference {
+        group: Some("gateway.networking.k8s.io".to_string()),
+        kind: Some("HTTPRoute".to_string()),
+        namespace: Some(ROUTE_NS.to_string()),
+        name: ROUTE.to_string(),
+        section_name: None,
+        port: None,
+    };
+    dynamic_status::has_condition(value, "HTTPRoute", &parent, type_, status, reason)
+}
+
 fn has_condition(value: &Value, status: &str, reason: Option<&str>) -> Result<bool> {
     let gateway = ParentReference {
         group: None,
@@ -186,6 +205,49 @@ async fn wait_route_condition(ctx: &ScenarioCtx, status: &str, reason: Option<&s
         },
     )
     .await
+}
+
+async fn wait_child_condition(ctx: &ScenarioCtx, status: &str, reason: Option<&str>) -> Result<()> {
+    wait_for(
+        &format!("HTTPRoute {CHILD_ROUTE} ResolvedRefs={status}/{reason:?} under parent {ROUTE}"),
+        || async {
+            let route = controller_resource(ctx, "HTTPRoute", ROUTE_NS, CHILD_ROUTE).await?;
+            has_child_condition(&route, status, reason)
+        },
+    )
+    .await
+}
+
+/// Wait until the child's entry for the parent is `Accepted=True /
+/// DelegationAccepted`. The child is new, so this cannot pass on a stale
+/// condition: it proves the Controller has processed the parent in its
+/// delegating form and confirmed the edge.
+async fn wait_child_delegation_accepted(ctx: &ScenarioCtx) -> Result<()> {
+    wait_for(
+        &format!("HTTPRoute {CHILD_ROUTE} Accepted=True/DelegationAccepted under parent {ROUTE}"),
+        || async {
+            let route = controller_resource(ctx, "HTTPRoute", ROUTE_NS, CHILD_ROUTE).await?;
+            has_child_entry_condition(&route, "Accepted", "True", Some("DelegationAccepted"))
+        },
+    )
+    .await
+}
+
+/// Assert, without waiting, that the parent's Gateway entry currently has
+/// `ResolvedRefs=status`.
+async fn assert_route_condition(ctx: &ScenarioCtx, status: &str, reason: Option<&str>, label: &str) -> Result<()> {
+    let route = controller_resource(ctx, "HTTPRoute", ROUTE_NS, ROUTE).await?;
+    anyhow::ensure!(
+        route.pointer("/spec/rules/0/backendRefs/0/kind") == Some(&Value::String("HTTPRoute".into())),
+        "{label}: HTTPRoute {ROUTE} is not the delegating parent: {}",
+        route["spec"]
+    );
+    anyhow::ensure!(
+        has_condition(&route, status, reason)?,
+        "{label}: HTTPRoute {ROUTE} ResolvedRefs is not {status}/{reason:?}: {}",
+        route["status"]
+    );
+    Ok(())
 }
 
 async fn apply(ctx: &ScenarioCtx, yaml: String) -> Result<()> {
@@ -396,18 +458,26 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
 
     apply(ctx, child_route_yaml()).await?;
     apply(ctx, delegated_parent_yaml()).await?;
+    // The parent's ResolvedRefs=True from its ordinary form may be stale;
+    // the child's new acceptance proves the delegating form was processed.
+    wait_child_delegation_accepted(ctx).await?;
     wait_route_condition(ctx, "True", None).await?;
+    assert_route_condition(ctx, "True", None, "delegating parent").await?;
+    wait_child_condition(ctx, "True", None).await?;
     wait_sample(ctx, &healthy, "delegation preserves AI slot order and weights").await?;
     apply(ctx, route_grant_yaml(false)).await?;
-    wait_route_condition(ctx, "False", Some("RefNotPermitted")).await?;
+    wait_child_condition(ctx, "False", Some("RefNotPermitted")).await?;
+    // The child owns its backends: the denial is reported on the child only.
+    assert_route_condition(ctx, "True", None, "parent while the child is denied").await?;
     wait_sample(
         ctx,
         &invalid_b,
         "delegation preserves denied positive-weight slot identity",
     )
     .await?;
+    assert_route_condition(ctx, "True", None, "parent after the denied child sample").await?;
     apply(ctx, route_grant_yaml(true)).await?;
-    wait_route_condition(ctx, "True", None).await?;
+    wait_child_condition(ctx, "True", None).await?;
     wait_sample(
         ctx,
         &healthy,

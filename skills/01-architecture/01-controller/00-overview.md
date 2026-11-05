@@ -22,7 +22,7 @@ pub struct ConfMgr {
 ```text
 ConfCenter (super trait)
 ├── CenterApi        — CRUD operations (get_one, set_one, delete_one, list ...)
-└── CenterLifeCycle  — Lifecycle (start, is_ready, request_reload ...)
+└── CenterLifeCycle  — Lifecycle (start, is_ready, leadership_status ...)
 ```
 
 The `ConfMgr::create(config)` factory selects the backend based on the `ConfCenterConfig` enum:
@@ -105,7 +105,7 @@ pub struct ControllerRuntime {
 }
 ```
 
-Handlers obtain these dependencies through `HandlerContext::runtime()`. Reload and
+Handlers obtain these dependencies through `HandlerContext::runtime()`. Recovery and
 leadership cleanup call `ControllerRuntime::reset()`; this is a selective reset,
 not an indiscriminate clearing of process globals.
 
@@ -122,7 +122,7 @@ Core capabilities:
 | `requeue(kind, key)` | Immediate cross-resource re-enqueue |
 | `requeue_with_chain(kind, key, chain)` | Delayed re-enqueue with TriggerChain (coalescing + cycle detection) |
 | `requeue_all()` | Full re-enqueue on Leader switchover, triggering status reconciliation |
-| `ControllerRuntime::reset()` | Clear reload-scoped processors/stores while preserving explicitly process-scoped components |
+| `ControllerRuntime::reset()` | Clear resource-epoch-scoped processors/stores while preserving explicitly process-scoped components |
 
 ## Module Layout
 

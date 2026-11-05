@@ -60,7 +60,7 @@ The auto-generated enum contains all 20 resource types:
 
 `edgion-resources::resource::meta::extract_resource_metadata` owns structured
 YAML/JSON extraction of the root kind and metadata identity before a caller knows
-the resource type. Controller Admin, FS storage, FS startup/reload scanning and
+the resource type. Controller Admin, FS storage, FS initialization scanning and
 CLI apply/delete share it. `ResourceKind::from_kind_name` separately maps kind
 strings and existing aliases; wire discriminants and registration stay unchanged.
 

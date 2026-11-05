@@ -1658,3 +1658,24 @@ endpoints or certificate details remain suppressed even with `RUST_LOG=trace`.
 Only OTLP/gRPC log export is supported. There is no `protocol` field or legacy
 inline OTLP output shape; OTLP/HTTP, trace export and application metric export are
 outside this connector.
+
+### Address families and complete answers
+
+A custom `urlTemplate` may include `{recordType}`, for example
+`https://dns.example/resolve?host={domain}&type={recordType}`. The resolver substitutes
+`A` or `AAAA`; `all` performs two sequential requests under one configured primary
+`connection.timeoutMs` deadline. A custom template without this token declares one
+fixed/combined complete answer: the operator must ensure the provider supports the
+requested families. Built-in preset URLs without a custom template support IPv4
+primary queries only; IPv6/`all` use the configured fallback or fail.
+
+Family-aware queries reject malformed address values, missing/wrong response
+containers, wrong-family typed answers, and more than 256 unique canonical addresses
+before filtering (including merged typed answers). An explicitly empty array/string
+or empty delimited body is a valid empty typed family; one nonempty family plus one
+valid empty family succeeds. A failed family is not authoritative absence, and two
+empty families fail. A fallback always retains the requested family. System DNS
+cannot reveal partial failures hidden by the OS; combined HTTPDNS likewise relies
+on the provider's successful response being complete. HTTPDNS bootstrap keeps its
+native system-resolution policy. Changing backend family does not rebuild its
+prepared client or duplicate TLS material.

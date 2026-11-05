@@ -96,9 +96,7 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_controller_resources_watched | Gauge | controller | kind | self | Resources currently watched, per kind | - |
 | edgion_controller_leader | Gauge | controller | none | self | Leader election status: 1 = leader, 0 = standby | - |
 | edgion_controller_leader_transitions_total | Counter | controller | none | self | Total leadership transitions (elected or demoted) — a double-leader bug or flapping election is invisible on the boolean gauge and obvious in this rate | - |
-| edgion_controller_reload_total | Counter | controller | none | self | Total reload operations triggered | - |
-| edgion_controller_reload_duration_seconds_last | Gauge | controller | none | self | Duration of the last reload | - |
-| edgion_controller_reload_client_notifications_total | Counter | controller | none | self | Client (Gateway) notifications sent for a reload | - |
+| edgion_controller_reload_client_notifications_total | Counter | controller | none | self | Client (Gateway) notifications sent for a ConfigSyncServer generation change | - |
 | edgion_controller_status_writes_total | Counter | controller | kind, backend (kubernetes/filesystem), result (success/error) | self | Status writes attempted by the Controller. Steady state is flat (writes are gated by a status_changed diff) | `{result="error"}` sustained (SSA 409 conflict loop) |
 | edgion_controller_status_writes_skipped_total | Counter | controller | kind | self | Status writes skipped because a semantic diff detected no meaningful change | - |
 | edgion_controller_status_conditions_max | Gauge | controller | kind, namespace, name | self | Largest single `.status.conditions` array length on a resource, hand-rendered off the resource_abnormal snapshot. Emitted ONLY for resources at/above `metrics.resource_abnormal.status_conditions_threshold` (default 20), so healthy fleets emit nothing — a bloated array is a status-write loop or cross-controller condition pollution | `edgion_controller_status_conditions_max > 0` |
@@ -127,7 +125,7 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_gateway_circuit_breaker_shed_total | Counter | gateway | service | business | Requests shed by the per-endpoint circuit-breaker concurrency cap (`CbPermit::try_acquire` at cap) — distinct from the outlier-detection ejection/rejection metrics above, which trip on backend health rather than in-flight count | - |
 | edgion_lb_degrade_selections_total | Counter | gateway | service | business | Cumulative selections entering the degrade branch across all Service port sections; retries count separately and selection does not imply successful forwarding. Registered when a Service gains health/outlier policy, including zero-threshold Services; lifecycle changes do not clear totals, but unowned idle series may expire | `sum by (service) (rate(edgion_lb_degrade_selections_total[5m]))` |
 | edgion_rr_selector_truncated_total | Counter | gateway | none | business | RoundRobin selector backend-count truncation (backend count exceeded `u16::MAX`) — an alarm for an extreme configuration anomaly | - |
-| edgion_region_route_overlay_events_total | Counter | gateway | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid) | business | `RegionRoute` overlay resolution events (fail-to-base outcomes when an EdgionConfigData overlay is missing, disabled, mismatched, or invalid) | - |
+| edgion_region_route_config_events_total | Counter | gateway | result (setting_reference_unavailable/setting_missing/setting_disabled/setting_type_mismatch/setting_invalid/hash_modulo_invalid) | business | fixed | RegionRoute configuration failures before request mutation; setting_invalid includes consumer/table incompatibility | - |
 | edgion_acme_challenge_lookup_total | Counter | gateway | result (hit/expired/domain_mismatch/not_found/empty_host) | business | ACME HTTP-01 challenge token lookup outcomes | - |
 
 ## 基数预算

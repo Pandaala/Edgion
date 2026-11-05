@@ -41,7 +41,10 @@ async fn compiled_http_parent_ports_select_the_matching_gateway_on_shared_listen
     route.spec.current_status = None;
     let mut route = crate::test_current_status::processed(route);
     route.pre_parse();
-    let rules = parse_http_routes_to_domain_rules(&HashMap::from([("default/port-owner".into(), Arc::new(route))]));
+    let rules = parse_http_routes_to_domain_rules(
+        &HashMap::from([("default/port-owner".into(), Arc::new(route))]),
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
     let (units, _) = rules.get("example.com").unwrap();
     let engine = RadixRouteMatchEngine::build(units.clone()).unwrap();
     let (mut client, server) = tokio::io::duplex(1024);
@@ -57,7 +60,7 @@ async fn compiled_http_parent_ports_select_the_matching_gateway_on_shared_listen
     for (port, owner) in [(8080, "default/a"), (8081, "default/b")] {
         let key = ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTP");
         let index = publication.listener_index(&key).unwrap();
-        let result = engine.match_route(&mut session, &ctx, index).unwrap();
+        let result = engine.match_route(&mut session, &ctx, index, &mut None).unwrap();
         assert_eq!(result.matched_gateway.gateway_key(), owner);
     }
 }
@@ -163,7 +166,12 @@ fn partial_update_after_hostname_build_failure_rebuilds_the_complete_listener() 
         hostnames: HashSet::from([CATCH_ALL_HOSTNAME.to_string()]),
     };
 
-    let recovered = patch_domain_route_rules(&data, &failed, &changes);
+    let recovered = patch_domain_route_rules(
+        &data,
+        &failed,
+        &changes,
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
 
     assert!(!recovered.hostname_build_failed);
     assert!(recovered.catch_all_routes.is_some());
@@ -282,6 +290,127 @@ fn route_with_paths(
     crate::test_current_status::from_value(json).expect("route fixture must deserialize")
 }
 
+#[test]
+fn parameter_aliases_cannot_bypass_path_length_validation() {
+    let unit = |name: &str, path: &str| {
+        let route = route_with_paths(
+            "default",
+            name,
+            vec!["aliases.example.com"],
+            "2026-09-13T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": "Exact", "value": path}}]}]),
+        );
+        let data = HashMap::from([(format!("default/{name}"), Arc::new(route))]);
+        parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new())
+            .remove("aliases.example.com")
+            .unwrap()
+            .0
+            .remove(0)
+    };
+    let short = unit("short", "/:id");
+    let long = unit("long", &format!("/:{}", "p".repeat(u16::MAX as usize)));
+    for units in [vec![short.clone(), long.clone()], vec![long, short]] {
+        assert!(RadixRouteMatchEngine::build(units).is_err());
+    }
+}
+
+#[test]
+fn parameter_aliases_survive_full_and_incremental_publication() {
+    let host = "aliases.example.com";
+    let pattern = RadixHostnamePattern::parse(host).unwrap();
+    let make_route = |name: &str, path: &str, kind: &str| {
+        let mut route = route_with_paths(
+            "default",
+            name,
+            vec![host],
+            "2026-09-13T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": kind, "value": path}}]}]),
+        );
+        route.pre_parse();
+        Arc::new(route)
+    };
+    let mut data = HashMap::new();
+    for (name, path, kind) in [
+        ("health", "/health", "Exact"),
+        ("prefix", "/static", "PathPrefix"),
+        ("regex", "^/regex$", "RegularExpression"),
+        ("escaped", "/users/::literal", "Exact"),
+    ] {
+        data.insert(format!("default/{name}"), make_route(name, path, kind));
+    }
+    for i in 0..255 {
+        let name = format!("alias-{i:03}");
+        data.insert(
+            format!("default/{name}"),
+            make_route(&name, &format!("/users/:p{i:03}"), "Exact"),
+        );
+    }
+    let assert_table = |table: &DomainRouteRules, aliases: usize| {
+        let rules = table.hosts.get(&pattern).expect("hostname must remain published");
+        assert_eq!(rules.regex_routes.len(), 1);
+        assert!(rules.regex_routes_engine.is_some());
+        let engine = rules.match_engine.as_ref().unwrap();
+        assert_eq!(engine.buckets_for_test().len(), 4);
+        assert_eq!(engine.ordered_candidates_for_test("/health").len(), 1);
+        assert_eq!(engine.ordered_candidates_for_test("/static/child").len(), 1);
+        let candidates = engine.ordered_candidates_for_test("/users/value");
+        assert_eq!(candidates.len(), aliases);
+        for (i, (_, idx)) in candidates.iter().enumerate() {
+            let path = &engine.paths_for_test()[*idx as usize];
+            assert_eq!(path.normalized, format!("/users/:p{i:03}"));
+            let params = crate::ctx::parse_path_params(&path.normalized, "/users/value");
+            assert_eq!(params.get(&format!("p{i:03}")).map(String::as_str), Some("value"));
+        }
+        assert_eq!(engine.ordered_candidates_for_test("/users/:literal").len(), aliases + 1);
+    };
+    let initial = build_domain_route_rules_from_routes(
+        &data,
+        &DomainRouteRules::new(),
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
+    assert_table(&initial, 255);
+    let key = "default/alias-255".to_string();
+    data.insert(key.clone(), make_route("alias-255", "/users/:p255", "Exact"));
+    let changes = HttpRouteChanges {
+        resource_keys: HashSet::from([key.clone()]),
+        hostnames: HashSet::from([host.to_string()]),
+    };
+    let patched = patch_domain_route_rules(
+        &data,
+        &initial,
+        &changes,
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
+    assert_table(&patched, 256);
+    assert_table(
+        &build_domain_route_rules_from_routes(&data, &initial, &crate::routes::delegation::DelegationSlotTable::new()),
+        256,
+    );
+    data.remove(&key);
+    assert_table(
+        &patch_domain_route_rules(
+            &data,
+            &patched,
+            &changes,
+            &crate::routes::delegation::DelegationSlotTable::new(),
+        ),
+        255,
+    );
+    // Exact and Prefix share indexing structure, but retain consumption policy.
+    data.insert(key, make_route("alias-255", "/users/:p255/", "PathPrefix"));
+    let mixed = patch_domain_route_rules(
+        &data,
+        &initial,
+        &changes,
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
+    assert_table(&mixed, 256);
+    let engine = mixed.hosts.get(&pattern).unwrap().match_engine.as_ref().unwrap();
+    let descendants = engine.ordered_candidates_for_test("/users/value/child");
+    assert_eq!(descendants.len(), 1);
+    assert!(engine.paths_for_test()[descendants[0].1 as usize].is_prefix_match);
+}
+
 /// Routes sharing one hostname whose paths overlap and which differ across
 /// several precedence levels (path length, exact vs prefix, method, header
 /// count, creation timestamp, route name, rule index).
@@ -323,7 +452,7 @@ fn precedence_fixture_units() -> Vec<Arc<HttpRouteRuleUnit>> {
     data.insert(older.key_name(), Arc::new(older));
     data.insert(newer.key_name(), Arc::new(newer));
 
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     let (units, _regex_units) = domain_rules
         .get("rank.example.com")
         .expect("fixture hostname must produce route rules");
@@ -419,7 +548,7 @@ fn tied_candidates_from_a_duplicate_hostname_keep_build_order() {
     let mut data: HashMap<String, Arc<HTTPRoute>> = HashMap::new();
     data.insert(route.key_name(), Arc::new(route));
 
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     let (units, _regex_units) = domain_rules
         .get("dup.example.com")
         .expect("duplicated hostname must still produce route rules");
@@ -538,7 +667,8 @@ fn duplicate_headers_compile_and_deep_match_the_same_canonical_vector() {
                 ]}]),
             );
             let data = HashMap::from([(route.key_name(), Arc::new(route))]);
-            let domains = parse_http_routes_to_domain_rules(&data);
+            let domains =
+                parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
             let (normal, regex) = domains.get("named.example.com").unwrap();
             let units: Vec<_> = normal.iter().chain(regex).collect();
             assert_eq!(units.len(), 2);
@@ -624,7 +754,7 @@ fn named_units(routes: Vec<HTTPRoute>) -> Vec<Arc<HttpRouteRuleUnit>> {
         .into_iter()
         .map(|route| (route.key_name(), Arc::new(route)))
         .collect();
-    parse_http_routes_to_domain_rules(&data)
+    parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new())
         .remove("named.example.com")
         .expect("named fixtures must produce a domain")
         .0
@@ -1172,7 +1302,7 @@ fn build_site_resolves_parent_ref_keys_with_the_route_namespace() {
 
     let mut data = HashMap::new();
     data.insert("route-ns/wiring".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
 
     let (normal, regex) = domain_rules
         .get("test.example.com")
@@ -1217,7 +1347,7 @@ fn resolved_parent_refs_are_shared_across_hostname_buckets() {
 
     let mut data = HashMap::new();
     data.insert("route-ns/multi-host".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
 
     let first_unit_of = |hostname: &str| {
         let (normal, regex) = domain_rules
@@ -1278,7 +1408,7 @@ fn rule_and_metric_handles_share_across_fanout_but_selectors_stay_per_hostname()
 
     let mut data = HashMap::new();
     data.insert("route-ns/shared-rule-state".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     let unit = |hostname: &str, rule_id: usize, match_id: usize| {
         let (normal, regex) = domain_rules
             .get(hostname)
@@ -1336,7 +1466,7 @@ fn rule_and_metric_handles_share_across_fanout_but_selectors_stay_per_hostname()
     assert_eq!(a10.backend_finder.select(), Ok(0));
     assert_eq!(b11.backend_finder.select(), Ok(1));
     assert_eq!(a10.backend_finder.select(), Ok(0));
-    let replacement = parse_http_routes_to_domain_rules(&data);
+    let replacement = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     let new_unit = replacement["a.example.com"]
         .0
         .iter()
@@ -1350,71 +1480,20 @@ fn rule_and_metric_handles_share_across_fanout_but_selectors_stay_per_hostname()
 }
 
 #[test]
-fn test_resolved_rules_compiled_instead_of_spec_rules() {
-    // Delegation contract: when resolved_rules is present the gateway
-    // compiles it INSTEAD of spec.rules.
-    let mut route = build_route_with_two_rules("test-deleg", "flat");
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([
-            { "matches": [{ "path": { "type": "PathPrefix", "value": "/resolved" } }],
-              "backendRefs": [{ "name": "child-svc", "namespace": "test-deleg", "port": 8080 }] }
-        ]))
-        .unwrap(),
-    );
-    for rule in route.spec.resolved_rules.iter_mut().flatten() {
-        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-    }
-    route.pre_parse();
-
-    let mut data = HashMap::new();
-    data.insert("test-deleg/flat".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
-
-    let paths = domain_unit_paths(&domain_rules, "test.example.com");
-    assert_eq!(paths, vec!["/resolved"], "resolved_rules must replace spec.rules");
-}
-
-#[test]
-fn test_invalid_rule_indices_ignored_when_resolved_rules_present() {
-    // invalid_rule_indices refers to spec.rules; a flattened route must
-    // not have its (pre-filtered) resolved_rules dropped by stale indices.
-    let mut route = build_route_with_two_rules("test-deleg-inv", "flat");
-    route.spec.invalid_rule_indices = Some(vec![0]);
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([
-            { "matches": [{ "path": { "type": "PathPrefix", "value": "/r-a" } }],
-              "backendRefs": [{ "name": "svc", "port": 8080 }] },
-            { "matches": [{ "path": { "type": "PathPrefix", "value": "/r-b" } }],
-              "backendRefs": [{ "name": "svc", "port": 8080 }] }
-        ]))
-        .unwrap(),
-    );
-    for rule in route.spec.resolved_rules.iter_mut().flatten() {
-        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-    }
-    route.pre_parse();
-
-    let mut data = HashMap::new();
-    data.insert("test-deleg-inv/flat".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
-    let mut paths = domain_unit_paths(&domain_rules, "test.example.com");
-    paths.sort();
-    assert_eq!(paths, vec!["/r-a", "/r-b"], "indices must not apply to resolved_rules");
-
-    // Control: without resolved_rules the same indices DO drop rule 0.
+fn test_invalid_rule_indices_drop_spec_rules() {
     let mut plain = build_route_with_two_rules("test-deleg-inv", "plain");
     plain.spec.invalid_rule_indices = Some(vec![0]);
     let mut data = HashMap::new();
     data.insert("test-deleg-inv/plain".to_string(), Arc::new(plain));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     let paths = domain_unit_paths(&domain_rules, "test.example.com");
     assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
 }
 
 #[test]
-fn invalid_request_mirror_is_skipped_even_in_resolved_rules() {
+fn invalid_request_mirror_is_skipped_without_controller_status() {
     let mut route = build_route_with_two_rules("test-mirror-validation", "flat");
-    route.spec.resolved_rules = Some(
+    route.spec.rules = Some(
         serde_json::from_value(serde_json::json!([
             {
                 "matches": [{"path": {"type": "PathPrefix", "value": "/invalid"}}],
@@ -1434,20 +1513,17 @@ fn invalid_request_mirror_is_skipped_even_in_resolved_rules() {
         ]))
         .unwrap(),
     );
-    for rule in route.spec.resolved_rules.iter_mut().flatten() {
-        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-    }
     route.pre_parse();
 
     let data = HashMap::from([("test-mirror-validation/flat".to_string(), Arc::new(route))]);
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
     assert_eq!(domain_unit_paths(&domain_rules, "test.example.com"), vec!["/valid"]);
 }
 
 #[test]
 fn credentialed_expose_headers_rejected_before_publication() {
     use serde_json::json;
-    for resolved in [false, true] {
+    {
         let mut route = route_with_paths(
             "cors-expose",
             "route",
@@ -1462,17 +1538,12 @@ fn credentialed_expose_headers_rejected_before_publication() {
                         "exposeHeaders": ["X-Request-Id"]}}]}
             ]),
         );
-        if resolved {
-            route.spec.resolved_rules = route.spec.rules.take();
-            route.spec.invalid_rule_indices = Some(vec![1]);
-        }
-        for rule in route.spec.resolved_rules.iter_mut().flatten() {
-            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-        }
         route.pre_parse();
         assert!(route.status.is_none());
-        let domains =
-            parse_http_routes_to_domain_rules(&HashMap::from([("cors-expose/route".into(), Arc::new(route))]));
+        let domains = parse_http_routes_to_domain_rules(
+            &HashMap::from([("cors-expose/route".into(), Arc::new(route))]),
+            &crate::routes::delegation::DelegationSlotTable::new(),
+        );
         assert_eq!(domain_unit_paths(&domains, "cors.example"), ["/valid"]);
         assert_eq!(domains["cors.example"].0[0].matched_info.rule_id, 1);
     }
@@ -1490,7 +1561,7 @@ fn invalid_native_cors_rejected_before_publication_without_controller_indices() 
         json!({"type": "CORS", "cors": {"maxAge": 2147483648_u32}}),
     ];
     for invalid_filter in invalid_filters {
-        for resolved in [false, true] {
+        {
             let mut route = route_with_paths(
                 "cors-validation",
                 "route",
@@ -1502,17 +1573,12 @@ fn invalid_native_cors_rejected_before_publication_without_controller_indices() 
                         "cors": {"allowOrigins": ["https://app.example"]}}]}
                 ]),
             );
-            if resolved {
-                route.spec.resolved_rules = route.spec.rules.take();
-            }
-            for rule in route.spec.resolved_rules.iter_mut().flatten() {
-                rule.resolved_parent_match =
-                    Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-            }
             route.pre_parse();
             assert!(route.spec.invalid_rule_indices.is_none());
-            let domains =
-                parse_http_routes_to_domain_rules(&HashMap::from([("cors-validation/route".into(), Arc::new(route))]));
+            let domains = parse_http_routes_to_domain_rules(
+                &HashMap::from([("cors-validation/route".into(), Arc::new(route))]),
+                &crate::routes::delegation::DelegationSlotTable::new(),
+            );
             assert_eq!(domain_unit_paths(&domains, "cors.example"), ["/valid"]);
             assert_eq!(domains["cors.example"].0[0].matched_info.rule_id, 1);
         }
@@ -1523,7 +1589,7 @@ fn invalid_native_cors_rejected_before_publication_without_controller_indices() 
 fn invalid_request_transform_is_dropped_without_hiding_valid_siblings() {
     use serde_json::json;
 
-    for resolved in [false, true] {
+    {
         let mut route = route_with_paths(
             "transform-validation",
             "route",
@@ -1540,15 +1606,11 @@ fn invalid_request_transform_is_dropped_without_hiding_valid_siblings() {
                 }
             ]),
         );
-        if resolved {
-            route.spec.resolved_rules = route.spec.rules.take();
-        }
-        for rule in route.spec.resolved_rules.iter_mut().flatten() {
-            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-        }
         route.pre_parse();
-        let domains =
-            parse_http_routes_to_domain_rules(&HashMap::from([("transform-validation/route".into(), Arc::new(route))]));
+        let domains = parse_http_routes_to_domain_rules(
+            &HashMap::from([("transform-validation/route".into(), Arc::new(route))]),
+            &crate::routes::delegation::DelegationSlotTable::new(),
+        );
 
         assert_eq!(domain_unit_paths(&domains, "transform.example"), ["/valid"]);
         assert_eq!(domains["transform.example"].0[0].matched_info.rule_id, 1);
@@ -1556,7 +1618,7 @@ fn invalid_request_transform_is_dropped_without_hiding_valid_siblings() {
 }
 
 #[test]
-fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules() {
+fn backend_cors_scope_rejected_without_controller_status() {
     use serde_json::json;
     let cors = json!({"type": "CORS", "cors": {"allowOrigins": ["https://app.example"]}});
     let rules = json!([
@@ -1573,7 +1635,7 @@ fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules()
         ]},
         {"matches": [{"path": {"value": "/plain"}}], "backendRefs": [{"name": "svc", "port": 80}]}
     ]);
-    for resolved in [false, true] {
+    {
         let mut route = route_with_paths(
             "cors-scope",
             "route",
@@ -1581,21 +1643,13 @@ fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules()
             "2026-09-09T00:00:00Z",
             rules.clone(),
         );
-        if resolved {
-            route.spec.resolved_rules = route.spec.rules.take();
-            // These indices address authored rules, never resolved rules.
-            route.spec.invalid_rule_indices = Some(vec![1, 4]);
-        }
-        for rule in route.spec.resolved_rules.iter_mut().flatten() {
-            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-        }
         route.pre_parse();
         assert!(route.status.is_none());
         let data = HashMap::from([("cors-scope/route".to_string(), Arc::new(route))]);
-        let domains = parse_http_routes_to_domain_rules(&data);
+        let domains = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
         let mut paths = domain_unit_paths(&domains, "cors.example");
         paths.sort();
-        assert_eq!(paths, ["/plain", "/rule-only"], "resolved={resolved}");
+        assert_eq!(paths, ["/plain", "/rule-only"]);
         let (normal, regex) = domains.get("cors.example").unwrap();
         let mut ids: Vec<_> = normal
             .iter()
@@ -1626,7 +1680,7 @@ fn http_route_log_label_annotation_does_not_reach_match_info() {
 
     let mut data = HashMap::new();
     data.insert("test-log-label/labeled".to_string(), Arc::new(route));
-    let domain_rules = parse_http_routes_to_domain_rules(&data);
+    let domain_rules = parse_http_routes_to_domain_rules(&data, &crate::routes::delegation::DelegationSlotTable::new());
 
     let (normal, regex) = domain_rules.get("test.example.com").expect("domain must be present");
     let unit = normal
@@ -1844,7 +1898,11 @@ fn test_built_unit_carries_route_arc() {
     let mut data = std::collections::HashMap::new();
     data.insert(route_key.to_string(), route.clone());
 
-    let table = build_domain_route_rules_from_routes(&data, &DomainRouteRules::new());
+    let table = build_domain_route_rules_from_routes(
+        &data,
+        &DomainRouteRules::new(),
+        &crate::routes::delegation::DelegationSlotTable::new(),
+    );
     // build_route_with_extension_ref declares the test.example.com hostname group.
     let rules = table
         .hosts
@@ -1869,7 +1927,10 @@ fn long_kubernetes_route_owner_compiles_backend_rules_without_losing_attribution
         let name = "a".repeat(length);
         let route = build_route_with_two_rules("route-ns", &name);
         let key = format!("route-ns/{name}");
-        let domain_rules = parse_http_routes_to_domain_rules(&HashMap::from([(key.clone(), Arc::new(route))]));
+        let domain_rules = parse_http_routes_to_domain_rules(
+            &HashMap::from([(key.clone(), Arc::new(route))]),
+            &crate::routes::delegation::DelegationSlotTable::new(),
+        );
         if length > 253 {
             assert!(domain_rules.is_empty());
             continue;
@@ -1898,7 +1959,7 @@ fn compiled_http_empty_backend_selector_retains_no_backend_error() {
 #[test]
 fn session_lifetime_publication_retains_old_generation() {
     use crate::EdgionHttpContext;
-    for resolved in [false, true] {
+    {
         let managers = GlobalHttpRouteManagers::new();
         let listener = ListenerKey("127.0.0.1:19379/HTTP".into());
         let key = "default/session-reload".to_string();
@@ -1911,13 +1972,6 @@ fn session_lifetime_publication_retains_old_generation() {
                 serde_json::json!([{"sessionPersistence": {"absoluteTimeout": timeout}}]),
             );
             route.spec.resolved_listeners = Some(vec![listener.clone()]);
-            if resolved {
-                route.spec.resolved_rules = route.spec.rules.clone();
-            }
-            for rule in route.spec.resolved_rules.iter_mut().flatten() {
-                rule.resolved_parent_match =
-                    Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
-            }
             route.pre_parse();
             Arc::new(route)
         };
@@ -1976,146 +2030,5 @@ fn session_lifetime_publication_retains_old_generation() {
                 .session_persistence_ttl_secs,
             Some(7)
         );
-    }
-}
-
-#[test]
-fn arch156_malformed_parent_scope_withdraws_rule_and_clean_update_recovers() {
-    let mut route = build_route_with_two_rules("scope-validation", "parent");
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([
-            {"matches": [{"path": {"type": "RegularExpression", "value": "^/api"}}]},
-            {"matches": [{"path": {"value": "/sibling"}}], "resolvedParentMatch": {"kind": "direct"}}
-        ]))
-        .unwrap(),
-    );
-    for metadata in [
-        serde_json::Value::Null,
-        serde_json::json!({"kind": "delegated", "matches": []}),
-        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": []}]}),
-        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": ["relative"]}]}),
-        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": vec!["/api"; 9]}]}),
-    ] {
-        route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match =
-            serde_json::from_value(metadata).unwrap();
-        route.pre_parse();
-        let data = HashMap::from([("scope-validation/parent".into(), Arc::new(route.clone()))]);
-        let domains = parse_http_routes_to_domain_rules(&data);
-        assert_eq!(domain_unit_paths(&domains, "test.example.com"), ["/sibling"]);
-        assert!(domains["test.example.com"].1.is_empty());
-    }
-    route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match = serde_json::from_value(serde_json::json!({
-        "kind": "delegated", "matches": [{"rawPathPrefixes": ["/api"]}]
-    }))
-    .unwrap();
-    route.pre_parse();
-    let domains =
-        parse_http_routes_to_domain_rules(&HashMap::from([("scope-validation/parent".into(), Arc::new(route))]));
-    assert_eq!(domains["test.example.com"].1.len(), 1);
-    assert!(domains["test.example.com"].1[0].parent_match.is_some());
-    assert_eq!(domains["test.example.com"].0.len(), 1);
-}
-
-#[tokio::test]
-async fn arch156_radix_candidates_preserve_parent_and_nonpath_branch_pairing() {
-    use crate::ctx::{EdgionHttpContext, NormalizedHostname};
-    use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
-    use tokio::io::AsyncWriteExt;
-    let publisher = PluginPublisher::new();
-    let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
-        "metadata": {"namespace": "default", "name": "gw"},
-        "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 8080, "protocol": "HTTP"}]}
-    }))
-    .unwrap();
-    publisher.replace_gateways(HashMap::from([(
-        "default/gw".into(),
-        GatewayInput::from_gateway(&gateway),
-    )]));
-    let publication = publisher.snapshot();
-    let key = ListenerKey::new("0.0.0.0:8080".parse().unwrap(), "HTTP");
-    let index = publication.listener_index(&key).unwrap();
-    let mut route = route_with_paths(
-        "default",
-        "parent",
-        vec!["example.com"],
-        "2026-09-20T00:00:00Z",
-        serde_json::json!([]),
-    );
-    route.spec.parent_refs = serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap();
-    route.spec.resolved_rules = serde_json::from_value(serde_json::json!([
-        {"matches": [
-            {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "a"}], "queryParams": [{"name": "v", "value": "1"}]},
-            {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "b"}], "queryParams": [{"name": "v", "value": "1"}]}
-        ], "resolvedParentMatch": {"kind": "delegated", "matches": [
-            {"rawPathPrefixes": ["/api", "/api/a"]}, {"rawPathPrefixes": ["/api", "/api/b"]}
-        ]}},
-        {"matches": [{"path": {"value": "/api"}}], "resolvedParentMatch": {"kind": "direct"}}
-    ])).unwrap();
-    route.spec.current_status = None;
-    let mut route = crate::test_current_status::processed(route);
-    route.pre_parse();
-    let domains = parse_http_routes_to_domain_rules(&HashMap::from([("default/parent".into(), Arc::new(route))]));
-    let units = domains["example.com"].0.clone();
-    let engine = RadixRouteMatchEngine::build(units).unwrap();
-    for (path, tenant, query, expected_rule, expected_match) in [
-        ("/api/a", "a", "v=1", 0, 0),
-        ("/api/b", "b", "v=1", 0, 1),
-        ("/api/a", "b", "v=1", 1, 0),
-        ("/api/b", "a", "v=1", 1, 0),
-        ("/api/a", "a", "v=2", 1, 0),
-        ("/api/c", "a", "v=1", 1, 0),
-    ] {
-        let (mut client, server) = tokio::io::duplex(1024);
-        client
-            .write_all(
-                format!("GET {path}?{query} HTTP/1.1\r\nHost: example.com\r\nx-tenant: {tenant}\r\n\r\n").as_bytes(),
-            )
-            .await
-            .unwrap();
-        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
-        assert!(session.read_request().await.unwrap());
-        let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.normalized_current_path = path.into();
-        ctx.request_info.hostname = NormalizedHostname::new("example.com");
-        ctx.request_query.capture(Some(query.into())).unwrap();
-        let selected = engine.match_route(&mut session, &ctx, index).unwrap();
-        assert_eq!(
-            selected.route_unit.matched_info.rule_id, expected_rule,
-            "{path} {tenant} {query}"
-        );
-        assert_eq!(selected.route_unit.matched_info.match_id, expected_match);
-    }
-}
-
-#[test]
-fn arch156_guard_elision_preserves_mixed_match_indices() {
-    let mut route = route_with_paths(
-        "default",
-        "parent",
-        vec!["example.com"],
-        "2026-09-20T00:00:00Z",
-        serde_json::json!([]),
-    );
-    route.spec.resolved_rules = serde_json::from_value(serde_json::json!([{
-        "matches": [
-            {"path": {"type": "Exact", "value": "/api/a"}},
-            {"path": {"type": "PathPrefix", "value": "/api/:tenant"}},
-            {"path": {"type": "PathPrefix", "value": "/api/c"}}
-        ],
-        "resolvedParentMatch": {"kind": "delegated", "matches": [
-            {"rawPathPrefixes": ["/api/a"]},
-            {"rawPathPrefixes": ["/api/b"]},
-            {"rawPathPrefixes": ["/api/c"]}
-        ]}
-    }]))
-    .unwrap();
-    route.spec.current_status = None;
-    let mut route = crate::test_current_status::processed(route);
-    route.pre_parse();
-    let domains = parse_http_routes_to_domain_rules(&HashMap::from([("default/parent".into(), Arc::new(route))]));
-    let units = &domains["example.com"].0;
-    assert_eq!(units.len(), 3);
-    for unit in units {
-        assert_eq!(unit.parent_match.is_some(), unit.matched_info.match_id == 1);
     }
 }

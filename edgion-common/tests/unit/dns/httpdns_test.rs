@@ -1,4 +1,110 @@
 use super::*;
+
+struct TypedFetcher {
+    v4: &'static str,
+    v6: &'static str,
+}
+
+#[async_trait::async_trait]
+impl HttpDnsFetcher for TypedFetcher {
+    async fn get(&self, url: &str) -> Result<String, DnsError> {
+        Ok(if url.ends_with("=AAAA") { self.v6 } else { self.v4 }.to_owned())
+    }
+}
+
+#[tokio::test]
+async fn complete_dual_answer_distinguishes_empty_from_failed_family() {
+    let cfg = generic(
+        "https://dns.test/?host={domain}&type={recordType}",
+        HttpDnsResponseFormat::default(),
+    );
+    let policy = DnsQueryPolicy::Family(DnsLookupFamily::All);
+    let fetcher = TypedFetcher {
+        v4: r#"{"ips":["192.0.2.1"]}"#,
+        v6: r#"{"ips":[]}"#,
+    };
+    assert_eq!(
+        resolve_http_dns_with(&fetcher, &cfg, "backend.test", policy)
+            .await
+            .unwrap(),
+        vec!["192.0.2.1".parse::<IpAddr>().unwrap()]
+    );
+    for v6 in [
+        r#"{"ips":["bad"]}"#,
+        "{}",
+        r#"{"ips":["192.0.2.2"]}"#,
+        r#"{"ips":[null]}"#,
+    ] {
+        assert!(
+            resolve_http_dns_with(&TypedFetcher { v6, ..fetcher }, &cfg, "backend.test", policy)
+                .await
+                .is_err()
+        );
+    }
+    let both = TypedFetcher {
+        v4: r#"{"ips":[]}"#,
+        v6: r#"{"ips":""}"#,
+    };
+    assert!(matches!(
+        resolve_http_dns_with(&both, &cfg, "backend.test", policy).await,
+        Err(DnsError::NoAddresses)
+    ));
+}
+
+#[test]
+fn complete_parser_rejects_overflow_and_canonicalizes_before_dedup() {
+    let response = PreparedResponse::from_format(&HttpDnsResponseFormat::default());
+    let ips: Vec<_> = (0..257).map(|n| format!("2001:db8::{n:x}")).collect();
+    let body = serde_json::json!({"ips": ips}).to_string();
+    assert!(response.parse_complete(&body).is_err());
+    assert_eq!(
+        response
+            .parse_complete(r#"{"ips":["192.0.2.1","::ffff:192.0.2.1"]}"#)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn preset_ipv6_does_not_query_unverified_vendor_url() {
+    let cfg = preset_cfg(HttpDnsPreset::Aliyun);
+    let fetcher = FixedBodyFetcher(r#"{"ips":["2001:db8::1"]}"#);
+    assert!(resolve_http_dns_with(
+        &fetcher,
+        &cfg,
+        "backend.test",
+        DnsQueryPolicy::Family(DnsLookupFamily::Ipv6Only)
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn fallback_preserves_family_for_literal() {
+    let mut cfg = generic("https://dns.test/{domain}", HttpDnsResponseFormat::default());
+    cfg.fallback = HttpDnsFallback::System;
+    assert!(resolve_http_dns_with(
+        &FailingFetcher,
+        &cfg,
+        "127.0.0.1",
+        DnsQueryPolicy::Family(DnsLookupFamily::Ipv6Only)
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        resolve_http_dns_with(
+            &FailingFetcher,
+            &cfg,
+            "127.0.0.1",
+            DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only)
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+}
 use edgion_resources::resources::link_sys::httpdns::{
     HttpDnsBodyKind, HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
 };
@@ -330,9 +436,13 @@ fn candidate_parsing_preserves_legacy_results_and_consumption() {
 
 #[tokio::test]
 async fn apply_fallback_empty_dns_servers_errors_directly() {
-    let err = apply_fallback(&HttpDnsFallback::Dns { servers: vec![] }, "example.com")
-        .await
-        .unwrap_err();
+    let err = apply_fallback(
+        &HttpDnsFallback::Dns { servers: vec![] },
+        "example.com",
+        DnsQueryPolicy::Native,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(err, DnsError::NoAddresses);
 }
 
@@ -340,7 +450,7 @@ async fn apply_fallback_empty_dns_servers_errors_directly() {
 async fn fetch_failure_empty_dns_fallback_servers_errors() {
     let mut cfg = generic("https://h/d?host={domain}", HttpDnsResponseFormat::default());
     cfg.fallback = HttpDnsFallback::Dns { servers: vec![] };
-    let err = resolve_http_dns_with(&FailingFetcher, &cfg, "example.com")
+    let err = resolve_http_dns_with(&FailingFetcher, &cfg, "example.com", crate::dns::DnsQueryPolicy::Native)
         .await
         .unwrap_err();
     // The primary failure (fetch error) is what surfaces, since the fallback
@@ -362,14 +472,20 @@ impl HttpDnsFetcher for FailingFetcher {
 async fn fetch_failure_uses_system_fallback() {
     let mut cfg = generic("https://h/d?host={domain}", HttpDnsResponseFormat::default());
     cfg.fallback = HttpDnsFallback::System;
-    let ips = resolve_http_dns_with(&FailingFetcher, &cfg, "localhost").await.unwrap();
+    let ips = resolve_http_dns_with(&FailingFetcher, &cfg, "localhost", crate::dns::DnsQueryPolicy::Native)
+        .await
+        .unwrap();
     assert!(ips.iter().any(|ip| ip.is_loopback()));
 }
 
 #[tokio::test]
 async fn fetch_failure_none_fallback_errors() {
     let cfg = generic("https://h/d?host={domain}", HttpDnsResponseFormat::default());
-    assert!(resolve_http_dns_with(&FailingFetcher, &cfg, "localhost").await.is_err());
+    assert!(
+        resolve_http_dns_with(&FailingFetcher, &cfg, "localhost", crate::dns::DnsQueryPolicy::Native)
+            .await
+            .is_err()
+    );
 }
 
 // ---- preset drives BOTH url template AND response format ----
@@ -421,7 +537,9 @@ async fn preset_plus_url_template_uses_custom_url_and_preset_format() {
     // Body is Aliyun-shaped JSON; the preset format (not the delimited user
     // `response`) must parse it.
     let fetcher = FixedBodyFetcher(r#"{"host":"api.example.com","ips":["93.184.216.34"],"ttl":30}"#);
-    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com", crate::dns::DnsQueryPolicy::Native)
+        .await
+        .unwrap();
     assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
 }
 
@@ -431,7 +549,9 @@ async fn aliyun_preset_parses_json_ips_ignoring_user_response() {
     // Aliyun shape: JSON with an `ips` array. The user `response` (delimited `|`)
     // must be ignored in favor of the preset's JSON format.
     let fetcher = FixedBodyFetcher(r#"{"host":"api.example.com","ips":["93.184.216.34"],"ttl":30}"#);
-    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com", crate::dns::DnsQueryPolicy::Native)
+        .await
+        .unwrap();
     assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
 }
 
@@ -440,7 +560,9 @@ async fn tencent_preset_parses_semicolon_delimited_ignoring_user_response() {
     let cfg = preset_cfg(HttpDnsPreset::Tencent);
     // Tencent DNSPod shape: semicolon-delimited plaintext.
     let fetcher = FixedBodyFetcher("1.2.3.4;5.6.7.8");
-    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+    let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com", crate::dns::DnsQueryPolicy::Native)
+        .await
+        .unwrap();
     assert_eq!(
         ips,
         vec![
@@ -506,4 +628,56 @@ fn prepared_response_keeps_branch_local_delimiter_checks_and_error_order() {
     ] {
         assert!(matches!(response.parse(body), Err(DnsError::Parse(message)) if message == expected));
     }
+}
+
+#[tokio::test]
+async fn complete_query_rejects_merged_overflow_and_overflow_before_family_filter() {
+    struct ManyAddresses;
+    #[async_trait::async_trait]
+    impl HttpDnsFetcher for ManyAddresses {
+        async fn get(&self, url: &str) -> Result<String, DnsError> {
+            let ips: Vec<String> = if url.ends_with("=A") {
+                (1..=128).map(|i| format!("192.0.2.{i}")).collect()
+            } else {
+                (1..=256)
+                    .map(|i| format!("2001:db8::{i:x}"))
+                    .chain(std::iter::once("192.0.2.1".into()))
+                    .collect()
+            };
+            Ok(serde_json::json!({"ips":ips}).to_string())
+        }
+    }
+    let combined = generic("https://dns.test/{domain}", HttpDnsResponseFormat::default());
+    assert!(resolve_http_dns_with(
+        &ManyAddresses,
+        &combined,
+        "backend.test",
+        DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only)
+    )
+    .await
+    .is_err());
+    struct MergedOverflow;
+    #[async_trait::async_trait]
+    impl HttpDnsFetcher for MergedOverflow {
+        async fn get(&self, url: &str) -> Result<String, DnsError> {
+            let ips: Vec<String> = if url.ends_with("=A") {
+                (1..=128).map(|i| format!("192.0.2.{i}")).collect()
+            } else {
+                (1..=129).map(|i| format!("2001:db8::{i:x}")).collect()
+            };
+            Ok(serde_json::json!({"ips":ips}).to_string())
+        }
+    }
+    let typed = generic(
+        "https://dns.test/{domain}?type={recordType}",
+        HttpDnsResponseFormat::default(),
+    );
+    assert!(resolve_http_dns_with(
+        &MergedOverflow,
+        &typed,
+        "backend.test",
+        DnsQueryPolicy::Family(DnsLookupFamily::All)
+    )
+    .await
+    .is_err());
 }

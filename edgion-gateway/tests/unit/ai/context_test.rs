@@ -183,6 +183,20 @@ fn ordinary_context_size_stays_within_budget() {
 }
 
 #[test]
+fn context_size_under_budget() {
+    // The delegated chain is one nullable box: 8 bytes inline, no allocation
+    // and `None` for every ordinary request.
+    assert_eq!(
+        std::mem::size_of::<Option<Box<crate::routes::delegation::DelegatedMatch>>>(),
+        std::mem::size_of::<usize>()
+    );
+    let ctx = EdgionHttpContext::new();
+    assert!(ctx.delegated.is_none());
+    let actual = std::mem::size_of::<EdgionHttpContext>();
+    assert!(actual < 1800, "EdgionHttpContext size {actual} must remain below 1800");
+}
+
+#[test]
 #[cfg(target_pointer_width = "64")]
 fn ordinary_context_construction_is_allocation_free() {
     // Snapshot initialization is startup work; measure the production request constructor.

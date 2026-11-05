@@ -31,8 +31,13 @@ fn render_unknown_config_fields_metric() -> String {
         let recorder = binding.as_ref().unwrap();
         recorder.with(sample_unknown_config_fields_metric);
         let rendered = recorder.render();
+        // The Prometheus exporter emits a family's series in HashMap order,
+        // which varies per scrape; series identity is the label set, not the
+        // line position, so normalize order before comparing.
+        let mut lines: Vec<&str> = rendered.lines().filter(|line| line.contains(METRIC_NAME)).collect();
+        lines.sort_unstable();
         let mut output = String::new();
-        for line in rendered.lines().filter(|line| line.contains(METRIC_NAME)) {
+        for line in lines {
             output.push_str(&line.replace("service=\"test\",", ""));
             output.push('\n');
         }

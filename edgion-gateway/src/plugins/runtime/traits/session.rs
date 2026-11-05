@@ -305,6 +305,14 @@ pub trait PluginSession: Send + Sync {
     /// selector/key is unknown.
     fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String>;
 
+    /// The HTTP rule unit whose plugin runtime is executing: a delegated-chain
+    /// ancestor while that level runs, otherwise the matched (leaf) unit.
+    /// Level-scoped filters (URL rewrite / redirect prefix replacement) read
+    /// their own level's match through this.
+    // Mockall needs an explicit lifetime for an optional borrowed return value.
+    #[allow(clippy::needless_lifetimes)]
+    fn executing_http_route_unit<'s>(&'s self) -> Option<&'s crate::routes::http::HttpRouteRuleUnit>;
+
     async fn write_response_header(
         &mut self,
         resp: Box<ResponseHeader>,

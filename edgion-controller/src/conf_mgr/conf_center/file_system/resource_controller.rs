@@ -21,6 +21,7 @@ use crate::conf_mgr::conf_center::common::{
     clear_runtime_invalid, get_runtime_invalid, parse_resource_content_offline, store_runtime_invalid,
     RuntimeInvalidEnvelopes,
 };
+use crate::conf_mgr::conf_center::non_kube_common::LocalTaskScope;
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
@@ -36,6 +37,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio_util::task::AbortOnDropHandle;
 
 /// FileSystemResourceController - handles events for a single resource type
 pub struct FileSystemResourceController<K>
@@ -52,6 +54,7 @@ where
     registry: Arc<PathRegistry>,
     event_rx: KindEventReceiver,
     shutdown_signal: Option<ShutdownSignal>,
+    scope: LocalTaskScope,
     /// Raw store shared with processor for cross-resource key lookups.
     fs_raw_store: Arc<LocalRawStore<K>>,
     invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
@@ -82,6 +85,7 @@ where
             registry,
             event_rx,
             shutdown_signal: None,
+            scope: LocalTaskScope::default(),
             fs_raw_store,
             invalid_envelopes: Arc::new(RuntimeInvalidEnvelopes::default()),
         }
@@ -90,6 +94,11 @@ where
     /// Set shutdown signal
     pub fn with_shutdown(mut self, signal: ShutdownSignal) -> Self {
         self.shutdown_signal = Some(signal);
+        self
+    }
+
+    pub(super) fn with_scope(mut self, scope: LocalTaskScope) -> Self {
+        self.scope = scope;
         self
     }
 
@@ -107,7 +116,7 @@ where
         let mut init_done = false;
         let mut init_count: usize = 0;
         let mut init_timer: Option<InitSyncTimer> = None;
-        let mut worker_handle: Option<JoinHandle<()>> = None;
+        let mut worker_handle: Option<AbortOnDropHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
         // Status handler for init phase. Registry-aware so `.yaml.status` writes
@@ -299,7 +308,7 @@ where
                             init_done = true;
 
                             // Spawn worker for runtime phase
-                            worker_handle = Some(spawn_worker(
+                            worker_handle = Some(AbortOnDropHandle::new(spawn_worker(
                                 self.processor.clone(),
                                 self.conf_dir.clone(),
                                 self.registry.clone(),
@@ -307,7 +316,8 @@ where
                                 self.shutdown_signal.clone(),
                                 self.fs_raw_store.clone(),
                                 self.invalid_envelopes.clone(),
-                            ));
+                                &self.scope,
+                            )));
 
                             tracing::info!(
                                 component = "fs_resource_controller",
@@ -517,14 +527,14 @@ where
         }
 
         // Wait for worker task to finish
-        if let Some(handle) = worker_handle {
+        if let Some(mut handle) = worker_handle {
             tracing::info!(
                 component = "fs_resource_controller",
                 kind = kind,
                 "Waiting for worker task to finish..."
             );
 
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+            match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
                 Ok(Ok(())) => {
                     tracing::info!(
                         component = "fs_resource_controller",
@@ -541,6 +551,8 @@ where
                     );
                 }
                 Err(_) => {
+                    handle.abort();
+                    let _ = handle.await;
                     tracing::warn!(
                         component = "fs_resource_controller",
                         kind = kind,
@@ -561,6 +573,7 @@ where
 }
 
 /// Spawn worker task for processing workqueue items
+#[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     conf_dir: PathBuf,
@@ -569,6 +582,7 @@ fn spawn_worker<K>(
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
     invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
+    scope: &LocalTaskScope,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -576,307 +590,317 @@ where
     let workqueue = processor.workqueue();
     let status_handler = FileSystemStatusHandler::new(conf_dir.clone()).with_registry(registry.clone());
 
-    tokio::spawn(async move {
-        // Clone shutdown_signal once outside the loop
-        let mut shutdown = shutdown_signal;
+    let cancel = scope.cancel.clone();
+    scope.tracker.spawn(async move {
+        let processing = async {
+            // Clone shutdown_signal once outside the loop
+            let mut shutdown = shutdown_signal;
 
-        loop {
-            let item = match &mut shutdown {
-                Some(signal) => {
-                    tokio::select! {
-                        item = workqueue.dequeue() => item,
-                        _ = signal.wait() => {
-                            tracing::info!(
-                                component = "fs_resource_controller",
-                                kind = kind,
-                                "Worker received shutdown signal"
-                            );
-                            break;
+            loop {
+                let item = match &mut shutdown {
+                    Some(signal) => {
+                        tokio::select! {
+                            item = workqueue.dequeue() => item,
+                            _ = signal.wait() => {
+                                tracing::info!(
+                                    component = "fs_resource_controller",
+                                    kind = kind,
+                                    "Worker received shutdown signal"
+                                );
+                                break;
+                            }
                         }
                     }
-                }
-                None => workqueue.dequeue().await,
-            };
+                    None => workqueue.dequeue().await,
+                };
 
-            match item {
-                Some(work_item) => {
-                    if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
-                        // The sole worker owns both revocation and status
-                        // publication. Do not route the Deleted result through
-                        // the ordinary delete-status arm: ParseError must stay
-                        // visible until a valid repair clears the envelope.
-                        let _ = processor
-                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
-                            .await;
-                        if let Err(e) = status_handler
-                            .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
-                            .await
-                        {
-                            tracing::warn!(
-                                component = "fs_resource_controller",
-                                kind = kind,
-                                key = %work_item.key,
-                                error = %e,
-                                "Failed to persist invalid-resource status"
-                            );
-                        }
-                        workqueue.done(&work_item.key);
-                        continue;
-                    }
-                    // For FileSystem mode we re-read the spec from disk. The
-                    // canonical path lives in `PathRegistry` (winner of this
-                    // (kind, key)); we fall back to the default nested layout
-                    // only when the registry has no record — which mainly
-                    // happens for keys that were enqueued but whose Create
-                    // event the watcher hasn't yet observed.
-                    let rkey = ResourceKey::new(kind.to_string(), work_item.key.clone());
-                    let path = registry
-                        .winner_of(&rkey)
-                        .unwrap_or_else(|| build_resource_path_from_key(&conf_dir, kind, &work_item.key));
-
-                    let (store_obj, parse_error) = if path.exists() {
-                        match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => match parse_resource_content_offline::<K>(&content) {
-                                Ok(obj) => {
-                                    // Guard the same content/filename identity invariant the
-                                    // main loop enforces. The worker re-reads the registry-winner
-                                    // file for `work_item.key`, but the file content could have
-                                    // drifted to a different metadata.name/namespace between enqueue
-                                    // and dequeue (a narrow race the main-loop reject can't cover for
-                                    // an already-queued item). Applying it under the stale work key
-                                    // would reintroduce the drift, so reject and surface an error
-                                    // status instead.
-                                    let content_key = make_resource_key(&obj);
-                                    if content_key != work_item.key {
-                                        let message = format!(
-                                            "file content identity '{content_key}' does not match work key \
-                                             '{}'; in FileSystem mode the filename is authoritative — rename \
-                                             the file or revert metadata.name/namespace to '{}'",
-                                            work_item.key, work_item.key
-                                        );
-                                        fs_raw_store.remove(&work_item.key);
-                                        store_runtime_invalid(
-                                            &invalid_envelopes,
-                                            work_item.key.clone(),
-                                            "IdentityMismatch",
-                                            message.clone(),
-                                        );
-                                        let _ = processor
-                                            .process_work_item(
-                                                &work_item.key,
-                                                None,
-                                                None,
-                                                work_item.trigger_chain.clone(),
-                                            )
-                                            .await;
-                                        if let Err(e) = status_handler
-                                            .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                component = "fs_resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to write identity-mismatch error status"
-                                            );
-                                        }
-                                        tracing::warn!(
-                                            component = "fs_resource_controller",
-                                            kind = kind,
-                                            key = %work_item.key,
-                                            content_key = %content_key,
-                                            "Worker rejected resource: content identity does not match work key"
-                                        );
-                                        workqueue.done(&work_item.key);
-                                        continue;
-                                    }
-                                    // Keep raw store in sync with the latest file version.
-                                    // The main loop upserts on Apply events, but the worker
-                                    // re-reads the file (possibly a newer version), so we
-                                    // update here to stay consistent.
-                                    fs_raw_store.upsert(work_item.key.clone(), Arc::new(obj.clone()));
-                                    clear_runtime_invalid(&invalid_envelopes, &work_item.key);
-                                    (Some(obj), None)
-                                }
-                                Err(e) => {
-                                    let error_msg = e.to_string();
-                                    fs_raw_store.remove(&work_item.key);
-                                    store_runtime_invalid(
-                                        &invalid_envelopes,
-                                        work_item.key.clone(),
-                                        "ParseError",
-                                        error_msg.clone(),
-                                    );
-                                    tracing::warn!(
-                                        component = "fs_resource_controller",
-                                        kind = kind,
-                                        key = %work_item.key,
-                                        error = %error_msg,
-                                        "Failed to parse file"
-                                    );
-                                    (None, Some(error_msg))
-                                }
-                            },
-                            Err(e) => {
-                                fs_raw_store.remove(&work_item.key);
-                                let error_msg = e.to_string();
+                match item {
+                    Some(work_item) => {
+                        if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
+                            // The sole worker owns both revocation and status
+                            // publication. Do not route the Deleted result through
+                            // the ordinary delete-status arm: ParseError must stay
+                            // visible until a valid repair clears the envelope.
+                            let _ = processor
+                                .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                                .await;
+                            if let Err(e) = status_handler
+                                .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
+                                .await
+                            {
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,
                                     key = %work_item.key,
-                                    error = %error_msg,
-                                    "Failed to read file"
+                                    error = %e,
+                                    "Failed to persist invalid-resource status"
                                 );
-                                (None, Some(error_msg))
                             }
+                            workqueue.done(&work_item.key);
+                            continue;
                         }
-                    } else {
-                        // File no longer exists — resource was deleted.
-                        // Remove from raw store in case the main-loop Delete event
-                        // was missed (e.g. channel lagged).
-                        fs_raw_store.remove(&work_item.key);
-                        (None, None)
-                    };
+                        // For FileSystem mode we re-read the spec from disk. The
+                        // canonical path lives in `PathRegistry` (winner of this
+                        // (kind, key)); we fall back to the default nested layout
+                        // only when the registry has no record — which mainly
+                        // happens for keys that were enqueued but whose Create
+                        // event the watcher hasn't yet observed.
+                        let rkey = ResourceKey::new(kind.to_string(), work_item.key.clone());
+                        let path = registry
+                            .winner_of(&rkey)
+                            .unwrap_or_else(|| build_resource_path_from_key(&conf_dir, kind, &work_item.key));
 
-                    // Handle parse errors by writing error status
-                    if let Some(error_msg) = parse_error {
-                        let _ = processor
-                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
-                            .await;
-                        if let Err(e) = status_handler
-                            .write_error_status(kind, &work_item.key, "ParseError", &error_msg)
-                            .await
-                        {
-                            tracing::warn!(
-                                component = "fs_resource_controller",
-                                kind = kind,
-                                key = %work_item.key,
-                                error = %e,
-                                "Failed to write error status"
-                            );
-                        }
-                        workqueue.done(&work_item.key);
-                        continue;
-                    }
-
-                    // Read existing status only when there is a store object to
-                    // process; the delete/skip arms never consume it, and a
-                    // delete must not pay a status read.
-                    let existing_status_json = if store_obj.is_some() {
-                        status_handler.read_status_json(kind, &work_item.key).await
-                    } else {
-                        None
-                    };
-                    // A resource that produces no status of its own cannot
-                    // overwrite the sidecar a previous failure left behind, so
-                    // remember whether one is present before it is consumed.
-                    let had_error_sidecar = existing_status_json
-                        .as_deref()
-                        .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
-
-                    // Use processor's process_work_item which handles the reconciliation logic
-                    let result = processor
-                        .process_work_item(
-                            &work_item.key,
-                            store_obj,
-                            existing_status_json,
-                            work_item.trigger_chain.clone(),
-                        )
-                        .await;
-
-                    // Persist status based on result
-                    match result {
-                        WorkItemResult::Processed {
-                            obj,
-                            status_changed,
-                            persisted_status,
-                        } => {
-                            if status_changed {
-                                match extract_status_value(&obj) {
-                                    Some(status_value) => {
-                                        match status_handler
-                                            .write_status_value(kind, &work_item.key, &status_value)
-                                            .await
-                                        {
-                                            Ok(()) => {
-                                                crate::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
-                                                tracing::info!(
-                                                    component = "fs_resource_controller",
-                                                    kind = kind,
-                                                    key = %work_item.key,
-                                                    "Persisted status to filesystem"
-                                                );
-                                            }
-                                            Err(e) => {
-                                                crate::conf_mgr::sync_runtime::record_status_write_error(
-                                                    kind,
-                                                    "filesystem",
-                                                );
+                        let (store_obj, parse_error) = if path.exists() {
+                            match tokio::fs::read_to_string(&path).await {
+                                Ok(content) => match parse_resource_content_offline::<K>(&content) {
+                                    Ok(obj) => {
+                                        // Guard the same content/filename identity invariant the
+                                        // main loop enforces. The worker re-reads the registry-winner
+                                        // file for `work_item.key`, but the file content could have
+                                        // drifted to a different metadata.name/namespace between enqueue
+                                        // and dequeue (a narrow race the main-loop reject can't cover for
+                                        // an already-queued item). Applying it under the stale work key
+                                        // would reintroduce the drift, so reject and surface an error
+                                        // status instead.
+                                        let content_key = make_resource_key(&obj);
+                                        if content_key != work_item.key {
+                                            let message = format!(
+                                                "file content identity '{content_key}' does not match work key \
+                                             '{}'; in FileSystem mode the filename is authoritative — rename \
+                                             the file or revert metadata.name/namespace to '{}'",
+                                                work_item.key, work_item.key
+                                            );
+                                            fs_raw_store.remove(&work_item.key);
+                                            store_runtime_invalid(
+                                                &invalid_envelopes,
+                                                work_item.key.clone(),
+                                                "IdentityMismatch",
+                                                message.clone(),
+                                            );
+                                            let _ = processor
+                                                .process_work_item(
+                                                    &work_item.key,
+                                                    None,
+                                                    None,
+                                                    work_item.trigger_chain.clone(),
+                                                )
+                                                .await;
+                                            if let Err(e) = status_handler
+                                                .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
+                                                .await
+                                            {
                                                 tracing::warn!(
                                                     component = "fs_resource_controller",
                                                     kind = kind,
                                                     key = %work_item.key,
                                                     error = %e,
-                                                    "Failed to write status file"
+                                                    "Failed to write identity-mismatch error status"
                                                 );
                                             }
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                content_key = %content_key,
+                                                "Worker rejected resource: content identity does not match work key"
+                                            );
+                                            workqueue.done(&work_item.key);
+                                            continue;
                                         }
+                                        // Keep raw store in sync with the latest file version.
+                                        // The main loop upserts on Apply events, but the worker
+                                        // re-reads the file (possibly a newer version), so we
+                                        // update here to stay consistent.
+                                        fs_raw_store.upsert(work_item.key.clone(), Arc::new(obj.clone()));
+                                        clear_runtime_invalid(&invalid_envelopes, &work_item.key);
+                                        (Some(obj), None)
                                     }
-                                    None => {
+                                    Err(e) => {
+                                        let error_msg = e.to_string();
+                                        fs_raw_store.remove(&work_item.key);
+                                        store_runtime_invalid(
+                                            &invalid_envelopes,
+                                            work_item.key.clone(),
+                                            "ParseError",
+                                            error_msg.clone(),
+                                        );
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
                                             key = %work_item.key,
-                                            "Status changed but failed to extract"
+                                            error = %error_msg,
+                                            "Failed to parse file"
                                         );
+                                        (None, Some(error_msg))
                                     }
-                                }
-                            } else if persisted_status.is_none() && had_error_sidecar {
-                                // A repaired resource that computes no status of
-                                // its own must still drop the retained error
-                                // sidecar; nothing else will overwrite it.
-                                if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                },
+                                Err(e) => {
+                                    fs_raw_store.remove(&work_item.key);
+                                    let error_msg = e.to_string();
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
                                         key = %work_item.key,
-                                        error = %e,
-                                        "Failed to clear stale error status after repair"
+                                        error = %error_msg,
+                                        "Failed to read file"
                                     );
+                                    (None, Some(error_msg))
                                 }
                             }
-                        }
-                        WorkItemResult::Deleted { key } => {
-                            // Delete status file when resource is deleted
-                            if let Err(e) = status_handler.delete_status(kind, &key).await {
+                        } else {
+                            // File no longer exists — resource was deleted.
+                            // Remove from raw store in case the main-loop Delete event
+                            // was missed (e.g. channel lagged).
+                            fs_raw_store.remove(&work_item.key);
+                            (None, None)
+                        };
+
+                        // Handle parse errors by writing error status
+                        if let Some(error_msg) = parse_error {
+                            let _ = processor
+                                .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                                .await;
+                            if let Err(e) = status_handler
+                                .write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                                .await
+                            {
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,
-                                    key = %key,
+                                    key = %work_item.key,
                                     error = %e,
-                                    "Failed to delete status file"
+                                    "Failed to write error status"
                                 );
                             }
+                            workqueue.done(&work_item.key);
+                            continue;
                         }
-                        WorkItemResult::Skipped => {
-                            // Nothing to do
-                        }
-                    }
 
-                    workqueue.done(&work_item.key);
-                }
-                None => {
-                    tracing::warn!(
-                        component = "fs_resource_controller",
-                        kind = kind,
-                        "Workqueue closed, stopping worker"
-                    );
-                    break;
+                        // Read existing status only when there is a store object to
+                        // process; the delete/skip arms never consume it, and a
+                        // delete must not pay a status read.
+                        let existing_status_json = if store_obj.is_some() {
+                            status_handler.read_status_json(kind, &work_item.key).await
+                        } else {
+                            None
+                        };
+                        // A resource that produces no status of its own cannot
+                        // overwrite the sidecar a previous failure left behind, so
+                        // remember whether one is present before it is consumed.
+                        let had_error_sidecar = existing_status_json
+                            .as_deref()
+                            .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
+
+                        // Use processor's process_work_item which handles the reconciliation logic
+                        let result = processor
+                            .process_work_item(
+                                &work_item.key,
+                                store_obj,
+                                existing_status_json,
+                                work_item.trigger_chain.clone(),
+                            )
+                            .await;
+
+                        // Persist status based on result
+                        match result {
+                            WorkItemResult::Processed {
+                                obj,
+                                status_changed,
+                                persisted_status,
+                            } => {
+                                if status_changed {
+                                    match extract_status_value(&obj) {
+                                        Some(status_value) => {
+                                            match status_handler
+                                                .write_status_value(kind, &work_item.key, &status_value)
+                                                .await
+                                            {
+                                                Ok(()) => {
+                                                    crate::conf_mgr::sync_runtime::record_status_write(
+                                                        kind,
+                                                        "filesystem",
+                                                    );
+                                                    tracing::info!(
+                                                        component = "fs_resource_controller",
+                                                        kind = kind,
+                                                        key = %work_item.key,
+                                                        "Persisted status to filesystem"
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    crate::conf_mgr::sync_runtime::record_status_write_error(
+                                                        kind,
+                                                        "filesystem",
+                                                    );
+                                                    tracing::warn!(
+                                                        component = "fs_resource_controller",
+                                                        kind = kind,
+                                                        key = %work_item.key,
+                                                        error = %e,
+                                                        "Failed to write status file"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                "Status changed but failed to extract"
+                                            );
+                                        }
+                                    }
+                                } else if persisted_status.is_none() && had_error_sidecar {
+                                    // A repaired resource that computes no status of
+                                    // its own must still drop the retained error
+                                    // sidecar; nothing else will overwrite it.
+                                    if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                        tracing::warn!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            error = %e,
+                                            "Failed to clear stale error status after repair"
+                                        );
+                                    }
+                                }
+                            }
+                            WorkItemResult::Deleted { key } => {
+                                // Delete status file when resource is deleted
+                                if let Err(e) = status_handler.delete_status(kind, &key).await {
+                                    tracing::warn!(
+                                        component = "fs_resource_controller",
+                                        kind = kind,
+                                        key = %key,
+                                        error = %e,
+                                        "Failed to delete status file"
+                                    );
+                                }
+                            }
+                            WorkItemResult::Skipped => {
+                                // Nothing to do
+                            }
+                        }
+
+                        workqueue.done(&work_item.key);
+                    }
+                    None => {
+                        tracing::warn!(
+                            component = "fs_resource_controller",
+                            kind = kind,
+                            "Workqueue closed, stopping worker"
+                        );
+                        break;
+                    }
                 }
             }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {},
+            _ = processing => {},
         }
-
         tracing::info!(component = "fs_resource_controller", kind = kind, "Worker task ended");
     })
 }

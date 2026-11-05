@@ -374,6 +374,7 @@ fn id_gateway(keys: &[&str]) -> Arc<crate::runtime::GatewayInfo> {
         None,
         keys.iter().map(|key| (*key).to_owned()).collect(),
         None,
+        None,
     ))
 }
 
@@ -501,6 +502,7 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
         None,
         None,
         Vec::new(),
+        None,
         None,
     )));
     assert!(
@@ -786,6 +788,7 @@ async fn shared_listener_captures_owner_policy_before_owner_is_selected() {
         None,
         Vec::new(),
         None,
+        None,
     )));
     assert!(
         capture_matched_scope(&mut ctx).is_err(),
@@ -828,14 +831,14 @@ async fn grpc_commits_and_http_fallback_share_captured_listener_generation() {
             ctx.request_info.hostname = crate::ctx::NormalizedHostname::new("coherent.example.com");
             ctx.request_info.normalized_current_path = "/svc/Call".into();
             let old = ctx.listener_publication().unwrap().clone();
-            let matched = old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().0;
+            let matched = old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().route_unit;
             assert!(Arc::ptr_eq(matched.route.as_ref().unwrap(), &first));
             let second = coherent_grpc_route("2");
             grpc.partial_update(HashMap::new(), HashMap::from([("coherent/grpc".into(), second.clone())]), HashSet::new());
             let fresh = crate::plugins::publication::global_publisher().snapshot().http_listener(&proxy.listener_key);
             assert!(Arc::ptr_eq(&old.http_routes(&proxy.http_route_manager), &fresh.http_routes(&proxy.http_route_manager)), "a GRPC commit retains the HTTP table");
-            assert!(Arc::ptr_eq(fresh.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &fresh.index, "coherent.example.com").unwrap().0.route.as_ref().unwrap(), &second));
-            assert!(Arc::ptr_eq(old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().0.route.as_ref().unwrap(), &first));
+            assert!(Arc::ptr_eq(fresh.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &fresh.index, "coherent.example.com").unwrap().route_unit.route.as_ref().unwrap(), &second));
+            assert!(Arc::ptr_eq(old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().route_unit.route.as_ref().unwrap(), &first));
             grpc.rebuild_all_listener_managers();
             grpc.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["coherent/grpc".into()]));
             let removed = crate::plugins::publication::global_publisher().snapshot().http_listener(&proxy.listener_key);

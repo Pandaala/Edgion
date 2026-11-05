@@ -2,6 +2,7 @@ use crate::config::conf_center::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_common::conf_sync::config::{ConfSyncConfig, ConfSyncSecurityConfig};
+use edgion_resources::resources::common::DnsLookupFamily;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -158,7 +159,7 @@ pub struct EdgionControllerConfig {
 
     /// Static cli tokens for role-scoped API access.
     /// Each entry names a token (by its SHA-256 hex digest) and assigns it
-    /// a fine-grained RBAC policy. Hot-reloadable.
+    /// a fine-grained RBAC policy. Changes require a process restart.
     #[arg(skip)]
     #[serde(default)]
     pub cli_tokens: Vec<CliTokenConfig>,
@@ -187,6 +188,8 @@ pub struct EdgionControllerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DnsResolverConfig {
+    /// Backend address family; loaded at process startup.
+    pub lookup_family: DnsLookupFamily,
     /// Control-plane resolution on/off.
     pub enabled: bool,
     /// Background refresh interval (duration string, e.g. "15s").
@@ -202,6 +205,7 @@ pub struct DnsResolverConfig {
 impl Default for DnsResolverConfig {
     fn default() -> Self {
         Self {
+            lookup_family: DnsLookupFamily::default(),
             enabled: true,
             refresh_interval: "15s".to_string(),
             link_sys_ref: None,
@@ -753,7 +757,7 @@ pub struct CenterClientConfig {
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
-    /// Hot-reloadable kill-switch. When false, the federation client is not run.
+    /// Startup switch. When false, the federation client is not run.
     #[serde(default = "default_center_enabled")]
     pub enabled: bool,
     /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.

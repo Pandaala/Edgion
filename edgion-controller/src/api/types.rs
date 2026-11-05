@@ -9,12 +9,6 @@ use std::sync::Arc;
 pub struct AdminState {
     pub conf_mgr: Arc<ConfMgr>,
     pub schema_validator: Arc<SchemaValidator>,
-    /// Path to the controller config YAML, for re-reading `[center]` on reload.
-    pub config_file: Option<String>,
-    /// Shared authorizer (hot-swappable Center policy) used by reload.
-    pub authorizer: Arc<crate::authz::Authorizer>,
-    /// Notifies the federation supervisor of `[center]` changes on reload.
-    pub center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
 }
 
 impl AdminState {
@@ -82,15 +76,7 @@ impl AdminState {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind(kind_str, opts).await.map_err(|e| {
-            tracing::warn!(
-                component = "admin_state",
-                kind = kind_str,
-                error = %e,
-                "Failed to list resources from storage"
-            );
-            map_writer_error(e)
-        })?;
+        let result = source_read(api.get_list_by_kind(kind_str, opts)).await?;
 
         let continue_token = result.continue_token;
 
@@ -98,12 +84,8 @@ impl AdminState {
         let values: Vec<serde_json::Value> = result
             .items
             .into_iter()
-            .filter_map(|entry| {
-                yaml_serde::from_str(&entry.content)
-                    .or_else(|_| serde_json::from_str(&entry.content))
-                    .ok()
-            })
-            .collect();
+            .map(|entry| crate::conf_mgr::conf_center::source_query::document(&entry).map_err(map_writer_error))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok((values, continue_token))
     }
@@ -118,16 +100,7 @@ impl AdminState {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind_ns(kind_str, namespace, opts).await.map_err(|e| {
-            tracing::warn!(
-                component = "admin_state",
-                kind = kind_str,
-                namespace = namespace,
-                error = %e,
-                "Failed to list namespaced resources from storage"
-            );
-            map_writer_error(e)
-        })?;
+        let result = source_read(api.get_list_by_kind_ns(kind_str, namespace, opts)).await?;
 
         let continue_token = result.continue_token;
 
@@ -135,12 +108,8 @@ impl AdminState {
         let values: Vec<serde_json::Value> = result
             .items
             .into_iter()
-            .filter_map(|entry| {
-                yaml_serde::from_str(&entry.content)
-                    .or_else(|_| serde_json::from_str(&entry.content))
-                    .ok()
-            })
-            .collect();
+            .map(|entry| crate::conf_mgr::conf_center::source_query::document(&entry).map_err(map_writer_error))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok((values, continue_token))
     }
@@ -158,15 +127,7 @@ impl AdminState {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.list_keys_by_kind(kind_str, opts).await.map_err(|e| {
-            tracing::debug!(
-                component = "admin_state",
-                kind = kind_str,
-                error = %e,
-                "Failed to list keys from storage"
-            );
-            map_writer_error(e)
-        })?;
+        let result = source_read(api.list_keys_by_kind(kind_str, opts)).await?;
 
         Ok((result.items, result.continue_token))
     }
@@ -181,16 +142,7 @@ impl AdminState {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.list_keys_by_kind_ns(kind_str, namespace, opts).await.map_err(|e| {
-            tracing::debug!(
-                component = "admin_state",
-                kind = kind_str,
-                namespace = namespace,
-                error = %e,
-                "Failed to list namespaced keys from storage"
-            );
-            map_writer_error(e)
-        })?;
+        let result = source_read(api.list_keys_by_kind_ns(kind_str, namespace, opts)).await?;
 
         Ok((result.items, result.continue_token))
     }
@@ -202,78 +154,40 @@ impl AdminState {
         namespace: &str,
         name: &str,
     ) -> Result<Option<serde_json::Value>, StatusCode> {
-        let api = self.conf_center();
-        let kind_str = kind.as_str();
-
-        match api.get_one(kind_str, Some(namespace), name).await {
-            Ok(content) => {
-                let value: serde_json::Value = yaml_serde::from_str(&content)
-                    .or_else(|_| serde_json::from_str(&content))
-                    .map_err(|e| {
-                        tracing::warn!(
-                            component = "admin_state",
-                            kind = kind_str,
-                            namespace = namespace,
-                            name = name,
-                            error = %e,
-                            "Failed to parse resource content"
-                        );
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?;
-                Ok(Some(value))
-            }
-            Err(ConfWriterError::NotFound(_)) => Ok(None),
-            Err(e) => {
-                tracing::warn!(
-                    component = "admin_state",
-                    kind = kind_str,
-                    namespace = namespace,
-                    name = name,
-                    error = %e,
-                    "Failed to get resource from storage"
-                );
-                Err(map_writer_error(e))
-            }
-        }
+        self.center_get_source(kind, Some(namespace), name).await
     }
 
-    /// Get a cluster-scoped resource by name from storage (via ConfCenter)
+    /// Get a cluster-scoped original source object under the same bounded path.
     pub async fn center_get_cluster_resource(
         &self,
         kind: ResourceKind,
         name: &str,
     ) -> Result<Option<serde_json::Value>, StatusCode> {
-        let api = self.conf_center();
-        let kind_str = kind.as_str();
+        self.center_get_source(kind, None, name).await
+    }
 
-        match api.get_one(kind_str, None, name).await {
-            Ok(content) => {
-                let value: serde_json::Value = yaml_serde::from_str(&content)
-                    .or_else(|_| serde_json::from_str(&content))
-                    .map_err(|e| {
-                        tracing::warn!(
-                            component = "admin_state",
-                            kind = kind_str,
-                            name = name,
-                            error = %e,
-                            "Failed to parse cluster resource content"
-                        );
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?;
-                Ok(Some(value))
-            }
-            Err(ConfWriterError::NotFound(_)) => Ok(None),
-            Err(e) => {
-                tracing::warn!(
-                    component = "admin_state",
-                    kind = kind_str,
-                    name = name,
-                    error = %e,
-                    "Failed to get cluster resource from storage"
-                );
-                Err(map_writer_error(e))
-            }
-        }
+    async fn center_get_source(
+        &self,
+        kind: ResourceKind,
+        namespace: Option<&str>,
+        name: &str,
+    ) -> Result<Option<serde_json::Value>, StatusCode> {
+        let api = self.conf_center();
+        source_read(async {
+            let content = match api.get_source_one(kind.as_str(), namespace, name).await {
+                Ok(content) => content,
+                Err(ConfWriterError::NotFound(_)) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            crate::conf_mgr::conf_center::source_query::document(&crate::conf_mgr::conf_center::traits::ConfEntry {
+                kind: kind.as_str().into(),
+                namespace: namespace.map(str::to_owned),
+                name: name.into(),
+                content,
+            })
+            .map(Some)
+        })
+        .await
     }
 
     // ==================== ConfigSyncServer Methods (Cache Layer) ====================
@@ -447,3 +361,18 @@ mod api_response_warnings_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/api/types_test/cache_redact_tests.rs"]
 mod cache_redact_tests;
+
+static SOURCE_READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+
+/// Bound API work. Blocking backends additionally retain their own task permit.
+pub(super) async fn source_read<T>(
+    work: impl std::future::Future<Output = Result<T, ConfWriterError>>,
+) -> Result<T, axum::http::StatusCode> {
+    let _permit = SOURCE_READS
+        .try_acquire()
+        .map_err(|_| axum::http::StatusCode::TOO_MANY_REQUESTS)?;
+    tokio::time::timeout(crate::conf_mgr::conf_center::source_query::SOURCE_TIMEOUT, work)
+        .await
+        .map_err(|_| axum::http::StatusCode::GATEWAY_TIMEOUT)?
+        .map_err(crate::api::common::map_writer_error)
+}

@@ -1,5 +1,27 @@
 use super::*;
 
+#[tokio::test]
+async fn literal_family_filter_normalizes_mapped_addresses() {
+    let spec = ResolverSpec::System;
+    let ip = "::ffff:192.0.2.1";
+    assert_eq!(
+        resolve(&spec, ip, DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only))
+            .await
+            .unwrap(),
+        vec!["192.0.2.1".parse::<IpAddr>().unwrap()]
+    );
+    assert!(matches!(
+        resolve(&spec, ip, DnsQueryPolicy::Family(DnsLookupFamily::Ipv6Only)).await,
+        Err(DnsError::NoAddresses)
+    ));
+    assert_eq!(
+        DnsQueryPolicy::Family(DnsLookupFamily::All)
+            .select(vec![ip.parse().unwrap(), "192.0.2.1".parse().unwrap()])
+            .len(),
+        1
+    );
+}
+
 fn owner(config: HttpDnsResolverConfig) -> Arc<edgion_resources::LinkSys> {
     use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
     let mut owner = edgion_resources::LinkSys::new(
@@ -49,7 +71,9 @@ fn httpdns_loopback_policy_changes_cache_fingerprint() {
 
 #[tokio::test]
 async fn system_spec_resolves_localhost() {
-    let addrs = resolve(&ResolverSpec::System, "localhost").await.expect("resolves");
+    let addrs = resolve(&ResolverSpec::System, "localhost", crate::dns::DnsQueryPolicy::Native)
+        .await
+        .expect("resolves");
     assert!(addrs.iter().any(|ip| ip.is_loopback()));
 }
 
@@ -437,7 +461,7 @@ async fn invalid_preparation_retains_latest_fallback_without_query_preparation()
         assert!(candidate(&config).matches(&prepared));
         let spec = ResolverSpec::HttpDns(prepared.clone());
         for _ in 0..2 {
-            let result = resolve(&spec, "127.0.0.1").await;
+            let result = resolve(&spec, "127.0.0.1", crate::dns::DnsQueryPolicy::Native).await;
             if matches!(fallback, HttpDnsFallback::System) {
                 assert!(result.unwrap().iter().any(|ip| ip.is_loopback()));
             } else {
@@ -476,9 +500,13 @@ async fn tls_audit_occurs_only_during_preparation() {
     for _ in 0..3 {
         assert!(candidate(&config).matches(&prepared));
         assert_eq!(count.load(Ordering::Relaxed), 1, "comparison must not audit TLS");
-        assert!(resolve(&ResolverSpec::HttpDns(prepared.clone()), "example.com")
-            .await
-            .is_err());
+        assert!(resolve(
+            &ResolverSpec::HttpDns(prepared.clone()),
+            "example.com",
+            crate::dns::DnsQueryPolicy::Native
+        )
+        .await
+        .is_err());
     }
     assert_eq!(count.load(Ordering::Relaxed), 1, "queries must not repeat TLS audit");
 }

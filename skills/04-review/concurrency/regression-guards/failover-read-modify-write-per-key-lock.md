@@ -12,6 +12,39 @@ finding_id: fr-capi-01, fr-capi-02
 closed: 2026-06-01
 ---
 
+## Current source-command contract (2026-10-30)
+
+The preview-bound ClusterRegionSetting command supersedes the historical helper
+and its three-attempt rebase. `apply_setting_failover` retains the shared API
+resource lock, but requires a canonical source fingerprint before idempotence or
+mutation. It protects unversioned sources too. A changed source returns conflict;
+there is no automatic retry against a different preview generation. Generic PUT
+keeps its independently documented opt-in If-Match behavior.
+
+`CenterApi::update_one_if_source` uses one bounded Kubernetes read and native
+resourceVersion replace, an etcd modification-revision transaction, or the existing
+filesystem striped lock plus a read-time fingerprint comparison. Filesystem source
+CAS holds its lock and scan permit through the complete blocking operation. Existing
+replacement and unlink owners also retain the same lock through actual completion,
+so cancellation cannot release it while an old rename/unlink is still pending.
+The registry path is pinned and revision changes are rejected before commit.
+A cancellation check can prevent an unstarted commit; it cannot undo a started
+rename, so timeout means unknown persistence. External file editors are not fenced.
+
+Fresh failover resourceVersion allocation skips a value equal to the current source
+version. Readiness reconstructs the startup floor but alone cannot prevent equality
+with an out-of-band version introduced after startup.
+
+The API lock map is retained as the existing mechanism; this task establishes no
+new hard cardinality or eviction bound for it. Do not repeat the historical
+assumption that a count of identities ever seen is itself a fixed memory bound.
+
+## Historical rationale (superseded where it describes the old command)
+
+The remainder records the 2026-06/07 findings and their then-current callers.
+The current contract above replaces its unconditional unversioned failover,
+three-attempt retry and old helper references.
+
 ## Conclusion
 
 `patch_edgion_config_data_failover` (`region_route_handlers.rs`) had an unguarded

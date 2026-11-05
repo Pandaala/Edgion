@@ -23,10 +23,10 @@ Filter——都是**规则级**（per-rule）问题。出问题的 rule 一定�
 `Accepted=False` 会把整条 route 从该 parent 的网关路由表中移除，因此它只用于「反正也没有任何 rule
 会服务」的情况。一条同时包含坏 AI rule 和正常非 AI rule 的 route，那些正常 rule 会继续服务。
 
-**委派例外**：升级判断只看 route 自身的 `spec.rules`。位于**被委派子路由**规则中的 AI 违规会在
-展平阶段被丢弃，并且始终以 `PartiallyInvalid=True` 上报，不会触发 `Accepted=False`——这与「被丢弃的
-委派规则不拒绝其父路由」的通用规则一致。若该丢弃导致父路由一条 rule 都不剩，父路由会停止服务而
-`Accepted` 仍为 `True`；此时请读 `PartiallyInvalid` 消息中的 `resolvedRules[i]: <原因>` 条目。
+**委派**：每条 route 都只按自身的 `spec.rules` 判断。[委派](../user-guide/http-route/delegation.md)子路由
+规则中的 AI 违规，按同一张表报告在子路由自己的 `status.parents` 条目上（每个 `kind: HTTPRoute`
+parentRef 一个条目），从不改变父路由的状态。委派规则上不允许使用 `AiProxy`，因为委派规则没有自己的
+后端。
 
 ## 凭据优先轮次
 

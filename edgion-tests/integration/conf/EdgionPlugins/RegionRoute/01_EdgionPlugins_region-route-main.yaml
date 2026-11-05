@@ -1,14 +1,4 @@
-# RegionRoute - main config with full inline routing configuration (overlay model)
-#
-# All routing logic and the default region table live directly in this EdgionPlugins spec.
-# No overrideRef is set for the main routing tests; the base config is used directly.
-#
-# Two regions using loopback IP endpoints (avoids DNS dependency in tests):
-#   virginia: 127.0.0.1:30001  hashRange [0, 599]  (600/1000 = 60%)
-#   ohio:     127.0.0.1:30002  hashRange [600, 999] (400/1000 = 40%)
-#
-# RouteByKeyConfMatch override map: vip-va->virginia, vip-oh->ohio
-# hashCalc writeBack: computed hash written to response header X-Region-Hash
+# ClusterRegionSetting fixtures; routing logic references a separate setting.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -16,42 +6,35 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-    - type: RegionRoute
-      config:
-        regions:
-          - name: virginia
-            hashRange: [0, 599]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: ohio
-            hashRange: [600, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-          - type: cookie
-            name: account_id
-        hashKeyGet:
-          - type: cookie
-            name: x_region_hash
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-          writeBack:
-            - type: responseHeader
-              name: X-Region-Hash
-        routeRules:
-          - type: RouteByDirectRegion
-            keyFrom:
-              - type: header
-                name: X-Direct-Region
-          - type: RouteByKeyConfMatch
-            matchMap:
-              "vip-va": virginia
-              "vip-oh": ohio
-          - type: RouteByHashRange
-        routeByKeyConfMatch:
-          matchMap:
-            "vip-va": "virginia"
-            "vip-oh": "ohio"
+  - type: RegionRoute
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      - type: cookie
+        name: account_id
+      hashKeyGet:
+      - type: cookie
+        name: x_region_hash
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+        writeBack:
+        - type: responseHeader
+          name: X-Region-Hash
+      routeRules:
+      - type: RouteByDirectRegion
+        keyFrom:
+        - type: header
+          name: X-Direct-Region
+      - type: RouteByKeyConfMatch
+        matchMap:
+          vip-va: virginia
+          vip-oh: ohio
+      - type: RouteByHashRange
+      routeByKeyConfMatch:
+        matchMap:
+          vip-va: virginia
+          vip-oh: ohio
+      clusterRegionRef:
+        name: region-route-main-setting

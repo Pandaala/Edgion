@@ -314,3 +314,22 @@ fn is_recorded_loser_all_pending_two_paths_is_false() {
         "all paths pending -> keep (no live winner)"
     );
 }
+
+#[test]
+fn source_scan_revision_tracks_every_winner_state_change() {
+    let r = PathRegistry::new();
+    let start = r.revision();
+    r.record(k("ConfigMap", "apps/a"), p("/conf/a.yaml"));
+    assert_ne!(r.revision(), start);
+    let recorded = r.revision();
+    r.record(k("ConfigMap", "apps/a"), p("/conf/a.yaml"));
+    assert_eq!(r.revision(), recorded);
+    r.mark_api_deleted(&p("/conf/a.yaml"));
+    assert_ne!(r.revision(), recorded);
+    let deleted = r.revision();
+    r.forget(&p("/conf/a.yaml"));
+    assert_ne!(r.revision(), deleted);
+    let removed = r.revision();
+    r.replace_from(&PathRegistry::new());
+    assert_ne!(r.revision(), removed);
+}

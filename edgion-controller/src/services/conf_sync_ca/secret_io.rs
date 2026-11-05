@@ -1,9 +1,8 @@
 //! Kubernetes Secret I/O for the conf_sync internal CA.
 //!
-//! Mirrors the server-side-apply pattern used by `services::acme::secret_io`:
-//! `PatchParams::apply(...)` + `Patch::Apply` with `k8s_openapi::ByteString` data
-//! and a managed-by label. These Secrets are NOT owned by a CRD, so there is no
-//! `OwnerReference`.
+//! Roots are POST-created and renewed with a source-version-conditioned Merge
+//! patch. Leaf Secrets use forced server-side apply. Both carry ByteString data
+//! and a managed-by label, without CRD ownership or an OwnerReference.
 
 use crate::services::conf_sync_ca::{Ca, LeafPem};
 use anyhow::{Context, Result};
@@ -38,7 +37,7 @@ pub fn build_secret(name: &str, ns: &str, data: BTreeMap<String, Vec<u8>>) -> Se
 }
 
 /// Pure builder for the CA Secret data map (`ca.crt` + `ca.key`). Shared by the
-/// create path in [`ensure_ca`] and the renewal path in [`write_ca`] so both
+/// create path in [`ensure_ca`] and the renewal path in [`renew_ca`] so both
 /// always carry BOTH fields — a renewal that dropped `ca.key` would orphan the
 /// root key and break all future re-signing.
 fn ca_secret_data(ca: &Ca) -> BTreeMap<String, Vec<u8>> {
@@ -48,25 +47,9 @@ fn ca_secret_data(ca: &Ca) -> BTreeMap<String, Vec<u8>> {
     ])
 }
 
-/// Server-side-apply params for the Secrets this module owns.
-///
-/// `force` is REQUIRED, not optional hygiene: server-side apply only overwrites
-/// fields the *same* field manager already owns. Every other owner triggers a 409
-/// Conflict instead — and both of our Secrets routinely have another owner:
-///
-/// - `edgion-conf-sync-ca` is CREATED by [`ensure_ca`]'s POST, so the API server
-///   records the fields under the client's default manager (`unknown`), not
-///   [`FIELD_MANAGER`]. A CA-renewal apply without `force` therefore 409s on every
-///   attempt, permanently — the root would expire with the reconciler stuck in
-///   backoff.
-/// - `edgion-conf-sync-certs` is normally apply-created by us, but an operator
-///   `kubectl create/edit/patch` (or the documented "adopt a manually created
-///   leaf" upgrade path) hands field ownership to kubectl and would likewise
-///   wedge every future rotation.
-///
-/// Forcing is the correct semantic here: the controller is the sole authority for
-/// the content of both Secrets, and convergence between replicas is guaranteed by
-/// [`ensure_ca`]'s POST-and-adopt, not by apply conflicts.
+/// Forced SSA for the leaf Secret, including fields previously owned by kubectl.
+/// Root renewal instead uses a version-conditioned Merge patch: it must never
+/// recreate a deleted root, and Merge does not enforce SSA ownership conflicts.
 fn apply_params() -> PatchParams {
     PatchParams::apply(FIELD_MANAGER).force()
 }
@@ -186,24 +169,40 @@ pub async fn write_leaf(secret_api: &Api<Secret>, ns: &str, leaf: &LeafPem, ca_c
     Ok(())
 }
 
-/// SSA-write the renewed root CA back to the CA Secret (`ca.crt` + `ca.key`).
-///
-/// Used by the rotation reconciler's `RotateScope::Ca` path after
-/// `renew_root_same_key`: the certificate PEM changes but the key PEM is the
-/// SAME bytes, so `ca.key` MUST be re-applied alongside `ca.crt` (both come from
-/// [`ca_secret_data`]) or a future `ensure_ca`/re-sign would find the key gone.
-///
-/// The apply is forced ([`apply_params`]): the Secret was POST-created by
-/// [`ensure_ca`], so its fields belong to another manager and an unforced apply
-/// would 409 on every renewal. Convergence between replicas is not at stake here
-/// — the caller is the elected leader re-signing the root it already holds.
-pub async fn write_ca(secret_api: &Api<Secret>, ns: &str, ca: &Ca) -> Result<()> {
-    let secret = build_secret(CA_SECRET, ns, ca_secret_data(ca));
+/// Renew only the exact root generation read here. Missing or changed Secrets
+/// fail the rotation before leaf publication; the next tick rereads current state.
+/// Merge cannot create a missing Secret and preserves unrelated fields. Unlike
+/// SSA, it can update fields owned by another manager without ownership conflicts.
+pub(super) async fn renew_ca(secret_api: &Api<Secret>, ca_ttl: time::Duration) -> Result<Ca> {
+    let source = secret_api.get(CA_SECRET).await.context("get CA secret for renewal")?;
+    let uid = source
+        .metadata
+        .uid
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .context("CA secret missing UID")?;
+    let version = source
+        .metadata
+        .resource_version
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .context("CA secret missing resourceVersion")?;
+    let crt = data_str(&source, "ca.crt").context("CA secret missing ca.crt")?;
+    let key = zeroize::Zeroizing::new(data_str(&source, "ca.key").context("CA secret missing ca.key")?);
+    let ca = Ca::load_from_pem(&crt, &key)?.renew_root_same_key(ca_ttl)?;
+    let data: BTreeMap<_, _> = ca_secret_data(&ca)
+        .into_iter()
+        .map(|(k, v)| (k, ByteString(v)))
+        .collect();
+    let patch = serde_json::json!({
+        "metadata": { "uid": uid, "resourceVersion": version },
+        "data": data,
+    });
     secret_api
-        .patch(CA_SECRET, &apply_params(), &Patch::Apply(secret))
+        .patch(CA_SECRET, &PatchParams::default(), &Patch::Merge(patch))
         .await
-        .context("apply renewed CA secret")?;
-    Ok(())
+        .context("conditionally renew CA secret")?;
+    Ok(ca)
 }
 
 /// Read the gateway leaf Secret if present: (client.crt, client.key, ca.crt).

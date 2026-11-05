@@ -66,6 +66,7 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | no | `false` | Skip a missing or invalid independent addition and report `PartiallyInvalid`; never mark the base bundle optional |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
+| `delegationPrecedence` | no | `child` | Only for a route-delegation chain. `child`: a deeper (child) route's WAF replaces this one. `parent`: this route's WAF wins over every route below it. Takes effect only on WAFs referenced from routes; ignored on Gateway and global WAFs |
 | `requestBody.inspection` | no | `full` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
 | `requestBody.maxInspectSize` | no | Gateway physical cap | Positive source-byte window; full mode only |
@@ -363,6 +364,11 @@ request's bounded runtime budget, including all SQL dialect/quote or HTML
 contexts. Reaching a limit closes the WAF request according to its normal
 runtime error policy. The implementation does not use Hyperscan.
 
+Operator work (original, transformed and detector bytes) is bounded per rule.
+All members of a chain, and every branch created when an earlier member
+matches several values, share that one budget, so a chain that matches many client-supplied values
+cannot multiply the work of its later members.
+
 ## Execution and limits
 
 ### Request-scoped control actions
@@ -634,7 +640,10 @@ removes it for new resolution without invalidating already-held runtime arcs.
 
 Only one WAF generation owns a request. Edgion selects it before phase 1 from
 Route, Gateway, then global candidates. Within the selected scope, larger
-`priority` wins; equal priorities use declaration order.
+`priority` wins; equal priorities use declaration order. On a
+[route-delegation](../../delegation.md) chain, each level elects its own WAF by
+`priority`; the deepest level with a WAF wins, unless an ancestor's WAF sets
+`delegationPrecedence: parent`, in which case the outermost such level wins.
 Backend-scoped WAF configuration is rejected because backend selection happens
 after the request WAF phase. The Controller reports the owning HTTPRoute or
 GRPCRoute as `Accepted=False` with reason `UnsupportedValue`; changing the

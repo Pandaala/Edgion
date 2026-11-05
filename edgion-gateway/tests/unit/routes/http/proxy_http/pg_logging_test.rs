@@ -335,6 +335,7 @@ fn test_metric_json_preserves_fields_and_escaping() {
             None,
             Vec::new(),
             None,
+            None,
         )));
     }
     let mut ctx = EdgionHttpContext::new();

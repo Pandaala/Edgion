@@ -47,9 +47,6 @@ pub(super) fn scrub_route(route: &mut HTTPRoute) {
     for rule in route.spec.rules.iter_mut().flatten() {
         scrub_rule(rule);
     }
-    for rule in route.spec.resolved_rules.iter_mut().flatten() {
-        scrub_rule(rule);
-    }
 }
 
 /// Private construction keeps a root wakeup from substituting for field authority.
@@ -98,19 +95,6 @@ pub struct AuthDecision {
     pub(super) errors: Vec<ResolvedRefsError>,
 }
 impl AuthDecision {
-    pub(super) fn unavailable(field: &AuthoredRouteAuthField<'_>) -> Self {
-        Self {
-            slot: field.slot(),
-            stamp: Some(field.resolution(Some("HTTPRoute authentication resolution is unavailable".into()))),
-            ca: None,
-            client: None,
-            secrets: None,
-            errors: vec![ResolvedRefsError::DecodeError {
-                key: "externalAuth",
-                detail: "HTTPRoute authentication resolution is unavailable".into(),
-            }],
-        }
-    }
     fn invalid(slot: RouteFilterSlot, error: ReferenceError) -> Self {
         Self {
             slot,
@@ -240,19 +224,6 @@ pub(super) fn decisions(
             }
         })
         .collect()
-}
-
-/// Collect every declared field before per-rule drops, then move decisions only
-/// into that declaring rule. The original field position never follows a clone.
-pub(super) fn by_rule(
-    route: &HTTPRoute,
-    resolve: impl FnMut(&AuthoredRouteAuthField<'_>) -> AuthDecision,
-) -> std::collections::HashMap<usize, Vec<AuthDecision>> {
-    let mut result: std::collections::HashMap<usize, Vec<AuthDecision>> = std::collections::HashMap::new();
-    for decision in decisions(route, resolve) {
-        result.entry(decision.slot.rule()).or_default().push(decision);
-    }
-    result
 }
 
 #[cfg(test)]

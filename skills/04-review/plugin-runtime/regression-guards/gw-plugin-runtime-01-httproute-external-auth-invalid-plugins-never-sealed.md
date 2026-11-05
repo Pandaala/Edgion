@@ -39,8 +39,8 @@ target and asserts that `RejectInvalidConfig` is the first request-stage filter.
 That runtime fix did not cover Controller admission. The response-header policy
 follow-up (`CAND-admission-001`) now calls the same
 `ForwardAuthConfig::validation_error()` from the Controller's per-rule checks
-for internal rule and backend filters. Delegation checks parent and child source
-rules through that same entry point. Invalid rules are excluded, valid siblings
+for internal rule and backend filters. Delegation parents and children are each
+checked as their own routes through that same entry point. Invalid rules are excluded, valid siblings
 survive, and correcting `clientHeaders` clears the invalid-rule status. If no
 effective rule survives, the existing attachment rejection path applies.
 
@@ -108,12 +108,14 @@ canonical TLS pair projection exposes target identity only, allowing delegated
 locality validation without inventing child ReferenceGrant authority. Original
 authored tokens and pipeline authorization retain their full source checks.
 
-Controller acquisition uses each original declaration before flattening, including
-inherited intermediate and backend filters. Root-only receipts register valid
-missing/denied material recovery before readonly bound acquisition with the
-actual declaring owner. Root/raw-child transport inputs are scrubbed; parse/delete
-replace dependencies and material; readonly status adds no edges. The default
-delegation lookup cannot silently retain raw auth when resolution is unavailable.
+Controller acquisition uses each route's own declarations
+(`route_terminal::root_auth`, run for every route); under the cascading-match
+delegation model every level resolves its own auth filters as its own route.
+Receipts register valid missing/denied material recovery before readonly bound
+acquisition with the actual declaring owner. Transport inputs are scrubbed;
+parse/delete replace dependencies and material; readonly status adds no edges.
+(History: before the redesign, acquisition ran over raw child declarations before
+flattening, with root-owned receipts.)
 
 New deterministic tests exercise actual event queues for Secret repair and Grant
 revocation, declaration/locality inheritance, malformed/forged fields, exact TLS

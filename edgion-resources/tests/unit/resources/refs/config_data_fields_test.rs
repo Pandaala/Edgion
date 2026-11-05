@@ -13,7 +13,7 @@ fn finite_actual_fields_default_namespace_and_separate_owner_failures() {
     for (kind, field, role) in [
         ("RequestAccessPolicy", "activeProfileRef", ConfigDataRole::Selector),
         ("Canary", "activeProfileRef", ConfigDataRole::Selector),
-        ("RegionRoute", "overrideRef", ConfigDataRole::RegionOverride),
+        ("RegionRoute", "clusterRegionRef", ConfigDataRole::ClusterRegion),
     ] {
         let owner = http(kind, field, json!({"name":"target"}));
         let entry = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();

@@ -4,7 +4,12 @@ use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use anyhow::{ensure, Result};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
+
+const ALIAS_HOST: &str = "named-alias-capacity.example.com";
+const ALIAS_OBSERVER: &str = "named-alias-capture-observer";
+const ALIAS_SUPPORT: &str = "named-alias-support";
 
 struct NamedParameterSuite(Option<(u16, &'static str)>);
 
@@ -97,6 +102,22 @@ impl TestSuite for NamedParameterSuite {
             )
             .with_timeout(Duration::from_secs(15)),
         );
+        cases.push(
+            TestCase::new(
+                "alias_capacity_and_capture",
+                "All 255/256 aliases and unrelated routes survive publication with selected capture names",
+                move |ctx: TestContext| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        match check_alias_capacity(&ctx, generation).await {
+                            Ok(()) => TestResult::passed(start.elapsed()),
+                            Err(error) => TestResult::failed(start.elapsed(), error.to_string()),
+                        }
+                    })
+                },
+            )
+            .with_timeout(Duration::from_secs(60)),
+        );
         cases
     }
 }
@@ -135,6 +156,144 @@ fn echoed_header<'a>(body: &'a str, name: &str) -> Option<&'a str> {
         let (header, value) = line.trim().split_once(':')?;
         header.eq_ignore_ascii_case(name).then_some(value.trim())
     })
+}
+
+async fn alias_response(ctx: &TestContext, path: &str, selector: usize) -> Result<(u16, String)> {
+    let response = ctx
+        .http_client
+        .get(format!("{}{path}", ctx.http_url()))
+        .header("host", ALIAS_HOST)
+        .header("x-alias", selector.to_string())
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await?;
+    Ok((response.status().as_u16(), response.text().await?))
+}
+
+async fn check_alias_capacity(ctx: &TestContext, generation: Option<(u16, &'static str)>) -> Result<()> {
+    for path in ["/capacity-health", "/prefix/child", "/regex", "/escaped/:literal/tail"] {
+        let (status, body) = alias_response(ctx, path, 0).await?;
+        if generation.is_some() {
+            ensure!(status == 200, "{path}: expected success, got HTTP {status}");
+            ensure!(
+                body.starts_with("Server: 0.0.0.0:30001\n"),
+                "{path}: wrong backend: {body:?}"
+            );
+        } else {
+            ensure!(status == 404, "{path}: expected absence, got HTTP {status}");
+        }
+    }
+    let (status, _) = alias_response(ctx, "/tail", 0).await?;
+    ensure!(status == 404, "escaped path lost its static prefix: HTTP {status}");
+
+    // Probe every selector so passing a phase proves the entire alias set is
+    // serving, rather than just observing the last resource to reach the Gateway.
+    let alias_count = generation.map_or(0, |(port, _)| if port == 30002 { 256 } else { 255 });
+    for selector in 0..256 {
+        let (status, body) = alias_response(ctx, "/alias/value", selector).await?;
+        if selector >= alias_count {
+            ensure!(status == 404, "alias {selector}: expected absence, got HTTP {status}");
+            continue;
+        }
+        let port = if selector == 255 { 30002 } else { 30001 };
+        ensure!(status == 200, "alias {selector}: expected success, got HTTP {status}");
+        ensure!(
+            body.starts_with(&format!("Server: 0.0.0.0:{port}\n")),
+            "alias {selector}: wrong backend: {body:?}"
+        );
+        if selector >= 254 {
+            let (selected, rejected) = if selector == 254 {
+                ("x-alias-p254", "x-alias-p255")
+            } else {
+                ("x-alias-p255", "x-alias-p254")
+            };
+            ensure!(
+                echoed_header(&body, selected) == Some("value"),
+                "alias {selector}: missing selected capture: {body:?}"
+            );
+            let unresolved = if selector == 254 { "$p255" } else { "$p254" };
+            ensure!(
+                echoed_header(&body, rejected) == Some(unresolved),
+                "alias {selector}: another candidate's capture leaked: {body:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn alias_route(name: &str, rules: Value) -> Value {
+    json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+        "metadata": {"name": name, "namespace": "edgion-test"},
+        "spec": {
+            "parentRefs": [{"name": "named-parameter-precedence-gateway"}],
+            "hostnames": [ALIAS_HOST], "rules": rules
+        }
+    })
+}
+
+fn alias_name(index: usize) -> String {
+    format!("named-capacity-alias-{index:03}")
+}
+
+fn alias_document(index: usize) -> Value {
+    let port = if index == 255 { 30002 } else { 30001 };
+    alias_route(
+        &alias_name(index),
+        json!([{
+            "matches": [{
+                "path": {"type": "Exact", "value": format!("/alias/:p{index:03}")},
+                "method": "GET",
+                "headers": [{"type": "Exact", "name": "x-alias", "value": index.to_string()}]
+            }],
+            "filters": [{"type": "ExtensionRef", "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": ALIAS_OBSERVER
+            }}],
+            "backendRefs": [{"name": format!("named-precedence-{port}"), "port": port}]
+        }]),
+    )
+}
+
+async fn apply_alias_documents(ctx: &ScenarioCtx, documents: Vec<Value>) -> Result<()> {
+    let yaml = documents
+        .iter()
+        .map(yaml_serde::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n---\n");
+    let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+    crate::dynamic::apply::apply_yaml_documents(&client, &ctx.resolve("generated-alias-capacity.yaml"), &yaml).await
+}
+
+async fn apply_initial_aliases(ctx: &ScenarioCtx) -> Result<()> {
+    let observer = json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+        "metadata": {"name": ALIAS_OBSERVER, "namespace": "edgion-test"},
+        "spec": {"requestPlugins": [{"enable": true, "type": "ProxyRewrite", "config": {
+            "headers": {"set": [
+                {"name": "X-Alias-P254", "value": "$p254"},
+                {"name": "X-Alias-P255", "value": "$p255"}
+            ]}
+        }}]}
+    });
+    let rules = [
+        ("Exact", "/capacity-health"),
+        ("PathPrefix", "/prefix"),
+        ("RegularExpression", "^/regex$"),
+        ("Exact", "/escaped/::literal/tail"),
+    ]
+    .into_iter()
+    .map(|(kind, path)| {
+        json!({
+            "matches": [{"path": {"type": kind, "value": path}}],
+            "backendRefs": [{"name": "named-precedence-30001", "port": 30001}]
+        })
+    })
+    .collect::<Vec<_>>();
+    let mut documents = vec![observer, alias_route(ALIAS_SUPPORT, json!(rules))];
+    // Sequential creation plus lexical names place lower selectors ahead of the
+    // selected p254/p255 candidates; their mismatching headers must be rejected.
+    documents.extend((0..255).map(alias_document));
+    apply_alias_documents(ctx, documents).await
 }
 
 async fn check_capture_generation(ctx: &TestContext, generation: Option<(u16, &'static str)>) -> Result<()> {
@@ -211,34 +370,35 @@ async fn delete_resources(ctx: &ScenarioCtx, resources: &[(&str, &str)]) -> Resu
 }
 
 async fn cleanup_routes(ctx: &ScenarioCtx) -> Result<()> {
-    delete_resources(
-        ctx,
-        &[
-            ("HTTPRoute", "named-static-z-winner"),
-            ("HTTPRoute", "named-static-a-loser"),
-            ("HTTPRoute", "named-equal-a-winner"),
-            ("HTTPRoute", "named-equal-z-loser"),
-            ("HTTPRoute", "named-exact-z-winner"),
-            ("HTTPRoute", "named-prefix-a-loser"),
-            ("HTTPRoute", "named-aggregate-z-winner"),
-            ("HTTPRoute", "named-aggregate-a-loser"),
-            ("HTTPRoute", "named-colon-z-winner"),
-            ("HTTPRoute", "named-colon-a-loser"),
-            ("HTTPRoute", "named-multi-z-winner"),
-            ("HTTPRoute", "named-multi-a-loser"),
-            ("HTTPRoute", "named-nonpath-z-winner"),
-            ("HTTPRoute", "named-nonpath-a-loser"),
-            ("HTTPRoute", "named-live-z-winner"),
-            ("HTTPRoute", "named-live-a-loser"),
-        ],
-    )
-    .await
+    let names: Vec<_> = (0..256).map(alias_name).collect();
+    let mut resources = vec![
+        ("HTTPRoute", "named-static-z-winner"),
+        ("HTTPRoute", "named-static-a-loser"),
+        ("HTTPRoute", "named-equal-a-winner"),
+        ("HTTPRoute", "named-equal-z-loser"),
+        ("HTTPRoute", "named-exact-z-winner"),
+        ("HTTPRoute", "named-prefix-a-loser"),
+        ("HTTPRoute", "named-aggregate-z-winner"),
+        ("HTTPRoute", "named-aggregate-a-loser"),
+        ("HTTPRoute", "named-colon-z-winner"),
+        ("HTTPRoute", "named-colon-a-loser"),
+        ("HTTPRoute", "named-multi-z-winner"),
+        ("HTTPRoute", "named-multi-a-loser"),
+        ("HTTPRoute", "named-nonpath-z-winner"),
+        ("HTTPRoute", "named-nonpath-a-loser"),
+        ("HTTPRoute", "named-live-z-winner"),
+        ("HTTPRoute", "named-live-a-loser"),
+        ("HTTPRoute", ALIAS_SUPPORT),
+    ];
+    resources.extend(names.iter().map(|name| ("HTTPRoute", name.as_str())));
+    delete_resources(ctx, &resources).await
 }
 
 async fn cleanup_supporting_resources(ctx: &ScenarioCtx) -> Result<()> {
     let mut resources = vec![
         ("HTTPRoute", "named-sentinel"),
         ("EdgionPlugins", "named-capture-observer"),
+        ("EdgionPlugins", ALIAS_OBSERVER),
         ("Service", "named-precedence-30001"),
         ("Service", "named-precedence-30002"),
         ("Service", "named-precedence-30003"),
@@ -276,25 +436,41 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
                 ctx.apply_dir("bootstrap/").await?;
             }
-            ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
+            ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(60)).await?;
             ctx.apply_dir("initial/").await?;
-            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await?;
+            apply_initial_aliases(&ctx).await?;
+            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(60)).await?;
             let updated_path = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
                 "updates/updated/"
             } else {
                 "updated/"
             };
             ctx.apply_dir(updated_path).await?;
-            ctx.wait_phase(SCENARIO, "updated", Duration::from_secs(20)).await?;
+            apply_alias_documents(&ctx, vec![alias_document(255)]).await?;
+            ctx.wait_phase(SCENARIO, "updated", Duration::from_secs(60)).await?;
             ctx.apply_dir("initial/").await?;
-            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await
+            delete_resources(&ctx, &[("HTTPRoute", &alias_name(255))]).await?;
+            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(60)).await
         }
         .await;
         let cleanup = async {
-            cleanup_routes(&ctx).await?;
-            ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
-            cleanup_supporting_resources(&ctx).await?;
-            cleanup_gateway(&ctx).await
+            let mut failures = Vec::new();
+            match cleanup_routes(&ctx).await {
+                Ok(()) => {
+                    if let Err(error) = ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(60)).await {
+                        failures.push(format!("route absence: {error:#}"));
+                    }
+                }
+                Err(error) => failures.push(format!("route cleanup: {error:#}")),
+            }
+            if let Err(error) = cleanup_supporting_resources(&ctx).await {
+                failures.push(format!("supporting cleanup: {error:#}"));
+            }
+            if let Err(error) = cleanup_gateway(&ctx).await {
+                failures.push(format!("gateway cleanup: {error:#}"));
+            }
+            ensure!(failures.is_empty(), "{}", failures.join("; "));
+            Ok(())
         }
         .await;
         match (result, cleanup) {

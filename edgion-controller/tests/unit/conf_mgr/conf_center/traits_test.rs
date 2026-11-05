@@ -180,7 +180,7 @@ fn project_conf_entry_to_key_handles_invalid_content() {
 /// that level of regression guard, the integration scripts
 /// `list-keys-{fs,etcd}.sh` exercise the trait dispatch end-to-end.
 #[test]
-fn list_keys_default_impl_logic_filters_invalid_and_passes_continue_token() {
+fn list_keys_default_impl_rejects_invalid_source_instead_of_partial_success() {
     let entries = vec![
         ConfEntry {
             kind: "HTTPRoute".to_string(),
@@ -200,12 +200,13 @@ fn list_keys_default_impl_logic_filters_invalid_and_passes_continue_token() {
         continue_token: Some("tok-42".to_string()),
     };
 
-    // Call the same shared helper the default impl uses
-    let projected = project_conf_entry_list("HTTPRoute", full);
-
-    // Invalid entry filtered out
-    assert_eq!(projected.items.len(), 1, "invalid YAML must be filter-mapped out");
+    assert!(project_conf_entry_list("HTTPRoute", full.clone()).is_err());
+    let valid = ListResult {
+        items: vec![full.items[0].clone()],
+        continue_token: full.continue_token,
+    };
+    let projected = project_conf_entry_list("HTTPRoute", valid).unwrap();
+    assert_eq!(projected.items.len(), 1);
     assert_eq!(projected.items[0].metadata.name, "good");
-    // continue_token passes through unchanged
     assert_eq!(projected.continue_token.as_deref(), Some("tok-42"));
 }

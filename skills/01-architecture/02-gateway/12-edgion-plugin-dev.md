@@ -317,13 +317,13 @@ If your plugin depends on Secrets but is not wired into this chain, you usually 
 - Status may even pass.
 - But the runtime never gets the actual credentials.
 
-### 6b. If the plugin uses EdgionConfigData refs (`allowRefs`/`denyRefs`, `overrideRef`, or `activeProfileRef`)
+### 6b. If the plugin uses EdgionConfigData refs (`allowRefs`/`denyRefs`, `clusterRegionRef`, or `activeProfileRef`)
 
 Cross-namespace EdgionConfigData refs require controller-side handling for the
 `ReferenceGrant` / `visibility` gate:
 
 1. **Register refs** in `EdgionPluginsHandler.parse()`: call the shared ref-registration helper
-   (see `register_ip_allow_deny_refs` and the `overrideRef` / `activeProfileRef` patterns) to
+   (see `register_ip_allow_deny_refs` and the `clusterRegionRef` / `activeProfileRef` patterns) to
    record the reverse dependency in `EdgionConfigDataRefManager`. This ensures the EdgionPlugins
    resource is requeued when the referenced EdgionConfigData changes (including when a grant is
    added or removed).
@@ -334,7 +334,7 @@ Cross-namespace EdgionConfigData refs require controller-side handling for the
    (reason `RefNotPermitted`) before emitting the `ResolvedRefs` condition.
 4. **Gateway data-plane**: when consuming the ref, check `ref_denied`; if set, apply the correct
    fail behavior: `allowRef` → deny-all fail-closed; `denyRef` → under-block (omit that deny set);
-   `overrideRef` / `activeProfileRef` → fall to base.
+   `clusterRegionRef` / `activeProfileRef` → fall to base.
 5. **Plugins that address a route backendRef by name** (a jump publisher such as
    `DynamicInternalUpstream` or `Canary`) must resolve through
    `RouteRules::find_backend_by_name` against the route's *compiled* backend view. Never scan

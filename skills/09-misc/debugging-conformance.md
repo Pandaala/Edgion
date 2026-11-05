@@ -32,11 +32,11 @@ Controller process_resource()
 Gateway routing-table update
   │  sv (written into MatchInfo, attached to access log of every request)
   ▼
-access log entry  →  match_info.sv = <sv>
+access log entry  →  match_info[].sv = <sv>   (array root → leaf; the last element is the leaf route)
 ```
 
 **Usage**:
-- A request misbehaves → find the `match_info.sv` value in the access log
+- A request misbehaves → find the `match_info[].sv` value in the access log (one per matched delegation level)
 - Use `find-sv <sv>` to find the corresponding resource-processing event in the controller log to see what configuration was synced at that time
 - Then use the `rv` value to find the original K8s resource change in the controller log
 
@@ -82,7 +82,7 @@ If a route shows `Accepted=False` or `ResolvedRefs=False`, the issue is in the c
 
 Key access-log fields:
 - `status` — HTTP status code (200/421/404, etc.); for gRPC, status=200 but check the `grpc_status` field
-- `match_info.sv` — the associated sync_version
+- `match_info[].sv` — the associated sync_version (per matched level)
 - `stage_logs` — execution result of each plugin, formatted as `OK u=alice; ` or `ERR ...`
 - `upstreams` — upstream addresses, latency, retry counts
 - `sni` — TLS SNI (key when debugging 421 issues)

@@ -27,10 +27,10 @@ fn canonical_minimal_fixtures_decode_and_preparse() {
     gateway.pre_parse();
     let mut http: HTTPRoute = source("HTTPRoute", "v1", &fixtures);
     http.pre_parse();
-    assert_eq!(http.effective_rules().unwrap().len(), 1);
+    assert_eq!(http.spec.rules.as_ref().unwrap().len(), 1);
     let mut grpc: GRPCRoute = source("GRPCRoute", "v1", &fixtures);
     grpc.pre_parse();
-    assert_eq!(grpc.effective_rules().unwrap().len(), 1);
+    assert_eq!(grpc.spec.rules.as_ref().unwrap().len(), 1);
     let mut tls: TLSRoute = source("TLSRoute", "v1", &fixtures);
     tls.pre_parse();
     let mut grant: ReferenceGrant = source("ReferenceGrant", "v1", &fixtures);
@@ -52,7 +52,7 @@ fn implemented_beta_sources_convert_to_canonical_models() {
     let gateway: Gateway = source::<GatewayBeta>("Gateway", "v1beta1", &fixtures).into();
     assert_eq!(gateway.spec.gateway_class_name, "edge");
     let route: HTTPRoute = source::<HTTPRouteBeta>("HTTPRoute", "v1beta1", &fixtures).into();
-    assert_eq!(route.effective_rules().unwrap().len(), 1);
+    assert_eq!(route.spec.rules.as_ref().unwrap().len(), 1);
     let grant: ReferenceGrant = source::<ReferenceGrantBeta>("ReferenceGrant", "v1beta1", &fixtures).into();
     assert_eq!(grant.spec.from.len(), 1);
 }

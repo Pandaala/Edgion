@@ -42,9 +42,6 @@ All handlers share state through Axum's `State<Arc<AdminState>>`:
 pub struct AdminState {
     pub conf_mgr: Arc<ConfMgr>,
     pub schema_validator: Arc<SchemaValidator>,
-    pub config_file: Option<String>,
-    pub authorizer: Arc<Authorizer>,
-    pub center_reload_tx: watch::Sender<CenterClientConfig>,
 }
 ```
 
@@ -77,7 +74,7 @@ The following endpoints are served on the **probe listener** (`:12100`, `probe_l
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
+| GET | `/api/v1/server-info` | Get the current `server_id` and ready state. A process restart or resource-epoch replacement changes `server_id` |
 | GET | `/api/v1/access` | Return the **caller's own** effective access snapshot. Authenticated-only; see below |
 
 #### `GET /api/v1/access` — effective access introspection
@@ -104,19 +101,13 @@ Response `data` shape:
   `authz/access.rs`.
 - **`revision`** is a SHA-256 over the canonical `(schemaVersion, resources, operations)`
   serialization — stable for identical access, and it changes when the policy is
-  hot-reloaded, so a client can cheaply detect that its permissions moved.
+  changed at process restart, so a client can cheaply detect that its permissions moved.
 - **Self-only**: it reports the `Role` already attached to *this* request. There
   is no way to ask about another identity.
 - **Auth**: missing/unknown token → `401` (the route is not in the public
   skip-set). It carries the inherent `access-self` verb, which no RBAC rule can
   grant or revoke — see
   [11-authentication-authorization.md](11-authentication-authorization.md).
-
-### Reload
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/reload` | Request asynchronous lifecycle rebuild: stop controllers, clear the current ConfigSyncServer, call `ControllerRuntime::reset()`, build a new server, and replay initialization. **The 200 is an initiation acknowledgement only** — `request_reload()` is fire-and-forget, so a reload that starts and then wedges still answers 200. The new `server_id` is the completion signal: observe it via conf_sync re-list (Gateway), the federation watch stream (Center — see `EdgionCenter/crates/center-app/src/api/reload_ops.rs`), or by polling `GET /api/v1/server-info`. Returns `Retry-After: 5` on 503 (reload already in progress) |
 
 ### Namespaced Resource CRUD
 
@@ -257,7 +248,11 @@ Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). R
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/region-routes/effective` | Effective region-route view |
-| POST | `/api/v1/cluster-region-routes/failover` | Patch region failover state |
+| GET | `/api/v1/cluster-region-settings/keys` | Bounded source identity projection |
+| GET | `/api/v1/cluster-region-settings/{namespace}/{name}` | Fresh bounded source setting |
+| GET | `/api/v1/cluster-region-settings/{namespace}/{name}/consumers` | Source table compatibility with observed consumers |
+| POST | `/api/v1/cluster-region-settings/{namespace}/{name}/failover/preview` | Preview one validated source change |
+| POST | `/api/v1/cluster-region-settings/{namespace}/{name}/failover` | Apply with a required source precondition; readiness gated |
 | POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Trigger ACME processing |
 | POST | `/api/v1/services/conf-sync-ca/rotate` | Trigger conf_sync CA rotation |
 | GET | `/api/v1/diagnostics/nested_ext_ref_usage` | ExtensionRef usage diagnostics |
@@ -426,20 +421,24 @@ The router applies `require_ready_middleware` (in `edgion-controller/src/api/mod
 - `POST /api/v1/cluster/{kind}` / `PUT /api/v1/cluster/{kind}/{name}` / `DELETE /api/v1/cluster/{kind}/{name}`
 - `POST /api/v1/namespaced/{kind}/{namespace}` / `PUT /api/v1/namespaced/{kind}/{namespace}/{name}` / `DELETE /api/v1/namespaced/{kind}/{namespace}/{name}`
 
-While the controller is in init or reload (`is_ready() == false`), these endpoints respond with `503 Service Unavailable` instead of entering `parse_resource_and_update_version` and `ConfCenter::create_one / update_one / delete_one`. Without this gate, writes accepted during the LIST + cache-build window bypass cache consistency and (in non-K8s mode) race `update_resource_version` against the init flow's `resourceVersion` sequencing.
+While the controller is initializing or recovering (`is_ready() == false`), these endpoints respond with `503 Service Unavailable` instead of entering `parse_resource_and_update_version` and `ConfCenter::create_one / update_one / delete_one`. Without this gate, writes accepted during the LIST + cache-build window bypass cache consistency and (in non-K8s mode) race `update_resource_version` against the init flow's `resourceVersion` sequencing.
 
 Endpoints intentionally not gated:
 
 - `GET` endpoints on `/api/v1/...` (reads may return partial data during init — explicit operator/debug choice).
 - `/api/v1/auth/*` — auth must stay reachable. (`/health`, `/ready`, `/metrics` are on separate listeners and are not routed through the Admin API router at all.)
-- `/api/v1/reload` — `request_reload` itself returns an error when the center is not started, and reload is the mechanism for recovering from a stuck init.
 - `/api/v1/services/acme/.../trigger` — notify-only, does not touch the storage layer.
 - `/api/v1/diagnostics/...` and `/api/v1/server-info` — read-only diagnostic surface.
 - `/configserver/...` — read-only cache surface; already returns 503 via `config_sync_server()` when not ready.
 
 **Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
 
-- `POST /api/v1/cluster-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+The former failover readiness gap is closed by the setting-scoped apply route.
+It requires a canonical source fingerprint and uses `update_one_if_source`.
+Preview and apply have a complete deadline; timeout leaves persistence unknown.
+Filesystem replacement/unlink tasks retain the existing resource lock through
+actual completion. This does not fence external file editors.
+
 - `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli
@@ -507,7 +506,7 @@ The token is read from the following sources (highest precedence first):
 1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
 2. **`admin_token`** config field (a Secret-mounted config file).
 
-A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and survives reloads (re-merged by `Authorizer::apply`). When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
+A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and is installed at startup by `Authorizer::apply`. When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
 
 See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
@@ -532,3 +531,22 @@ api::serve_with_shutdown(conf_mgr, schema_validator, addr, shutdown_signal).awai
 ```
 
 `serve_with_shutdown` uses Axum's `with_graceful_shutdown` to stop accepting new connections after a shutdown signal is received and wait for in-flight requests to complete.
+
+## Federation HTTP transport limits
+
+The reverse HTTP proxy has a 12-second deadline covering dispatch, body collection
+and response-channel waiting. It accepts at most a 1 MiB request body, 10 MiB
+response body, 16 KiB path, 32-byte method, 128-byte request identifier, and 64
+headers totaling 32 KiB. Federation protobuf encode/decode limits are explicitly
+16 MiB on both peers. Final response statuses must be 200..599. Body read failure
+returns a fixed 502; size overflow returns a fixed 413, without the original
+entity headers. No raw path/query or body-read error enters proxy diagnostics.
+A timeout can leave a started blocking mutation persisted; read back rather than
+replaying automatically. Source list/get/key/count and dedicated setting/RegionRoute responses use the
+shared capped JSON writer: serialization stops before exceeding 10 MiB and never
+publishes a partial body. DTO projection has an 8 MiB measured-output ledger and
+1,000 total rows shared across parent observations, service usages and backends;
+nested rows count conservatively again when enclosed in their parent. Measurement
+includes JSON escaping and happens before retaining projected values. Source
+objects and internal runtime snapshots have separate input/work budgets; these
+output limits do not bound the complete internal runtime snapshot allocation.

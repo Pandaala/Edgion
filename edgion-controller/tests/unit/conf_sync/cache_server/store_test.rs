@@ -148,6 +148,45 @@ fn get_events_filters_by_requested_version() {
 }
 
 #[test]
+fn zero_cursor_expires_only_after_history_is_evicted() {
+    let mut store = make_store();
+    let (snapshot, cursor) = store.snapshot_owned();
+    assert!(snapshot.is_empty());
+    assert_eq!(cursor, 0);
+
+    for version in 1..=10 {
+        store.apply_event(
+            EventType::Add,
+            TestResource::new(&format!("resource-{version}"), Some("default")),
+            version,
+        );
+    }
+    let (version, events) = store.get_events_from_sync_version(cursor).unwrap();
+    assert_eq!(version, 10);
+    assert_eq!(events.unwrap().len(), 10);
+
+    store.apply_event(EventType::Add, TestResource::new("resource-11", Some("default")), 11);
+    assert_eq!(
+        store.get_events_from_sync_version(cursor).unwrap_err(),
+        WATCH_ERR_TOO_OLD_VERSION
+    );
+    // A cursor equal to the evicted version has already consumed that event.
+    let (version, events) = store.get_events_from_sync_version(1).unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(
+        events
+            .unwrap()
+            .iter()
+            .map(|event| event.sync_version)
+            .collect::<Vec<_>>(),
+        (2..=11).collect::<Vec<_>>()
+    );
+    let (snapshot, version) = store.snapshot_owned();
+    assert_eq!(version, 11);
+    assert_eq!(snapshot.len(), 11);
+}
+
+#[test]
 fn stale_version_error_when_events_expired() {
     let mut store: EventStore<TestResource> = EventStore::new(50);
 

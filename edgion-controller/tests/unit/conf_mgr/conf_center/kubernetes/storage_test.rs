@@ -69,6 +69,7 @@ async fn gateway_class_beta_create_and_get_share_selected_endpoint() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -121,6 +122,7 @@ async fn gateway_class_selection_prefers_v1_and_falls_back_only_when_absent() {
             }
         });
         let storage = KubernetesStorage {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),
@@ -171,6 +173,7 @@ async fn http_route_selection_prefers_v1_and_falls_back_only_when_absent() {
             }
         });
         let storage = KubernetesStorage {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),
@@ -281,6 +284,18 @@ async fn http_route_beta_crud_projects_to_selected_wire_version() {
     .unwrap();
     assert_eq!(projected["apiVersion"], "gateway.networking.k8s.io/v1");
     assert_eq!(projected["spec"], source["spec"]);
+
+    // Controller-resolved delegation keys never reach a Kubernetes write.
+    let mut injected = source.clone();
+    injected["spec"]["resolvedDelegationKeys"] = json!([]);
+    let projected = serde_json::to_value(
+        storage
+            .parse_dynamic_object("HTTPRoute", &injected.to_string(), &v1)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(projected["spec"].get("resolvedDelegationKeys").is_none());
+    assert_eq!(projected["spec"], source["spec"]);
 }
 
 #[tokio::test]
@@ -316,6 +331,7 @@ async fn http_route_beta_create_and_get_use_selected_namespaced_endpoint() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -379,6 +395,7 @@ async fn gateway_beta_create_and_get_use_selected_namespaced_endpoint() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -436,6 +453,7 @@ async fn gateway_selection_prefers_v1_and_falls_back_only_on_absence() {
             }
         });
         let storage = KubernetesStorage {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),
@@ -477,6 +495,7 @@ async fn canonical_crud_resolver_matches_the_typed_source_inventory() {
         Ok::<_, Infallible>(Response::new(Body::empty()))
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -578,6 +597,7 @@ async fn reference_grant_crud_resolver_follows_real_discovery() {
             Ok::<_, Infallible>(response)
         });
         let storage = KubernetesStorage {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),
@@ -629,6 +649,7 @@ async fn legacy_route_crud_selects_alpha_only_and_prefers_v1_when_available() {
                 }
             });
             let storage = KubernetesStorage {
+                source_generation: uuid::Uuid::new_v4().to_string(),
                 client: Client::new(service, "default"),
                 allowed_namespaces: BTreeSet::new(),
                 reference_grant_version: Arc::new(OnceCell::new()),
@@ -664,10 +685,11 @@ async fn reference_grant_prefers_v1_when_both_versions_are_served() {
         let count = count.clone();
         async move {
             count.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, Infallible>(reference_grant_discovery_response())
+            Ok::<_, Infallible>(reference_grant_discovery_response("v1"))
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -698,7 +720,7 @@ async fn reference_grant_selection_is_shared_and_pinned_after_discovery() {
             let served = path == "/apis/gateway.networking.k8s.io/v1beta1"
                 || (path == "/apis/gateway.networking.k8s.io/v1" && available.load(Ordering::SeqCst));
             Ok::<_, Infallible>(if served {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1beta1")
             } else {
                 not_found_response()
             })
@@ -707,6 +729,7 @@ async fn reference_grant_selection_is_shared_and_pinned_after_discovery() {
     let client = Client::new(service, "default");
     let selected = Arc::new(OnceCell::new());
     let make_storage = || KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: client.clone(),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: selected.clone(),
@@ -760,12 +783,12 @@ async fn shared_reference_grant_selection_pins_main_and_runtime_crud_paths() {
             };
             let response = if path == "/apis/gateway.networking.k8s.io/v1" {
                 if available.load(Ordering::SeqCst) {
-                    reference_grant_discovery_response()
+                    reference_grant_discovery_response("v1beta1")
                 } else {
                     not_found_response()
                 }
             } else if path == "/apis/gateway.networking.k8s.io/v1beta1" {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1beta1")
             } else if parts.method == Method::GET && path.ends_with("/referencegrants") {
                 json_response(
                     StatusCode::OK,
@@ -794,6 +817,7 @@ async fn shared_reference_grant_selection_pins_main_and_runtime_crud_paths() {
     let client = Client::new(service, "default");
     let selection = Arc::new(OnceCell::new());
     let storage = || KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: client.clone(),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: selection.clone(),
@@ -915,11 +939,12 @@ async fn transient_reference_grant_discovery_failure_retries_before_selection() 
                     }),
                 )
             } else {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1")
             })
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -944,6 +969,7 @@ async fn tls_route_storage_uses_selected_v1_and_rejects_other_versions() {
         Ok::<_, Infallible>(Response::new(Body::empty()))
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1007,6 +1033,7 @@ async fn tls_route_create_projects_alpha3_to_v1() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1098,12 +1125,12 @@ fn config_map_value(resource_version: Option<&str>, status_state: Option<&str>, 
     value
 }
 
-fn reference_grant_discovery_response() -> Response<Body> {
+fn reference_grant_discovery_response(version: &str) -> Response<Body> {
     json_response(
         StatusCode::OK,
         json!({
             "apiVersion": "v1",
-            "groupVersion": "gateway.networking.k8s.io/v1beta1",
+            "groupVersion": format!("gateway.networking.k8s.io/{version}"),
             "kind": "APIResourceList",
             "resources": [{
                 "name": "referencegrants",
@@ -1210,7 +1237,7 @@ async fn delete_sends_kubernetes_resource_version_precondition() {
             let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
                 not_found_response()
             } else if parts.method == Method::GET {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1beta1")
             } else {
                 json_response(
                     StatusCode::OK,
@@ -1226,6 +1253,7 @@ async fn delete_sends_kubernetes_resource_version_precondition() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1249,28 +1277,30 @@ async fn delete_sends_kubernetes_resource_version_precondition() {
 }
 
 #[tokio::test]
-async fn configmap_key_listing_is_limited_to_watched_namespaces_and_paginates_locally() {
+async fn configmap_key_listing_is_limited_to_watched_namespaces_and_paginates_natively() {
     let paths = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&paths);
     let service = service_fn(move |request: http::Request<Body>| {
         let captured = Arc::clone(&captured);
         async move {
+            let second = request.uri().query().is_some_and(|q| q.contains("continue=next"));
+            assert!(request.uri().query().unwrap().contains("limit=1"));
             captured.lock().push(request.uri().path().to_string());
             Ok::<_, Infallible>(json_response(
                 StatusCode::OK,
                 json!({
                     "apiVersion": "meta.k8s.io/v1",
                     "kind": "PartialObjectMetadataList",
-                    "metadata": {"resourceVersion": "7"},
+                    "metadata": {"resourceVersion": "7", "continue":if second {""}else{"next"}},
                     "items": [
-                        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a-2", "namespace": "allowed"}},
-                        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a-1", "namespace": "allowed"}}
+                        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": if second {"a-2"}else{"a-1"}, "namespace": "allowed"}}
                     ]
                 }),
             ))
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::from(["allowed".to_string()]),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1315,54 +1345,6 @@ async fn configmap_key_listing_is_limited_to_watched_namespaces_and_paginates_lo
             "/api/v1/namespaces/allowed/configmaps"
         ]
     );
-}
-
-#[test]
-fn namespace_pagination_rejects_foreign_tokens() {
-    let error = paginate_namespaced(
-        vec![1],
-        Some(ListOptions {
-            limit: 1,
-            continue_token: Some("kubernetes-token".to_string()),
-        }),
-        "ConfigMap",
-        &BTreeSet::from(["allowed".to_string()]),
-        Some("7"),
-    )
-    .expect_err("foreign tokens must be rejected");
-    assert!(matches!(error, ConfWriterError::StalePagination(_)));
-}
-
-#[test]
-fn namespace_pagination_token_is_bound_to_query_and_snapshot() {
-    let namespaces = BTreeSet::from(["allowed".to_string()]);
-    let first = paginate_namespaced(
-        vec![1, 2],
-        Some(ListOptions {
-            limit: 1,
-            continue_token: None,
-        }),
-        "ConfigMap",
-        &namespaces,
-        Some("7"),
-    )
-    .expect("first page must succeed");
-    let token = first.continue_token.expect("first page must continue");
-
-    for (kind, resource_version) in [("Secret", "7"), ("ConfigMap", "8")] {
-        let error = paginate_namespaced(
-            vec![1, 2],
-            Some(ListOptions {
-                limit: 1,
-                continue_token: Some(token.clone()),
-            }),
-            kind,
-            &namespaces,
-            Some(resource_version),
-        )
-        .expect_err("token reuse across a query or snapshot must fail");
-        assert!(matches!(error, ConfWriterError::StalePagination(_)));
-    }
 }
 
 fn canonical_reference_grant_value() -> Value {
@@ -1533,6 +1515,7 @@ async fn unconditional_update_surfaces_replace_conflict_without_server_retry() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1588,6 +1571,7 @@ async fn conditional_update_does_not_retry_replace_conflict() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1642,6 +1626,7 @@ async fn unconditional_update_does_not_retry_non_conflict_replace_error() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1685,6 +1670,7 @@ async fn unconditional_update_does_not_retry_a_persistent_conflict() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1731,7 +1717,7 @@ async fn create_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
             let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
                 not_found_response()
             } else if parts.method == Method::GET && parts.uri.path() == "/apis/gateway.networking.k8s.io/v1beta1" {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1beta1")
             } else {
                 json_response(StatusCode::CREATED, value)
             };
@@ -1739,6 +1725,7 @@ async fn create_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1795,7 +1782,7 @@ async fn update_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
             let response = if path == "/apis/gateway.networking.k8s.io/v1" {
                 not_found_response()
             } else if parts.method == Method::GET && path == "/apis/gateway.networking.k8s.io/v1beta1" {
-                reference_grant_discovery_response()
+                reference_grant_discovery_response("v1beta1")
             } else if parts.method == Method::GET {
                 json_response(
                     StatusCode::OK,
@@ -1820,6 +1807,7 @@ async fn update_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1885,6 +1873,7 @@ async fn reference_grant_probe_propagates_forbidden_without_fallback() {
         }
     });
     let storage = KubernetesStorage {
+        source_generation: uuid::Uuid::new_v4().to_string(),
         client: Client::new(service, "default"),
         allowed_namespaces: BTreeSet::new(),
         reference_grant_version: Arc::new(OnceCell::new()),
@@ -1903,11 +1892,7 @@ async fn reference_grant_probe_propagates_forbidden_without_fallback() {
         )
         .await
         .expect_err("forbidden probe must fail");
-    let message = match err {
-        ConfWriterError::InternalError(message) => message,
-        other => panic!("expected internal probe error, got {other:?}"),
-    };
-    assert!(message.to_ascii_lowercase().contains("forbidden"));
+    assert!(matches!(err, ConfWriterError::PermissionDenied(_)));
     let paths = paths.lock();
     assert_eq!(paths.len(), 1, "RBAC failure must not be treated as v1 absence");
     assert_eq!(paths[0].trim_end_matches('?'), "/apis/gateway.networking.k8s.io/v1");
@@ -1926,6 +1911,7 @@ impl KubernetesStorage {
             Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
         });
         let storage = Self {
+            source_generation: uuid::Uuid::new_v4().to_string(),
             client: Client::new(service, "default"),
             allowed_namespaces: BTreeSet::new(),
             reference_grant_version: Arc::new(OnceCell::new()),

@@ -23,15 +23,15 @@ HTTPRoute is the most complex resource in Edgion. It defines HTTP-layer routing 
 ### validate
 
 1. Calls `validate_http_route_if_enabled()` for matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
-2. Per-rule header modifier validation uses the shared `HTTPRouteRule::header_modifier_error()` in the invalid-rule path, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
+2. Per-rule header modifier validation uses the shared `HTTPRouteRule::header_modifier_error()` in the invalid-rule path, including backend filters and delegating rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 
 ### Decode and type-level preparse
 
 `HTTPRouteMatch.headers` normalizes at typed deserialization: only the first
 ASCII-case-equivalent name survives, with its original type, value, spelling,
-and relative order. This happens before Controller validation and delegation,
-and also covers Gateway decoding of both declared and resolved rules.
-Delegation still rejects conflicting effective parent/child constraints.
+and relative order. This happens before Controller validation and also covers
+Gateway decoding. Delegation does not merge parent and child predicates: each
+level matches its own decoded headers.
 
 `HTTPRoute::preparse()` normalizes paths and resolves rule annotations;
 `ResourceMeta::pre_parse()` additionally parses timeouts and retries.
@@ -53,98 +53,115 @@ unsupported. Exact same-family delegation uses the Gateway API group and no port
 Source namespace omission defaults to `default`; an explicitly invalid namespace
 or missing/invalid source name closes the existing Accepted gate, including direct
 status calls, and empties derived executable rules/listeners. No native target is
-looked up or registered for that invalid source. A valid parent selection of an
-invalid child retains its named/wildcard recovery edge but drops the child before
-native backend reads, Grant checks, or rule cloning.
+looked up or registered for that invalid source.
 
-Delegation authorizes each original child terminal before cloning, using the
-child's source namespace even when its target is the root namespace. The root
-Route owns wakeups. Valid terminal receipts survive later rule filtering and
+Under delegation every route, parent or child, authorizes and registers only its
+own authored backendRefs under its own owner; no rule is cloned across routes.
+A child's terminal backends are therefore checked with the child as the referrer
+and wake the child. Valid terminal receipts survive later rule filtering and
 missing/denied targets. Service manager owners retain their explicit canonical
-namespace while root Grant wakeups retain raw metadata namespace representation.
+namespace while Grant wakeups retain raw metadata namespace representation.
 Apply replaces all prior dependencies and requeues dropped policy keys.
 
 ### parse
 
-0. **Replace ReferenceGrant dependencies, mark denials, then flatten delegation**: clear the prior CrossNsRefManager set once at parse entry. Before every ReferenceGrant store read, register the target namespace under the root Route owner; this applies to ordinary backendRefs, RequestMirror, and child-declared flattened backends. Then mark `ref_denied` on spec.rules before flattening (flatten clones non-delegating sibling rules verbatim into resolved_rules, which the gateway compiles instead of spec.rules — marking afterwards would leave the compiled copies un-denied). If any rule delegates (`backendRef {group: gateway.networking.k8s.io, kind: HTTPRoute}`), `route_delegation::flatten_route()` DFS-expands the delegation tree into `spec.resolved_rules` (schemars-skip, serialized for conf_sync) and stores diagnostics in the in-process `spec.delegation_issues`. `RouteDelegationIndex` (child → parents) is updated; edge deltas requeue affected children so their child-side status stays fresh. Canonical user semantics: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); module: `handlers/route_delegation.rs`
-1. **Complete cross-namespace reference collection**: idempotently add all authored and flattened target namespaces to CrossNsRefManager without another clear, preserving dependencies installed before authorization reads
+0. **Replace ReferenceGrant dependencies and mark denials**: clear the prior CrossNsRefManager set once at parse entry. Before every ReferenceGrant store read, register the target namespace under the Route owner; this applies to ordinary backendRefs and RequestMirror. Mark `ref_denied` on `spec.rules`. Clear any authored `resolved_delegation_keys` (controller-owned). Then sync the participants-only `DelegationGraph` (`http_route_delegation_graph`, `delegation_graph.rs`) from this route's own facts (`route_delegation.rs::http_delegation_facts`): parentRef shape, delegating targets with their standard-filter masks, declared parents, root flag. An ordinary route costs one participant probe. A non-inert child gets `resolved_delegation_keys` = its confirmed keys (≤6). The returned requeue set (target children, declared parents, level dependents) goes through the workqueue. See [Delegation (cascading match)](#delegation-cascading-match).
+1. **Complete cross-namespace reference collection**: idempotently add all authored target namespaces to CrossNsRefManager without another clear, preserving dependencies installed before authorization reads
 2. **Register Service references**: register all Service-typed backendRefs into ServiceRefManager so that Service changes automatically requeue the route
 3. **Clear and recompute resolved_listeners**: from parentRef, resolve the target Listener's address and protocol, producing `Vec<ListenerKey>` (formatted `"{addr}/{protocol}"`) for per-listener route isolation on the Gateway side. Resolution logic is shared via `resolve_listener_keys()` (used by 6 handlers in `handlers/route_utils.rs`):
    - Always look up the Gateway to obtain address and protocol (the parentRef.port-only fast path no longer exists)
    - When sectionName + port are both present, validate consistency between them
    - If neither is specified → use all of the Gateway's Listeners (subject to the allowedRoutes namespace check)
 4. **Resolve resolved_hostnames**: compute the intersection of the route's hostnames with the Gateway Listener's hostnames
-5. (ReferenceGrant `ref_denied` marking happens in step 0, before the flatten — see above)
+5. (ReferenceGrant `ref_denied` marking happens in step 0 — see above)
 
-### Delegated parent match transport (ARCH-156)
+### Delegation (cascading match)
 
-The Controller clears authored `resolvedParentMatch` and regenerates it on every
-flattened rule. A tagged `direct` entry identifies a copied root-owned sibling;
-`delegated.matches` aligns one-to-one with the effective rule's matches. Each
-entry carries the conjunction of 1..8 authored ancestor `rawPathPrefixes`.
-Gateway normalizes them exactly once using its actual path policy. Controller
-checks normalized copies but preserves raw effective child paths for the same
-Gateway pass; inherited default-root children retain the raw nearest prefix.
-Repeating BASE decoding can widen overlapping percent escapes.
-Headers, query parameters, and method remain in the existing merged match.
-OR branches retain their own pairing; no parent resource object or filter chain
-is re-executed during matching. Existing transitive dependency registration
-requeues the root for descendant changes, including missing-child recovery.
+The Controller validates and publishes each route once; it no longer flattens
+delegation trees. The Gateway matches level by level (see the
+[HTTP route engine](../02-gateway/03-routes/01-http-route.md#delegation-cascading-match)).
+Design: [`tasks/todo/route-delegation-cascading-match-design.md`](../../../tasks/todo/route-delegation-cascading-match-design.md);
+user semantics: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md);
+review knowledge: [cascading match (ISSUE-010)](../../04-review/routing/regression-guards/delegation-cascading-match-issue-010.md).
 
-Regex containment is enforced at request matching, not guessed from regex text.
-Controller Exact/Prefix admission and the nested omitted-path limitation remain
-conservative. Gateway omits a runtime guard only when its canonical matcher proves
-a literal Exact/Prefix child is contained by every literal ancestor. Regex,
-parameter syntax and unproven relationships retain the full ancestor guard.
-Elision never removes resource dependencies or requeue propagation. The schema-hidden sidecar survives conf_sync; the Gateway rejects
-missing or invalid sidecars on resolved rules before runtime construction.
-See the [delegation boundary guard](../../04-review/routing/regression-guards/delegation-root-prefix-inherits-scope.md).
+- **Shared vocabulary** (`edgion-resources/src/resources/route_delegation.rs`):
+  `classify_parent_refs` (`None` / `Root` / `Child(≤3)` / `Invalid`),
+  `delegation_target_of_http_rule` (exactly one HTTPRoute backendRef, no port, no
+  per-backend filters, PathPrefix matches only), `DelegationKey
+  { kind, parent_ns, parent_name, target_ns, target_name | "*" }`,
+  `standard_filter_mask_http`, `MAX_ROUTE_DELEGATION_LEVELS = 5`,
+  `MAX_ROUTE_KIND_PARENT_REFS = 3`. Controller and Gateway use the same helpers.
+- **Facts** (`handlers/route_delegation.rs`): malformed delegating rules and
+  delegating rules with a backend-selecting plugin (`is_backend_selecting_plugin`:
+  upstream-jump plugins plus `AllEndpointStatus` and `AiProxy`) become invalid
+  rules (`PartiallyInvalid`). A route with an invalid shape, or a child that sets
+  `hostnames`, is inert: no targets, no keys. A route that fails its own
+  validation (any error, including one malformed ordinary rule) is `blocked`: it
+  keeps its edges but gets no level, so its children become `NotAttached`.
+- **Graph** (`delegation_graph.rs`): parent → (target, edge rules: each delegating
+  rule's standard-filter mask and scope, canonical path prefixes for HTTP or
+  service names for gRPC), named target →
+  parents (keeps `BackendNotFound` / `RefNotPermitted` fresh on any route
+  create/delete with one probe), parent → declared children, child → declaration,
+  roots, and the minimum level (root = 1, child = 1 + min over confirmed parents,
+  above 5 = none). A wildcard target filters the declared-children index by
+  namespace, never scans a namespace. Cycles are not detected; levels converge to
+  none once the cycle loses its root.
+- **Requeue** (workqueue only): parent target change → old and new target
+  children; child parentRefs change → only those old and new declared parents that
+  name this child as a target (a `*` parent's status never depends on a child);
+  level or `blocked` change → children (at most 4 hops). Handlers read only in-memory
+  indexes.
+- **Transport**: the conf_sync payload is the authored route plus, on a child,
+  `resolved_delegation_keys` (`#[schemars(skip)]`, skipped when empty, so an
+  ordinary route's payload is unchanged). There is no copied rule set, parent-match
+  sidecar or namespace stamp.
 
 ### on_change
 
 1. Register into `GatewayRouteIndex` (Gateway changes will requeue this route)
 2. Update `AttachedRouteTracker`; if the attachment relationship has changed, requeue the parent Gateway (to refresh the attachedRoutes count)
-3. Requeue delegating parents via `RouteDelegationIndex.parents_of()` (this route may be someone's delegation child; parents must re-flatten)
+3. Requeue the parents that name this route as a delegation target (`DelegationGraph::parents_naming`, one probe; refreshes their `BackendNotFound` / `RefNotPermitted`). All other delegation requeues are issued by `parse`
 
-> **Post-init one-shot (not an on_change step):** `trigger_delegation_parent_revalidation` (`ref_grant/revalidation_listener.rs`, invoked from `run_post_cache_ready_revalidations`) requeues all registered delegating parents once caches are ready, closing the init window where a parent flattened before its children were loaded.
+> **Post-init one-shot (not an on_change step):** `trigger_delegation_parent_revalidation` (`ref_grant/revalidation_listener.rs`, invoked from `run_post_cache_ready_revalidations`) requeues all registered delegating parents once caches are ready, closing the init window where a parent was processed before its children were loaded.
 
 ### on_delete
 
 - Clear registrations in CrossNsRefManager, ServiceRefManager, GatewayRouteIndex, and AttachedRouteTracker
-- Delegation cleanup: clear this route's own parent-side edges via `update_parent(key, ∅, ∅)` and requeue its former children from the returned delta (their child-side Accepted must refresh), then requeue any parents still delegating to it
+- Delegation cleanup: `DelegationGraph::on_route_deleted` removes a participant and returns its declared children, declared parents and the parents naming it; each is requeued (one read-locked probe for an ordinary route)
 - If AttachedRouteTracker has changes, requeue the parent Gateway
 
 ### update_status
 
 Generate an independent RouteParentStatus for each parentRef:
 - `Accepted`: validates whether the Gateway/Listener corresponding to parentRef exists and admits this route (non-empty hostname intersection, namespace policy permits). Only `kind: Gateway` parentRefs enter this path
-- `ResolvedRefs`: canonical effective target views validate Service/EdgionBackend identity and existence. Invalid references map through the existing `InvalidKind` reason. Valid denied terminals retain `RefNotPermitted` without an existence read. Valid delegation selectors are excluded from terminal existence reads; missing named children surface as `BackendNotFound` via `DelegationIssue::MissingChild`.
-- `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped` — out-of-prefix child rules, filter conflicts, cycles, depth, malformed delegating rules)
+- `ResolvedRefs`: canonical effective target views validate Service/EdgionBackend identity and existence. Invalid references map through the existing `InvalidKind` reason. Valid denied terminals retain `RefNotPermitted` without an existence read. Valid delegation selectors are excluded from terminal existence reads. For named delegation targets, `parent_named_target_errors` reports a missing child as `BackendNotFound` and an existing child that does not declare this parent as `RefNotPermitted`; wildcard targets never report.
+- `PartiallyInvalid`: own invalid rules only, including malformed delegating rules and delegating rules carrying a backend-selecting plugin. Child-caused problems never appear on the parent
 - Native CORS on any backendRef invalidates the entire owning rule through
-  `HTTPRouteRule::unsupported_backend_cors_reason`. The same check is used during
-  delegation flattening and independently on the Gateway's effective rules before
+  `HTTPRouteRule::unsupported_backend_cors_reason`. The same check runs on the
+  Controller and independently on the Gateway's rules before
   runtime compilation. Rule-level native CORS remains supported; no backend policy
   is promoted or merged into the rule. See the
   [scope decision](../../04-review/cors/intentional-design/native-cors-rule-scope.md).
   If an authored rule has this scope error and no effective rule survives, the
-  Gateway attachment uses `Accepted=False/UnsupportedValue` instead. Delegating
-  parents include the rejected child rule's backend CORS reason in their diagnostics.
-- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. Independent delegation drops and authored native backend CORS scope violations escalate on a route where **no** effective rule serves any more: then `Accepted=False/UnsupportedValue` lists the offending `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
-- Child-side delegation status: each `kind: HTTPRoute` parentRef (reverse lock) gets an `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, computed from `RouteDelegationIndex`)
+  Gateway attachment uses `Accepted=False/UnsupportedValue` instead. A delegation
+  child reports the reason on its own entries, never on its parent.
+- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. Authored native backend CORS scope violations escalate on a route where **no** effective rule serves any more: then `Accepted=False/UnsupportedValue` lists the offending `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
+- Child-side delegation status (`child_entry_verdict`): each `kind: HTTPRoute` parentRef gets its own entry — `Accepted=True/DelegationAccepted` when the edge is confirmed and the parent has a level ≤4; otherwise `Accepted=False` with `NoMatchingParent` (no confirmed edge), `NotAttached` (parent has no level) or `DepthExceeded` (parent level 5). An invalid shape (`InvalidParentRefs`) or child `hostnames` (`UnsupportedValue`) rejects every entry. A mandatory-filter conflict with that parent (edge mask AND child union mask, then per-rule masks to name rules) keeps `Accepted=True` and adds `PartiallyInvalid=True`. The child's own invalid rules ride its entries as for any route. The Gateway installs child keys only for entries with `Accepted=True`
 - Cleans up old status entries that correspond to parentRefs no longer present
 
 Native CORS also rejects `allowCredentials: true` with any exact `*` entry in
 `exposeHeaders`, including mixed lists. `HTTPRouteRule::unsupported_cors_reason`
 combines this support restriction with backend scope enforcement for Controller
-status/delegation and Gateway publication. Valid siblings survive; an authored
+status and Gateway publication. Valid siblings survive; an authored
 violation with no effective rule uses the existing attachment rejection path.
 See the [credentialed exposure policy](../../04-review/cors/intentional-design/native-credentialed-exposure-policy.md).
 
 ### AI source diagnostics and execution admission
 
-After resolving references and delegated rules, the Controller attaches bounded
-`resolved_ai_admission` backend facts to both authored and flattened rules.
-There is one fact per original backend slot in both vectors; invalid or denied
+After resolving references, the Controller attaches bounded
+`resolved_ai_admission` backend facts to the route's own rules.
+There is one fact per original backend slot; invalid or denied
 targets produce `Missing` without reading Service/EdgionBackend state or changing
 weights. Only same-namespace or authorized valid targets reach those stores.
 These transport-only fields are hidden from CRD schema and carry no backend
@@ -159,47 +176,45 @@ matched rule's generic 500 instead of ordinary upstream or another rule fallback
 Missing required facts and mismatched route generations fail closed. Backend
 ExtensionRef execution remains first-use admission of the selected backend under
 the captured scope; restrictions on unselected candidates do not reject early. Independent
-backend WAF/native CORS/delegation rejection behavior remains unchanged.
+backend WAF/native CORS rejection behavior remains unchanged.
 
 ### ExtensionRef ownership and recovery
 
-The Controller consumes `HttpRouteExtensionRefs` loans from actual authored or
-effective filter positions. Exact `edgion.io/EdgionPlugins`, a valid required name,
+The Controller consumes `HttpRouteExtensionRefs` loans from the route's own
+filter positions. Exact `edgion.io/EdgionPlugins`, a valid required name,
 and a valid owning Route identity precede dependency registration or content
-lookup. Authored loans ignore namespace stamps. Effective loans accept the existing
-controller-owned `resolved_namespace` only from `resolved_rules`; they describe the
-published root and field position, without claiming the original child's UID or
-generation. No ExtensionRef loan can mint a ReferenceGrant query.
+lookup. Every ExtensionRef resolves in the namespace of the route that declares
+it; there is no namespace stamp, and delegation never moves a filter into another
+route. No ExtensionRef loan can mint a ReferenceGrant query. (The `authored*` and
+`effective*` facade methods now return the same data; collapsing them is an open
+follow-up.)
 
-Delegation registers every valid original child's plugin dependency under the
-root wakeup identity before rule drops. Only structurally eligible scope checks
-read plugin content, using `get_raw_any` after registration so a pending desired
-generation is visible. Parse entry clears the prior plugin dependency set once;
-later authored/effective/status registration is additive. An omitted root namespace
-stays omitted in the manager wakeup key while local targets use `default`.
-Invalid owners and targets contribute no new plugin edge or content lookup.
-For a valid owner, parse is the sole dependency-clear boundary and status only
-extends the set. A standalone status call for an invalid source may withdraw
-stale dependencies and derived rules/listeners/hostnames; an invalid target,
-dropped rule or missing plugin under a valid owner does not permit that cleanup.
-Gateway rule and selected-backend builders now borrow the actual Route and
-its effective rule/backend/filter slots through the same canonical facade. A
-validated local target becomes one cold complete store key; invalid descriptors
-retain a positional `None` and cannot query or consume a same-name plugin.
-Publication demand, AI admission and adaptive facts use that same projection.
-Request resolution, CORS/WAF selection and access-log declarations consume these
-validated keys or their positional results under the captured class scope.
-Authored stamps are ignored even on direct Gateway input; only actual
-`resolved_rules` can supply validated child-local namespace stamps. These loans
-still carry no Grant authority or original-child identity beyond the transport.
-R3a2 verification is scoped to these consumers; mirror/descriptor work and live
-conformance remain separate.
+Each route registers its own plugin dependencies under its own owner. Only
+structurally eligible scope checks read plugin content, using `get_raw_any` after
+registration so a pending desired generation is visible. Parse entry clears the
+prior plugin dependency set once; later status registration is additive. An
+omitted route namespace stays omitted in the manager wakeup key while local
+targets use `default`. Invalid owners and targets contribute no new plugin edge
+or content lookup. For a valid owner, parse is the sole dependency-clear boundary
+and status only extends the set. A standalone status call for an invalid source
+may withdraw stale dependencies and derived listeners/hostnames; an invalid
+target, dropped rule or missing plugin under a valid owner does not permit that
+cleanup. Gateway rule and selected-backend builders borrow the actual Route and
+its rule/backend/filter slots through the same canonical facade. A validated
+local target becomes one cold complete store key; invalid descriptors retain a
+positional `None` and cannot query or consume a same-name plugin. Publication
+demand, AI admission and adaptive facts use that same projection. Request
+resolution, CORS/WAF selection and access-log declarations consume these
+validated keys or their positional results under the captured class scope. On a
+delegated request each ancestor level resolves its own ExtensionRef array against
+the root-matched Gateway's plugin scope (`DelegatedMatch::ext_refs`); see the
+[ExtensionRef locality guard](../../04-review/routing/regression-guards/delegated-extensionref-remains-child-local.md).
 
 ## Gateway-side processing
 
 HTTPRoute's ConfHandler implements route compilation and registration:
 
-0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with the Namespace of the HTTPRoute that declared it, preserving parent-local and child-local EdgionPlugins resolution in the shared Gateway runtime. Authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
+0. **Rules and delegation children**: compiles `spec.rules` minus `invalid_rule_indices`. A delegation child (`delegation_build.rs::is_delegation_child`: all parentRefs are HTTPRoute refs) has no `resolved_listeners`; it is not bucketed by listener and is routed to the delegation slot path instead. Its accepted keys are `child_accepted_keys`: Controller-resolved keys, locally re-checked against the child's own parentRefs and shape (`accept_child_keys`), and kept only for parentRef entries with a current `Accepted=True` status. Child units are compiled once (own namespace, no hostname, no listener check; leaf metric handles and plugin scopes prebuilt for every Gateway in the process) and `Arc`-shared into the subtrees of their ≤6 keys. A delegating rule unit obtains its `Arc<DelegationSlot>` at compile time from the global per-kind `DelegationSlotTable`
 1. **parentRef filtering**: require a nonempty processed Controller stamp and a current owned parent status with `Accepted=True`; missing or stale status admits no parent
 2. **Per-listener route management**: based on resolved_listeners, register route rules into the `HttpRouteManager` of the corresponding `ListenerKey`
 3. **Domain route table**: each physical Listener maintains authored hostname groups; only omitted/empty hostname lists create a separate internal catch-all. Both planes reject a bare `*` or any other invalid hostname entry for the complete Route.
@@ -237,21 +252,20 @@ Live failures of a valid Service section/endpoints retain their existing 503 map
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | HTTPRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's Listener |
-| HTTPRoute → HTTPRoute | HTTPRoute | delegation backendRef (`kind: HTTPRoute`) + `RouteDelegationIndex` | Parent flattens child rules into `resolved_rules`; child changes requeue parents (named + wildcard-namespace edges, transitively registered at the root) |
+| HTTPRoute → HTTPRoute | HTTPRoute | delegation backendRef (`kind: HTTPRoute`) + child `parentRefs {kind: HTTPRoute}` + `DelegationGraph` | Edge requires bidirectional confirmation; child carries `resolved_delegation_keys`; Gateway matches through per-key subtrees. A child change republishes only the child |
 | HTTPRoute → Service | Service | backendRef | Route's backend target service |
 | HTTPRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
 | HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | AI capability drives rule validation; apply/delete requeues the route |
-| HTTPRoute → Secret/ConfigMap | Secret/ConfigMap | internal Edgion-auth and indirect plugins | Auth material uses the actual declaring route for permission and the published root for recovery |
+| HTTPRoute → Secret/ConfigMap | Secret/ConfigMap | internal Edgion-auth and indirect plugins | Auth material uses the actual declaring route for both permission and recovery |
 | HTTPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |
 
 ### RequestMirror owner-bound references (R3b)
 
 Native rule/backend mirror fields use `HttpRouteMirrorRefs` actual-owner loans.
 Authored loans alone authorize core Service targets; effective loans compile cold
-Gateway Service/section keys and carry no Grant authority. Delegation resolves the
-original child slot before cloning or rule drops. Valid Service and Grant-namespace
-recovery edges register before authorization under the published root's actual
-ResourceRef. An invalid mirror owner, union, target, name, namespace or port contributes no
+Gateway Service/section keys and carry no Grant authority. Each route resolves its
+own mirror slots. Valid Service and Grant-namespace recovery edges register before
+authorization under that route's actual ResourceRef. An invalid mirror owner, union, target, name, namespace or port contributes no
 new mirror dependency or mirror-target lookup. HTTP parse clears Service roles once after snapshotting old forwarding
 targets; final forwarding registration adds to surviving child mirror edges.
 
@@ -268,22 +282,21 @@ Gateway locality. The supported internal FS/etcd ForwardAuth shape remains
 separate from unsupported native Gateway API ExternalAuth; native and mixed
 objects are not converted into Edgion authentication configurations.
 
-Parse clears root Secret dependencies once and scrubs incoming auth locality,
-request-secret maps and TLS material before early returns. `flatten_route`
-resolves the root exactly once even without delegation, returns authored root
-decisions for parse to apply, and prepares every raw child declaration before
-rule drops or inheritance. Parent, intermediate, terminal and backend filter
-positions retain their own namespace. New material is acquired only through the
+Parse clears the route's Secret dependencies once and scrubs incoming auth locality,
+request-secret maps and TLS material before early returns.
+`route_terminal::root_auth` resolves the route's own auth fields exactly once for
+every route, delegating or not, and returns decisions for parse to apply. Every
+level of a delegation chain resolves its own auth filters in its own namespace. New material is acquired only through the
 canonical bound credential pipeline; its owner-equality check remains intact.
-A private receipt registers valid target recovery under the actual root before
-Grant/store reads. Invalid source/target/root yields no new edge or material read;
+A private receipt registers valid target recovery under the actual route before
+Grant/store reads. Invalid source/target/route yields no new edge or material read;
 valid missing/denied references keep recovery edges even when a rule is dropped.
 
-Readonly status uses the same flatten/auth decisions without registering edges;
+Readonly status uses the same auth decisions without registering edges;
 failures use existing ResolvedRefs diagnostics and remain attached to auth filters
 for Gateway fail-closed sealing, rather than becoming an unguarded rule fallback.
-Apply replaces all prior material/dependencies and delete clears the root's
-Secret edges. Secret and Grant events use existing queues to reprocess the root.
+Apply replaces all prior material/dependencies and delete clears the route's
+Secret edges. Secret and Grant events use existing queues to reprocess the route.
 Disabled local TLS stays inert; unrelated request templates are still resolved.
 Service targets retain their separate no-new-grant/no-new-dependency contract.
 
@@ -294,7 +307,7 @@ ReferenceGrant authority or ongoing request-time revocation.
 
 ### Session persistence lifetime ownership
 
-Gateway rule compilation validates the final effective `sessionPersistence` and
+Gateway rule compilation validates each rule's own `sessionPersistence` and
 resolves its optional lifetime before publishing any match units. The shared
 resource policy uses the canonical duration parser with strict surrounding
 whitespace rejection and whole-second ceiling/minimum-one semantics (including

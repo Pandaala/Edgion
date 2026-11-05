@@ -107,11 +107,11 @@ pub(crate) fn resolve_field(field: &ConfigDataField<'_>, ctx: &HandlerContext) -
         };
     }
     if !target.spec.enable {
-        let error = if field.role() == ConfigDataRole::RegionOverride {
+        let error = if field.role() == ConfigDataRole::ClusterRegion {
             ResolvedRefsError::EdgionConfigDataInvalid {
                 namespace: target_namespace.to_string(),
                 name: target_name.to_string(),
-                detail: "RegionRouteOverride is disabled; using base regions".into(),
+                detail: "ClusterRegionSetting is disabled".into(),
             }
         } else {
             unavailable()

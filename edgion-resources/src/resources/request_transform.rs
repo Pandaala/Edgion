@@ -127,7 +127,7 @@ pub fn authored_request_transform_violations(
     rule: &HTTPRouteRule,
 ) -> Result<Vec<RequestTransformViolation>, CrdContractError> {
     let contract = http_route_transform_contract()?;
-    let mut violations = validate_rule_filter_lists(rule, true)?;
+    let mut violations = validate_rule_filter_lists(rule)?;
     let rule_value = normalized_rule_value(rule)?;
     violations.extend(
         contract
@@ -147,25 +147,6 @@ pub fn request_transform_filter_list_violations(
     Ok(violations)
 }
 
-/// Validate an effective rule after delegation expansion.
-///
-/// Authored-only cardinality and exactly-one-match CEL are deliberately not
-/// applied. Every effective match must instead provide a PathPrefix context
-/// whenever a prefix transform can execute.
-pub fn effective_request_transform_violations(
-    rule: &HTTPRouteRule,
-) -> Result<Vec<RequestTransformViolation>, CrdContractError> {
-    let mut violations = validate_rule_filter_lists(rule, false)?;
-    if rule_has_redirect(rule.filters.as_deref()) && rule.backend_refs.as_ref().is_some_and(|refs| !refs.is_empty()) {
-        violations.push(RequestTransformViolation::static_message(
-            "filters",
-            "RequestRedirect filter must not be used together with backendRefs",
-        ));
-    }
-    validate_prefix_context(rule, &mut violations);
-    Ok(violations)
-}
-
 fn validate_prefix_context(rule: &HTTPRouteRule, violations: &mut Vec<RequestTransformViolation>) {
     if rule_has_prefix_transform(rule) && !effective_matches_are_prefix(rule) {
         violations.push(RequestTransformViolation::static_message(
@@ -175,17 +156,14 @@ fn validate_prefix_context(rule: &HTTPRouteRule, violations: &mut Vec<RequestTra
     }
 }
 
-fn validate_rule_filter_lists(
-    rule: &HTTPRouteRule,
-    authored: bool,
-) -> Result<Vec<RequestTransformViolation>, CrdContractError> {
+fn validate_rule_filter_lists(rule: &HTTPRouteRule) -> Result<Vec<RequestTransformViolation>, CrdContractError> {
     let mut violations = Vec::new();
-    validate_filter_list(rule.filters.as_deref(), "filters", authored, &mut violations)?;
+    validate_filter_list(rule.filters.as_deref(), "filters", true, &mut violations)?;
     for (backend_index, backend) in rule.backend_refs.iter().flatten().enumerate() {
         validate_filter_list(
             backend.filters.as_deref(),
             &format!("backendRefs/{backend_index}/filters"),
-            authored,
+            true,
             &mut violations,
         )?;
     }

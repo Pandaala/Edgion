@@ -1,0 +1,30 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: region-route-norules-setting
+  namespace: edgion-default
+spec:
+  data:
+    type: ClusterRegionSetting
+    config:
+      clusterName: integration
+      regionName: fixture-local
+      regions:
+      - name: virginia
+        hashRange:
+        - 0
+        - 599
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: ohio
+        hashRange:
+        - 600
+        - 998
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+      - name: fixture-local
+        hashRange:
+        - 999
+        - 999
+        backendEndpoint: local.invalid:80
+        tls: false

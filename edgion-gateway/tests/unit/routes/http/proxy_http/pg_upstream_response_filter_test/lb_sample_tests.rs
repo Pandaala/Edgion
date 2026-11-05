@@ -67,7 +67,8 @@ fn ctx_with_attempt(
 
 fn route_unit_with_retry_codes(codes: Vec<u16>) -> HttpRouteRuleUnit {
     HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "test-ns/lb-sample".to_string(),
         matched_info: MatchInfo {
@@ -85,7 +86,6 @@ fn route_unit_with_retry_codes(codes: Vec<u16>) -> HttpRouteRuleUnit {
             annotations_meta: None,
         },
         rule: Arc::new(HTTPRouteRule {
-            resolved_parent_match: None,
             name: None,
             resolved_terminal_route_uid: None,
             resolved_ai_admission: None,

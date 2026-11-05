@@ -182,7 +182,7 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
         assert_eq!(active.degrade_threshold, 0);
         assert_degrade_count(handle, key, 0);
         let section = available.resolve_section(&section_number(80)).unwrap();
-        let identity = section.all_slots[0].backend.runtime_identity().unwrap();
+        let identity = section.all_slots()[0].backend.runtime_identity().unwrap();
         let select = |degrade| select_service_endpoint(key, section_number(80), &None, degrade, None, "", None);
         let captured = ServiceDegradePolicy::CapturedOverride(Some(100));
         assert!(select(captured).is_ok());
@@ -250,7 +250,7 @@ fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released()
         assert!(coordinator.record_health_completion(
             &policy,
             available.membership_identity,
-            section.all_slots[0].backend.runtime_identity().unwrap(),
+            section.all_slots()[0].backend.runtime_identity().unwrap(),
             false,
             1,
             1,
@@ -341,7 +341,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
     let key = &published.service_key;
     let (available, active) = load_active_projection(key).unwrap();
     let http = available.resolve_section(&section_number(80)).unwrap();
-    let backend = &http.all_slots[0].backend;
+    let backend = &http.all_slots()[0].backend;
     assert!(coordinator.record_health_completion(
         &policy,
         available.membership_identity,
@@ -395,7 +395,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
         assert!(coordinator.record_health_completion(
             &policy,
             available.membership_identity,
-            metrics_section.all_slots[0].backend.runtime_identity().unwrap(),
+            metrics_section.all_slots()[0].backend.runtime_identity().unwrap(),
             false,
             1,
             1,
@@ -918,4 +918,36 @@ fn response_cache_actual_retained_discovery_stamp_survives_reload_and_recreation
     );
     assert!(old.service == fresh.service && old.section == fresh.section);
     drop(replacement);
+}
+
+#[test]
+fn slot_lookup_rejects_same_socket_from_another_generation() {
+    let published = publish_service(
+        "sel-slot-owner",
+        "backend",
+        vec![service_port("http", 80, IntOrString::String("web".to_string()), None)],
+        vec![("http", 8080)],
+        "10.23.0.1",
+    );
+    let old = capture_fixture(&published.service_key, 80).unwrap();
+    let target: StdSocketAddr = "10.23.0.1:8080".parse().unwrap();
+    let old_backend = old.section.slot_for_addr(target).unwrap().backend.clone();
+    // A readiness change creates a new wrapper even though the socket is unchanged.
+    let _replacement = publish_service_with_ready(
+        "sel-slot-owner",
+        "backend",
+        vec![service_port("http", 80, IntOrString::String("web".to_string()), None)],
+        vec![("http", 8080)],
+        "10.23.0.1",
+        false,
+    );
+    let new = capture_fixture(&published.service_key, 80).unwrap();
+    let new_backend = &new.section.slot_for_addr(target).unwrap().backend;
+    assert!(!Arc::ptr_eq(&old_backend, new_backend));
+    assert!(slot_for_backend(&old.section, &old_backend).is_some());
+    assert!(slot_for_backend(&new.section, new_backend).is_some());
+    assert!(slot_for_backend(&new.section, &old_backend).is_none());
+    assert!(slot_for_backend(&old.section, new_backend).is_none());
+    assert!(old.endpoint_for_addr(target).unwrap().1);
+    assert!(!new.endpoint_for_addr(target).unwrap().1);
 }

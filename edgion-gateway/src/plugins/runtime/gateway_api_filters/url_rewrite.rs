@@ -32,9 +32,7 @@ impl URLRewriteFilter {
             PreparedPathModifier::ReplacePrefixMatch(replacement) => {
                 let original_path = session.get_path();
                 let matched_prefix = session
-                    .ctx()
-                    .route_unit
-                    .as_ref()
+                    .executing_http_route_unit()
                     .and_then(|unit| unit.matched_info.m.path.as_ref())
                     .and_then(|path_match| {
                         if path_match.match_type.as_deref() == Some("PathPrefix") {

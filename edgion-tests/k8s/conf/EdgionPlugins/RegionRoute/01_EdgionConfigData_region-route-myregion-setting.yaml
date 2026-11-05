@@ -1,0 +1,32 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: region-route-myregion-setting
+  namespace: edgion-default
+spec:
+  data:
+    type: ClusterRegionSetting
+    config:
+      clusterName: integration
+      regionName: virginia
+      regions:
+      - name: virginia
+        hashRange:
+        - 0
+        - 598
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: ohio
+        hashRange:
+        - 600
+        - 999
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+        failoverTo: virginia
+      - name: europe
+        hashRange:
+        - 599
+        - 599
+        backendEndpoint: 127.0.0.1:30003
+        tls: false
+        failoverTo: ohio

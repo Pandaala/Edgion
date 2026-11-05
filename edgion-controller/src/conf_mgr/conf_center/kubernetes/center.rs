@@ -24,7 +24,6 @@ use super::version_detection::{
 use crate::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult, ResourceKey,
 };
-use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::conf_mgr::ControllerRuntime;
 use crate::conf_sync::conf_server::ConfigSyncServer;
@@ -67,7 +66,7 @@ impl FailureBudget {
         }
     }
 
-    /// Benign administrative reload resets the failure budget.
+    /// Benign leadership transition resets the failure budget.
     fn reset(&mut self) {
         self.consecutive_failures = 0;
     }
@@ -109,15 +108,13 @@ enum LifecycleEvent {
     LeadershipAcquired,
     /// Controller exited
     ControllerExit(ControllerExitReason),
-    /// Manual reload requested via Admin API
-    ReloadRequested,
 }
 
 /// Exit reason from all-serve serving flow.
 enum ServingFlowExit {
     /// Normal shutdown requested
     Shutdown,
-    /// Benign administrative reload — resets the failure budget
+    /// Benign leadership transition — resets the failure budget
     Benign,
     /// Real failure (caches timeout / watcher panic / deadline / channel closed) — counts toward give-up
     Failure,
@@ -257,8 +254,6 @@ pub struct KubernetesCenter {
     config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>,
     /// Shutdown handle for stopping sync tasks
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
-    /// Reload signal sender (for triggering reload via Admin API)
-    reload_tx: Mutex<Option<mpsc::Sender<()>>>,
     /// Aggregated controller runtime (stores, registries)
     runtime: Arc<ControllerRuntime>,
     /// Live leadership flag published to process-wide singleton components via
@@ -301,7 +296,6 @@ impl KubernetesCenter {
             writer,
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
-            reload_tx: Mutex::new(None),
             runtime,
             leader_flag: Arc::new(watch::channel(false).0),
         })
@@ -342,11 +336,6 @@ impl KubernetesCenter {
     fn set_shutdown_handle(&self, handle: ShutdownHandle) {
         let mut shutdown_handle = self.shutdown_handle.lock();
         *shutdown_handle = Some(handle);
-    }
-
-    /// Set reload signal sender
-    fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
-        *self.reload_tx.lock() = tx;
     }
 
     /// Create internal LeaderElectionConfig from KubernetesConfig
@@ -442,21 +431,9 @@ impl KubernetesCenter {
         shutdown_handle: &ShutdownHandle,
     ) -> MainFlowExit {
         let mut budget = FailureBudget::new();
-        let mut reload_start_time: Option<std::time::Instant> = None;
         let deadline_budget = Duration::from_secs(self.config.cache_ready_deadline_secs);
 
         loop {
-            // Record reload completion time if this is a reload iteration
-            if let Some(start_time) = reload_start_time.take() {
-                let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
-                reload_metrics().reload_completed(duration);
-                tracing::info!(
-                    component = "kubernetes_center",
-                    duration_secs = duration,
-                    "Reload completed"
-                );
-            }
-
             // Check if still leader before starting iteration
             if !leader_handle.is_leader() {
                 self.set_config_sync_server(None);
@@ -568,14 +545,6 @@ impl KubernetesCenter {
                             );
                             break reason;
                         }
-                        LifecycleEvent::ReloadRequested => {
-                            tracing::info!(
-                                component = "kubernetes_center",
-                                mode = "kubernetes",
-                                "Reload requested via Admin API, restarting controllers"
-                            );
-                            break ControllerExitReason::ReloadRequested;
-                        }
                     },
                     LoopTurn::ChannelClosed => {
                         tracing::error!(
@@ -633,17 +602,6 @@ impl KubernetesCenter {
                 }
                 ControllerExitReason::LostLeadership => {
                     return MainFlowExit::LostLeadership;
-                }
-                ControllerExitReason::ReloadRequested => {
-                    tracing::info!(
-                        component = "kubernetes_center",
-                        mode = "kubernetes",
-                        "Manual reload requested, restarting with new server_id"
-                    );
-                    reload_metrics().reload_started();
-                    reload_start_time = Some(std::time::Instant::now());
-                    budget.reset();
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 ControllerExitReason::AllControllersStopped => {
                     // Real error - count as failure and apply backoff
@@ -805,10 +763,6 @@ impl KubernetesCenter {
             epoch_cancel.cancel();
             let _ = tx.send(LifecycleEvent::LeadershipLost).await;
         });
-
-        // 7. Reload-signal watcher
-        let reload_fut = self.reload_watcher_future(event_tx);
-        watchers.spawn("reload", reload_fut);
 
         Ok((watchers, config_sync_server))
     }
@@ -982,17 +936,6 @@ impl KubernetesCenter {
         }
     }
 
-    /// Build the reload-signal watcher future (spawned into the WatcherSet).
-    fn reload_watcher_future(&self, tx: mpsc::Sender<LifecycleEvent>) -> impl std::future::Future<Output = ()> {
-        let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
-        self.set_reload_tx(Some(reload_tx));
-        async move {
-            if reload_rx.recv().await.is_some() {
-                let _ = tx.send(LifecycleEvent::ReloadRequested).await;
-            }
-        }
-    }
-
     // ==================== All-Serve Mode Methods ====================
 
     /// All-serve lifecycle: all replicas run watchers + gRPC.
@@ -1142,9 +1085,6 @@ impl KubernetesCenter {
                     LifecycleEvent::ControllerExit(reason) => {
                         break reason;
                     }
-                    LifecycleEvent::ReloadRequested => {
-                        break ControllerExitReason::ReloadRequested;
-                    }
                 },
                 LoopTurn::ChannelClosed => {
                     tracing::error!(
@@ -1205,7 +1145,6 @@ impl KubernetesCenter {
         }
         match exit_reason {
             ControllerExitReason::Shutdown => ServingFlowExit::Shutdown,
-            ControllerExitReason::ReloadRequested => ServingFlowExit::Benign,
             // LostLeadership bubbling up via ControllerExit is a leadership
             // transition, not a fault — the loop normally handles it inline.
             ControllerExitReason::LostLeadership => ServingFlowExit::Benign,
@@ -1351,10 +1290,6 @@ impl KubernetesCenter {
                 }
             }
         });
-
-        // 7. Reload-signal watcher
-        let reload_fut = self.reload_watcher_future(event_tx);
-        watchers.spawn("reload", reload_fut);
 
         Ok((watchers, config_sync_server))
     }
@@ -1518,16 +1453,6 @@ impl CenterLifeCycle for KubernetesCenter {
     /// intentionally disagree — see `CenterLifeCycle::leader_signal`.
     fn leader_signal(&self) -> Option<watch::Receiver<bool>> {
         Some(self.leader_flag.subscribe())
-    }
-
-    /// Request a reload (re-initialize all processors and stores)
-    fn request_reload(&self) -> Result<(), String> {
-        if let Some(tx) = self.reload_tx.lock().as_ref() {
-            tx.try_send(())
-                .map_err(|e| format!("Failed to send reload signal: {}", e))
-        } else {
-            Err("Center not started or not ready for reload".to_string())
-        }
     }
 
     fn runtime(&self) -> Arc<ControllerRuntime> {

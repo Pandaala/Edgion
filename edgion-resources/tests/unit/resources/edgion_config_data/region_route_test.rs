@@ -65,15 +65,19 @@ fn long_failover_walk_is_iterative() {
 }
 
 #[test]
-fn absent_overlay_table_inherits_but_empty_replacement_is_invalid() {
-    let mut overlay = RegionRouteOverride {
-        enable: None,
-        active: None,
-        regions: None,
+fn setting_requires_local_membership_and_a_complete_table() {
+    let mut setting = ClusterRegionSetting {
+        cluster_name: "prod".into(),
+        region_name: "east".into(),
+        regions: Vec::new(),
     };
-    assert!(overlay.validate_and_init().is_ok());
-    overlay.regions = Some(Vec::new());
-    assert!(overlay.validate_and_init().is_err());
+    assert!(setting.validate_and_init().is_err());
+    setting.regions = vec![make_region("west", 0, 999, "west")];
+    assert!(setting.validate_and_init().unwrap_err().contains("regionName"));
+    setting.region_name = "west".into();
+    assert!(setting.validate_and_init().is_ok());
+    setting.cluster_name.clear();
+    assert!(setting.validate_and_init().unwrap_err().contains("clusterName"));
 }
 
 #[test]
@@ -123,17 +127,16 @@ fn validate_regions_empty_name_is_err() {
 
 #[test]
 fn override_validate_and_init_delegates_to_validate_regions() {
-    // Regression: RegionRouteOverride::validate_and_init must catch the SAME
+    // Regression: ClusterRegionSetting::validate_and_init must catch the SAME
     // rules as validate_regions (controller/gateway symmetry).
-    let ov = RegionRouteOverride {
-        enable: None,
-        active: None,
-        regions: Some(vec![
+    let ov = ClusterRegionSetting {
+        cluster_name: "prod".into(),
+        region_name: "cn".into(),
+        regions: vec![
             make_region("cn", 0, 499, "ep-a:443"),
             make_region("cn", 500, 999, "ep-b:443"), // duplicate name
-        ]),
+        ],
     };
     let err = ov.validate_and_init().unwrap_err();
-    assert!(err.starts_with("RegionRouteOverride: "), "{}", err);
     assert!(err.contains("duplicate") && err.contains("cn"), "{}", err);
 }

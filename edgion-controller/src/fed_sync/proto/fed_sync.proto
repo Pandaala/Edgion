@@ -2,30 +2,30 @@ syntax = "proto3";
 
 package fed_sync;
 
-// ── Center → Controller: request list/watch of a resource kind ──
+// ── Center → Controller: request list/watch of an allowlisted Center view ──
 
 message FedWatchRequest {
     string request_id    = 1;  // UUID for correlating responses
-    string kind          = 2;  // Resource kind, e.g. "EdgionConfigData"
-    uint64 from_version  = 3;  // 0 = full list + watch; >0 = resume watch
+    string kind          = 2;  // Dedicated view: only "RegionRoute"; never a generic resource kind
+    uint64 from_version  = 3;  // Must be 0; nonzero requires relist because no generation is supplied
 }
 
 // ── Controller → Center: full list response ──
 
 message FedWatchListResponse {
     string request_id    = 1;  // Echo FedWatchRequest.request_id
-    bytes data           = 2;  // JSON-serialized full list; bytes for zero-copy (wire-compatible with string)
+    bytes data           = 2;  // JSON {records:[typed Center views]}; no source specs or resolved credentials
     uint64 sync_version  = 3;  // Current version
-    string server_id     = 4;  // ConfigSyncServer instance ID (restart detection)
+    string server_id     = 4;  // CenterWatchStore generation (restart detection)
 }
 
 // ── Controller → Center: incremental watch events ──
 
 message FedWatchEventResponse {
     string request_id    = 1;  // Echo FedWatchRequest.request_id
-    string data          = 2;  // JSON-serialized event array
+    string data          = 2;  // JSON {changes:[{version,key,record}]}; record=null deletes the key
     uint64 sync_version  = 3;  // Current version
-    string server_id     = 4;  // ConfigSyncServer instance ID
+    string server_id     = 4;  // CenterWatchStore generation
     string error         = 5;  // Non-empty = error code
 }
 

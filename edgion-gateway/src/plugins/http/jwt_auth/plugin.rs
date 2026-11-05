@@ -64,8 +64,10 @@ impl RequestFilter for JwtAuth {
             }
             None => {
                 plugin_log.push("No token");
-                if self.handle_anonymous_access(session, plugin_log) {
-                    return PluginRunningResult::GoodNext;
+                match self.handle_anonymous_access(session, plugin_log) {
+                    Ok(true) => return PluginRunningResult::GoodNext,
+                    Ok(false) => {}
+                    Err(_) => return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log),
                 }
                 // Apply failure delay before returning 401
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
@@ -87,11 +89,7 @@ impl RequestFilter for JwtAuth {
                     la![ok.group.group.as_str(), ok.issuer(), sensitive(username)],
                 );
                 if self.set_claims_headers(session, ok.claims()).is_err() {
-                    plugin_log.push_err("claim header cleanup failed");
-                    return PluginRunningResult::ErrResponse {
-                        status: 500,
-                        body: None,
-                    };
+                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
                 }
                 if self.config.store_claims_in_ctx {
                     if let Ok(claims_json) = serde_json::to_string(ok.claims()) {

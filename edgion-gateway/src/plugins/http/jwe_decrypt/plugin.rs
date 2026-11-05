@@ -386,6 +386,14 @@ impl RequestFilter for JweDecrypt {
                     .await;
             }
             None => {
+                if crate::plugins::http::common::auth_common::clear_claim_headers(
+                    session,
+                    &self.claim_header_projection,
+                )
+                .is_err()
+                {
+                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                }
                 plugin_log.push("bypass");
                 return PluginRunningResult::GoodNext;
             }
@@ -423,14 +431,18 @@ impl RequestFilter for JweDecrypt {
         }
 
         if !self.claim_header_projection.entries().is_empty() {
-            if let Ok(payload_json) = serde_json::from_str::<serde_json::Value>(&plaintext) {
-                set_claims_headers(
-                    session,
-                    &payload_json,
-                    &self.claim_header_projection,
-                    self.config.max_header_value_bytes,
-                    self.config.max_total_header_bytes,
-                );
+            // Non-JSON plaintext has no projectable claims, but still owns its destinations.
+            let payload_json = serde_json::from_str::<serde_json::Value>(&plaintext).unwrap_or(serde_json::Value::Null);
+            if set_claims_headers(
+                session,
+                &payload_json,
+                &self.claim_header_projection,
+                self.config.max_header_value_bytes,
+                self.config.max_total_header_bytes,
+            )
+            .is_err()
+            {
+                return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
             }
         }
 

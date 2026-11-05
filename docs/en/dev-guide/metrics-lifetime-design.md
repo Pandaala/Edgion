@@ -306,8 +306,6 @@ The old cold-slot extraction decision concerned boilerplate, not this lifetime/c
 | edgion_controller_resources_watched | Gauge | controller | Fixed | kind |
 | edgion_controller_leader | Gauge | controller | Fixed | none |
 | edgion_controller_leader_transitions_total | Counter | controller | Fixed | none |
-| edgion_controller_reload_total | Counter | controller | Fixed | none |
-| edgion_controller_reload_duration_seconds_last | Gauge | controller | Fixed | none |
 | edgion_controller_reload_client_notifications_total | Counter | controller | Fixed | none |
 | edgion_controller_status_writes_total | Counter | controller | Fixed | kind, backend (kubernetes/filesystem/etcd), result (success/error) |
 | edgion_controller_status_writes_skipped_total | Counter | controller | Fixed | kind |
@@ -332,7 +330,7 @@ The old cold-slot extraction decision concerned boilerplate, not this lifetime/c
 | edgion_gateway_circuit_breaker_shed_total | Counter | gateway | Dynamic | service |
 | edgion_lb_degrade_selections_total | Counter | gateway | Dynamic | service |
 | edgion_rr_selector_truncated_total | Counter | gateway | Fixed | none |
-| edgion_region_route_overlay_events_total | Counter | gateway | Fixed | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid) |
+| edgion_region_route_config_events_total | Counter | gateway | result (setting_reference_unavailable/setting_missing/setting_disabled/setting_type_mismatch/setting_invalid/hash_modulo_invalid) |
 | edgion_acme_challenge_lookup_total | Counter | gateway | Fixed | result (hit/expired/domain_mismatch/not_found/empty_host) |
 
 Catalog coverage: 102 distinct rows. Global binary `service` is omitted from the local-label column.

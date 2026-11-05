@@ -10,6 +10,53 @@ use mockall::Sequence;
 use serde_json::json;
 use std::collections::HashMap;
 
+#[tokio::test]
+async fn missing_or_non_json_payload_clears_configured_headers_and_propagates_failure() {
+    for payload in [None, Some("opaque plaintext"), Some(r#"{"other":true}"#)] {
+        for removal_fails in [false, true] {
+            let mut config = config_with_key(&test_key());
+            config.strict = false;
+            config.payload_to_headers = Some(HashMap::from([("sub".into(), "X-Sub".into())]));
+            let plugin = JweDecrypt::new(&config, "default".into());
+            let token = payload.map(|value| format!("Bearer {}", encrypt_compact_jwe(value, &test_key(), "A256GCM")));
+            let mut session = MockPluginSession::new();
+            let headers = token
+                .as_ref()
+                .map(|value| vec![("authorization", value.as_str())])
+                .unwrap_or_default();
+            setup_header_mocks(&mut session, &headers);
+            session
+                .expect_set_request_header_value()
+                .times(usize::from(payload.is_some()))
+                .returning(|_, _| Ok(()));
+            session
+                .expect_remove_request_header()
+                .withf(|name| name == "x-sub")
+                .times(1)
+                .returning(move |_| {
+                    if removal_fails {
+                        Err(std::io::Error::other("private failure").into())
+                    } else {
+                        Ok(())
+                    }
+                });
+            let mut log = PluginLog::new("JweDecrypt");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                if removal_fails {
+                    PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None,
+                    }
+                } else {
+                    PluginRunningResult::GoodNext
+                }
+            );
+            assert!(!log.contains("private"));
+        }
+    }
+}
+
 fn test_key() -> Vec<u8> {
     b"0123456789abcdef0123456789abcdef".to_vec()
 }
@@ -337,6 +384,11 @@ async fn unknown_noncritical_header_uses_raw_aad_and_preserves_success_order() {
     let mut session = MockPluginSession::new();
     setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
 
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-sub")
+        .times(1)
+        .returning(|_| Ok(()));
     let mut sequence = Sequence::new();
     session
         .expect_set_request_header_value()
@@ -399,6 +451,11 @@ async fn payload_projection_enforces_its_own_exact_and_plus_one_caps() {
         let header_value = format!("Bearer {token}");
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-sub")
+            .times(1)
+            .returning(|_| Ok(()));
         let mut sequence = Sequence::new();
 
         session

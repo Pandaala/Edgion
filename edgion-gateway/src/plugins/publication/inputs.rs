@@ -18,6 +18,7 @@ use kube::api::ObjectMeta;
 
 use crate::plugins::stream::plugin_generation::StreamStages;
 use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs, resolve_stream_plugin_store_key};
+use crate::routes::http::delegation_build::child_accepted_keys;
 use crate::runtime::matching::route::{check_allowed_routes, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::{gateway_listener_entries, ListenerEntry};
 
@@ -100,6 +101,10 @@ pub(crate) struct RouteInput {
     pub stages: StreamStages,
     /// Preserve the callback's original Arc for the admission source token.
     pub http_route: Option<Arc<HTTPRoute>>,
+    /// A route-delegation child the Gateway accepts into at least one slot.
+    /// It has no Gateway attachment of its own; its ExtensionRefs and rule
+    /// admissions are published into every Gateway scope (spec §6.4).
+    pub delegation_child: bool,
 }
 
 impl RouteInput {
@@ -123,6 +128,7 @@ impl RouteInput {
             stream_key: None,
             stages: StreamStages::default(),
             http_route: None,
+            delegation_child: false,
         }
     }
 
@@ -148,6 +154,7 @@ impl RouteInput {
                     .filter_map(extension_ref_key),
             );
         }
+        input.delegation_child = !child_accepted_keys(&route).is_empty();
         input.http_route = Some(route);
         input
     }
@@ -165,11 +172,7 @@ impl RouteInput {
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
-        let invalid = if route.spec.resolved_rules.is_some() {
-            None
-        } else {
-            route.spec.invalid_rule_indices.as_ref()
-        };
+        let invalid = route.spec.invalid_rule_indices.as_ref();
         if let Ok(references) = GrpcRouteExtensionRefs::from_route(route) {
             input.http_keys.extend(
                 references
@@ -178,6 +181,9 @@ impl RouteInput {
                     .filter_map(extension_ref_key),
             );
         }
+        // Accepted GRPCRoute delegation children (middle levels included)
+        // publish their ExtensionRefs into every Gateway scope (spec §6.4).
+        input.delegation_child = !crate::routes::grpc::delegation_build::grpc_child_accepted_keys(route).is_empty();
         input
     }
 
@@ -243,6 +249,13 @@ impl RouteInput {
         input
     }
 
+    /// Whether this route contributes to a scope serving `gateways`: an
+    /// accepted delegation child contributes to every scope; any other route
+    /// only through its own Gateway attachment.
+    pub(crate) fn contributes_to(&self, gateways: &[(&String, &GatewayInput)]) -> bool {
+        self.delegation_child || gateways.iter().any(|(key, gateway)| self.attaches_to(key, gateway))
+    }
+
     /// Demand follows accepted parents and serving listener intersections.
     /// Request hostname matching remains the canonical route matcher's job.
     pub(crate) fn attaches_to(&self, gateway_key: &str, gateway: &GatewayInput) -> bool {
@@ -262,16 +275,15 @@ impl RouteInput {
     }
 }
 
-/// The same effective rule sequence and original indices as HTTP route table
-/// construction, including native CORS rejection after delegated-rule selection.
+/// The servable rule sequence (authored rules minus `invalid_rule_indices`)
+/// with original indices, exactly as HTTP route table construction sees it,
+/// including native CORS rejection.
 pub(crate) fn effective_http_rules(route: &HTTPRoute) -> impl Iterator<Item = (usize, &HTTPRouteRule)> {
-    let invalid = if route.spec.resolved_rules.is_some() {
-        None
-    } else {
-        route.spec.invalid_rule_indices.as_ref()
-    };
+    let invalid = route.spec.invalid_rule_indices.as_ref();
     route
-        .effective_rules()
+        .spec
+        .rules
+        .as_ref()
         .into_iter()
         .flatten()
         .enumerate()

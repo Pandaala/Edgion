@@ -14,11 +14,11 @@ Source findings: `complete-gateway-api-request-transform-validation-and-preparat
 
 RequestRedirect and URLRewrite constraints have one shared source contract generated
 from the vendored Gateway API v1.5 HTTPRoute CRDs. Controller handlers, Admin
-validation, EdgionPlugins validation, delegation output, and Gateway defensive
+validation, EdgionPlugins validation, and Gateway defensive
 construction must use that shared resource-layer implementation. Do not reproduce
 CRD-covered scheme, port, status, path-modifier, pairing, list, or conflict rules
 in consumers. Transport-only URI preparation remains an Edgion safety check.
-Cross-scope rule/backend conflicts and effective-rule prefix/backend safety are
+Cross-scope rule/backend conflicts and rule prefix/backend safety are
 also centralized there as Edgion context checks; they are not represented as
 standalone CRD fragments.
 
@@ -36,9 +36,11 @@ HTTPRoute path matches serialize those resolved defaults across conf_sync.
 
 - Authored invalid rules receive Controller invalid-rule status; valid sibling rules
   remain publishable.
-- Effective delegated rules are checked after flattening. Authored list cardinality is
-  not reapplied to the flattened representation, but prefix transforms require usable
-  PathPrefix context.
+- Delegation derives no rule lists (cascading match): every route, including a
+  delegation child, is checked once on its own authored rules with
+  `authored_request_transform_violations`, and each level's prefix transforms use that
+  level's own matches. The former separate effective-rule pass was removed with
+  flattening.
 - Gateway route publication independently drops an invalid rule if malformed state
   bypasses the Controller.
 - Request plugins consume `PreparedRequestRedirect` or `PreparedUrlRewrite`; the hot
@@ -64,5 +66,5 @@ cargo test -p edgion-gateway gateway_api_filters::url_rewrite --lib
 ```
 
 Re-evaluate this guard when the vendored Gateway API version changes, selected
-Standard and Experimental fragments diverge, delegation changes its flattened rule
-shape, or another resource begins using the generic CRD-contract engine.
+Standard and Experimental fragments diverge, delegation starts copying rules between
+routes again, or another resource begins using the generic CRD-contract engine.

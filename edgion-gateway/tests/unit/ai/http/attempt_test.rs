@@ -240,7 +240,8 @@ fn retry_route() -> Arc<HttpRouteRuleUnit> {
         codes: Some(vec![503]),
     });
     Arc::new(HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "default/retry".to_string(),
         matched_info: MatchInfo {

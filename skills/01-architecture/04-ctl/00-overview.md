@@ -13,7 +13,7 @@ The CLI target name `center` refers to the Controller's ConfCenter data source. 
 
 | Target | Connection target | Default port | Capability | Data source |
 |--------|---------|---------|------|--------|
-| **center** (default) | Controller Admin API | :12101 | Full CRUD + reload | ConfCenter (configuration center) |
+| **center** (default) | Controller Admin API | :12101 | Full CRUD | ConfCenter (configuration center) |
 | **server** | Controller Admin API | :12101 | Read-only query | ServerCache (gRPC server-side cache) |
 | **client** | Gateway Admin API | :12001 | Read-only query | ClientCache (gRPC client-side cache) |
 
@@ -33,9 +33,8 @@ The CLI target name `center` refers to the Controller's ConfCenter data source. 
 | get | Supported | Supported | Supported |
 | apply | Supported | Not supported | Not supported |
 | delete | Supported | Not supported | Not supported |
-| reload | Supported | Not supported | Not supported |
 
-Write operations (apply/delete/reload) are only available in center mode. server and client modes are read-only and used to inspect the state of each cache tier.
+Write operations (apply/delete) are only available in center mode. server and client modes are read-only and used to inspect the state of each cache tier.
 
 ## API routes
 
@@ -55,7 +54,6 @@ PUT    /api/v1/namespaced/{kind}/{ns}/{name}   # Update a namespaced resource
 PUT    /api/v1/cluster/{kind}/{name}           # Update a cluster-scoped resource
 DELETE /api/v1/namespaced/{kind}/{ns}/{name}   # Delete a namespaced resource
 DELETE /api/v1/cluster/{kind}/{name}           # Delete a cluster-scoped resource
-POST   /api/v1/reload                          # Reload all resources
 ```
 
 ### server routes (ConfigServer cache)
@@ -193,7 +191,6 @@ edgion-cli/src/
 │       ├── apply.rs        # apply command (YAML parsing → API call)
 │       ├── get.rs          # get command (query + formatted output)
 │       ├── delete.rs       # delete command
-│       ├── reload.rs       # reload command
 │       ├── gen_certs.rs    # gen-certs command
 │       └── login.rs        # token persistence command
 └── lib.rs

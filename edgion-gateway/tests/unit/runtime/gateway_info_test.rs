@@ -21,6 +21,7 @@ fn identity_keys_preserve_raw_namespace_and_canonical_format() {
             None,
             Vec::new(),
             None,
+            None,
         );
         assert_eq!(info.namespace(), namespace);
         assert_eq!(info.gateway_namespace(), namespace.unwrap_or(""));
@@ -50,6 +51,7 @@ fn shared_generation_borrows_the_same_key_storage() {
         None,
         Some(true),
         vec!["team/plugin".to_owned()],
+        None,
         None,
     ));
     let shared = Arc::clone(&info);

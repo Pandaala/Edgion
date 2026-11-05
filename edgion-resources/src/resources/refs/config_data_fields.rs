@@ -30,14 +30,14 @@ impl Owner<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigDataRole {
     Selector,
-    RegionOverride,
+    ClusterRegion,
     UrlAllowList,
 }
 impl ConfigDataRole {
     pub fn expected_type(self) -> &'static str {
         match self {
             Self::Selector => "Selector",
-            Self::RegionOverride => "RegionRouteOverride",
+            Self::ClusterRegion => "ClusterRegionSetting",
             Self::UrlAllowList => "RequestAccessUrlAllowList",
         }
     }
@@ -45,7 +45,7 @@ impl ConfigDataRole {
         matches!(
             (self, data),
             (Self::Selector, ConfigEntry::Selector(_))
-                | (Self::RegionOverride, ConfigEntry::RegionRouteOverride(_))
+                | (Self::ClusterRegion, ConfigEntry::ClusterRegionSetting(_))
                 | (Self::UrlAllowList, ConfigEntry::RequestAccessUrlAllowList(_))
         )
     }
@@ -134,7 +134,7 @@ impl<'a> HttpConfigDataEntry<'a> {
                 (config.active_profile_ref.as_ref()?, ConfigDataRole::Selector)
             }
             EdgionPlugin::Canary(config) => (config.active_profile_ref.as_ref()?, ConfigDataRole::Selector),
-            EdgionPlugin::RegionRoute(config) => (config.override_ref.as_ref()?, ConfigDataRole::RegionOverride),
+            EdgionPlugin::RegionRoute(config) => (&config.cluster_region_ref, ConfigDataRole::ClusterRegion),
             _ => unreachable!("bound variant"),
         };
         Some(ConfigDataField {

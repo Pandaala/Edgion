@@ -1,5 +1,3 @@
-# EdgionPlugins resource restored to reference data-flap-good EdgionConfigData.
-# Update 2 (to_valid): EdgionConfigData exists again -> overrideRef resolves -> ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -7,25 +5,16 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - type: RegionRoute
-      config:
-        regions:
-          - name: east
-            hashRange: [0, 499]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: west
-            hashRange: [500, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-        routeRules:
-          - type: RouteByHashRange
-        overrideRef:
-          name: "data-flap-good"
-          namespace: edgion-test
+  - type: RegionRoute
+    config:
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+      routeRules:
+      - type: RouteByHashRange
+      clusterRegionRef:
+        name: data-flap-good
+        namespace: edgion-test

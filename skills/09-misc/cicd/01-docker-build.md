@@ -200,6 +200,13 @@ docker build \
   -t edgion/edgion-gateway:runtime-local .
 ```
 
+Entrypoint contract: the build writes the selected binary into the
+`/usr/local/bin/edgion-entrypoint` wrapper (`exec <binary> "$@"`), and the image uses it
+as an exec-form `ENTRYPOINT` with no `CMD`. The binary runs as PID 1 under its own
+name, `docker run <image> <args>` and
+Kubernetes `args` are forwarded to it, and its exit status is the container's. See
+[the regression guard](../../04-review/packaging/regression-guards/runtime-image-entrypoint.md).
+
 ## Multi-architecture and the builder image
 
 `cicd/docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:

@@ -33,7 +33,7 @@ metadata:
   name: cert-auth-plugin
 spec:
   requestPlugins:
-      type: HeaderCertAuth
+    - type: HeaderCertAuth
       config:
         mode: Header
         certificateHeaderName: X-Client-Cert
@@ -49,11 +49,11 @@ spec:
 |-----------|------|---------|-------------|
 | `mode` | Enum | `Header` | Certificate source mode. Allowed values: `Header` / `Connection` |
 | `certificateHeaderName` | String | `"X-Client-Cert"` | Header name containing the certificate (Header mode only) |
-| `certificateHeaderFormat` | Enum | `Base64Encoded` | Certificate encoding (Header mode). Allowed values: `Base64Encoded` (base64 PEM body without delimiters) / `UrlEncoded` (URL-encoded full PEM) |
+| `certificateHeaderFormat` | Enum | `base64Encoded` | Certificate encoding (Header mode). Allowed values: `base64Encoded` (base64 PEM body without delimiters) / `urlEncoded` (URL-encoded full PEM) |
 | `hideCredentials` | Boolean | `true` | Remove the source certificate header before forwarding upstream |
 | `caSecretRefs` | Array\<Object\> | **Required** in Header mode | CA Secret references used to verify the client certificate. All certs in the referenced Secrets are loaded as trust anchors; include intermediates if the leaf is signed by one. Connection mode does not require this. |
 | `skipConsumerLookup` | Boolean | `false` | Skip consumer mapping and pass the cert DN/SAN through directly |
-| `consumerBy` | Enum | `SanOrCn` | Consumer identity resolution. Allowed values: `SanOrCn` (first SAN, fall back to CN) / `Cn` (CN only) / `Fingerprint` (cert SHA-256 fingerprint) |
+| `consumerBy` | Enum | `sanOrCn` | Consumer identity resolution. Allowed values: `sanOrCn` (first SAN, fall back to CN) / `cn` (CN only) / `fingerprint` (cert SHA-256 fingerprint) |
 | `upstreamHeaders` | Object | see sub-table | Upstream header names for identity propagation |
 | `allowAnonymous` | Boolean | `false` | Allow the request as anonymous when authentication fails |
 | `errorStatus` | Integer | `401` | Status code on verification failure (must be 400–599) |
@@ -77,11 +77,11 @@ spec:
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
       mode: Header
       certificateHeaderName: X-Client-Cert
-      certificateHeaderFormat: UrlEncoded
+      certificateHeaderFormat: urlEncoded
       caSecretRefs:
         - name: client-ca-cert
       hideCredentials: true
@@ -93,17 +93,17 @@ Reuse the certificate already verified during the TLS handshake. No `caSecretRef
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
       mode: Connection
-      consumerBy: SanOrCn
+      consumerBy: sanOrCn
 ```
 
 ### Scenario 3: Allow Anonymous Access
 
 ```yaml
 requestPlugins:
-    type: HeaderCertAuth
+  - type: HeaderCertAuth
     config:
       mode: Header
       caSecretRefs:
@@ -119,6 +119,30 @@ requestPlugins:
 - **Connection mode**: Obtains the verified client certificate directly from the mTLS handshake context
 - **Consumer identity**: Extracts identity from the certificate SAN, CN, or fingerprint based on `consumerBy`, and writes it to `upstreamHeaders.consumerHeader` (default `X-Consumer-Username`)
 - With `hideCredentials: true` (the default), the source certificate header is not forwarded upstream
+
+### Certificate identity header ownership
+
+Each executing plugin clears its active output destinations before writing identity values:
+`dnHeader`, `sanHeader`, and `fingerprintHeader` when `skipConsumerLookup: true`, or
+`consumerHeader` and `fingerprintHeader` otherwise. This also removes duplicate input fields.
+With distinct output names, a certificate without a SAN leaves the SAN destination absent; DN/SAN values containing
+CR, LF, or NUL are omitted rather than retaining client input. Other invalid header values
+fail the write and return HTTP 500. Anonymous continuations clear the same active
+destinations before writing the anonymous consumer marker and identity.
+
+Header removal or write failures return HTTP 500 without forwarding, even with
+`allowAnonymous: true`. Authentication failures still use the configured rejection or
+anonymous policy. Disabled or condition-skipped plugins do not perform cleanup, and inactive
+output names and unrelated headers are not reserved.
+
+Use distinct output names when the backend needs separate fields. Aliased output names
+retain the existing write order (DN, then first SAN, then fingerprint; or consumer, then
+fingerprint). Header-mode certificate extraction happens before cleanup, so an input name
+can also be an output name; `hideCredentials: true` still removes that name at the end.
+Later plugins can modify these headers according to their execution order.
+
+For Connection mode with EdgionTls, enable `edgion.io/expose-client-cert: "true"` on the
+EdgionTls resource. Gateway `frontendValidation` mTLS exposes certificate metadata automatically.
 
 ---
 

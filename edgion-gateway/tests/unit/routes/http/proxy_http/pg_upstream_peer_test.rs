@@ -1417,7 +1417,7 @@ fn service_degrade_capture_controls_actual_selection_across_retries() {
         coordinator.set_health_policy(KEY, Some(Arc::clone(&health)));
         let generation = coordinator.load_generation();
         let available = generation.available(KEY).unwrap();
-        for slot in available.resolve_section(&section).unwrap().all_slots.iter() {
+        for slot in available.resolve_section(&section).unwrap().all_slots().iter() {
             let healthy = slot.backend.addr.as_inet().unwrap().ip().to_string() == "10.8.2.1";
             assert!(coordinator.record_health_completion(
                 &health,
@@ -2191,7 +2191,6 @@ fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
 /// weight semantics match what `pick_backend_ref` sees at runtime.
 fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> {
     let rule = Arc::new(HTTPRouteRule {
-        resolved_parent_match: None,
         name: None,
         resolved_terminal_route_uid: None,
         resolved_ai_admission: None,
@@ -2212,7 +2211,8 @@ fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> 
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     Arc::new(HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "test-ns/test-route".to_string(),
         matched_info: crate::MatchInfo {
@@ -2578,6 +2578,7 @@ async fn policy_ancestor_admission_precedes_http_attempt_and_pins_recovery_gener
             None,
             None,
             Vec::new(),
+            None,
             None,
         ))
     };
