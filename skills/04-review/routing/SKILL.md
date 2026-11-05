@@ -17,6 +17,7 @@ before applying a decision to current code.
 - [route-03 — client-disconnect abort in the retry loop: log-only by decision](intentional-design/retry-client-disconnect-log-only.md)
 - [Route Architecture Consistency Review](intentional-design/route-architecture-consistency.md)
 - [A build-time route predicate prefilter is not justified — WONT-FIX](intentional-design/route-predicate-prefilter-not-justified.md)
+- [routing-05 — Multi-pattern RegexSet result allocation is accepted — WONT-FIX](intentional-design/regex-set-pattern-set-allocation-accepted.md)
 - [Session persistence: two-state delegation inheritance + File/Etcd-only strict — DESIGN-TRADEOFF (won't build three-state)](intentional-design/session-persistence-two-state-inheritance-and-k8s-strict-scope.md)
 
 ## Regression guards
