@@ -22,9 +22,11 @@ supported.
 `compiler.rs` creates typed operands; and `transaction.rs` charges work,
 evaluates the detector, and stages captures. `edgion-waf/src/injection.rs`
 enforces a 4 MiB per-value detector cap and a checked linear detector work
-charge accumulated across rule members and phases in one transaction. The
-existing per-member operator, chain-branch, and request-body stream work
-checks use separate local counters against the same configured limit. The native Rust
+charge accumulated across rule members and phases in one transaction.
+Ordinary operator work accumulates per rule unit across chain members and
+branches ([chain work accounting](chain-ordinary-work-accumulates-per-unit.md));
+chain-branch state bytes and request-body prefix/stream work use separate
+counters against the same configured limit. The native Rust
 scanners in `sqli/` and `xss/` use static data pinned to
 `libinjection-go` v0.3.2; provenance, license texts, reference verification,
 and the local benchmark are described in `edgion-waf/INJECTION.md`.

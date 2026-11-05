@@ -20,6 +20,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 - [Native XML inspection preserves bounded parsing and ordered effects](regression-guards/native-xml-inspection.md)
 - [Multipart boundary discovery stays linear](regression-guards/multipart-boundary-search-bounded.md)
 - [Native injection operators use bounded detection and transaction semantics](regression-guards/native-injection-operators-use-bounded-detection.md)
+- [Chain ordinary work accumulates across members and branches](regression-guards/chain-ordinary-work-accumulates-per-unit.md)
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
 - [Named WAF profiles publish one validated generation](regression-guards/named-profile-selection-and-bundle-publication.md)
 

@@ -1195,6 +1195,10 @@ pub struct Transaction<'generation> {
     match_scratch: Vec<MemberMatch>,
     match_scratch_bytes: usize,
     detector_work_bytes: usize,
+    /// Ordinary operator work of the current rule unit. It survives every
+    /// chain member and frontier branch, including failed ones, so branch
+    /// fan-out cannot multiply the per-unit work bound.
+    unit_work_bytes: usize,
     ctl_work_bytes: usize,
     tx: TxState,
     capture_keys: Vec<MatchValue>,
@@ -1427,6 +1431,7 @@ impl<'generation> Transaction<'generation> {
             match_scratch: Vec::new(),
             match_scratch_bytes: 0,
             detector_work_bytes: 0,
+            unit_work_bytes: 0,
             ctl_work_bytes: 0,
             tx: TxState {
                 check_policy,
@@ -2104,6 +2109,7 @@ impl<'generation> Transaction<'generation> {
     }
 
     fn evaluate_unit(&mut self, unit_id: usize, prefix_match: Option<bool>) -> Result<bool, RuntimeError> {
+        self.unit_work_bytes = 0;
         // Keep capacity charged while the buffer is loaned to the entire unit.
         let mut matches = std::mem::take(&mut self.match_scratch);
         matches.clear();
@@ -2329,6 +2335,8 @@ impl<'generation> Transaction<'generation> {
     ) -> Result<Vec<MemberMatch>, RuntimeError> {
         let mut matches = std::mem::take(&mut self.match_scratch);
         matches.clear();
+        // Each direct call models one member invocation of a fresh unit.
+        self.unit_work_bytes = 0;
         let result = self.evaluate_member_matches_into(unit_id, member_id, tx, stop_after_first, &mut matches);
         // Private tests may inspect the returned matches. Production always
         // drains and returns capacity through evaluate_unit's single loan.
@@ -2396,6 +2404,7 @@ impl<'generation> Transaction<'generation> {
         let mut json_tail = self.json_summary_no_hit_tail(member_id, tx)?;
         let mut selected = std::mem::take(&mut self.selected_scratch);
         selected.clear();
+        let mut work = self.unit_work_bytes;
         let result = (|| {
             let storage = SelectionStorage {
                 capacity_bytes,
@@ -2496,7 +2505,6 @@ impl<'generation> Transaction<'generation> {
                 } else {
                     None
                 };
-            let mut work = 0_usize;
             let match_limit = if stop_after_first { 1 } else { selected.len() };
             let match_storage = match summary_match_storage {
                 Some(storage) => storage,
@@ -2558,6 +2566,15 @@ impl<'generation> Transaction<'generation> {
                         self.response.as_ref(),
                         context.json_budget.as_deref_mut(),
                     )?;
+                    // Every stage charge includes the original bytes; reject
+                    // before transforming once the unit cannot afford them.
+                    if work.checked_add(value.len()).ok_or(RuntimeError::Arithmetic)?
+                        > self.limits.max_operator_work_bytes
+                    {
+                        return Err(RuntimeError::OperatorWorkLimit {
+                            limit: self.limits.max_operator_work_bytes,
+                        });
+                    }
                     evaluate_single_input_with_transform_memo(
                         &mut context,
                         SingleInputPlan {
@@ -2597,6 +2614,7 @@ impl<'generation> Transaction<'generation> {
             }
             Ok(())
         })();
+        self.unit_work_bytes = work;
         selected.clear();
         let actual_bytes = selected
             .capacity()
@@ -2706,7 +2724,9 @@ impl<'generation> Transaction<'generation> {
             return Ok(None);
         };
         if tail.selected_count > self.limits.max_selected_values
-            || combined_work > self.limits.max_operator_work_bytes
+            || combined_work
+                .checked_add(self.unit_work_bytes)
+                .is_none_or(|work| work > self.limits.max_operator_work_bytes)
             || !results.admits_summary_no_hit(
                 budget,
                 &self.generation,

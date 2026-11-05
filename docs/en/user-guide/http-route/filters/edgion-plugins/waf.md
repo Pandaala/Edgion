@@ -364,6 +364,11 @@ request's bounded runtime budget, including all SQL dialect/quote or HTML
 contexts. Reaching a limit closes the WAF request according to its normal
 runtime error policy. The implementation does not use Hyperscan.
 
+Operator work (original, transformed and detector bytes) is bounded per rule.
+All members of a chain, and every branch created when an earlier member
+matches several values, share that one budget, so a chain that matches many client-supplied values
+cannot multiply the work of its later members.
+
 ## Execution and limits
 
 ### Request-scoped control actions

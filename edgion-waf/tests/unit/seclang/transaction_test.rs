@@ -2251,6 +2251,63 @@ fn detector_work_accumulates_across_chain_members() {
 }
 
 #[test]
+fn ordinary_work_accumulates_across_failed_chain_branches() {
+    let generation = generation(concat!(
+        "SecRule REQUEST_HEADERS \"@rx .\" \"id:204,phase:1,pass,chain\"\n",
+        "SecRule REQUEST_HEADERS:X-Payload \"@rx never-present\" \"setvar:tx.hit=1\"\n",
+    ));
+    let payload = vec![b'a'; 1_000];
+    // Each member invocation over the 1000-byte payload charges a few KiB:
+    // one branch fits the limit, while five failed branches together exceed it
+    // even though every single invocation stays below it.
+    let limit = 6_000;
+    let limits = RuntimeLimits {
+        max_operator_work_bytes: limit,
+        ..RuntimeLimits::default()
+    };
+
+    let single_headers = [RequestHeader::new(b"X-Payload", &payload)];
+    let mut single = Transaction::new(&generation, request(&single_headers, b"/"), limits).unwrap();
+    let outcome = single.execute_request_headers().unwrap();
+    assert!(outcome.findings.is_empty());
+
+    let fan_out_headers = [
+        RequestHeader::new(b"X-Payload", &payload),
+        RequestHeader::new(b"X-A", b"1"),
+        RequestHeader::new(b"X-B", b"1"),
+        RequestHeader::new(b"X-C", b"1"),
+        RequestHeader::new(b"X-D", b"1"),
+    ];
+    let mut fan_out = Transaction::new(&generation, request(&fan_out_headers, b"/"), limits).unwrap();
+    assert_eq!(
+        fan_out.execute_request_headers(),
+        Err(RuntimeError::OperatorWorkLimit { limit })
+    );
+    assert_eq!(fan_out.tx_value(b"hit"), None);
+}
+
+#[test]
+fn ordinary_work_budget_resets_for_each_rule_unit() {
+    let generation = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Payload \"@rx never-present\" \"id:205,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Payload \"@rx never-present\" \"id:206,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X-Payload \"@rx never-present\" \"id:207,phase:1,pass\"\n",
+    ));
+    let payload = vec![b'a'; 1_000];
+    let headers = [RequestHeader::new(b"X-Payload", &payload)];
+    let mut transaction = Transaction::new(
+        &generation,
+        request(&headers, b"/"),
+        RuntimeLimits {
+            max_operator_work_bytes: 2_500,
+            ..RuntimeLimits::default()
+        },
+    )
+    .unwrap();
+    assert!(transaction.execute_request_headers().unwrap().findings.is_empty());
+}
+
+#[test]
 fn detector_input_and_capture_failures_do_not_publish_tx_state() {
     let generation = generation("SecRule REQUEST_HEADERS:X-SQL \"@detectSQLi\" \"id:105,phase:1,pass,capture\"\n");
     let headers = [RequestHeader::new(b"X-SQL", b"1 OR 1=1")];
