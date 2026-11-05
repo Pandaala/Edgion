@@ -4,6 +4,7 @@ use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use crate::plugins::runtime::PluginLog;
 use base64::engine::general_purpose;
 use serde_json::Value;
+use std::sync::Arc;
 
 #[test]
 fn consumer_identity_header_preserves_bytes_and_marks_sensitive() {
@@ -43,8 +44,8 @@ fn basic_header(decoded: &[u8]) -> String {
     format!("Basic {}", general_purpose::STANDARD.encode(decoded))
 }
 
-fn prepared_users(username: &str, password: &str, group: &str) -> Arc<PreparedUserMap> {
-    Arc::new(BasicAuth::prepare_users(make_user_map(username, password, group)))
+fn prepared_users(username: &str, password: &str, group: &str) -> PreparedUserMap {
+    BasicAuth::prepare_users(make_user_map(username, password, group))
 }
 
 #[test]
@@ -164,7 +165,7 @@ fn recognized_unsupported_hashes_remain_unchanged_and_reject_hash_literal() {
     ] {
         let users = prepared_users("alice", password_hash, "partner-a");
         assert_eq!(users.get("alice").unwrap().password_hash, password_hash);
-        assert!(BasicAuth::verify_pinned_user(users, "alice".to_string(), password_hash.to_string()).is_none());
+        assert!(BasicAuth::verify_user(&users, "alice", password_hash).is_none());
     }
 }
 
@@ -172,11 +173,9 @@ fn recognized_unsupported_hashes_remain_unchanged_and_reject_hash_literal() {
 fn plaintext_is_prepared_as_sha_and_verifies() {
     let users = prepared_users("alice", "password", "partner-a");
     assert!(users.get("alice").unwrap().password_hash.starts_with("{SHA}"));
-    assert_eq!(
-        BasicAuth::verify_pinned_user(Arc::clone(&users), "alice".to_string(), "password".to_string()),
-        Some(("alice".to_string(), "partner-a".to_string()))
-    );
-    assert!(BasicAuth::verify_pinned_user(users, "alice".to_string(), "wrong".to_string()).is_none());
+    assert_eq!(BasicAuth::verify_user(&users, "alice", "password"), Some("partner-a"));
+    assert!(BasicAuth::verify_user(&users, "alice", "wrong").is_none());
+    assert!(BasicAuth::verify_user(&users, "bob", "password").is_none());
 }
 
 #[test]
@@ -194,27 +193,34 @@ fn constructor_removes_resolved_users_from_retained_config() {
 }
 
 #[test]
-fn pinned_generation_keeps_one_user_version() {
+fn each_prepared_generation_verifies_only_its_own_user_version() {
     let old = prepared_users("alice", "old-password", "old-group");
     let new = prepared_users("alice", "new-password", "new-group");
 
-    assert_eq!(
-        BasicAuth::verify_pinned_user(Arc::clone(&old), "alice".to_string(), "old-password".to_string()),
-        Some(("alice".to_string(), "old-group".to_string()))
-    );
-    assert!(BasicAuth::verify_pinned_user(old, "alice".to_string(), "new-password".to_string()).is_none());
-    assert_eq!(
-        BasicAuth::verify_pinned_user(Arc::clone(&new), "alice".to_string(), "new-password".to_string()),
-        Some(("alice".to_string(), "new-group".to_string()))
-    );
-    assert!(BasicAuth::verify_pinned_user(new, "alice".to_string(), "old-password".to_string()).is_none());
+    assert_eq!(BasicAuth::verify_user(&old, "alice", "old-password"), Some("old-group"));
+    assert!(BasicAuth::verify_user(&old, "alice", "new-password").is_none());
+    assert_eq!(BasicAuth::verify_user(&new, "alice", "new-password"), Some("new-group"));
+    assert!(BasicAuth::verify_user(&new, "alice", "old-password").is_none());
 }
 
-#[tokio::test]
-async fn known_and_unknown_users_keep_distinct_dispatch_control() {
+#[test]
+fn apr1_and_md5_crypt_hashes_verify_inline() {
+    // `openssl passwd -apr1 -salt r31.....` / `openssl passwd -1 -salt saltsalt` of "myPassword".
+    for hash in [
+        "$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/",
+        "$1$saltsalt$2vnaRpHa6Jxjz5n83ok8Z0",
+    ] {
+        let users = prepared_users("alice", hash, "partner-a");
+        assert_eq!(BasicAuth::verify_user(&users, "alice", "myPassword"), Some("partner-a"));
+        assert!(BasicAuth::verify_user(&users, "alice", "wrong").is_none());
+    }
+}
+
+// A plain #[test] with no Tokio runtime: authentication must stay synchronous
+// (no blocking-pool dispatch) for this to compile and run.
+#[test]
+fn known_and_unknown_users_authenticate_synchronously() {
     let plugin = create_basic_auth_with_users();
-    assert!(plugin.pin_known_user_generation("testuser").is_some());
-    assert!(plugin.pin_known_user_generation("missing").is_none());
 
     let mut known = MockPluginSession::new();
     setup_header_mocks(
@@ -222,8 +228,8 @@ async fn known_and_unknown_users_keep_distinct_dispatch_control() {
         &[("authorization", basic_header(b"testuser:testpass").as_str())],
     );
     assert_eq!(
-        plugin.authenticate_request(&mut known).await.unwrap(),
-        ("testuser".to_string(), "default".to_string())
+        plugin.authenticate_request(&mut known).unwrap(),
+        ("testuser".to_string(), "default")
     );
 
     let mut unknown = MockPluginSession::new();
@@ -232,7 +238,7 @@ async fn known_and_unknown_users_keep_distinct_dispatch_control() {
         &[("authorization", basic_header(b"missing:testpass").as_str())],
     );
     assert!(matches!(
-        plugin.authenticate_request(&mut unknown).await,
+        plugin.authenticate_request(&mut unknown),
         Err(AuthFailure::BadCredentials)
     ));
 }

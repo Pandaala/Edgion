@@ -26,6 +26,21 @@ fn md5_crypt_roundtrip() {
 }
 
 #[test]
+fn md5_crypt_rejects_passwords_over_the_length_cap() {
+    // Apache htpasswd hashes passwords of up to 256 bytes (interactive prompt).
+    assert_eq!(MAX_MD5_CRYPT_PASSWORD_BYTES, 256);
+    for magic in [&b"$apr1$"[..], &b"$1$"[..]] {
+        let at_cap = "a".repeat(MAX_MD5_CRYPT_PASSWORD_BYTES);
+        let hash = compute_md5_crypt(at_cap.as_bytes(), b"saltsalt", magic);
+        assert!(verify(&at_cap, &hash));
+
+        let over_cap = "a".repeat(MAX_MD5_CRYPT_PASSWORD_BYTES + 1);
+        let hash = compute_md5_crypt(over_cap.as_bytes(), b"saltsalt", magic);
+        assert!(!verify(&over_cap, &hash));
+    }
+}
+
+#[test]
 fn unknown_format_rejects() {
     assert!(!verify("password", "plaintext_is_not_supported"));
 }

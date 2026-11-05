@@ -47,6 +47,16 @@ fn verify_sha1(password: &str, encoded_hash: &str) -> bool {
 
 // ──────────────────── MD5-crypt / APR1 ($1$ / $apr1$) ──────────────────
 
+/// Longest password accepted for MD5-crypt / APR1 verification.
+///
+/// Each of the 1000 stretching rounds hashes the presented password up to
+/// twice, so cost grows linearly with its length (about 0.7 ms at this cap in
+/// a release build, versus about 150 ms for 64 KiB). 256 bytes is the longest
+/// password Apache `htpasswd` can hash (interactive prompt; `-b` and `-i`
+/// accept at most 255); hashes of longer passwords produced by other tools
+/// (for example `openssl passwd`) will not verify.
+pub(crate) const MAX_MD5_CRYPT_PASSWORD_BYTES: usize = 256;
+
 const ITOA64: &[u8] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 fn to64(buf: &mut Vec<u8>, mut v: u32, n: usize) {
@@ -57,6 +67,9 @@ fn to64(buf: &mut Vec<u8>, mut v: u32, n: usize) {
 }
 
 fn verify_md5_variant(password: &str, hash: &str, magic: &[u8]) -> bool {
+    if password.len() > MAX_MD5_CRYPT_PASSWORD_BYTES {
+        return false;
+    }
     let magic_str = std::str::from_utf8(magic).unwrap_or("");
     let after_magic = &hash[magic_str.len()..];
     let Some(dollar_pos) = after_magic.find('$') else {

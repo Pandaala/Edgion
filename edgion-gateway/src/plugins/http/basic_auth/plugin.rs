@@ -2,7 +2,6 @@
 
 use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
@@ -41,8 +40,7 @@ enum PasswordEncoding {
 
 /// Basic Authentication plugin
 pub struct BasicAuth {
-    // The Arc pins one immutable user-map generation across spawn_blocking.
-    user_passwords: Arc<PreparedUserMap>,
+    user_passwords: PreparedUserMap,
     config: BasicAuthConfig,
     auth_challenge: PreparedAuthChallenge,
 }
@@ -52,7 +50,7 @@ impl BasicAuth {
     pub fn new(config: &BasicAuthConfig) -> Self {
         let mut runtime_config = config.clone();
         let users = runtime_config.resolved_users.take().unwrap_or_default();
-        let user_passwords = Arc::new(Self::load_users(users));
+        let user_passwords = Self::load_users(users);
 
         BasicAuth {
             auth_challenge: PreparedAuthChallenge::new("Basic", &runtime_config.realm),
@@ -105,22 +103,22 @@ impl BasicAuth {
         }
     }
 
-    fn pin_known_user_generation(&self, username: &str) -> Option<Arc<PreparedUserMap>> {
-        self.user_passwords
-            .contains_key(username)
-            .then(|| Arc::clone(&self.user_passwords))
+    /// Verify one user's password and return the user's group.
+    ///
+    /// Supported hashes are verified inline on the request worker, like other
+    /// data-plane auth crypto: `{SHA}` costs well under a microsecond for
+    /// typical passwords (linear in length, comparable to decoding the header)
+    /// and APR1/MD5-crypt (1000 MD5 rounds, password capped at 256 bytes)
+    /// roughly 0.1-0.7 ms. A blocking-pool hop would not reduce that CPU cost;
+    /// it would add a thread handoff and admit up to 512 blocking threads per
+    /// listener runtime, each with an unbounded queue, under credential-guessing
+    /// load.
+    fn verify_user<'a>(users: &'a PreparedUserMap, username: &str, password: &str) -> Option<&'a str> {
+        let user = users.get(username)?;
+        super::htpasswd::verify(password, &user.password_hash).then_some(user.group.as_str())
     }
 
-    fn verify_pinned_user(users: Arc<PreparedUserMap>, username: String, password: String) -> Option<(String, String)> {
-        let user = users.get(&username)?;
-        if !super::htpasswd::verify(&password, &user.password_hash) {
-            return None;
-        }
-        let group = user.group.clone();
-        Some((username, group))
-    }
-
-    async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<(String, String), AuthFailure> {
+    fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<(String, &str), AuthFailure> {
         let Some(auth_header_value) = session.header_str("authorization") else {
             return Err(AuthFailure::MissingHeader);
         };
@@ -128,17 +126,8 @@ impl BasicAuth {
         let (username, password) =
             Self::extract_credentials(auth_header_value).map_err(|_| AuthFailure::BadCredentials)?;
 
-        // Preserve the fast miss for unknown users. Known users carry this same
-        // immutable generation into the blocking verifier and re-look up there.
-        let users = self
-            .pin_known_user_generation(&username)
-            .ok_or(AuthFailure::BadCredentials)?;
-
-        // All supported hashes (SHA-1 / MD5-crypt / APR-MD5) are cheap to verify.
-        tokio::task::spawn_blocking(move || Self::verify_pinned_user(users, username, password))
-            .await
-            .map_err(|_| AuthFailure::BadCredentials)?
-            .ok_or(AuthFailure::BadCredentials)
+        let group = Self::verify_user(&self.user_passwords, &username, &password).ok_or(AuthFailure::BadCredentials)?;
+        Ok((username, group))
     }
 
     fn extract_credentials(authorization: &str) -> BasicAuthResult<(String, String)> {
@@ -208,7 +197,7 @@ impl RequestFilter for BasicAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let (username, group) = match self.authenticate_request(session).await {
+        let (username, group) = match self.authenticate_request(session) {
             Ok(result) => result,
             Err(AuthFailure::MissingHeader) => {
                 if self.handle_anonymous_access(session, plugin_log) {
@@ -223,8 +212,9 @@ impl RequestFilter for BasicAuth {
                 // Unified PluginLog tag blocks log-grep-based enumeration (unknown user vs
                 // wrong password look identical in access log). Timing-side enumeration is
                 // a separate concern — verify only runs when the user exists, so a fast
-                // path still reveals user existence. Mitigate via `auth_failure_delay_ms`
-                // at the deployment layer.
+                // path still reveals user existence. `auth_failure_delay_ms` is added after
+                // verify, so it slows guessing but does not equalize timing; limit probing
+                // with rate limiting at the deployment layer.
                 plugin_log.push("Deny bad credential");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
@@ -233,7 +223,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push_fmt("OK group={} user {}", la![group.as_str(), sensitive(&username)]);
+        plugin_log.push_fmt("OK group={} user {}", la![group, sensitive(&username)]);
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);

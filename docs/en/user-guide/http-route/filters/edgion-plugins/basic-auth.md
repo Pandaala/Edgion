@@ -67,7 +67,7 @@ filters:
 | `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog; [Character rules](README.md#authentication-realm) |
 | `hideCredentials` | Boolean | `false` | Whether to hide the Authorization header from the upstream service |
 | `anonymous` | String | none | Anonymous username. When set, unauthenticated requests are also allowed with this username |
-| `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) applied before returning an auth failure response. Used to mitigate brute-force and username-enumeration attacks — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |
+| `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) added before returning an auth failure response. Slows brute-force guessing; it does not equalize response timing — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |
 
 ### BasicAuthSecretGroup sub-fields
 
@@ -329,9 +329,9 @@ Content-Type: text/plain
 
 ### 6. Mitigating Enumeration and Brute-Force (Recommended)
 
-Basic Auth has a **username enumeration timing side channel**: when the requested username does not exist, the plugin returns 401 without running the hash verify; when the username exists but the password is wrong, the plugin runs the htpasswd verify path. The supported hashes (SHA-1 / APR-MD5 / MD5-crypt) are sub-microsecond to verify, so the absolute time difference is small — but it is still observable, especially over LAN, and the user-existence signal alone is enough to drive offline brute-force against any leaked hash.
+Basic Auth has a **username enumeration timing side channel**: when the requested username does not exist, the plugin returns 401 without running the hash verify; when the username exists but the password is wrong, the plugin runs the htpasswd verify path. `{SHA}` verifies in well under a microsecond for typical passwords and APR-MD5 / MD5-crypt (1000 MD5 rounds) in roughly 0.1-0.7 ms depending on password length, so the absolute time difference is small — but it is still statistically observable, especially over LAN, and the user-existence signal alone is enough to drive offline brute-force against any leaked hash.
 
-This is a common property of gateway-layer Basic Auth (Traefik, Nginx, Envoy, Kong and other mainstream gateways likewise do not eliminate this at the code layer). **The recommended mitigation is a configuration-level combination of the following two settings**:
+This is a common property of gateway-layer Basic Auth (Traefik, Nginx, Envoy, Kong and other mainstream gateways likewise do not eliminate this at the code layer). **The recommended mitigation is a configuration-level combination of the following two settings**, which make each guess expensive and cap the probing rate. Neither removes the timing difference itself: the failure delay is a fixed sleep added *after* verification, so the known-user verify time is still present on top of it.
 
 **① Set `authFailureDelayMs` (required)**
 
@@ -343,11 +343,12 @@ filters:
         - name: default
           secretRefs:
             - name: api-user
-      authFailureDelayMs: 500  # Uniform 500ms delay on auth failure, masking the user-existence timing signal
+      authFailureDelayMs: 500  # Fixed 500ms delay added to every auth failure
 ```
 
-- Recommended value `>= 500` (must be much larger than network jitter to fully mask the user-existence signal)
-- Also raises brute-force cost: from thousands of attempts/sec down to ~2/sec per connection
+- Recommended value `>= 500`
+- Raises brute-force cost: from thousands of attempts/sec down to ~2/sec per connection
+- It does **not** hide the user-existence signal: the delay is the same for both paths, so the sub-millisecond verify difference remains measurable by averaging many probes. Rate limiting (②) is what bounds how many probes an attacker can average
 
 **② Add upstream rate limiting (recommended)**
 
@@ -370,7 +371,7 @@ filters:
       authFailureDelayMs: 500
 ```
 
-**Why not dummy hash verify at the code layer?** Even with cheap hashes, running an extra verify for unknown users would still amplify wasted CPU under enumeration traffic. The `authFailureDelayMs` + upstream rate-limit combination achieves equivalent defense without creating that amplification vector, and is consistent with mainstream gateway practice.
+**Why not dummy hash verify at the code layer?** Even with cheap hashes, running an extra verify for unknown users would still amplify wasted CPU under enumeration traffic. The `authFailureDelayMs` + upstream rate-limit combination accepts the small timing difference and instead bounds how fast it can be probed, without creating that amplification vector; this is consistent with mainstream gateway practice.
 
 ### ❌ Avoid
 
@@ -527,7 +528,7 @@ spec:
 
 ## Performance Considerations
 
-- **Password hashing**: The plugin verifies htpasswd `{SHA}` / `$apr1$` / `$1$` hashes inline; all three are sub-microsecond per request. Plaintext passwords from Secrets are auto-hashed as `{SHA}` once at load time
+- **Password hashing**: The plugin verifies htpasswd `{SHA}` / `$apr1$` / `$1$` hashes inline on the request worker, like other auth plugins' crypto: `{SHA}` costs well under a microsecond for typical passwords, `$apr1$` / `$1$` roughly 0.1-0.7 ms per request. For `$apr1$` / `$1$` users, presented passwords longer than 256 bytes (the longest password Apache `htpasswd` can hash) are rejected without hashing, because MD5-crypt cost grows with password length. A `$apr1$` / `$1$` hash of a longer password generated by another tool (for example `openssl passwd`) never verifies; use `{SHA}` or a plaintext Secret value for such passwords. Plaintext passwords from Secrets are auto-hashed as `{SHA}` once at load time
 - **No result cache**: Verification runs on every request — no in-process auth cache. This keeps revocation immediate after a Secret update, at the cost of a fixed per-request hash. For stronger schemes (bcrypt, scrypt, argon2) place an external auth in front (`ForwardAuth` / `ExtAuthz`); the gateway's basic-auth filter intentionally rejects bcrypt to avoid forcing such a cache, matching Envoy / Kong behavior
 - **Secret updates**: After modifying a Secret, the plugin automatically reloads (there may be a brief delay)
 
