@@ -3,8 +3,9 @@
 // Initial: the child in edgion-grpc-deleg-dyn narrows the parent's wildcard
 // delegation of test.TestService to SayHello.
 // Update: only the child route changes (the narrowed method moves to
-// StreamNumbers); the controller must requeue the parent, re-flatten, and
-// the gateway must hot-swap routing.
+// StreamNumbers); the controller republishes only the child (its delegation
+// keys are unchanged) and the gateway must rebuild the child's subtree slot
+// and hot-swap routing without touching the parent.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;

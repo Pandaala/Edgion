@@ -188,65 +188,51 @@ pub fn upstream_response_filter(
             },
         )?;
     } else {
-        // Check if status code triggers retry based on rule.retry.codes
-        if let Some(route_unit) = ctx.route_unit.as_ref() {
-            if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
-                if let Some(codes) = parsed_retry.codes.as_ref() {
-                    if codes.contains(&status_code) {
-                        // Determine retry attempts: rule.retry.attempts > global
-                        let retry_attempts = parsed_retry.attempts.unwrap_or(ctx.egc.retry_attempts);
+        // Status-code retry: rule.retry.codes from the leaf, else the nearest
+        // delegating ancestor (HTTP routes only).
+        if ctx.retry_codes().is_some_and(|codes| codes.contains(&status_code)) {
+            // Determine retry attempts: rule.retry.attempts (leaf, then ancestors) > global
+            let retry_attempts = ctx.retry_attempts().unwrap_or(ctx.egc.retry_attempts);
 
-                        // Check request timeout. Either the route-level
-                        // `request_timeout` or a client-supplied `grpc-timeout`
-                        // having expired disqualifies a status-code retry.
-                        let request_timeout_exceeded = route_unit
-                            .rule
-                            .parsed_timeouts
-                            .as_ref()
-                            .and_then(|t| t.request_timeout.as_duration())
-                            .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
-                            .unwrap_or(false);
-                        let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
+            // Check request timeout. Either the route-level
+            // `request_timeout` or a client-supplied `grpc-timeout`
+            // having expired disqualifies a status-code retry.
+            let request_timeout_exceeded = ctx.request_timeout_exceeded();
+            let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
-                        let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
-                        if super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts)
-                            && !deadline_exceeded
-                            && buffer_ok
-                        {
-                            // Retry budget (retryConstraint): composes AFTER the
-                            // attempts/deadline/buffer checks above (D3). This is the
-                            // point where a status-code retry is DECIDED, so the budget
-                            // is consulted here. On refusal, `retry_on_status` is left
-                            // false (making pg_error_while_proxy Case 1 a no-op so no
-                            // already-started response is corrupted) and a deterministic
-                            // 503 is raised as a synthetic HTTPStatus error. The
-                            // per-upstream entry keeps the backend's real observed status
-                            // (stamped earlier); the 503 is a request-level outcome.
-                            if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
-                                if !budget.try_retry() {
-                                    crate::observe::metrics::record_retry_budget_denied();
-                                    ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
-                                    return Err(pingora_core::Error::explain(
-                                        pingora_core::ErrorType::HTTPStatus(503),
-                                        "retry budget exhausted",
-                                    ));
-                                }
-                            }
-                            ctx.retry_on_status = true;
-                            // Stamp the attempt's per-upstream log entry with an
-                            // explicit retry reason so access-log aggregation can
-                            // count retries by reason instead of inferring this
-                            // case from the entry's status code.
-                            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                                upstream.err.push("RetryOnStatus".into());
-                            }
-                            return Err(pingora_core::Error::explain(
-                                pingora_core::ErrorType::HTTPStatus(status_code),
-                                format!("retry on status {}", status_code),
-                            ));
-                        }
+            let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
+            if super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts) && !deadline_exceeded && buffer_ok {
+                // Retry budget (retryConstraint): composes AFTER the
+                // attempts/deadline/buffer checks above (D3). This is the
+                // point where a status-code retry is DECIDED, so the budget
+                // is consulted here. On refusal, `retry_on_status` is left
+                // false (making pg_error_while_proxy Case 1 a no-op so no
+                // already-started response is corrupted) and a deterministic
+                // 503 is raised as a synthetic HTTPStatus error. The
+                // per-upstream entry keeps the backend's real observed status
+                // (stamped earlier); the 503 is a request-level outcome.
+                if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+                    if !budget.try_retry() {
+                        crate::observe::metrics::record_retry_budget_denied();
+                        ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
+                        return Err(pingora_core::Error::explain(
+                            pingora_core::ErrorType::HTTPStatus(503),
+                            "retry budget exhausted",
+                        ));
                     }
                 }
+                ctx.retry_on_status = true;
+                // Stamp the attempt's per-upstream log entry with an
+                // explicit retry reason so access-log aggregation can
+                // count retries by reason instead of inferring this
+                // case from the entry's status code.
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.err.push("RetryOnStatus".into());
+                }
+                return Err(pingora_core::Error::explain(
+                    pingora_core::ErrorType::HTTPStatus(status_code),
+                    format!("retry on status {}", status_code),
+                ));
             }
         }
     }
@@ -359,6 +345,30 @@ pub(super) fn cached_response_filter(
     run_response_header_sync_tail(edgion_http, session, response, ctx)
 }
 
+/// Run the matched route's sync upstream-response chain: a delegated chain's
+/// ancestors first (root -> parent, each as its own level), then the leaf
+/// exactly as for an ordinary route. A level that settles the response stage
+/// stops the remaining levels.
+pub(super) fn run_route_upstream_response_sync(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    upstream_response: &mut ResponseHeader,
+) {
+    let Some(leaf) = ctx.leaf_route_runtime() else {
+        return;
+    };
+    for level in 0..ctx.ancestor_count() {
+        let Some(runtime) = ctx.ancestor_runtime(level) else {
+            break;
+        };
+        runtime.run_upstream_response_plugins_sync_at(session, ctx, upstream_response, Some(level));
+        if response_stage_settled(ctx) {
+            return;
+        }
+    }
+    leaf.run_upstream_response_plugins_sync(session, ctx, upstream_response);
+}
+
 fn run_response_header_sync_tail(
     _edgion_http: &EdgionHttpProxy,
     session: &mut Session,
@@ -376,15 +386,7 @@ fn run_response_header_sync_tail(
     // route type. A GRPCRoute request stores its compiled chain separately from
     // HTTPRoute; consulting only `route_unit` silently skips every gRPC
     // response-stage filter while the corresponding request-stage chain runs.
-    if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
-        grpc_route_unit
-            .plugin_runtime
-            .run_upstream_response_plugins_sync(session, ctx, upstream_response);
-    } else if let Some(route_unit) = ctx.route_unit.clone() {
-        route_unit
-            .plugin_runtime
-            .run_upstream_response_plugins_sync(session, ctx, upstream_response);
-    }
+    run_route_upstream_response_sync(session, ctx, upstream_response);
 
     // Run backend-level upstream_response edgion_plugins (sync) for the same
     // matched route type.
@@ -470,11 +472,7 @@ fn record_lb_latency_sample(ctx: &EdgionHttpContext, status: u16, header_at: Ins
         return false;
     };
     let latency_us = header_at.saturating_duration_since(upstream.start_time).as_micros() as u64;
-    let retry_codes = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|route| route.rule.parsed_retry.as_ref())
-        .and_then(|retry| retry.codes.as_deref());
+    let retry_codes = ctx.retry_codes();
     crate::lb::sample::record_response_sample(
         backend,
         status,

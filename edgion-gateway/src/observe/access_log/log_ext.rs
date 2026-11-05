@@ -233,6 +233,27 @@ fn apply_declarations(
     }
 }
 
+/// Route labels of the matched leaf route (absent on a 404). For a delegated
+/// match the leaf is `ctx.route_unit`, never an ancestor.
+pub(crate) fn route_labels(ctx: &EdgionHttpContext) -> Option<&BTreeMap<String, String>> {
+    if let Some(u) = ctx.route_unit.as_ref() {
+        return u.matched_info.labels_meta.as_deref();
+    }
+    ctx.grpc_route_unit
+        .as_ref()
+        .and_then(|u| u.matched_info.labels_meta.as_deref())
+}
+
+/// Route annotations of the matched leaf route (absent on a 404).
+pub(crate) fn route_annotations(ctx: &EdgionHttpContext) -> Option<&BTreeMap<String, String>> {
+    if let Some(u) = ctx.route_unit.as_ref() {
+        return u.matched_info.annotations_meta.as_deref();
+    }
+    ctx.grpc_route_unit
+        .as_ref()
+        .and_then(|u| u.matched_info.annotations_meta.as_deref())
+}
+
 /// Read one field's value from its source. `None` means "the source had no
 /// value" — the field is then absent from `ext`, which is distinct from a
 /// whitelist miss (present, masked).
@@ -244,23 +265,6 @@ fn resolve_field<'a>(
     // Route metadata, resolved once at route build (Step 3). `MatchInfo` (HTTP)
     // and `GrpcMatchInfo` (gRPC) are distinct types with identical fields, so
     // each side is picked explicitly. Absent on a 404, where neither unit exists.
-    let labels_meta = || -> Option<&BTreeMap<String, String>> {
-        if let Some(u) = ctx.route_unit.as_ref() {
-            return u.matched_info.labels_meta.as_deref();
-        }
-        ctx.grpc_route_unit
-            .as_ref()
-            .and_then(|u| u.matched_info.labels_meta.as_deref())
-    };
-    let annotations_meta = || -> Option<&BTreeMap<String, String>> {
-        if let Some(u) = ctx.route_unit.as_ref() {
-            return u.matched_info.annotations_meta.as_deref();
-        }
-        ctx.grpc_route_unit
-            .as_ref()
-            .and_then(|u| u.matched_info.annotations_meta.as_deref())
-    };
-
     match field.from {
         // Repeated headers: `HeaderMap::get` returns the FIRST value. Caveat to
         // document, not to defend against: if the upstream is last-wins, an
@@ -286,8 +290,8 @@ fn resolve_field<'a>(
             crate::request_cookie::FieldScope::All,
         ),
         LogExtSource::Ctx => ctx.get_ctx_var(&field.name),
-        LogExtSource::RouteLabel => labels_meta().and_then(|m| m.get(&field.name).map(String::as_str)),
-        LogExtSource::RouteAnnotation => annotations_meta().and_then(|m| m.get(&field.name).map(String::as_str)),
+        LogExtSource::RouteLabel => route_labels(ctx).and_then(|m| m.get(&field.name).map(String::as_str)),
+        LogExtSource::RouteAnnotation => route_annotations(ctx).and_then(|m| m.get(&field.name).map(String::as_str)),
     }
 }
 

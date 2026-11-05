@@ -30,7 +30,7 @@ Control-plane and startup logs use `tracing` and are not subject to this rule. S
 pub struct AccessLogEntry<'a> {
     pub timestamp: i64,
     pub request_info: &'a RequestInfo,
-    pub match_info: Option<RouteMatchInfo<'a>>,  // HTTP or gRPC route match info
+    pub match_info: Option<MatchInfoChain<'a>>, // array root -> leaf (delegation ancestors + leaf), HTTP or gRPC
     pub diagnostics: &'a [RequestDiagnostic],
     pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>,
@@ -40,7 +40,7 @@ pub struct AccessLogEntry<'a> {
 }
 ```
 
-- `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
+- `MatchInfoChain` (`Http { ancestors, leaf }` / `Grpc { ancestors, leaf }`) serializes `match_info` as a JSON array ordered root → leaf with a custom `Serialize` that borrows each level's precomputed `MatchInfo` / `GrpcMatchInfo` (no allocation). `ancestors` come from `ctx.delegated` and are empty for ordinary routes, which therefore log a one-element array. `AccessLogExtern` `routeLabel` / `routeAnnotation` read the leaf (`ctx.route_unit`).
 - `ext` is populated at serialization time (inside `logging()`) by resolving up to three tiers of `AccessLogExtern` declarations (`EdgionGatewayConfig.spec.globalPluginsRef` → Gateway `edgion.io/edgion-plugins` → route `ExtensionRef`) against the live plugin store — **not** by anything that ran earlier in the request. `AccessLogExtern` is a declaration, never an executed filter; this is why it survives 404 / 421 / the 400 family, which return before any plugin runs. Omitted when nothing was collected. See `skills/03-coding/observability/00-access-log.md`.
 - Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
 - JSON serialization uses serde's `skip_serializing_if` to reduce output size.

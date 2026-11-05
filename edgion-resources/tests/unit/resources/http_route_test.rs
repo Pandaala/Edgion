@@ -48,7 +48,7 @@ fn header_matches_decode_first_equivalent_name_in_order() {
 }
 
 #[test]
-fn header_matches_decode_independently_in_declared_and_resolved_rules() {
+fn header_matches_decode_independently_in_rules() {
     let rules = serde_json::json!([{"matches": [
         {"headers": [{"name": "X-Mode", "value": "one"}, {"name": "x-mode", "value": "two"}]},
         {"headers": [{"name": "x-mode", "value": "two"}, {"name": "X-Mode", "value": "one"}]}
@@ -56,17 +56,15 @@ fn header_matches_decode_independently_in_declared_and_resolved_rules() {
     let route: super::HTTPRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
         "metadata": {"name": "duplicates"},
-        "spec": {"rules": rules, "resolvedRules": rules}
+        "spec": {"rules": rules}
     }))
     .unwrap();
-    for rules in [route.spec.rules, route.spec.resolved_rules] {
-        let rules = rules.unwrap();
-        let matches = rules[0].matches.as_ref().unwrap();
-        for (index, expected) in ["one", "two"].into_iter().enumerate() {
-            let headers = matches[index].headers.as_ref().unwrap();
-            assert_eq!(headers.len(), 1);
-            assert_eq!(headers[0].value, expected);
-        }
+    let rules = route.spec.rules.unwrap();
+    let matches = rules[0].matches.as_ref().unwrap();
+    for (index, expected) in ["one", "two"].into_iter().enumerate() {
+        let headers = matches[index].headers.as_ref().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].value, expected);
     }
 }
 
@@ -500,16 +498,6 @@ fn test_is_route_delegation_ref_matrix() {
     assert!(!backend_ref(Some(GATEWAY_API_GROUP), Some("GRPCRoute")).is_route_delegation_ref());
 }
 
-fn route_json(spec: serde_json::Value) -> HTTPRoute {
-    serde_json::from_value(serde_json::json!({
-        "apiVersion": "gateway.networking.k8s.io/v1",
-        "kind": "HTTPRoute",
-        "metadata": {"name": "r", "namespace": "default"},
-        "spec": spec
-    }))
-    .expect("route should deserialize")
-}
-
 #[test]
 fn request_mirror_filter_type_and_config_must_match() {
     let missing_config: HTTPRouteRule = serde_json::from_value(serde_json::json!({
@@ -534,56 +522,6 @@ fn request_mirror_filter_type_and_config_must_match() {
         unexpected_config.request_mirror_validation_error().as_deref(),
         Some("filters[0] RequestMirror: requestMirror must be absent when filter.type is not RequestMirror")
     );
-}
-
-#[test]
-fn test_effective_rules_prefers_resolved() {
-    let mut route = route_json(serde_json::json!({
-        "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/spec"}}]}]
-    }));
-    // No resolved_rules → falls back to spec.rules
-    let rules = route.effective_rules().expect("spec rules present");
-    assert_eq!(
-        rules[0].matches.as_ref().unwrap()[0]
-            .path
-            .as_ref()
-            .unwrap()
-            .value
-            .as_deref(),
-        Some("/spec")
-    );
-
-    // With resolved_rules → resolved wins
-    let resolved: Vec<HTTPRouteRule> = serde_json::from_value(serde_json::json!(
-        [{"matches": [{"path": {"type": "PathPrefix", "value": "/resolved"}}]}]
-    ))
-    .unwrap();
-    route.spec.resolved_rules = Some(resolved);
-    let rules = route.effective_rules().expect("resolved rules present");
-    assert_eq!(
-        rules[0].matches.as_ref().unwrap()[0]
-            .path
-            .as_ref()
-            .unwrap()
-            .value
-            .as_deref(),
-        Some("/resolved")
-    );
-}
-
-#[test]
-fn test_resolved_rules_serialized_delegation_issues_not() {
-    let mut route = route_json(serde_json::json!({"rules": []}));
-    route.spec.resolved_rules = Some(Vec::new());
-    route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
-        message: "internal".to_string(),
-    }];
-    let json = serde_json::to_value(&route).unwrap();
-    // resolved_rules must survive conf_sync serialization
-    assert!(json["spec"].get("resolvedRules").is_some());
-    // delegation_issues is controller-internal and must never serialize
-    assert!(json["spec"].get("delegationIssues").is_none());
-    assert!(json["spec"].get("delegation_issues").is_none());
 }
 
 #[test]
@@ -734,31 +672,4 @@ fn session_lifetime_projection_preserves_strictness_and_rounding() {
         permanent.validated_lifetime_secs().unwrap_err(),
         "cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout"
     );
-}
-
-#[test]
-fn parent_match_transport_is_required_inside_variant_and_schema_hidden() {
-    for value in [
-        serde_json::json!({"kind": "direct"}),
-        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": ["/api", "/api/v1"]}]}),
-    ] {
-        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({"resolvedParentMatch": value})).unwrap();
-        assert_eq!(
-            serde_json::to_value(rule.clone()).unwrap()["resolvedParentMatch"],
-            value
-        );
-    }
-    for value in [
-        serde_json::json!({"kind": "delegated"}),
-        serde_json::json!({"kind": "delegated", "matches": [{}]}),
-        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["/api"]}]}),
-        serde_json::json!({"kind": "unknown"}),
-        serde_json::json!({"kind": "direct", "matches": []}),
-    ] {
-        assert!(serde_json::from_value::<HTTPRouteRule>(serde_json::json!({"resolvedParentMatch": value})).is_err());
-    }
-    let schema = serde_json::to_value(schemars::schema_for!(HTTPRouteRule)).unwrap();
-    assert!(!schema.to_string().contains("resolvedParentMatch"));
-    let ordinary: HTTPRouteRule = serde_json::from_value(serde_json::json!({})).unwrap();
-    assert!(ordinary.resolved_parent_match.is_none());
 }

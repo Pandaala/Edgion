@@ -1,0 +1,29 @@
+# multi_parent_child: root that delegates /v2/billing to the shared
+# multi-child and stamps x-parent: v2 on delegated traffic.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-v2-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "multi.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v2/billing
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent
+                value: v2
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: multi-child
+          namespace: edgion-deleg

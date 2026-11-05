@@ -275,33 +275,20 @@ impl<'a> HttpRouteAuthRefs<'a> {
         filter: usize,
     ) -> Result<EffectiveRouteAuthField<'a>, ReferenceError> {
         let slot = RouteFilterSlot::new(rule, backend, filter);
-        let field = filter_at(
-            self.route.effective_rules().map(Vec::as_slice).unwrap_or_default(),
-            slot,
-        )
-        .ok_or(ReferenceError::StaleBinding)?;
+        let field = filter_at(self.route.spec.rules.as_deref().unwrap_or_default(), slot)
+            .ok_or(ReferenceError::StaleBinding)?;
         let config = config(field)?;
-        let namespace = if self.route.spec.resolved_rules.is_some() {
-            field
-                .resolved_external_auth
-                .as_ref()
-                .ok_or(ReferenceError::StaleBinding)?
-                .namespace
-                .as_str()
-        } else {
-            self.route.metadata.namespace.as_deref().unwrap_or("default")
-        };
+        let namespace = self.route.metadata.namespace.as_deref().unwrap_or("default");
         ObjectIdentity::checked(
             "gateway.networking.k8s.io",
             "HTTPRoute",
             ResourceScope::Namespaced(namespace),
             self.route.metadata.name.as_deref().unwrap_or_default(),
         )?;
-        if self.route.spec.resolved_rules.is_none()
-            && field
-                .resolved_external_auth
-                .as_ref()
-                .is_some_and(|stamp| stamp.namespace != namespace)
+        if field
+            .resolved_external_auth
+            .as_ref()
+            .is_some_and(|stamp| stamp.namespace != namespace)
         {
             return Err(ReferenceError::StaleBinding);
         }

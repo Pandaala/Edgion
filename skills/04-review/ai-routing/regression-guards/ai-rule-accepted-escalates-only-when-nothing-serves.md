@@ -50,12 +50,15 @@ rule is invalid — while restoring the documented per-rule precedent (`http_rou
 branches are naturally exclusive: `PartiallyInvalid`'s `own_invalid` already requires
 `valid_rules > 0`.
 
-**4. Delegation drops still never flip `Accepted`**
+**4. Delegation: every route escalates on its own rules**
 
-An AI violation inside a *delegated child* rule is removed from `resolved_rules` during parse and
-reported as `DelegationIssue::RuleDropped`. That path keeps the pre-existing contract — a dropped
-delegated rule never raises `Accepted` — and the fix does not change it. Only the route's own
-`spec.rules` participate in the escalation.
+Under the cascading-match delegation model no rule is copied between routes. A
+delegation child is evaluated on its own `spec.rules` with the same escalation, and
+the result is written on the child's own `status.parents` entries (one per
+route-kind parentRef); it never changes the parent's status. `AiProxy` is a
+backend-selecting plugin and is rejected on a delegating rule. (History: the
+removed Controller flattening dropped child AI violations from the parent's copied
+rule set and reported them on the parent as `PartiallyInvalid` only.)
 
 ## Implementation
 
@@ -63,8 +66,7 @@ delegated rule never raises `Accepted` — and the fix does not change it. Only 
 `update_status`:
 
 - AI reasons are collected into `ai_invalid_rules` but no longer pushed eagerly.
-- `serves_no_rule` = `resolved_rules.is_empty()` when delegation produced a resolved set, otherwise
-  `valid_rules == 0`.
+- `serves_no_rule` = `valid_rules == 0` (the route's own `spec.rules` minus invalid indexes).
 - `ai_rejects_route = !ai_invalid_rules.is_empty() && serves_no_rule` gates the
   `AcceptedError::UnsupportedValue` push, and also suppresses the `PartiallyInvalid=True` branch.
 - When the escalation fires on a later reconcile (an operator deletes the last valid sibling rule),
@@ -85,8 +87,8 @@ Regression tests: `ai_invalid_rule_stays_partially_invalid_when_other_rules_surv
 - Suppress `PartiallyInvalid` whenever `Accepted=False` for any reason — `Accepted` is routinely
   False for `NoMatchingParent` while rule-level findings are still worth reporting; this would
   break `invalid_cors_results_in_partially_invalid_not_accepted_false`.
-- Add a `DelegationIssue` variant to escalate AI drops from delegated children — widens a shared
-  `edgion-resources` schema for a case the delegation contract already covers by design.
+- (Historical, flattening era) Add a delegation-issue variant to escalate AI drops from delegated
+  children onto the parent. Moot under the cascading match: children escalate on their own status.
 
 ## Re-evaluation Triggers
 

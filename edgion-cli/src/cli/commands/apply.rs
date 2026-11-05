@@ -167,11 +167,25 @@ async fn apply_doc(
         Err(_) => false,
     };
 
-    // Create or update
+    // Create or update. The existence probe reads the Controller's processed
+    // cache, which can trail a write that just landed in storage, so a create
+    // that reports 409 Conflict (already exists) falls back to an update. A
+    // follower's not-leader 409 is not an "already exists" answer: it is
+    // reported as is and never retried as an update.
     let (resp, action) = if exists {
         (client.update(kind, namespace, name, content).await?, "updated")
     } else {
-        (client.create(kind, namespace, content).await?, "created")
+        let resp = client.create(kind, namespace, content.clone()).await?;
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            let body = resp.text().await.context("Failed to read response body")?;
+            if let Some(message) = not_leader_error(&body) {
+                print_error(&format!("Failed to apply {} {}: {}", kind, name, message));
+                anyhow::bail!(message);
+            }
+            (client.update(kind, namespace, name, content).await?, "updated")
+        } else {
+            (resp, "created")
+        }
     };
 
     match handle_response(resp).await {
@@ -186,6 +200,22 @@ async fn apply_doc(
     }
 
     Ok(())
+}
+
+/// Error message for a follower Controller's not-leader rejection body
+/// (`{"error": "not leader", "leader": <admin address or null>}`), or `None`
+/// for any other body.
+fn not_leader_error(body: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    if json.get("error").and_then(|e| e.as_str()) != Some("not leader") {
+        return None;
+    }
+    Some(
+        match json.get("leader").and_then(|l| l.as_str()).filter(|l| !l.is_empty()) {
+            Some(leader) => format!("API error: not leader; retry against the leader at {leader}"),
+            None => "API error: not leader; the leader is currently unknown, retry later".to_string(),
+        },
+    )
 }
 
 #[cfg(test)]

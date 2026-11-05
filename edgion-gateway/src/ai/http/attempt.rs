@@ -412,13 +412,7 @@ pub(crate) fn on_raw_response(
     transport: RetryTransportFacts,
 ) -> pingora_core::Result<()> {
     let status_code = upstream_response.status.as_u16();
-    let wants_retry = status_code != 101
-        && ctx
-            .route_unit
-            .as_ref()
-            .and_then(|route| route.rule.parsed_retry.as_ref())
-            .and_then(|retry| retry.codes.as_ref())
-            .is_some_and(|codes| codes.contains(&status_code));
+    let wants_retry = status_code != 101 && ctx.retry_codes().is_some_and(|codes| codes.contains(&status_code));
     if status_code == 429 {
         crate::ai::http::response::apply_provider_cooldown(ctx, upstream_response);
     }

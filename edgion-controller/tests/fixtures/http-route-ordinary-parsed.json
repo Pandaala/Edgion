@@ -1,0 +1,186 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "HTTPRoute",
+  "metadata": {
+    "annotations": {
+      "edgion.io/hostname-resolution": "gateway-pending"
+    },
+    "generation": 3,
+    "name": "ordinary",
+    "namespace": "apps",
+    "uid": "ordinary-uid"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "gw",
+        "sectionName": "http"
+      }
+    ],
+    "resolvedStatusController": "edgion.io/gateway-controller",
+    "hostnames": [
+      "app.example.com"
+    ],
+    "resolvedHostnames": [
+      "app.example.com"
+    ],
+    "rules": [
+      {
+        "resolvedAiAdmission": {
+          "backends": [
+            {
+              "kind": "service"
+            },
+            {
+              "kind": "missing"
+            }
+          ]
+        },
+        "name": "primary",
+        "matches": [
+          {
+            "path": {
+              "type": "PathPrefix",
+              "value": "/api"
+            },
+            "method": "GET"
+          }
+        ],
+        "filters": [
+          {
+            "type": "RequestHeaderModifier",
+            "requestHeaderModifier": {
+              "set": [
+                {
+                  "name": "x-a",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          {
+            "type": "ExtensionRef",
+            "extensionRef": {
+              "group": "edgion.io",
+              "kind": "EdgionPlugins",
+              "name": "plug"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "svc",
+            "port": 80,
+            "weight": 3
+          },
+          {
+            "name": "other",
+            "namespace": "secret-ns",
+            "port": 81,
+            "refDenied": {
+              "targetNamespace": "secret-ns",
+              "targetName": "other",
+              "reason": "NoMatchingReferenceGrant"
+            }
+          }
+        ],
+        "timeouts": {
+          "request": "5s"
+        },
+        "resolvedTerminalRouteUid": "ordinary-uid",
+        "resolvedTerminalRuleIdentity": "name:primary"
+      },
+      {
+        "resolvedAiAdmission": {
+          "backends": [
+            {
+              "kind": "service"
+            }
+          ]
+        },
+        "matches": [
+          {
+            "path": {
+              "type": "Exact",
+              "value": "/auth"
+            }
+          }
+        ],
+        "filters": [
+          {
+            "type": "ExternalAuth",
+            "externalAuth": {
+              "target": {
+                "name": "auth",
+                "port": 8080
+              },
+              "timeoutMs": 5000,
+              "retry": null,
+              "rateLimit": null,
+              "healthCheck": null,
+              "maxResponseBytes": 1024,
+              "statusOnError": 503,
+              "request": {
+                "path": {
+                  "template": "/check/${secretRef:material/token:key}",
+                  "allowOverride": false
+                },
+                "args": {
+                  "forwardAll": false,
+                  "origin": [],
+                  "custom": []
+                },
+                "headers": {
+                  "forwardAll": false,
+                  "origin": [],
+                  "custom": []
+                },
+                "cookies": {
+                  "forwardAll": false,
+                  "origin": [],
+                  "custom": []
+                }
+              },
+              "forwardBody": false,
+              "decision": {
+                "upstreamHeaders": [],
+                "clientHeaders": [],
+                "hideCredentials": false,
+                "authFailureDelayMs": 0
+              }
+            },
+            "resolvedExternalAuth": {
+              "namespace": "apps",
+              "error": "HTTPRoute authentication references are unresolved"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "svc",
+            "port": 80
+          }
+        ],
+        "resolvedTerminalRouteUid": "ordinary-uid",
+        "resolvedTerminalRuleIdentity": "index:1"
+      },
+      {
+        "resolvedAiAdmission": {
+          "backends": [
+            {
+              "kind": "service"
+            }
+          ]
+        },
+        "backendRefs": [
+          {
+            "name": "fallback",
+            "port": 8080
+          }
+        ],
+        "resolvedTerminalRouteUid": "ordinary-uid",
+        "resolvedTerminalRuleIdentity": "index:2"
+      }
+    ]
+  }
+}

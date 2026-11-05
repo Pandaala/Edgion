@@ -23,6 +23,14 @@ Fix suggestions of the form "move the precedence comparison back into
 `match_route` so `RadixPath` has no post-construction field", or "sort each
 radix node's bucket independently and merge", are **not accepted**.
 
+Scope (re-checked for the route-delegation cascading match, ISSUE-010): ranks are
+per engine. Each delegation subtree is its own `RouteRules` with its own
+`RadixRouteMatchEngine`, ranked at its own build, so precedence is compared only
+among one level's rules and the hot path still sorts integer pairs per engine.
+Delegating units add one `Option` check after `deep_match`; they do not change the
+ordering step. See the
+[cascading-match guard](delegation-cascading-match-issue-010.md).
+
 ## Core Rationale
 
 **1. The ordering inputs are immutable snapshot data**

@@ -4,6 +4,7 @@
 //! It provides service/method based routing with minimal integration into the HTTP pipeline.
 
 mod conf_handler_impl;
+pub mod delegation_build;
 mod grpc_timeout;
 mod integration;
 mod match_engine;
@@ -15,7 +16,7 @@ pub use conf_handler_impl::create_grpc_route_handler;
 #[cfg(test)]
 pub(crate) use conf_handler_impl::parse_route_to_units_for_test;
 pub use grpc_timeout::{format_grpc_timeout, parse_grpc_timeout};
-pub use match_engine::GrpcMatchEngine;
+pub use match_engine::{GrpcMatchEngine, GrpcRouteMatchResult};
 pub use match_unit::{
     CompiledGrpcBackend, GrpcBackendHandle, GrpcMatchInfo, GrpcRouteInfo, GrpcRouteRuleUnit, GrpcRuleRuntime,
     SelectedGrpcBackend,

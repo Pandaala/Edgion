@@ -108,7 +108,11 @@ mod route_matching_tests {
                 )
             })
             .collect();
-        build_domain_route_rules_from_routes(&data, &DomainRouteRules::new())
+        build_domain_route_rules_from_routes(
+            &data,
+            &DomainRouteRules::new(),
+            &crate::routes::delegation::DelegationSlotTable::new(),
+        )
     }
 
     #[test]
@@ -645,6 +649,7 @@ mod route_matching_tests {
             crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(
                 &routes,
                 &DomainRouteRules::new(),
+                &crate::routes::delegation::DelegationSlotTable::new(),
             ),
         );
         assert!(manager

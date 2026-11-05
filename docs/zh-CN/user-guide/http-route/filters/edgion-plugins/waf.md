@@ -57,6 +57,7 @@ spec:
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | 否 | `false` | 独立附加包缺失或无效时跳过并报告 `PartiallyInvalid`；基础包不可设为可选 |
 | `mode` | 否 | `on` | `on` 执行规则阻断；`detectionOnly` 仅记录规则命中 |
 | `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
+| `delegationPrecedence` | 否 | `child` | 仅用于路由委派链。`child`：更深层（子路由）的 WAF 替换本层；`parent`：本层 WAF 胜过它下面的所有路由。只对路由引用的 WAF 生效，写在 Gateway 级和全局 WAF 上会被忽略 |
 | `requestBody.inspection` | 否 | `full` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
 | `requestBody.maxInspectSize` | 否 | 网关物理上限 | 正数大小字符串；仅用于 `full`，限制检查窗口 |
@@ -503,7 +504,9 @@ Phase 3 在响应头发送给客户端前执行。主上游响应始终流式处
 新配置先完整编译再原子发布；进行中的请求保留原规则版本。无效更新报告
 `Accepted=False` 并保留最近可用版本。删除资源后，新请求不能继续解析该资源。
 同一请求按 Route、Gateway、全局依次选择 WAF；仅在同一范围内比较 `priority`，
-相同优先级按声明顺序决定。
+相同优先级按声明顺序决定。在[路由委派](../../delegation.md)链上，每一层先按
+`priority` 选出本层的 WAF；默认由有 WAF 的最深层胜出，除非某个祖先层的 WAF 设置了
+`delegationPrecedence: parent`，此时设置了该项的最外层胜出。
 后端级 WAF 配置不受支持，因为 WAF 请求阶段先于后端选择。
 
 编译器严格拒绝未实现的指令、操作符、动作、无法解析的外部资源及完整响应体要求，

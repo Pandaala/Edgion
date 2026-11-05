@@ -146,6 +146,9 @@ impl PluginSession for ResultSession {
     fn matched_route_meta(&self, _proto: RouteProto, _selector: &str) -> Option<String> {
         panic!("unexpected session operation")
     }
+    fn executing_http_route_unit(&self) -> Option<&edgion_gateway::routes::http::HttpRouteRuleUnit> {
+        panic!("unexpected session operation")
+    }
     async fn write_response_header(
         &mut self,
         _resp: Box<ResponseHeader>,

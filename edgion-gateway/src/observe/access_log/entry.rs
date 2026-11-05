@@ -4,9 +4,12 @@ use crate::geoip::GeoLookup;
 use crate::observe::access_log::log_ext::LogExt;
 use crate::observe::RequestDiagnostic;
 use crate::plugins::StageLogs;
-use crate::routes::grpc::GrpcMatchInfo;
+use crate::routes::grpc::{GrpcMatchInfo, GrpcRouteRuleUnit};
+use crate::routes::http::HttpRouteRuleUnit;
 use crate::{ai::GenAiSummary, ctx::WafAccessLog, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
+use serde::ser::SerializeSeq;
 use serde::Serialize;
+use std::sync::Arc;
 
 /// Explicit per-slot outcome marker. "Not queried" (no database loaded),
 /// "queried, no data" (a database is loaded but has no record for this
@@ -134,12 +137,46 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Unified match info that covers both HTTP and gRPC routes in access logs.
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum RouteMatchInfo<'a> {
-    Http(&'a MatchInfo),
-    Grpc(&'a GrpcMatchInfo),
+/// Access-log `match_info`: a JSON array ordered root -> leaf.
+///
+/// Each element borrows the level's precomputed match info and serializes
+/// exactly like it; nothing is allocated or cloned. Ordinary routes yield a
+/// one-element array. gRPC shares the shape: the `Grpc` variant carries its
+/// delegating ancestors the same way.
+pub enum MatchInfoChain<'a> {
+    Http {
+        /// Delegating ancestors, root first; empty for ordinary routes.
+        ancestors: &'a [Arc<HttpRouteRuleUnit>],
+        leaf: &'a MatchInfo,
+    },
+    Grpc {
+        /// Delegating GRPCRoute ancestors, root first; empty for ordinary routes.
+        ancestors: &'a [Arc<GrpcRouteRuleUnit>],
+        leaf: &'a GrpcMatchInfo,
+    },
+}
+
+impl Serialize for MatchInfoChain<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Http { ancestors, leaf } => {
+                let mut seq = serializer.serialize_seq(Some(ancestors.len() + 1))?;
+                for ancestor in ancestors.iter() {
+                    seq.serialize_element(&ancestor.matched_info)?;
+                }
+                seq.serialize_element(*leaf)?;
+                seq.end()
+            }
+            Self::Grpc { ancestors, leaf } => {
+                let mut seq = serializer.serialize_seq(Some(ancestors.len() + 1))?;
+                for ancestor in ancestors.iter() {
+                    seq.serialize_element(&ancestor.matched_info)?;
+                }
+                seq.serialize_element(*leaf)?;
+                seq.end()
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -159,7 +196,7 @@ pub struct AccessLogEntry<'a> {
     pub request_uri: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub match_info: Option<RouteMatchInfo<'a>>,
+    pub match_info: Option<MatchInfoChain<'a>>,
 
     #[serde(skip_serializing_if = "is_empty")]
     pub diagnostics: &'a [RequestDiagnostic],
@@ -213,11 +250,15 @@ impl<'a> AccessLogEntry<'a> {
     #[inline]
     pub fn from_context(ctx: &'a EdgionHttpContext) -> Self {
         let match_info = if let Some(ru) = ctx.route_unit.as_ref() {
-            Some(RouteMatchInfo::Http(&ru.matched_info))
+            Some(MatchInfoChain::Http {
+                ancestors: ctx.delegated.as_deref().map_or(&[], |d| d.ancestors.as_slice()),
+                leaf: &ru.matched_info,
+            })
         } else {
-            ctx.grpc_route_unit
-                .as_ref()
-                .map(|gru| RouteMatchInfo::Grpc(&gru.matched_info))
+            ctx.grpc_route_unit.as_ref().map(|gru| MatchInfoChain::Grpc {
+                ancestors: ctx.delegated.as_deref().map_or(&[], |d| d.grpc_ancestors.as_slice()),
+                leaf: &gru.matched_info,
+            })
         };
 
         let request_uri = if crate::cli::config::get_access_log_options().include_raw_uri

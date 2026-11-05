@@ -1,0 +1,26 @@
+# multi_parent_child (gRPC): one child declared under two parents. SayHello
+# is served through either parent and carries only that parent's filter.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: multi-child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-multi-parent-a
+      namespace: edgion-test
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-multi-parent-b
+      namespace: edgion-test
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: child-grpc-svc
+          port: 30021

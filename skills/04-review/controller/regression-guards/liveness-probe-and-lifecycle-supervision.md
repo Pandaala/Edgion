@@ -106,8 +106,9 @@ requires restarting every affected replica. Ordinary resource watches, Secret an
 certificate updates, Kubernetes recovery, leadership transitions, and
 `server_id`/`ServerReload` synchronization remain supported. Removing the endpoint
 alone would not repair ISSUE-005 because etcd leadership transitions reuse the
-same runtime. The separate Center consumer migration remains tracked in
-[tasks/todo/edgion-center-remove-controller-reload.md](../../../../tasks/todo/edgion-center-remove-controller-reload.md).
+same runtime. The separate Center consumer migration remains tracked as
+`edgion-center-remove-controller-reload`, outside this repository with the
+extracted EdgionCenter work; this tree has no copy of that task.
 
 ### Earlier ARCH-092 evidence
 

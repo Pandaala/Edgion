@@ -163,6 +163,10 @@ impl ConfHandler<Gateway> for GatewayHandler {
             get_global_tls_route_managers().rebuild_all_listener_managers();
             get_global_udp_route_managers().rebuild_all_listener_managers();
         }
+        // Cached delegation children prebuild leaf metric handles for every
+        // Gateway in the process; recompile them when that set changed.
+        get_global_http_route_managers().refresh_delegation_gateways();
+        crate::routes::grpc::get_global_grpc_route_managers().refresh_delegation_gateways();
         // Full listener entries and scoped policy publish together, including
         // same-key SNI/DNS/proof changes that do not rebuild route tables.
         crate::plugins::publication::global_publisher().replace_gateways(
@@ -377,6 +381,10 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 get_global_tls_route_managers().rebuild_all_listener_managers();
                 get_global_udp_route_managers().rebuild_all_listener_managers();
             }
+            // Cached delegation children prebuild leaf metric handles for
+            // every Gateway in the process; recompile them when that set changed.
+            get_global_http_route_managers().refresh_delegation_gateways();
+            crate::routes::grpc::get_global_grpc_route_managers().refresh_delegation_gateways();
         }
         // GatewayInput carries the canonical full listener entries; index and
         // scope change in one publication even when physical keys are unchanged.

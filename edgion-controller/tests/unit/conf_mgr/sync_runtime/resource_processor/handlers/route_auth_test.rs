@@ -142,9 +142,6 @@ fn readonly_auth_resolution_and_default_callback_do_not_retain_injected_values()
         .resolved_secrets
         .is_none());
     assert!(filter.resolved_external_auth.as_ref().unwrap().error().is_some());
-    let default = decisions(&child, AuthDecision::unavailable).remove(0);
-    assert!(default.secrets.is_none());
-    assert!(!default.errors.is_empty());
 }
 
 #[test]

@@ -65,7 +65,7 @@ class Scenario:
 
     def read_route(self, name, gateway=False, allow_missing=False):
         # The storage API returns authored input. Derived invalid indices and
-        # resolved delegation rules live in the Controller's publication cache.
+        # resolved delegation keys live in the Controller's publication cache.
         cache = "configclient" if gateway else "configserver"
         path = f"/{cache}/HTTPRoute?namespace={self.args.namespace}&name={name}"
         code, _, body = self.admin(gateway, path)
@@ -209,39 +209,50 @@ class Scenario:
         self.publish(child)
         self.publish(parent)
 
-        def delegated_rejected():
+        def conditions(obj):
+            return [c for p in obj.get("status", {}).get("parents", []) for c in p.get("conditions", [])]
+
+        def delegation_edge(invalid):
+            # Cascading match: the child is published on its own with its own
+            # invalid indices and the confirmed delegation key; the parent
+            # publishes only its authored rules and never carries child-caused
+            # diagnostics (design §4.2, §7.1).
             current = self.read_route(child_name)
-            require(current["spec"].get("invalidRuleIndices") == [0], "Child not marked invalid")
-            published = self.read_route(parent_name, True)
-            require(published is not None and published["spec"].get("resolvedRules") == [],
-                    "Invalid child still present in effective rules")
-            parent_status = self.read_route(parent_name).get("status", {})
-            require(any("backendRefs[0] CORS is not supported" in c.get("message", "")
-                        for p in parent_status.get("parents", []) for c in p.get("conditions", [])),
-                    "Parent delegation status lacks child scope diagnostic")
+            require(current["spec"].get("invalidRuleIndices", []) == ([0] if invalid else []),
+                    "Child validation has not converged")
+            child_diag = any("backendRefs[0] CORS is not supported" in c.get("message", "")
+                             for c in conditions(current))
+            require(child_diag == invalid, "Child CORS diagnostic differs")
+            published_child = self.read_route(child_name, True)
+            require(published_child is not None
+                    and published_child["spec"].get("invalidRuleIndices", []) == ([0] if invalid else []),
+                    "Child publication has not converged")
+            keys = published_child["spec"].get("resolvedDelegationKeys", [])
+            require([(k.get("parent_ns"), k.get("parent_name")) for k in keys]
+                    == [(self.args.namespace, parent_name)], f"Child delegation keys differ: {keys}")
+            published_parent = self.read_route(parent_name, True)
+            require(published_parent is not None and "resolvedRules" not in published_parent["spec"],
+                    "Parent publication carries flattened rules")
+            parent_conditions = conditions(self.read_route(parent_name))
+            require(not any("CORS is not supported" in c.get("message", "") for c in parent_conditions),
+                    "Child-caused CORS diagnostic appears on the parent")
+            require(not any(c["type"] == "PartiallyInvalid" and c["status"] == "True" for c in parent_conditions),
+                    "Parent reports PartiallyInvalid for a child rule")
+
+        def delegated_rejected():
+            delegation_edge(True)
             for method in ["OPTIONS", "GET"]:
                 self.traffic(child_path, method, 404)
 
-        self.wait_phase("delegation drops backend CORS child", delegated_rejected)
+        self.wait_phase("invalid backend-CORS child rule is not served through the parent", delegated_rejected)
         child["spec"]["rules"] = [self.rule(child_path, rule_cors=True)]
         self.publish(child, update=True)
 
         def delegated_restored():
-            current = self.read_route(child_name)
-            require(not current["spec"].get("invalidRuleIndices"), "Child invalid indices remain")
-            parent_status = self.read_route(parent_name).get("status", {})
-            require(not any("CORS is not supported" in c.get("message", "")
-                            for p in parent_status.get("parents", []) for c in p.get("conditions", [])),
-                    "Parent CORS rejection diagnostic remains")
-            require(not any(c["type"] == "PartiallyInvalid" and c["status"] == "True"
-                            for p in parent_status.get("parents", []) for c in p.get("conditions", [])),
-                    "Parent delegation error remains")
-            published = self.read_route(parent_name, True)
-            require(published is not None and len(published["spec"].get("resolvedRules", [])) == 1,
-                    "Corrected child has not been published through parent")
+            delegation_edge(False)
             self.supported(child_path)
 
-        self.wait_phase("delegation requeues parent and restores rule CORS", delegated_restored)
+        self.wait_phase("child correction restores rule CORS through the parent", delegated_restored)
 
     def cleanup(self):
         errors = []

@@ -2,20 +2,24 @@
 //!
 //! Handles HTTPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use edgion_resources::resources::refs::route_fields::{HttpRouteMirrorRefs, MirrorSlot, TerminalMirrorReference};
+use edgion_resources::resources::refs::route_fields::{HttpRouteMirrorRefs, MirrorSlot};
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use super::super::ref_grant::validate_http_route_if_enabled;
 use super::route_backend_refs::{self, BackendDependencyReceipt};
-use super::route_delegation::{flatten_route, populate_terminal_rule_identities, DelegationLookup};
+use super::route_delegation::{
+    child_entry_verdict, edge_message, http_child_rules, http_delegation_facts, parent_named_target_errors,
+    resolve_child_keys, route_exists, sync_http_delegation_graph, ChildEntryVerdict, HttpDelegationFacts,
+    DELEGATION_ACCEPTED, INVALID_PARENT_REFS,
+};
+use super::route_terminal::{populate_terminal_rule_identities, root_auth};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_backend_targets,
     requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
-    AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
+    condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition, AcceptedError,
+    HandlerContext, ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::{EdgionBackend, HTTPRoute};
@@ -23,7 +27,7 @@ use edgion_resources::resources::common::{ParentReference, RefDenied};
 #[cfg(test)]
 use edgion_resources::resources::edgion_plugins::{AiProxyConfig, EdgionPlugin, EdgionPlugins};
 use edgion_resources::resources::http_route::{
-    DelegationIssue, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, GATEWAY_API_GROUP,
+    HTTPBackendRef, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, GATEWAY_API_GROUP,
 };
 #[cfg(test)]
 use edgion_resources::resources::http_route_ai_admission::{self as shared_ai_admission, AiProxyAdmission};
@@ -32,10 +36,10 @@ use edgion_resources::resources::refs::extension_ref::{
     is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
 };
 use edgion_resources::resources::refs::route_fields::{
-    EffectiveBackendReference, HttpRouteBackendRefs, HttpRouteExtensionRefs, RouteExtensionField,
-    TerminalBackendReference,
+    EffectiveBackendReference, HttpRouteBackendRefs, HttpRouteExtensionRefs,
 };
 use edgion_resources::resources::refs::targets::BackendTarget;
+use edgion_resources::resources::route_delegation::{ParentRefShape, RouteKindName};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener
@@ -52,68 +56,6 @@ fn is_delegation_parent_ref(pr: &ParentReference) -> bool {
     identity.group == GATEWAY_API_GROUP && identity.kind == "HTTPRoute"
 }
 
-/// `DelegationLookup` backed by the live controller stores.
-struct RuntimeDelegationLookup<'a> {
-    runtime: &'a ControllerRuntime,
-    grant_owner: Option<ResourceRef>,
-    auth: Option<(&'a HTTPRoute, &'a HandlerContext, bool)>,
-}
-
-impl DelegationLookup for RuntimeDelegationLookup<'_> {
-    fn auth_decision(
-        &self,
-        field: &edgion_resources::resources::refs::route_auth_fields::AuthoredRouteAuthField<'_>,
-    ) -> super::route_auth::AuthDecision {
-        match self.auth {
-            Some((root, ctx, register)) => super::route_auth::resolve(root, field, ctx, register),
-            None => super::route_auth::AuthDecision::unavailable(field),
-        }
-    }
-
-    fn get_route(&self, key: &str) -> Option<Arc<HTTPRoute>> {
-        let processor = self.runtime.processor_registry.get("HTTPRoute")?;
-        // Visibility must match the wildcard listing (ServerCache): the raw
-        // store bypasses the controller's namespace/metadata filters, so a
-        // named delegation to a filtered-out child would otherwise expand a
-        // route the controller never processes (no on_change → stale forever,
-        // and a de-facto namespace-filter bypass).
-        if !processor.contains_key(key) {
-            return None;
-        }
-        processor.get_raw_any(key)?.downcast::<HTTPRoute>().ok()
-    }
-
-    fn list_route_keys_in_namespace(&self, ns: &str) -> Vec<String> {
-        let Some(processor) = self.runtime.processor_registry.get("HTTPRoute") else {
-            return Vec::new();
-        };
-        let prefix = format!("{ns}/");
-        let mut keys: Vec<String> = processor
-            .list_keys()
-            .into_iter()
-            .filter(|k| k.starts_with(&prefix))
-            .collect();
-        keys.sort_unstable();
-        keys
-    }
-
-    fn mirror_ref_denied(&self, terminal: TerminalMirrorReference<'_>) -> Option<RefDenied> {
-        self.grant_owner
-            .as_ref()
-            .and_then(|root| super::request_mirror::authorize(terminal, root, true, self.runtime))
-    }
-    fn terminal_ref_denied(&self, terminal: TerminalBackendReference<'_>) -> Option<RefDenied> {
-        self.grant_owner
-            .as_ref()
-            .and_then(|owner| route_backend_refs::authorize_terminal(terminal, owner, self.runtime))
-    }
-    fn extension_ref_error(&self, field: RouteExtensionField<'_>, inspect: bool) -> Option<String> {
-        self.grant_owner
-            .as_ref()
-            .and_then(|root| super::route_utils::delegated_extension_ref_error(self.runtime, root, field, inspect))
-    }
-}
-
 /// HTTPRoute handler
 pub struct HttpRouteHandler {
     controller_name: String,
@@ -122,6 +64,24 @@ pub struct HttpRouteHandler {
 impl HttpRouteHandler {
     pub fn new(controller_name: String) -> Self {
         Self { controller_name }
+    }
+
+    /// True when the route fails its own validation, so `update_status`
+    /// rejects every one of its entries for a reason of its own: a
+    /// validation error (including an invalid reference source), invalid
+    /// hostnames, a route-wide plugin scope error, or no rule left to serve.
+    /// Such a route gets no delegation level, so its descendants report
+    /// `NotAttached` instead of `DelegationAccepted`.
+    fn rejected_on_own_validation(&self, route: &HTTPRoute, ctx: &HandlerContext, facts: &HttpDelegationFacts) -> bool {
+        if !self.validate(route, ctx).is_empty()
+            || route.spec.validate_hostnames().is_err()
+            || !backend_route_wide_scope_errors(route, ctx.runtime()).is_empty()
+        {
+            return true;
+        }
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let invalid = find_controller_invalid_rule_details_with(route, route_ns, ctx.runtime(), facts);
+        !invalid.is_empty() && invalid.len() == route.spec.rules.as_ref().map_or(0, Vec::len)
     }
 
     fn create_resource_ref(route: &HTTPRoute) -> ResourceRef {
@@ -134,21 +94,14 @@ impl HttpRouteHandler {
 
     /// Register Service backend references for cross-resource requeue.
     ///
-    /// `extra_dependencies` carries the flattened delegation backendRefs (with
-    /// explicit namespaces) so Service changes under delegated children
-    /// requeue this parent route directly. Parse already cleared the old set
-    /// before mirror authorization. Add forwarding edges without clearing the
-    /// valid child mirror edges retained through delegation and rule drops.
-    fn register_service_refs(
-        route: &HTTPRoute,
-        extra_dependencies: &[BackendDependencyReceipt],
-        ctx: &HandlerContext,
-        old: HashSet<String>,
-    ) -> Vec<String> {
-        let mut backend_refs_list = HttpRouteBackendRefs::from_route(route)
+    /// Only the route's own authored backendRefs register: delegated children
+    /// register their own dependencies. Parse already cleared the old set
+    /// before mirror authorization; add forwarding edges without clearing the
+    /// mirror edges registered there.
+    fn register_service_refs(route: &HTTPRoute, ctx: &HandlerContext, old: HashSet<String>) -> Vec<String> {
+        let backend_refs_list: Vec<BackendDependencyReceipt> = HttpRouteBackendRefs::from_route(route)
             .map(|references| route_backend_refs::collect_dependencies(references.authored()))
             .unwrap_or_default();
-        backend_refs_list.extend_from_slice(extra_dependencies);
 
         super::route_utils::finish_service_refs(
             &Self::create_resource_ref(route),
@@ -156,22 +109,6 @@ impl HttpRouteHandler {
             old,
             ctx.runtime(),
         )
-    }
-
-    /// Record cross-namespace references from backend_refs.
-    ///
-    /// `extra_namespaces` carries the cross-namespace targets of flattened
-    /// delegation backendRefs so ReferenceGrant changes in those namespaces
-    /// requeue this parent route. Extend the set cleared at parse entry without
-    /// removing dependencies registered before mirror authorization checks.
-    fn record_cross_ns_refs(route: &HTTPRoute, extra_namespaces: &HashSet<String>, ctx: &HandlerContext) {
-        if HttpRouteBackendRefs::from_route(route).is_err() {
-            return;
-        }
-        let owner = Self::create_resource_ref(route);
-        for namespace in extra_namespaces {
-            ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.clone(), owner.clone());
-        }
     }
 
     /// Register all EdgionPlugins ExtensionRefs for plugin-change requeue.
@@ -185,9 +122,9 @@ impl HttpRouteHandler {
             return;
         };
         let root = Self::create_resource_ref(route);
-        // Parse entry clears the old generation. These additive passes retain
-        // valid dependencies from authored, inherited, and later-dropped rules.
-        for field in references.authored().chain(references.effective()) {
+        // Parse entry clears the old generation; register every valid
+        // dependency of the route's rules, including rules later withdrawn.
+        for field in references.authored() {
             if let Some(receipt) = super::route_utils::ExtensionDependencyReceipt::from_field(field) {
                 receipt.register(&root, ctx.runtime());
             }
@@ -197,18 +134,13 @@ impl HttpRouteHandler {
     /// Replace this route's EdgionBackend dependency set and return the
     /// old/new union plus the removed subset. The union is needed because an
     /// EBTP attached to either side may change the route's Gateway ancestors.
-    fn register_backend_refs(
-        route: &HTTPRoute,
-        flattened_dependencies: &[BackendDependencyReceipt],
-        ctx: &HandlerContext,
-    ) -> BackendRefDelta {
+    fn register_backend_refs(route: &HTTPRoute, ctx: &HandlerContext) -> BackendRefDelta {
         let resource_ref = Self::create_resource_ref(route);
         let manager = &ctx.runtime().backend_ref_mgr;
         let old: HashSet<String> = manager.clear_value_refs(&resource_ref).into_iter().collect();
-        let mut receipts = HttpRouteBackendRefs::from_route(route)
+        let receipts: Vec<BackendDependencyReceipt> = HttpRouteBackendRefs::from_route(route)
             .map(|references| route_backend_refs::collect_dependencies(references.authored()))
             .unwrap_or_default();
-        receipts.extend_from_slice(flattened_dependencies);
         let new: HashSet<String> = receipts
             .iter()
             .filter_map(|receipt| receipt.backend_key().map(str::to_string))
@@ -261,10 +193,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+        // Controller-resolved delegation edges are never operator-authored.
+        route.spec.resolved_delegation_keys = Vec::new();
         super::route_auth::scrub_route(&mut route);
-        for rule in route.spec.rules.iter_mut().flatten() {
-            rule.resolved_parent_match = None;
-        }
         let source_valid = HttpRouteBackendRefs::from_route(&route).is_ok();
         let grant_owner = Self::create_resource_ref(&route);
         _ctx.secret_ref_manager().clear_value_refs(&grant_owner);
@@ -279,36 +210,29 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             // Avoid registering dependencies for an object that will never
             // enter the cache; an earlier published generation is removed by
             // the processor's should_publish=false transition.
-            route.spec.resolved_rules = None;
             route.spec.resolved_listeners = None;
             route.spec.resolved_hostnames = None;
             requeue_backend_policies_for_services(&old_services.iter().cloned().collect::<Vec<_>>(), _ctx).await;
+            // A withdrawn source leaves the delegation graph.
+            let route_key = format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or(""));
+            let graph = &_ctx.runtime().http_route_delegation_graph;
+            if graph.is_participant(&route_key) {
+                for key in graph.remove(&route_key) {
+                    _ctx.requeue("HTTPRoute", key).await;
+                }
+            }
             return ProcessResult::Continue(route);
         }
 
         // This is controller-owned transport metadata. Kubernetes prunes it
         // via schemars, while filesystem/etcd inputs need the same explicit
-        // defense before delegated copies are stamped with their declaring
-        // namespace.
+        // defense.
         for rule in route.spec.rules.iter_mut().flatten() {
             rule.resolved_ai_admission = None;
-            for filter in rule.filters.iter_mut().flatten().chain(
-                rule.backend_refs
-                    .iter_mut()
-                    .flatten()
-                    .flat_map(|backend_ref| backend_ref.filters.iter_mut().flatten()),
-            ) {
-                if filter.filter_type == HTTPRouteFilterType::ExtensionRef {
-                    if let Some(extension_ref) = filter.extension_ref.as_mut() {
-                        extension_ref.resolved_namespace = None;
-                    }
-                }
-            }
         }
 
-        // Terminal identity is controller-owned transport metadata. Stamp the
-        // root rules before flattening so non-delegating siblings inherit it;
-        // delegated child terminals are stamped by the flattener itself.
+        // Terminal identity is controller-owned transport metadata, stamped on
+        // the route's own rules for every route.
         populate_terminal_rule_identities(&mut route);
 
         let mirror_decisions = HttpRouteMirrorRefs::from_route(&route)
@@ -329,7 +253,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 }
             }
         }
-        // Authorize actual authored loans before cloning any effective rules.
+        // Authorize actual authored backend loans.
         let decisions = HttpRouteBackendRefs::from_route(&route)
             .map(|references| route_backend_refs::resolve_denials(references.authored(), &grant_owner, _ctx.runtime()))
             .unwrap_or_default();
@@ -351,22 +275,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             }
         }
 
-        // HTTPRoute delegation: expand delegation trees into resolved_rules.
-        // Runs early so the flattened Service/cross-ns refs land in the single
-        // registration pass below. resolved_rules/delegation_issues are
-        // controller-derived: clear any user-provided or stale values.
-        route.spec.resolved_rules = None;
-        route.spec.delegation_issues = Vec::new();
-        Self::register_plugin_refs(&route, _ctx);
-        let mut delegation_outcome = {
-            let adapter = RuntimeDelegationLookup {
-                runtime: _ctx.runtime(),
-                grant_owner: Some(grant_owner.clone()),
-                auth: Some((&route, _ctx, true)),
-            };
-            flatten_route(&route, &adapter)
-        };
-        for decision in delegation_outcome.root_auth_decisions.drain(..) {
+        for decision in root_auth(&route, _ctx, true).decisions {
             if let Some(rule) = route
                 .spec
                 .rules
@@ -377,47 +286,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             }
         }
 
-        // Dependency registration below must inspect the rules that the
-        // Gateway will actually compile, including delegated child filters.
-        route.spec.resolved_rules = delegation_outcome.resolved_rules.clone();
-
-        // Register before protocol filtering so a rule removed below retains
+        // Register before protocol filtering so a rule removed later retains
         // the dependency that can make it eligible again on a later reconcile.
         Self::register_plugin_refs(&route, _ctx);
-        for receipt in &delegation_outcome.extension_dependencies {
-            receipt.register(&grant_owner, _ctx.runtime());
-        }
 
-        let reasons: Vec<_> = route
-            .spec
-            .resolved_rules
-            .iter()
-            .flatten()
-            .enumerate()
-            .map(|(index, _)| {
-                super::route_utils::graphql_router_rule_error(&route, index, true, _ctx.runtime(), true)
-                    .or_else(|| backend_plugin_scope_invalid_reason(&route, index, true, _ctx.runtime(), false))
-            })
-            .collect();
-        if let Some(rules) = &mut route.spec.resolved_rules {
-            let mut reasons = reasons.into_iter().enumerate();
-            rules.retain(|_| {
-                let (resolved_index, reason) = reasons.next().expect("one decision per borrowed resolved rule");
-                let keep = reason.is_none();
-                if let Some(reason) = reason {
-                    delegation_outcome.issues.push(DelegationIssue::RuleDropped {
-                        message: format!("resolvedRules[{resolved_index}]: {reason}"),
-                    });
-                }
-                keep
-            });
-            delegation_outcome.resolved_rules = route.spec.resolved_rules.clone();
-        }
-
-        // Record cross-namespace references for revalidation when ReferenceGrant changes
-        Self::record_cross_ns_refs(&route, &delegation_outcome.cross_ns_target_namespaces, _ctx);
-
-        let backend_ref_delta = Self::register_backend_refs(&route, &delegation_outcome.backend_dependencies, _ctx);
+        let backend_ref_delta = Self::register_backend_refs(&route, _ctx);
         requeue_backend_policies_for_backend_targets(&backend_ref_delta.affected, _ctx).await;
         tracing::debug!(
             route = %format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or("")),
@@ -428,66 +301,28 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Register Service backend references for cross-resource requeue, then
         // requeue BTPs bound to any Service dropped from backendRefs (the apply
         // path otherwise only requeues BTPs for the route's current backends).
-        let dropped_service_keys =
-            Self::register_service_refs(&route, &delegation_outcome.backend_dependencies, _ctx, old_services);
+        let dropped_service_keys = Self::register_service_refs(&route, _ctx, old_services);
         requeue_backend_policies_for_services(&dropped_service_keys, _ctx).await;
 
-        // Register dependencies before reading backend source facts. Recompute
-        // flattened slots after delegation; never trust a child's old sidecar.
+        // Register dependencies before reading backend source facts.
         populate_ai_admission(&mut route, _ctx.runtime());
 
-        // Maintain the delegation index (also clears stale edges when the
-        // route no longer delegates) and requeue children whose delegation
-        // edges changed so their child-side status stays fresh.
-        {
+        // Delegation graph (§5.2). An ordinary route costs one participant
+        // probe; participants update their edges and requeue the routes whose
+        // confirmation or level may have changed.
+        let facts = http_delegation_facts(&route, _ctx.runtime());
+        let gateway_attached = route.spec.parent_refs.iter().flatten().any(is_gateway_parent_ref);
+        let graph = &_ctx.runtime().http_route_delegation_graph;
+        let own_rejected = || self.rejected_on_own_validation(&route, _ctx, &facts);
+        if let Some(requeue) = sync_http_delegation_graph(graph, &route, &facts, gateway_attached, own_rejected) {
             let route_key = format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or(""));
-            let delta = _ctx.runtime().route_delegation_index.update_parent(
-                &route_key,
-                delegation_outcome.named_children.clone(),
-                delegation_outcome.wildcard_namespaces.clone(),
-            );
-            for child_key in &delta.changed_named {
-                if *child_key != route_key {
-                    _ctx.requeue("HTTPRoute", child_key.clone()).await;
-                }
+            if matches!(facts.shape, ParentRefShape::Child(_)) && !facts.inert {
+                route.spec.resolved_delegation_keys = resolve_child_keys(graph, &route_key);
             }
-            if !delta.changed_namespaces.is_empty() {
-                let adapter = RuntimeDelegationLookup {
-                    runtime: _ctx.runtime(),
-                    grant_owner: None,
-                    auth: None,
-                };
-                for ns in &delta.changed_namespaces {
-                    for key in adapter.list_route_keys_in_namespace(ns) {
-                        if key != route_key {
-                            _ctx.requeue("HTTPRoute", key).await;
-                        }
-                    }
-                }
-            }
-
-            // Close the flatten↔delete race: a child deleted between the
-            // flatten read and the update_parent registration above would
-            // neither be in resolved_rules' future (its on_delete ran too
-            // early to see our edge) nor trigger a re-flatten. Verify the
-            // expanded children still exist and self-requeue on mismatch
-            // (TriggerChain caps bound any pathological repetition).
-            {
-                let adapter = RuntimeDelegationLookup {
-                    runtime: _ctx.runtime(),
-                    grant_owner: None,
-                    auth: None,
-                };
-                let vanished = delegation_outcome
-                    .expanded_children
-                    .iter()
-                    .any(|key| adapter.get_route(key).is_none());
-                if vanished {
-                    _ctx.requeue("HTTPRoute", route_key.clone()).await;
-                }
+            for key in requeue {
+                _ctx.requeue("HTTPRoute", key).await;
             }
         }
-        route.spec.delegation_issues = delegation_outcome.issues;
 
         // Treat resolved_listeners as controller-derived state.
         // Clear any user-provided or stale value before recomputing from current parentRefs.
@@ -569,13 +404,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         super::requeue_backend_policies_for_owner(&Self::create_resource_ref(route), ctx).await;
-
-        // This route may be someone's delegation child: requeue the parents so
-        // they re-flatten with the new child spec.
-        let route_key = format!("{route_ns}/{route_name}");
-        for parent_key in ctx.runtime().route_delegation_index.parents_of(&route_key, route_ns) {
-            ctx.requeue("HTTPRoute", parent_key).await;
-        }
+        // Delegation requeues (declared parents, target children, level
+        // dependents) are issued by `parse` from the delegation graph. Parents
+        // naming a newly created route refresh their `ResolvedRefs`, for
+        // ordinary routes too.
+        requeue_parents_naming_on_create(&format!("{route_ns}/{route_name}"), ctx).await;
     }
 
     async fn on_delete(&self, route: &HTTPRoute, ctx: &HandlerContext) {
@@ -593,38 +426,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
 
-        // Delegation cleanup: drop this route's parent-side edges (the delta
-        // carries its former children, which must refresh their child-side
-        // Accepted status now that this parent is gone), then requeue any
-        // parents still delegating to it (they must re-flatten without this
-        // child).
+        // Delegation cleanup: a participant leaves the graph and requeues its
+        // declared children and declared parents; parents naming this route
+        // refresh their `BackendNotFound`. An ordinary route costs one
+        // read-locked probe.
         let route_key = format!("{route_ns}/{route_name}");
-        let removed = ctx.runtime().route_delegation_index.update_parent(
-            &route_key,
-            std::collections::HashSet::new(),
-            std::collections::HashSet::new(),
-        );
-        for child_key in &removed.changed_named {
-            if *child_key != route_key {
-                ctx.requeue("HTTPRoute", child_key.clone()).await;
-            }
-        }
-        if !removed.changed_namespaces.is_empty() {
-            let adapter = RuntimeDelegationLookup {
-                runtime: ctx.runtime(),
-                grant_owner: None,
-                auth: None,
-            };
-            for ns in &removed.changed_namespaces {
-                for key in adapter.list_route_keys_in_namespace(ns) {
-                    if key != route_key {
-                        ctx.requeue("HTTPRoute", key).await;
-                    }
-                }
-            }
-        }
-        for parent_key in ctx.runtime().route_delegation_index.parents_of(&route_key, route_ns) {
-            ctx.requeue("HTTPRoute", parent_key).await;
+        for key in ctx.runtime().http_route_delegation_graph.on_route_deleted(&route_key) {
+            ctx.requeue("HTTPRoute", key).await;
         }
 
         remove_from_attached_route_tracker(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
@@ -643,7 +451,6 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             _ctx.runtime()
                 .plugin_ref_mgr
                 .clear_value_refs(&Self::create_resource_ref(route));
-            route.spec.resolved_rules = Some(Vec::new());
             route.spec.resolved_listeners = None;
             route.spec.resolved_hostnames = None;
         }
@@ -668,12 +475,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, _ctx.runtime());
 
-        let auth_status_lookup = RuntimeDelegationLookup {
-            runtime: _ctx.runtime(),
-            grant_owner: None,
-            auth: Some((route, _ctx, false)),
-        };
-        resolved_refs_errors.extend(flatten_route(route, &auth_status_lookup).auth_errors);
+        resolved_refs_errors.extend(root_auth(route, _ctx, false).errors);
         if let Ok(refs) = HttpRouteMirrorRefs::from_route(route) {
             resolved_refs_errors.extend(super::request_mirror::errors(refs.effective(), _ctx.runtime()));
         }
@@ -690,26 +492,31 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             &ref_denied_list,
         ));
 
-        // Delegation diagnostics (produced by flatten_route during parse):
-        // missing named children ride ResolvedRefs; dropped rules ride
-        // PartiallyInvalid alongside the per-rule validation findings.
-        let mut delegation_dropped: Vec<String> = Vec::new();
-        for issue in &route.spec.delegation_issues {
-            match issue {
-                DelegationIssue::MissingChild { namespace, name } => {
-                    resolved_refs_errors.push(ResolvedRefsError::DelegationChildNotFound {
-                        kind: "HTTPRoute",
-                        namespace: namespace.clone(),
-                        name: name.clone(),
-                    });
-                }
-                DelegationIssue::RuleDropped { message } => delegation_dropped.push(message.clone()),
-            }
+        // Delegation (§7): named-target errors of this route as a parent ride
+        // ResolvedRefs; an illegal parentRef shape rejects every entry.
+        let facts = http_delegation_facts(route, _ctx.runtime());
+        let own_key = format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or(""));
+        let graph = &_ctx.runtime().http_route_delegation_graph;
+        if source_error.is_none() {
+            resolved_refs_errors.extend(parent_named_target_errors(
+                graph,
+                _ctx.runtime(),
+                RouteKindName::HTTPRoute,
+                &own_key,
+                &facts,
+            ));
         }
+        let shape_error = match &facts.shape {
+            ParentRefShape::Invalid(reason) => Some(AcceptedError::Delegation {
+                reason: INVALID_PARENT_REFS,
+                message: (*reason).to_string(),
+            }),
+            _ => None,
+        };
 
         // Per-rule validation: find rules where ALL backend refs are invalid
         let invalid_details = if source_error.is_none() {
-            find_controller_invalid_rule_details(route, route_ns, _ctx.runtime())
+            find_controller_invalid_rule_details_with(route, route_ns, _ctx.runtime(), &facts)
         } else {
             Vec::new()
         };
@@ -723,18 +530,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        // Nothing is left to serve for this parent when no rule survives: with
-        // delegation the gateway compiles `resolved_rules` verbatim (already
-        // pre-filtered during parse), otherwise it compiles `spec.rules` minus
-        // `invalid_rule_indices`.
-        let serves_no_rule = match &route.spec.resolved_rules {
-            Some(resolved) => resolved.is_empty(),
-            None => valid_rules == 0,
-        };
-        // Any static rule failure or delegation drop rejects an empty attachment.
-        // AI source diagnostics never withdraw a rule or participate here.
-        let attachment_rejects_route =
-            (!invalid_details.is_empty() || !delegation_dropped.is_empty()) && serves_no_rule;
+        // Nothing is left to serve for this parent when no rule survives: the
+        // gateway compiles `spec.rules` minus `invalid_rule_indices`. An
+        // invalid reference source is rejected outright (no resolved listeners).
+        let serves_no_rule = valid_rules == 0;
+        // Any static rule failure rejects an empty attachment. AI source
+        // diagnostics never withdraw a rule or participate here.
+        let attachment_rejects_route = !invalid_details.is_empty() && serves_no_rule;
 
         let hostname_error = route.spec.validate_hostnames().err();
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
@@ -751,27 +553,32 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     message: format!("rules[{index}]: {message}"),
                 });
             }
-            // PartiallyInvalid is suppressed for a rejected attachment, so keep
-            // the dropped child diagnostics in its Accepted condition instead.
-            validation_accepted_errors.extend(
-                delegation_dropped
-                    .iter()
-                    .cloned()
-                    .map(|message| AcceptedError::UnsupportedValue { message }),
-            );
         }
         let route_rejected = source_error.is_some()
             || hostname_error.is_some()
+            || shape_error.is_some()
             || attachment_rejects_route
             || !plugin_scope_errors.is_empty();
+        // Own dropped rules, listed on every accepted entry while an effective
+        // rule remains matchable.
+        let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
+        let own_invalid_reasons: Vec<String> = if own_invalid {
+            invalid_details
+                .iter()
+                .map(|(i, r)| format!("rules[{i}]: {r}"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let own_invalid_suffix = format!(" ({valid_rules} of {total_rules} rules active)");
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                // Delegation parentRefs (kind: HTTPRoute reverse locks) get
-                // their own Accepted semantics below, not Gateway acceptance.
+                // Delegation parentRefs (kind: HTTPRoute) get their own
+                // Accepted semantics below, not Gateway acceptance.
                 if !is_gateway_parent_ref(parent_ref) {
                     continue;
                 }
@@ -790,6 +597,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                             message: error.to_string(),
                         },
                     );
+                }
+                if let Some(error) = &shape_error {
+                    accepted_errors.insert(0, error.clone());
                 }
                 accepted_errors.extend(validation_accepted_errors.clone());
 
@@ -815,81 +625,102 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 set_parent_conditions_full(conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                 // Set PartiallyInvalid for per-rule drops while an effective
-                // rule remains matchable. Skipped when
-                // `attachment_rejects_route` already rejected the whole route: a route
-                // that serves nothing must not also claim rules are active.
-                let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if !route_rejected && (own_invalid || !delegation_dropped.is_empty()) {
-                    let mut reasons: Vec<String> = Vec::new();
-                    if own_invalid {
-                        reasons.extend(invalid_details.iter().map(|(i, r)| format!("rules[{i}]: {r}")));
-                    }
-                    reasons.extend(delegation_dropped.iter().cloned());
-                    let mut message = reasons.join("; ");
-                    if own_invalid {
-                        message = format!("{message} ({valid_rules} of {total_rules} rules active)");
-                    }
-                    message = format!("Dropped Rule(s): {message}");
-                    update_condition(
-                        conditions,
-                        condition_true(
-                            condition_types::PARTIALLY_INVALID,
-                            condition_reasons::RULE_INVALID,
-                            message,
-                            generation,
-                        ),
-                    );
+                // rule remains matchable. Skipped when the route is rejected:
+                // a route that serves nothing must not also claim rules are
+                // active.
+                let reasons = if route_rejected {
+                    &[][..]
                 } else {
-                    // PartiallyInvalid is a negative-polarity Gateway API
-                    // condition and must be absent unless it is True.
-                    conditions.retain(|condition| condition.type_ != condition_types::PARTIALLY_INVALID);
-                }
+                    &own_invalid_reasons[..]
+                };
+                set_partially_invalid(conditions, reasons, &own_invalid_suffix, own_invalid, None, generation);
             }
 
-            // Child-side delegation status: each `kind: HTTPRoute` parentRef
-            // (reverse lock) reports whether that parent currently delegates
-            // to this route.
-            let own_key = format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or(""));
-            let delegating_parents = _ctx.runtime().route_delegation_index.parents_of(&own_key, route_ns);
+            // Child entries (§7.2): one per `kind: HTTPRoute` parentRef.
             for parent_ref in parent_refs.iter().filter(|pr| is_delegation_parent_ref(pr)) {
                 let parent_key = format!(
                     "{}/{}",
                     parent_ref.namespace.as_deref().unwrap_or(route_ns),
                     parent_ref.name
                 );
-                let condition = if source_error.is_some() {
-                    condition_false(
-                        condition_types::ACCEPTED,
-                        condition_reasons::INVALID,
-                        "Invalid route reference source",
-                        generation,
-                    )
-                } else if delegating_parents.contains(&parent_key) {
-                    condition_true(
-                        condition_types::ACCEPTED,
-                        "DelegationAccepted",
-                        format!("Parent HTTPRoute '{parent_key}' delegates to this route"),
-                        generation,
-                    )
+                let mut accepted_errors = Vec::new();
+                let mut accepted_message = String::new();
+                let mut conflicts = None;
+                if source_error.is_some() {
+                    accepted_errors.push(AcceptedError::Invalid {
+                        message: "Invalid route reference source".to_string(),
+                    });
                 } else {
-                    condition_false(
-                        condition_types::ACCEPTED,
-                        "NoMatchingParent",
-                        format!("Parent HTTPRoute '{parent_key}' does not currently delegate to this route"),
-                        generation,
-                    )
-                };
+                    let rules = &route.spec.rules;
+                    let child_rules = || http_child_rules(rules.as_ref());
+                    match child_entry_verdict(
+                        graph,
+                        RouteKindName::HTTPRoute,
+                        &own_key,
+                        &parent_key,
+                        &facts,
+                        child_rules,
+                    ) {
+                        ChildEntryVerdict::Accepted {
+                            message,
+                            conflicting_rules,
+                            out_of_scope_rules,
+                        } => {
+                            accepted_message = message;
+                            conflicts = edge_message(
+                                RouteKindName::HTTPRoute,
+                                &parent_key,
+                                &conflicting_rules,
+                                &out_of_scope_rules,
+                            );
+                        }
+                        ChildEntryVerdict::Rejected { error } => accepted_errors.push(error),
+                    }
+                }
+                if let Some(error) = hostname_error {
+                    accepted_errors.push(AcceptedError::UnsupportedValue {
+                        message: error.to_string(),
+                    });
+                }
+                accepted_errors.extend(validation_accepted_errors.clone());
+
                 // Match on kind too: a route can carry both a `kind: Gateway`
                 // and a `kind: HTTPRoute` parentRef with the same name/ns/
-                // section, and the delegation Accepted condition must not
-                // overwrite the Gateway-acceptance entry.
+                // section, and the delegation entry must not overwrite the
+                // Gateway-acceptance entry.
                 let ps = super::route_utils::parent_status_for_update(
                     &mut status.parents,
                     parent_ref,
                     route_ns,
                     &self.controller_name,
                 );
-                update_condition(&mut ps.conditions, condition);
+                let conditions = &mut ps.conditions;
+                set_parent_conditions_full(conditions, &accepted_errors, &resolved_refs_errors, generation);
+                let mut reasons = Vec::new();
+                let mut conflict = None;
+                if accepted_errors.is_empty() {
+                    update_condition(
+                        conditions,
+                        condition_true(
+                            condition_types::ACCEPTED,
+                            DELEGATION_ACCEPTED,
+                            accepted_message,
+                            generation,
+                        ),
+                    );
+                    if !route_rejected {
+                        reasons.extend(own_invalid_reasons.iter().cloned());
+                        conflict = conflicts;
+                    }
+                }
+                set_partially_invalid(
+                    conditions,
+                    &reasons,
+                    &own_invalid_suffix,
+                    own_invalid,
+                    conflict,
+                    generation,
+                );
             }
 
             super::route_utils::retain_current_parent_statuses(
@@ -915,6 +746,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             route.spec.parent_refs.as_ref().filter(|_| {
                 source_error.is_none()
                     && hostname_error.is_none()
+                    && shape_error.is_none()
                     && route.spec.unsupported_default_gateway_attachment().is_none()
             }),
             route.spec.hostnames.as_ref(),
@@ -924,9 +756,63 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 }
 
+/// Set `PartiallyInvalid=True` listing the route's own dropped rules
+/// (`reasons`, one per rule, prefixed `Dropped Rule(s):`) and this entry's
+/// edge-conflict segment, or remove it: it is a negative-polarity Gateway API
+/// condition and must be absent unless True. `own_suffix` is appended to the
+/// dropped-rules segment when the route's own rules are invalid.
+fn set_partially_invalid(
+    conditions: &mut Vec<edgion_resources::resources::common::Condition>,
+    reasons: &[String],
+    own_suffix: &str,
+    own_invalid: bool,
+    conflict: Option<String>,
+    generation: Option<i64>,
+) {
+    let mut segments = Vec::new();
+    if !reasons.is_empty() {
+        let mut message = format!("Dropped Rule(s): {}", reasons.join("; "));
+        if own_invalid {
+            message.push_str(own_suffix);
+        }
+        segments.push(message);
+    }
+    segments.extend(conflict);
+    if segments.is_empty() {
+        conditions.retain(|condition| condition.type_ != condition_types::PARTIALLY_INVALID);
+        return;
+    }
+    update_condition(
+        conditions,
+        condition_true(
+            condition_types::PARTIALLY_INVALID,
+            condition_reasons::RULE_INVALID,
+            segments.join("; "),
+            generation,
+        ),
+    );
+}
+
+/// On creation of `route_key`, requeue the parents that delegate to it by
+/// name: their `BackendNotFound` turns into `RefNotPermitted` or clears.
+/// `on_change` runs before the save to cache, so a key missing from the cache
+/// is a new route; updates do not requeue (a change of the declared parents
+/// is requeued through the delegation graph). One index probe when no parent
+/// names the route.
+async fn requeue_parents_naming_on_create(route_key: &str, ctx: &HandlerContext) {
+    let parents = ctx.runtime().http_route_delegation_graph.parents_naming(route_key);
+    if parents.is_empty() || route_exists(ctx.runtime(), RouteKindName::HTTPRoute, route_key) {
+        return;
+    }
+    for parent in parents {
+        if parent != route_key {
+            ctx.requeue("HTTPRoute", parent).await;
+        }
+    }
+}
+
 /// Delegation backendRefs (`kind: HTTPRoute`) are excluded — they are not
-/// Service backends; their resolution problems are reported through
-/// `DelegationIssue` (MissingChild → ResolvedRefs, drops → PartiallyInvalid).
+/// Service backends; malformed delegating rules ride the invalid-rule path.
 fn validate_http_backend_refs(route: &HTTPRoute, runtime: &ControllerRuntime) -> Vec<ResolvedRefsError> {
     route_backend_refs::validate_targets(
         HttpRouteBackendRefs::from_route(route).map(|references| references.effective()),
@@ -936,14 +822,10 @@ fn validate_http_backend_refs(route: &HTTPRoute, runtime: &ControllerRuntime) ->
 
 /// Collect Option<&RefDenied> from all backend refs for shared error collection.
 ///
-/// Scans `effective_rules()` (resolved_rules when present, else spec.rules):
-/// on a delegating parent, resolved_rules already contains the non-delegating
-/// sibling copies (carrying their ref_denied) PLUS the flattened child
-/// backendRefs whose cross-ns Service ref lacks a ReferenceGrant — so this is
-/// the complete set with no double-counting of siblings.
+/// Scans the route's own `spec.rules`.
 fn collect_ref_denied_list(route: &HTTPRoute) -> Vec<Option<&RefDenied>> {
     let mut list = Vec::new();
-    for rule in route.effective_rules().into_iter().flatten() {
+    for rule in route.spec.rules.iter().flatten() {
         if let Some(backend_refs) = &rule.backend_refs {
             for br in backend_refs {
                 list.push(br.ref_denied.as_ref());
@@ -966,7 +848,7 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
 }
 
 /// Apply the same static ForwardAuth validation as Gateway construction before
-/// publishing a rule or copying it into a delegation result.
+/// publishing a rule.
 fn invalid_external_auth_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
     let filter_reason = |filter: &edgion_resources::resources::http_route::HTTPRouteFilter| {
         if filter.filter_type != HTTPRouteFilterType::ExternalAuth {
@@ -1135,46 +1017,43 @@ fn populate_ai_admission(route: &mut HTTPRoute, runtime: &ControllerRuntime) {
             .collect()
     };
     let mut authored = empty_facts(route.spec.rules.as_ref());
-    let mut resolved = empty_facts(route.spec.resolved_rules.as_ref());
     if let Ok(references) = HttpRouteBackendRefs::from_route(route) {
         for reference in references.authored().map(|reference| reference.target_view()) {
             let slot = reference.slot();
             authored[slot.rule()].backends[slot.backend()] = resolve_ai_admission(reference, runtime);
         }
-        if route.spec.resolved_rules.is_some() {
-            for reference in references.effective() {
-                let slot = reference.slot();
-                resolved[slot.rule()].backends[slot.backend()] = resolve_ai_admission(reference, runtime);
-            }
-        }
     }
     for (rule, facts) in route.spec.rules.iter_mut().flatten().zip(authored) {
         rule.resolved_ai_admission = Some(facts);
     }
-    for (rule, facts) in route.spec.resolved_rules.iter_mut().flatten().zip(resolved) {
-        rule.resolved_ai_admission = Some(facts);
-    }
 }
 
-fn find_controller_invalid_rule_details(
+fn find_controller_invalid_rule_details_with(
     route: &HTTPRoute,
     route_ns: &str,
     runtime: &ControllerRuntime,
+    facts: &HttpDelegationFacts,
 ) -> Vec<(usize, String)> {
     let mut details = find_invalid_rule_details(route, route_ns);
-    let already_invalid: HashSet<usize> = details.iter().map(|(index, _)| *index).collect();
-    for (index, _) in route.spec.rules.iter().flatten().enumerate() {
+    let mut already_invalid: HashSet<usize> = details.iter().map(|(index, _)| *index).collect();
+    // Malformed delegating rules and backend-selecting plugins on a delegating
+    // rule ride the same invalid-rule path.
+    for (index, reason) in facts.invalid_rules() {
+        if already_invalid.insert(*index) {
+            details.push((*index, reason.clone()));
+        }
+    }
+    for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = super::route_utils::graphql_router_rule_error(
-            route,
-            index,
-            false,
-            runtime,
-            route.spec.resolved_rules.is_some(),
-        )
-        .or_else(|| backend_plugin_scope_invalid_reason(route, index, false, runtime, false))
+        let delegating = rule
+            .backend_refs
+            .iter()
+            .flatten()
+            .any(HTTPBackendRef::is_route_delegation_ref);
+        if let Some(reason) = super::route_utils::graphql_router_rule_error(route, index, runtime, delegating)
+            .or_else(|| backend_plugin_scope_invalid_reason(route, index, runtime, false))
         {
             details.push((index, reason));
             continue;
@@ -1187,34 +1066,23 @@ fn find_controller_invalid_rule_details(
 fn backend_plugin_scope_invalid_reason(
     route: &HTTPRoute,
     rule_index: usize,
-    effective: bool,
     runtime: &ControllerRuntime,
     route_wide_only: bool,
 ) -> Option<String> {
     let references = HttpRouteExtensionRefs::from_route(route).ok()?;
     let root = HttpRouteHandler::create_resource_ref(route);
-    let fields = || {
-        references
-            .authored()
-            .filter(|_| !effective)
-            .chain(references.effective().filter(|_| effective))
-            .filter(|field| field.slot().rule() == rule_index)
-    };
+    let fields = || references.authored().filter(|field| field.slot().rule() == rule_index);
     // Register the complete valid set before any applicable content inspection.
     for field in fields() {
         if let Some(receipt) = super::route_utils::ExtensionDependencyReceipt::from_field(field) {
             receipt.register(&root, runtime);
         }
     }
-    if !effective
-        && find_invalid_rule_details(route, route.metadata.namespace.as_deref().unwrap_or("default"))
-            .iter()
-            .any(|(index, _)| *index == rule_index)
+    if find_invalid_rule_details(route, route.metadata.namespace.as_deref().unwrap_or("default"))
+        .iter()
+        .any(|(index, _)| *index == rule_index)
     {
         return None;
-    }
-    if effective && fields().any(|field| field.validated().is_err()) {
-        return Some("invalid ExtensionRef configuration or local target".into());
     }
     fields()
         .filter(|field| field.slot().backend().is_some())
@@ -1240,7 +1108,7 @@ fn backend_route_wide_scope_errors(route: &HTTPRoute, runtime: &ControllerRuntim
         .enumerate()
         .filter(|(index, _)| !invalid.contains(index))
         .filter_map(|(index, _)| {
-            backend_plugin_scope_invalid_reason(route, index, false, runtime, true).map(|message| {
+            backend_plugin_scope_invalid_reason(route, index, runtime, true).map(|message| {
                 AcceptedError::UnsupportedValue {
                     message: format!("rules[{index}]: {message}"),
                 }
@@ -1323,6 +1191,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/http_route_test/coalesced_recreate_test.rs"]
 mod coalesced_recreate_test;
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/http_route_test/delegation_status_test.rs"]
+mod delegation_status_test;
 
 #[cfg(test)]
 #[path = "../../../../../tests/support/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs"]

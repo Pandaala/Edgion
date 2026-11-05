@@ -479,8 +479,7 @@ impl KubernetesStorage {
                     "resolvedHostnames",
                     "resolvedListeners",
                     "invalidRuleIndices",
-                    "resolvedRules",
-                    "delegationIssues",
+                    "resolvedDelegationKeys",
                 ] {
                     spec.remove(field);
                 }

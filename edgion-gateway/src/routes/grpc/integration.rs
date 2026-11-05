@@ -41,9 +41,12 @@ pub async fn try_match_grpc_route(
     }
 
     match grpc_routes.match_route(session, ctx, index, &ctx.request_info.hostname) {
-        Ok((grpc_route_unit, matched_gi)) => {
-            ctx.grpc_route_unit = Some(grpc_route_unit);
-            ctx.gateway_info = Some(matched_gi);
+        Ok(result) => {
+            // `grpc_route_unit` is always the leaf; a delegated chain's
+            // ancestors go to `ctx.delegated` (`None` for ordinary matches).
+            ctx.grpc_route_unit = Some(result.route_unit);
+            ctx.gateway_info = Some(result.matched_gateway);
+            ctx.delegated = result.delegated;
             ctx.is_grpc_route_matched = true;
             Ok(true)
         }
@@ -70,14 +73,26 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     // Session Persistence step 1 of 2: extract token + set initial state
     // (mirrors select_http_backend). The `selected_grpc_backend.is_some()`
     // early return above guarantees this never re-runs on a retry attempt.
-    let sp_token = grpc_route_unit.rule.session_persistence.as_ref().and_then(|sp| {
-        sp_extract_token(
-            session,
-            &mut ctx.ensure_session_persistence().state,
-            Some(sp),
-            crate::routes::http::session_persistence::now_unix_secs(),
-        )
-    });
+    // The leaf's sessionPersistence block, else the nearest delegating
+    // ancestor's (taken whole, delegated chains only). Ordinary routes borrow
+    // the leaf block; only an inherited ancestor unit is Arc-cloned.
+    let inherited_sp_unit = match grpc_route_unit.rule.session_persistence {
+        Some(_) => None,
+        None => ctx.grpc_session_persistence_unit().cloned(),
+    };
+    let sp_token = grpc_route_unit
+        .rule
+        .session_persistence
+        .as_ref()
+        .or_else(|| inherited_sp_unit.as_ref()?.rule.session_persistence.as_ref())
+        .and_then(|sp| {
+            sp_extract_token(
+                session,
+                &mut ctx.ensure_session_persistence().state,
+                Some(sp),
+                crate::routes::http::session_persistence::now_unix_secs(),
+            )
+        });
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
     // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:

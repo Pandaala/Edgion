@@ -2237,17 +2237,19 @@ impl DslTestSuite {
     // `/extra` after the matched prefix. The radix matcher must still bind
     // `:item=book-7` rather than `book-7/extra`, while PathPrefix permits the
     // suffix beyond the template.
-    // ==================== Scenario 27: cached_query frozen at entry time ====================
+    // ==================== Scenario 27: req.query reads the current query ====================
 
-    /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites
-    /// the URI to a different query, req.query("name") read afterwards must
-    /// still return the entry-time value. test_server's /request-header-test
-    /// echoes incoming request headers in the response body, so we look for
-    /// "X-Captured-Name: BEFORE_REWRITE".
-    fn test_freeze_query_param() -> TestCase {
+    /// `req.query(name)` reads the logical current Query (see
+    /// skills/03-coding/dsl/builtins-path.md and the URI normalization
+    /// contract's "Frozen query cache source", which superseded the old
+    /// frozen-at-entry getter). After a DSL `set_uri` rewrites the query,
+    /// `req.query("name")` must return the rewritten value. test_server's
+    /// /request-header-test echoes request headers in the response body, so we
+    /// look for "X-Captured-Name: AFTER_REWRITE".
+    fn test_query_param_reads_current_after_set_uri() -> TestCase {
         TestCase::new(
-            "dsl_freeze_query_param",
-            "DSL: cached_query stays at entry value after req.set_uri",
+            "dsl_query_param_reads_current_after_set_uri",
+            "DSL: req.query returns the rewritten value after req.set_uri",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -2269,16 +2271,15 @@ impl DslTestSuite {
                             }
                             let body = resp.text().await.unwrap_or_default();
                             // header_echo_handler renders headers as "  Name: value\n" lines
-                            if body.contains("X-Captured-Name: BEFORE_REWRITE") {
+                            if body.contains("X-Captured-Name: AFTER_REWRITE") {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "cached_query frozen to entry value after set_uri".to_string(),
+                                    "req.query read the current query after set_uri".to_string(),
                                 )
-                            } else if body.contains("X-Captured-Name: AFTER_REWRITE") {
+                            } else if body.contains("X-Captured-Name: BEFORE_REWRITE") {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    "REGRESSION: cached_query read live URI after set_uri (entry freeze broken)"
-                                        .to_string(),
+                                    "REGRESSION: req.query returned the entry value after set_uri".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
@@ -2508,7 +2509,7 @@ impl TestSuite for DslTestSuite {
             Self::test_dsl_path_param_extracts_values(),
             Self::test_dsl_path_param_prefix_extension(),
             // Scenario 27: cached_query frozen at entry time
-            Self::test_freeze_query_param(),
+            Self::test_query_param_reads_current_after_set_uri(),
             // Scenario 28: time_format ApiError path — deny vs ignore error policy
             Self::test_time_format_deny_returns_500(),
             Self::test_time_format_ignore_passes_through(),

@@ -462,7 +462,10 @@ impl Inputs {
         }
         let mut routes = Vec::new();
         for route in self.routes.values() {
-            if !gateways.iter().any(|(key, gateway)| route.attaches_to(key, gateway)) {
+            // Delegation children have no Gateway attachment: their refs and
+            // rule admissions enter every scope, compiled under this scope's
+            // own policy (spec §6.4). Ordinary routes keep attachment-only membership.
+            if !route.contributes_to(gateways) {
                 continue;
             }
             http.extend(route.http_keys.iter().cloned());
@@ -877,7 +880,7 @@ fn rule_admission(
     sources: &HashMap<String, Arc<EdgionPlugins>>,
 ) -> RuleAdmission {
     let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    let count = route.effective_rules().map_or(0, |rules| rules.len());
+    let count = route.spec.rules.as_ref().map_or(0, |rules| rules.len());
     let mut allowed = vec![false; count];
     let mut graphql_allowed = vec![false; count];
     let Ok(references) = HttpRouteExtensionRefs::from_route(route) else {
@@ -924,18 +927,23 @@ fn rule_admission(
                 None => missing = Some(key),
             }
         }
+        let delegating = rule
+            .backend_refs
+            .iter()
+            .flatten()
+            .any(edgion_resources::HTTPBackendRef::is_route_delegation_ref);
         graphql_allowed[index] = edgion_resources::plugin_configs::graphql_router_rule_binding_error(
             rule,
             namespace,
             &graphql_sources.iter().map(|source| source.as_ref()).collect::<Vec<_>>(),
-            route.spec.resolved_rules.is_some(),
+            delegating,
         )
         .is_none()
             && edgion_resources::plugin_configs::graphql_router_rule_error(
                 rule,
                 namespace,
                 &graphql_plugins,
-                route.spec.resolved_rules.is_some(),
+                delegating,
             )
             .is_none();
         allowed[index] = ai_rule_invalid_reason(

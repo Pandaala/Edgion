@@ -155,7 +155,21 @@ Specifics:
   rebuilds. Unchanged cached units keep their runtime/selector Arcs. Discovery
   still scans caches and affected Listener payloads; this is not per-host ranking.
 - Inside `GrpcMatchEngine::match_route`, `deep_match` validates the request hostname against the route's `effective_hostnames`.
-- Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback).
+- Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback). Delegation children are the exception: they never have listeners, are routed to the delegation slot path, and do not warn.
+
+## Delegation (cascading match)
+
+GRPCRoute delegation reuses the HTTP mechanism described in the
+[HTTP route engine](01-http-route.md#delegation-cascading-match): the shared
+`routes/delegation/` slot table, lazy `DescentState`, `DelegatedMatch` and
+`InheritedRuleValues`. `routes/grpc/delegation_build.rs` accepts child keys and
+builds one `GrpcMatchEngine` per `DelegationKey` (`kind: GRPCRoute`) with its own
+build-time ranks. `GrpcMatchEngine::match_route` descends only after a
+candidate with a `delegate` slot passes its own `deep_match`; a subtree miss
+backtracks to the next ranked candidate. The match result keeps the leaf in
+`grpc_route_unit` and the ancestors in `DelegatedMatch::grpc_ancestors`.
+Ancestor filters and plugins run root first; access-log `match_info` is the same
+root → leaf array as HTTP.
 
 ## Client deadline (`grpc-timeout`) handling
 

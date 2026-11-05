@@ -89,7 +89,7 @@ and the [schema/transport contract](../../../01-architecture/05-resources/00-sch
 - Sibling precedent: `edgion.io/retry-non-idempotent`
   (`skills/02-features/05-annotations/references/annotations-metadata.md`)
 - Regression tests: `http_route_preparse.rs` `parses_mirror_tuning_*`,
-  `mirror_tuning_reaches_resolved_rules`
+  `mirror_tuning_reaches_rules`
 
 ## Resolution references
 

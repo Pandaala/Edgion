@@ -138,7 +138,8 @@ The same applies to all dependency relationships:
 
 ```bash
 # 1. Find sv from the access log
-# access.log: {"match_info":{"rsc":{"kind":"HTTPRoute","ns":"prod","name":"api-route"},"sv":42},...}
+# access.log: {"match_info":[{"rsc":{"kind":"HTTPRoute","ns":"prod","name":"api-route"},"rule_id":0,"match_id":0,"sv":42}],...}
+# match_info is an array root -> leaf; a delegated request has one element (and one sv) per level.
 
 # 2. Filter data-plane conf_sync logs by sv
 grep 'sv.*42' gateway.log

@@ -22,8 +22,8 @@ GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is hi
 ### validate
 
 1. Calls `validate_grpc_route_if_enabled()` for header matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
-   Method validation uses the shared `GRPCRouteMatch::compile_method()` via `GRPCRouteRule::method_match_error()` in per-rule classification, status, and delegation filtering. Invalid method predicates drop their whole rule; valid siblings survive, and all-invalid effective rules reject attachment with `Accepted=False / UnsupportedValue`. These errors never enter route-wide advisory validation. Missing outer method is unconstrained; omitted type is Exact; method-only Exact and regex are supported outside delegation. Explicit empty matchers, invalid Exact names, and invalid regexes fail closed with bounded static errors.
-   Per-rule header modifier validation uses the shared `GRPCRouteRule::header_modifier_error()`, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
+   Method validation uses the shared `GRPCRouteMatch::compile_method()` via `GRPCRouteRule::method_match_error()` in per-rule classification and status, for delegation children too. Invalid method predicates drop their whole rule; valid siblings survive, and all-invalid effective rules reject attachment with `Accepted=False / UnsupportedValue`. These errors never enter route-wide advisory validation. Missing outer method is unconstrained; omitted type is Exact; method-only Exact and regex are supported, also in delegation children (the delegating rule itself is restricted, see below). Explicit empty matchers, invalid Exact names, and invalid regexes fail closed with bounded static errors.
+   Per-rule header modifier validation uses the shared `GRPCRouteRule::header_modifier_error()`, including backend filters and delegating rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 2. Validates the actual Route source; backend target/status checks run through the effective target-only view in `update_status`.
 
 ### Native backend reference ownership
@@ -40,82 +40,56 @@ unsupported. Exact same-family delegation uses the Gateway API group and no port
 Source namespace omission defaults to `default`; an explicitly invalid namespace
 or missing/invalid source name closes the existing Accepted gate, including direct
 status calls, and empties derived executable rules/listeners. No native target is
-looked up or registered for that invalid source. A valid parent selection of an
-invalid child retains its named/wildcard recovery edge but drops the child before
-native backend reads, Grant checks, or rule cloning.
+looked up or registered for that invalid source.
 
-Delegation authorizes each original child terminal before cloning, using the
-child's source namespace even when its target is the root namespace. The root
-Route owns wakeups. Valid terminal receipts survive later rule filtering and
-missing/denied targets. Service manager owners retain their explicit canonical
+Under delegation every route authorizes and registers only its own authored
+backendRefs under its own owner; no rule is cloned across routes. Valid terminal
+receipts survive later rule filtering and missing/denied targets. Service manager owners retain their explicit canonical
 namespace while root Grant wakeups retain raw metadata namespace representation.
 Apply replaces all prior dependencies and requeues dropped policy keys.
 
 ### parse
 
-Mirrors HTTPRoute's step order, including the delegation flatten:
-0. **Replace ReferenceGrant dependencies, mark denials, then flatten delegation**: clear the prior CrossNsRefManager set once at parse entry. Register each target namespace under the root Route owner before reading the ReferenceGrant store, both for authored backendRefs and child-declared flattened backends. Mark `ref_denied` on `spec.rules` before flattening (flatten clones non-delegating sibling rules verbatim into `resolved_rules`, which the gateway compiles instead of `spec.rules` — marking afterwards would leave the compiled copies un-denied). If any rule delegates (`backendRef {group: gateway.networking.k8s.io, kind: GRPCRoute}`), `grpc_route_delegation::flatten_route()` DFS-expands the delegation tree into `spec.resolved_rules` (schemars-skip, serialized for conf_sync) and stores diagnostics in the in-process `spec.delegation_issues` (the kind-agnostic `DelegationIssue` enum, reused unchanged from `http_route.rs`). A **second `RouteDelegationIndex` instance** — `grpc_route_delegation_index` on `ControllerRuntime`, same type as HTTP's `route_delegation_index`, disjoint `"ns/name"` keys — is updated so GRPCRoute changes requeue only gRPC parents. Canonical user semantics: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); module: `handlers/grpc_route_delegation.rs`
-1. Complete the authored and flattened target set in CrossNsRefManager without another clear
+Mirrors HTTPRoute's step order:
+0. **Replace ReferenceGrant dependencies and mark denials**: clear the prior CrossNsRefManager set once at parse entry; register each target namespace under the Route owner before reading the ReferenceGrant store; mark `ref_denied` on `spec.rules`. Clear any authored `resolved_delegation_keys`, compute `grpc_route_delegation::grpc_delegation_facts`, and sync the separate `grpc_route_delegation_graph` (same `DelegationGraph` type as HTTP, disjoint keys, `kind: GRPCRoute`). A non-inert child gets its confirmed `resolved_delegation_keys`; the returned requeue set goes through the workqueue. Shared mechanics: [HTTPRoute delegation](04-http-route.md#delegation-cascading-match)
+1. Complete the authored target set in CrossNsRefManager without another clear
 2. Register Service references in ServiceRefManager
 3. Clear and recompute `resolved_listeners` (resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`)
 4. Resolve `resolved_hostnames` (intersection of route hostnames with Gateway Listener hostnames)
-5. (ReferenceGrant `ref_denied` marking happens in step 0, before the flatten — see above)
+5. (ReferenceGrant `ref_denied` marking happens in step 0 — see above)
 
 ### on_change
 
-Same as HTTPRoute: register in GatewayRouteIndex, update AttachedRouteTracker, requeue the parent Gateway when needed, and requeue delegating parents via `grpc_route_delegation_index.parents_of()`. The same post-cache-ready one-shot revalidation as HTTPRoute (`ref_grant/revalidation_listener.rs`) has a gRPC parallel requeueing `"GRPCRoute"`, closing the cold-start window where a parent flattens before its children are loaded.
+Same as HTTPRoute: register in GatewayRouteIndex, update AttachedRouteTracker, requeue the parent Gateway when needed, and requeue the parents naming this route (`grpc_route_delegation_graph.parents_naming`). The same post-cache-ready one-shot revalidation as HTTPRoute (`ref_grant/revalidation_listener.rs::trigger_grpc_delegation_parent_revalidation`) requeues every gRPC delegating parent, closing the cold-start window where a parent is processed before its children are loaded.
 
 ### on_delete
 
-Same as HTTPRoute: clear all reference and index registrations, including this route's own parent-side delegation edges (`update_parent(key, ∅, ∅)`, requeueing former children and any parents still delegating to it).
+Same as HTTPRoute: clear all reference and index registrations; `grpc_route_delegation_graph.on_route_deleted` removes a participant and requeues its declared children, declared parents and the parents naming it.
 
 ### update_status
 
 Same as HTTPRoute: produce a RouteParentStatus for each parentRef and set the Accepted and ResolvedRefs Conditions, plus delegation-specific status surfaces:
-- `ResolvedRefs`: canonical target validation scans `effective_rules()`, including delegated missing or invalid terminals. Valid delegation selectors are excluded from Service existence reads; malformed selectors are invalid references. A missing named child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`. Valid denied terminals retain `RefNotPermitted` without a Service existence read.
-- `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped`).
-- Child-side delegation status: each `kind: GRPCRoute` parentRef (reverse lock) gets its own `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, from `grpc_route_delegation_index`). The Gateway-acceptance loop must gate on `is_gateway_parent_ref` so this doesn't run `validate_parent_ref_accepted` against reverse-lock parentRefs.
-- `collect_ref_denied_list`-equivalent status folding scans `effective_rules()` so flattened children's ReferenceGrant denials surface on the parent.
+- `ResolvedRefs`: canonical target validation scans the route's own rules. Valid delegation selectors are excluded from Service existence reads; malformed selectors are invalid references. Named delegation targets report `BackendNotFound` (missing child) or `RefNotPermitted` (child does not declare this parent). Valid denied terminals retain `RefNotPermitted` without a Service existence read.
+- `PartiallyInvalid`: own invalid rules only, including malformed delegating rules and backend-selecting plugins on delegating rules.
+- Child-side delegation status: each `kind: GRPCRoute` parentRef gets its own entry from the shared `child_entry_verdict` (`DelegationAccepted` / `NoMatchingParent` / `NotAttached` / `DepthExceeded`, plus `InvalidParentRefs` / `UnsupportedValue` on every entry, and `PartiallyInvalid` for out-of-scope rules (a method match naming a service other than the delegated one) and per-rule mandatory-filter conflicts; when those cover every child rule the entry is `Accepted=False / UnsupportedValue`). The Gateway-acceptance loop gates on `is_gateway_parent_ref` so route-kind parentRefs never run `validate_parent_ref_accepted`.
 
 ### ExtensionRef ownership and recovery
 
-The Controller consumes `GrpcRouteExtensionRefs` loans from actual authored or
-effective filter positions. Exact `edgion.io/EdgionPlugins`, a valid required name,
-and a valid owning Route identity precede dependency registration or content
-lookup. Authored loans ignore namespace stamps. Effective loans accept the existing
-controller-owned `resolved_namespace` only from `resolved_rules`; they describe the
-published root and field position, without claiming the original child's UID or
-generation. No ExtensionRef loan can mint a ReferenceGrant query.
-
-Delegation registers every valid original child's plugin dependency under the
-root wakeup identity before rule drops. Only structurally eligible scope checks
-read plugin content, using `get_raw_any` after registration so a pending desired
-generation is visible. Parse entry clears the prior plugin dependency set once;
-later authored/effective/status registration is additive. An omitted root namespace
-stays omitted in the manager wakeup key while local targets use `default`.
-Invalid owners and targets contribute no new plugin edge or content lookup.
-For a valid owner, parse is the sole dependency-clear boundary and status only
-extends the set. A standalone status call for an invalid source may withdraw
-stale dependencies and derived rules/listeners/hostnames; an invalid target,
-dropped rule or missing plugin under a valid owner does not permit that cleanup.
-Gateway rule and selected-backend builders now borrow the actual Route and
-its effective rule/backend/filter slots through the same canonical facade. A
-validated local target becomes one cold complete store key; invalid descriptors
-retain a positional `None` and cannot query or consume a same-name plugin.
-Publication demand, AI admission and adaptive facts use that same projection.
-Request resolution, CORS/WAF selection and access-log declarations consume these
-validated keys or their positional results under the captured class scope.
-Authored stamps are ignored even on direct Gateway input; only actual
-`resolved_rules` can supply validated child-local namespace stamps. These loans
-still carry no Grant authority or original-child identity beyond the transport.
-R3a2 verification is scoped to these consumers; mirror/descriptor work and live
-conformance remain separate.
+The Controller consumes `GrpcRouteExtensionRefs` loans from the route's own
+filter positions, with the same rules as
+[HTTPRoute](04-http-route.md#extensionref-ownership-and-recovery): exact
+`edgion.io/EdgionPlugins`, a valid name and a valid owning Route identity precede
+dependency registration or content lookup; every ExtensionRef resolves in the
+declaring route's namespace; each route registers its own plugin dependencies;
+no ExtensionRef loan can mint a ReferenceGrant query. On a delegated call each
+ancestor level resolves its own ExtensionRef array against the root-matched
+Gateway's plugin scope.
 
 ## Gateway-side processing
 
 GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:
 
-0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with its declaring GRPCRoute namespace; authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
+0. **Rules and delegation children**: compiles `spec.rules` minus `invalid_rule_indices`. A delegation child (all parentRefs are GRPCRoute refs) is not bucketed by listener; `grpc/delegation_build.rs` accepts its keys exactly as HTTP does (Controller keys, local parentRef/shape re-check, `Accepted=True` gating), compiles its units once and shares them into the `GrpcMatchEngine` subtree of each key. Delegating rule units hold their `Arc<DelegationSlot>` from compile time
 1. **preparse**: in the route cache, call `route.preparse()` to build runtime structures
 2. **Route units**: compile each method predicate once into `GrpcMatchInfo.compiled_method_match`; any invalid predicate drops its whole rule, even without Controller status. Valid matches share the rule/plugin/backend runtime through `Arc`.
 3. **Domain matching**: index the Route's declared spec.hostnames (borrowed from its existing schema Arc), with omitted hostnames in catch-all. Keep resolved_hostnames as the deep-match eligibility constraint: Listener intersection must not promote Route hostname priority. The shared Algo `RadixHostnameMatcher` visits exact and descending wildcard suffixes before catch-all. Within each group, merge up to five indexed streams by build-time service/method/header/route rank. Failed full matches continue to broader domains. See [the engine](../02-gateway/03-routes/02-grpc-route.md).
@@ -124,14 +98,27 @@ GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:
 
 ## Delegation (GRPCRoute → GRPCRoute)
 
-GRPCRoute delegation is a parallel module (`handlers/grpc_route_delegation.rs`), not a trait generalization of `route_delegation.rs` — the Rule/Match/Filter/BackendRef type families are disjoint and the gRPC scope unit (a service name, spec-string-compared) differs from HTTP's path-prefix containment. Full user-facing semantics: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); feature schema: [`02-features/03-resources/05-grpcroute.md`](../../02-features/03-resources/05-grpcroute.md).
+GRPCRoute delegation uses the same cascading match as HTTPRoute (shared
+`edgion-resources/src/resources/route_delegation.rs` vocabulary, shared
+`DelegationGraph` and status helpers in `handlers/route_delegation.rs`, shared
+Gateway `routes/delegation/` slot table, descent state and inheritance fold).
+Only rule-shape facts are gRPC-specific (`handlers/grpc_route_delegation.rs`,
+`delegation_target_of_grpc_rule`). User semantics:
+[`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md);
+feature schema: [`02-features/03-resources/05-grpcroute.md`](../../02-features/03-resources/05-grpcroute.md).
 
-**Four security-critical divergences from a literal HTTP mirror** (regressions here are routing-boundary escapes — see the doc comment at the top of `grpc_route_delegation.rs` for the authoritative statement):
+gRPC-specific rules:
 
-1. A delegating rule with `matches` absent/empty is **invalid** (HTTP treats a matchless delegating rule as delegating `"/"`; that default is not mirrored — delegate-all is out of scope for v1).
-2. A terminal child rule with `matches` absent/empty flattens to **one inherited match per delegated scope**, never cloned matchless (the gateway synthesizes a catch-all unit for a matchless rule; an unmodified clone would match ALL traffic on the parent's hostnames).
-3. A valid child match whose `method.service` is absent (missing matcher or method-only) **inherits** the delegated service as `{type: Exact, service: S}`, preserving its method name. Shared rule validation rejects explicit empty matchers and empty/invalid Exact names before inheritance.
-4. Any child match with `method.type: RegularExpression` **invalidates that whole child rule** (v1 rejects the match outright rather than proving a regex service cannot escape the scope).
+1. A delegating rule with `matches` absent/empty is **invalid** (HTTP treats a
+   matchless delegating rule as delegating `/`; delegate-all is out of scope for
+   gRPC). Every delegating match needs `method.type` Exact-or-omitted, a non-empty
+   `service` and no `method`.
+2. Child matches are absolute and intersect with the delegated service at match
+   time: a different `service` never matches, a child without `service` matches
+   the delegated one, and a matchless child rule is a catch-all inside the subtree
+   (safe because the root level already fixed the service). The former matchless
+   rewrite and child regex rejection are gone; ordinary method validation applies.
+3. Each slot holds its own `GrpcMatchEngine` with per-level build-time ranks.
 
 ### Compiled native backend ownership
 
@@ -153,14 +140,14 @@ requires the selected target, and retries preserve the captured Arc or absence.
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | GRPCRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's Listener |
-| GRPCRoute → GRPCRoute | GRPCRoute | delegation backendRef (`kind: GRPCRoute`) + `grpc_route_delegation_index` | Parent flattens child rules into `resolved_rules`; child changes requeue parents (named + wildcard-namespace edges, transitively registered at the root) |
+| GRPCRoute → GRPCRoute | GRPCRoute | delegation backendRef (`kind: GRPCRoute`) + child `parentRefs {kind: GRPCRoute}` + `grpc_route_delegation_graph` | Bidirectional confirmation; child carries `resolved_delegation_keys`; Gateway matches through per-key `GrpcMatchEngine` subtrees |
 | GRPCRoute → Service | Service | backendRef | Route's backend target service |
 | GRPCRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
 | GRPCRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |
 
 ### Session persistence lifetime ownership
 
-Gateway rule compilation validates the final effective `sessionPersistence` and
+Gateway rule compilation validates each rule's own `sessionPersistence` and
 resolves its optional lifetime before publishing any match units. The shared
 resource policy uses the canonical duration parser with strict surrounding
 whitespace rejection and whole-second ceiling/minimum-one semantics (including

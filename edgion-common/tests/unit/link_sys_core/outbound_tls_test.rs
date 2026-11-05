@@ -879,7 +879,7 @@ fn trusted_etcd_pem_inherits_verify_and_never_constructs_partial_identity() {
 fn internal_route_tls_projection_keeps_exact_order_source_kind_and_client_identity() {
     use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
     use edgion_resources::resources::refs::route_auth_fields::HttpRouteAuthRefs;
-    let wire = serde_json::json!({"metadata":{"name":"root","namespace":"root"},"spec":{"resolvedRules":[{
+    let wire = serde_json::json!({"metadata":{"name":"root","namespace":"child"},"spec":{"rules":[{
         "filters":[{"type":"ExternalAuth","resolvedExternalAuth":{"namespace":"child"},"externalAuth":{
             "target":{"name":"auth","port":8443},"decision":{},"tls":{"enabled":true,"verify":false,
                 "validation":{"caCertificateRefs":[{"kind":"Secret","name":"bundle"},{"kind":"ConfigMap","name":"bundle"}]},
@@ -897,7 +897,7 @@ fn internal_route_tls_projection_keeps_exact_order_source_kind_and_client_identi
         validate_local_tls_selection(field.outbound_tls_selection().unwrap()).map(|_| ())
     };
     assert_eq!(prove(wire.clone()), Ok(()));
-    let base = "/spec/resolvedRules/0/filters/0/externalAuth/tls";
+    let base = "/spec/rules/0/filters/0/externalAuth/tls";
     for (tail, value, expected) in [
         (
             "/resolvedCaCertificates/0/metadata/namespace",

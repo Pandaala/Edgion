@@ -161,7 +161,7 @@ Authorization: Bearer <admin-token>
     "path": "/health",
     "status": 200
   },
-  "match_info": { },
+  "match_info": [ ],
   "backend_context": { },
   "genai": { },
   "stage_logs": [ ],
@@ -182,7 +182,7 @@ Authorization: Bearer <admin-token>
 |------|------|------|
 | `ts` | Integer | 条目时间戳，纪元毫秒 |
 | `request_info` | Object | 请求作用域字段——见下方[请求字段](#请求字段) |
-| `match_info` | Object | 匹配的路由标识（无路由匹配时省略） |
+| `match_info` | Array\<Object\> | 匹配的路由标识，每个命中层级一个元素，根在前（无路由匹配时省略） |
 | `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
 | `genai` | Object | 最终 GenAI 用量与有界 per-attempt 核算（非 AI 请求省略） |
 | `stage_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
@@ -214,15 +214,26 @@ Authorization: Bearer <admin-token>
 
 ### `match_info` 字段
 
+`match_info` 是按根 → 叶排序的数组。直接挂到 Gateway 的路由输出单元素数组。经
+[路由委派](../../user-guide/http-route/delegation.md)匹配的请求，每个命中层级输出一个
+元素：根路由在最前，最终选出后端的路由在最后。HTTPRoute 与 GRPCRoute 的数组形态相同。GRPCRoute 的元素还额外带有 `rule_name`（规则设置了 `name` 时）和 `matched`（匹配到的 GRPCRoute match，包含 `method.service` / `method.method`）。
+
+每个元素包含以下字段：
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `rns` | String | 路由命名空间 |
-| `rn` | String | 路由名称 |
-| `rule_id` | Integer | 匹配的规则索引（从 0 开始） |
-| `match_id` | Integer | 匹配的匹配项索引（从 0 开始） |
-| `sv` | Integer | Controller→Gateway 同步版本；为 0 时省略 |
+| `rsc.kind` | String | 路由类型（`HTTPRoute` 或 `GRPCRoute`） |
+| `rsc.ns` | String | 本层路由的命名空间 |
+| `rsc.name` | String | 本层路由的名称 |
+| `rsc.labels` | Object | 该路由由运维定义的日志标签（不存在时省略） |
+| `rule_id` | Integer | 本层路由内匹配的规则索引（从 0 开始） |
+| `match_id` | Integer | 该规则内匹配的匹配项索引（从 0 开始） |
+| `sv` | Integer | 本层路由的 Controller→Gateway 同步版本；为 0 时省略 |
 
-无路由匹配时，整个 `match_info` 对象省略。
+每一层报告自己的 `sv`，因此配置变更生效期间，一个委派请求的各层可能显示不同的
+同步版本。
+
+无路由匹配时，整个 `match_info` 数组省略。
 
 ### `backend_context` 字段
 
@@ -531,7 +542,7 @@ access_log_options:
     "path": "/health",
     "status": 200
   },
-  "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
+  "match_info": [ { "rsc": { "kind": "HTTPRoute", "ns": "production", "name": "api-route" }, "rule_id": 0, "match_id": 0 } ],
   "backend_context": {
     "name": "api-service",
     "namespace": "production",

@@ -1129,7 +1129,7 @@ mod tests {
     fn nonlocal_failover() -> AccessLogEntry {
         AccessLogEntry {
             data: json!({
-                "match_info": {"rsc": {"name": "region-route-myregion-test"}},
+                "match_info": [{"rsc": {"name": "region-route-myregion-test"}}],
                 "stage_logs": [{"edgion_plugins": [{
                     "name": "region-route-myregion",
                     "logs": [{"name": "RegionRoute", "log": [
@@ -1185,7 +1185,7 @@ mod tests {
     #[test]
     fn nonlocal_failover_requires_expected_scope_and_unique_execution() {
         for path in [
-            "/match_info/rsc/name",
+            "/match_info/0/rsc/name",
             "/stage_logs/0/edgion_plugins/0/name",
             "/stage_logs/0/edgion_plugins/0/logs/0/name",
         ] {

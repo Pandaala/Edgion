@@ -156,3 +156,22 @@ The follow-up task is closed under that revised scope. No compiler-layout ledger
 size reduction or throughput improvement is claimed. Existing numeric layout
 assertions were left unchanged by the two selected implementations; they do not
 constitute a requirement to shrink the context or box ordinary metadata.
+
+## Route delegation chain (2026-11-03)
+
+Cascading HTTPRoute delegation adds one nullable owner,
+`delegated: Option<Box<DelegatedMatch>>`, beside `route_unit` (which keeps the
+leaf). It costs 8 inline bytes on the native 64-bit target and is `None`, with
+no allocation, for every ordinary request; the box is allocated only when the
+match itself descended through a delegating rule. The box holds the ancestors
+(root -> parent), the per-level resolved ExtensionRef arrays and the inherited
+timeouts/retry/sessionPersistence fallbacks folded once at match time. Boxing
+keeps that chain state, whose inline size grows with the SmallVec capacity, off
+the ordinary context.
+
+A fresh native aarch64-Darwin run of `ai::context::tests::context_size_under_budget`
+measured 1384 bytes after the change, below the 1800-byte interim ceiling. The
+1376-byte pre-change figure is inferred from the field width and 8-byte
+alignment, not an executed baseline. The same test asserts the 8-byte width of
+the nullable owner and that a fresh context has none. Re-evaluate if chain state
+moves inline or a second delegation field is added.

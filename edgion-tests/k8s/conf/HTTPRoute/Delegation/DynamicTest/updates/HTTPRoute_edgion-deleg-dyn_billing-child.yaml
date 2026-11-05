@@ -6,6 +6,11 @@ metadata:
   name: billing-child
   namespace: edgion-deleg-dyn
 spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: delegation-dyn-parent
+      namespace: edgion-test
   rules:
     - matches:
         - path:

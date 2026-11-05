@@ -1,0 +1,29 @@
+# backtracking (gRPC): rule 0 delegates test.TestService to backtrack-child,
+# which serves only SayHello. Rule 1 is the platform's own matchless
+# catch-all. StreamNumbers enters the child subtree, misses, and backtracks
+# to rule 1 (design §3.1, §9).
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-backtrack-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-backtrack.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: backtrack-child
+          namespace: edgion-grpc-deleg
+    - backendRefs:
+        - name: test-grpc
+          port: 30021

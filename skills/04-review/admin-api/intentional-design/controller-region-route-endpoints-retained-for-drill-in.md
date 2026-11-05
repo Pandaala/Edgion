@@ -35,7 +35,8 @@ atomically fenced. Timeout is an unknown write outcome, not evidence of no write
 
 Center migration is tracked with the source-browsing task; do not infer a working
 cross-repository caller from this Controller-only contract or historical UI paths.
-See [the implementation task](../../../../tasks/todo/center-source-resource-browsing/02-implementation.md).
+That implementation task (`center-source-resource-browsing`) is tracked outside this
+repository, with the extracted EdgionCenter work; this tree has no copy of it.
 
 ## Historical evidence and re-evaluation
 

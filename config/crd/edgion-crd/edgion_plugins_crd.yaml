@@ -62,6 +62,11 @@ spec:
                       maximum: 65535
                       default: 0
                       description: "WAF owner-selection priority within one scope; Route takes precedence over Gateway and Global"
+                    delegationPrecedence:
+                      type: string
+                      enum: [child, parent]
+                      default: child
+                      description: "Owner election across a delegated route chain. Priority is compared only within one level; walking root to leaf, the outermost level whose WAF declares parent wins, otherwise the deepest level with a WAF wins. Ignored on ordinary routes."
                     requestBody:
                       type: object
                       properties:

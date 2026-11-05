@@ -1,4 +1,5 @@
 use crate::ctx::EdgionHttpContext;
+use crate::routes::delegation::descent::{self, ChildHit, DelegatedMatch, DescentState};
 use crate::routes::grpc::GrpcRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
@@ -10,6 +11,14 @@ use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
 use pingora_proxy::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// A gRPC route match. `route_unit` is always the leaf; a delegated chain's
+/// ancestors are in `delegated` (`None` for every ordinary match).
+pub struct GrpcRouteMatchResult {
+    pub route_unit: Arc<GrpcRouteRuleUnit>,
+    pub matched_gateway: Arc<GatewayInfo>,
+    pub delegated: Option<Box<DelegatedMatch>>,
+}
 
 /// One immutable ranked route array, shared by all hostname indexes.
 /// Hostname specificity is resolved by ordered hostname lookup; every remaining
@@ -189,13 +198,62 @@ impl GrpcMatchEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
+    ) -> Result<GrpcRouteMatchResult, EdError> {
         let (service, method) = parse_grpc_path(ctx.path())?;
+        // Created lazily on the first delegating hit; ordinary requests only
+        // write the `None` discriminant.
+        let mut descent_state: Option<DescentState> = None;
         self.select(service, method, hostname, |route| {
-            route.deep_match(session, index, hostname)
+            let Some(gateway) = route.deep_match(session, index, hostname)? else {
+                return Ok(None);
+            };
+            // The only branch an ordinary candidate pays after its deep_match.
+            let Some(slot) = &route.delegate else {
+                return Ok(Some((gateway, None)));
+            };
+            let state = descent_state.get_or_insert_with(DescentState::new);
+            Ok(descend(route, slot, service, method, session, state)?.map(|hit| (gateway, Some(hit))))
         })?
-        .map(|(route, gateway)| (Arc::clone(route), gateway))
+        .map(|(route, (matched_gateway, hit))| match hit {
+            None => GrpcRouteMatchResult {
+                route_unit: Arc::clone(route),
+                matched_gateway,
+                delegated: None,
+            },
+            Some(hit) => GrpcRouteMatchResult {
+                route_unit: hit.leaf,
+                matched_gateway,
+                delegated: Some(Box::new(DelegatedMatch::new_grpc(hit.ancestors))),
+            },
+        })
         .ok_or_else(EdError::RouteNotFound)
+    }
+
+    /// Match inside a delegation subtree with the same per-level candidate
+    /// order as the root. Child units carry no hostnames, so only the hostless
+    /// group is consulted; each candidate checks the chain mask and its own
+    /// headers, and a delegating child descends recursively.
+    pub(crate) fn match_child(
+        &self,
+        service: &str,
+        method: &str,
+        session: &Session,
+        state: &mut DescentState,
+    ) -> Result<Option<ChildHit<GrpcRouteRuleUnit>>, EdError> {
+        Ok(self
+            .select_in(&self.catch_all, service, method, |route| {
+                if state.conflicts(route.filter_mask) || !route.deep_match_child(session)? {
+                    return Ok(None);
+                }
+                match &route.delegate {
+                    None => Ok(Some(ChildHit {
+                        leaf: Arc::clone(route),
+                        ancestors: smallvec::SmallVec::new(),
+                    })),
+                    Some(slot) => descend(route, slot, service, method, session, state),
+                }
+            })?
+            .map(|(_, hit)| hit))
     }
 
     /// Shared selection loop. Only a predicate no-match advances to the next
@@ -207,7 +265,7 @@ impl GrpcMatchEngine {
         service: &str,
         method: &str,
         hostname: &str,
-        mut deep_match: impl FnMut(&GrpcRouteRuleUnit) -> Result<Option<T>, EdError>,
+        mut deep_match: impl FnMut(&Arc<GrpcRouteRuleUnit>) -> Result<Option<T>, EdError>,
     ) -> Result<Option<(&Arc<GrpcRouteRuleUnit>, T)>, EdError> {
         // A non-DNS authority cannot hit a named group. Existing HTTP authority
         // validation and the separately authored hostless group remain in charge.
@@ -218,22 +276,37 @@ impl GrpcMatchEngine {
             .flat_map(|query| self.hosts.matching_values(query))
             .chain(std::iter::once(&self.catch_all))
         {
-            for rank in group.candidates(service, method) {
-                let route = &self.routes[rank];
-                if let Some(CompiledGrpcMethodMatch::RegularExpression {
-                    service: service_regex,
-                    method: method_regex,
-                }) = route.matched_info.compiled_method_match.as_ref()
+            if let Some(hit) = self.select_in(group, service, method, &mut deep_match)? {
+                return Ok(Some(hit));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Candidate loop of one hostname group, in precomputed rank order.
+    #[inline]
+    fn select_in<T>(
+        &self,
+        group: &GrpcCandidateIndex,
+        service: &str,
+        method: &str,
+        mut deep_match: impl FnMut(&Arc<GrpcRouteRuleUnit>) -> Result<Option<T>, EdError>,
+    ) -> Result<Option<(&Arc<GrpcRouteRuleUnit>, T)>, EdError> {
+        for rank in group.candidates(service, method) {
+            let route = &self.routes[rank];
+            if let Some(CompiledGrpcMethodMatch::RegularExpression {
+                service: service_regex,
+                method: method_regex,
+            }) = route.matched_info.compiled_method_match.as_ref()
+            {
+                if service_regex.as_ref().is_some_and(|re| !re.is_match(service))
+                    || method_regex.as_ref().is_some_and(|re| !re.is_match(method))
                 {
-                    if service_regex.as_ref().is_some_and(|re| !re.is_match(service))
-                        || method_regex.as_ref().is_some_and(|re| !re.is_match(method))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
-                if let Some(result) = deep_match(route)? {
-                    return Ok(Some((route, result)));
-                }
+            }
+            if let Some(result) = deep_match(route)? {
+                return Ok(Some((route, result)));
             }
         }
         Ok(None)
@@ -243,6 +316,21 @@ impl GrpcMatchEngine {
     pub(crate) fn shares_hosts(&self, other: &Self) -> bool {
         self.hosts.shares_hosts(&other.hosts)
     }
+}
+
+/// Descend from a matched delegating gRPC `unit` into its subtree slot.
+#[inline]
+fn descend(
+    unit: &Arc<GrpcRouteRuleUnit>,
+    slot: &Arc<crate::routes::delegation::DelegationSlot<GrpcMatchEngine>>,
+    service: &str,
+    method: &str,
+    session: &Session,
+    state: &mut DescentState,
+) -> Result<Option<ChildHit<GrpcRouteRuleUnit>>, EdError> {
+    descent::descend_with(unit, unit.filter_mask, slot, state, |subtree, state| {
+        subtree.match_child(service, method, session, state)
+    })
 }
 
 /// Parse gRPC path: /{service}/{method}

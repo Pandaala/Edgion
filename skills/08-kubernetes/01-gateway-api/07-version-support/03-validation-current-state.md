@@ -60,9 +60,9 @@ supports `--check` drift detection.
 
 The shared resource layer compiles that contract once, applies it to authored
 rule/backend filter lists and EdgionPlugins configs, and prepares typed immutable
-Gateway state. Effective delegated rules receive a separate safety pass because
-flattening can legitimately change authored list cardinality while still needing
-valid prefix-match context. Filesystem and etcd still report failures through
+Gateway state. Delegation no longer derives rule lists: every route, including a
+delegation child, is checked once on its own authored rules, and each level's
+transforms run against that level's own matches. Filesystem and etcd still report failures through
 the normal handler/status lifecycle; they do not gain a pretend admission gate.
 
 This is deliberately a selected semantic contract, not a claim that Edgion

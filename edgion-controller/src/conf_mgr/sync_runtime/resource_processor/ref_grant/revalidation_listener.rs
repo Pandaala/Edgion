@@ -125,12 +125,12 @@ pub async fn run_post_cache_ready_revalidations(runtime: Arc<ControllerRuntime>)
 ///
 /// During init a delegating parent may be processed before its children are
 /// loaded (in K8s mode the raw store swaps in only at InitDone), so its first
-/// flatten yields empty/missing children — transient MissingChild status and
-/// a resolved_rules snapshot without the delegated rules. This one-shot
-/// revalidation re-flattens every registered parent once everything is
-/// loaded. Runs in both Kubernetes and file/etcd modes.
+/// status can carry a transient `BackendNotFound` / `RefNotPermitted` for a
+/// named child. This one-shot revalidation requeues every parent recorded in
+/// the delegation graph once everything is loaded. Runs in both Kubernetes
+/// and file/etcd modes.
 pub async fn trigger_delegation_parent_revalidation(runtime: Arc<ControllerRuntime>) {
-    let parents = runtime.route_delegation_index.all_parents();
+    let parents = runtime.http_route_delegation_graph.all_parents();
     if parents.is_empty() {
         return;
     }
@@ -138,7 +138,7 @@ pub async fn trigger_delegation_parent_revalidation(runtime: Arc<ControllerRunti
     tracing::info!(
         component = "delegation_parent_revalidation",
         parent_count = parents.len(),
-        "Requeuing all delegating parent HTTPRoutes for post-init re-flatten"
+        "Requeuing all delegating parent HTTPRoutes for post-init revalidation"
     );
 
     for key in parents {
@@ -149,12 +149,9 @@ pub async fn trigger_delegation_parent_revalidation(runtime: Arc<ControllerRunti
 /// Requeue all delegating parent GRPCRoutes after caches are ready.
 ///
 /// gRPC parallel of `trigger_delegation_parent_revalidation`, over the
-/// separate `grpc_route_delegation_index` instance. Same cold-start ordering
-/// fix: a delegating parent processed before its children on cold start
-/// otherwise keeps transient `MissingChild` status and an empty flatten until
-/// something else requeues it.
+/// separate GRPCRoute delegation graph. Same cold-start ordering fix.
 pub async fn trigger_grpc_delegation_parent_revalidation(runtime: Arc<ControllerRuntime>) {
-    let parents = runtime.grpc_route_delegation_index.all_parents();
+    let parents = runtime.grpc_route_delegation_graph.all_parents();
     if parents.is_empty() {
         return;
     }
@@ -162,7 +159,7 @@ pub async fn trigger_grpc_delegation_parent_revalidation(runtime: Arc<Controller
     tracing::info!(
         component = "delegation_parent_revalidation",
         parent_count = parents.len(),
-        "Requeuing all delegating parent GRPCRoutes for post-init re-flatten"
+        "Requeuing all delegating parent GRPCRoutes for post-init revalidation"
     );
 
     for key in parents {

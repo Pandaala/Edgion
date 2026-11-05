@@ -390,3 +390,82 @@ fn unchanged_matrix_renews_after_idle_without_spending_more_keys() {
         );
     }
 }
+
+/// Spec §8.3: a delegation child's (leaf's) units carry prebuilt handles for
+/// every Gateway in the process, built with the child's own route identity:
+/// the prebuilt cell and the dynamic fallback for the leaf land in one series.
+#[test]
+fn leaf_metric_labels_are_child_route() {
+    use crate::cli::config::get_backend_requests_config;
+    use crate::observe::metrics::registry::record_backend_request;
+    use crate::routes::delegation::DelegationSlotTable;
+    use crate::routes::http::delegation_build::build_subtree;
+    use edgion_resources::{HTTPRoute, ResourceMeta};
+    use std::sync::Arc;
+
+    let mut child: HTTPRoute = crate::test_current_status::from_value(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+        "metadata": {"namespace": "tenant", "name": "leaf"},
+        "spec": {
+            "resolvedStatusController": "edgion.io/gateway-controller",
+            "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "infra", "name": "root"}],
+            "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api/v1"}}],
+                       "backendRefs": [{"name": "svc", "port": 80}]}]
+        }
+    }))
+    .unwrap();
+    child.pre_parse();
+    let child = Arc::new(child);
+    let gateways = vec![
+        ("infra".to_string(), "gw-a".to_string()),
+        ("edge".to_string(), "gw-b".to_string()),
+    ];
+
+    let (snap, _) = run_with_recorder(|| {
+        let slots = DelegationSlotTable::new();
+        let subtree = build_subtree(&[Arc::clone(&child)], &slots, &gateways).expect("child subtree");
+        assert_eq!(subtree.route_rules_list.len(), 1);
+        let unit = &subtree.route_rules_list[0];
+        assert_eq!(unit.matched_info.rsc.ns, "tenant");
+        assert_eq!(unit.matched_info.rsc.name, "leaf");
+        for (gw_ns, gw_name) in &gateways {
+            let entry = unit
+                .metric_handles
+                .lookup(gw_ns, gw_name)
+                .expect("handles prebuilt for every process Gateway");
+            assert_eq!(entry.counters.len(), 1, "one slot per backendRef");
+        }
+        assert!(unit.metric_handles.lookup("infra", "unknown").is_none());
+
+        // The prebuilt cell and the leaf-identity fallback hit one series.
+        let entry = unit.metric_handles.lookup("infra", "gw-a").unwrap();
+        entry.counters[0].as_ref().unwrap()[ps_index(ProtocolIdx::Http, StatusIdx::S2xx)].increment(1);
+        record_backend_request(
+            &get_backend_requests_config().labels,
+            "infra",
+            "gw-a",
+            "tenant",
+            "leaf",
+            "tenant",
+            "svc",
+            "http",
+            "2xx",
+            "",
+            "",
+        );
+    });
+    let incremented: Vec<_> = snap
+        .snapshot()
+        .into_vec()
+        .into_iter()
+        .filter(|(k, _, _, v)| {
+            k.key().name() == crate::observe::metrics::registry::names::BACKEND_REQUESTS_TOTAL
+                && matches!(v, metrics_util::debugging::DebugValue::Counter(n) if *n > 0)
+        })
+        .collect();
+    assert_eq!(incremented.len(), 1);
+    assert!(matches!(
+        incremented[0].3,
+        metrics_util::debugging::DebugValue::Counter(2)
+    ));
+}

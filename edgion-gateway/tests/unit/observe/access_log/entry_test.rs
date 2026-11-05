@@ -371,3 +371,222 @@ fn upstream_authority_is_logged_only_when_present() {
     let json = AccessLogEntry::from_context(&ctx).to_json();
     assert!(json.contains("tenant-a.sandbox.internal"), "got: {json}");
 }
+
+fn chain_unit(
+    ns: &str,
+    name: &str,
+    rule_id: usize,
+    match_id: usize,
+    sv: u64,
+) -> Arc<crate::routes::http::HttpRouteRuleUnit> {
+    use crate::routes::http::match_unit::HttpRouteRuleUnit;
+    use crate::Rsc;
+    use edgion_resources::HTTPRouteRule;
+    let rule = Arc::new(HTTPRouteRule {
+        name: None,
+        resolved_terminal_route_uid: None,
+        resolved_ai_admission: None,
+        resolved_terminal_rule_identity: None,
+        matches: None,
+        filters: None,
+        backend_refs: Some(vec![]),
+        timeouts: None,
+        retry: None,
+        session_persistence: None,
+        parsed_timeouts: None,
+        parsed_retry: None,
+        parsed_forward_raw_path: None,
+        parsed_allow_non_idempotent_retry: None,
+        parsed_mirror_tuning: None,
+    });
+    let runtime = crate::routes::http::match_unit::compile_http_fixture(&rule, ns).unwrap();
+    let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
+    let key = format!("{ns}/{name}");
+    Arc::new(HttpRouteRuleUnit {
+        delegate: None,
+        filter_mask: 0,
+        session_persistence_ttl_secs: None,
+        resource_key: key.clone(),
+        matched_info: MatchInfo {
+            rsc: Rsc::new("HTTPRoute", ns, name),
+            rule_id,
+            match_id,
+            sv,
+            m: edgion_resources::HTTPRouteMatch {
+                path: None,
+                headers: None,
+                query_params: None,
+                method: None,
+            },
+            labels_meta: None,
+            annotations_meta: None,
+        },
+        rule,
+        route: None,
+        path_regex: None,
+        parent_refs: None,
+        compiled_header_regexes: vec![],
+        compiled_query_regexes: vec![],
+        has_query_matchers: false,
+        specificity: crate::routes::http::match_unit::MatchSpecificity {
+            has_method: false,
+            header_count: 0,
+            query_count: 0,
+            creation_ts_ms: 0,
+            route_key: key,
+            rule_index: rule_id as u32,
+            match_index: match_id as u32,
+        },
+        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+        plugin_runtime: runtime.plugin_runtime,
+        backends: runtime.backends,
+        backend_finder,
+    })
+}
+
+fn match_info_json(ctx: &EdgionHttpContext) -> serde_json::Value {
+    let entry: serde_json::Value = serde_json::from_str(&AccessLogEntry::from_context(ctx).to_json()).unwrap();
+    entry["match_info"].clone()
+}
+
+#[test]
+fn match_info_is_array_for_ordinary_route() {
+    let unit = chain_unit("ns", "leaf", 2, 1, 7);
+    let old_object = serde_json::to_string(&unit.matched_info).unwrap();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(unit);
+
+    let raw = AccessLogEntry::from_context(&ctx).to_json();
+    assert!(raw.contains(&format!(r#""match_info":[{old_object}]"#)), "got: {raw}");
+}
+
+#[test]
+fn match_info_root_to_leaf_for_delegated() {
+    let root = chain_unit("ns", "root", 3, 4, 1);
+    let mid = chain_unit("ns", "mid", 0, 2, 2);
+    let leaf = chain_unit("other", "leaf", 5, 6, 0);
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(leaf);
+    ctx.delegated = Some(Box::new(crate::routes::delegation::DelegatedMatch::new(
+        smallvec::smallvec![root, mid],
+    )));
+
+    let json = match_info_json(&ctx);
+    let arr = json.as_array().unwrap();
+    let names: Vec<_> = arr.iter().map(|e| e["rsc"]["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["root", "mid", "leaf"]);
+    assert_eq!(
+        (arr[0]["rule_id"].as_u64(), arr[0]["match_id"].as_u64()),
+        (Some(3), Some(4))
+    );
+    assert_eq!(
+        (arr[1]["rule_id"].as_u64(), arr[1]["match_id"].as_u64()),
+        (Some(0), Some(2))
+    );
+    assert_eq!(
+        (arr[2]["rule_id"].as_u64(), arr[2]["match_id"].as_u64()),
+        (Some(5), Some(6))
+    );
+    assert_eq!(arr[0]["sv"], 1);
+    assert_eq!(arr[1]["sv"], 2);
+    assert!(arr[2].get("sv").is_none());
+}
+
+#[test]
+fn grpc_match_info_is_array() {
+    use crate::routes::grpc::GrpcMatchInfo;
+    let info = GrpcMatchInfo::new(
+        "ns".to_string(),
+        "g".to_string(),
+        1,
+        2,
+        edgion_resources::GRPCRouteMatch {
+            method: None,
+            headers: None,
+        },
+        0,
+        None,
+    );
+    let old_object = serde_json::to_string(&info).unwrap();
+    let json = serde_json::to_string(&MatchInfoChain::Grpc {
+        ancestors: &[],
+        leaf: &info,
+    })
+    .unwrap();
+    assert_eq!(json, format!("[{old_object}]"));
+}
+
+/// Compile a one-rule GRPCRoute and return its rule unit.
+fn grpc_chain_unit(name: &str, service: &str) -> Arc<crate::routes::grpc::GrpcRouteRuleUnit> {
+    let route: edgion_resources::GRPCRoute = crate::test_current_status::from_value(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GRPCRoute",
+        "metadata": {"namespace": "ns", "name": name},
+        "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gw"}],
+            "rules": [{"name": format!("{name}-rule"), "matches": [{"method": {"service": service}}],
+                "backendRefs": [{"name": "svc", "port": 80}]}]}
+    }))
+    .unwrap();
+    let mut units = crate::routes::grpc::parse_route_to_units_for_test(&format!("ns/{name}"), &Arc::new(route));
+    assert_eq!(units.len(), 1);
+    units.pop().unwrap()
+}
+
+#[test]
+fn grpc_delegated_match_info_from_context_is_root_to_leaf() {
+    let (root, mid, leaf) = (
+        grpc_chain_unit("g-root", "svc.Root"),
+        grpc_chain_unit("g-mid", "svc.Mid"),
+        grpc_chain_unit("g-leaf", "svc.Leaf"),
+    );
+    let mut ctx = EdgionHttpContext::new();
+    ctx.grpc_route_unit = Some(Arc::clone(&leaf));
+    ctx.delegated = Some(Box::new(crate::routes::delegation::DelegatedMatch::new_grpc(
+        smallvec::smallvec![Arc::clone(&root), Arc::clone(&mid)],
+    )));
+    let entry = serde_json::to_value(AccessLogEntry::from_context(&ctx)).unwrap();
+    let levels = entry["match_info"].as_array().expect("match_info is an array");
+    let names: Vec<_> = levels
+        .iter()
+        .map(|level| level["rsc"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["g-root", "g-mid", "g-leaf"], "root first, leaf last");
+    for (level, unit) in levels.iter().zip([&root, &mid, &leaf]) {
+        assert_eq!(level, &serde_json::to_value(&unit.matched_info).unwrap());
+    }
+    let rule_names: Vec<_> = levels.iter().map(|level| level["rule_name"].as_str()).collect();
+    assert_eq!(
+        rule_names,
+        [Some("g-root-rule"), Some("g-mid-rule"), Some("g-leaf-rule")],
+        "each element keeps its gRPC-only fields"
+    );
+
+    // An ordinary gRPC match (no delegation) is a one-element array.
+    ctx.delegated = None;
+    let entry = serde_json::to_value(AccessLogEntry::from_context(&ctx)).unwrap();
+    assert_eq!(entry["match_info"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn route_label_extern_reads_leaf() {
+    use crate::observe::access_log::log_ext::{route_annotations, route_labels};
+    let meta = |v: &str| Some(Arc::new([("k".to_string(), v.to_string())].into_iter().collect()));
+    let mut root = (*chain_unit("ns", "root", 0, 0, 0)).clone();
+    root.matched_info.labels_meta = meta("root-val");
+    root.matched_info.annotations_meta = meta("root-ann");
+    let mut leaf = (*chain_unit("ns", "leaf", 0, 0, 0)).clone();
+    leaf.matched_info.labels_meta = meta("leaf-val");
+    leaf.matched_info.annotations_meta = meta("leaf-ann");
+    let mut ctx = EdgionHttpContext::new();
+    ctx.route_unit = Some(Arc::new(leaf));
+    ctx.delegated = Some(Box::new(crate::routes::delegation::DelegatedMatch::new(
+        smallvec::smallvec![Arc::new(root)],
+    )));
+    assert_eq!(
+        route_labels(&ctx).unwrap().get("k").map(String::as_str),
+        Some("leaf-val")
+    );
+    assert_eq!(
+        route_annotations(&ctx).unwrap().get("k").map(String::as_str),
+        Some("leaf-ann")
+    );
+}

@@ -1,0 +1,30 @@
+# multi_parent_child (gRPC): root b delegates test.TestService to the shared
+# multi-child and stamps x-parent-filter=b on delegated calls.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-multi-parent-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-multi-b.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "b"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: multi-child
+          namespace: edgion-grpc-deleg

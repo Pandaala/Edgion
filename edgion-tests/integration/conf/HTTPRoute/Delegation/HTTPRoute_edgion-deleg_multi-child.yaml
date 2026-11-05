@@ -1,0 +1,30 @@
+# multi_parent_child: one child declared under two parents. Its absolute
+# paths intersect each parent's scope, so /v1/billing/invoice is served
+# through billing-v1-parent and /v2/billing/invoice through billing-v2-parent,
+# each carrying only its own parent's mandatory filter.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: multi-child
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: billing-v1-parent
+      namespace: edgion-test
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: billing-v2-parent
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/billing/invoice
+        - path:
+            type: PathPrefix
+            value: /v2/billing/invoice
+      backendRefs:
+        - name: child-svc
+          port: 30001

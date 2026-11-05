@@ -86,13 +86,7 @@ impl HTTPRoute {
         // prunes undeclared filter fields in K8s conf-center mode.
         let parsed_mirror_tuning = self.parse_mirror_tuning_annotations();
 
-        // Both the operator-authored rules and the controller-flattened
-        // delegation rules (resolved_rules) need the annotation copies; the
-        // gateway compiles whichever is effective (see `effective_rules()`).
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             for rule in rules.iter_mut() {
                 rule.parsed_forward_raw_path = parsed_forward_raw_path;
                 rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
@@ -186,10 +180,7 @@ impl HTTPRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             for rule in rules.iter_mut() {
                 // Parse timeouts for each rule
                 if let Some(timeouts) = &rule.timeouts {
@@ -219,10 +210,7 @@ impl HTTPRoute {
         );
 
         let path_cfg = crate::path_normalization::get_path_normalization_config();
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             for rule in rules.iter_mut() {
                 let Some(matches) = rule.matches.as_mut() else {
                     continue;
@@ -264,10 +252,7 @@ impl HTTPRoute {
             self.metadata.name.as_deref().unwrap_or("")
         );
 
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             for rule in rules.iter_mut() {
                 let Some(retry) = &rule.retry else {
                     continue;

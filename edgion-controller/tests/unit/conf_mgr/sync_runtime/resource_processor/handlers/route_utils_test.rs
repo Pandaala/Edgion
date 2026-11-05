@@ -699,32 +699,6 @@ async fn extension_lookup_registers_before_desired_generation_read_and_rejects_i
             None
         );
     }
-    let mut effective = route.clone();
-    effective.spec.resolved_rules = effective.spec.rules.clone();
-    effective.spec.resolved_rules.as_mut().unwrap()[0]
-        .backend_refs
-        .as_mut()
-        .unwrap()[2]
-        .filters
-        .as_mut()
-        .unwrap()[0]
-        .extension_ref
-        .as_mut()
-        .unwrap()
-        .resolved_namespace = Some("bad/ns".into());
-    let field = HttpRouteExtensionRefs::from_route(&effective)
-        .unwrap()
-        .effective_at(0, Some(2), 0)
-        .unwrap();
-    assert_eq!(
-        extension_scope_violation_with(
-            field,
-            true,
-            |_| panic!("invalid stamp registered"),
-            |_| panic!("invalid stamp read")
-        ),
-        None
-    );
     for (key, value) in [
         ("name", ""),
         ("name", "bad/name"),

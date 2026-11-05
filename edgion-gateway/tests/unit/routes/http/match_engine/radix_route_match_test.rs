@@ -239,3 +239,69 @@ fn cmp_candidate_is_a_strict_total_order() {
         }
     }
 }
+
+/// A delegating unit is an ordinary radix candidate ranked by its own match
+/// only (per-level precedence): a sibling root's longer prefix outranks it, and
+/// the child's paths never enter the root engine.
+#[test]
+fn delegating_candidate_ranks_by_its_own_path_in_the_root_engine() {
+    use crate::routes::http::routes_mgr::GlobalHttpRouteManagers;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    use edgion_resources::{HTTPRoute, ListenerKey, ResourceMeta};
+
+    let listener = ListenerKey::new("0.0.0.0:18720".parse().unwrap(), "HTTP");
+    let route = |name: &str, parent: Option<&str>, path: &str, backends: serde_json::Value| {
+        let parent_ref = match parent {
+            Some(p) => serde_json::json!({"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": p}),
+            None => serde_json::json!({"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "gw1"}),
+        };
+        let mut route: HTTPRoute = crate::test_current_status::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"namespace": "default", "name": name, "creationTimestamp": "2026-09-20T00:00:00Z"},
+            "spec": {
+                "resolvedStatusController": "edgion.io/gateway-controller",
+                "parentRefs": [parent_ref],
+                "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": path}}], "backendRefs": backends}]
+            }
+        }))
+        .unwrap();
+        if parent.is_none() {
+            route.spec.resolved_listeners = Some(vec![listener.clone()]);
+        }
+        route.pre_parse();
+        Arc::new(route)
+    };
+    let a = route(
+        "rk-a",
+        None,
+        "/api",
+        serde_json::json!([{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "rk-child"}]),
+    );
+    let b = route(
+        "rk-b",
+        None,
+        "/api/users",
+        serde_json::json!([{"name": "svc", "port": 80}]),
+    );
+    let child = route(
+        "rk-child",
+        Some("rk-a"),
+        "/api/users/deep",
+        serde_json::json!([{"name": "svc", "port": 80}]),
+    );
+
+    let mgr = GlobalHttpRouteManagers::new();
+    mgr.full_set(&[&a, &b, &child].iter().map(|r| (r.key_name(), Arc::clone(r))).collect());
+    let table = mgr.get_or_create_listener_manager(&listener).load_route_table();
+    let engine = table.catch_all_routes.as_ref().unwrap().match_engine.clone().unwrap();
+
+    let ordered: Vec<(&str, bool)> = engine
+        .ordered_candidates_for_test("/api/users/deep")
+        .iter()
+        .map(|(_, path_idx)| {
+            let unit = &engine.routes[engine.paths_for_test()[*path_idx as usize].route_idx];
+            (unit.matched_info.rsc.name.as_str(), unit.delegate.is_some())
+        })
+        .collect();
+    assert_eq!(ordered, [("rk-b", false), ("rk-a", true)]);
+}

@@ -1,0 +1,109 @@
+{
+  "apiVersion": "gateway.networking.k8s.io/v1",
+  "kind": "GRPCRoute",
+  "metadata": {
+    "annotations": {
+      "edgion.io/hostname-resolution": "gateway-pending"
+    },
+    "generation": 3,
+    "name": "ordinary",
+    "namespace": "apps",
+    "uid": "ordinary-uid"
+  },
+  "spec": {
+    "parentRefs": [
+      {
+        "name": "gw",
+        "sectionName": "grpc"
+      }
+    ],
+    "resolvedStatusController": "edgion.io/gateway-controller",
+    "hostnames": [
+      "grpc.example.com"
+    ],
+    "resolvedHostnames": [
+      "grpc.example.com"
+    ],
+    "rules": [
+      {
+        "name": "primary",
+        "matches": [
+          {
+            "method": {
+              "type": "Exact",
+              "service": "pkg.Svc",
+              "method": "Get"
+            },
+            "headers": [
+              {
+                "name": "x-tenant",
+                "value": "a"
+              }
+            ]
+          }
+        ],
+        "filters": [
+          {
+            "type": "RequestHeaderModifier",
+            "requestHeaderModifier": {
+              "set": [
+                {
+                  "name": "x-a",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          {
+            "type": "ExtensionRef",
+            "extensionRef": {
+              "group": "edgion.io",
+              "kind": "EdgionPlugins",
+              "name": "plug"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "svc",
+            "port": 50051,
+            "weight": 3
+          },
+          {
+            "name": "other",
+            "namespace": "secret-ns",
+            "port": 50052,
+            "refDenied": {
+              "targetNamespace": "secret-ns",
+              "targetName": "other",
+              "reason": "NoMatchingReferenceGrant"
+            }
+          }
+        ]
+      },
+      {
+        "matches": [
+          {
+            "method": {
+              "service": "pkg.Other"
+            }
+          }
+        ],
+        "backendRefs": [
+          {
+            "name": "svc",
+            "port": 50051
+          }
+        ]
+      },
+      {
+        "backendRefs": [
+          {
+            "name": "fallback",
+            "port": 8080
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -424,7 +424,8 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
 | `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |
 | `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `clusterRegionRef` flaps good→missing→good; `ResolvedRefs` tracks it (`False`/`InvalidEdgionConfigDataRef` while missing) |
-| `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Delegation child rule moves /pay → /pay2; parent re-flattens and gateway hot-swaps routing |
+| `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Child-only update moves /pay → /pay2 and the Gateway rebuilds only the child subtree; parent-only narrowing changes the intersected scope (including a regex child rule) |
+| `GrpcRouteDelegationDynamic` | `GRPCRoute/Delegation/DynamicTest` | Child-only update moves the narrowed method SayHello → StreamNumbers; only the child is republished and its subtree hot-swapped |
 | `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
 | `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
 

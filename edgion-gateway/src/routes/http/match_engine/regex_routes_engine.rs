@@ -1,4 +1,5 @@
 use crate::ctx::EdgionHttpContext;
+use crate::routes::delegation::descent::{self, ChildHit, DescentState};
 use crate::routes::http::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use edgion_resources::err::EdError;
@@ -101,6 +102,7 @@ impl RegexRoutesEngine {
                     .map(|matched_gateway| RouteMatchResult {
                         route_unit: Arc::clone(route),
                         matched_gateway,
+                        delegated: None,
                     }));
             }
             // Indices from `RegexSet::matches()` are ascending; combined with the
@@ -112,6 +114,7 @@ impl RegexRoutesEngine {
                     return Ok(Some(RouteMatchResult {
                         route_unit: regex_route.clone(),
                         matched_gateway: matched_gi,
+                        delegated: None,
                     }));
                 }
             }
@@ -122,12 +125,42 @@ impl RegexRoutesEngine {
                         return Ok(Some(RouteMatchResult {
                             route_unit: regex_route.clone(),
                             matched_gateway: matched_gi,
+                            delegated: None,
                         }));
                     }
                 }
             }
         }
 
+        Ok(None)
+    }
+
+    /// Child-level match inside a delegation subtree, in the same precedence
+    /// order as [`Self::match_route`]. The subtree engine supplies the child's
+    /// own regex; the parent's prefix already matched one level up, so the
+    /// effective scope is their intersection.
+    pub(crate) fn match_child(
+        &self,
+        session: &Session,
+        ctx: &EdgionHttpContext,
+        state: &mut DescentState,
+    ) -> Result<Option<ChildHit>, EdError> {
+        let path = ctx.path();
+        if let Some(ref regex_set) = self.regex_set {
+            for idx in regex_set.matches(path) {
+                if let Some(hit) = descent::match_child_unit(&self.routes[idx], session, ctx, state)? {
+                    return Ok(Some(hit));
+                }
+            }
+        } else {
+            for regex_route in &self.routes {
+                if regex_route.matches_path(path) {
+                    if let Some(hit) = descent::match_child_unit(regex_route, session, ctx, state)? {
+                        return Ok(Some(hit));
+                    }
+                }
+            }
+        }
         Ok(None)
     }
 }

@@ -1,13 +1,24 @@
 ---
 name: delegation-root-prefix-inherits-scope
-description: HTTPRoute delegation scope inheritance and ARCH-156 runtime ancestor path conjunction, including regex boundaries and internal transport validation.
+description: Historical (superseded by the cascading-match redesign) — HTTPRoute delegation scope inheritance and ARCH-156 runtime ancestor path conjunction under the removed Controller flattening model.
 status: fixed
 finding_id: new_work-09-delegation-root-prefix
 closed: 2026-07-29
-knowledge_type: regression-guards
+knowledge_type: superseded
 ---
 
-# Delegated Child `PathPrefix /` Inherits the Scope Prefix — FIXED
+# Delegated Child `PathPrefix /` Inherits the Scope Prefix — SUPERSEDED
+
+> **Inactive (historical).** This page describes the removed Controller
+> flattening model (`flatten_route`, `merge_match`, the `resolvedParentMatch`
+> sidecar, `rawPathPrefixes` and Gateway ancestor guards). The cascading-match
+> redesign replaced it: child paths are absolute and the scope is the natural
+> intersection of each level's own matches, so no prefix inheritance, containment
+> check or runtime ancestor guard exists any more. Successor:
+> [Route delegation cascading match (ISSUE-010)](../regression-guards/delegation-cascading-match-issue-010.md).
+> Nothing below is a current gate. Residual valid constraint: a child match whose
+> path is absent or the structural default `PathPrefix /` covers the whole
+> delegated scope, now by intersection rather than by rewriting.
 
 ## Conclusion
 
@@ -62,7 +73,7 @@ never match. Ordinary regex routing is unchanged.
 
 Controller flattening carries tagged `resolvedParentMatch` on effective rules:
 `direct` for root siblings; `delegated` with a scope entry for each child match.
-Ancestor path lists are conjunctive and capped by the existing eight-edge depth;
+Ancestor path lists were conjunctive and capped by the former depth limit of eight edges;
 non-path predicates remain merged. For terminal regex matches, incompatible
 parent OR branches are skipped independently; one conflicting branch must not
 discard another compatible branch. If any child match has no compatible scope,

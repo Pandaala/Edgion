@@ -565,6 +565,12 @@ impl RequestState {
         if epoch_id == 0 || !ctx.plugin_scope()?.scope.available {
             return None;
         }
+        // The key and cache-safety checks below cover only the leaf's plugins.
+        // A delegated chain's ancestor plugins (for example a parent's auth)
+        // are not yet part of them, so delegated requests are never cached.
+        if ctx.delegated.is_some() {
+            return None;
+        }
         let route = Arc::clone(ctx.route_unit.as_ref()?);
         if route.backends.len() != 1 {
             return None;

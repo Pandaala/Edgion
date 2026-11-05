@@ -63,7 +63,7 @@ async fn policy_ancestor_fanout_is_change_gated_and_includes_dropped_targets() {
 }
 
 #[tokio::test]
-async fn policy_ancestor_diagnostics_follow_sections_winners_and_delegated_terminal_rules() {
+async fn policy_ancestor_diagnostics_follow_sections_and_winners() {
     use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessorHandler, ResourceProcessor};
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::conf_mgr::ControllerRuntime;
@@ -123,15 +123,6 @@ async fn policy_ancestor_diagnostics_follow_sections_winners_and_delegated_termi
     publish("z-loser", Some("https"), false, true);
     publish("whole", None, true, true);
     assert!(diagnostics(&direct).is_empty());
-    publish("b-valid", Some("https"), false, true);
-    let delegated:HTTPRoute=serde_json::from_value(json!({"metadata":{"namespace":"root","name":"delegating"},"spec":{
-        "rules":[{"backendRefs":[{"kind":"HTTPRoute","group":"gateway.networking.k8s.io","name":"child-route"}]}],
-        "resolvedRules":[{"resolvedTerminalRouteUid":"child-uid","resolvedTerminalRuleIdentity":"index:0","backendRefs":[{"namespace":"child","name":"unrelated","port":443},{"namespace":"child","name":"backend","port":443}]}]
-    }})).unwrap();
-    let messages = diagnostics(&delegated);
-    assert_eq!(messages.len(), 1);
-    assert!(messages[0].contains("backendRefs[1]"));
-    assert!(messages[0].contains("child/b-valid"));
 }
 
 struct CountingRawStore<T> {

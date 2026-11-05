@@ -937,10 +937,11 @@ fn owned_route_auth_client(
     if let Some(namespace) = namespace {
         wire["metadata"]["namespace"] = namespace.into();
     }
+    // The declaring route's namespace owns the ExternalAuth target; the
+    // Controller stamps it on the route's own rule.
     if let Some(declaring) = declaring {
-        wire["spec"]["resolvedRules"] = wire["spec"]["rules"].clone();
-        wire["spec"]["resolvedRules"][0]["filters"][0]["resolvedExternalAuth"] =
-            serde_json::json!({"namespace":declaring});
+        wire["metadata"]["namespace"] = declaring.into();
+        wire["spec"]["rules"][0]["filters"][0]["resolvedExternalAuth"] = serde_json::json!({"namespace":declaring});
     }
     let route: edgion_resources::HTTPRoute = serde_json::from_value(wire).unwrap();
     let refs = HttpRouteAuthRefs::from_route(&route).map_err(|error| error.to_string())?;

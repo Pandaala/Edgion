@@ -185,7 +185,7 @@ fn route_usage_rejects_other_namespaces_and_reference_kinds() {
 }
 
 #[test]
-fn route_usage_uses_delegation_resolved_rules() {
+fn route_usage_reads_authored_rules_only() {
     let routes = vec![serde_json::json!({
         "metadata": {"namespace": "shop", "name": "parent"},
         "spec": {
@@ -195,6 +195,7 @@ fn route_usage_uses_delegation_resolved_rules() {
                 }}],
                 "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "child"}]
             }],
+            // Injected legacy flattening output is not a field and is ignored.
             "resolvedRules": [{
                 "filters": [{"type": "ExtensionRef", "extensionRef": {
                     "group": "edgion.io", "kind": "EdgionPlugins", "name": "region"
@@ -205,7 +206,8 @@ fn route_usage_uses_delegation_resolved_rules() {
     })];
     let usages = collect_route_usages("shop", "region", &routes, &[], &mut ProjectionBudget::new()).unwrap();
     assert_eq!(usages.len(), 1);
-    assert_eq!(usages[0]["backendServices"][0]["name"], "child-service");
+    assert_eq!(usages[0]["routeName"], "parent");
+    assert!(!usages[0].to_string().contains("child-service"));
 }
 
 #[test]

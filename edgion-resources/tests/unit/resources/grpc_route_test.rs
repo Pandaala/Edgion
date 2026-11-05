@@ -203,89 +203,6 @@ fn route_json(spec: serde_json::Value) -> GRPCRoute {
 }
 
 #[test]
-fn test_effective_rules_prefers_resolved() {
-    let mut route = route_json(serde_json::json!({
-        "rules": [{"matches": [{"method": {"service": "svc.Spec"}}]}]
-    }));
-    // No resolved_rules → falls back to spec.rules
-    let rules = route.effective_rules().expect("spec rules present");
-    assert_eq!(
-        rules[0].matches.as_ref().unwrap()[0]
-            .method
-            .as_ref()
-            .unwrap()
-            .service
-            .as_deref(),
-        Some("svc.Spec")
-    );
-
-    // With resolved_rules → resolved wins
-    let resolved: Vec<GRPCRouteRule> = serde_json::from_value(serde_json::json!(
-        [{"matches": [{"method": {"service": "svc.Resolved"}}]}]
-    ))
-    .unwrap();
-    route.spec.resolved_rules = Some(resolved);
-    let rules = route.effective_rules().expect("resolved rules present");
-    assert_eq!(
-        rules[0].matches.as_ref().unwrap()[0]
-            .method
-            .as_ref()
-            .unwrap()
-            .service
-            .as_deref(),
-        Some("svc.Resolved")
-    );
-}
-
-#[test]
-fn test_resolved_rules_serialized_delegation_issues_not() {
-    let mut route = route_json(serde_json::json!({"rules": []}));
-    route.spec.resolved_rules = Some(Vec::new());
-    route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
-        message: "internal".to_string(),
-    }];
-    let json = serde_json::to_value(&route).unwrap();
-    // resolved_rules must survive conf_sync serialization
-    assert!(json["spec"].get("resolvedRules").is_some());
-    // delegation_issues is controller-internal and must never serialize
-    assert!(json["spec"].get("delegationIssues").is_none());
-    assert!(json["spec"].get("delegation_issues").is_none());
-}
-
-#[test]
-fn test_resolved_rules_only_covered_by_preparse_pipeline() {
-    // A route with ONLY resolved_rules set (no spec.rules) must still get
-    // full load-time processing: timeouts, retry, and annotation copies.
-    let mut route = route_json(serde_json::json!({}));
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([{
-            "matches": [{"method": {"service": "svc.Billing"}}],
-            "timeouts": {"request": "10s"},
-            "retry": {"attempts": 2}
-        }]))
-        .unwrap(),
-    );
-
-    route.preparse();
-    route.parse_timeouts();
-    route.parse_retry();
-
-    let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
-    assert!(rule.parsed_timeouts.is_some(), "resolved_rules timeouts must be parsed");
-    assert_eq!(
-        rule.parsed_retry.as_ref().and_then(|r| r.attempts),
-        Some(2),
-        "resolved_rules retry must be parsed"
-    );
-    // No annotation set on the route → None, but the field must still be
-    // reachable/populated by the preparse pipeline (not left stale).
-    assert_eq!(
-        rule.parsed_allow_non_idempotent_retry, None,
-        "resolved_rules annotation copy must run (absent annotation -> None)"
-    );
-}
-
-#[test]
 fn grpc_route_retry_accepts_the_i32_domain_ceiling() {
     let mut route = route_json(serde_json::json!({
         "rules": [{"retry": {"attempts": i32::MAX}}]
@@ -303,7 +220,7 @@ fn grpc_route_retry_accepts_the_i32_domain_ceiling() {
 }
 
 #[test]
-fn test_resolved_rules_annotation_copy_reaches_resolved_rules() {
+fn retry_non_idempotent_annotation_reaches_rules() {
     let mut route: GRPCRoute = serde_json::from_value(serde_json::json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "GRPCRoute",
@@ -316,19 +233,13 @@ fn test_resolved_rules_annotation_copy_reaches_resolved_rules() {
         }
     }))
     .unwrap();
-    route.spec.resolved_rules = Some(
-        serde_json::from_value(serde_json::json!([{
-            "matches": [{"method": {"service": "svc.Child"}}]
-        }]))
-        .unwrap(),
-    );
 
     route.preparse();
 
-    let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+    let rule = &route.spec.rules.as_ref().unwrap()[0];
     assert_eq!(
         rule.parsed_allow_non_idempotent_retry,
         Some(true),
-        "annotation copies must reach resolved_rules"
+        "annotation copies must reach rules"
     );
 }

@@ -89,6 +89,7 @@ impl Fixture {
         http_route_manager.store_route_table(build_domain_route_rules_from_routes(
             &HashMap::from([(HTTP_ROUTE.into(), route)]),
             &DomainRouteRules::new(),
+            &crate::routes::delegation::DelegationSlotTable::new(),
         ));
         let grpc_route_manager = Arc::new(GrpcPortRouteManager::default());
         if grpc {

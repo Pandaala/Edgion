@@ -1,14 +1,15 @@
 # Delegation child owned by the application team.
-# Reverse-lock: `parentRefs` carries a `kind: GRPCRoute` entry naming the
-# platform team's delegation-parent explicitly, so only that route may
-# delegate into this one (and the child gets its own Accepted condition for
-# this parentRef — see grpc_route.rs update_status's
-# `delegation_accepted_condition`).
-# Rule 1 narrows the delegated test.TestService scope to SayHello -> the
-# child's own backend Service.
-# Rule 2 matches a DIFFERENT service entirely (test.OtherService); it falls
-# outside every delegated scope and must be dropped by the controller's
-# flatten step (recorded as PartiallyInvalid on the parent).
+# `parentRefs` carries a `kind: GRPCRoute` entry naming the platform team's
+# delegation-parent: the edge exists only because the parent delegates to
+# this route AND this route declares the parent (bidirectional
+# confirmation). The child gets its own Accepted condition for this entry.
+# Child matches are absolute; the scope is the intersection with the
+# parent's delegated service:
+# - rule 0 narrows the delegated test.TestService scope to SayHello -> the
+#   child's own backend Service.
+# - rule 1 matches a DIFFERENT service (test.OtherService). It never matches
+#   through the parent (the root level already fixed the service) and is not
+#   reported on the parent: child-side scope is never a parent error.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:

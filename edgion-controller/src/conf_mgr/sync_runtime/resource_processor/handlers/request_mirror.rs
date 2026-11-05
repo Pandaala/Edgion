@@ -15,7 +15,6 @@ use edgion_resources::resources::refs::GrantQuery;
 pub(super) struct MirrorDecision {
     slot: MirrorSlot,
     namespace: Option<String>,
-    cross_namespace: Option<String>,
     denied: Option<RefDenied>,
 }
 impl MirrorDecision {
@@ -27,9 +26,6 @@ impl MirrorDecision {
     }
     pub(super) fn slot(&self) -> MirrorSlot {
         self.slot
-    }
-    pub(super) fn cross_namespace(&self) -> Option<&str> {
-        self.cross_namespace.as_deref()
     }
     pub(super) fn apply_rule(&self, rule: &mut HTTPRouteRule) {
         let MirrorSlot::Route(slot) = self.slot else { return };
@@ -57,11 +53,6 @@ pub(super) fn resolve(
     let reference = field.validated().ok().flatten();
     MirrorDecision {
         slot: field.field().slot(),
-        cross_namespace: reference.and_then(|reference| {
-            let query = reference.grant_query();
-            (query.source().scope() != query.target().scope())
-                .then(|| query.target().scope().namespace().unwrap_or_default().to_string())
-        }),
         namespace: reference.map(|reference| {
             reference
                 .reference()

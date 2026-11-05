@@ -347,6 +347,31 @@ pub struct WafConfig {
     /// only among candidates at the same scope.
     #[serde(default)]
     pub priority: u16,
+
+    /// Owner election across the levels of a delegated route chain. Priority
+    /// is compared only within one level. Walking root to leaf, the outermost
+    /// level whose winning WAF declares `parent` owns the request; when no
+    /// level declares `parent`, the deepest level with a WAF wins. Ordinary
+    /// (non-delegated) routes ignore this field.
+    #[serde(default, skip_serializing_if = "WafDelegationPrecedence::is_default")]
+    pub delegation_precedence: WafDelegationPrecedence,
+}
+
+/// Which level of a delegated route chain owns the request-wide WAF.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WafDelegationPrecedence {
+    /// A deeper (child) level's WAF replaces this level's WAF.
+    #[default]
+    Child,
+    /// This level's WAF wins over every deeper level's WAF.
+    Parent,
+}
+
+impl WafDelegationPrecedence {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Child
+    }
 }
 
 impl std::fmt::Debug for WafConfig {
@@ -369,6 +394,7 @@ impl std::fmt::Debug for WafConfig {
             .field("mode", &self.mode)
             .field("request_body", &self.request_body)
             .field("priority", &self.priority)
+            .field("delegation_precedence", &self.delegation_precedence)
             .finish()
     }
 }

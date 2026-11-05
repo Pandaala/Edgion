@@ -183,10 +183,17 @@ wait_for_ready() {
 # =============================================================================
 # Loaddirectoryall yaml file
 # =============================================================================
+# Newline-delimited absolute paths already applied in this run. A parent suite
+# is loaded recursively, so it would re-apply files of nested suites (for
+# example X/DynamicTest/initial) that discovery also lists on their own; each
+# file is applied once. Plain string matching keeps this Bash 3.2 compatible.
+LOADED_CONFIG_FILES=$'\n'
+
 load_directory_recursive() {
     local dir=$1
     local suite_name=$2
     local count=0
+    local skipped_duplicates=0
     local apply_args=()
     
     if [ ! -d "$dir" ]; then
@@ -218,9 +225,21 @@ load_directory_recursive() {
             continue
         fi
 
+        case "$LOADED_CONFIG_FILES" in
+            *$'\n'"$file"$'\n'*)
+                skipped_duplicates=$((skipped_duplicates + 1))
+                continue
+                ;;
+        esac
+        LOADED_CONFIG_FILES="${LOADED_CONFIG_FILES}${file}"$'\n'
+
         apply_args+=("-f" "$file")
         count=$((count + 1))
     done
+
+    if [ "$skipped_duplicates" -gt 0 ]; then
+        log_info "$suite_name: skipped $skipped_duplicates file(s) already loaded by an earlier suite"
+    fi
 
     if [ "$count" -eq 0 ]; then
         log_success "$suite_name: no operator-managed config files to load"

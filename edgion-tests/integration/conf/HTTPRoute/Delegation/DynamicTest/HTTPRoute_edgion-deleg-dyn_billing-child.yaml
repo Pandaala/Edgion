@@ -1,5 +1,5 @@
 # Initial child: serves /api/v1/billing/pay. The updates/ overlay moves the
-# rule to /api/v1/billing/pay2 to prove child-change → parent re-flatten →
+# rule to /api/v1/billing/pay2 to prove child-change → subtree rebuild →
 # gateway hot reload.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -7,6 +7,11 @@ metadata:
   name: billing-child
   namespace: edgion-deleg-dyn
 spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: delegation-dyn-parent
+      namespace: edgion-test
   rules:
     - matches:
         - path:

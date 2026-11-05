@@ -1,5 +1,6 @@
 use super::radix_path::{PathSpecificity, RadixPath};
 use crate::ctx::EdgionHttpContext;
+use crate::routes::delegation::descent::{self, ChildHit, DelegatedMatch, DescentState};
 use crate::routes::http::match_unit::{MatchSpecificity, RouteMatchResult};
 use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
@@ -73,13 +74,27 @@ impl RadixRouteMatchEngine {
         session: &Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
+        descent: &mut Option<DescentState>,
     ) -> Result<Option<RouteMatchResult>, EdError> {
         if let Some(route) = self.routes.get(route_idx) {
             match route.deep_match(session, ctx, index) {
                 Ok(Some(matched_gi)) => {
+                    // The only branch an ordinary candidate pays; descent state is
+                    // created lazily, on the first delegating hit of the request.
+                    if let Some(slot) = &route.delegate {
+                        let state = descent.get_or_insert_with(DescentState::new);
+                        return Ok(
+                            descent::descend(route, slot, session, ctx, state)?.map(|hit| RouteMatchResult {
+                                route_unit: hit.leaf,
+                                matched_gateway: matched_gi,
+                                delegated: Some(Box::new(DelegatedMatch::new(hit.ancestors))),
+                            }),
+                        );
+                    }
                     return Ok(Some(RouteMatchResult {
                         route_unit: route.clone(),
                         matched_gateway: matched_gi,
+                        delegated: None,
                     }));
                 }
                 Ok(None) => return Ok(None),
@@ -98,11 +113,15 @@ impl RadixRouteMatchEngine {
     /// Exact precedes Prefix; ties compare aggregate static segment count,
     /// static character count, then segment count. Parameter names never rank.
     /// Remaining ties use the existing non-path specificity chain.
+    ///
+    /// A delegating candidate whose subtree yields nothing is a miss, so the
+    /// loop simply continues with the next candidate (backtracking).
     pub fn match_route(
         &self,
         session: &mut Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
+        descent: &mut Option<DescentState>,
     ) -> Result<RouteMatchResult, EdError> {
         let candidates = self.ordered_candidates(ctx.path());
         if candidates.is_empty() {
@@ -111,12 +130,30 @@ impl RadixRouteMatchEngine {
 
         for (_, path_idx) in &candidates {
             let radix_path = &self.radix_paths[*path_idx as usize];
-            if let Some(result) = self.try_route_deep_match(radix_path.route_idx, session, ctx, index)? {
+            if let Some(result) = self.try_route_deep_match(radix_path.route_idx, session, ctx, index, descent)? {
                 return Ok(result);
             }
         }
 
         Err(RouteNotFound())
+    }
+
+    /// Child-level match inside a delegation subtree. Same candidate set and
+    /// precedence ranks as [`Self::match_route`]; each candidate is evaluated by
+    /// [`descent::match_child_unit`] (own conditions, mask, nested descent).
+    pub(crate) fn match_child(
+        &self,
+        session: &Session,
+        ctx: &EdgionHttpContext,
+        state: &mut DescentState,
+    ) -> Result<Option<ChildHit>, EdError> {
+        for (_, path_idx) in &self.ordered_candidates(ctx.path()) {
+            let radix_path = &self.radix_paths[*path_idx as usize];
+            if let Some(hit) = descent::match_child_unit(&self.routes[radix_path.route_idx], session, ctx, state)? {
+                return Ok(Some(hit));
+            }
+        }
+        Ok(None)
     }
 
     /// Collect the candidates a request path matches and order them by their

@@ -36,6 +36,7 @@ mod request_mirror;
 mod route_auth;
 mod route_backend_refs;
 pub(crate) mod route_delegation;
+mod route_terminal;
 pub(crate) mod route_utils;
 pub(crate) mod san_guard;
 mod secret;

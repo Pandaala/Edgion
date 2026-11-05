@@ -1,0 +1,32 @@
+# five_level_chain, level 5 (deepest allowed level).
+# Rule 0 is terminal and must be served (chain of five levels).
+# Rule 1 delegates to chain-l6, which would be level 6: the Gateway never
+# descends from a full chain, so /chain/l2/l3/l4/l6 is 404.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l5
+  namespace: edgion-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: chain-l4
+      namespace: edgion-deleg
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l5
+      backendRefs:
+        - name: child-svc
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain/l2/l3/l4/l6
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l6
+          namespace: edgion-deleg

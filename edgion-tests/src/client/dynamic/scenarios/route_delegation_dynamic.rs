@@ -1,4 +1,6 @@
-//! Child updates requeue the parent; parent-only updates replace regex scopes.
+//! Child-only updates rebuild the delegated subtree without touching the
+//! parent; parent-only narrowing changes the parent level's scope, which
+//! intersects the child's absolute paths (including its regex rule).
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;

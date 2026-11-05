@@ -129,11 +129,9 @@ impl RequestFilter for RequestRedirectFilter {
             let original_host = session.header_str("host");
             let original_path = session.get_path();
             let original_query = session.request_query();
-            let ctx = session.ctx();
-            let listener_port = ctx.request_info.listener_port;
-            let matched_path = ctx
-                .route_unit
-                .as_ref()
+            let listener_port = session.ctx().request_info.listener_port;
+            let matched_path = session
+                .executing_http_route_unit()
                 .and_then(|unit| unit.matched_info.m.path.as_ref())
                 .and_then(|path_match| {
                     (path_match.match_type.as_deref() == Some("PathPrefix"))

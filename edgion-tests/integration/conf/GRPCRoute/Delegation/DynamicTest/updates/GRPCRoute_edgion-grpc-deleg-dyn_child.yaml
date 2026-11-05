@@ -7,6 +7,11 @@ metadata:
   name: child
   namespace: edgion-grpc-deleg-dyn
 spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: delegation-dyn-parent
+      namespace: edgion-test
   rules:
     - matches:
         - method:

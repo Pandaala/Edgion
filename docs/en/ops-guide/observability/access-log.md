@@ -171,7 +171,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
     "path": "/health",
     "status": 200
   },
-  "match_info": { },
+  "match_info": [ ],
   "backend_context": { },
   "genai": { },
   "stage_logs": [ ],
@@ -192,7 +192,7 @@ Request-scoped fields (`direct_peer_ip`, `host`, `path`, `status`, etc.) nest on
 |-------|------|-------------|
 | `ts` | Integer | Entry timestamp, epoch milliseconds |
 | `request_info` | Object | Request-scoped fields — see [Request fields](#request-fields) below |
-| `match_info` | Object | Matched route identity (omitted when no route matched) |
+| `match_info` | Array\<Object\> | Matched route identity, one element per matched level, root first (omitted when no route matched) |
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
 | `genai` | Object | Final GenAI usage and bounded per-attempt accounting (omitted for non-AI requests) |
 | `stage_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
@@ -224,15 +224,28 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 
 ### `match_info` fields
 
+`match_info` is an array ordered root → leaf. A route attached directly to a
+Gateway logs a one-element array. A request matched through
+[route delegation](../../user-guide/http-route/delegation.md) logs one element per
+matched level: the root route first, the route that selected the backend last.
+HTTPRoute and GRPCRoute use the same array shape. A GRPCRoute element additionally carries `rule_name` (when the rule sets `name`) and `matched`, the matched GRPCRoute match including `method.service` / `method.method`.
+
+Each element has these fields:
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `rns` | String | Route namespace |
-| `rn` | String | Route name |
-| `rule_id` | Integer | Matched rule index (starts at 0) |
-| `match_id` | Integer | Matched match-item index (starts at 0) |
-| `sv` | Integer | Controller→Gateway sync version; omitted when 0 |
+| `rsc.kind` | String | Route kind (`HTTPRoute` or `GRPCRoute`) |
+| `rsc.ns` | String | Route namespace of this level |
+| `rsc.name` | String | Route name of this level |
+| `rsc.labels` | Object | Operator-defined log labels of this route (omitted when absent) |
+| `rule_id` | Integer | Matched rule index within this level's own route (starts at 0) |
+| `match_id` | Integer | Matched match-item index within that rule (starts at 0) |
+| `sv` | Integer | Controller→Gateway sync version of this level's route; omitted when 0 |
 
-When no route matches, the entire `match_info` object is omitted.
+Each level reports its own `sv`, so a delegated request can show different sync
+versions per level while a configuration change is being applied.
+
+When no route matches, the entire `match_info` array is omitted.
 
 ### `backend_context` fields
 
@@ -622,7 +635,7 @@ access_log_options:
     "path": "/health",
     "status": 200
   },
-  "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
+  "match_info": [ { "rsc": { "kind": "HTTPRoute", "ns": "production", "name": "api-route" }, "rule_id": 0, "match_id": 0 } ],
   "backend_context": {
     "name": "api-service",
     "namespace": "production",

@@ -49,8 +49,8 @@ mod response_callback;
 pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
 
 pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
-pub(crate) use global_plugins_resolve::select_waf_owner;
 pub(crate) use global_plugins_resolve::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs};
+pub(crate) use global_plugins_resolve::{select_waf_owner, select_waf_owner_chain};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub(crate) use pg_early_request_filter::apply_client_policy;
 pub(crate) use pg_upstream_peer::{backfill_upstream_addr, configure_peer_timeouts};

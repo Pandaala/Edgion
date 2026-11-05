@@ -64,21 +64,24 @@ fn gateway_projection_preserves_annotation_and_serving_listener_contracts() {
 }
 
 #[test]
-fn http_delegation_preserves_source_identity_and_resolved_extension_namespaces() {
-    let mut raw = route("HTTPRoute", json!([{"filters": [extension("original")]}]));
-    let mut delegated = extension("delegated");
-    delegated["extensionRef"]["resolvedNamespace"] = json!("child");
-    raw["spec"]["invalidRuleIndices"] = json!([0]);
-    raw["spec"]["resolvedRules"] = json!([{
-        "filters": [delegated],
-        "backendRefs": [{"name": "backend", "port": 80, "filters": [extension("backend-plugin")]}]
-    }]);
+fn http_input_preserves_source_identity_and_owner_extension_namespaces() {
+    // An injected `resolvedNamespace` is not a field: ExtensionRefs resolve in
+    // the declaring route's namespace.
+    let mut original = extension("original");
+    original["extensionRef"]["resolvedNamespace"] = json!("child");
+    let raw = route(
+        "HTTPRoute",
+        json!([{
+            "filters": [original],
+            "backendRefs": [{"name": "backend", "port": 80, "filters": [extension("backend-plugin")]}]
+        }]),
+    );
     let source: Arc<HTTPRoute> = Arc::new(crate::test_current_status::from_value(raw).unwrap());
     let input = RouteInput::from_http(Arc::clone(&source));
     assert!(Arc::ptr_eq(input.http_route.as_ref().unwrap(), &source));
     assert_eq!(
         input.http_keys,
-        HashSet::from(["child/delegated".to_owned(), "apps/backend-plugin".to_owned()])
+        HashSet::from(["apps/original".to_owned(), "apps/backend-plugin".to_owned()])
     );
     assert_eq!(
         effective_http_rules(&source)
@@ -117,16 +120,15 @@ fn http_demand_skips_invalid_rules_native_backend_cors_and_unsupported_refs() {
 }
 
 #[test]
-fn grpc_demand_uses_effective_rules_and_backend_filters() {
+fn grpc_demand_skips_invalid_rules_and_reads_backend_filters() {
     let mut raw = route("GRPCRoute", json!([{"filters": [extension("original")]}]));
     raw["spec"]["invalidRuleIndices"] = json!([0]);
     let mut source: GRPCRoute = crate::test_current_status::from_value(raw).unwrap();
     assert!(RouteInput::from_grpc(&source).http_keys.is_empty());
-    let mut delegated = extension("delegated");
-    delegated["extensionRef"]["resolvedNamespace"] = json!("child");
-    source.spec.resolved_rules = Some(
+    source.spec.invalid_rule_indices = None;
+    source.spec.rules = Some(
         serde_json::from_value(json!([{
-            "filters": [delegated],
+            "filters": [extension("delegated")],
             "backendRefs": [{"name": "backend", "port": 80, "filters": [extension("backend-plugin")]}]
         }]))
         .unwrap(),
@@ -134,7 +136,7 @@ fn grpc_demand_uses_effective_rules_and_backend_filters() {
     let input = RouteInput::from_grpc(&source);
     assert_eq!(
         input.http_keys,
-        HashSet::from(["child/delegated".to_owned(), "apps/backend-plugin".to_owned()])
+        HashSet::from(["apps/delegated".to_owned(), "apps/backend-plugin".to_owned()])
     );
     assert!(input.http_route.is_none());
 }
@@ -213,15 +215,13 @@ fn owning_reference_demand_rejects_invalid_sources_names_and_stamps_per_descript
             ("group", ""),
             ("group", "core"),
             ("kind", "Secret"),
-            ("resolvedNamespace", "UPPER"),
         ] {
             let mut invalid = extension("decoy");
             invalid["extensionRef"][field] = json!(value);
-            let mut raw = route(
+            let raw = route(
                 kind,
                 json!([{ "filters": [invalid, extension("valid")], "backendRefs":[{"name":"service","port":80,"filters":[extension("backend")]}] }]),
             );
-            raw["spec"]["resolvedRules"] = raw["spec"]["rules"].take();
             let keys = if kind == "HTTPRoute" {
                 RouteInput::from_http(Arc::new(crate::test_current_status::from_value(raw).unwrap())).http_keys
             } else {
@@ -351,4 +351,43 @@ fn fixed_link_sys_source_updates_publish_new_views_and_keep_captured_generations
         .http("apps/fixed-links")
         .is_none());
     assert!(Arc::ptr_eq(&first, &captured.http("apps/fixed-links").unwrap()));
+}
+
+#[test]
+fn delegation_child_flag_follows_accepted_delegation_keys() {
+    use edgion_resources::resources::route_delegation::{
+        key_for, DelegationTarget, DelegationTargetName, RouteKindName,
+    };
+    let mut child: HTTPRoute = crate::test_current_status::from_value(json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+        "metadata": {"name": "child", "namespace": "apps"},
+        "spec": {"resolvedStatusController": "edgion.io/gateway-controller",
+            "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "parent"}],
+            "rules": [{"filters": [extension("plugins")], "backendRefs": [{"name": "svc", "port": 80}]}]}
+    }))
+    .unwrap();
+    assert!(
+        !RouteInput::from_http(Arc::new(child.clone())).delegation_child,
+        "no Controller-confirmed key: not published as a child"
+    );
+    child.spec.resolved_delegation_keys = vec![key_for(
+        RouteKindName::HTTPRoute,
+        "apps",
+        "parent",
+        &DelegationTarget {
+            ns: "apps".into(),
+            name: DelegationTargetName::Named("child".into()),
+        },
+    )];
+    let input = RouteInput::from_http(Arc::new(child));
+    assert!(input.delegation_child);
+    assert!(input.http_keys.contains("apps/plugins"));
+    assert!(input.listeners.is_empty());
+
+    let ordinary: HTTPRoute = crate::test_current_status::from_value(route(
+        "HTTPRoute",
+        json!([{"filters": [extension("plugins")], "backendRefs": [{"name": "svc", "port": 80}]}]),
+    ))
+    .unwrap();
+    assert!(!RouteInput::from_http(Arc::new(ordinary)).delegation_child);
 }

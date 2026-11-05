@@ -15,7 +15,7 @@ apply reconciliation clears the owner's previous dependency set once, then only
 extends it until all authorization reads and derived publication are complete.
 
 HTTPRoute and GRPCRoute follow this ordering for ordinary cross-namespace
-backendRefs and flattened delegated backends. HTTPRoute RequestMirror already
+backendRefs; delegation children authorize their own backends as their own routes. HTTPRoute RequestMirror already
 followed the same rule and now uses the shared ordering helper. TCPRoute,
 TLSRoute, and UDPRoute register their complete direct backend dependency sets
 before authorization. Gateway, Service, EdgionTls, EdgionAcme, and shared
@@ -52,8 +52,8 @@ DNS helper within its existing lifecycle.
 
 `read_after_registering_cross_ns_dependency` now owns the ordering. HTTPRoute
 and GRPCRoute clear once at parse entry, use the helper for every direct grant
-read, and pass the root owner into delegation flattening so child-declared
-backend authorization registers the parent before reading. The later collection
+read. A delegation child is reconciled as its own route, so its backend
+authorization registers the child before reading. The later collection
 pass is idempotent and does not clear dependencies.
 
 Native HTTP/GRPC/TCP/TLS/UDP backendRefs now reach that helper only through
@@ -64,9 +64,9 @@ its complete valid namespace set before the first authorization read. Effective
 status/AI views and owned receipts cannot mint Grant queries; denied terminals
 retain their dependencies but do not cause status/AI target reads.
 
-Delegation borrows the original child field for authorization before cloning and
-pins its namespace/denial on the effective copy. Its source remains the child even
-for a child-to-root-namespace target, while the root remains the requeue owner.
+Under the cascading-match delegation model no field is cloned between routes:
+the child is both the authorization source and the requeue owner of its own
+backends. (History: the removed Controller flattening authorized child fields before cloning them into the parent; that path no longer exists.)
 Valid receipts are collected before later rule filtering. Invalid source/target
 zero-read assertions concern discovery from the new descriptor; necessary cleanup
 and requeue enumeration of existing legal old dependencies still runs.
@@ -97,9 +97,8 @@ Gateway requests or establish an immediate data-plane revocation fence.
 The deterministic unit test
 `dependency_is_visible_before_authorization_read` executes an observation inside
 the protected read closure and confirms that the owner is already visible in
-`CrossNsRefManager`. HTTPRoute and GRPCRoute delegation tests confirm that
-denied authored siblings are copied into the effective rules with `ref_denied`
-intact. Namespaced ConfigMap CA and Service DNS tests confirm exact owner
+`CrossNsRefManager`. (Historical: flattening-era delegation tests confirmed that
+denied siblings kept `ref_denied` when copied; with no copies that check is moot.) Namespaced ConfigMap CA and Service DNS tests confirm exact owner
 registration, replacement cleanup, and delete cleanup. Current EGC handler tests
 instead confirm administrative material selection, canonical cluster owner
 recovery dependencies, and no Grant edges; grants do not alter its TLS material

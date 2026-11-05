@@ -703,12 +703,11 @@ actual rule/backend/filter loans from `refs::route_auth_fields`. This is distinc
 from unsupported native Gateway API `backendRef`/`protocol` ExternalAuth; mixed
 payloads keep the native classification and fail closed. No vendored CRD is relaxed.
 
-The Controller resolves each original declaring HTTPRoute's TLS/template fields
-before delegation inheritance. Secret/ConfigMap and ReferenceGrant recovery keys
-belong to the published root, while authorization uses the actual declaring route.
-Incoming root and raw-child resolved material/locality is cleared. Effective
-filters carry schema-hidden declaring namespace and failure state; that locality
-cannot mint a child Grant query or claim a child UID/generation.
+The Controller resolves each HTTPRoute's own TLS/template fields; under
+delegation every level is a separate published route, so Secret/ConfigMap and
+ReferenceGrant recovery keys and authorization both belong to the declaring route.
+Incoming resolved material/locality is cleared. Filters carry schema-hidden
+declaring namespace and failure state; that locality cannot mint a Grant query.
 
 Gateway `PreparedRouteAuth` retains the actual effective config loan through TLS
 proof and ForwardAuth construction, using the same captured global TLS defaults.

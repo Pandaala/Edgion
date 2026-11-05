@@ -284,6 +284,18 @@ async fn http_route_beta_crud_projects_to_selected_wire_version() {
     .unwrap();
     assert_eq!(projected["apiVersion"], "gateway.networking.k8s.io/v1");
     assert_eq!(projected["spec"], source["spec"]);
+
+    // Controller-resolved delegation keys never reach a Kubernetes write.
+    let mut injected = source.clone();
+    injected["spec"]["resolvedDelegationKeys"] = json!([]);
+    let projected = serde_json::to_value(
+        storage
+            .parse_dynamic_object("HTTPRoute", &injected.to_string(), &v1)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(projected["spec"].get("resolvedDelegationKeys").is_none());
+    assert_eq!(projected["spec"], source["spec"]);
 }
 
 #[tokio::test]

@@ -11,9 +11,8 @@ use std::sync::{Arc, LazyLock};
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
-    DelegationIssue, HTTPHeader, LocalObjectReference, ParsedRouteRetry,
-    ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
-    GATEWAY_API_GROUP,
+    HTTPHeader, LocalObjectReference, ParsedRouteRetry, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
+    RouteTimeout as HttpRouteTimeout, SessionPersistence, GATEWAY_API_GROUP,
 };
 use crate::ListenerKey;
 
@@ -67,7 +66,7 @@ pub struct GRPCRouteSpec {
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
-    /// Indices refer to `rules`; not applicable to `resolved_rules`.
+    /// Indices refer to `rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
@@ -76,23 +75,11 @@ pub struct GRPCRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<GRPCRouteRule>>,
 
-    /// Controller-resolved flattened rules produced by GRPCRoute delegation
-    /// (a rule whose backendRef points at `kind: GRPCRoute` delegates its
-    /// method/service match to child routes; the controller expands the
-    /// delegation tree). Present only on routes containing at least one
-    /// delegating rule. When present, the gateway compiles these INSTEAD of
-    /// `rules`, and `invalid_rule_indices` does not apply (flattening already
-    /// dropped invalid rules). See docs/en/user-guide/grpc-route/delegation.md
-    /// and skills/01-architecture/05-resources/05-grpc-route.md.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Controller-resolved delegation edges this child route has passed
+    /// bidirectional confirmation for. Never operator-authored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
-    pub resolved_rules: Option<Vec<GRPCRouteRule>>,
-
-    /// Controller-internal delegation diagnostics, produced by the flatten
-    /// step in `parse` and consumed by `update_status`. Never serialized.
-    #[serde(skip, default)]
-    #[schemars(skip)]
-    pub delegation_issues: Vec<DelegationIssue>,
+    pub resolved_delegation_keys: Vec<super::route_delegation::DelegationKey>,
 }
 
 impl GRPCRouteSpec {
@@ -509,12 +496,6 @@ pub struct GRPCRouteRetry {
 
 /// Pre-parse methods for GRPCRoute.
 impl GRPCRoute {
-    /// Rules the gateway should compile: the controller-flattened delegation
-    /// result when present, otherwise the operator-authored `rules`.
-    pub fn effective_rules(&self) -> Option<&Vec<GRPCRouteRule>> {
-        self.spec.resolved_rules.as_ref().or(self.spec.rules.as_ref())
-    }
-
     /// Parse per-rule annotations (`retry-non-idempotent`).
     ///
     /// # Incomplete by itself
@@ -557,13 +538,7 @@ impl GRPCRoute {
                 }
             });
 
-        // Both the operator-authored rules and the controller-flattened
-        // delegation rules (resolved_rules) need the annotation copy; the
-        // gateway compiles whichever is effective (see `effective_rules()`).
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             preparse_rules(rules, parsed_allow_non_idempotent_retry);
         }
     }
@@ -573,10 +548,7 @@ impl GRPCRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             parse_timeouts_rules(rules);
         }
     }
@@ -593,25 +565,21 @@ impl GRPCRoute {
             self.metadata.name.as_deref().unwrap_or("")
         );
 
-        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(rules) = self.spec.rules.as_mut() {
             parse_retry_rules(rules, &route_id);
         }
     }
 }
 
 /// Copy the pre-parsed `retry-non-idempotent` annotation value onto every rule
-/// in `rules`. Shared by `spec.rules` and `spec.resolved_rules`.
+/// in `rules`.
 fn preparse_rules(rules: &mut [GRPCRouteRule], allow_non_idempotent: Option<bool>) {
     for rule in rules.iter_mut() {
         rule.parsed_allow_non_idempotent_retry = allow_non_idempotent;
     }
 }
 
-/// Parse and pre-process timeout configurations for `rules`. Shared by
-/// `spec.rules` and `spec.resolved_rules`.
+/// Parse and pre-process timeout configurations for `rules`.
 fn parse_timeouts_rules(rules: &mut [GRPCRouteRule]) {
     for rule in rules.iter_mut() {
         // Parse timeouts for each rule
@@ -656,8 +624,7 @@ fn parse_timeouts_rules(rules: &mut [GRPCRouteRule]) {
     }
 }
 
-/// Parse and pre-process retry configurations for `rules`. Shared by
-/// `spec.rules` and `spec.resolved_rules`.
+/// Parse and pre-process retry configurations for `rules`.
 fn parse_retry_rules(rules: &mut [GRPCRouteRule], route_id: &str) {
     for rule in rules.iter_mut() {
         let Some(retry) = &rule.retry else {

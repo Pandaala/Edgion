@@ -267,6 +267,33 @@ pub fn has_condition_with_message(
     false
 }
 
+/// True when the route's `status.parents` entry whose parentRef names
+/// `parent_ns/parent_name` carries a condition with this type, status and
+/// reason. A parentRef without a namespace matches any `parent_ns`.
+pub fn parent_entry_has(
+    route: &Value,
+    parent_ns: &str,
+    parent_name: &str,
+    condition_type: &str,
+    expected_status: &str,
+    reason: &str,
+) -> bool {
+    route["status"]["parents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry["parentRef"]["name"].as_str() == Some(parent_name)
+                && entry["parentRef"]["namespace"].as_str().unwrap_or(parent_ns) == parent_ns
+        })
+        .flat_map(|entry| entry["conditions"].as_array().into_iter().flatten())
+        .any(|c| {
+            c["type"].as_str() == Some(condition_type)
+                && c["status"].as_str() == Some(expected_status)
+                && c["reason"].as_str() == Some(reason)
+        })
+}
+
 fn check_conditions(parent_or_ancestor: &Value, condition_type: &str, expected_status: &str) -> bool {
     if let Some(conditions) = parent_or_ancestor["conditions"].as_array() {
         conditions

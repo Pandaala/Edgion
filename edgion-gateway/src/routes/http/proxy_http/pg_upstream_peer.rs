@@ -589,14 +589,24 @@ pub async fn select_http_backend(
     };
 
     // Session Persistence step 1 of 2: extract token + set initial state.
-    let sp_token = route_unit.rule.session_persistence.as_ref().and_then(|sp| {
-        session_persistence::sp_extract_token(
-            session,
-            &mut ctx.ensure_session_persistence().state,
-            Some(sp),
-            session_persistence::now_unix_secs(),
-        )
-    });
+    // The leaf's block, else the nearest delegating ancestor's (delegated only).
+    let inherited_sp_unit = match route_unit.rule.session_persistence {
+        Some(_) => None,
+        None => ctx.http_session_persistence_unit().cloned(),
+    };
+    let sp_token = route_unit
+        .rule
+        .session_persistence
+        .as_ref()
+        .or_else(|| inherited_sp_unit.as_ref()?.rule.session_persistence.as_ref())
+        .and_then(|sp| {
+            session_persistence::sp_extract_token(
+                session,
+                &mut ctx.ensure_session_persistence().state,
+                Some(sp),
+                session_persistence::now_unix_secs(),
+            )
+        });
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
     // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:
@@ -1026,18 +1036,10 @@ fn replay_write_floor(body_captured: bool, global_backend_request: std::time::Du
 #[inline]
 pub fn configure_peer_timeouts(_edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
     let backend_timeout = &ctx.egc.parsed_timeouts.backend;
-    let route_timeouts = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        });
-
-    let route_backend_timeout = route_timeouts.map(|rt| &rt.backend_request_timeout);
-    let normal_backend_timeout = effective_backend_bound(route_backend_timeout, backend_timeout.request_timeout);
+    // Leaf, then the nearest delegating ancestor, then the gRPC rule.
+    let route_backend_timeout = ctx.route_backend_request_timeout();
+    let normal_backend_timeout =
+        effective_backend_bound(route_backend_timeout.as_ref(), backend_timeout.request_timeout);
     let upstream_read_timeout_override = match ctx.jump.as_deref() {
         Some(crate::UpstreamJumpTarget::External(external)) => external.upstream_read_timeout_override,
         _ => None,

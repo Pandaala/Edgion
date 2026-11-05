@@ -92,15 +92,13 @@ async fn mirror_http_parse_tracks_rule_and_backend_refs_and_clears_old_dependenc
         .get_refs(&mirror_service_key("target", "shadow"))
         .contains(&owner));
     let mirrors: Vec<_> = route
-        .effective_rules()
+        .spec
+        .rules
+        .as_ref()
         .into_iter()
         .flatten()
         .flat_map(mirror_backends)
         .collect();
-    assert!(
-        route.spec.resolved_rules.is_some(),
-        "must exercise the compiled sibling copy"
-    );
     assert_eq!(mirrors.len(), 2);
     assert!(mirrors
         .iter()
@@ -118,7 +116,9 @@ async fn mirror_http_parse_tracks_rule_and_backend_refs_and_clears_old_dependenc
     };
     route = parsed;
     assert!(route
-        .effective_rules()
+        .spec
+        .rules
+        .as_ref()
         .into_iter()
         .flatten()
         .flat_map(mirror_backends)
@@ -397,7 +397,8 @@ fn resolve_owned(
     };
     let decision = resolve(field, |terminal| authorize_with(terminal, &root, true, runtime, check));
     decision.apply_backend(backend);
-    decision.cross_namespace().map(str::to_string)
+    // Cross-namespace target: the resolved namespace when it differs from the owner's.
+    backend.namespace.clone().filter(|namespace| namespace != "app")
 }
 fn mirror_backends(rule: &edgion_resources::HTTPRouteRule) -> impl Iterator<Item = &BackendObjectReference> {
     rule.filters

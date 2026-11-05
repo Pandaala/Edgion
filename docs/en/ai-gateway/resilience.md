@@ -26,12 +26,11 @@ always dropped from the data plane; the status condition depends on what is left
 reserved for the case where nothing would serve anyway. A route that mixes a bad AI rule with
 valid non-AI rules keeps serving those rules.
 
-**Delegation exception.** The escalation only considers the route's own `spec.rules`. An AI
-violation inside a *delegated child* rule is dropped during flattening and always reported as
-`PartiallyInvalid=True` — it never sets `Accepted=False`, matching the general rule that a dropped
-delegated rule does not reject its parent. If that drop leaves the parent with no rule at all, the
-parent stops serving while `Accepted` stays `True`; read the `PartiallyInvalid` message for the
-`resolvedRules[i]: <reason>` entries.
+**Delegation.** Every route is evaluated on its own `spec.rules`. An AI violation in a
+[delegation](../user-guide/http-route/delegation.md) child rule is reported with the same table on
+the child's own `status.parents` entries (one per `kind: HTTPRoute` parentRef); it never changes
+the parent's status. `AiProxy` is not allowed on a delegating rule, because a delegating rule has
+no backends of its own.
 
 ## Credential-first rounds
 

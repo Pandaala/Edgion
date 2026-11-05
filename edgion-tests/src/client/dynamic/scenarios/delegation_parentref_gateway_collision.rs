@@ -385,7 +385,8 @@ async fn check_http(ctx: &TestContext, generation: Generation) -> Result<()> {
     ensure!(
         log.route_kind() == Some("HTTPRoute")
             && log.route_namespace() == Some(NS)
-            && log.route_name() == Some(HTTP_NAME)
+            && log.route_name() == Some(HTTP_CHILD)
+            && chain_names(&log, "HTTPRoute") == [HTTP_NAME, HTTP_CHILD]
             && log.request_host() == Some(HTTP_PARENT_HOST)
             && log.request_path() == Some(active)
             && log.status_code() == Some(200),
@@ -536,13 +537,31 @@ async fn check_grpc(ctx: &TestContext, generation: Generation) -> Result<()> {
     ensure!(
         log.route_kind() == Some("GRPCRoute")
             && log.route_namespace() == Some(NS)
-            && log.route_name() == Some(GRPC_NAME)
+            && log.route_name() == Some(GRPC_CHILD)
+            && chain_names(&log, "GRPCRoute") == [GRPC_NAME, GRPC_CHILD]
             && log.request_path() == Some(path)
             && log.status_code() == Some(200),
         "wrong gRPC access-log owner or payload: {:?}",
         log.data
     );
     Ok(())
+}
+
+/// Route names of the access-log `match_info` chain (root -> leaf), keeping
+/// only elements of `kind` in namespace `NS`; any other element yields an
+/// empty marker so a mismatch cannot pass.
+fn chain_names<'a>(log: &'a crate::access_log_client::AccessLogEntry, kind: &str) -> Vec<&'a str> {
+    log.route_chain()
+        .iter()
+        .map(|level| {
+            let rsc = &level["rsc"];
+            if rsc["kind"].as_str() == Some(kind) && rsc["ns"].as_str() == Some(NS) {
+                rsc["name"].as_str().unwrap_or_default()
+            } else {
+                ""
+            }
+        })
+        .collect()
 }
 
 async fn check_absent(ctx: &TestContext, grpc: bool) -> Result<()> {

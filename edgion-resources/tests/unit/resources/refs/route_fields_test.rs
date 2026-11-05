@@ -103,7 +103,7 @@ fn delegation_selectors_and_ai_targets_keep_distinct_contracts() {
             }
         }
     }
-    let mut route:HTTPRoute=serde_json::from_value(json!({"metadata":{"name":"route"},"spec":{"rules":[{"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":"ai"}]}],"resolvedRules":[{"backendRefs":[{"name":"effective","port":80}]}]}})).unwrap();
+    let mut route:HTTPRoute=serde_json::from_value(json!({"metadata":{"name":"route"},"spec":{"rules":[{"backendRefs":[{"group":"edgion.io","kind":"EdgionBackend","name":"ai"}]}]}})).unwrap();
     assert!(matches!(
         HttpRouteBackendRefs::from_route(&route)
             .unwrap()
@@ -119,7 +119,7 @@ fn delegation_selectors_and_ai_targets_keep_distinct_contracts() {
             .next()
             .unwrap()
             .name(),
-        "effective"
+        "ai"
     );
     route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].port = Some(443);
     assert!(HttpRouteBackendRefs::from_route(&route)
@@ -135,8 +135,7 @@ fn indexed_effective_loans_keep_actual_owner_rule_and_backend_positions() {
     macro_rules! check {
         ($route:ty, $facade:ident) => {{
             let route: $route = serde_json::from_value(json!({"metadata":{"name":"owner"},"spec":{
-                "rules":[{"backendRefs":[{"name":"authored","port":80}]}],
-                "resolvedRules":[{}, {"backendRefs":[{"name":"child","namespace":"children","port":65535,"weight":0}]}]
+                "rules":[{}, {"backendRefs":[{"name":"child","namespace":"children","port":65535,"weight":0}]}]
             }})).unwrap();
             let refs = $facade::from_route(&route).unwrap();
             assert!(refs.effective_at(0,0).is_none());
@@ -150,7 +149,7 @@ fn indexed_effective_loans_keep_actual_owner_rule_and_backend_positions() {
             let BackendTarget::Service(target) = loan.target().unwrap() else { panic!("expected Service") };
             assert_eq!(target.scope().namespace(), Some("children"));
             assert_eq!(target.name(), "child");
-            assert_eq!(refs.authored_at(0,0).unwrap().target_view().name(), "authored");
+            assert_eq!(refs.authored_at(1,0).unwrap().target_view().name(), "child");
         }};
     }
     check!(HTTPRoute, HttpRouteBackendRefs);
@@ -158,12 +157,12 @@ fn indexed_effective_loans_keep_actual_owner_rule_and_backend_positions() {
 }
 
 #[test]
-fn extension_loans_bind_actual_owners_positions_and_authored_vs_effective_locality() {
+fn extension_loans_bind_actual_owners_positions_and_owner_namespace() {
     macro_rules! check {
         ($route:ty, $facade:ident, $kind:expr) => {{
             let filter = json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bundle","resolvedNamespace":"forged"}});
             let rule = json!({"filters":[filter.clone()],"backendRefs":[{"name":"service","port":80,"filters":[filter.clone(),filter.clone()]}]});
-            let mut route: $route = serde_json::from_value(json!({"metadata":{"name":"root","uid":"root-uid","generation":7},"spec":{"rules":[rule]}})).unwrap();
+            let route: $route = serde_json::from_value(json!({"metadata":{"name":"root","uid":"root-uid","generation":7},"spec":{"rules":[rule]}})).unwrap();
             let refs = $facade::from_route(&route).unwrap();
             for (index, field) in refs.authored().enumerate() {
                 let lookup = field.validated().unwrap().unwrap();
@@ -178,18 +177,12 @@ fn extension_loans_bind_actual_owners_positions_and_authored_vs_effective_locali
             }
             assert_eq!(refs.authored().count(), 3);
             assert_eq!(refs.effective_at(0, None, 0).unwrap().validated().unwrap().unwrap().target().scope().namespace(), Some("default"));
-            route.spec.resolved_rules = route.spec.rules.clone();
-            let refs = $facade::from_route(&route).unwrap();
+            // An injected `resolvedNamespace` is not a field: the target always
+            // resolves in the declaring route's namespace.
             let actual = refs.effective_at(0, Some(0), 1).unwrap().validated().unwrap().unwrap();
-            assert_eq!(actual.target().scope().namespace(), Some("forged"));
-            assert_eq!(actual.source_uid(), Some("root-uid"), "effective transport describes root, not invented child provenance");
-            assert!(std::ptr::eq(actual.target().name().as_ptr(), route.spec.resolved_rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[1].extension_ref.as_ref().unwrap().name.as_ptr()));
-            for bad in ["", "Bad", "bad/ns"] {
-                route.spec.resolved_rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0].extension_ref.as_mut().unwrap().resolved_namespace = Some(bad.into());
-                let refs = $facade::from_route(&route).unwrap();
-                assert!(refs.effective_at(0, None, 0).unwrap().validated().is_err());
-                assert!(refs.authored_at(0, None, 0).unwrap().validated().unwrap().is_some());
-            }
+            assert_eq!(actual.target().scope().namespace(), Some("default"));
+            assert_eq!(actual.source_uid(), Some("root-uid"));
+            assert!(std::ptr::eq(actual.target().name().as_ptr(), route.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[1].extension_ref.as_ref().unwrap().name.as_ptr()));
             let mut missing_name = route.clone();
             missing_name.metadata.name = None;
             assert!($facade::from_route(&missing_name).is_err());
@@ -229,7 +222,7 @@ fn extension_field_validation_rejects_bad_union_and_target_without_compacting_po
 
 #[test]
 fn mirror_actual_owner_slots_and_effective_targets_preserve_authority_boundary() {
-    let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+    let route: HTTPRoute = serde_json::from_value(serde_json::json!({
         "metadata":{"name":"owner","uid":"source-uid","generation":7},
         "spec":{"rules":[{"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"rule-copy","port":80}}}],
             "backendRefs":[{"name":"primary","port":80,"filters":[{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"backend-copy","namespace":"target","port":8080}}}]}]}]}
@@ -244,14 +237,6 @@ fn mirror_actual_owner_slots_and_effective_targets_preserve_authority_boundary()
     assert_eq!(backend.reference().field().source_uid(), Some("source-uid"));
     assert_eq!(backend.reference().field().source_generation(), Some(7));
     assert!(refs.effective_at(3, None, 0).is_none());
-    route.spec.resolved_rules = route.spec.rules.clone();
-    route.spec.resolved_rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
-        .request_mirror
-        .as_mut()
-        .unwrap()
-        .backend_ref
-        .namespace = Some("child".into());
-    let refs = HttpRouteMirrorRefs::from_route(&route).unwrap();
     assert_eq!(
         refs.authored_at(0, None, 0)
             .unwrap()
@@ -273,7 +258,7 @@ fn mirror_actual_owner_slots_and_effective_targets_preserve_authority_boundary()
             .target()
             .scope()
             .namespace(),
-        Some("child")
+        Some("default")
     );
 }
 

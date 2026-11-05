@@ -194,11 +194,7 @@ fn collect_route_usages(
             let Some(route_name) = route.pointer("/metadata/name").and_then(Value::as_str) else {
                 continue;
             };
-            let Some(rules) = route
-                .pointer("/spec/resolvedRules")
-                .or_else(|| route.pointer("/spec/rules"))
-                .and_then(Value::as_array)
-            else {
+            let Some(rules) = route.pointer("/spec/rules").and_then(Value::as_array) else {
                 continue;
             };
             for (rule_index, rule) in rules.iter().enumerate() {

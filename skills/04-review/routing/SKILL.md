@@ -43,7 +43,7 @@ before applying a decision to current code.
 - [route-10 — 1xx informational responses pollute response-filter state (status, CB, ht) — FIXED](regression-guards/1xx-response-filter-state-pollution.md)
 - [Delegated ExtensionRefs remain local to the declaring route](regression-guards/delegated-extensionref-remains-child-local.md)
 - [Gateway API ExtensionRef validation fails closed](regression-guards/gateway-api-extensionref-validation-fails-closed.md)
-- [Delegated scope inheritance and ARCH-156 semantic ancestor boundaries](regression-guards/delegation-root-prefix-inherits-scope.md)
+- [Route delegation is a Gateway cascading match (ISSUE-010)](regression-guards/delegation-cascading-match-issue-010.md)
 - [Denied L7 Named Jumps Fail Closed — FIXED](regression-guards/denied-named-jump-fails-closed.md)
 - [GatewayConfigStore Orphaned Secondary Store Removed — FIXED](regression-guards/gateway-config-store-orphaned.md)
 - [HTTP `RouteManager` / `get_global_route_manager` Legacy Aliases — REMOVED](regression-guards/http-route-manager-legacy-alias-removed.md)
@@ -73,3 +73,4 @@ before applying a decision to current code.
 ## Superseded decisions
 
 - [Listener Specificity Algorithm Duplicated Across Two Stores — DESIGN-TRADEOFF / SUBSUMED-BY-COMPANION](superseded/listener-specificity-duplicated.md)
+- [Delegated scope inheritance and ARCH-156 ancestor boundaries — SUPERSEDED by the cascading match](superseded/delegation-root-prefix-inherits-scope.md)

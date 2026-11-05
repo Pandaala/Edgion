@@ -68,7 +68,7 @@ pub struct HTTPRouteSpec {
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
-    /// Indices refer to `rules`; not applicable to `resolved_rules`.
+    /// Indices refer to `rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
@@ -77,23 +77,11 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
 
-    /// Controller-resolved flattened rules produced by HTTPRoute delegation
-    /// (a rule whose backendRef points at `kind: HTTPRoute` delegates its path
-    /// prefix to child routes; the controller expands the delegation tree).
-    /// Present only on routes containing at least one delegating rule. When
-    /// present, the gateway compiles these INSTEAD of `rules`, and
-    /// `invalid_rule_indices` does not apply (flattening already dropped
-    /// invalid rules). See docs/en/user-guide/http-route/delegation.md and
-    /// skills/01-architecture/05-resources/04-http-route.md.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Controller-resolved delegation edges this child route has passed
+    /// bidirectional confirmation for. Never operator-authored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
-    pub resolved_rules: Option<Vec<HTTPRouteRule>>,
-
-    /// Controller-internal delegation diagnostics, produced by the flatten
-    /// step in `parse` and consumed by `update_status`. Never serialized.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub delegation_issues: Vec<DelegationIssue>,
+    pub resolved_delegation_keys: Vec<super::route_delegation::DelegationKey>,
 }
 
 /// v1beta1 wire source. Nested Standard and selected Experimental fields use
@@ -133,8 +121,7 @@ impl From<HTTPRouteBeta> for HTTPRoute {
                 resolved_listeners: None,
                 invalid_rule_indices: None,
                 rules: beta.spec.rules,
-                resolved_rules: None,
-                delegation_issues: Vec::new(),
+                resolved_delegation_keys: Vec::new(),
                 use_default_gateways: beta.spec.use_default_gateways,
             },
             status: beta.status,
@@ -156,17 +143,6 @@ impl HTTPRouteSpec {
     }
 }
 
-/// Diagnostics from delegation flattening (controller-internal).
-#[derive(Clone, Debug, PartialEq)]
-pub enum DelegationIssue {
-    /// A named child HTTPRoute referenced by a delegating rule does not exist
-    /// (surfaces as `ResolvedRefs=False` / `BackendNotFound`).
-    MissingChild { namespace: String, name: String },
-    /// A delegating rule or a child rule was dropped from `resolved_rules`
-    /// (surfaces via the `PartiallyInvalid` condition).
-    RuleDropped { message: String },
-}
-
 /// API group of the Gateway API resources (used for delegation ref detection).
 pub const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
 /// API group of Edgion custom resources.
@@ -175,12 +151,6 @@ pub const EDGION_API_GROUP: &str = "edgion.io";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
-    /// Controller-derived parent path scope, aligned with effective matches.
-    /// Required on resolved rules; never operator-authored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_parent_match: Option<ResolvedParentMatch>,
-
     /// Controller-resolved source facts for scoped Gateway AI admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -374,7 +344,6 @@ impl HTTPRouteRule {
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
-            resolved_parent_match: self.resolved_parent_match.clone(),
             resolved_ai_admission: self.resolved_ai_admission.clone(),
             name: self.name.clone(),
             matches: self.matches.clone(),
@@ -397,7 +366,6 @@ impl Clone for HTTPRouteRule {
 impl fmt::Debug for HTTPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HTTPRouteRule")
-            .field("resolved_parent_match", &self.resolved_parent_match)
             .field("name", &self.name)
             .field("matches", &self.matches)
             .field("plugins", &self.filters)
@@ -415,26 +383,6 @@ impl fmt::Debug for HTTPRouteRule {
             .finish()
     }
 }
-
-/// Internal delegation provenance. Absence on an effective resolved rule is invalid.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum ResolvedParentMatch {
-    Direct {},
-    Delegated { matches: Vec<ParentMatch> },
-}
-
-/// Conjunctive ancestor paths for one effective match, never an OR of parents.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ParentMatch {
-    /// Authored ancestor prefixes. Gateway normalizes these exactly once using
-    /// its actual path policy, matching ordinary route compilation.
-    pub raw_path_prefixes: Vec<String>,
-}
-
-/// Maximum number of parent scopes carried across HTTPRoute delegation.
-pub const MAX_HTTP_ROUTE_DELEGATION_DEPTH: usize = 8;
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -728,14 +676,6 @@ impl HTTPBackendRef {
     /// referencing a Service backend.
     pub fn is_route_delegation_ref(&self) -> bool {
         self.backend_kind() == HTTPBackendRefKind::RouteDelegation
-    }
-}
-
-impl HTTPRoute {
-    /// Rules the gateway should compile: the controller-flattened delegation
-    /// result when present, otherwise the operator-authored `rules`.
-    pub fn effective_rules(&self) -> Option<&Vec<HTTPRouteRule>> {
-        self.spec.resolved_rules.as_ref().or(self.spec.rules.as_ref())
     }
 }
 
@@ -1460,17 +1400,6 @@ pub struct LocalObjectReference {
 
     /// Name is the name of the referent
     pub name: String,
-
-    /// Controller-resolved namespace of a delegated rule's ExtensionRef.
-    ///
-    /// LocalObjectReference is operator-local and therefore has no namespace
-    /// field. Once a child rule is flattened into a parent HTTPRoute, the
-    /// child's local namespace must travel with the derived rule so Controller
-    /// dependency tracking and Gateway plugin lookup do not reinterpret it as
-    /// parent-local.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_namespace: Option<String>,
 }
 
 /// HTTPRouteTimeouts defines timeouts that can be configured for an HTTPRoute

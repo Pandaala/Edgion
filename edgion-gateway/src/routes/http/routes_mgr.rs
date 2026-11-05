@@ -1,7 +1,10 @@
 use super::conf_handler_impl::{patch_domain_route_rules, HttpRouteChanges};
+use super::delegation_build::{is_delegation_child, HttpDelegationIndex};
 use crate::backends::LogicalBackendHandle;
 use crate::ctx::EdgionHttpContext;
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
+use crate::routes::delegation::descent::{ChildHit, DescentState};
+use crate::routes::delegation::DelegationSlotTable;
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::routes::http::match_unit::RouteMatchResult;
@@ -168,14 +171,17 @@ impl RouteRules {
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
     /// - `index`: Pre-built gateway/listener index for this port
+    /// - `descent`: per-request delegation state, created lazily on the first
+    ///   delegating hit and shared across hostname groups (`None` otherwise)
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
+        descent: &mut Option<DescentState>,
     ) -> Result<RouteMatchResult, EdError> {
         if let Some(ref match_engine) = self.match_engine {
-            match match_engine.match_route(session, ctx, index) {
+            match match_engine.match_route(session, ctx, index, descent) {
                 Ok(result) => return Ok(result),
                 Err(EdError::RouteNotFound()) => {}
                 Err(error) => return Err(error),
@@ -189,6 +195,26 @@ impl RouteRules {
         }
 
         Err(EdError::RouteNotFound())
+    }
+
+    /// Child-level match of a delegation subtree: radix candidates by their
+    /// precomputed ranks, then the regex fallback. Child units are checked with
+    /// `deep_match_child` (no Gateway eligibility; decided at the root).
+    pub(crate) fn match_child(
+        &self,
+        session: &pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
+        state: &mut DescentState,
+    ) -> Result<Option<ChildHit>, EdError> {
+        if let Some(ref match_engine) = self.match_engine {
+            if let Some(hit) = match_engine.match_child(session, ctx, state)? {
+                return Ok(Some(hit));
+            }
+        }
+        if let Some(ref regex_engine) = self.regex_routes_engine {
+            return regex_engine.match_child(session, ctx, state);
+        }
+        Ok(None)
     }
 }
 
@@ -234,11 +260,25 @@ impl DomainRouteRules {
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
     /// - `index`: Pre-built gateway/listener index for this port
+    #[inline]
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
+    ) -> Result<RouteMatchResult, EdError> {
+        self.match_route_with_descent(session, ctx, index, &mut None)
+    }
+
+    /// [`Self::match_route`] with caller-owned descent state, so one request
+    /// shares a single visited set across hostname groups. `descent` stays
+    /// `None` unless a delegating rule matched.
+    pub fn match_route_with_descent(
+        &self,
+        session: &mut pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
+        index: &GatewayInfoIndex,
+        descent: &mut Option<DescentState>,
     ) -> Result<RouteMatchResult, EdError> {
         // ctx.request_info.hostname is a NormalizedHostname — already lowercased,
         // port-stripped, FQDN-dot-removed. No further normalization needed.
@@ -249,7 +289,7 @@ impl DomainRouteRules {
         if !self.hosts.is_empty() {
             if let Ok(query) = RadixHostnameQuery::new(hostname) {
                 for rules in self.hosts.matching_values(query) {
-                    match rules.match_route(session, ctx, index) {
+                    match rules.match_route(session, ctx, index, descent) {
                         Err(EdError::RouteNotFound()) => {}
                         result => return result,
                     }
@@ -259,7 +299,7 @@ impl DomainRouteRules {
 
         // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
         if let Some(catch_all) = self.catch_all_routes.as_ref() {
-            return catch_all.match_route(session, ctx, index);
+            return catch_all.match_route(session, ctx, index, descent);
         }
 
         Err(EdError::RouteNotFound())
@@ -332,6 +372,15 @@ pub struct GlobalHttpRouteManagers {
     /// `partial_update` already cleared it (orphan listener-bucket leak).
     /// Held only across synchronous work (no `.await` in the critical region).
     rebuild_lock: parking_lot::Mutex<()>,
+
+    /// HTTPRoute delegation slots. Delegating rule units hold their slot from
+    /// compile time; child publications swap subtrees inside it. Touched only
+    /// under `rebuild_lock`.
+    pub(crate) delegation_slots: DelegationSlotTable<RouteRules>,
+
+    /// Gateway-side child index (child -> accepted keys + compiled units, and
+    /// key -> children). Touched only under `rebuild_lock`.
+    pub(crate) delegation_index: parking_lot::Mutex<HttpDelegationIndex>,
 }
 
 impl Default for GlobalHttpRouteManagers {
@@ -346,6 +395,8 @@ impl GlobalHttpRouteManagers {
             route_cache: DashMap::new(),
             by_listener: DashMap::new(),
             rebuild_lock: parking_lot::Mutex::new(()),
+            delegation_slots: DelegationSlotTable::new(),
+            delegation_index: parking_lot::Mutex::new(HttpDelegationIndex::default()),
         }
     }
 
@@ -439,6 +490,7 @@ impl GlobalHttpRouteManagers {
             let table = crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(
                 routes,
                 &manager.load_route_table(),
+                &self.delegation_slots,
             );
             manager.store_route_table(table);
             rebuilt_listeners += 1;
@@ -541,7 +593,7 @@ impl GlobalHttpRouteManagers {
         for (key, routes) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
             let previous = manager.load_route_table();
-            let table = patch_domain_route_rules(routes, &previous, changes);
+            let table = patch_domain_route_rules(routes, &previous, changes, &self.delegation_slots);
             manager.store_route_table(table);
             if routes.is_empty() && !active_listeners.contains(key) && self.by_listener.remove(key).is_some() {
                 removed_stale += 1;
@@ -575,13 +627,18 @@ impl GlobalHttpRouteManagers {
         );
     }
 
-    /// Bucket all cached routes by their resolved listeners.
-    fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> {
+    /// Bucket all cached routes by their resolved listeners. Delegation
+    /// children are skipped silently: they have no listeners and are routed to
+    /// the delegation slots instead.
+    pub(crate) fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> {
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
 
         for entry in self.route_cache.iter() {
             let route_key = entry.key().clone();
             let route = entry.value().clone(); // Arc clone
+            if is_delegation_child(&route) {
+                continue;
+            }
             let listeners = resolved_listeners_for_route(&route); // &Arc coerces to &HTTPRoute
 
             // Listener keys this route is bucketed under, from the

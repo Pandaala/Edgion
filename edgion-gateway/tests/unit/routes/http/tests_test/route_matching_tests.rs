@@ -104,7 +104,7 @@
                 )
             })
             .collect();
-        build_domain_route_rules_from_routes(&data, &DomainRouteRules::new())
+        build_domain_route_rules_from_routes(&data, &DomainRouteRules::new(), &crate::routes::delegation::DelegationSlotTable::new())
     }
 
     #[test]
@@ -610,7 +610,7 @@
         manager.store_route_table(
             crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(
                 &routes,
-                &DomainRouteRules::new(),
+                &DomainRouteRules::new(), &crate::routes::delegation::DelegationSlotTable::new(),
             ),
         );
         assert!(manager

@@ -111,27 +111,41 @@ class ExposureScenario(Scenario):
         self.publish(parent)
 
         def delegation_state(invalid):
+            # Cascading match: the child is published on its own with its own
+            # invalid indices and confirmed delegation key; the parent carries
+            # only its authored rules and no child-caused diagnostic (§4.2, §7.1).
             current = self.read_route(child_name)
             require(current["spec"].get("invalidRuleIndices", []) == ([0] if invalid else []),
                     "Child validation has not converged")
+            published_child = self.read_route(child_name, True)
+            require(published_child is not None
+                    and published_child["spec"].get("invalidRuleIndices", []) == ([0] if invalid else []),
+                    "Child publication has not converged")
+            keys = published_child["spec"].get("resolvedDelegationKeys", [])
+            require([(k.get("parent_ns"), k.get("parent_name")) for k in keys]
+                    == [(self.args.namespace, parent_name)], f"Child delegation keys differ: {keys}")
+            child_conditions = [c for p in current.get("status", {}).get("parents", [])
+                                for c in p.get("conditions", [])]
+            require(any("exposeHeaders" in c.get("message", "") for c in child_conditions) == invalid,
+                    "Child exposeHeaders diagnostic differs")
             controller = self.read_route(parent_name)
             published = self.read_route(parent_name, True)
-            require(len(published["spec"].get("resolvedRules", [])) == (0 if invalid else 1),
-                    "Delegated publication has not converged")
+            require(published is not None and "resolvedRules" not in published["spec"],
+                    "Parent publication carries flattened rules")
             require(published["spec"] == controller["spec"], "Parent publication differs")
             conditions = [c for p in controller.get("status", {}).get("parents", [])
                           for c in p.get("conditions", [])]
-            require(any("exposeHeaders" in c.get("message", "") for c in conditions) == invalid,
-                    "Parent delegation diagnostic differs")
+            require(not any("exposeHeaders" in c.get("message", "") for c in conditions),
+                    "Child-caused diagnostic appears on the parent")
             if invalid:
                 for method in ["GET", "OPTIONS"]:
                     self.traffic(child_path, method, 404)
             else:
                 self.exposed(child_path, "X-Request-Id", True)
-        self.wait_phase("delegated invalid child is unpublished", lambda: delegation_state(True))
+        self.wait_phase("delegated invalid child rule is not served", lambda: delegation_state(True))
         child["spec"]["rules"][0]["filters"][0]["cors"]["exposeHeaders"] = ["X-Request-Id"]
         self.publish(child, update=True)
-        self.wait_phase("child correction requeues parent", lambda: delegation_state(False))
+        self.wait_phase("child correction is served through the parent", lambda: delegation_state(False))
 
 
 def main():

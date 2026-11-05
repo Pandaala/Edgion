@@ -113,6 +113,7 @@ Notes:
 ### `edgion.io/retry-non-idempotent`
 
 - **Granularity**: HTTPRoute / GRPCRoute (applied to all rules under the route).
+  Under delegation only the leaf route's value applies; ancestors' values are ignored.
 - **Valid values**:
   - `"true"` — allow the reused-connection retry to replay a non-idempotent request body (restores the pre-guard behavior).
   - `"false"` / absent / any other value — keep the safe default.
@@ -124,10 +125,12 @@ Notes:
 ### `edgion.io/mirror-*` (RequestMirror tuning)
 
 - **Granularity**: HTTPRoute (applied to every `RequestMirror` filter under the route,
-  both rule-level and backendRef-level filters). Under delegation, the parent route's
-  annotations apply to the flattened `resolved_rules`; a child route's own mirror-*
-  annotations are not carried over (same semantics as `forward-raw-path` /
-  `retry-non-idempotent`).
+  both rule-level and backendRef-level filters). Under delegation every level is
+  preparsed from its own route, so each route's mirror-* annotations tune only the
+  `RequestMirror` filters that route declares (a parent's mandatory mirror filter
+  keeps the parent's tuning). By contrast, `forward-raw-path` and
+  `retry-non-idempotent` are request-wide and are read from the leaf route only;
+  ancestors' values are ignored for delegated requests.
 - **Why annotations, not filter fields**: Edgion installs the unmodified vendored
   Gateway API CRD, a structural schema — in K8s conf-center mode the API server
   silently prunes any `requestMirror` field the schema does not declare (no admission
@@ -146,6 +149,7 @@ Notes:
 ### `edgion.io/forward-raw-path`
 
 - **Granularity**: HTTPRoute (applied to all rules under this HTTPRoute).
+  Under delegation only the leaf route's value applies; ancestors' values are ignored.
 - **Valid values**:
   - `"true"` — force raw forwarding (overrides the global `forward_normalized_path` / region_route default).
   - `"false"` — force normalized forwarding (overrides region_route-style `preserve_raw_path = true`).

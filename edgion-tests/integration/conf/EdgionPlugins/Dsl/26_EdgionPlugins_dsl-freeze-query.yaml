@@ -1,7 +1,7 @@
-# Verifies that EdgionHttpContext::cached_query is frozen to entry_raw_query.
-# req.set_uri rewrites the URI to a different query, but req.query("name")
-# read afterwards must still return the entry-time value, proving the cache
-# is order-independent regardless of plugin URI rewrites.
+# Verifies that req.query reads the logical current Query: after req.set_uri
+# rewrites the URI to a different query, req.query("name") returns the
+# rewritten value (the frozen-at-entry getter was superseded; see
+# skills/03-coding/dsl/builtins-path.md).
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

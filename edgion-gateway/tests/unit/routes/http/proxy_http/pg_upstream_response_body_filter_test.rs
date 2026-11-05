@@ -113,7 +113,8 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
         method: None,
     };
     Arc::new(HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "default/http".to_string(),
         matched_info: MatchInfo {
@@ -126,7 +127,6 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
             annotations_meta: None,
         },
         rule: Arc::new(HTTPRouteRule {
-            resolved_parent_match: None,
             name: None,
             resolved_terminal_route_uid: None,
             resolved_ai_admission: None,
@@ -1411,4 +1411,57 @@ async fn unavailable_ip_body_event_aborts_pure_queued_output_before_any_trailer_
         let counts = trailers.lock();
         assert_eq!((counts.ran, counts.preempted, counts.released), (0, 1, 1));
     }
+}
+
+/// An ancestor rule's ExtensionRef IP dependency must be checked against the
+/// ancestor's own ExtensionRef array, not the leaf's (which is empty here).
+#[tokio::test]
+async fn ancestor_extension_ref_ip_dependency_resolves_at_its_level() {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"body-gate","namespace":"m1-body-gate"},
+        "spec":{"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"1mb"},
+            "conditions":{"run":{"allOf":[{"type":"directPeerIpMatch","ipRefs":[{"name":"never-published-m1-list"}],"negate":true}]}}
+        }]}
+    }))
+    .unwrap();
+    let compiled = crate::plugins::http::compile_plugins(&owner);
+    assert!(compiled.is_activatable, "{:?}", compiled.preparse_errors);
+    let parent_route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"parent","namespace":"m1-body-gate"},
+        "spec":{"rules":[{"filters":[{"type":"ExtensionRef",
+            "extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"body-gate"}}]}]}
+    }))
+    .unwrap();
+    let parent_runtime = Arc::new(PluginRuntime::from_httproute_filters_for_rule(
+        &parent_route,
+        0,
+        &Default::default(),
+    ));
+    assert_eq!(parent_runtime.ext_ref_keys().len(), 1);
+
+    let build_ctx = || {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.route_unit = Some(http_route_unit(Arc::new(PluginRuntime::new())));
+        let mut chain = crate::routes::delegation::DelegatedMatch::new(smallvec::smallvec![http_route_unit(
+            parent_runtime.clone()
+        )]);
+        chain
+            .ext_refs
+            .push(Some(Arc::from(vec![Some(compiled.plugin_runtime.clone())])));
+        ctx.delegated = Some(Box::new(chain));
+        ctx
+    };
+
+    // Without its level the ancestor indexes the (empty) leaf array and the
+    // fail-closed check is silently skipped.
+    let mut session = test_session().await;
+    let mut ctx = build_ctx();
+    parent_runtime.check_body_ip_dependencies(&mut session, &mut ctx);
+    assert!(!ctx.ip_body_denied(), "level-less lookup misses the ancestor target");
+
+    // The read-only body path passes the ancestor's level and denies.
+    let mut session = test_session().await;
+    let mut ctx = build_ctx();
+    check_read_only_ip_dependencies(&mut session, &mut ctx);
+    assert!(ctx.ip_body_denied());
 }

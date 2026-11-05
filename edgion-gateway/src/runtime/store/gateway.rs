@@ -80,6 +80,26 @@ impl GatewayStore {
             .collect()
     }
 
+    /// Every Gateway's `(namespace, name)`, sorted. Cold path only.
+    pub fn gateway_identities(&self) -> Vec<(String, String)> {
+        let mut identities: Vec<(String, String)> = self
+            .gateways
+            .values()
+            .map(|gateway| {
+                (
+                    gateway
+                        .metadata
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                    gateway.metadata.name.clone().unwrap_or_default(),
+                )
+            })
+            .collect();
+        identities.sort();
+        identities
+    }
+
     /// Number of Gateway resources currently held.
     pub fn count(&self) -> usize {
         self.gateways.len()

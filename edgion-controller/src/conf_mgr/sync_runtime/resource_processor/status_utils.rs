@@ -170,6 +170,10 @@ pub enum AcceptedError {
     Invalid { message: String },
     /// A supported extension was attached with an unsupported value/shape.
     UnsupportedValue { message: String },
+    /// Route delegation verdict of a child's route-kind parentRef entry
+    /// (`NoMatchingParent`, `NotAttached`, `DepthExceeded`,
+    /// `InvalidParentRefs`, `UnsupportedValue`).
+    Delegation { reason: &'static str, message: String },
 }
 
 impl AcceptedError {
@@ -182,6 +186,7 @@ impl AcceptedError {
             Self::ParentNotFound { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
             Self::UnsupportedValue { .. } => condition_reasons::UNSUPPORTED_VALUE,
+            Self::Delegation { reason, .. } => reason,
         }
     }
 
@@ -204,6 +209,7 @@ impl AcceptedError {
             }
             Self::Invalid { message } => message.clone(),
             Self::UnsupportedValue { message } => message.clone(),
+            Self::Delegation { message, .. } => message.clone(),
         }
     }
 
@@ -308,6 +314,21 @@ pub enum ResolvedRefsError {
         namespace: String,
         name: String,
     },
+    /// Edgion extension · route delegation: a named child route exists but
+    /// does not list the delegating parent in its parentRefs.
+    DelegationChildNotDeclaring {
+        kind: &'static str,
+        namespace: String,
+        name: String,
+    },
+    /// Edgion extension · route delegation: a delegating rule names the
+    /// route itself as its target. A route cannot be its own child, so no
+    /// parentRef change can make this edge valid.
+    DelegationSelfReference {
+        kind: &'static str,
+        namespace: String,
+        name: String,
+    },
 }
 
 impl ResolvedRefsError {
@@ -330,6 +351,8 @@ impl ResolvedRefsError {
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
             Self::CertContentInvalid { .. } => condition_reasons::INVALID_CERTIFICATE,
             Self::DelegationChildNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::DelegationChildNotDeclaring { .. } => condition_reasons::REF_NOT_PERMITTED,
+            Self::DelegationSelfReference { .. } => condition_reasons::REF_NOT_PERMITTED,
         }
     }
 
@@ -409,6 +432,14 @@ impl ResolvedRefsError {
             Self::CertContentInvalid { detail } => detail.clone(),
             Self::DelegationChildNotFound { kind, namespace, name } => {
                 format!("Delegation child {} '{}/{}' not found", kind, namespace, name)
+            }
+            Self::DelegationChildNotDeclaring { kind, namespace, name } => {
+                format!("Delegation child {kind} '{namespace}/{name}' does not list this route in its parentRefs")
+            }
+            Self::DelegationSelfReference { kind, namespace, name } => {
+                format!(
+                    "Delegation target {kind} '{namespace}/{name}' is this route itself; a route cannot delegate to itself, remove or retarget the delegating rule"
+                )
             }
         }
     }
@@ -590,6 +621,12 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             // Delegation child missing is the same severity class as a missing
             // Service backend (both surface as BACKEND_NOT_FOUND).
             ResolvedRefsError::DelegationChildNotFound { .. } => 5,
+            // A child that does not declare the parent is a permission
+            // failure, the same class as a missing ReferenceGrant.
+            ResolvedRefsError::DelegationChildNotDeclaring { .. } => 1,
+            // A self-delegation is a forbidden reference (RefNotPermitted);
+            // its dedicated message keeps the hint accurate.
+            ResolvedRefsError::DelegationSelfReference { .. } => 1,
             ResolvedRefsError::SecretNotFound { .. } | ResolvedRefsError::ConfigMapNotFound { .. } => 6,
             ResolvedRefsError::DecodeError { .. } | ResolvedRefsError::SecretMatchValueInvalid { .. } => 7,
             ResolvedRefsError::MissingKeys { .. } | ResolvedRefsError::SecretMatchKeyMissing { .. } => 8,

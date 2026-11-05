@@ -239,6 +239,7 @@ impl RequestFixture {
             .store_route_table(build_domain_route_rules_from_routes(
                 &HashMap::from([("cache-c0/route".into(), route)]),
                 &DomainRouteRules::new(),
+                &crate::routes::delegation::DelegationSlotTable::new(),
             ));
         publisher.update_http_routes(
             HashMap::new(),

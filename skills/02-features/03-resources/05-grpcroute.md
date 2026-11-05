@@ -122,10 +122,9 @@ ExtensionRef requires exact `group: edgion.io`, `kind: EdgionPlugins`, and a
 valid resource name. It is local to the declaring Route, with `default` for an
 omitted Route namespace and no operator namespace selector. Controller owning
 filter loans reject invalid identities before plugin dependency registration or
-content reads. Valid missing bundles retain recovery edges, including valid
-references on later-dropped child rules. Authored namespace stamps are ignored;
-flattened copies carry Controller-owned child locality. Gateway early lookup and
-request-capture migration remains the separate R3a2 slice.
+content reads. Valid missing bundles retain recovery edges. Under delegation
+every level is compiled from its own route, so an ExtensionRef always resolves
+in the declaring route's namespace; there is no namespace stamp.
 
 
 **Note**: GRPCRoute does not support `RequestRedirect` or `URLRewrite`.
@@ -147,16 +146,19 @@ Currently, retries are triggered on connection failure (`fail_to_connect`), prox
 A rule delegates a **gRPC service** to child GRPCRoutes (possibly in other
 namespaces) by pointing its **single** `backendRef` at
 `group: gateway.networking.k8s.io, kind: GRPCRoute` (`name: "*"` = every route
-in the target namespace). The controller flattens the tree at parse time into
-the controller-resolved `resolved_rules` field; the data plane never sees the
-nesting. Unlike HTTPRoute's path-prefix scope, the delegated unit here is a
-gRPC service name compared by spec-string equality (no canonicalization gap).
+in the target namespace that declares this parent). The child names the parent
+in its own `parentRefs` (`kind: GRPCRoute`). It is the same cascading match as
+[HTTPRoute delegation](04-httproute.md#route-delegation-multi-tenancy): the
+Controller publishes each route once plus the child's
+`resolved_delegation_keys`; the Gateway matches level by level through
+per-target `GrpcMatchEngine` subtrees. The delegated unit is a gRPC service
+name compared by string equality.
 
 ```yaml
 rules:
   - matches:
       - method: { type: Exact, service: billing.v1.PaymentService }  # method must be absent
-    filters:              # mandatory, inherited by all child rules
+    filters:              # mandatory for all delegated traffic
       - type: RequestHeaderModifier
         requestHeaderModifier: { set: [{ name: x-tenant, value: billing }] }
     backendRefs:
@@ -168,40 +170,31 @@ rules:
 
 Key semantics (canonical user doc: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); architecture: [`../../01-architecture/05-resources/05-grpc-route.md`](../../01-architecture/05-resources/05-grpc-route.md)):
 
+- parentRefs shape, bidirectional confirmation, the 5-level cap, per-level
+  precedence, backtracking with "first entry wins", inheritance and status
+  reasons are identical to HTTPRoute.
 - A delegating rule's `matches` must be present and non-empty, and every match
   must carry a `method` matcher with `type` Exact-or-omitted, non-empty
   `service`, and no `method` — **a matchless delegating rule is invalid**
-  (deliberately does NOT mirror HTTPRoute's `"/"` default; delegate-all is out
-  of scope for v1).
-- A child match with a non-empty, non-matching `method.service` is out of
-  scope (dropped); one with a missing outer matcher or valid method-only
-  matcher inherits the delegated service. Explicit empty matchers and empty
-  Exact fields invalidate the child rule. A matchless
-  child rule flattens to **one inherited match per delegated scope**, never
-  cloned as-is (a raw clone would compile to a gateway catch-all).
-- `type: RegularExpression` in a child match invalidates that child rule
-  (v1 rejects the regex match outright rather than proving containment).
-- Children must not set `hostnames`; children may delegate further (cycle
-  detection, depth cap 8); children may reverse-lock parents via
-  `parentRefs {kind: GRPCRoute}`.
+  (delegate-all is out of scope).
+- Child matches are absolute; the scope is the intersection with the
+  delegated service. A child `service` that differs never matches (no error);
+  a child without `service` matches the delegated one; a matchless child rule
+  is a catch-all inside the subtree (safe: the root level fixed the service).
+  Ordinary GRPCRoute method validation applies to child rules unchanged.
 - Parent standard filters (`RequestHeaderModifier`/`ResponseHeaderModifier`)
-  are mandatory (same-type child filter ⇒ rule dropped); `ExtensionRef` chains
-  concatenate (parent first). `timeouts` / `retry` / `sessionPersistence`:
-  child-first-else-inherit.
-- Child backendRef namespace defaults to the child's namespace; cross-ns
-  Service refs are ReferenceGrant-checked with the child as referrer.
-- Additive: `backendRef {kind: GRPCRoute}` was previously invalid config;
-  `allowedRoutes` semantics are untouched.
+  are mandatory; `ExtensionRef` chains run parent first.
 
 ### Failure semantics
 
 | Condition | Surface |
 |-----------|---------|
-| Named delegation child does not exist | `ResolvedRefs=False` / `BackendNotFound` |
-| Delegating rule malformed (matchless, `method.method` set, regex match, header-only match, empty service, `port`/`filters`/multiple backendRefs present) | Rule dropped; `PartiallyInvalid=True` |
-| Child rule has a header conflict, standard-filter conflict, all matches out of scope, or a `RegularExpression` match | Rule dropped; `PartiallyInvalid=True` |
-| Delegation cycle / depth > 8 | Rule dropped; `PartiallyInvalid=True` (`DelegationLoop` / `DelegationDepthExceeded`) |
-| Child sets `spec.hostnames` | Child rules from that route skipped |
+| Named delegation child does not exist | Parent `ResolvedRefs=False` / `BackendNotFound` |
+| Named child exists but does not declare the parent | Parent `ResolvedRefs=False` / `RefNotPermitted` |
+| Delegating rule malformed (matchless, `method.method` set, regex match, header-only match, empty service, `port`/`filters`/multiple backendRefs present) or carrying a backend-selecting plugin | Rule dropped; parent `PartiallyInvalid=True` |
+| Child rule conflicts with a parent mandatory filter | Child entry `Accepted=True` + `PartiallyInvalid=True`; rule skipped under that parent only |
+| Parent unreachable from a root / parent at level 5 | Child entry `Accepted=False` / `NotAttached` / `DepthExceeded` |
+| Child sets `spec.hostnames` / invalid parentRefs shape | Every child entry `Accepted=False` / `UnsupportedValue` / `InvalidParentRefs`; route inert |
 | Wildcard (`name: "*"`) resolves to zero children | Valid — no-op, not an error |
 | Unmatched gRPC request at runtime | `UNIMPLEMENTED` (gRPC status code 12), not HTTP 404 |
 
@@ -215,5 +208,5 @@ Internal processing: [`01-architecture/05-resources/05-grpc-route.md`](../../01-
 | Filters | 6 types (including Redirect, URLRewrite) | 4 types (no Redirect, URLRewrite) |
 | Internal implementation | Independent matching engine | Shared route_utils, gRPC-specific MatchInfo |
 | gRPC-Web | Not supported | Auto-detected |
-| Delegation scope unit | Path prefix (containment) | gRPC service name (spec-string equality) |
+| Delegation scope unit | Path prefix (intersection) | gRPC service name (string equality) |
 | Matchless delegating rule | Delegates `"/"` (default) | Invalid (delegate-all out of scope for v1) |

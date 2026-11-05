@@ -406,7 +406,7 @@ Edgion 将每条请求的完整生命周期压缩为一行 JSON 日志。`Access
 |------|------|------|
 | `ts` | i64 | 毫秒级 UTC 时间戳（`chrono::Utc::now().timestamp_millis()`） |
 | `request_info` | RequestInfo | 请求元数据：method、path、status、client IP、协议、X-Trace-Id 等 |
-| `match_info` | RouteMatchInfo | 路由匹配结果，支持 HTTP 和 gRPC 两种路由类型（`#[serde(untagged)]` 枚举） |
+| `match_info` | MatchInfoChain | 路由匹配结果，按根 → 叶排序的数组（普通路由一个元素，委派路由每层一个元素）；HTTP 与 gRPC 形态相同 |
 | `diagnostics` | `[{kind, code}]` | 按发生顺序记录的请求诊断，包括已恢复故障和重要信息 |
 | `backend_context` | BackendContext | 后端上游信息：服务名、命名空间、上游 IP/端口、响应体大小、写入等待时间 |
 | `stage_logs` | \[StageLogs\] | 各插件阶段的执行日志——哪些插件被执行、耗时多少、返回了什么结果 |

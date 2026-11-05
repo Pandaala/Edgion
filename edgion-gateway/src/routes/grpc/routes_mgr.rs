@@ -6,9 +6,11 @@ use std::fmt::Display;
 use std::sync::{Arc, OnceLock, Weak};
 
 use crate::ctx::EdgionHttpContext;
+use crate::routes::delegation::DelegationSlotTable;
+use crate::routes::grpc::delegation_build::{is_grpc_delegation_child, GrpcDelegationIndex};
+use crate::routes::grpc::match_engine::GrpcRouteMatchResult;
 use crate::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::{GRPCRoute, ListenerKey};
 
@@ -44,14 +46,15 @@ impl GrpcRouteRules {
     /// - `index`: Pre-built gateway/listener index for this port
     /// - `hostname`: Request hostname for route-level hostname matching
     ///
-    /// Returns matched route unit and the specific `GatewayInfo` that passed validation.
+    /// Returns the matched (leaf) route unit, the specific `GatewayInfo` that
+    /// passed root validation, and the delegated ancestors (if any).
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
+    ) -> Result<GrpcRouteMatchResult, EdError> {
         if let Some(ref engine) = self.match_engine {
             engine.match_route(session, ctx, index, hostname)
         } else {
@@ -85,7 +88,7 @@ impl DomainGrpcRouteRules {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
+    ) -> Result<GrpcRouteMatchResult, EdError> {
         self.grpc_routes.match_route(session, ctx, index, hostname)
     }
 
@@ -151,6 +154,14 @@ pub struct GlobalGrpcRouteManagers {
     /// concurrently under different per-kind locks; this is the only lock both
     /// contend on, preventing a stale-snapshot rebuild leak. Synchronous only.
     rebuild_lock: parking_lot::Mutex<()>,
+
+    /// GRPCRoute delegation slots (key -> subtree engine). Only mutated under
+    /// `rebuild_lock`; delegating units hold their slot `Arc` from compile time.
+    pub(crate) delegation_slots: DelegationSlotTable<GrpcMatchEngine>,
+
+    /// Delegation child index (child -> accepted keys + compiled units). Only
+    /// touched under `rebuild_lock`.
+    pub(crate) delegation_index: Mutex<GrpcDelegationIndex>,
 }
 
 impl Default for GlobalGrpcRouteManagers {
@@ -166,6 +177,8 @@ impl GlobalGrpcRouteManagers {
             by_listener: DashMap::new(),
             route_units_cache: Mutex::new(HashMap::new()),
             rebuild_lock: parking_lot::Mutex::new(()),
+            delegation_slots: DelegationSlotTable::new(),
+            delegation_index: Mutex::new(GrpcDelegationIndex::default()),
         }
     }
 
@@ -366,8 +379,11 @@ impl GlobalGrpcRouteManagers {
 
     /// Bucket all cached units by their routes' resolved listeners.
     ///
-    /// When a route has no `resolved_listeners`, it is skipped with a warning.
-    fn bucket_units_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> {
+    /// When a route has no `resolved_listeners`, it is skipped with a warning
+    /// (silently for delegation children, which are routed to slots).
+    pub(crate) fn bucket_units_by_listener(
+        &self,
+    ) -> HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> {
         let units_cache = self.route_units_cache.lock();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
 
@@ -377,7 +393,10 @@ impl GlobalGrpcRouteManagers {
             let listeners = resolved_listeners_for_grpc_route(route);
 
             if listeners.is_empty() {
-                tracing::warn!(route = %route_key, "GRPCRoute has no resolved_listeners, skipping");
+                // Delegation children are published through slots, never by listener.
+                if !is_grpc_delegation_child(route) {
+                    tracing::warn!(route = %route_key, "GRPCRoute has no resolved_listeners, skipping");
+                }
                 continue;
             }
 

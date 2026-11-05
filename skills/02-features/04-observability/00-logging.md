@@ -30,7 +30,7 @@ Each entry is serialized from `AccessLogEntry` (`edgion-gateway/src/observe/acce
 | `ts` | Entry timestamp (epoch milliseconds) |
 | `request_info.host` / `request_info.path` | Request host and normalized current path |
 | `request_info.status` | Final downstream HTTP status (`0` when unknown), matching Nginx/OpenResty `$status` semantics |
-| `match_info.sv` | Controller → Gateway sync version (omitted when 0) |
+| `match_info[].sv` | Controller → Gateway sync version per matched level (`match_info` is an array, root → leaf; omitted when 0) |
 | `diagnostics` | Ordered `{kind, code}` request events; errors may be recovered by a later retry |
 | `stage_logs` | Per-plugin execution log (compact, ≤ 40 bytes per entry) |
 | `backend_context.upstreams` | Upstream connection details (ip, port, timing phases, retry) |

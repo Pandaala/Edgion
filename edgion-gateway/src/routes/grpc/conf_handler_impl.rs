@@ -1,10 +1,16 @@
 use crate::routes::common::{
     effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs,
 };
+use crate::routes::delegation::DelegationSlotTable;
+use crate::routes::grpc::delegation_build::is_grpc_delegation_child;
 use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo};
 use crate::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
-use crate::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
+use crate::routes::grpc::{get_global_grpc_route_managers, GrpcMatchEngine, GrpcRouteRuleUnit};
+use crate::routes::http::delegation_build::process_gateway_identities;
 use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resources::route_delegation::{
+    delegation_target_of_grpc_rule, key_for, standard_filter_mask_grpc, RouteKindName,
+};
 use edgion_resources::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -18,11 +24,12 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         tracing::info!(component = "grpc_route_manager", count = data.len(), "full set start");
 
         // Step 1: Parse all routes and build units cache
+        let previous: Vec<Arc<GRPCRoute>> = self.route_cache.iter().map(|e| Arc::clone(e.value())).collect();
         self.route_cache.clear();
         let mut new_units_cache: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
 
         for (key, route) in data {
-            let units = parse_route_to_units(key, route);
+            let units = parse_route_to_units(key, route, &self.delegation_slots);
             new_units_cache.insert(key.clone(), units);
             self.route_cache.insert(key.clone(), route.clone()); // Arc clone
         }
@@ -31,6 +38,9 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         // Step 2: Rebuild all per-listener managers (lock already held above).
         self.rebuild_all_listener_managers_locked();
+
+        // Step 3: Rebuild every delegation slot from scratch.
+        let slot_garbage = self.rebuild_all_delegation_locked(previous.iter(), data, process_gateway_identities);
 
         tracing::info!(
             component = "grpc_route_manager",
@@ -48,6 +58,9 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
                 .collect(),
             self.publication_tables(),
         );
+        // After the previous tables are released, so dropped parents no longer pin slots.
+        drop(previous);
+        self.collect_delegation_slots(&slot_garbage);
     }
 
     fn partial_update(
@@ -87,7 +100,9 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         for (key, route) in &add_or_update {
             let listeners = resolved_listeners_for_grpc_route(route);
             if listeners.is_empty() {
-                tracing::warn!(route = %key, "GRPCRoute has no resolved_listeners during partial_update");
+                if !is_grpc_delegation_child(route) {
+                    tracing::warn!(route = %key, "GRPCRoute has no resolved_listeners during partial_update");
+                }
             } else {
                 for listener in listeners {
                     affected_listeners.insert(listener.clone());
@@ -107,11 +122,18 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             }
         }
 
+        // Previous generations of every changed route, for delegation routing.
+        let delegation_changes: Vec<(String, Option<Arc<GRPCRoute>>)> = add_or_update
+            .keys()
+            .chain(&remove)
+            .map(|key| (key.clone(), self.route_cache.get(key).map(|e| Arc::clone(e.value()))))
+            .collect();
+
         // Update route cache and units cache
         {
             let mut units_cache = self.route_units_cache.lock();
             for (key, route) in &add_or_update {
-                let units = parse_route_to_units(key, route);
+                let units = parse_route_to_units(key, route, &self.delegation_slots);
                 units_cache.insert(key.clone(), units);
                 self.route_cache.insert(key.clone(), route.clone()); // Arc clone
             }
@@ -121,8 +143,10 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             }
         }
 
-        // Rebuild affected listener managers
+        // Rebuild affected listener managers. Child-only changes leave
+        // `affected_listeners` empty: no listener rebuild.
         self.rebuild_affected_listener_managers(&affected_listeners);
+        let slot_garbage = self.apply_delegation_changes_locked(&delegation_changes, process_gateway_identities);
 
         tracing::info!(
             component = "grpc_route_manager",
@@ -134,6 +158,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             &policy_removed,
             self.publication_tables(),
         );
+        drop(delegation_changes);
+        self.collect_delegation_slots(&slot_garbage);
     }
 }
 
@@ -145,18 +171,17 @@ pub fn create_grpc_route_handler() -> Box<dyn ConfHandler<GRPCRoute> + Send + Sy
 #[cfg(test)]
 include!("../../../tests/support/routes/grpc/conf_handler_impl_test/147_function_item.rs");
 
-/// Parse a single GRPCRoute into route rule units.
-fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<GrpcRouteRuleUnit>> {
-    if edgion_resources::resources::refs::route_fields::GrpcRouteBackendRefs::from_route(route).is_err() {
-        return Vec::new();
-    }
-    if let Err(error) = route.spec.validate_hostnames() {
-        tracing::warn!(component = "grpc_route_manager", route = resource_key, %error,
-            "Invalid GRPCRoute hostnames; skipping the complete route");
+/// Parse a single root GRPCRoute into listener-bucketed rule units.
+/// Delegation children yield no units here; they are compiled into slots.
+fn parse_route_to_units(
+    resource_key: &str,
+    route: &Arc<GRPCRoute>,
+    slots: &DelegationSlotTable<GrpcMatchEngine>,
+) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    if !route_compiles(resource_key, route) || is_grpc_delegation_child(route) {
         return Vec::new();
     }
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-    let route_name = route.metadata.name.as_deref().unwrap_or("");
 
     let Some(accepted_refs) = filter_accepted_parent_refs(
         route.spec.parent_refs.as_deref(),
@@ -169,7 +194,61 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
 
     // Derive attached gateway pairs before accepted_refs is moved into route_info.
     let attached_gateways = gateways_from_parent_refs(&accepted_refs, route_namespace);
+    let route_info = Arc::new(GrpcRouteInfo {
+        parent_refs: Some(resolve_parent_refs(&accepted_refs, route_namespace)),
+        effective_hostnames: effective_hostnames(
+            route.spec.resolved_hostnames.as_deref(),
+            route.spec.hostnames.as_deref(),
+        ),
+    });
+    compile_route_units(resource_key, route, route_info, &attached_gateways, slots)
+}
 
+/// Compile one delegation child's units once. The units carry the child's own
+/// namespace/identity and no hostname or Gateway eligibility (the root level
+/// decides those); they are `Arc`-shared into every subtree whose key the
+/// child holds. Leaf metric handles are prebuilt for every process Gateway.
+pub(super) fn compile_child_units(
+    route: &Arc<GRPCRoute>,
+    slots: &DelegationSlotTable<GrpcMatchEngine>,
+    process_gateways: &[(String, String)],
+) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    let resource_key = route.key_name();
+    if !route_compiles(&resource_key, route) {
+        return Vec::new();
+    }
+    let route_info = Arc::new(GrpcRouteInfo {
+        parent_refs: None,
+        effective_hostnames: Vec::new(),
+    });
+    compile_route_units(&resource_key, route, route_info, process_gateways, slots)
+}
+
+/// Route-level checks shared by roots and children.
+fn route_compiles(resource_key: &str, route: &GRPCRoute) -> bool {
+    if edgion_resources::resources::refs::route_fields::GrpcRouteBackendRefs::from_route(route).is_err() {
+        return false;
+    }
+    if let Err(error) = route.spec.validate_hostnames() {
+        tracing::warn!(component = "grpc_route_manager", route = resource_key, %error,
+            "Invalid GRPCRoute hostnames; skipping the complete route");
+        return false;
+    }
+    true
+}
+
+/// Compile every accepted rule of one route into match units. A delegating
+/// rule obtains its target slot here (compile time) and compiles no backends,
+/// so the request path never looks a key up.
+fn compile_route_units(
+    resource_key: &str,
+    route: &Arc<GRPCRoute>,
+    route_info: Arc<GrpcRouteInfo>,
+    metric_gateways: &[(String, String)],
+    slots: &DelegationSlotTable<GrpcMatchEngine>,
+) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+    let route_name = route.metadata.name.as_deref().unwrap_or("");
     let route_sv = route.get_sync_version();
     let (route_labels_meta, route_annotations_meta) = crate::ctx::extract_route_meta(&route.metadata);
     let creation_ts_ms = route
@@ -178,35 +257,31 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
         .as_ref()
         .map(|t| t.0.timestamp_millis())
         .unwrap_or(0);
-    let route_info = Arc::new(GrpcRouteInfo {
-        parent_refs: Some(resolve_parent_refs(&accepted_refs, route_namespace)),
-        effective_hostnames: effective_hostnames(
-            route.spec.resolved_hostnames.as_deref(),
-            route.spec.hostnames.as_deref(),
-        ),
-    });
 
-    // Delegation: when the controller flattened a delegation tree into
-    // resolved_rules, compile those INSTEAD of the operator-authored rules.
-    // invalid_rule_indices refers to spec.rules; when resolved_rules is
-    // present, flattening already dropped invalid rules and the indices do
-    // not apply.
-    let invalid_rule_indices = if route.spec.resolved_rules.is_some() {
-        None
-    } else {
-        route.spec.invalid_rule_indices.as_ref()
-    };
+    let invalid_rule_indices = route.spec.invalid_rule_indices.as_ref();
 
     let mut units = Vec::new();
-    if let Some(rules) = route.effective_rules() {
+    if let Some(rules) = route.spec.rules.as_ref() {
         for (rule_id, rule) in rules.iter().enumerate() {
             // Skip rules marked invalid by Controller
             if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
                 continue;
             }
+            // Delegation shape is re-checked locally, not trusted from the Controller.
+            let target = match delegation_target_of_grpc_rule(rule, route_namespace) {
+                None => None,
+                Some(Ok(target)) => Some(target),
+                Some(Err(reason)) => {
+                    tracing::warn!(route = %resource_key, rule_id, %reason,
+                        "skipping malformed delegating GRPCRoute rule");
+                    continue;
+                }
+            };
             // Compile matchers once, before allocating rule runtime state. An
             // invalid method predicate withdraws its entire rule on both planes,
             // including input whose Controller status is absent or stale.
+            // A matchless rule is a catch-all; inside a delegation subtree that
+            // is safe because the parent level already fixed the service.
             let catch_all = edgion_resources::GRPCRouteMatch {
                 method: None,
                 headers: None,
@@ -236,15 +311,26 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                 continue;
             }
             let rule_arc = Arc::new(rule.clone());
-            let Some(rule_runtime) = GrpcRouteRuleUnit::compile_grpc_rule(route, rule_id) else {
+            let Some(mut rule_runtime) = GrpcRouteRuleUnit::compile_grpc_rule(route, rule_id) else {
                 continue;
             };
+            let delegate = target.map(|target| {
+                slots.get_or_create(&key_for(RouteKindName::GRPCRoute, route_namespace, route_name, &target))
+            });
+            // A delegating rule has no backends of its own (backends: leaf only).
+            let metric_backends = if delegate.is_some() {
+                rule_runtime.backends = Arc::from(Vec::new());
+                Vec::new()
+            } else {
+                grpc_backends_from_rule(rule, route_namespace)
+            };
+            let filter_mask = standard_filter_mask_grpc(rule);
             let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_runtime.backends);
             let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-                &attached_gateways,
+                metric_gateways,
                 route_namespace,
                 route_name,
-                &grpc_backends_from_rule(rule, route_namespace),
+                &metric_backends,
             ));
 
             for matched_info in matched_infos {
@@ -260,6 +346,8 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                     match_index: matched_info.match_id as u32,
                 };
                 units.push(Arc::new(GrpcRouteRuleUnit {
+                    delegate: delegate.clone(),
+                    filter_mask,
                     session_persistence_ttl_secs: rule_runtime.session_persistence_ttl_secs,
                     resource_key: resource_key.to_string(),
                     matched_info,

@@ -1,18 +1,53 @@
 # Delegation child owned by the application team.
-# No Gateway parentRefs: this route only becomes reachable through the
-# parent's delegation. Rule 1 is inside the delegated prefix; rule 2 is
-# outside it and must be dropped by the controller flatten step (404).
+# It declares the platform parent as its only (route-kind) parentRef: the
+# edge exists only because the parent delegates to it AND it names the
+# parent. It never attaches to a Gateway directly.
+# Child paths are absolute; the effective scope is the intersection with the
+# parent's /api/v1/billing prefix:
+# - rule 0 (/api/v1/billing/pay) is inside the scope. Its plugin denies a
+#   client-sent `x-parent-filter: off`; the parent overwrites the header with
+#   "on" first, so the request passes only if the parent filter runs before
+#   the child plugin.
+# - rule 1 (/api/v1/billing/audit) is inside the scope. Its plugin denies
+#   `x-parent-filter: on`, proving the child plugin observes the value the
+#   parent set (403).
+# - rule 2 (/evil) is disjoint from the parent scope and therefore never
+#   matches through the parent (404). It is not rejected.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: billing-child
   namespace: edgion-deleg
 spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: delegation-parent
+      namespace: edgion-test
   rules:
     - matches:
         - path:
             type: PathPrefix
             value: /api/v1/billing/pay
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: deleg-deny-client-header
+      backendRefs:
+        - name: child-svc
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing/audit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: deleg-deny-parent-header
       backendRefs:
         - name: child-svc
           port: 30001

@@ -1,0 +1,26 @@
+# five_level_chain, level 1 (root): /chain -> chain-l2.
+# Levels: chain-l1 (root) -> chain-l2 -> chain-l3 -> chain-l4 -> chain-l5.
+# chain-l5 is the deepest allowed level (MAX_ROUTE_DELEGATION_LEVELS = 5);
+# its delegating rule to chain-l6 never matches and chain-l6 reports
+# Accepted=False / DepthExceeded.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-l1
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "chain.delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chain
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: chain-l2
+          namespace: edgion-deleg

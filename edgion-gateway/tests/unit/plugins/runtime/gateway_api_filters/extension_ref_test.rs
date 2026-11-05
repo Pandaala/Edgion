@@ -17,7 +17,6 @@ fn plugin_key_accessor_is_allocation_free() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "api-guard".into(),
-            resolved_namespace: None,
         },
     );
 
@@ -108,7 +107,6 @@ async fn request_inner_identity_restores_outer_on_early_result() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "terminating".into(),
-            resolved_namespace: None,
         },
     );
     filter.set_index(0);
@@ -172,7 +170,6 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "waf".into(),
-            resolved_namespace: None,
         },
     );
     filter.set_index(0);
@@ -232,7 +229,6 @@ async fn async_response_reuses_resolved_runtime_for_skip_and_error() {
                 group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "waf".into(),
-                resolved_namespace: None,
             },
         );
         filter.set_index(0);
@@ -277,7 +273,6 @@ fn backend_scope_uses_request_pinned_runtime_across_attempts() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "p1".into(),
-            resolved_namespace: None,
         },
     );
     let mut log = PluginLog::new("test");
@@ -320,7 +315,6 @@ fn backend_scope_rejects_upstream_jump_runtime() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "jump".into(),
-            resolved_namespace: None,
         },
     );
     let mut log = PluginLog::new("ExtensionRef");
@@ -359,7 +353,6 @@ fn index_hit_uses_resolved_target() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "p1".into(),
-            resolved_namespace: None,
         },
     );
     filter.set_index(0);
@@ -390,7 +383,6 @@ fn index_miss_returns_500() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "p1".into(),
-            resolved_namespace: None,
         },
     );
     filter.set_index(7);
@@ -434,7 +426,6 @@ async fn unsupported_kind_fails_closed() {
             group: "edgion.io".into(),
             kind: "NotAPlugin".into(),
             name: "x".into(),
-            resolved_namespace: None,
         },
     );
     let mut log = PluginLog::with_alias("ExtensionRef", None);
@@ -454,7 +445,6 @@ fn empty_group_does_not_alias_edgion_io() {
             group: String::new(),
             kind: "EdgionPlugins".into(),
             name: "x".into(),
-            resolved_namespace: None,
         },
     );
     let mut log = PluginLog::with_alias("ExtensionRef", None);
@@ -504,7 +494,6 @@ async fn invalid_name_never_resolves_at_any_stage_or_allocates_body_logs() {
                 group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "bad/name".into(),
-                resolved_namespace: None,
             },
             if index.is_some() { None } else { Some(0) },
         );
@@ -582,7 +571,6 @@ async fn backend_actual_context_cache_survives_all_four_stages_and_retries() {
             group: "edgion.io".into(),
             kind: "EdgionPlugins".into(),
             name: "plugins".into(),
-            resolved_namespace: None,
         },
     );
     for _attempt in 0..3 {

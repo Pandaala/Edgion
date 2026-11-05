@@ -125,8 +125,8 @@ After all processors are cache-ready, `run_post_cache_ready_revalidations()` run
 | 2 | `trigger_gateway_secret_revalidation()` | Requeue all Gateways |
 | 3 | `trigger_gateway_route_revalidation()` | Requeue all routes registered in gateway_route_index |
 | 4 | `trigger_gatewayclass_params_revalidation()` | Requeue all GatewayClasses to re-resolve `parametersRef` |
-| 5 | `trigger_delegation_parent_revalidation()` | Re-flatten delegating parent HTTPRoutes |
-| 6 | `trigger_grpc_delegation_parent_revalidation()` | Re-flatten delegating parent GRPCRoutes |
+| 5 | `trigger_delegation_parent_revalidation()` | Requeue every delegating parent HTTPRoute so edges, keys and levels settle after init |
+| 6 | `trigger_grpc_delegation_parent_revalidation()` | Same for delegating parent GRPCRoutes |
 
 Call sites:
 - `kubernetes/center.rs` (main initialization + HA all-serve reload)
@@ -172,7 +172,9 @@ Route ↔ Gateway is one important bidirectional relationship:
 - **Route on_change → requeue Gateway**: current parent status is refreshed on reconciliation; dropped parents are also requeued. A status-only Gateway publication does not change the routing-input record and cannot restart the loop.
 - **Gateway → EdgionTls**: the existing proof-consumer path refreshes every publication epoch independently of the ordinary Route change gate.
 
-Route delegation can also requeue parents and children of the same kind, and
+Route delegation can also requeue parents and children of the same kind (target
+children, declared parents, and level dependents, at most four hops; a cycle
+terminates because levels above five become "none"), and
 policy sibling-precedence changes can requeue peers. Change-detection guards
 reduce churn; TriggerChain remains the final bound for every cycle.
 

@@ -1,3 +1,5 @@
+# Generated from edgion-tests/integration/conf/GRPCRoute/Delegation/*.yaml; child
+# backends point at the shared test-grpc Service through the ReferenceGrant.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -36,39 +38,24 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
-  name: delegation-parent
-  namespace: edgion-test
+  name: backtrack-child
+  namespace: edgion-grpc-deleg
 spec:
   parentRefs:
-    - name: grpc-delegation-gateway
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-backtrack-parent
       namespace: edgion-test
-      sectionName: grpc
-  hostnames:
-    - grpc-delegation.example.com
   rules:
     - matches:
         - method:
             type: Exact
             service: test.TestService
-            method: StreamNumbers
+            method: SayHello
       backendRefs:
         - name: test-grpc
+          namespace: edgion-test
           port: 30021
-    - matches:
-        - method:
-            type: Exact
-            service: test.TestService
-      filters:
-        - type: RequestHeaderModifier
-          requestHeaderModifier:
-            set:
-              - name: x-parent-filter
-                value: "on"
-      backendRefs:
-        - group: gateway.networking.k8s.io
-          kind: GRPCRoute
-          name: "*"
-          namespace: edgion-grpc-deleg
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
@@ -100,3 +87,196 @@ spec:
         - name: test-grpc
           namespace: edgion-test
           port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: matchless-child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-matchless-parent
+      namespace: edgion-test
+  rules:
+    - backendRefs:
+        - name: test-grpc
+          namespace: edgion-test
+          port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: multi-child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-multi-parent-a
+      namespace: edgion-test
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: grpc-multi-parent-b
+      namespace: edgion-test
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: test-grpc
+          namespace: edgion-test
+          port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: delegation-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-delegation.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: StreamNumbers
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "on"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: "*"
+          namespace: edgion-grpc-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-backtrack-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-backtrack.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: backtrack-child
+          namespace: edgion-grpc-deleg
+    - backendRefs:
+        - name: test-grpc
+          port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-matchless-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-matchless.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: matchless
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: matchless-child
+          namespace: edgion-grpc-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-multi-parent-a
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-multi-a.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "a"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: multi-child
+          namespace: edgion-grpc-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-multi-parent-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-multi-b.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "b"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: multi-child
+          namespace: edgion-grpc-deleg

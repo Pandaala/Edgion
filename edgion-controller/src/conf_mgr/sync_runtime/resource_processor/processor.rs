@@ -294,7 +294,7 @@ pub trait ProcessorObj: Send + Sync {
     fn list_keys(&self) -> Vec<String>;
 
     /// Serialize the processed cache snapshot. Unlike `get_raw_any`, this exposes
-    /// Controller-derived fields such as delegated route `resolvedRules` and
+    /// Controller-derived fields such as route `resolvedDelegationKeys` and
     /// internal reference-denial markers used by read-only effective APIs.
     ///
     /// # Secret boundary — read before returning this to a client

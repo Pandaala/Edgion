@@ -18,6 +18,7 @@ pub mod configmap_utils;
 mod context;
 pub mod credential;
 pub mod credential_source_state;
+pub mod delegation_graph;
 pub mod edgion_config_data_utils;
 pub mod frontend_ca_ref;
 pub mod gateway_route_index;
@@ -31,7 +32,6 @@ pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
 pub mod region_route_table;
-pub mod route_delegation_index;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
@@ -85,8 +85,6 @@ pub use proxy_protocol_listener_policy::{
 pub use attached_route_tracker::AttachedRouteTracker;
 
 pub use gateway_route_index::GatewayRouteIndex;
-
-pub use route_delegation_index::RouteDelegationIndex;
 
 pub use service_ref::{new_service_ref_manager, ServiceRefManager};
 

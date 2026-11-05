@@ -21,6 +21,7 @@ use crate::link_sys::template::evaluate_template;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader};
 use crate::request_body::{BodyStorage, BodyStorageView};
+use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::server::{http_to_grpc_status, prepare_grpc_terminal_headers, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet};
@@ -444,6 +445,12 @@ pub struct PingoraSessionAdapter<'a> {
     backend_mirror_allowed: bool,
     /// Local replies from selected-backend dispatch cannot reuse H1 in Pingora.
     backend_request_dispatch: bool,
+    /// Index of the delegated-chain ancestor (`ctx.delegated.ancestors`) whose
+    /// plugin runtime this adapter executes.
+    /// Its ExtensionRefs and `${matchedHttpRoute:...}` templates resolve
+    /// against that level's own route. `None` for the leaf and every
+    /// ordinary route, which read the request context as before.
+    level: Option<usize>,
 }
 
 fn backend_mirror_allowed_for_attempt(attempt: Option<usize>) -> bool {
@@ -556,7 +563,46 @@ impl<'a> PingoraSessionAdapter<'a> {
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
             backend_request_dispatch: false,
+            level: None,
         }
+    }
+
+    /// Execute on behalf of a delegated-chain ancestor (`None` keeps the
+    /// leaf/ordinary behavior).
+    #[inline]
+    pub fn with_level(mut self, level: Option<usize>) -> Self {
+        self.level = level;
+        self
+    }
+
+    /// Bind a response processor to the installing level: a processor installed
+    /// by a delegated-chain ancestor renders trusted route templates against
+    /// that ancestor's route. Leaf and ordinary installs are returned as is.
+    #[inline]
+    pub(crate) fn scope_processor_to_level(
+        &self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor> {
+        use crate::plugins::runtime::response_stream_session::{LevelRoute, LevelScopedProcessor};
+        let level = match (self.level_unit(), self.grpc_level_unit()) {
+            (Some(unit), _) => LevelRoute::Http(Arc::clone(unit)),
+            (None, Some(unit)) => LevelRoute::Grpc(Arc::clone(unit)),
+            (None, None) => return processor,
+        };
+        LevelScopedProcessor::wrap(level, processor)
+    }
+
+    /// The executing ancestor's unit; `None` for the leaf and ordinary routes.
+    #[inline]
+    fn level_unit(&self) -> Option<&Arc<HttpRouteRuleUnit>> {
+        self.ctx.delegated.as_ref()?.ancestors.get(self.level?)
+    }
+
+    /// The executing GRPCRoute ancestor's unit; `None` for the leaf, ordinary
+    /// routes and HTTPRoute chains.
+    #[inline]
+    fn grpc_level_unit(&self) -> Option<&Arc<crate::routes::grpc::GrpcRouteRuleUnit>> {
+        self.ctx.delegated.as_ref()?.grpc_ancestors.get(self.level?)
     }
 
     /// Only the backend request dispatcher may use this constructor. Its first
@@ -595,6 +641,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
             backend_request_dispatch: false,
+            level: None,
         }
     }
 
@@ -1221,7 +1268,22 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {
+        if self.level.is_some() {
+            // An ancestor level answers from its own route (spec §6.5).
+            let meta = match proto {
+                RouteProto::Http => &self.level_unit()?.route.as_ref()?.metadata,
+                RouteProto::Grpc => &self.grpc_level_unit()?.route.as_ref()?.metadata,
+            };
+            return route_meta_field(meta, selector);
+        }
         matched_route_meta(self.ctx, proto, selector)
+    }
+
+    fn executing_http_route_unit(&self) -> Option<&HttpRouteRuleUnit> {
+        match self.level {
+            Some(_) => self.level_unit().map(|unit| unit.as_ref()),
+            None => self.ctx.route_unit.as_deref(),
+        }
     }
 
     async fn write_response_header(
@@ -1811,6 +1873,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) {
+        let processor = self.scope_processor_to_level(processor);
         self.ctx.push_response_stream_processor(processor);
     }
 
@@ -1843,6 +1906,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
+        let processor = self.scope_processor_to_level(processor);
         self.ctx.push_response_stream_processor(processor)
     }
 
@@ -2252,7 +2316,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn resolved_route_ext_ref(&self, index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        self.ctx.resolved_route_ext_ref(index)
+        match self.level {
+            Some(level) => self.ctx.delegated.as_ref()?.ext_ref(level, index),
+            None => self.ctx.resolved_route_ext_ref(index),
+        }
     }
 
     fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {

@@ -39,7 +39,6 @@ fn test_backend_ref_in(name: &str, namespace: &str) -> HTTPBackendRef {
 /// and weight semantics must match production exactly.
 fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
     let rule = Arc::new(HTTPRouteRule {
-        resolved_parent_match: None,
         name: None,
         resolved_terminal_route_uid: None,
         resolved_ai_admission: None,
@@ -60,7 +59,8 @@ fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     HttpRouteRuleUnit {
-        parent_match: None,
+        delegate: None,
+        filter_mask: 0,
         session_persistence_ttl_secs: None,
         resource_key: "test-ns/test-route".to_string(),
         matched_info: MatchInfo {

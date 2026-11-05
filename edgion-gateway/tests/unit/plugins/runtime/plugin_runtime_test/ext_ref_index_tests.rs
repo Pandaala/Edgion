@@ -43,7 +43,6 @@ fn make_ext_ref_filter_with_kind(kind: &str, name: &str) -> HTTPRouteFilter {
             group: "edgion.io".into(),
             kind: kind.into(),
             name: name.into(),
-            resolved_namespace: None,
         }),
     }
 }
@@ -148,22 +147,20 @@ fn backend_scope_does_not_collect_keys() {
 }
 
 #[test]
-fn grpc_rule_scope_uses_controller_resolved_namespace() {
+fn grpc_rule_scope_uses_declaring_route_namespace() {
     let filter: GRPCRouteFilter = serde_json::from_value(serde_json::json!({
         "type": "ExtensionRef",
         "extensionRef": {
             "group": "edgion.io",
             "kind": "EdgionPlugins",
-            "name": "child-plugin",
-            "resolvedNamespace": "child"
+            "name": "child-plugin"
         }
     }))
     .expect("gRPC ExtensionRef fixture must deserialize");
-    let mut route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
-        "metadata": {"name": "parent", "namespace": "parent"}, "spec": {"rules": [{"filters": [filter]}]}
+    let route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "child", "namespace": "child"}, "spec": {"rules": [{"filters": [filter]}]}
     }))
     .unwrap();
-    route.spec.resolved_rules = route.spec.rules.take();
     let runtime = PluginRuntime::from_grpcroute_filters_for_rule(&route, 0);
     assert_eq!(runtime.ext_ref_keys(), &[Some("child/child-plugin".to_string())]);
 }
@@ -230,18 +227,15 @@ fn owned_grpc_backend(filters: &[edgion_resources::GRPCRouteFilter], namespace: 
 }
 
 #[test]
-fn owning_extension_slots_validate_targets_and_effective_locality() {
+fn owning_extension_slots_validate_targets_and_owner_locality() {
     let base = serde_json::json!({"metadata":{"name":"route"}, "spec":{"rules":[{"filters":[
-        {"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"first","resolvedNamespace":"child"}},
+        {"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"first"}},
         {"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"bad/name"}},
         {"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"last"}}
     ]}]}});
     for grpc in [false, true] {
-        for resolved in [false, true] {
-            let mut value = base.clone();
-            if resolved {
-                value["spec"]["resolvedRules"] = value["spec"]["rules"].take();
-            }
+        {
+            let value = base.clone();
             let runtime = if grpc {
                 PluginRuntime::from_grpcroute_filters_for_rule(&serde_json::from_value(value).unwrap(), 0)
             } else {
@@ -253,11 +247,7 @@ fn owning_extension_slots_validate_targets_and_effective_locality() {
             };
             assert_eq!(
                 runtime.ext_ref_keys(),
-                &[
-                    Some(if resolved { "child/first" } else { "default/first" }.into()),
-                    None,
-                    Some("default/last".into())
-                ]
+                &[Some("default/first".into()), None, Some("default/last".into())]
             );
             assert_eq!(runtime.request_plugins_count(), 3);
             assert_eq!(runtime.upstream_response_plugins_count(), 3);
@@ -272,13 +262,9 @@ fn owning_extension_slots_validate_targets_and_effective_locality() {
             ("group", serde_json::json!("")),
             ("group", serde_json::json!("core")),
             ("kind", serde_json::json!("Service")),
-            ("resolvedNamespace", serde_json::json!("UPPER")),
         ] {
             let mut input = base.clone();
             input["spec"]["rules"][0]["filters"][0]["extensionRef"][field] = value;
-            if field == "resolvedNamespace" {
-                input["spec"]["resolvedRules"] = input["spec"]["rules"].take();
-            }
             let runtime = if grpc {
                 PluginRuntime::from_grpcroute_filters_for_rule(&serde_json::from_value(input).unwrap(), 0)
             } else {
@@ -319,16 +305,10 @@ fn owning_extension_slots_validate_targets_and_effective_locality() {
 #[tokio::test]
 async fn invalid_effective_backend_extension_rejects_without_any_target_query() {
     for grpc in [false, true] {
-        for (field, value) in [
-            ("name", ""),
-            ("name", "bad/name"),
-            ("group", ""),
-            ("kind", "Secret"),
-            ("resolvedNamespace", "UPPER"),
-        ] {
+        for (field, value) in [("name", ""), ("name", "bad/name"), ("group", ""), ("kind", "Secret")] {
             let mut reference = serde_json::json!({"group":"edgion.io","kind":"EdgionPlugins","name":"decoy"});
             reference[field] = serde_json::json!(value);
-            let source = serde_json::json!({"metadata":{"name":"route","namespace":"default"},"spec":{"resolvedRules":[{"backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":reference}]}]}]}});
+            let source = serde_json::json!({"metadata":{"name":"route","namespace":"default"},"spec":{"rules":[{"backendRefs":[{"name":"service","port":80,"filters":[{"type":"ExtensionRef","extensionRef":reference}]}]}]}});
             let runtime = if grpc {
                 PluginRuntime::from_grpcroute_filters_for_backend(&serde_json::from_value(source).unwrap(), 0, 0)
             } else {

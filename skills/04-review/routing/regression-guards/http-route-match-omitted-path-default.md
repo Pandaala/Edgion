@@ -52,31 +52,17 @@ gateway-routing-only fix leaves three of them on the `None` branch. Defaulting
 at deserialization fixes all five at once and keeps File/Etcd byte-identical to
 what a K8s cluster would have served.
 
-**3. The controller's two `None` branches — CORRECTED 2026-07-29**
+**3. The controller's two `None` branches — CORRECTED 2026-07-29 (historical)**
 
-The original closure claimed both delegation sites were unaffected. That was
-true only for the two cases it checked, and it missed a third:
-
-- `route_delegation.rs` scope derivation maps `None => ("PathPrefix", "/")` —
-  literally the same value the new default produces, so it is a no-op change.
-  (Still true.)
-- `route_delegation.rs` synthesizes an `HTTPRouteMatch { path: None, .. }`
-  **in code** for a child rule that declares no `matches` at all. Code-built
-  values never pass through `Deserialize`, so that sentinel stays `None`.
-  (Still true.)
-- **Missed**: a child rule that DOES declare `matches` whose individual match
-  omits `path` (method/header-only). Those matches ARE deserialized, so the
-  backfill turned them into an explicit `PathPrefix /`, the containment check
-  judged `/` outside every delegated prefix, and the rule was dropped —
-  `child_match_without_path_inherits_prefix` sat red from this commit until
-  the two-repo `cargo test` gate caught it. Fixed by treating the structural
-  default as inherit-scope-prefix in `merge_match`; see
-  [delegation-root-prefix-inherits-scope.md](delegation-root-prefix-inherits-scope.md).
-
-The single behavior delta is a File/Etcd child rule that *explicitly declares*
-`matches` with a `path`-less item: it now becomes `PathPrefix /`, fails the
-scope-containment check, and is dropped — exactly what the same YAML already
-did on Kubernetes. Aligning to K8s is the point of the fix.
+> History: this item described Controller delegation flattening
+> (`route_delegation.rs` scope derivation and `merge_match` prefix inheritance),
+> which the cascading-match redesign removed. Today a child match whose path is
+> omitted (backfilled to `PathPrefix /`) simply covers the whole delegated scope
+> by intersection with the parent level; nothing is inherited, rewritten or
+> dropped. See [the cascading-match guard](delegation-cascading-match-issue-010.md)
+> and the superseded
+> [prefix-inheritance page](../superseded/delegation-root-prefix-inherits-scope.md).
+> The structural default itself is still required.
 
 ## Fix Suggestions Not Accepted
 

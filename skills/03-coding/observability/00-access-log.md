@@ -58,7 +58,8 @@ for ARCH-019 ownership evidence and verification limits.
 | `discover_protocol` | Auto-detected protocol (grpc / websocket etc.) |
 | `diagnostics` | One ordered request history of `{kind, code}` entries; `kind` is intrinsically `info` or `error` |
 | `diagnostics_full` | Present and `true` only when the bounded request history dropped one or more tail entries |
-| `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
+| `match_info` | Array ordered root → leaf (`MatchInfoChain`, custom `Serialize`, no allocation); each element is one level's `MatchInfo` (`rsc`, `rule_id`, `match_id`, `sv`). Ordinary routes emit a one-element array; delegated routes one element per level with that level's authored indexes |
+| `match_info[].sv` | sync_version — gRPC sync version of that level's route, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
 | `waf` | Optional final native-WAF summary: selected source/priority/mode, fixed phase summaries, bounded loggable findings, first intervention, and first terminal error |
 | upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked by the request diagnostic `{kind: "error", code: "ClientClosed"}` |
