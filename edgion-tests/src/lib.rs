@@ -17,6 +17,17 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+/// Install the ring rustls provider for unit tests. Harness binaries install
+/// it in `main`; reqwest is built with `rustls-no-provider`, so tests that
+/// construct clients directly need the same process-wide provider.
+#[cfg(test)]
+pub(crate) fn install_test_crypto_provider() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 #[path = "client/access_log_client.rs"]
 pub mod access_log_client;
 #[path = "client/admin_apply.rs"]

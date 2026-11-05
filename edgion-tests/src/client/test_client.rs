@@ -1063,7 +1063,7 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         assert!(runner.contains("Status: ${status}"));
         for phase in [
             r#"REPORT_PHASE="main tests""#,
-            r#"REPORT_PHASE="Controller and Gateway reload""#,
+            r#"REPORT_PHASE="Controller restart and Gateway resynchronization""#,
             r#"REPORT_PHASE="final metrics validation""#,
             r#"REPORT_PHASE="final unknown-field validation""#,
             r#"REPORT_PHASE="final requeue-loop validation""#,
@@ -4237,14 +4237,18 @@ fn suite_context_resolver(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Install the default rustls crypto provider (once).
+/// Install the default rustls crypto provider (once per process).
+fn install_crypto_provider() {
     INIT.call_once(|| {
         rustls::crypto::ring::default_provider()
             .install_default()
             .expect("Failed to install rustls crypto provider");
     });
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    install_crypto_provider();
 
     let cli = Cli::parse();
 
@@ -4393,6 +4397,8 @@ mod context_selection_tests {
     }
 
     fn base(nondefault: bool) -> TestContext {
+        // Contexts build HTTP clients; `main` normally installs the provider.
+        install_crypto_provider();
         let args = if nondefault {
             vec![
                 "test_client",

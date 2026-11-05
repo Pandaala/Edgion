@@ -121,6 +121,9 @@ impl TestContext {
         verbose: bool,
         access_log_path: PathBuf,
     ) -> Self {
+        // Binaries install the rustls provider in `main`; unit tests build contexts directly.
+        #[cfg(test)]
+        crate::install_test_crypto_provider();
         let http_client = Self::build_http_client(
             &target_host,
             https_port,

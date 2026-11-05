@@ -154,6 +154,32 @@ nonempty rules. No matching rule or an already-owned upstream jump records no
 selection outcome. Dye is disabled by default and follows the shared anti-spoof
 and header-mutation policy when explicitly configured.
 
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: regional-routing
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      dye:
+        request:
+          - name: X-Served-Region     # value omitted => final selected region (on: [success] by default)
+        response:
+          - name: X-Edgion-Outcome
+            on: [fallback]            # value omitted => region_route:fallback:configuration-unavailable
+      config:
+        clusterRegionRef:
+          name: local-region
+        failOpen: true
+        keyGet:
+          - type: header
+            name: X-Account-Id
+        routeRules:
+          - type: RouteByHashRange
+```
+
 ## Source browsing and single-setting failover
 
 The Controller exposes source-backed setting discovery:

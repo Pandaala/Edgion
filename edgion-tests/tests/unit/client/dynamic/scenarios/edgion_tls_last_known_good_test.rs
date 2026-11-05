@@ -37,6 +37,7 @@ fn context(root: &std::path::Path) -> ScenarioCtx {
 
 #[tokio::test]
 async fn baseline_failure_precedes_every_resource_mutation() {
+    crate::install_test_crypto_provider();
     let temp = tempfile::tempdir().unwrap();
     let error = run(context(temp.path())).await.unwrap_err();
     // If an apply were attempted first, the invalid Controller URL would fail
@@ -47,6 +48,7 @@ async fn baseline_failure_precedes_every_resource_mutation() {
 
 #[tokio::test]
 async fn rotation_changes_fixture_serial_and_restoring_reseeds_original() {
+    crate::install_test_crypto_provider();
     let temp = tempfile::tempdir().unwrap();
     let ctx = context(temp.path());
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

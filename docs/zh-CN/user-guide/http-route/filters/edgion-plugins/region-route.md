@@ -122,6 +122,32 @@ setting_type_mismatch、setting_invalid 或 hash_modulo_invalid。
 configuration-unavailable。成功能力要求规则非空；没有匹配或上游跳转已被其他插件占用时，
 不记录选择结果。显式启用染色后仍遵守共享防伪和请求头处理策略。
 
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: regional-routing
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      dye:
+        request:
+          - name: X-Served-Region     # value omitted => final selected region (on: [success] by default)
+        response:
+          - name: X-Edgion-Outcome
+            on: [fallback]            # value omitted => region_route:fallback:configuration-unavailable
+      config:
+        clusterRegionRef:
+          name: local-region
+        failOpen: true
+        keyGet:
+          - type: header
+            name: X-Account-Id
+        routeRules:
+          - type: RouteByHashRange
+```
+
 ## 原始资源浏览与单设置故障切换
 
 Controller 提供以下源资源接口：

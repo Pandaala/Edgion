@@ -461,6 +461,7 @@ mod admission_tests {
 
     #[test]
     fn admission_requires_each_observed_status_and_rejects_request_errors() {
+        crate::install_test_crypto_provider();
         for (phase, expected) in [
             ("precondition GET", StatusCode::NOT_FOUND),
             ("POST", StatusCode::BAD_REQUEST),
@@ -481,6 +482,7 @@ mod admission_tests {
 
     #[test]
     fn admission_yaml_request_preserves_bytes_and_authentication() {
+        crate::install_test_crypto_provider();
         let yaml = "kind: EdgionPlugins\nmetadata:\n  namespace: default\n  name: invalid-shape\n";
         let request = admission_request(
             reqwest::Client::new()

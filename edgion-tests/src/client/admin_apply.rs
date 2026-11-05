@@ -84,6 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_conflicts_until_success() {
+        crate::install_test_crypto_provider();
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/resource"))
@@ -116,6 +117,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_retry_non_conflict_response() {
+        crate::install_test_crypto_provider();
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/resource"))

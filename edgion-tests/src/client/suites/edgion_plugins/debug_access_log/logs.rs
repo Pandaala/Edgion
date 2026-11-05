@@ -425,6 +425,7 @@ mod empty_log_tests {
 
     #[tokio::test]
     async fn empty_logs_request_failure_is_not_success() {
+        crate::install_test_crypto_provider();
         // Invalid URL construction fails before DNS or any network operation.
         let ctx = TestContext {
             target_host: "[invalid".into(),

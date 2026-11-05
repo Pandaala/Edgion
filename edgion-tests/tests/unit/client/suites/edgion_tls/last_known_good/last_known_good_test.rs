@@ -24,6 +24,7 @@ fn context(access_log_path: PathBuf) -> TestContext {
 
 #[tokio::test]
 async fn exact_fixture_serial_round_trips_through_openssl_and_stash() {
+    crate::install_test_crypto_provider();
     let temp = tempfile::tempdir().unwrap();
     let ctx = context(temp.path().join("access.log"));
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))

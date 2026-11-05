@@ -11,11 +11,8 @@ impl EdgionClient {
 
 /// Build an `EdgionClient` pointed at `base_url` with no cached token.
 fn make_client(base_url: String) -> EdgionClient {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .connect_timeout(std::time::Duration::from_secs(2))
-        .build()
-        .expect("reqwest client");
+    // Use the production transport so no process-wide rustls provider is needed.
+    let client = build_cli_client().expect("cli client");
     EdgionClient {
         client,
         base_url,
@@ -229,7 +226,7 @@ fn diagnostic_origin_excludes_request_data() {
 
 #[test]
 fn request_diagnostics_remove_explicit_and_sdk_urls() {
-    let client = reqwest::Client::new();
+    let client = build_cli_client().expect("cli client");
     for target in [TargetType::Center, TargetType::Server, TargetType::Client] {
         let error = client.get("http://[").build().unwrap_err().with_url(
             reqwest::Url::parse("https://sdk-user:sdk-secret@example.org/sdk-path?token=sdk-query#sdk-fragment")

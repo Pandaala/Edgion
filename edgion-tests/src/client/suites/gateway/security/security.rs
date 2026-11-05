@@ -215,6 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn excessive_xff_request_failure_is_not_a_rejection() {
+        crate::install_test_crypto_provider();
         // The malformed URL fails request construction before any network operation.
         let ctx = TestContext {
             target_host: "[invalid".into(),
