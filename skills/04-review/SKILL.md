@@ -55,6 +55,7 @@ The mandatory graded design index remains [00-design-rules.md](../00-design-rule
 | listeners | [listeners](listeners/SKILL.md) |
 | observability | [observability](observability/SKILL.md) |
 | oidc | [oidc](oidc/SKILL.md) |
+| packaging | [packaging](packaging/SKILL.md) |
 | plugin-metadata | [plugin-metadata](plugin-metadata/SKILL.md) |
 | plugin-runtime | [plugin-runtime](plugin-runtime/SKILL.md) |
 | rate-limit | [rate-limit](rate-limit/SKILL.md) |
