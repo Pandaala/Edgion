@@ -243,6 +243,14 @@ impl RedisBackend {
         }
     }
 
+    /// The published Cluster primary set, if any. Other modes have none.
+    pub fn published_cluster_primaries(&self) -> Option<Vec<(String, u16)>> {
+        match self.snapshot.load_full().as_deref() {
+            Some(Snapshot::Cluster { primaries, .. }) => Some(primaries.clone()),
+            _ => None,
+        }
+    }
+
     fn cluster_candidate_addresses(&self) -> Vec<(String, u16)> {
         let known = self.snapshot.load_full().and_then(|snapshot| match &*snapshot {
             Snapshot::Cluster { primaries, .. } => Some(primaries.clone()),

@@ -142,6 +142,22 @@ fn only_a_replaced_primary_counts_as_a_failover() {
 }
 
 #[test]
+fn cluster_primary_set_change_ignores_order_and_spelling() {
+    let a = ("Node-A".to_string(), 7000);
+    let b = ("node-b".to_string(), 7001);
+    let c = ("node-c".to_string(), 7002);
+    let before = [a.clone(), b.clone()];
+    assert!(!cluster_primaries_changed(
+        Some(&before),
+        Some(&[b.clone(), ("node-a".to_string(), 7000)])
+    ));
+    assert!(cluster_primaries_changed(Some(&before), Some(&[a.clone(), c.clone()])));
+    assert!(cluster_primaries_changed(Some(&before), Some(std::slice::from_ref(&a))));
+    assert!(!cluster_primaries_changed(None, Some(&before)));
+    assert!(!cluster_primaries_changed(Some(&before), None));
+}
+
+#[test]
 fn partial_recovery_backs_off_and_full_recovery_resets() {
     let base = Duration::from_millis(100);
     assert_eq!(next_recovery_delay(base, true), base);

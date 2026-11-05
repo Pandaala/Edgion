@@ -156,6 +156,7 @@ impl RedisLinkClient {
                         _ = tokio::time::sleep(wait) => {},
                     }
                     let primary_before = backend.published_primary();
+                    let cluster_before = backend.published_cluster_primaries();
                     let result = tokio::select! { biased;
                         _ = shutdown.changed() => return,
                         result = backend.establish(resolver.clone()) => result,
@@ -170,6 +171,12 @@ impl RedisLinkClient {
                             if primary_changed(primary_before.as_ref(), backend.published_primary().as_ref()) {
                                 tracing::info!(redis = %name, "Redis Sentinel primary changed");
                                 report_topology_event(&health, &name, RedisTopologyEvent::PrimaryChanged);
+                            }
+                            if cluster_primaries_changed(
+                                cluster_before.as_deref(),
+                                backend.published_cluster_primaries().as_deref(),
+                            ) {
+                                tracing::info!(redis = %name, "Redis Cluster primary set changed");
                             }
                         }
                         Err(_) if !failing => {
@@ -245,6 +252,21 @@ pub(super) fn primary_changed(before: Option<&(String, u16)>, after: Option<&(St
         }
         _ => false,
     }
+}
+
+/// The published Cluster primary set was replaced by a different set. Order and
+/// spelling are ignored; a first publication or removed snapshot is not a change.
+pub(super) fn cluster_primaries_changed(before: Option<&[(String, u16)]>, after: Option<&[(String, u16)]>) -> bool {
+    let (Some(before), Some(after)) = (before, after) else {
+        return false;
+    };
+    let normalize = |primaries: &[(String, u16)]| {
+        let mut set: Vec<_> = primaries.iter().map(super::backend::endpoint_identity).collect();
+        set.sort();
+        set.dedup();
+        set
+    };
+    normalize(before) != normalize(after)
 }
 
 /// Keep dial failures fixed. A certificate rejection is distinguishable from a
