@@ -12,6 +12,7 @@ before applying a decision to current code.
 ## Intentional design
 
 - [BandwidthLimit Per-Response-Stream Scope — DOCUMENTED, NOT-AN-ISSUE](intentional-design/bandwidth-limit-per-stream.md)
+- [RateLimitLocal Cluster-scope divisor is a per-controller connection count — ACCEPTED (ctrl-center-01)](intentional-design/cluster-scope-instance-count-divisor.md)
 - [Deny-Response `shutdown()` Scope — ACL Plugins Shut Down, Rate-Limit Plugins Deliberately Do Not](intentional-design/deny-response-shutdown-scope.md)
 - [Rate-limit response-header injection duplication — ACCEPTED TRADEOFF (plugins-http-F004, 2026-05-26)](intentional-design/header-injection-duplication.md)
 - [Redis Rate Limiting Fail-Open — Accepted Tradeoff](intentional-design/redis-fail-open.md)
