@@ -88,6 +88,9 @@ live result is claimed.
   behavior. They do not identify a CMVP validated-module stream, certificate
   scope, artifact provenance, or the compliance of a complete platform or
   deployment.
+- `fips` covers BoringSSL only. Rustls client channels (conf_sync, LinkSys,
+  plugin and AI-provider egress) stay on `ring`; see
+  [FIPS build scope excludes rustls client channels](../intentional-design/fips-scope-excludes-rustls-clients.md).
 
 ## Re-evaluation triggers
 

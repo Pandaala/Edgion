@@ -19,6 +19,7 @@ before applying a decision to current code.
 - [tls-F007 (duplication) — Two SNI matchers stay separate; semantics changes apply to both](intentional-design/cert-matcher-duplication-accepted.md)
 - [tls-07 — `revocationCheck` / `ocspStapling` are reserved schema, not implemented](intentional-design/revocation-config-not-implemented.md)
 - [Rustls Gateway Backend — FUTURE PRODUCT SCOPE](intentional-design/rustls-gateway-backend-unsupported.md)
+- [arch-04 — FIPS build scope excludes rustls client channels](intentional-design/fips-scope-excludes-rustls-clients.md)
 - [Rustls Upstream Custom CA and mTLS — UNSUPPORTED](intentional-design/rustls-upstream-ca-mtls-unsupported.md)
 - [Rustls Upstream Additional SAN Enforcement — UNSUPPORTED](intentional-design/rustls-upstream-san-unsupported.md)
 - [TLS setup writes remain transport-bounded](intentional-design/tls-setup-writes-remain-transport-bounded.md)
