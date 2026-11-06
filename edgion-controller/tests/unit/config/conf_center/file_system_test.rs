@@ -19,6 +19,7 @@ fn test_file_system_config_serialize() {
         controller_name: None,
         conf_dir: PathBuf::from("/etc/edgion/conf"),
         poll_interval_ms: None,
+        cache_ready_deadline_secs: 180,
     };
 
     let yaml = yaml_serde::to_string(&config).unwrap();
@@ -62,4 +63,15 @@ fn test_file_system_config_poll_interval_ms_absent() {
 
     let serialized = yaml_serde::to_string(&config).unwrap();
     assert!(!serialized.contains("poll_interval_ms"));
+}
+
+#[test]
+fn test_file_system_cache_ready_deadline_default_and_floor() {
+    let mut config: FileSystemConfig = yaml_serde::from_str("conf_dir: /etc/edgion/conf").unwrap();
+    assert_eq!(config.cache_ready_deadline_secs, 180);
+    assert!(config.validate().is_ok());
+    config.cache_ready_deadline_secs = 30;
+    assert!(config.validate().is_err());
+    config.cache_ready_deadline_secs = 600;
+    assert!(config.validate().is_ok());
 }

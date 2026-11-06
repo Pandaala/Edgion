@@ -72,6 +72,12 @@ pub struct EtcdConfig {
     /// Leader election (etcd HA). Always on in etcd mode (spec §8).
     #[serde(default)]
     pub leader_election: EtcdLeaderElectionConfig,
+
+    /// Deadline (seconds) for the initial load of every resource kind to reach
+    /// readiness. This is the only startup bound; phase waits have no inner
+    /// deadline. Must be > 30.
+    #[serde(default = "super::readiness::default_cache_ready_deadline_secs")]
+    pub cache_ready_deadline_secs: u64,
 }
 
 pub(crate) fn default_key_prefix() -> String {
@@ -230,6 +236,11 @@ pub struct EtcdTlsConfig {
 // ============================================================================
 
 impl EtcdConfig {
+    /// Fail-fast validation of startup timing knobs.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        super::readiness::validate_cache_ready_deadline_secs("etcd", self.cache_ready_deadline_secs)
+    }
+
     /// Read local PEM files and retain direct bootstrap credentials without
     /// creating resource references or synthetic Secrets.
     pub fn to_bootstrap_config(&self) -> anyhow::Result<EtcdBootstrapConfig> {

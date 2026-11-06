@@ -71,9 +71,9 @@ impl FailureBudget {
         self.consecutive_failures = 0;
     }
 
-    /// Record a failure exit. `ran_stably` = the iteration ran at least
-    /// STABLE_RUN_DURATION before failing (reset-before-count, matching the
-    /// pre-existing run_main_flow semantics).
+    /// Record a failure exit. `ran_stably` = the iteration reached CachesReady
+    /// and then ran at least STABLE_RUN_DURATION before failing
+    /// (reset-before-count). See [`ran_stably`].
     fn on_failure(&mut self, ran_stably: bool) -> FailureAction {
         if ran_stably {
             self.consecutive_failures = 0;
@@ -85,6 +85,16 @@ impl FailureBudget {
             FailureAction::Retry(KubernetesCenter::backoff(self.consecutive_failures))
         }
     }
+}
+
+/// Whether a failed iteration counts as a stable run that resets the failure budget.
+///
+/// Only time spent serving after CachesReady counts. Time spent waiting for
+/// readiness never does, so a `cache_ready_deadline_secs` at or above
+/// `STABLE_RUN_DURATION` cannot turn every startup-deadline expiry into a
+/// budget reset and disable give-up.
+fn ran_stably(ready_since: Option<Instant>, now: Instant) -> bool {
+    ready_since.is_some_and(|ready| now.saturating_duration_since(ready) >= STABLE_RUN_DURATION)
 }
 
 /// Exit reason from main flow
@@ -100,8 +110,6 @@ enum MainFlowExit {
 enum LifecycleEvent {
     /// Caches are ready (PROCESSOR_REGISTRY is ready)
     CachesReady,
-    /// Caches ready timeout - not all caches ready within timeout
-    CachesTimeout,
     /// Lost leadership
     LeadershipLost,
     /// Acquired leadership (all-serve mode only)
@@ -116,8 +124,10 @@ enum ServingFlowExit {
     Shutdown,
     /// Benign leadership transition — resets the failure budget
     Benign,
-    /// Real failure (caches timeout / watcher panic / deadline / channel closed) — counts toward give-up
-    Failure,
+    /// Real failure (watcher panic / deadline / channel closed / controller stop) — counts toward
+    /// give-up. `ran_stably` = the flow reached CachesReady and then served for
+    /// at least `STABLE_RUN_DURATION` before failing.
+    Failure { ran_stably: bool },
 }
 
 /// One turn of the supervised event loop (see `next_loop_turn`).
@@ -503,8 +513,8 @@ impl KubernetesCenter {
                 }
             };
 
-            let iteration_start = Instant::now();
             let mut caches_ready = false;
+            let mut ready_since: Option<Instant> = None;
             let mut deadline = Box::pin(tokio::time::sleep(deadline_budget));
 
             // Supervised event loop: events / watcher joins / pre-ready deadline.
@@ -514,20 +524,13 @@ impl KubernetesCenter {
                     LoopTurn::Event(event) => match event {
                         LifecycleEvent::CachesReady => {
                             caches_ready = true;
+                            ready_since = Some(Instant::now());
                             self.set_config_sync_server(Some(config_sync_server.clone()));
                             tracing::info!(
                                 component = "kubernetes_center",
                                 mode = "kubernetes",
                                 "ConfigSyncServer is ready, gRPC services can process requests"
                             );
-                        }
-                        LifecycleEvent::CachesTimeout => {
-                            tracing::error!(
-                                component = "kubernetes_center",
-                                mode = "kubernetes",
-                                "Caches timeout, treating as controller failure"
-                            );
-                            break ControllerExitReason::AllControllersStopped;
                         }
                         LifecycleEvent::LeadershipLost => {
                             tracing::warn!(component = "kubernetes_center", mode = "kubernetes", "Lost leadership");
@@ -611,8 +614,7 @@ impl KubernetesCenter {
                         "All controllers stopped, will restart with backoff"
                     );
 
-                    let ran_stably = Instant::now().saturating_duration_since(iteration_start) >= STABLE_RUN_DURATION;
-                    match budget.on_failure(ran_stably) {
+                    match budget.on_failure(ran_stably(ready_since, Instant::now())) {
                         FailureAction::Retry(delay) => {
                             tracing::info!(
                                 component = "kubernetes_center",
@@ -866,9 +868,6 @@ impl KubernetesCenter {
             _ = cancel.cancelled() => return,
             result = phase_wait => if result.is_err() { return; },
         }
-        const CACHE_READY_TIMEOUT_SECS: u64 = 30;
-        let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
-        let start = Instant::now();
         let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
         let registry = &runtime.processor_registry;
         // Kinds that must be both registered and ready (excludes no_sync_kinds)
@@ -895,45 +894,41 @@ impl KubernetesCenter {
                 .collect()
         };
 
-        let mut pending = pending_sync_kinds();
-        while !pending.is_empty() && Instant::now().saturating_duration_since(start) < timeout {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            pending = pending_sync_kinds();
+        // No inner deadline: the supervised loop's `cache_ready_deadline_secs`
+        // is the single startup bound and cancels this task on expiry.
+        let readiness_poll = async {
+            while !pending_sync_kinds().is_empty() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = readiness_poll => {}
         }
 
-        if pending.is_empty() {
-            // Cancellable tail: semantically equivalent to the existing
-            // abort_and_wait (drop at an await point), just earlier.
-            let tail = async {
-                css.register_all(registry.all_watch_objs(&no_sync_refs));
-                crate::conf_mgr::sync_runtime::resource_processor::run_post_cache_ready_revalidations(runtime.clone())
-                    .await;
-            };
-            tokio::select! {
-                _ = cancel.cancelled() => return,
-                _ = tail => {}
-            }
-
-            // Hard checkpoint: after demotion, neither start jobs nor report
-            // ready. From here to the send there is no await before the job
-            // start, so a cancel can no longer interleave between the check
-            // and the (synchronous) start_leader_jobs.
-            if cancel.is_cancelled() {
-                return;
-            }
-            if let (Some(client), Some(leader_handle)) = (acme_client, leader_handle) {
-                Self::start_leader_jobs(&client, &watch_namespaces, runtime, leader_handle);
-            }
-            let _ = tx.send(LifecycleEvent::CachesReady).await;
-        } else {
-            tracing::warn!(
-                component = "kubernetes_center",
-                timeout_secs = CACHE_READY_TIMEOUT_SECS,
-                not_ready = ?pending,
-                "Timeout waiting for processors"
-            );
-            let _ = tx.send(LifecycleEvent::CachesTimeout).await;
+        // Cancellable tail: semantically equivalent to the existing
+        // abort_and_wait (drop at an await point), just earlier.
+        let tail = async {
+            css.register_all(registry.all_watch_objs(&no_sync_refs));
+            crate::conf_mgr::sync_runtime::resource_processor::run_post_cache_ready_revalidations(runtime.clone())
+                .await;
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = tail => {}
         }
+
+        // Hard checkpoint: after demotion, neither start jobs nor report
+        // ready. From here to the send there is no await before the job
+        // start, so a cancel can no longer interleave between the check
+        // and the (synchronous) start_leader_jobs.
+        if cancel.is_cancelled() {
+            return;
+        }
+        if let (Some(client), Some(leader_handle)) = (acme_client, leader_handle) {
+            Self::start_leader_jobs(&client, &watch_namespaces, runtime, leader_handle);
+        }
+        let _ = tx.send(LifecycleEvent::CachesReady).await;
     }
 
     // ==================== All-Serve Mode Methods ====================
@@ -952,7 +947,6 @@ impl KubernetesCenter {
             if shutdown_handle.is_shutdown() {
                 return Ok(());
             }
-            let iteration_start = Instant::now();
             let exit = self.run_serving_flow(client, leader_handle, shutdown_handle).await;
             match exit {
                 ServingFlowExit::Shutdown => return Ok(()),
@@ -963,32 +957,29 @@ impl KubernetesCenter {
                         _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                     }
                 }
-                ServingFlowExit::Failure => {
-                    let ran_stably = Instant::now().saturating_duration_since(iteration_start) >= STABLE_RUN_DURATION;
-                    match budget.on_failure(ran_stably) {
-                        FailureAction::Retry(delay) => {
-                            tracing::info!(
-                                component = "kubernetes_center",
-                                ha_mode = "all-serve",
-                                backoff_secs = delay.as_secs(),
-                                "Waiting before restart"
-                            );
-                            tokio::select! {
-                                _ = shutdown_signal.wait() => return Ok(()),
-                                _ = tokio::time::sleep(delay) => {}
-                            }
-                        }
-                        FailureAction::GiveUp => {
-                            tracing::error!(
-                                component = "kubernetes_center",
-                                ha_mode = "all-serve",
-                                "Max consecutive failures exceeded, triggering graceful shutdown"
-                            );
-                            shutdown_handle.shutdown();
-                            return Ok(());
+                ServingFlowExit::Failure { ran_stably } => match budget.on_failure(ran_stably) {
+                    FailureAction::Retry(delay) => {
+                        tracing::info!(
+                            component = "kubernetes_center",
+                            ha_mode = "all-serve",
+                            backoff_secs = delay.as_secs(),
+                            "Waiting before restart"
+                        );
+                        tokio::select! {
+                            _ = shutdown_signal.wait() => return Ok(()),
+                            _ = tokio::time::sleep(delay) => {}
                         }
                     }
-                }
+                    FailureAction::GiveUp => {
+                        tracing::error!(
+                            component = "kubernetes_center",
+                            ha_mode = "all-serve",
+                            "Max consecutive failures exceeded, triggering graceful shutdown"
+                        );
+                        shutdown_handle.shutdown();
+                        return Ok(());
+                    }
+                },
             }
         }
     }
@@ -1022,7 +1013,7 @@ impl KubernetesCenter {
                     error = %e,
                     "Failed to start event watchers (all-serve)"
                 );
-                return ServingFlowExit::Failure;
+                return ServingFlowExit::Failure { ran_stably: false };
             }
             Err(_elapsed) => {
                 tracing::error!(
@@ -1030,11 +1021,12 @@ impl KubernetesCenter {
                     deadline_secs = deadline_budget.as_secs(),
                     "start_event_watchers exceeded cache_ready_deadline_secs (all-serve)"
                 );
-                return ServingFlowExit::Failure;
+                return ServingFlowExit::Failure { ran_stably: false };
             }
         };
 
         let mut caches_ready = false;
+        let mut ready_since: Option<Instant> = None;
         let mut leader_services_running = false;
         let mut deadline = Box::pin(tokio::time::sleep(deadline_budget));
 
@@ -1045,6 +1037,7 @@ impl KubernetesCenter {
                 LoopTurn::Event(event) => match event {
                     LifecycleEvent::CachesReady => {
                         caches_ready = true;
+                        ready_since = Some(Instant::now());
                         self.set_config_sync_server(Some(config_sync_server.clone()));
                         tracing::info!(
                             component = "kubernetes_center",
@@ -1078,9 +1071,6 @@ impl KubernetesCenter {
                             self.stop_leader_services().await;
                             leader_services_running = false;
                         }
-                    }
-                    LifecycleEvent::CachesTimeout => {
-                        break ControllerExitReason::AllControllersStopped;
                     }
                     LifecycleEvent::ControllerExit(reason) => {
                         break reason;
@@ -1120,8 +1110,15 @@ impl KubernetesCenter {
             }
         };
 
-        self.finish_serving_flow(watchers, leader_services_running, exit_reason, shutdown_handle)
-            .await
+        let ran_stably = ran_stably(ready_since, Instant::now());
+        self.finish_serving_flow(
+            watchers,
+            leader_services_running,
+            exit_reason,
+            ran_stably,
+            shutdown_handle,
+        )
+        .await
     }
 
     async fn finish_serving_flow(
@@ -1129,6 +1126,7 @@ impl KubernetesCenter {
         watchers: WatcherSet,
         leader_services_running: bool,
         exit_reason: ControllerExitReason,
+        ran_stably: bool,
         shutdown_handle: &ShutdownHandle,
     ) -> ServingFlowExit {
         self.stop_resource_epoch(watchers).await;
@@ -1148,7 +1146,7 @@ impl KubernetesCenter {
             // LostLeadership bubbling up via ControllerExit is a leadership
             // transition, not a fault — the loop normally handles it inline.
             ControllerExitReason::LostLeadership => ServingFlowExit::Benign,
-            ControllerExitReason::AllControllersStopped => ServingFlowExit::Failure,
+            ControllerExitReason::AllControllersStopped => ServingFlowExit::Failure { ran_stably },
         }
     }
 

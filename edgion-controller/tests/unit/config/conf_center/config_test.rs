@@ -6,6 +6,7 @@ fn test_file_system_config() {
         controller_name: None,
         conf_dir: PathBuf::from("/etc/edgion/conf"),
         poll_interval_ms: None,
+        cache_ready_deadline_secs: 180,
     });
 
     assert!(!config.is_k8s_mode());

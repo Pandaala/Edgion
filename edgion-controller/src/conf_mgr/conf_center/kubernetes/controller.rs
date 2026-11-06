@@ -944,28 +944,20 @@ impl KubernetesController {
             "Provider controllers spawned, waiting for init completion"
         );
 
-        const PHASE_TIMEOUT: Duration = Duration::from_secs(15);
+        // Phase waits are unbounded: `cache_ready_deadline_secs` in the
+        // center's supervised loop is the single startup bound and cancels
+        // this epoch when it expires.
         let providers = self.provider_kinds();
-        wait_phase(
-            &mut h,
-            &cancel,
-            &mut shutdown_signal,
-            async {
-                let ready = runtime
-                    .processor_registry
-                    .wait_kinds_ready(&providers, PHASE_TIMEOUT)
-                    .await;
-                anyhow::ensure!(ready, "Provider initialization timed out");
-                while !*namespace_ready.borrow() {
-                    namespace_ready
-                        .changed()
-                        .await
-                        .map_err(|_| anyhow::anyhow!("Namespace readiness sender disappeared"))?;
-                }
-                Ok(())
-            },
-            PHASE_TIMEOUT,
-        )
+        wait_phase(&mut h, &cancel, &mut shutdown_signal, async {
+            runtime.processor_registry.wait_kinds_ready_unbounded(&providers).await;
+            while !*namespace_ready.borrow() {
+                namespace_ready
+                    .changed()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Namespace readiness sender disappeared"))?;
+            }
+            Ok(())
+        })
         .await?;
         tracing::info!(component = "k8s_controller", "Phase 1 complete: all providers ready");
 
@@ -981,22 +973,13 @@ impl KubernetesController {
         } else {
             Vec::new()
         };
-        wait_phase(
-            &mut h,
-            &cancel,
-            &mut shutdown_signal,
-            async {
-                anyhow::ensure!(
-                    runtime
-                        .processor_registry
-                        .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
-                        .await,
-                    "Gateway initialization timed out"
-                );
-                Ok(())
-            },
-            PHASE_TIMEOUT,
-        )
+        wait_phase(&mut h, &cancel, &mut shutdown_signal, async {
+            runtime
+                .processor_registry
+                .wait_kinds_ready_unbounded(&gateway_kinds)
+                .await;
+            Ok(())
+        })
         .await?;
         gateway_ready_tx.send_replace(true);
         tracing::info!(component = "k8s_controller", "Phase 2 complete: Gateway ready");
@@ -1166,18 +1149,20 @@ pub enum ControllerExitReason {
 }
 
 /// Phase waits observe every required child, including a child that fails before readiness.
+///
+/// There is no per-phase deadline: the center's `cache_ready_deadline_secs`
+/// bounds the whole startup and cancels the epoch on expiry.
 async fn wait_phase<F>(
     children: &mut JoinSet<Result<()>>,
     cancel: &CancellationToken,
     shutdown: &mut ShutdownSignal,
     ready: F,
-    deadline: Duration,
 ) -> Result<()>
 where
     F: std::future::Future<Output = Result<()>>,
 {
     tokio::select! {
-        result = tokio::time::timeout(deadline, ready) => result.map_err(|_| anyhow::anyhow!("Resource phase timed out"))?,
+        result = ready => result,
         result = children.join_next() => anyhow::bail!("Required child stopped during initialization: {:?}", result),
         _ = cancel.cancelled() => anyhow::bail!("Resource epoch cancelled during initialization"),
         _ = shutdown.wait() => anyhow::bail!("Shutdown during initialization"),

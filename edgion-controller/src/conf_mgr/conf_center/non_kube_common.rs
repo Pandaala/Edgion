@@ -66,11 +66,13 @@ pub struct CenterBase {
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     controller_handle: Mutex<Option<JoinHandle<()>>>,
     runtime: Arc<ControllerRuntime>,
+    /// Single startup bound (`cache_ready_deadline_secs`); phase waits are unbounded.
+    ready_deadline: Duration,
 }
 
 impl CenterBase {
     /// Create a new `CenterBase` with all handles initialised to `None`.
-    pub fn new() -> Self {
+    pub fn new(ready_deadline: Duration) -> Self {
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_managed_credentials_supported(false);
         // single_publisher stays true (ControllerRuntime::new default): persist=false is allowed on FS/etcd.
@@ -79,6 +81,7 @@ impl CenterBase {
             shutdown_handle: Mutex::new(None),
             controller_handle: Mutex::new(None),
             runtime,
+            ready_deadline,
         }
     }
 
@@ -127,9 +130,10 @@ impl CenterBase {
         self.runtime.reset();
     }
 
-    async fn wait_registry_ready(&self, timeout_secs: u64, component: &str) -> bool {
+    async fn wait_registry_ready(&self, component: &str) -> bool {
         let registry = &self.runtime.processor_registry;
-        let timeout = Duration::from_secs(timeout_secs);
+        let timeout = self.ready_deadline;
+        let timeout_secs = timeout.as_secs();
         let start = std::time::Instant::now();
         let notify = registry.ready_notify.clone();
 
@@ -284,7 +288,7 @@ impl CenterBase {
             let mut global_shutdown = shutdown_handle.signal();
             let mut initialized = false;
             let initialize_and_serve = async {
-                if !self.wait_registry_ready(30, component).await {
+                if !self.wait_registry_ready(component).await {
                     return LoopAction::InitializationFailed;
                 }
                 run_post_cache_ready_revalidations(self.runtime.clone()).await;
@@ -368,7 +372,9 @@ impl CenterBase {
 
 impl Default for CenterBase {
     fn default() -> Self {
-        Self::new()
+        Self::new(Duration::from_secs(
+            crate::config::conf_center::readiness::DEFAULT_CACHE_READY_DEADLINE_SECS,
+        ))
     }
 }
 
@@ -541,21 +547,12 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         return Err(error);
     }
 
-    const PHASE_TIMEOUT: Duration = Duration::from_secs(15);
-    let providers_ready = runtime
+    // Phase waits are unbounded: the center's `cache_ready_deadline_secs`
+    // readiness wait is the single startup bound and tears this task down.
+    runtime
         .processor_registry
-        .wait_kinds_ready(&provider_kinds, PHASE_TIMEOUT)
+        .wait_kinds_ready_unbounded(&provider_kinds)
         .await;
-
-    if !providers_ready {
-        for handle in &handles {
-            handle.abort();
-        }
-        return Err(anyhow::anyhow!(
-            "provider resource initialization did not complete within {:?}",
-            PHASE_TIMEOUT
-        ));
-    }
     tracing::info!(component = component, "Phase 1 complete: all providers ready");
 
     // ==================== Phase 2: Gateway ====================
@@ -569,19 +566,10 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         }
         return Err(error);
     }
-    if !runtime
+    runtime
         .processor_registry
-        .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
-        .await
-    {
-        for handle in &handles {
-            handle.abort();
-        }
-        return Err(anyhow::anyhow!(
-            "Gateway initialization did not complete within {:?}",
-            PHASE_TIMEOUT
-        ));
-    }
+        .wait_kinds_ready_unbounded(&gateway_kinds)
+        .await;
     tracing::info!(component = component, "Phase 2 complete: Gateway ready");
 
     // ==================== Phase 3: Dependent Resources ====================

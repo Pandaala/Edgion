@@ -95,14 +95,15 @@ pub struct KubernetesConfig {
     pub no_watch_kinds: Vec<String>,
 
     /// Deadline (seconds) for a started watcher set to reach CachesReady.
-    /// Covers the readiness poll (internally budgeted at 30 s) plus the
-    /// post-ready tail (WatchObj registration, cross-namespace revalidations,
-    /// leader-job start). Restart-bound: a recovery iteration re-arms the deadline but
-    /// always with the boot-time value. Raise this when a single resource
-    /// kind's count approaches the per-kind workqueue capacity (5000) —
-    /// a too-small value is a permanent restart loop, which is why values
-    /// at or below the 30 s poll budget are rejected at startup.
-    #[serde(default = "default_cache_ready_deadline_secs")]
+    /// This is the only bound on startup: it covers every phase's initial
+    /// LIST and init processing plus the post-ready tail (WatchObj
+    /// registration, cross-namespace revalidations, leader-job start); the
+    /// phase waits themselves have no inner deadline. Restart-bound: a
+    /// recovery iteration re-arms the deadline but always with the boot-time
+    /// value. Raise this for large or slow clusters — a too-small value is a
+    /// permanent restart loop, which is why values at or below 30 s are
+    /// rejected at startup.
+    #[serde(default = "super::readiness::default_cache_ready_deadline_secs")]
     pub cache_ready_deadline_secs: u64,
 }
 
@@ -139,7 +140,7 @@ impl<'de> Deserialize<'de> for KubernetesConfig {
             #[serde(default)]
             no_watch_kinds: Vec<String>,
 
-            #[serde(default = "default_cache_ready_deadline_secs")]
+            #[serde(default = "super::readiness::default_cache_ready_deadline_secs")]
             cache_ready_deadline_secs: u64,
             #[serde(default, rename = "gateway_class", deserialize_with = "reject_gateway_class")]
             _removed_gateway_class: (),
@@ -178,7 +179,7 @@ impl Default for KubernetesConfig {
             gateway_address: None,
             ha_mode: HaMode::default(),
             no_watch_kinds: Vec::new(),
-            cache_ready_deadline_secs: default_cache_ready_deadline_secs(),
+            cache_ready_deadline_secs: super::readiness::default_cache_ready_deadline_secs(),
         }
     }
 }
@@ -218,17 +219,7 @@ impl KubernetesConfig {
     /// value here risks a permanent restart loop at runtime, which is worse
     /// than a startup error).
     pub fn validate(&self) -> Result<()> {
-        const READINESS_POLL_BUDGET_SECS: u64 = 30;
-        if self.cache_ready_deadline_secs <= READINESS_POLL_BUDGET_SECS {
-            anyhow::bail!(
-                "kubernetes conf_center misconfig: cache_ready_deadline_secs ({}) must be > {} \
-                 (the internal cache-readiness poll budget); a deadline that cannot even cover \
-                 the poll is a designed-in restart loop",
-                self.cache_ready_deadline_secs,
-                READINESS_POLL_BUDGET_SECS
-            );
-        }
-        Ok(())
+        super::readiness::validate_cache_ready_deadline_secs("kubernetes", self.cache_ready_deadline_secs)
     }
 }
 
@@ -299,10 +290,6 @@ fn default_renew_deadline_secs() -> u64 {
 
 fn default_retry_period_secs() -> u64 {
     2
-}
-
-fn default_cache_ready_deadline_secs() -> u64 {
-    90
 }
 
 /// Metadata filter configuration for reducing K8s resource size in memory

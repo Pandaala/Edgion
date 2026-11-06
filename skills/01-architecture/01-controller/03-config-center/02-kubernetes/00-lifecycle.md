@@ -195,7 +195,6 @@ Passed to `ResourceController` for the leader guard in `persist_k8s_status()`.
 ```rust
 enum LifecycleEvent {
     CachesReady,                  // all phased processors are registered + all sync kinds are ready
-    CachesTimeout,                // not ready before timeout
     LeadershipLost,               // lost leadership
     LeadershipAcquired,           // acquired leadership (all-serve mode only)
     ControllerExit(reason),       // KubernetesController exited (shutdown/terminal failure)
@@ -209,7 +208,6 @@ The loop drives a shared `next_loop_turn()` helper (a three-way `select!`, not a
 | Event | leader-only handling | all-serve handling |
 |-------|-----------------------|--------------------|
 | `CachesReady` | Create ConfigSyncServer + register WatchObjs | Same as left; if already leader, additionally start_leader_services |
-| `CachesTimeout` | Treat as controller failure and rebuild | Treat as controller failure and rebuild |
 | `LeadershipLost` | Exit run_main_flow | stop_leader_services, keep serving gRPC |
 | `LeadershipAcquired` | Not used | If caches_ready, start_leader_services |
 | `ControllerExit` | Exit the loop, trigger retry/rebuild | Same as left |
@@ -241,7 +239,7 @@ Preflight logic (`version_detection.rs`):
 | Task | Responsibility | Events emitted |
 |------|----------------|----------------|
 | **Controller** | Run `KubernetesController.run()` (spawn all ResourceControllers) | `ControllerExit(reason)` |
-| **Caches** | Wait for all phased processors to register + all sync-to-Gateway kinds to be ready | `CachesReady` / `CachesTimeout` |
+| **Caches** | Wait for all phased processors to register + all sync-to-Gateway kinds to be ready | `CachesReady` (no inner deadline; the loop deadline cancels it) |
 | **Leader** | Monitor leadership state changes (poll the `AtomicBool` every 100ms) | `LeadershipLost` / `LeadershipAcquired` |
 
 **Leader watcher initial-state broadcast** (all-serve mode):
@@ -336,12 +334,16 @@ tokio::select! {
 
 The pre-ready deadline is armed for the whole watcher-set lifetime and disarmed once `CachesReady` is
 observed (`deadline_armed = !caches_ready`). Its duration is `cache_ready_deadline_secs` on
-`KubernetesConfig` (default **90 s** = the internal 30 s readiness-poll budget + a 60 s tail allowance for
-`register_all` + revalidations + leader-job start).
+`KubernetesConfig` (default **180 s**). It is the **single** startup bound: Phase 1 (providers + first
+Namespace snapshot), Phase 2 (Gateway), the dependent-kind readiness poll, and the tail (`register_all` +
+revalidations + leader-job start) all run under it. `wait_phase` and the caches task's readiness poll have
+no inner deadline; they end on readiness, child failure, epoch cancellation, or shutdown. The former
+hard-coded 15 s phase constants and 30 s readiness poll fired before this knob and made it impossible to
+start a large or slow cluster (ctrl-center-02).
 
-- **Validation**: rejected at startup unless `> 30` (the internal readiness-poll budget) — a deadline that
-  cannot even cover the poll is a designed-in restart loop. See
-  `KubernetesConfig::validate()` in `edgion-controller/src/config/conf_center/kubernetes.rs`.
+- **Validation**: rejected at startup unless `> 30` — a full initial load that must finish that fast is a
+  designed-in restart loop. The shared floor and default live in
+  `edgion-controller/src/config/conf_center/readiness.rs`; FileSystem and etcd use the same field.
 - **Restart-bound**: the value is read from `self.config`, captured once at
   `KubernetesCenter` construction. Each resource-epoch initialization arms a fresh deadline
   with the **boot-time** value. Changing this field requires a process restart.
@@ -350,7 +352,9 @@ observed (`deadline_armed = !caches_ready`). Its duration is `cache_ready_deadli
 - **Sizing rule of thumb**: raise the deadline when a single resource kind's count approaches the per-kind
   workqueue capacity (5000) — the revalidation tail drains that queue at apiserver status-write rates, and
   because every deadline restart runs `runtime.reset()` and replays from scratch, a too-small deadline is a
-  *permanent* crash loop (`STABLE_RUN_DURATION` = 300 s is never reached).
+  *permanent* crash loop. A stable run is measured from `CachesReady`, not from iteration start, so a
+  deadline >= `STABLE_RUN_DURATION` (300 s) cannot turn each startup expiry into a budget reset and
+  disable give-up.
 - **Worst-case pre-ready wait before a restart fires is ≈ 2× the configured value**: the deadline budget
   also wraps `start_event_watchers`/`start_event_watchers_all_serve` itself via `tokio::time::timeout`
   (guarding a hung `preflight_check_gateway_api_crds`), and if that returns `Ok` the loop's own deadline then
@@ -417,12 +421,12 @@ both HA modes:
   `ControllerExitReason::AllControllersStopped` path call `shutdown_handle.shutdown()` on give-up.
 - **`run_all_serve_lifecycle`**: gained the same failure counter + backoff + give-up, replacing the previous
   fixed 1 s / 5 s sleep-and-retry-forever behavior. `ServingFlowExit` distinguishes real failures
-  (`CachesTimeout` / `AllControllersStopped` / watcher panic / deadline / channel closed — counted toward
+  (`AllControllersStopped` / watcher panic / deadline / channel closed — counted toward
   give-up) from **benign** leadership transitions (reset the counter and do
   **not** count toward give-up), mirroring the leader-only classification.
 
 Without this, all-serve mode's previous behavior was to retry forever on persistent failure (~90 s cycle by
-default), never triggering failover or paging anyone.
+default at the time), never triggering failover or paging anyone.
 
 ### `/health` deadman
 
@@ -473,7 +477,7 @@ conf_center:
   type: kubernetes
   controller_name: edgion.io/gateway-controller
   ha_mode: leader-only            # or "all-serve"
-  cache_ready_deadline_secs: 90   # default; restart-bound, see "Supervision & Recovery" above
+  cache_ready_deadline_secs: 180  # default; restart-bound, see "Supervision & Recovery" above
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system

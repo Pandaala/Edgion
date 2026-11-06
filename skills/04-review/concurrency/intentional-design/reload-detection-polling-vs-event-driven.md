@@ -53,7 +53,7 @@ to make `ServerReload` "event-driven" optimizes a path that is not the bottlenec
 
 Controller serving-generation replacement during leader changes and failure
 recovery is not a steady-state operation, and rebuilding takes seconds of controller-side
-work (cache rebuild, registry re-ready, `wait_registry_ready(30, ...)`). A worst-case 1s extra
+work (cache rebuild, registry re-ready, `wait_registry_ready` bounded by `cache_ready_deadline_secs`). A worst-case 1s extra
 detection latency on the backstop is a small fraction of that and not separately observable.
 This is the same cost profile already accepted in
 [`leader-handle-polling.md`](leader-handle-polling.md) (100–200ms `AtomicBool` poll kept over

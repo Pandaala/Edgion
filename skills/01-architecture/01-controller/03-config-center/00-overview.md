@@ -213,7 +213,8 @@ runtime.processor_registry
 | `requeue_with_chain(kind, key, chain)` | Cross-resource requeue carrying a trigger chain |
 | `requeue_all()` | Full requeue (on leader switchover) |
 | `is_all_ready()` | Check whether all caches are ready |
-| `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to finish initialization |
+| `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to finish initialization, with a deadline |
+| `wait_kinds_ready_unbounded(kinds)` | Phased-startup wait; bounded only by the lifecycle `cache_ready_deadline_secs` |
 | `all_watch_objs(no_sync)` | Collect WatchObjs for the ConfigSyncServer |
 | `ControllerRuntime::reset()` | Selectively reset processors and resource-epoch-scoped stores |
 

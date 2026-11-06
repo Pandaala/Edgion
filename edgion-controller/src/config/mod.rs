@@ -584,6 +584,12 @@ impl EdgionControllerConfig {
                 ConfCenterConfig::Etcd(config) => config.controller_name.clone(),
             };
             fs_cfg.poll_interval_ms = cli.fs_poll_interval_ms;
+            // Keep the operator's startup deadline; only the directory is overridden.
+            fs_cfg.cache_ready_deadline_secs = match &base.conf_center {
+                ConfCenterConfig::FileSystem(config) => config.cache_ready_deadline_secs,
+                ConfCenterConfig::Kubernetes(config) => config.cache_ready_deadline_secs,
+                ConfCenterConfig::Etcd(config) => config.cache_ready_deadline_secs,
+            };
             base.conf_center = ConfCenterConfig::FileSystem(fs_cfg);
         }
         // Case B: conf_center already set from config file — still apply the CLI poll interval override

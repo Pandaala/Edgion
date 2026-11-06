@@ -79,7 +79,7 @@ conf_center:
 #   gateway_address: ""                            # Address reported in Gateway status
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # Skip CRD pre-check and watch for these kinds
-#   cache_ready_deadline_secs: 90                  # Pre-CachesReady deadline (secs); restart-bound, not hot-reloadable
+#   cache_ready_deadline_secs: 180                 # Single startup deadline (secs); restart-bound, not hot-reloadable
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
@@ -227,6 +227,7 @@ ignore `label_selector` to cover unlabeled classes too. Adding `GatewayClass` to
 | `type` | `String` | — | Must be `file_system` |
 | `controller_name` | `String` | **Required** | Explicit Gateway API controller identity |
 | `conf_dir` | `Path` | — | YAML resource directory. **Use absolute paths** — the current implementation does not resolve this relative to `work_dir` |
+| `cache_ready_deadline_secs` | `Integer` | `180` | Deadline (seconds) for the initial load of every resource kind to reach readiness. It is the only startup bound; phases have no inner deadline. **Must be `> 30`**. On expiry startup fails and the Controller exits. Raise it for large configuration sets |
 
 Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` to FileSystem mode.
 
@@ -241,7 +242,7 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
-| `cache_ready_deadline_secs` | `Integer` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` — covers the internal 30 s readiness-poll budget plus the post-ready tail (WatchObj registration, revalidations, leader-job start). **Must be `> 30`** (startup validation error otherwise). **Restart-bound** — each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
+| `cache_ready_deadline_secs` | `Integer` | `180` | Deadline (seconds) for a started watcher set to reach `CachesReady`. It is the **only** startup bound: it covers the initial LIST and init processing of every phase (providers, Gateway, dependents) plus the post-ready tail (WatchObj registration, revalidations, leader-job start); the phases themselves have no inner deadline. **Must be `> 30`** (startup validation error otherwise). **Restart-bound** — each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Raise it for large or slow clusters (many Secrets/EndpointSlices, a throttled or distant API server) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. On expiry the resource epoch is rebuilt with exponential backoff; only time served after `CachesReady` counts toward the 5-minute stable-run reset, so after 10 consecutive startup failures the Controller exits and Kubernetes restarts it. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
 
 At startup, the Controller waits for a complete initial load of its required
 watch sources before publishing configuration synchronization. Later Kubernetes
@@ -288,6 +289,7 @@ resources in an etcd cluster instead of the Kubernetes API. It supports active-p
 | `tls` | Object | — | Optional TLS for the **Controller→etcd** connection (file paths): `tls.ca_cert_file`, `tls.client_cert_file`, `tls.client_key_file`. This is unrelated to the conf_sync mTLS channel |
 | `connect_timeout_ms` | `Integer` | `5000` | etcd connection (dial) timeout in milliseconds |
 | `request_timeout_ms` | `Integer` | `10000` | Per-request timeout for the shared conf_center etcd client's unary calls, in milliseconds. **Note**: this is NOT applied to the blocking leader-election `campaign()` RPC (which the election client runs without a channel-wide timeout on purpose), so operators do not need to tune it for election |
+| `cache_ready_deadline_secs` | `Integer` | `180` | Deadline (seconds) for the initial load of every resource kind to reach readiness after this Controller becomes leader. It is the only startup bound; phases have no inner deadline. **Must be `> 30`**. On expiry startup fails and the Controller exits. Raise it for a large key prefix or a slow etcd |
 | `leader_election` | Object | — | Active-passive HA settings (see below). **Always on**; there is no enable/disable toggle |
 
 ### [conf_center.leader_election] — Etcd Mode

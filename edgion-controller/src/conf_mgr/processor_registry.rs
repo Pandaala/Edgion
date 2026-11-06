@@ -282,6 +282,17 @@ impl ProcessorRegistry {
         }
     }
 
+    /// Wait without a deadline until every listed kind is ready.
+    ///
+    /// Phased initialization uses this so a large or slow source is never
+    /// failed by a hidden per-phase deadline. The owning lifecycle bounds the
+    /// whole startup with `cache_ready_deadline_secs` and cancels this wait by
+    /// tearing down the resource epoch.
+    pub async fn wait_kinds_ready_unbounded(&self, kinds: &[&str]) {
+        let ready = self.wait_kinds_ready(kinds, Duration::MAX).await;
+        debug_assert!(ready, "an unbounded readiness wait cannot time out");
+    }
+
     /// Requeue all resources across all kinds.
     /// Used on leader transition to trigger full status reconciliation.
     pub async fn requeue_all(&self) {

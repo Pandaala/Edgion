@@ -101,9 +101,10 @@ fn test_to_log_config_respects_console_flag() {
 #[test]
 fn conf_dir_override_preserves_explicit_controller_identity() {
     let mut base = EdgionControllerConfig {
-        conf_center: ConfCenterConfig::FileSystem(
-            FileSystemConfig::default().with_controller_name("example.com/deployment-a"),
-        ),
+        conf_center: ConfCenterConfig::FileSystem(FileSystemConfig {
+            cache_ready_deadline_secs: 600,
+            ..FileSystemConfig::default().with_controller_name("example.com/deployment-a")
+        }),
         ..Default::default()
     };
     let cli = EdgionControllerConfig {
@@ -116,6 +117,7 @@ fn conf_dir_override_preserves_explicit_controller_identity() {
     };
     assert_eq!(config.controller_name.as_deref(), Some("example.com/deployment-a"));
     assert_eq!(config.conf_dir, std::path::PathBuf::from("replacement"));
+    assert_eq!(config.cache_ready_deadline_secs, 600);
 }
 
 #[test]

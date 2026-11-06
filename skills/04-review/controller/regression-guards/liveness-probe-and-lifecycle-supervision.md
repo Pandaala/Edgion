@@ -1,20 +1,21 @@
 ---
 name: liveness-probe-and-lifecycle-supervision
-description: Use when reviewing K8s-mode controller lifecycle/liveness findings; covers the fixed supervised event loop (startup deadline + JoinSet panic detection + leadership-epoch cancellation), give-up-triggers-shutdown, the /health deadman, and the leader_job_alive gauge, plus five rejected hardening proposals.
+description: Use when reviewing controller lifecycle/liveness or startup-deadline findings; covers the fixed supervised event loop (single configurable startup deadline + JoinSet panic detection + leadership-epoch cancellation), give-up-triggers-shutdown, the /health deadman, the leader_job_alive gauge, the removal of hidden per-phase init deadlines (ctrl-center-02), plus five rejected hardening proposals.
 status: fixed
 finding_id: leader-wedge-recovery-and-worker-death
 closed: 2026-07-17
 knowledge_type: regression-guards
 ---
 
-# Wedged Leader Never Restarts / Never Fails Over — FIXED (supervised loop + deadline + deadman + gauge)
+# Wedged Leader Never Restarts / Never Fails Over — FIXED (supervised loop + single startup deadline + deadman + gauge)
 
 ## Conclusion
 
 The Kubernetes-mode event loops (`run_main_flow`, `run_serving_flow` in
 `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs`) now observe their
 watcher tasks through a `JoinSet`-backed `select!`, arm a configurable pre-ready deadline
-(`cache_ready_deadline_secs`, default 90 s) that is disabled once caches are ready, and
+(`cache_ready_deadline_secs`, default 180 s; see the ctrl-center-02 section below) that is
+disabled once caches are ready, and
 cancel the caches-ready tail via a leadership-epoch `CancellationToken` so a demoted
 replica cannot start leader jobs and report ready with them dead. Exhausting in-process
 recovery (`MAX_CONSECUTIVE_FAILURES`) now calls `shutdown_handle.shutdown()` before
@@ -76,6 +77,50 @@ returning, which releases the lease (reusing the separately-fixed
 the pod so another replica can take over. All-serve mode previously had no give-up at all
 (fixed 1 s/5 s sleep loop forever); it now shares the same failure-counter + backoff +
 give-up logic via an `ServingFlowExit` failure-vs-benign split.
+
+## Single configurable startup deadline (ctrl-center-02)
+
+**Trigger.** Hard-coded inner deadlines fired before the operator knob
+`cache_ready_deadline_secs` (then default 90 s): `PHASE_TIMEOUT = 15 s` bounded
+Kubernetes Phase 1 (providers, including cluster-wide Secret and EndpointSlice
+LIST + serial init) and Phase 2 (Gateway) in `kubernetes/controller.rs`, and
+`CACHE_READY_TIMEOUT_SECS = 30` bounded the dependent-kind readiness poll in
+`kubernetes/center.rs` (emitting `CachesTimeout`). FileSystem and etcd had the
+same 15 s phase constants in `non_kube_common.rs` under a hard-coded 30 s
+`wait_registry_ready`. A cluster whose initial load needed longer failed every
+epoch deterministically; raising the documented knob changed nothing, and after
+`MAX_CONSECUTIVE_FAILURES` every replica shut down identically.
+
+**Correct behavior.** `cache_ready_deadline_secs` is the single startup bound in
+all three backends (shared default 180 s and `> 30` floor in
+`edgion-controller/src/config/conf_center/readiness.rs`; FileSystem/etcd
+validate it in their center constructors and pass it to `CenterBase`). Phase
+waits use `ProcessorRegistry::wait_kinds_ready_unbounded`; Kubernetes
+`wait_phase` has no deadline and still ends on child failure, epoch
+cancellation, or shutdown. The caches task polls until ready and stops on
+epoch cancellation; `LifecycleEvent::CachesTimeout` no longer exists. Do not
+reintroduce an inner per-phase or poll deadline shorter than, or independent
+of, this knob.
+
+**Stable-run accounting.** `ran_stably` counts only time served after
+`CachesReady`. Previously it measured from iteration start, so any
+`cache_ready_deadline_secs >= STABLE_RUN_DURATION` (300 s) made every startup
+expiry reset the failure budget and give-up could never fire. Both leader-only
+and all-serve flows (`ServingFlowExit::Failure { ran_stably }`) use the helper.
+
+**Accepted costs.** A genuinely broken source (for example RBAC forbids LIST)
+now fails after the full deadline (default 180 s) per attempt instead of 15 s,
+so give-up takes correspondingly longer. FileSystem/etcd phase waits do not
+observe per-kind child failure the way Kubernetes `wait_phase` does; such a
+failure surfaces at the lifecycle deadline. Progress-based liveness (do not
+count an expiry while a source is still making LIST/page progress) and per-kind
+deadlines were not implemented; a single generous deadline was chosen instead.
+The `--conf-dir` CLI override keeps the configured `cache_ready_deadline_secs`.
+
+**Verification.** Unit tests: `phase_wait_has_no_inner_deadline`,
+`caches_ready_poll_has_no_inner_deadline_and_stops_on_cancel`,
+`only_time_served_after_ready_counts_as_a_stable_run`, Kubernetes/FileSystem/etcd
+config default and floor tests. No live large-cluster run was performed.
 
 ## Local backend iteration teardown and administrative reload removal
 
@@ -209,10 +254,13 @@ Re-open this decision only if:
   a demoted replica can run leader jobs for up to that long before the epoch token catches
   up. A fencing token/epoch check at the data-plane boundary would change the "naive
   `is_leader()` recheck" rejection above.
-- The bounded workqueue's per-kind capacity (5000) changes, or the sizing rule of thumb in
-  the config docs stops holding — `cache_ready_deadline_secs` is restart-bound (a
-  each recovery iteration re-arms with the boot-time value), so an undersized deadline
+- The bounded workqueue's per-kind capacity (5000) changes, or the sizing guidance in
+  the config docs stops holding — `cache_ready_deadline_secs` is restart-bound (each
+  recovery iteration re-arms with the boot-time value), so an undersized deadline
   becomes a *permanent* crash loop, not a one-time failure.
+- A per-phase or progress-based startup deadline is proposed — it must not fire
+  before, or independently of, the operator-visible `cache_ready_deadline_secs`
+  (ctrl-center-02).
 
 ## Reference Cases
 
@@ -225,7 +273,7 @@ Re-open this decision only if:
 - Sibling call-site cleanup that this fix builds on:
   [leader-jobs-call-site-consolidation.md](leader-jobs-call-site-consolidation.md)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — supervised
-  `select!` loop, `spawn_caches_ready_task` epoch-token check, give-up-triggers-shutdown
+  `select!` loop, `run_caches_ready` epoch-token check, give-up-triggers-shutdown
   sites
 - `edgion-controller/src/config/conf_center/kubernetes.rs` — `cache_ready_deadline_secs`
   validation and default
@@ -240,3 +288,4 @@ Re-open this decision only if:
 ## Resolution references
 
 - `leader-wedge-recovery-and-worker-death` — 2026-07-17.
+- `ctrl-center-02` (hard-coded init-phase timeout crash loop) — 2026-11-06.

@@ -63,7 +63,7 @@ fn filesystem_none_leadership_runs_immediately() {
         .build()
         .unwrap()
         .block_on(async {
-            let base = CenterBase::new();
+            let base = CenterBase::default();
             let generations = Cell::new(0);
             let sd = ShutdownHandle::new();
             let lifecycle =
@@ -96,7 +96,7 @@ fn backend_completion_withdraws_ready_generation_before_waiting_for_shutdown() {
             // Closed channel and explicitly reported failure share cleanup-before-wait.
             // When orderly shutdown is already requested, closure remains normal shutdown.
             for (reported_error, orderly_shutdown) in [(false, false), (true, false), (false, true)] {
-                let base = CenterBase::new();
+                let base = CenterBase::default();
                 let sd = ShutdownHandle::new();
                 let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
                 let (finished_tx, finished_rx) = tokio::sync::oneshot::channel::<()>();
@@ -159,7 +159,7 @@ fn shutdown_or_initialization_failure_drains_descendants_before_reset() {
                 (false, true, false),
                 (true, false, true),
             ] {
-                let base = CenterBase::new();
+                let base = CenterBase::default();
                 let shutdown = ShutdownHandle::new();
                 let leader = LeaderState::new(Duration::from_secs(30));
                 leader.set_leader(true);

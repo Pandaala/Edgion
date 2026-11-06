@@ -79,7 +79,7 @@ conf_center:
 #   gateway_address: ""                            # Gateway status 中报告的地址
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # 跳过 CRD 预检和 watch 的资源 kind
-#   cache_ready_deadline_secs: 90                  # CachesReady 前的超时上限（秒）；随进程重启生效，不支持热重载
+#   cache_ready_deadline_secs: 180                 # 启动阶段唯一的超时上限（秒）；随进程重启生效，不支持热重载
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
@@ -210,6 +210,7 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 | `type` | `String` | — | 必须填 `file_system`（snake_case，不是 `filesystem`） |
 | `controller_name` | `String` | **必填** | 显式 Gateway API 控制器身份 |
 | `conf_dir` | `Path` | — | YAML 资源目录，**建议写绝对路径**（当前实现不会随 `work_dir` 自动解析） |
+| `cache_ready_deadline_secs` | `Integer` | `180` | 所有资源 kind 首次加载到就绪的超时上限（秒）。这是启动阶段唯一的超时，各阶段内部没有独立超时。**必须 `> 30`**。超时后启动失败，Controller 退出。配置量较大时应调大 |
 
 注意：`--conf-dir` CLI 参数会直接覆盖此处的 `conf_dir`，并将 `conf_center` 切换到 FileSystem 模式。
 
@@ -224,7 +225,7 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 | `gateway_address` | `String` | — | Gateway status 中报告的地址，可选 |
 | `ha_mode` | `String` | — | HA 模式：`"leader-only"` 或 `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | 跳过 CRD 预检和 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute"]` |
-| `cache_ready_deadline_secs` | `Integer` | `90` | 已启动的 watcher 集合到达 `CachesReady` 前的超时上限（秒）——覆盖内部 30 秒的就绪轮询预算，加上就绪后的收尾阶段（WatchObj 注册、revalidation、leader-job 启动）。**必须 `> 30`**，否则启动时校验失败拒绝启动。**随进程重启生效**——每次资源运行周期初始化都使用启动时捕获的值；修改此字段需要完整重启进程。经验法则：当单一资源 kind 的数量接近每 kind 工作队列容量（5000）时应调大此值——由于每次超时触发的重启都会 `runtime.reset()` 并从头重放，过小的值会造成**永久性**重启循环而不是一次性失败。最坏情况下，重启触发前的等待时间约为配置值的 **2 倍**（同一超时预算还会通过 `tokio::time::timeout` 包裹最初的 `start_event_watchers` 调用，返回后再为收尾阶段重新武装一次）。完整机制见 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) |
+| `cache_ready_deadline_secs` | `Integer` | `180` | 已启动的 watcher 集合到达 `CachesReady` 前的超时上限（秒）。这是启动阶段**唯一**的超时：覆盖各阶段（provider、Gateway、依赖资源）的首次 LIST 和 init 处理，以及就绪后的收尾阶段（WatchObj 注册、revalidation、leader-job 启动）；各阶段内部不再有独立超时。**必须 `> 30`**，否则启动时校验失败拒绝启动。**随进程重启生效**——每次资源运行周期初始化都使用启动时捕获的值；修改此字段需要完整重启进程。集群较大或较慢（Secret/EndpointSlice 数量多、API server 被限流或延迟高）时应调大此值——由于每次超时都会从头重放，过小的值会造成**永久性**重启循环而不是一次性失败。超时后会以指数退避重建资源运行周期；只有到达 `CachesReady` 之后的运行时间才计入 5 分钟稳定运行重置，因此连续 10 次启动失败后 Controller 会退出，由 Kubernetes 重启。最坏情况下，重启触发前的等待时间约为配置值的 **2 倍**（同一超时预算还会通过 `tokio::time::timeout` 包裹最初的 `start_event_watchers` 调用，返回后再为收尾阶段重新武装一次）。完整机制见 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) |
 
 首次启动时，Controller 会等待所需监听来源完成首次完整加载，再发布配置同步服务。
 运行期间 Kubernetes 重新 LIST 时，会保留该来源上一次完整快照，成功后再替换，并通过
@@ -263,6 +264,7 @@ Etcd 模式面向非 Kubernetes（裸金属 / 虚拟机）生产环境：Control
 | `tls` | Object | — | 可选，用于 **Controller→etcd** 连接的 TLS（文件路径）：`tls.ca_cert_file`、`tls.client_cert_file`、`tls.client_key_file`。与 conf_sync mTLS 通道无关 |
 | `connect_timeout_ms` | `Integer` | `5000` | etcd 连接（拨号）超时，毫秒 |
 | `request_timeout_ms` | `Integer` | `10000` | 共享 conf_center etcd 客户端一元调用的单请求超时，毫秒。**注意**：它**不会**作用于阻塞式的 Leader 竞选 `campaign()` RPC（竞选客户端刻意不设置通道级超时），因此运维无需为竞选调整此值 |
+| `cache_ready_deadline_secs` | `Integer` | `180` | 本 Controller 成为 Leader 后，所有资源 kind 首次加载到就绪的超时上限（秒）。这是启动阶段唯一的超时，各阶段内部没有独立超时。**必须 `> 30`**。超时后启动失败，Controller 退出。key prefix 下数据量大或 etcd 较慢时应调大 |
 | `leader_election` | Object | — | 主备 HA 设置（见下文）。**始终开启**，没有启用 / 禁用开关 |
 
 ### [conf_center.leader_election] — Etcd 模式

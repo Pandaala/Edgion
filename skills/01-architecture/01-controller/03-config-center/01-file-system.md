@@ -87,7 +87,7 @@ start(shutdown_handle)
     │   │   └── Spawn dependents → dispatch_init(dependent_kinds)
     │   └── FileSystemWatcher.run_runtime()
     │       └── runtime_phase: PollWatcher (adaptive interval) → Apply/Delete dispatched directly
-    ├── 3. wait_registry_ready(30s)
+    ├── 3. wait_registry_ready(cache_ready_deadline_secs, default 180 s)
     ├── 4. Trigger cross-namespace revalidation
     ├── 5. Create ConfigSyncServer + register all WatchObjs
     ├── 6. set_config_sync_server(Some)  ← gRPC service becomes available
@@ -195,9 +195,11 @@ processing time; do not assume a universal 1.5-second bound for large trees.
   metadata-only error. Blocking filesystem work, PollWatcher setup and existing
   worker cleanup retain their own limitations; no universal shutdown deadline is
   promised.
-- The per-phase readiness timeout starts after initial dispatch. The outer
-  lifecycle readiness deadline is separate; this change adds no per-send timeout
-  and does not guarantee immediate reporting of an initialization failure.
+- Phase readiness waits are unbounded. The lifecycle readiness deadline
+  (`cache_ready_deadline_secs`, shared with etcd) is the single startup bound;
+  on expiry the iteration is torn down and startup fails. There is no per-send
+  timeout, and an initialization failure is not guaranteed to be reported
+  before that deadline.
 - **Delete-then-immediately-recreate within the same 1s window is coalesced into a single Modify**: PollWatcher only sees snapshot diffs; the intermediate deleted state is invisible. If a ConfHandler relies on diff computation between on_delete / on_change (for example, to clean up reverse references), it must instead compare "old vs new value" inside `parse()` rather than relying on on_delete. See the implementations in `reference_grant.rs` and `backend_tls_policy.rs` for the pattern.
 - The runtime PollWatcher establishes its baseline only after `prime()` has scanned, so a file created/changed in the window between the `prime()` scan and the `run_runtime()` baseline is not seen until its next change. This window is now slightly wider — it spans the provider/Gateway `dispatch_init` and readiness waits — and remains an **accepted** limitation of the dev/test FS backend. The etcd backend has no equivalent: its watch resumes from the primed revision (`R + 1`) and replays that gap. See `docs/superpowers/specs/2026-07-20-etcd-fs-phase1-ordering-design.md`.
 

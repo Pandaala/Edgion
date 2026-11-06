@@ -57,6 +57,8 @@ pub struct FileSystemCenter {
 impl FileSystemCenter {
     /// Create a new FileSystemCenter
     pub fn new(config: FileSystemConfig) -> Result<Self> {
+        config.validate()?;
+        let ready_deadline = Duration::from_secs(config.cache_ready_deadline_secs);
         let controller_name = crate::config::conf_center::controller_identity::require_controller_name(
             config.controller_name.as_deref(),
         )?;
@@ -82,7 +84,7 @@ impl FileSystemCenter {
             config,
             writer,
             registry,
-            base: CenterBase::new(),
+            base: CenterBase::new(ready_deadline),
             conf_dir_abs,
         })
     }

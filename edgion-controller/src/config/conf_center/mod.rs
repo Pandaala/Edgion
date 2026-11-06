@@ -13,6 +13,7 @@ pub mod controller_identity;
 pub mod etcd;
 pub mod file_system;
 pub mod kubernetes;
+pub(crate) mod readiness;
 
 pub use config::ConfCenterConfig;
 pub use etcd::{EtcdAuthConfig, EtcdConfig, EtcdTlsConfig};

@@ -31,6 +31,11 @@ pub struct FileSystemConfig {
     /// When absent the watcher uses its built-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_interval_ms: Option<u64>,
+    /// Deadline (seconds) for the initial load of every resource kind to reach
+    /// readiness. This is the only startup bound; phase waits have no inner
+    /// deadline. Must be > 30.
+    #[serde(default = "super::readiness::default_cache_ready_deadline_secs")]
+    pub cache_ready_deadline_secs: u64,
 }
 
 impl Default for FileSystemConfig {
@@ -39,6 +44,7 @@ impl Default for FileSystemConfig {
             controller_name: None,
             conf_dir: PathBuf::from("conf"),
             poll_interval_ms: None,
+            cache_ready_deadline_secs: super::readiness::default_cache_ready_deadline_secs(),
         }
     }
 }
@@ -56,12 +62,18 @@ impl FileSystemConfig {
             controller_name: None,
             conf_dir,
             poll_interval_ms: None,
+            cache_ready_deadline_secs: super::readiness::default_cache_ready_deadline_secs(),
         }
     }
 
     /// Get the configuration directory
     pub fn conf_dir(&self) -> &PathBuf {
         &self.conf_dir
+    }
+
+    /// Fail-fast validation of startup timing knobs.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        super::readiness::validate_cache_ready_deadline_secs("file_system", self.cache_ready_deadline_secs)
     }
 }
 

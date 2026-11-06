@@ -36,3 +36,16 @@ fn benign_reset_clears_the_counter() {
     budget.reset();
     assert!(matches!(budget.on_failure(false), FailureAction::Retry(_)));
 }
+
+#[test]
+fn only_time_served_after_ready_counts_as_a_stable_run() {
+    let now = Instant::now();
+    // Never reached CachesReady: a long startup-deadline expiry is not stable,
+    // even when cache_ready_deadline_secs >= STABLE_RUN_DURATION.
+    assert!(!ran_stably(None, now));
+    assert!(!ran_stably(
+        Some(now),
+        now + STABLE_RUN_DURATION - Duration::from_secs(1)
+    ));
+    assert!(ran_stably(Some(now), now + STABLE_RUN_DURATION));
+}

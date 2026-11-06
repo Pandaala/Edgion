@@ -116,7 +116,7 @@ conf_center:
 #   gateway_address: ""                   # Address reported in Gateway status
 #   ha_mode: leader-only                  # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]  # Resource kinds to skip CRD precheck and watch for
-#   cache_ready_deadline_secs: 90         # Pre-CachesReady deadline (secs); restart-bound, not hot-reloadable
+#   cache_ready_deadline_secs: 180        # Single startup deadline (secs); restart-bound, not hot-reloadable
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system      # Default: POD_NAMESPACE, else "default"
@@ -575,6 +575,7 @@ and the negative checks below; deleting Secrets is not instantaneous revocation.
 |-------|------|---------|-------------|
 | `type` | `String` | — | `"file_system"` |
 | `conf_dir` | `PathBuf` | `conf` | Resource configuration directory |
+| `cache_ready_deadline_secs` | `u64` | `180` | Single startup bound for the initial load of every kind (`CenterBase::wait_registry_ready`); phase waits are unbounded. Must be `> 30`; expiry fails startup |
 | `poll_interval_ms` | `u64?` | Watcher-calculated | Poll interval override; minimum 100 ms |
 
 Important practical constraints:
@@ -597,7 +598,7 @@ CLI special cases:
 | `gateway_address` | `String?` | — | Address reported in Gateway status |
 | `ha_mode` | `String` | — | `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Vec<String>` | `[]` | Resource kinds (PascalCase) not to probe/watch, e.g., `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`. Skips CRD precheck at startup, does not spawn a watcher, and is excluded from processor readiness. Disabling `GatewayClass` makes Gateway ownership unprovable, so Kubernetes Gateways are not processed |
-| `cache_ready_deadline_secs` | `u64` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` (covers the internal 30 s readiness-poll budget plus the post-ready tail: WatchObj registration, revalidations, leader-job start). **Must be `> 30`** — a startup validation error otherwise. **Restart-bound**: each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value causes a permanent restart loop, not a one-off failure. Worst-case pre-ready wait before a restart fires is ≈2× the configured value (the deadline also wraps `start_event_watchers` itself via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](../../01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism. |
+| `cache_ready_deadline_secs` | `u64` | `180` | Deadline (seconds) for a started watcher set to reach `CachesReady`. The **only** startup bound: covers every phase's initial LIST + init processing and the post-ready tail (WatchObj registration, revalidations, leader-job start); phase waits are unbounded. **Must be `> 30`** — a startup validation error otherwise. **Restart-bound**: each resource-epoch initialization uses the boot-time value; changing it requires a process restart. Raise it for large or slow clusters — a too-small value causes a permanent restart loop, not a one-off failure. Only time served after `CachesReady` counts toward the `STABLE_RUN_DURATION` budget reset, so a deadline >= 300 s still reaches give-up. Worst-case pre-ready wait before a restart fires is ≈2× the configured value (the deadline also wraps `start_event_watchers` itself via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](../../01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism. |
 
 ### [conf_center.leader_election]
 
@@ -620,6 +621,7 @@ CLI special cases:
 | `tls` | object? | — | Optional CA and client certificate/key file paths |
 | `connect_timeout_ms` | `u64?` | Provider default | Dial timeout |
 | `request_timeout_ms` | `u64?` | Provider default | Per-request timeout |
+| `cache_ready_deadline_secs` | `u64` | `180` | Single startup bound for the initial load of every kind after winning leadership (`CenterBase::wait_registry_ready`); phase waits are unbounded. Must be `> 30`; expiry fails startup |
 | `keep_alive_time_secs` | `u64?` | Provider default | HTTP/2 keepalive interval |
 | `keep_alive_timeout_secs` | `u64?` | Provider default | HTTP/2 keepalive timeout |
 

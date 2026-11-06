@@ -4,6 +4,7 @@
 //! The only etcd-specific work is creating `EtcdController` for each iteration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -54,6 +55,8 @@ impl EtcdCenter {
     ///
     /// This connects to etcd and initializes the client.
     pub async fn new(config: EtcdConfig) -> Result<Self> {
+        config.validate()?;
+        let ready_deadline = Duration::from_secs(config.cache_ready_deadline_secs);
         let controller_name = crate::config::conf_center::controller_identity::require_controller_name(
             config.controller_name.as_deref(),
         )?;
@@ -88,7 +91,7 @@ impl EtcdCenter {
             client,
             election,
             term_token_slot: Arc::new(ArcSwap::from_pointee(CancellationToken::new())),
-            base: CenterBase::new(),
+            base: CenterBase::new(ready_deadline),
         })
     }
 }

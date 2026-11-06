@@ -109,6 +109,7 @@ fn test_to_client_config_minimal() {
         keep_alive_time_secs: None,
         keep_alive_timeout_secs: None,
         leader_election: EtcdLeaderElectionConfig::default(),
+        cache_ready_deadline_secs: 180,
     };
 
     let client_config = config.to_bootstrap_config().unwrap();
@@ -144,6 +145,7 @@ fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
         keep_alive_time_secs: None,
         keep_alive_timeout_secs: None,
         leader_election: EtcdLeaderElectionConfig::default(),
+        cache_ready_deadline_secs: 180,
     };
 
     let client_config = config.to_bootstrap_config().unwrap();
@@ -170,6 +172,7 @@ fn test_to_client_config_without_auth_is_not_required() {
         keep_alive_time_secs: None,
         keep_alive_timeout_secs: None,
         leader_election: EtcdLeaderElectionConfig::default(),
+        cache_ready_deadline_secs: 180,
     };
 
     let client_config = config.to_bootstrap_config().unwrap();
@@ -207,6 +210,7 @@ fn test_ca_only_tls_config_does_not_set_client_secret() {
         keep_alive_time_secs: None,
         keep_alive_timeout_secs: None,
         leader_election: EtcdLeaderElectionConfig::default(),
+        cache_ready_deadline_secs: 180,
     };
 
     let client_config = config.to_bootstrap_config().unwrap();
@@ -331,4 +335,15 @@ fn advertised_leader_addresses_classify_literals_without_broadening_egress_polic
             assert_eq!(if grpc { &config.grpc_addr } else { &config.admin_addr }, address);
         }
     }
+}
+
+#[test]
+fn etcd_cache_ready_deadline_default_and_floor() {
+    let mut config = file_tls_config();
+    assert_eq!(config.cache_ready_deadline_secs, 180);
+    assert!(config.validate().is_ok());
+    config.cache_ready_deadline_secs = 30;
+    assert!(config.validate().is_err());
+    config.cache_ready_deadline_secs = 600;
+    assert!(config.validate().is_ok());
 }

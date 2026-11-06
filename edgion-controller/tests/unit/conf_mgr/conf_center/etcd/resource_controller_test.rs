@@ -512,7 +512,7 @@ fn retired_secret_worker_cannot_restore_rotated_or_removed_ca_after_leadership_c
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         // Rotation replaces bytes; revocation removes the old CA entirely.
         for replacement in [Some("new-ca"), None] {
-            let base = CenterBase::new();
+            let base = CenterBase::default();
             let shutdown = ShutdownHandle::new();
             let leader = LeaderState::new(Duration::from_secs(30));
             leader.set_leader(true);

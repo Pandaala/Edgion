@@ -117,7 +117,8 @@ Core capabilities:
 | `get(kind)` | Get a processor by kind name |
 | `is_all_ready()` | Check whether all processors are ready (returns false for an empty registry) |
 | `not_ready_kinds()` | Return the list of kinds not yet ready |
-| `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to become ready during phased startup |
+| `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds with a deadline (FS/etcd `wait_registry_ready`) |
+| `wait_kinds_ready_unbounded(kinds)` | Phased-startup wait with no inner deadline; `cache_ready_deadline_secs` bounds the epoch |
 | `all_watch_objs(no_sync_kinds)` | Collect WatchObjs for ConfigSyncServer registration (filters out kinds that should not sync) |
 | `requeue(kind, key)` | Immediate cross-resource re-enqueue |
 | `requeue_with_chain(kind, key, chain)` | Delayed re-enqueue with TriggerChain (coalescing + cycle detection) |

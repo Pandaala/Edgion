@@ -104,7 +104,13 @@ async fn all_serve_shutdown_arriving_during_drain_overrides_failure() {
     assert!(!shutdown.is_shutdown());
     assert!(matches!(
         center
-            .finish_serving_flow(watchers, false, ControllerExitReason::AllControllersStopped, &shutdown)
+            .finish_serving_flow(
+                watchers,
+                false,
+                ControllerExitReason::AllControllersStopped,
+                false,
+                &shutdown
+            )
             .await,
         ServingFlowExit::Shutdown
     ));
@@ -205,6 +211,31 @@ async fn pre_cancelled_token_suppresses_caches_ready() {
     .await;
     assert!(
         rx.try_recv().is_err(),
-        "cancelled caches task must send neither CachesReady nor CachesTimeout"
+        "cancelled caches task must not send CachesReady"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn caches_ready_poll_has_no_inner_deadline_and_stops_on_cancel() {
+    let (tx, mut rx) = mpsc::channel::<LifecycleEvent>(4);
+    let cancel = CancellationToken::new();
+    // An expected kind that never registers keeps the poll pending.
+    let task = tokio::spawn(KubernetesCenter::run_caches_ready(
+        Arc::new(ConfigSyncServer::new()),
+        Arc::new(ControllerRuntime::default()),
+        vec!["Gateway"],
+        Vec::new(),
+        tx,
+        None,
+        None,
+        Vec::new(),
+        cancel.clone(),
+        watch::channel(true).1,
+    ));
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert!(!task.is_finished(), "the poll must not give up on an inner deadline");
+    assert!(rx.try_recv().is_err(), "no event may be sent while kinds are pending");
+    cancel.cancel();
+    task.await.unwrap();
+    assert!(rx.try_recv().is_err());
 }

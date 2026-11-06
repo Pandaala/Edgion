@@ -235,8 +235,22 @@ async fn phase_wait_observes_required_child_failure_without_waiting_for_timeout(
         &CancellationToken::new(),
         &mut signal,
         futures::future::pending(),
-        Duration::from_secs(60),
     )
     .await;
     assert!(result.unwrap_err().to_string().contains("Required child"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn phase_wait_has_no_inner_deadline() {
+    // A slow initial LIST (well past the former 15 s phase constant) must not
+    // fail the phase; only the center's cache_ready_deadline_secs bounds startup.
+    let mut children: JoinSet<Result<()>> = JoinSet::new();
+    children.spawn(futures::future::pending());
+    let (_shutdown, mut signal) = ShutdownController::new();
+    let result = wait_phase(&mut children, &CancellationToken::new(), &mut signal, async {
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        Ok(())
+    })
+    .await;
+    assert!(result.is_ok(), "{result:?}");
 }
