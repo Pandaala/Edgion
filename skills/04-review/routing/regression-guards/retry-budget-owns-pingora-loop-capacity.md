@@ -26,7 +26,8 @@ request. Edgion therefore configures it to `i32::MAX + 1`; it is capacity for
 the public route budget, not a second operator-visible retry policy.
 
 Raising that capacity also removed the only bound on retries Pingora decides by
-itself. At locked fork `0b0d8bb`, `handle_read_header_error` marks peer-qualified
+itself. At the locked fork `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`
+(`h2` 0.4.20), `handle_read_header_error` marks peer-qualified
 h2 GOAWAY, RST_STREAM(REFUSED_STREAM), and local protocol/downgrade outcomes as
 `RetryType::Decided(true)` before `error_while_proxy` ever sees them, and
 `RetryType::decide_reuse` is a no-op once a decision exists, so the route
@@ -41,6 +42,14 @@ origin therefore sees exactly 17 requests including the initial attempt,
 then `UpstreamTransportRetryCeiling`. This is a retry count, distinct from the
 former 16-iteration Pingora loop. Retries this callback sets itself are not
 counted; they already passed their own gates.
+
+These fork claims (`handle_read_header_error` classification in
+`pingora-core/src/protocols/http/v2/client.rs`, `RetryType::decide_reuse` in
+`pingora-error/src/lib.rs`, and the `while retries < self.max_retries` loop in
+`pingora-proxy/src/lib.rs`) were re-verified by source inspection at that
+revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1; the first
+two files are unchanged from `0b0d8bba` (the `edgion_0.9.0_v1` revision this page was last verified against; not the immediate predecessor lock, which was `1aaa45cc`). Historical: the
+original observation was made at fork `0b0d8bb` on the `edgion_0.9.0_v1` branch.
 
 ## Rationale and evidence
 

@@ -100,5 +100,7 @@ error consumers stop preserving typed capacity failures.
 
 - `edgion-request-body-capture-lacks-aggregate-budget`: aggregate retained-storage
   admission gap; Edgion baseline `6069963764e2435aaa834aaa8aa56028b0dec67a`.
-- Cargo.lock selects Pingora `1aaa45cc70430bc782990bc20ddee3fef36d6b99` on
-  `edgion_0.9.0_v1`; this fix does not change the dependency or protocol behavior.
+- At the time of this fix, Cargo.lock selected Pingora
+  `1aaa45cc70430bc782990bc20ddee3fef36d6b99` on `edgion_0.9.0_v1` (historical; the
+  current lock is recorded in `supply-chain/mandatory-design/pingora-fork-branch-lock-policy.md`);
+  this fix does not change the dependency or protocol behavior.

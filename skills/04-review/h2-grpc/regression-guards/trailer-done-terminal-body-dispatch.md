@@ -14,14 +14,22 @@ Fixed: `upstream_response_body_filter` now receives `end_of_stream = true` exact
 
 ### Current dependency adoption
 
-Source revalidation at Edgion `2bf6b8570`: Cargo.lock selects fork
-`1aaa45cc70430bc782990bc20ddee3fef36d6b99`, which includes downstream terminal
-observation. `response_pipeline.rs` owns a separate downstream TerminalBodyDispatch;
+Cargo.lock now selects fork
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, which includes
+downstream terminal observation; this was re-verified by source inspection at
+that revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1.
+`TerminalBodyDispatch` is defined in `pingora-proxy/src/response_terminal.rs`
+(unchanged from `0b0d8bba`; `Failed` still claims without dispatching) and
+re-exported by `response_pipeline.rs`, whose `ResponsePipelineState` owns both
+the upstream `terminal_body` latch and a separate `downstream_terminal_body`
+latch; a `Failed` source also claims the downstream latch.
 `lib.rs::downstream_response_body_filter_tasks` calls response_body_filter with
 None and EOS true when a non-body task claims terminal observation, and rejects
 nonempty synthetic output. The old nonadoption/open-gap statements below describe
 the September snapshot, not the current dependency. This is source verification,
 not fresh execution of fork regressions or proof of every transport interleaving.
+Historical: the same adoption was first source-verified at Edgion `2bf6b8570`
+against fork `1aaa45cc70430bc782990bc20ddee3fef36d6b99`.
 
 ### Downstream observation follow-up
 
@@ -75,16 +83,25 @@ footer body, producing body bytes after trailers and a second body-hook EOS.
 `ResponseCompressionCtx::response_filter_with_preceding` now finalizes before
 the trailer and returns a non-terminal footer body. H1, H2, and custom pumps
 process that prefix through the ordinary body-filter/cache pipeline before
-the unchanged trailer. The context's `finalized` guard prevents the later
+the unchanged trailer. The context's finalization flag (the unnamed second
+tuple field of `ResponseCompressionCtx`, set once `response_body_filter` sees
+`end`; there is no field literally named `finalized`) prevents the later
 `Done` from producing another footer; the response-wide terminal latch prevents
 a second terminal callback across pump batches.
 
 The canonical fork explanation is
 `edgion-changes/review/compression/compression-trailer-terminal-order.md`.
-Source revalidation on 2026-09-09 compared Edgion's locked fork revision
+Historical source revalidation on 2026-09-09 compared Edgion's locked fork revision
 `518f7274` with sibling checkout `dba39b6`; the compression implementation,
 H2/custom pumps, and relevant integration test files are identical. This is
-an already-fixed fork defect, not a new Edgion runtime change.
+an already-fixed fork defect, not a new Edgion runtime change. At
+`edgion_v0.9.1@e5f4287` (source inspection, 2026-11-06),
+`pingora-core/src/protocols/http/compression/mod.rs` is unchanged from
+`0b0d8bba` and still provides `response_filter_with_preceding` and the core
+footer test; `pingora-proxy/tests/test_terminal_body_dispatch.rs` still
+contains both H1/H2 `compressed_trailered_response_is_complete_and_dispatches_eos_once`
+cases, and `pingora-proxy/tests/test_upstream_response_body_sink.rs` still
+contains the custom-pump `custom_compressed_trailered_response_is_complete_and_dispatches_eos_once`.
 
 Coverage includes `compression_footer_is_emitted_before_trailers_and_only_once`,
 the H1/H2 `compressed_trailered_response_is_complete_and_dispatches_eos_once`

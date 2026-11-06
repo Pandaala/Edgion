@@ -15,10 +15,17 @@ Edgion-shaped benchmark showed that a conservative predicate removes the outer
 allocation on deliberately idle later chunks, while installed async processors
 retain their own nested boxed-future allocations.
 
-P090-009 source inspection on 2026-10-05 found that locked fork
-`0b0d8bba9609655bfd7db0fe0add6818bc0ee937` now returns a zero-sized ready future
-for the default upstream body hook and delegates the typed default directly
-to it. That default requires no allocator storage; the historical 16-byte
+The current lock selects fork
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`. Its default
+`ProxyHttp::upstream_response_body_filter` boxes the zero-sized
+`NoopUpstreamResponseBodyFilter` future (which constructs its result in
+`poll()`), and the default `upstream_response_body_filter_event` returns that
+legacy hook's future directly instead of wrapping it
+(`pingora-proxy/src/proxy_trait.rs`). This was re-verified by source inspection
+at that revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1;
+the same behavior was first recorded by P090-009 source inspection on
+2026-10-05 against the then-locked `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
+(historical). That default requires no allocator storage; the historical 16-byte
 result is not a measurement of this implementation. Edgion overrides remain
 async and must be profiled separately. No new allocation benchmark was run.
 See [the current hook capability boundary](../../plugin-runtime/compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md).

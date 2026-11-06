@@ -34,9 +34,15 @@ socket. Route and certificate hot reload under an existing Gateway remains suppo
 
 **1. The current TCP serving model lacks runtime service registration**
 
-The locked Edgion Pingora fork (`0b0d8bba9609655bfd7db0fe0add6818bc0ee937`)
-registers services through `Server::add_service(&mut self, ...)`, while
-`Server::run(self, ...)` owns the serving loop. The existing Gateway handler
+The locked Edgion Pingora fork
+(`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`) registers services
+through `Server::add_service(&mut self, ...)`, while `Server::run(mut self,
+RunArgs)` owns the serving loop (`pingora-core/src/server/mod.rs`). This was
+re-verified by source inspection at that revision on 2026-11-06 after the fork
+was rebased onto upstream 0.9.1; `pingora-core/src/server/` is unchanged from
+`0b0d8bba` (the `edgion_0.9.0_v1` revision this page was last verified against; not the immediate predecessor lock, which was `1aaa45cc`), and the `pingora-core/src/listeners/mod.rs`
+change between the two revisions (L4 buffer documentation and an unbuffered
+listener test) adds no post-startup registration. The existing Gateway handler
 cannot simply call `add_service` after startup. This constrains the current
 integration; it is not proof that a different serving design is impossible.
 

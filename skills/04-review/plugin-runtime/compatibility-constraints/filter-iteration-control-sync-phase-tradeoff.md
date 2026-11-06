@@ -8,9 +8,14 @@ knowledge_type: compatibility-constraints
 
 ## Conclusion and scope
 
-At locked Pingora revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`,
+At locked Pingora revision
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`,
 `ProxyHttp::upstream_response_filter`, the upstream body hook, and the upstream
-trailer hook are asynchronous. Edgion's `UpstreamResponseFilter` and read-only
+trailer hook are asynchronous, while the downstream `response_body_filter`
+remains synchronous. This was re-verified by source inspection at that
+revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1; the
+original inspection used the then-locked
+`0b0d8bba9609655bfd7db0fe0add6818bc0ee937` (historical). Edgion's `UpstreamResponseFilter` and read-only
 `UpstreamResponseBodyFilter` plugin traits remain synchronous. Their signatures
 are a product phase boundary, not evidence that Pingora cannot await response
 work. Writable body processors and trailer companions already run asynchronously
@@ -25,8 +30,11 @@ responses remain governed by [the canonical design rules](../../../00-design-rul
 
 ## Rationale and evidence
 
-Edgion consumer inspection used HEAD `c6848316bc4c7a3ffe0a3eb2fa3d60b2f5e50076`
-and the lock-resolved fork revision above:
+Edgion consumer inspection originally used HEAD
+`c6848316bc4c7a3ffe0a3eb2fa3d60b2f5e50076` and the then-locked `0b0d8bb`; the
+files below still exist, and the adapter still overrides the upstream
+header/body/body-event/trailer hooks as `async fn` and has no production
+`response_body_filter` override, as re-checked on 2026-11-06:
 
 - [Proxy adapter](../../../../edgion-gateway/src/routes/http/proxy_http/mod.rs):
   asynchronous upstream header/body/trailer callbacks and response-head hooks.
@@ -49,7 +57,13 @@ and the lock-resolved fork revision above:
 The fork's `proxy_trait.rs`, `response_pipeline.rs`, `response_body_sink.rs`,
 `response_terminal.rs`, and `response_head_barrier.rs` own the generic
 contracts. Its feature documentation under `edgion-changes/features/` and
-`edgion-changes/architecture/body-relay.md` is the detailed authority.
+`edgion-changes/architecture/body-relay.md` is the detailed authority. All of
+these paths exist at `e5f4287`. In the rebased fork the precommit decision is
+the response-head Hold (`ResponseHeadCommitPlan::{Immediate, Hold}` with
+sink-driven Release/Replace, the synchronous `response_head_hold_boundary`
+mapper that defaults to a non-retryable Fail, and a single absolute deadline),
+and `response_head_may_hold` disables cache lookup/admission before the cache
+key is generated.
 
 | Operation | Inspected upstream async commits | Required fork/consumer behavior |
 | --- | --- | --- |
@@ -65,7 +79,10 @@ Upstream commits
 and [`6cc56b6`](https://github.com/cloudflare/pingora/commit/6cc56b6c10b086359e9c97f0bfe5a0d7d41cec1f)
 add async signatures, awaits, and context bounds; they do not add the richer
 contracts in this table. This comparison is pinned to those commits, not an
-assertion about all future upstream releases.
+assertion about all future upstream releases. Neither commit is in the upstream
+0.9.1 release (`f86ffda`) that the current fork is based on; at `f86ffda` the
+upstream body, trailer, and downstream body hooks are still synchronous, so the
+async upstream hooks at `e5f4287` are fork changes.
 
 H1, H2, and custom pumps perform upstream compression before the shared response
 pipeline. Upstream processor output precedes cache admission and downstream-only

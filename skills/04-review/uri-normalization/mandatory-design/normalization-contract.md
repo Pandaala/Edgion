@@ -131,7 +131,21 @@ rewrite replaces authority. A path-only rewrite to `*` is rejected before
 changing an absolute-form target; concatenating it after the authority would
 change the authority itself.
 
-At fork revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, the
+The Pingora-side claims above were re-verified by source inspection at
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a` on 2026-11-06 after
+the fork was rebased onto upstream 0.9.1: `pingora-http/src/lib.rs`
+`parse_request_target` keeps absolute-form scheme and authority only in the raw
+target (the URI carries the path component), `set_raw_path` and `set_uri`
+replace the whole target, and `pingora_http::authority::raw_target_authority`
+remains the shared classifier. The new fork patch `43a85fa` ("normalize empty
+and fragment-only request targets") makes an empty target, after fragment
+stripping, resolve explicitly to `Uri::default()` (`/`, no query, no authority,
+`RawTarget::FromUri`) instead of relying on the linked `http` crate. With
+`http` 1.5.0 locked both before and after the bump, that is the same `/`
+outcome as before. It does not affect the absolute-form write above, which
+always supplies `scheme://authority` plus a `/`-prefixed path.
+
+Historical: at fork revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, the
 `HTTPRoute/Transport` integration suite observes the normalized target,
 query, and authority at both HTTP/1 and HTTP/2 origins for all four
 downstream/upstream combinations. `EdgionPlugins/PathNormalization/ForwardView`

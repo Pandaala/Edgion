@@ -8,8 +8,14 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Edgion's locked Pingora revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
-already contains the P090-005 implementation. Do not add another notification
+Edgion's locked Pingora revision
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a` already contains the
+P090-005 implementation. This was re-verified by source inspection at that
+revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1: the
+`ShardedNotify`, `await_shutdown`, biased `handle_new_request` select, and
+`http_cleanup` code is unchanged from `0b0d8bba` (the `edgion_0.9.0_v1` revision this page was last verified against; not the immediate predecessor lock, which was `1aaa45cc`); the
+`pingora-proxy/src/lib.rs` diff between the two revisions touches only response
+terminal-body dispatch and retry-test setup. Do not add another notification
 layer to the Gateway. In `pingora-proxy/src/lib.rs`, `await_shutdown` polls its
 shard's waiter before loading the shutdown flag with Acquire ordering;
 `http_cleanup` stores the flag with Release ordering and notifies every shard.
@@ -28,7 +34,15 @@ connection draining; Edgion owns process configuration and its auxiliary drain.
 
 ## Regression coverage
 
-The local fork's `pingora-proxy/src/shutdown_tests.rs` covers:
+The coverage below existed only in the local fork working tree used for the
+2026-09-27 verification. Source inspection on 2026-11-06 found that neither the
+current lock `e5f4287` nor the earlier verified revision `0b0d8bba` contains
+`pingora-proxy/src/shutdown_tests.rs`; both contain only
+`tests::shutdown_wakes_parked_read_requests` (still using the 50 ms sleep) and
+`tests::shutdown_before_read_request_parks_returns_immediately` in
+`pingora-proxy/src/lib.rs`. Treat the following as unpublished local evidence,
+not as regression tests carried by the locked fork. The local
+`pingora-proxy/src/shutdown_tests.rs` covered:
 
 - Real cleanup between an HTTP header read returning Pending and the shutdown
   branch's first poll, plus shutdown before the read starts.
@@ -36,13 +50,13 @@ The local fork's `pingora-proxy/src/shutdown_tests.rs` covers:
   independent proxy instances, and one future polled on two OS threads.
 - An immediately available request completing its local response during shutdown.
 
-The original two `tests::shutdown_*` identities remain, with manual polling
-replacing the old 50 ms sleep. These tests establish specific interleavings;
+In that local working tree, the original two `tests::shutdown_*` identities
+remained, with manual polling replacing the old 50 ms sleep. These tests establish specific interleavings;
 they do not model-check every atomic interleaving inside `await_shutdown`.
 The no-registration fast path also relies on reviewing the biased select order.
-Fork-owned details belong in
+Fork-owned details were intended for
 `edgion-changes/review/concurrency/sharded-shutdown-notification.md` in the
-Pingora repository.
+Pingora repository; that page is absent at both `e5f4287` and `0b0d8bba`.
 
 The standalone
 [HTTP shutdown scenario](../../../../edgion-tests/integration/scripts/integration/test_http_process_shutdown.py)
@@ -152,7 +166,8 @@ successful profiling evidence or mixed into the unprofiled A/B measurements.
 
 ## Verification and re-evaluation
 
-Fresh local verification on 2026-09-27 used Edgion
+Historical local verification on 2026-09-27 (before the fork rebase onto
+upstream 0.9.1; not repeated at `e5f4287`) used Edgion
 `862d5add79bd7daa6830fbe7a8fd02f05780373e` plus its existing worktree changes,
 with the unchanged real consumer lock selecting fork `0b0d8bb`. No manifest,
 lockfile, production notification code, commit or remote branch was changed.

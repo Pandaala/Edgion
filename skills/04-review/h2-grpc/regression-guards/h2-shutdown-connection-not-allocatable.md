@@ -33,9 +33,16 @@ new connection establish the product's timeout and retirement outcome.
 The Gateway retains `PeerOptions::default().max_h2_streams = 1`; it cannot
 establish a concurrent upstream sibling contract.
 
-The actual locked fork (`edgion_0.9.0_v1@0b0d8bba`, `h2 0.4.19`) marks the
-connection in the upstream read-timeout failure arm, then checks shutdown at
-both connector selection and stream allocation. The supplemental
+The locked fork (`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`,
+`h2 0.4.20`) marks the connection in the upstream read-timeout failure arm
+(`pingora-proxy/src/proxy_h2.rs`, `DuplexPumpOutcome::Failed`), then checks
+shutdown at both connector selection (`Connector::reused_http_session`, in-use
+and idle filters) and stream allocation (`ConnectionRef::spawn_stream`, before
+`new_stream()` plus the post-await re-check) in
+`pingora-core/src/connectors/http/v2.rs`. This was re-verified by source
+inspection at that revision on 2026-11-06 after the fork was rebased onto
+upstream 0.9.1; `connectors/http/v2.rs` is unchanged from the earlier
+`edgion_0.9.0_v1@0b0d8bba` lock. The supplemental
 `h2_lifecycle_connector.rs` uses this exact dependency's public Connector
 with two slots. After an actual ReadTimedout, it explicitly calls
 `mark_shutdown()`, drops only the fault session, and checks that a live,
@@ -48,7 +55,8 @@ Together with the serial Gateway case and source inspection it covers the
 reported boundaries without enabling product multiplexing. This does not
 close the separate failure-case disposition policy task or prove all races.
 
-On 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
+Historical run (against the earlier `edgion_0.9.0_v1@0b0d8bba` lock, not
+repeated for `e5f4287`): on 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
 -- --nocapture` passed 14 tests, including the held-stream wire proof.
 The final fresh-Gateway Transport run passed all 165 registered entries,
 including both serial Gateway shutdown scenarios and the supplemental public

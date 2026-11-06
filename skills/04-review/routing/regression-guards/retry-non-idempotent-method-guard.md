@@ -62,10 +62,18 @@ stream condition, not on every error called `H2Error` being safe.
 ### P090-008 transport policy table
 
 The inspected baseline is Edgion's locked Pingora revision
-`0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, with `h2` 0.4.19. The official
-`6fa38359e7200561a0794311eaef31a01857a515` default-hook change is a
-re-evaluation trigger, not a requirement to copy its method blanket into
-Edgion's override.
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, with `h2` 0.4.20.
+The table's fork-dependent rows were re-verified by source inspection at that
+revision on 2026-11-06 after the fork was rebased onto upstream 0.9.1:
+`handle_read_header_error` (`pingora-core/src/protocols/http/v2/client.rs`) and
+`RetryType` (`pingora-error/src/lib.rs`) are unchanged from the earlier verified revision `0b0d8bba`, and
+`h2` 0.4.20 `Inner::recv_go_away` (`src/proto/streams/streams.rs`) still errors
+only locally initiated streams above `last_stream_id`. Historical: P090-008
+originally inspected revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
+(`edgion_0.9.0_v1`) with `h2` 0.4.19. The official
+`6fa38359e7200561a0794311eaef31a01857a515` default-hook change, an ancestor of
+both revisions, is a re-evaluation trigger, not a requirement to copy its
+method blanket into Edgion's override.
 
 | Failure / incoming decision | Ordinary HTTP or GRPC route | AI attempt plan |
 | --- | --- | --- |
@@ -97,6 +105,13 @@ cached document. `Disabled`, `Unsupported`, `NativeTruncated`, and
 `RegisteredUnavailable` do not. Bodyless requests still obey a frozen `Never`.
 
 ### Acceptance evidence and limits
+
+Historical: every test run recorded in this section executed against fork
+revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937` ("the pinned fork" below).
+The 2026-11-06 re-verification at `e5f4287be713` was source inspection only and
+did not re-run these suites; the cited fork tests
+(`held_head_and_body_cross_batches_until_release`, `final_statuses_forbid_retry`,
+`retry_guard_ignores_1xx_but_not_101`) still exist at that revision.
 
 `HTTPRoute/Transport` adds 65 `retry_policy__*` cases: 64 use the shared real
 Gateway/Controller topology and raw H1/H2 origins; one exercises the pinned

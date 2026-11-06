@@ -55,13 +55,29 @@ carries the release request before that response completes. This supplemental
 contract does not claim product-level upstream multiplexing.
 
 These external outcomes do not isolate the private watcher poison state from
-the h2 decoder's GOAWAY handling. Inspection of the actual Cargo.lock fork
-`edgion_0.9.0_v1@0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, `h2 0.4.19`,
-confirms persistent ceiling and permanent poison checks at registration and
-publication. Product tests supplement that evidence rather than replacing
-the fork's internal registration/race tests or the retained watcher.
+the h2 decoder's GOAWAY handling. Inspection of the Cargo.lock fork
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, `h2 0.4.20`,
+confirms persistent ceiling (`ActiveWatch::goaway_ceiling`, applied by
+`note_connection_torn_down` and checked in `Registration::register`;
+publication resolves only through the pending map that ceiling pruning and
+poisoning empty) and permanent poison checks (`WatchState::Poisoned`, also
+entered when a later GOAWAY raises the ceiling) in
+`pingora-core/src/protocols/http/v2/end_stream_watch.rs`. This was re-verified
+by source inspection at that revision on 2026-11-06 after the fork was rebased
+onto upstream 0.9.1. The rebase consolidated `FrameScanner`'s former separate
+`goaway`/`padded_data`/`terminal_data` fields into one `PayloadState` enum
+(`Skip`/`PaddedData`/`TerminalData`/`Goaway`); the ceiling still lives in the
+watch state, not the scanner, and the poison, padding-wait, and GOAWAY-finish
+semantics are unchanged by inspection. h2 0.4.20 additionally rejects a
+nonzero-stream GOAWAY itself (`frame::GoAway::load` returns
+`InvalidStreamId`), so that case's product outcome is now jointly produced by
+h2 and the watcher poison. The watcher's module-level private-fact audit note
+still names h2 0.4.19; no fresh full audit of those private h2 facts against
+0.4.20 is claimed here. Product tests supplement that evidence rather than
+replacing the fork's internal registration/race tests or the retained watcher.
 
-On 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
+Historical run (against the earlier `edgion_0.9.0_v1@0b0d8bba` lock, not
+repeated for `e5f4287`): on 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
 -- --nocapture` passed 14 tests, including all five lifecycle wire proofs.
 The final fresh-Gateway Transport run passed all 165 registered entries,
 including the twelve H1-to-H2/H2-to-H2 GOAWAY scenarios and the supplemental
@@ -89,7 +105,11 @@ distinct contracts sharing the same poison primitive.
 
 The canonical fork explanation is
 `edgion-changes/review/h2-grpc/h2-end-stream-observer-read-terminal-poison.md`.
-On 2026-09-09, the relevant `protocols/http/v2` implementation and tests were
+`EndStreamWatchStream::poll_read` still poisons on `Ready(Err)` and on an
+empty read with `has_partial_frame()` at `e5f4287`, and the four
+read-terminal `final_contract_*` H2-002 regressions (of eight `final_contract_*` tests) remain present and not ignored in
+`end_stream_watch_tests.rs` (source inspection only, 2026-11-06).
+Historically, on 2026-09-09, the relevant `protocols/http/v2` implementation and tests were
 identical between Edgion's locked fork `518f7274` and sibling `dba39b6`.
 Enabled regressions cover bytes plus read error, every partial frame-header
 split, partial terminal DATA including padding, and every partial GOAWAY

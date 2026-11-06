@@ -34,9 +34,24 @@ contract. Existing H2 CONNECT tunnel coverage remains. The tests do not claim
 bidirectional H1 tunneling after 200 or a complete protocol matrix; details and
 historical corrections remain in the owning fork record.
 
-The fork baseline was `bd08429` plus local test changes. Edgion's `Cargo.lock`
-still selected `0b0d8bb`; this task did not publish the fork, update the lockfile,
-add CONNECT routing, or introduce a custom connector into the gateway.
+Historically, the fork baseline was `bd08429` plus local test changes while
+Edgion's `Cargo.lock` still selected `0b0d8bb`, which did not contain the new
+tests; this task did not publish the fork, update the lockfile, add CONNECT
+routing, or introduce a custom connector into the gateway.
+
+The current lock selects
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`. Source inspection at
+that revision on 2026-11-06, after the fork was rebased onto upstream 0.9.1,
+found the six named tests committed
+(`pingora-proxy/tests/upstream_response_body_sink/custom_request_contract.rs`
+and `pingora-proxy/tests/seam/connect.rs`), the evidence record above present,
+and the custom pump contracts unchanged in `pingora-proxy/src/proxy_custom.rs`:
+non-`Ordinary` dispositions fail with `InternalError` before the upstream
+header write, a request-body `Terminate` outcome fails with `InternalError`,
+and `request_relay.rs` treats source EOF as authoritative over a stale
+`is_body_done()`. These tests were not run for this re-verification. That
+fork record's closing sentence still says Edgion locks `0b0d8bb`; it is stale.
+Edgion still installs no custom connector.
 
 ## Re-evaluation
 

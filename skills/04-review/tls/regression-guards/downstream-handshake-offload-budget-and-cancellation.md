@@ -15,11 +15,20 @@ acceptor owns its own Pingora runtime; the startup builder rejects a total
 above 64 threads after listener deduplication and conflict filtering. Plain
 HTTP/TCP/UDP, TLS passthrough, upstream TLS, and conf-sync TLS are unaffected.
 
-The locked fork revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
-uses an abort-on-drop task handle for the complete fork family. On 2026-10-05,
-a separate clean checkout fetched this exact revision directly from the
-declared HTTPS remote. The earlier publication warning for local revision
-`7c24c0dd6ea5996af011529f6bae8ae8972f695a` is superseded.
+The locked fork revision
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a` (all 16 fork
+packages) uses an abort-on-drop task handle: the BoringSSL `Acceptor::tls_handshake`
+awaits `OffloadRuntime::spawn_abort_on_drop`, which wraps the spawned task in
+`tokio_util::task::AbortOnDropHandle`. This was re-verified by source
+inspection at that revision on 2026-11-06 after the fork was rebased onto
+upstream 0.9.1 (fork patch `565c88f`, "cancel offloaded downstream handshakes
+with their callers"); `pingora-core/src/offload.rs` and
+`pingora-core/src/listeners/tls/boringssl_openssl/mod.rs` are byte-identical
+to `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, the `edgion_0.9.0_v1` revision
+this page was last verified against (the immediate predecessor lock was `1aaa45cc`). Historical:
+on 2026-10-05, a separate clean checkout fetched `0b0d8bba` directly from the
+declared HTTPS remote, superseding the earlier publication warning for local
+revision `7c24c0dd6ea5996af011529f6bae8ae8972f695a`.
 A listener timeout or caller cancellation must release an incomplete handshake
 task and its socket.
 The handler remains responsible for the established connection's existing TLS
@@ -38,7 +47,8 @@ Pingora's `TlsSettings::build` creates a separate lazy `OffloadRuntime` for
 each acceptor. Without the process budget, a seemingly small pair of pool
 values multiplies by the number of listeners. The locked fork's
 BoringSSL acceptor adopts the cancellation behavior from official upstream commit
-`4487f7b2ab50f159e4a2cf4f6a6b813f61bb6e19`.
+`4487f7b2ab50f159e4a2cf4f6a6b813f61bb6e19` as a fork patch; that upstream commit
+is on upstream `main` and is not an ancestor of upstream 0.9.1 `f86ffda`.
 
 ## Alternatives and limits
 
@@ -83,8 +93,10 @@ That original offline workspace check consumed the local Git revision without
 a Cargo path patch. The fresh verification below supersedes its outstanding
 publication and clean-checkout gates; neither run establishes a performance gain.
 
-### Fresh acceptance on 2026-10-05
+### Historical acceptance on 2026-10-05 (fork `0b0d8bb`)
 
+This run predates the fork rebase onto upstream 0.9.1 and has not been repeated
+at `e5f4287`; the 2026-11-06 re-verification above is source inspection only.
 The frozen Edgion revision was `6c89d1379d38ca8040c9cc1637867b2d4307d2d0`,
 with all 16 Pingora-family packages locked to `0b0d8bb`. A clean local Edgion
 clone used the existing compilation cache without a manifest or lockfile
@@ -194,6 +206,7 @@ the one-entry SSL log and ex-data contracts.
 
 - P090-001, `tasks/pingora-0.9.0/001-downstream-tls-handshake-offload.md`:
   optional capability implemented with a bounded process policy and the
-  cancellation prerequisite in the published locked fork; fresh acceptance of
-  the current revision is recorded above. The historical equal-CPU comparison
+  cancellation prerequisite in the published locked fork; the 2026-10-05
+  acceptance above ran at the earlier verified revision `0b0d8bb`, and the current lock
+  `e5f4287` was re-verified by source inspection only. The historical equal-CPU comparison
   remains diagnostic and does not justify an unconditional performance claim.

@@ -15,11 +15,18 @@ Edgion product boundary, not fixed or disproved. This decision does not certify
 complete partial/error handoff cleanup or successful Linux upgrade acceptance.
 
 Edgion's lockfile selects Pingora
-`0b0d8bba9609655bfd7db0fe0add6818bc0ee937`. That revision owns the accepted
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`. That revision owns the accepted
 transfer connection with `OwnedFd`, receives listener descriptors with
 `MSG_CMSG_CLOEXEC`, and includes socket-pair EOF tests for unclaimed descriptor
-cleanup and claimed descriptor preservation. No further import of those fixes
-is needed for this consumer revision.
+cleanup and claimed descriptor preservation (`closes_only_unclaimed_fds`,
+`empty_keep_set_closes_everything`). No further import of those fixes is needed
+for this consumer revision. This and the residual-defect analysis below were
+re-verified by source inspection at that revision on 2026-11-06 after the fork
+was rebased onto upstream 0.9.1; `pingora-core/src/server/` (including
+`transfer_fd/mod.rs` and `bootstrap_services.rs`) is unchanged from
+`0b0d8bba9609655bfd7db0fe0add6818bc0ee937` (the earlier `edgion_0.9.0_v1`
+revision; the immediate predecessor lock was `1aaa45cc`), on which the 2026-10-05
+decision was originally made.
 
 ## Rationale and evidence
 
@@ -70,8 +77,9 @@ No production code, dependency, configuration, or user-facing API changes here.
 
 ## Verification and re-evaluation
 
-Source inspection used the exact locked fork, not the older local maintenance
-checkout. Independent read-only review confirmed both the imported fixes and
+The 2026-10-05 source inspection used the then-locked fork `0b0d8bba`, not
+the older local maintenance checkout; the 2026-11-06 re-inspection used
+`e5f4287` revision objects, not a working tree. Independent read-only review confirmed both the imported fixes and
 the residual error-path defect. The existing Linux transfer/CLOEXEC tests and
 Unix socket-pair tests were inspected, not executed for this decision. No fresh
 runtime, subprocess, or normal listener-service acceptance is claimed.

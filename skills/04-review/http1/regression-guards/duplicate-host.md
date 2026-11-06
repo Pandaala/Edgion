@@ -34,8 +34,17 @@ rejection for both ordinary and redirect listeners.
 ## Verification and limits
 
 - Fork source: `pingora-core/src/protocols/http/authority.rs` and
-  `v1/server.rs` at `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`.
-- At that revision, `cargo test -p pingora-http --lib` passed 56 tests,
+  `v1/server.rs` at `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`.
+  Re-verified by source inspection at that revision on 2026-11-06 after the
+  fork was rebased onto upstream 0.9.1: `validate_request_authority_fields`
+  rejects a second `Host` ("multiple Host header fields"),
+  `HttpSession::validate_request` calls `validate_request_authority` from
+  `read_request`, HTTP/2 ingress calls the shared field check stream-locally
+  (`v2/server.rs`), and `proxy_h1.rs`/`proxy_h2.rs` re-run
+  `validate_request_authority` on egress. `authority.rs` is unchanged from the
+  earlier verified revision `0b0d8bba`; the `v1/server.rs` delta is limited to trailer write timeouts.
+- Historical: at the earlier verified revision `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
+  (`edgion_0.9.0_v1`), `cargo test -p pingora-http --lib` passed 56 tests,
   `cargo test -p pingora-core --lib authority` passed 16 tests, and the
   `pingora-proxy/tests/test_upstream.rs` ambiguous-authority and post-filter
   userinfo cases passed against their own origin captures. The proxy tests

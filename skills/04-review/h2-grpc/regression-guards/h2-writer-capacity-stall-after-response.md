@@ -34,15 +34,24 @@ recorder must show an open upload, a complete 64-byte response, then Gateway
 on the same upstream connection without an additional connection accept.
 
 The `/lifecycle` HTTPRoute explicitly disables `backendRequest`, so the fork's
-10-second EOS stall probe, rather than a route write timeout, supplies the
-bound. Backend wire proofs check the handshake window, absence of stream
+10-second EOS stall probe (`UPSTREAM_STALL_PROBE_INTERVAL`), rather than a
+route write timeout, supplies the bound. In the same unconfigured case the
+write also carries the fork's 10-second `DEFAULT_H2_UPSTREAM_WRITE_TIMEOUT`
+floor; once `upstream_response_ended` is observed, either the probe
+(`UpstreamBodyWriteEnd::StalledAfterResponse`) or that floor's `WriteTimedout`
+(`upstream_write_error_outcome` via `upstream_write_stalled_after_response`)
+abandons the upload as `UpstreamDoneReceiving` and the response is delivered. Backend wire proofs check the handshake window, absence of stream
 WINDOW_UPDATE before response completion, full response EOS, and upload reset.
 Ordinary early-response coverage does not establish this trigger. Same-socket
 reuse establishes capacity recovery, not the absence of every pump-task leak.
 
 Current source inspection uses the Cargo.lock resolution
-`edgion_0.9.0_v1@0b0d8bba9609655bfd7db0fe0add6818bc0ee937`, `h2 0.4.19`.
-On 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, `h2 0.4.20`. It was
+re-verified by source inspection at that revision on 2026-11-06 after the fork
+was rebased onto upstream 0.9.1; `pingora-proxy/src/proxy_h2_request_body.rs`
+is unchanged from the earlier `edgion_0.9.0_v1@0b0d8bba` lock.
+Historical run (against `0b0d8bba`, not repeated for `e5f4287`): on
+2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
 -- --nocapture` passed 14 tests, including all five lifecycle wire proofs.
 The final fresh-Gateway Transport run passed all 165 registered entries,
 including all four H1-to-H2/H2-to-H2 stall and stall-reuse scenarios.

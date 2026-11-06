@@ -71,6 +71,37 @@ HEAD, locked source, remote branch observation, and local fork changes separatel
 Inspect resolved Cargo metadata as well as the manifest to exclude a local
 override from consumer verification.
 
+### Current lock: `edgion_v0.9.1` rebase
+
+The current lockfile resolves all 16 fork packages to
+`edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, and `h2` to 0.4.20.
+Lock history on `edgion_0.9.0_v1`: `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
+(Edgion `c633ef4a7`, 2026-10-08), then `1aaa45cc70430bc782990bc20ddee3fef36d6b99`
+(`963d2664a`, 2026-11-03; `0b0d8bba` plus six fork commits), then the current lock
+(`e270a928e`, 2026-11-05). The new branch is not a fast-forward of either: the fork
+patch series was rebased and partly rewritten onto upstream 0.9.1
+(`f86ffda5d3ae5c3baf5125682138b33b26c01b08`), so neither `0b0d8bba` nor `1aaa45cc`
+is an ancestor of `e5f4287`. Compare the series with
+`git range-diff 702f690..1aaa45cc f86ffda..e5f4287be713` in the fork repository.
+
+Consequence for review knowledge (`arch-05`): a conclusion verified against fork or
+`h2` internals at `0b0d8bba` is historical evidence, not current evidence, until it is
+re-verified at the current lock. On 2026-11-06 the `skills/04-review` pages that cited
+`0b0d8bba` as the locked revision were re-verified by source inspection at `e5f4287`
+and updated (many of them had last been verified at `0b0d8bba`, not at the
+immediate predecessor `1aaa45cc`); pages that still mention `0b0d8bba` or `edgion_0.9.0_v1` do so only as
+explicitly historical evidence. Recorded test results on those pages still belong to
+`0b0d8bba`; residual gaps found by the sweep (h2 0.4.20 watcher audit, Edgion
+response-cache H2 coverage, unpublished fork shutdown tests, a stale fork record, and
+fresh test runs) are tracked in `tasks/todo/pingora-v0.9.1-rebase-evidence-followups.md`.
+Pages outside the `arch-05` set that still describe an older pin (`1aaa45cc`,
+`518f7274`, or `h2` 0.4.19) as current are tracked in the same task. Repeat this sweep
+whenever the lockfile moves the fork family: search `skills/04-review` for every fork
+commit and `h2` version other than the current lock (not only the immediate
+predecessor), and keep any remaining mention only as explicitly historical evidence.
+
+### Historical: P090-002 synchronization (`edgion_0.9.0_v1`)
+
 P090-002's scoped investigation on 2026-10-05 confirmed that consumer
 `d05d95576d8d046b3221b1d8e444123fc85e7f89` locks all 16 fork packages to
 `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`. The adopted upstream milestone
