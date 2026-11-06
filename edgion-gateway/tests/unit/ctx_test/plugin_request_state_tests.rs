@@ -79,15 +79,27 @@ fn first_sparse_plugin_effect_allocates_one_aux_box_and_reuses_it() {
 #[test]
 fn runtime_snapshots_do_not_instantiate_plugin_aux() {
     let mut ctx = EdgionHttpContext::new();
+    // Publication prepares these slices; installing them per request must only clone the Arc.
+    let prepared: Option<Arc<[Arc<PluginRuntime>]>> =
+        Some(Arc::from(vec![Arc::new(crate::plugins::runtime::PluginRuntime::new())]));
     let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
-        ctx.install_resolved_global_plugins(Vec::new());
-        ctx.install_resolved_gateway_plugins(Vec::new());
+        ctx.install_resolved_global_plugins(prepared.clone());
+        ctx.install_resolved_gateway_plugins(prepared.clone());
         ctx.install_resolved_route_ext_refs(Vec::new());
     });
 
     assert!(!ctx.has_plugin_aux());
     assert_eq!(allocations.calls, 0);
     assert_eq!(allocations.requested_bytes, 0);
+    let (global, gateway) = (ctx.resolved_global_plugins(), ctx.resolved_gateway_plugins());
+    assert!(Arc::ptr_eq(global.as_ref().unwrap(), prepared.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(gateway.as_ref().unwrap(), prepared.as_ref().unwrap()));
+    // Conservative helper contract: installing `None` never clears an installed
+    // snapshot (the request path never reaches this case today).
+    ctx.install_resolved_global_plugins(None);
+    ctx.install_resolved_gateway_plugins(None);
+    assert!(ctx.resolved_global_plugins().is_some());
+    assert!(ctx.resolved_gateway_plugins().is_some());
 
     ctx.install_resolved_route_ext_refs(vec![None]);
     assert!(!ctx.has_plugin_aux());

@@ -13,7 +13,7 @@ before applying a decision to current code.
 
 - [Config-sync batch logs: `info!` is count-only, key detail is `debug!`](mandatory-design/conf-sync-batch-info-count-only.md)
 - [DSL `Vm::execute` runtime-error tracing — DESIGN-TRADEOFF (DECLINED)](mandatory-design/dsl-vm-execute-tracing-declined.md)
-- [`global_plugins_resolve` Dangling Refs Are Not Logged (Fixed)](mandatory-design/global-plugins-resolve-no-tracing.md)
+- [Dangling Plugin References Are Not Logged During Resolution (Fixed)](mandatory-design/global-plugins-resolve-no-tracing.md)
 - [Observability Review Rules](mandatory-design/observability-review-rule.md)
 - [`PluginRuntime` `add_*` Builders Are Tracing-Free (Fixed)](mandatory-design/plugin-runtime-builder-no-tracing.md)
 - [TCP fail-close logging and GeoIP stream lifecycle boundaries](mandatory-design/tcp-stream-plugin-no-tracing.md)

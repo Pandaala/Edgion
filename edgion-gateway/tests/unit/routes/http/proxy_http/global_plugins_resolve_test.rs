@@ -255,22 +255,6 @@ fn ordinary_route_waf_election_unchanged_by_delegation_precedence() {
     assert!(owns(&selected, &child_high));
 }
 
-fn install_global_refs(store: &PluginStore, refs: Vec<PluginReference>) -> Arc<PluginScope> {
-    let mut config = (**store.scope().config.as_ref().unwrap()).clone();
-    config.spec.global_plugins_ref = Some(refs);
-    store
-        .publisher()
-        .replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
-    store.scope()
-}
-
-fn pref(name: &str, ns: Option<&str>) -> PluginReference {
-    PluginReference {
-        name: name.to_string(),
-        namespace: ns.map(|s| s.to_string()),
-    }
-}
-
 #[test]
 fn runtime_projection_outlives_scope_without_retaining_compiled_resource() {
     let store = PluginStore::new();
@@ -290,44 +274,6 @@ fn runtime_projection_outlives_scope_without_retaining_compiled_resource() {
     assert!(runtime_weak.upgrade().is_some());
     drop(runtime);
     assert!(runtime_weak.upgrade().is_none());
-}
-
-#[test]
-fn resolve_global_plugins_empty_when_none() {
-    let store = PluginStore::new();
-    let resolved = resolve_global_plugins(&store.scope());
-    assert!(resolved.is_empty());
-}
-
-#[test]
-fn resolve_global_plugins_keeps_order_and_drops_dangling() {
-    let store = PluginStore::new();
-    install_plugins(&store, vec![("ns1", "p1"), ("ns1", "p3")]);
-    let p1 = store.get_plugin_runtime("ns1/p1").expect("p1 is installed");
-    let p3 = store.get_plugin_runtime("ns1/p3").expect("p3 is installed");
-
-    let refs = vec![
-        pref("p1", Some("ns1")),
-        pref("p2", Some("ns1")), // dangling
-        pref("p3", Some("ns1")),
-    ];
-    let resolved = resolve_global_plugins(&install_global_refs(&store, refs));
-    assert_eq!(resolved.len(), 2, "dangling p2 should be dropped");
-    assert!(Arc::ptr_eq(&resolved[0], &p1));
-    assert!(Arc::ptr_eq(&resolved[1], &p3));
-}
-
-#[test]
-fn resolve_global_plugins_default_namespace_when_none() {
-    let store = PluginStore::new();
-    install_plugins(&store, vec![("default", "global1")]);
-    let global1 = store
-        .get_plugin_runtime("default/global1")
-        .expect("global1 is installed");
-    let refs = vec![pref("global1", None)];
-    let resolved = resolve_global_plugins(&install_global_refs(&store, refs));
-    assert_eq!(resolved.len(), 1);
-    assert!(Arc::ptr_eq(&resolved[0], &global1));
 }
 
 #[test]
@@ -377,7 +323,7 @@ fn invalid_slots_make_zero_queries_and_preserve_valid_missing_and_duplicate_posi
 }
 
 #[tokio::test]
-async fn ambiguous_view_is_present_at_global_gateway_and_rule_resolution() {
+async fn ambiguous_view_is_present_at_global_and_rule_resolution() {
     use edgion_common::conf_sync::traits::ConfHandler;
     let store = PluginStore::new();
     let (_, mut bare) = make_plugin("default", "ambiguous");
@@ -388,17 +334,17 @@ async fn ambiguous_view_is_present_at_global_gateway_and_rule_resolution() {
         ("default/ambiguous".into(), Arc::new(qualified)),
     ]));
     let scope = store.scope();
-    assert!(resolve_global_plugins(&scope)
-        .iter()
-        .any(|runtime| runtime.rejects_invalid_config()));
-    let gateway = resolve_gateway_plugins(&scope, &["default/missing".into(), "default/ambiguous".into()]);
-    assert_eq!(gateway.len(), 1, "ordinary missing drops but collision does not");
+    let global = scope
+        .resolved_globals
+        .as_ref()
+        .and_then(|globals| globals.iter().find(|runtime| runtime.rejects_invalid_config()))
+        .cloned()
+        .expect("prepared globals keep the ambiguous placeholder");
     let rule = resolve_route_ext_refs(&scope, &[Some("default/ambiguous".into())]);
     assert!(rule[0].as_ref().unwrap().rejects_invalid_config());
-    assert!(gateway[0].rejects_invalid_config());
     // Exercise the same preflight gate used before native or plugin CORS.
     use tokio::io::AsyncWriteExt;
-    for runtime in [gateway[0].clone(), rule[0].as_ref().unwrap().clone()] {
+    for runtime in [global, rule[0].as_ref().unwrap().clone()] {
         let (mut client, server) = tokio::io::duplex(4096);
         let mut session = pingora_proxy::Session::new_h1(Box::new(server));
         client.write_all(b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://app.example\r\nAccess-Control-Request-Method: GET\r\n\r\n").await.unwrap();

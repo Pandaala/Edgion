@@ -165,6 +165,9 @@ pub(crate) struct GatewayScope {
     pub gateway_key: String,
     pub scope: Arc<PluginScope>,
     pub http_keys: Vec<String>,
+    /// `http_keys` resolved against `scope` once at publication; `None` when no
+    /// key resolves (no keys, all targets missing, or an unavailable scope).
+    pub resolved_http: Option<Arc<[Arc<PluginRuntime>]>>,
 }
 
 pub(crate) struct RuleAdmission {
@@ -177,6 +180,9 @@ pub(crate) struct PluginScope {
     pub available: bool,
     pub config: Option<Arc<EdgionGatewayConfig>>,
     pub global_keys: Vec<String>,
+    /// `global_keys` resolved against `http` once at publication; `None` when no
+    /// key resolves (no keys, all targets missing, or an unavailable scope).
+    pub resolved_globals: Option<Arc<[Arc<PluginRuntime>]>>,
     pub has_access_log_extern: bool,
     pub(super) http: HashMap<String, Arc<CompiledPlugins>>,
     pub(super) stream: HashMap<String, Arc<CompiledStreamPlugins>>,
@@ -187,6 +193,15 @@ impl PluginScope {
     /// Retain the runtime directly without a temporary compiled-resource owner.
     pub fn http_runtime(&self, key: &str) -> Option<Arc<PluginRuntime>> {
         self.http.get(key).map(|compiled| Arc::clone(&compiled.plugin_runtime))
+    }
+
+    /// Cold-path resolution of ordered plugin keys for one publication. Keeps
+    /// order, duplicates and ambiguous-reference runtimes; drops keys with no
+    /// target. Dangling keys are not logged by design; see
+    /// `skills/04-review/observability/mandatory-design/global-plugins-resolve-no-tracing.md`.
+    pub(super) fn resolve_http_runtimes(&self, keys: &[String]) -> Option<Arc<[Arc<PluginRuntime>]>> {
+        let runtimes: Vec<_> = keys.iter().filter_map(|key| self.http_runtime(key)).collect();
+        (!runtimes.is_empty()).then(|| Arc::from(runtimes))
     }
 
     /// Borrow log declarations from this captured generation.

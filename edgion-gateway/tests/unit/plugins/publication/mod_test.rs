@@ -14,7 +14,7 @@ use super::{ConnectionView, PluginPublisher, PluginScope};
 use crate::plugins::http::CompiledPlugins;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
-use crate::plugins::runtime::{PluginLog, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginRuntime, RequestFilter};
 
 impl PluginScope {
     pub(crate) fn http(&self, key: &str) -> Option<Arc<CompiledPlugins>> {
@@ -2322,4 +2322,166 @@ fn ordinary_route_scope_membership_unchanged() {
     assert!(scope(&publisher, "apps/a").graphql_rule(&ordinary, 0));
     assert!(!scope(&publisher, "apps/b").graphql_rule(&ordinary, 0));
     assert_eq!(publisher.snapshot().stats().ai_route_tokens, 1);
+}
+
+fn named_plugin(name: &str) -> Arc<EdgionPlugins> {
+    let mut source = (*plugin("dsl", true)).clone();
+    source.metadata.name = Some(name.into());
+    Arc::new(source)
+}
+
+fn same_runtimes(prepared: &Option<Arc<[Arc<PluginRuntime>]>>, scope: &PluginScope, keys: &[&str]) {
+    let prepared = prepared.as_deref().expect("prepared slice is present");
+    assert_eq!(prepared.len(), keys.len());
+    for (runtime, key) in prepared.iter().zip(keys) {
+        assert!(Arc::ptr_eq(runtime, &scope.http(key).unwrap().plugin_runtime), "{key}");
+    }
+}
+
+fn set_global_refs(publisher: &PluginPublisher, refs: Option<Value>) {
+    let mut cfg = (*config("policy-a", json!({}))).clone();
+    cfg.spec.global_plugins_ref = refs.map(|refs| serde_json::from_value(refs).unwrap());
+    publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg))]));
+}
+
+#[test]
+fn prepared_global_slice_matches_reference_order_and_tracks_publication() {
+    let publisher = publisher();
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("default/plugins".into(), default_source(false, true, "default")),
+    ]));
+    // Missing targets are dropped (current fail-open behavior tracked by gw-core-02);
+    // a reference without a namespace resolves in `default`.
+    set_global_refs(
+        &publisher,
+        Some(json!([
+            {"namespace":"apps","name":"other"},
+            {"name":"missing"},
+            {"namespace":"apps","name":"plugins"},
+            {"namespace":"apps","name":"plugins"},
+            {"name":"plugins"}
+        ])),
+    );
+    let first = scope(&publisher, "apps/a");
+    let first_order = ["apps/plugins", "apps/plugins", "default/plugins"];
+    same_runtimes(&first.resolved_globals, &first, &first_order);
+
+    // An unchanged republish reuses the scope and therefore the same slice.
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), gateway("a", "a", 18080, None))]));
+    let reused = scope(&publisher, "apps/a");
+    assert!(Arc::ptr_eq(&first, &reused));
+
+    // A previously missing target arrives: the scope and its slice are rebuilt.
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("default/plugins".into(), default_source(false, true, "default")),
+        ("apps/other".into(), named_plugin("other")),
+    ]));
+    let rebuilt = scope(&publisher, "apps/a");
+    assert!(!Arc::ptr_eq(&first, &rebuilt));
+    same_runtimes(
+        &rebuilt.resolved_globals,
+        &rebuilt,
+        &["apps/other", "apps/plugins", "apps/plugins", "default/plugins"],
+    );
+    same_runtimes(&first.resolved_globals, &first, &first_order);
+
+    set_global_refs(&publisher, Some(json!([{"name":"missing"}])));
+    assert!(scope(&publisher, "apps/a").resolved_globals.is_none());
+    set_global_refs(&publisher, None);
+    assert!(scope(&publisher, "apps/a").resolved_globals.is_none());
+}
+
+#[test]
+fn prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner() {
+    let publisher = publisher();
+    set_global_refs(&publisher, None);
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("apps/other".into(), named_plugin("other")),
+    ]));
+    let mut input = gateway("a", "a", 18080, None);
+    input.http_keys = ["apps/other", "apps/missing", "apps/plugins", "apps/plugins"]
+        .map(String::from)
+        .to_vec();
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    let first = publisher.snapshot().gateway("apps/a").unwrap();
+    // Missing targets are dropped (current fail-open behavior tracked by gw-core-02).
+    same_runtimes(
+        &first.resolved_http,
+        &first.scope,
+        &["apps/other", "apps/plugins", "apps/plugins"],
+    );
+
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    assert!(Arc::ptr_eq(&first, &publisher.snapshot().gateway("apps/a").unwrap()));
+
+    // Reordering keys keeps the class scope (same key set) but must rebuild the
+    // Gateway owner and its slice.
+    input.http_keys = ["apps/plugins", "apps/missing", "apps/plugins", "apps/other"]
+        .map(String::from)
+        .to_vec();
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    let reordered = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(Arc::ptr_eq(&first.scope, &reordered.scope));
+    assert!(!Arc::ptr_eq(&first, &reordered));
+    same_runtimes(
+        &reordered.resolved_http,
+        &reordered.scope,
+        &["apps/plugins", "apps/plugins", "apps/other"],
+    );
+
+    input.http_keys = vec!["apps/plugins".into()];
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    let changed = publisher.snapshot().gateway("apps/a").unwrap();
+    same_runtimes(&changed.resolved_http, &changed.scope, &["apps/plugins"]);
+
+    input.http_keys = vec!["apps/missing".into()];
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    let missing = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(missing.resolved_http.is_none());
+
+    // Same keys, but the missing target arrives: the class scope is rebuilt, so
+    // the Gateway owner and its slice are rebuilt too.
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("apps/other".into(), named_plugin("other")),
+        ("apps/missing".into(), named_plugin("missing")),
+    ]));
+    let arrived = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(!Arc::ptr_eq(&missing, &arrived));
+    same_runtimes(&arrived.resolved_http, &arrived.scope, &["apps/missing"]);
+
+    input.http_keys.clear();
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
+    let no_keys = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(no_keys.scope.available);
+    assert!(no_keys.resolved_http.is_none());
+
+    // An unavailable class scope prepares nothing; requests answer 503 first.
+    input.http_keys = vec!["apps/plugins".into()];
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input)]));
+    publisher.replace_gateway_configs(HashMap::new());
+    let unavailable = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(!unavailable.scope.available);
+    assert!(unavailable.resolved_http.is_none());
+    assert!(unavailable.scope.resolved_globals.is_none());
+}
+
+#[test]
+fn prepared_gateway_slice_keeps_ambiguous_placeholder() {
+    let publisher = publisher();
+    set_global_refs(&publisher, None);
+    publisher.replace_http_plugins(HashMap::from([
+        ("plugins".into(), default_source(true, true, "bare")),
+        ("default/plugins".into(), default_source(false, true, "qualified")),
+    ]));
+    let mut input = gateway("a", "a", 18080, None);
+    input.http_keys = vec!["default/missing".into(), "default/plugins".into()];
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), input)]));
+    let owner = publisher.snapshot().gateway("apps/a").unwrap();
+    let prepared = owner.resolved_http.as_deref().expect("collision is kept");
+    assert_eq!(prepared.len(), 1, "ordinary missing drops but collision does not");
+    assert!(prepared[0].rejects_invalid_config());
 }

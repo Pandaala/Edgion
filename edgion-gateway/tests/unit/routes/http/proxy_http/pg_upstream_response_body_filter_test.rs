@@ -286,8 +286,8 @@ async fn route_backend_gateway_and_global_delays_merge_to_the_maximum() {
     let mut ctx = EdgionHttpContext::default();
     ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("8192"))));
     ctx.selected_backend = Some(selected_http_backend(Arc::new(bandwidth_runtime("4096"))));
-    ctx.install_resolved_gateway_plugins(vec![Arc::new(bandwidth_runtime("1024"))]);
-    ctx.install_resolved_global_plugins(vec![Arc::new(bandwidth_runtime("2048"))]);
+    ctx.install_resolved_gateway_plugins(Some(Arc::from(vec![Arc::new(bandwidth_runtime("1024"))])));
+    ctx.install_resolved_global_plugins(Some(Arc::from(vec![Arc::new(bandwidth_runtime("2048"))])));
 
     assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_secs(1)));
 }
@@ -413,8 +413,8 @@ async fn pre_trailer_generated_body_uses_scoped_maximum_delay_without_closing_eo
     let mut ctx = EdgionHttpContext::default();
     ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("8192"))));
     ctx.selected_backend = Some(selected_http_backend(Arc::new(bandwidth_runtime("4096"))));
-    ctx.install_resolved_gateway_plugins(vec![Arc::new(bandwidth_runtime("1024"))]);
-    ctx.install_resolved_global_plugins(vec![Arc::new(bandwidth_runtime("2048"))]);
+    ctx.install_resolved_gateway_plugins(Some(Arc::from(vec![Arc::new(bandwidth_runtime("1024"))])));
+    ctx.install_resolved_global_plugins(Some(Arc::from(vec![Arc::new(bandwidth_runtime("2048"))])));
     ctx.push_response_stream_processor(Box::new(PreTrailerOutput));
     ctx.freeze_response_processor_driver();
     let mut body = None;

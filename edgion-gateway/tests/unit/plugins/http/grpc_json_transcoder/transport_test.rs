@@ -250,8 +250,8 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
             let r = runtime(consumer);
             assert!(!r.rejects_invalid_config());
             match scope {
-                0 => ctx.install_resolved_global_plugins(vec![r]),
-                1 => ctx.install_resolved_gateway_plugins(vec![r]),
+                0 => ctx.install_resolved_global_plugins(Some(Arc::from(vec![r]))),
+                1 => ctx.install_resolved_gateway_plugins(Some(Arc::from(vec![r]))),
                 _ => ctx.install_resolved_route_ext_refs(vec![Some(r)]),
             }
             assert_eq!(

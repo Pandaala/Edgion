@@ -474,7 +474,7 @@ async fn hit_runs_current_cors_trace_and_veto_once_then_next_request_misses() {
         ctx.install_current_dye_plan(Some(CompiledDyePlan::compile(&dye, "rate_limit_redis").unwrap()));
         PingoraSessionAdapter::new(&mut session, &mut ctx).record_outcome(DyeOutcome::FailOpen, "current");
     }
-    ctx.install_resolved_global_plugins(vec![runtime]);
+    ctx.install_resolved_global_plugins(Some(Arc::from(vec![runtime])));
     assert!(respond_from_cache(&proxy, &mut session, &mut ctx).await.unwrap());
     assert_eq!(
         effects.load(std::sync::atomic::Ordering::Acquire),
@@ -588,7 +588,7 @@ async fn actual_response_denial_discards_private_fill_and_never_delivers_origin_
     session.read_request().await.unwrap();
     let mut ctx = EdgionHttpContext::default();
     fixture.arm(&mut ctx);
-    ctx.install_resolved_global_plugins(vec![Arc::new(runtime)]);
+    ctx.install_resolved_global_plugins(Some(Arc::from(vec![Arc::new(runtime)])));
     let mut header = fixture.response();
     proxy
         .upstream_response_filter(&mut session, &mut header, &mut ctx)

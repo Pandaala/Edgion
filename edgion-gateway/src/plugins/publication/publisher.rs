@@ -539,6 +539,7 @@ impl Inputs {
                     available: plan.signature.available,
                     config: plan.config,
                     global_keys: plan.signature.globals.clone(),
+                    resolved_globals: None,
                     has_access_log_extern: false,
                     http: HashMap::new(),
                     stream: HashMap::new(),
@@ -636,6 +637,7 @@ impl Inputs {
                             .as_ref()
                             .is_some_and(|fields| !fields.is_empty())
                     });
+                    scope.resolved_globals = scope.resolve_http_runtimes(&scope.global_keys);
                 }
                 Arc::new(scope)
             };
@@ -745,6 +747,7 @@ impl Inputs {
                     gateway_key: key.clone(),
                     scope: Arc::clone(scope),
                     http_keys: gateway.http_keys.clone(),
+                    resolved_http: scope.resolve_http_runtimes(&gateway.http_keys),
                 }),
             };
             next.gateways.insert(key.clone(), gateway_scope);

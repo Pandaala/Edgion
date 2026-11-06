@@ -12,9 +12,10 @@ knowledge_type: intentional-design
 ## Conclusion
 
 Edgion's global plugins (`EdgionGatewayConfig.spec.global_plugins_ref`,
-`edgion-resources/src/resources/edgion_gateway_config.rs:49`) are resolved once per request into
-`ctx.resolved_global_plugins` and run unconditionally before all route-level plugins
-(`edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:198-209`, plus the four response
+`edgion-resources/src/resources/edgion_gateway_config.rs:81`) are resolved once per publication into
+the class scope's shared `PluginScope::resolved_globals` slice, installed per request into
+`ctx.resolved_global_plugins`, and run unconditionally before all route-level plugins
+(`edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:436-447`, plus the four response
 phases). There is no field on `HTTPRoute` / `GRPCRoute` / any route rule that lets a route
 override a specific global plugin's config or disable it for that route only — Edgion has no
 equivalent of Envoy's VirtualHost/Route/WeightedCluster `typed_per_filter_config`.
@@ -50,8 +51,9 @@ hole — consistent with a medium-severity feature request.
 
 **3. The hot path is already shaped for the feature, which confirms it is additive**
 
-`ctx.resolved_global_plugins` is already a per-request resolved list, so the eventual feature would
-only need a preparse merge step and no hot-path change. That the runtime is "ready" does not make
+`ctx.resolved_global_plugins` is installed per request from a prepared per-class-scope slice
+(`PluginScope::resolved_globals`), so the eventual feature would need a preparse merge step plus
+a per-route prepared effective list installed in its place, not new per-request resolution work. That the runtime is "ready" does not make
 this a small fix — the cost and risk live in the schema, controller validation, and preparse
 merge, all of which are still cross-layer additive work that should be designed deliberately.
 
@@ -85,7 +87,8 @@ Re-open this decision only if:
   [filter-iteration-control-sync-phase-tradeoff.md](../compatibility-constraints/filter-iteration-control-sync-phase-tradeoff.md),
   [body-filter-read-only-by-design.md](../../http-body/intentional-design/body-filter-read-only-by-design.md),
   [listener-port-set-frozen-at-startup.md](../../listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md).
-- Source: `edgion-resources/src/resources/edgion_gateway_config.rs:49` (`global_plugins_ref`);
-  `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` (`resolve_global_plugins`);
-  `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:198-209` (unconditional global
+- Source: `edgion-resources/src/resources/edgion_gateway_config.rs:81` (`global_plugins_ref`);
+  `edgion-gateway/src/plugins/publication/views.rs` (`PluginScope::resolve_http_runtimes`, prepared
+  `resolved_globals`);
+  `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:436-447` (unconditional global
   plugin execution before route plugins).

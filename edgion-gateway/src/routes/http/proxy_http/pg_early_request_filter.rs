@@ -72,12 +72,10 @@ async fn initialize_scoped_request_ids(session: &mut Session, ctx: &mut EdgionHt
         return Err(unavailable_policy());
     }
     if !ctx.global_request_ids_initialized {
-        let plugins = super::resolve_global_plugins(&owner.scope);
-        ctx.install_resolved_global_plugins(plugins);
+        ctx.install_resolved_global_plugins(owner.scope.resolved_globals.clone());
     }
     if !ctx.gateway_request_ids_initialized {
-        let plugins = super::resolve_gateway_plugins(&owner.scope, &owner.http_keys);
-        ctx.install_resolved_gateway_plugins(plugins);
+        ctx.install_resolved_gateway_plugins(owner.resolved_http.clone());
     }
     let global = ctx.resolved_global_plugins();
     let gateway = ctx.resolved_gateway_plugins();

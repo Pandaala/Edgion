@@ -2618,9 +2618,9 @@ impl EdgionHttpContext {
     }
 
     #[inline]
-    pub(crate) fn install_resolved_global_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
-        if !plugins.is_empty() {
-            self.plugin_execution.resolved_global_plugins = Some(Arc::from(plugins));
+    pub(crate) fn install_resolved_global_plugins(&mut self, plugins: Option<Arc<[Arc<PluginRuntime>]>>) {
+        if plugins.is_some() {
+            self.plugin_execution.resolved_global_plugins = plugins;
         }
     }
 
@@ -2630,9 +2630,9 @@ impl EdgionHttpContext {
     }
 
     #[inline]
-    pub(crate) fn install_resolved_gateway_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
-        if !plugins.is_empty() {
-            self.plugin_execution.resolved_gateway_plugins = Some(Arc::from(plugins));
+    pub(crate) fn install_resolved_gateway_plugins(&mut self, plugins: Option<Arc<[Arc<PluginRuntime>]>>) {
+        if plugins.is_some() {
+            self.plugin_execution.resolved_gateway_plugins = plugins;
         }
     }
 

@@ -789,7 +789,7 @@ async fn late_request_body_view_survives_sync_hook_until_async_dsl_reads_it() {
     let (_client, mut session) = h1_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.request_body.install(view);
-    ctx.install_resolved_global_plugins(vec![Arc::new(runtime)]);
+    ctx.install_resolved_global_plugins(Some(Arc::from(vec![Arc::new(runtime)])));
     let proxy = proxy();
     let mut upstream = ResponseHeader::build(200, None).unwrap();
 

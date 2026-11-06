@@ -1,15 +1,15 @@
-//! Per-request resolve helpers for global plugin refs, Gateway-level plugin
-//! keys, and rule-level ExtensionRefs.
+//! Per-request resolve helpers for rule-level ExtensionRefs and request-wide
+//! WAF owner selection.
 //!
-//! All helpers are pure: input refs/keys -> output Vec. They are called
-//! from `pg_request_filter` once per request to populate the lazily allocated
-//! plugin-runtime snapshot state.
-//! Dangling references are silently dropped (global/gateway refs) or kept as a
-//! `None` placeholder (ext refs); they are intentionally NOT logged here
-//! because this is the data-plane hot path, where `tracing` is forbidden
-//! (see `skills/03-coding/01-log-safety.md` Iron Rule 3 — a single
-//! misconfigured ref would otherwise emit one warn per request, scaling
-//! the log volume with QPS).
+//! Global plugin references and Gateway-level plugin keys are not resolved
+//! here: they are prepared once per publication
+//! (`PluginScope::resolved_globals`, `GatewayScope::resolved_http`) and the
+//! request path only clones those slices.
+//! Dangling ExtensionRefs are kept as a `None` placeholder; they are
+//! intentionally NOT logged here because this is the data-plane hot path,
+//! where `tracing` is forbidden (see `skills/03-coding/01-log-safety.md`
+//! Iron Rule 3 — a single misconfigured ref would otherwise emit one warn per
+//! request, scaling the log volume with QPS).
 
 use std::sync::Arc;
 
@@ -17,13 +17,6 @@ use crate::ctx::{WafLogSource, WafSelection};
 use crate::plugins::publication::PluginScope;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::runtime::WafCandidate;
-#[cfg(test)]
-use edgion_resources::resources::edgion_gateway_config::PluginReference;
-
-/// Resolve the global references precomputed for this captured class scope.
-pub(crate) fn resolve_global_plugins(scope: &PluginScope) -> Vec<Arc<PluginRuntime>> {
-    resolve_gateway_plugins(scope, &scope.global_keys)
-}
 
 /// Resolve a rule's ExtensionRef keys (built by
 /// `PluginRuntime::ext_ref_keys()`) to positional Vec of resolved runtimes.
@@ -43,19 +36,6 @@ pub(crate) fn resolve_route_ext_refs_with(
     mut lookup: impl FnMut(&str) -> Option<Arc<PluginRuntime>>,
 ) -> Vec<Option<Arc<PluginRuntime>>> {
     keys.iter().map(|key| key.as_deref().and_then(&mut lookup)).collect()
-}
-
-/// Resolve already-formed "namespace/name" store keys (from a Gateway's
-/// `edgion.io/edgion-plugins` annotation) into plugin runtimes, preserving order and
-/// dropping dangling refs (hot path: no logging).
-pub(crate) fn resolve_gateway_plugins(store: &PluginScope, keys: &[String]) -> Vec<Arc<PluginRuntime>> {
-    let mut out = Vec::with_capacity(keys.len());
-    for key in keys {
-        if let Some(rt) = store.http_runtime(key) {
-            out.push(rt);
-        }
-    }
-    out
 }
 
 #[derive(Clone, Copy)]
@@ -159,7 +139,3 @@ pub(crate) fn select_waf_owner_chain<'a>(
 #[cfg(test)]
 #[path = "../../../../tests/unit/routes/http/proxy_http/global_plugins_resolve_test.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/routes/http/proxy_http/global_plugins_resolve_test/gateway_plugins_resolve_tests.rs"]
-mod gateway_plugins_resolve_tests;

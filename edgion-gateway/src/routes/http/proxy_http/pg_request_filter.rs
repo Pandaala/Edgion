@@ -242,10 +242,10 @@ pub async fn request_filter(
         return Ok(true);
     }
     if !ctx.global_request_ids_initialized {
-        ctx.install_resolved_global_plugins(super::resolve_global_plugins(&owner.scope));
+        ctx.install_resolved_global_plugins(owner.scope.resolved_globals.clone());
     }
     if !ctx.gateway_request_ids_initialized {
-        ctx.install_resolved_gateway_plugins(super::resolve_gateway_plugins(&owner.scope, &owner.http_keys));
+        ctx.install_resolved_gateway_plugins(owner.resolved_http.clone());
     }
     let keys = ctx
         .route_unit
@@ -432,7 +432,7 @@ pub async fn request_filter(
     ctx.set_waf_partial_capture_allowed(waf_partial_capture_allowed);
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
-    // Reads the per-request snapshot populated above (zero format!/store cost).
+    // Reads the publication-prepared slice installed above (no per-request resolution).
     if let Some(plugins) = global_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
@@ -447,8 +447,8 @@ pub async fn request_filter(
     }
 
     // Step 2b: Run Gateway-level plugins (edgion.io/edgion-plugins annotation), after
-    // GatewayClass-global and before route-level. The snapshot was resolved
-    // before WAF winner election above.
+    // GatewayClass-global and before route-level. The prepared slice was
+    // installed before WAF winner election above.
     if let Some(plugins) = gateway_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
