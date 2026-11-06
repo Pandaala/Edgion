@@ -122,11 +122,34 @@ impl GuardrailResponseProcessor {
         }
     }
 
-    fn output_buffer() -> Result<BytesMut, ()> {
-        let output = BytesMut::with_capacity(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES);
-        (output.capacity() <= MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
-            .then_some(output)
-            .ok_or(())
+    /// Ensure `output` can hold `bound` bytes in total. The bound is admitted
+    /// against the callback limit before allocation, and growth goes straight to
+    /// the exact bound instead of amortized doubling, so capacity never exceeds
+    /// the limit. Callbacks start unallocated and size output to what they emit.
+    fn reserve_output(output: &mut BytesMut, bound: usize) -> Result<(), ()> {
+        if bound > MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES {
+            return Err(());
+        }
+        if output.capacity() >= bound {
+            return Ok(());
+        }
+        let mut grown = BytesMut::with_capacity(bound);
+        if grown.capacity() > MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES {
+            return Err(());
+        }
+        grown.extend_from_slice(output);
+        *output = grown;
+        Ok(())
+    }
+
+    fn resolved_len(resolved: &WindowOutput) -> Option<usize> {
+        match resolved {
+            WindowOutput::Release(slices) => slices
+                .iter()
+                .try_fold(0usize, |total, slice| total.checked_add(slice.len())),
+            WindowOutput::Replace(bytes) => Some(bytes.len()),
+            WindowOutput::Discard => Some(0),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -161,23 +184,15 @@ impl GuardrailResponseProcessor {
     }
 
     fn append_output(output: &mut BytesMut, resolved: WindowOutput) -> Result<(), ()> {
+        let added = Self::resolved_len(&resolved).ok_or(())?;
+        Self::reserve_output(output, output.len().checked_add(added).ok_or(())?)?;
         match resolved {
             WindowOutput::Release(slices) => {
                 for slice in slices {
-                    let next = output.len().checked_add(slice.len()).ok_or(())?;
-                    if next > MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES {
-                        return Err(());
-                    }
                     output.extend_from_slice(&slice);
                 }
             }
-            WindowOutput::Replace(bytes) => {
-                let next = output.len().checked_add(bytes.len()).ok_or(())?;
-                if next > MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES {
-                    return Err(());
-                }
-                output.extend_from_slice(&bytes);
-            }
+            WindowOutput::Replace(bytes) => output.extend_from_slice(&bytes),
             WindowOutput::Discard => {}
         }
         Ok(())
@@ -382,7 +397,18 @@ impl GuardrailResponseProcessor {
         if self.fail_open {
             match self.window.resolve(WindowDecision::Release) {
                 Ok(resolved) => {
-                    if Self::append_output(output, resolved).is_err() {
+                    // Admit the released window and the untouched tail together so
+                    // the fail-open output is allocated once at its exact size.
+                    let tail = records
+                        .iter()
+                        .try_fold(0usize, |total, record| total.checked_add(record.raw_len()));
+                    let bound = Self::resolved_len(&resolved)
+                        .zip(tail)
+                        .and_then(|(window, tail)| window.checked_add(tail))
+                        .and_then(|added| output.len().checked_add(added));
+                    if bound.is_none_or(|bound| Self::reserve_output(output, bound).is_err())
+                        || Self::append_output(output, resolved).is_err()
+                    {
                         output.clear();
                         self.terminate_dependency(sink, session, "callback-output-limit");
                         return;
@@ -440,11 +466,23 @@ impl GuardrailResponseProcessor {
         self.publish_terminal("reject", "policy");
     }
 
-    fn rollback_fits(&mut self, output_len: usize, emitted_len: usize, remaining_raw_bytes: Option<usize>) -> bool {
+    /// Inclusive rollback bound: emitted output, the proposed decision, and every
+    /// remaining raw record. `None` when it overflows or exceeds the callback limit.
+    fn rollback_bound(output_len: usize, emitted_len: usize, remaining_raw_bytes: Option<usize>) -> Option<usize> {
         output_len
             .checked_add(emitted_len)
             .and_then(|value| value.checked_add(remaining_raw_bytes?))
-            .is_some_and(|value| value <= MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
+            .filter(|value| *value <= MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
+    }
+
+    /// Admit the inclusive rollback bound, then reserve only the decision
+    /// output. Remaining records are usually retained rather than emitted, so
+    /// reserving them would ship unused capacity downstream with the frozen
+    /// chunk; a later fail-open tail reserves its own exact size.
+    fn reserve_rollback(output: &mut BytesMut, emitted_len: usize, remaining_raw_bytes: Option<usize>) -> bool {
+        let decision_bound = output.len().checked_add(emitted_len);
+        Self::rollback_bound(output.len(), emitted_len, remaining_raw_bytes).is_some()
+            && decision_bound.is_some_and(|bound| Self::reserve_output(output, bound).is_ok())
     }
 
     async fn process_batch(
@@ -468,11 +506,7 @@ impl GuardrailResponseProcessor {
         if batch.status() == CanonicalSourceStatus::Unavailable {
             self.summary.input_bytes = self.summary.input_bytes.saturating_add(batch.raw_len() as u64);
             let records = VecDeque::from(batch.into_records());
-            let Ok(mut output) = Self::output_buffer() else {
-                self.terminate_dependency(sink, session, "callback-output-limit");
-                *chunk = None;
-                return;
-            };
+            let mut output = BytesMut::new();
             self.fail_dependency(&mut output, records, sink, session, "semantic-source");
             *chunk = (!output.is_empty()).then(|| output.freeze());
             return;
@@ -481,11 +515,7 @@ impl GuardrailResponseProcessor {
         // A rejected retain keeps the current record in this total until retry succeeds.
         let mut remaining_raw_bytes = Some(batch.raw_len());
         let mut records = VecDeque::from(batch.into_records());
-        let Ok(mut output) = Self::output_buffer() else {
-            self.terminate_dependency(sink, session, "callback-output-limit");
-            *chunk = None;
-            return;
-        };
+        let mut output = BytesMut::new();
         while let Some(mut record) = records.pop_front() {
             let record_raw_len = record.raw_len();
             self.summary.input_bytes = self.summary.input_bytes.saturating_add(record_raw_len as u64);
@@ -541,7 +571,7 @@ impl GuardrailResponseProcessor {
                             }
                             ParsedDecision::Reject => 0,
                         };
-                        if !self.rollback_fits(output.len(), emitted_len, remaining_raw_bytes) {
+                        if !Self::reserve_rollback(&mut output, emitted_len, remaining_raw_bytes) {
                             self.fail_dependency(&mut output, records, sink, session, "callback-output-limit");
                             *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
@@ -617,7 +647,7 @@ impl GuardrailResponseProcessor {
                     }
                     ParsedDecision::Reject => 0,
                 };
-                if !self.rollback_fits(output.len(), emitted_len, remaining_raw_bytes) {
+                if !Self::reserve_rollback(&mut output, emitted_len, remaining_raw_bytes) {
                     self.fail_dependency(&mut output, records, sink, session, "callback-output-limit");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
@@ -689,7 +719,7 @@ impl GuardrailResponseProcessor {
                     }
                     ParsedDecision::Reject => 0,
                 };
-                if !self.rollback_fits(output.len(), emitted_len, Some(0)) {
+                if !Self::reserve_rollback(&mut output, emitted_len, Some(0)) {
                     self.fail_dependency(&mut output, VecDeque::new(), sink, session, "callback-output-limit");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
@@ -777,11 +807,7 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
                 .take()
                 .map(|bytes| VecDeque::from([crate::sse::window::WindowRecord::raw(vec![bytes])]))
                 .unwrap_or_default();
-            let Ok(mut output) = Self::output_buffer() else {
-                self.terminate_dependency(sink, session, "callback-output-limit");
-                *chunk = None;
-                return;
-            };
+            let mut output = BytesMut::new();
             self.fail_dependency(&mut output, records, sink, session, "not-canonical-sse");
             *chunk = (!output.is_empty()).then(|| output.freeze());
             return;
@@ -794,11 +820,7 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
                     .take()
                     .map(|bytes| VecDeque::from([crate::sse::window::WindowRecord::raw(vec![bytes])]))
                     .unwrap_or_default();
-                let Ok(mut output) = Self::output_buffer() else {
-                    self.terminate_dependency(sink, session, "callback-output-limit");
-                    *chunk = None;
-                    return;
-                };
+                let mut output = BytesMut::new();
                 self.fail_dependency(&mut output, records, sink, session, "missing-eos-source");
                 *chunk = (!output.is_empty()).then(|| output.freeze());
             }

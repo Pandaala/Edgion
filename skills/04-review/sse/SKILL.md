@@ -19,3 +19,4 @@ before applying a decision to current code.
 
 - [Window context follows emitted text](regression-guards/window-emitted-context.md)
 - [Window capacity admission precedes allocation](regression-guards/window-capacity-admission.md)
+- [Guardrail callback output is reserved to its admitted bound](regression-guards/guardrail-callback-output-capacity.md)

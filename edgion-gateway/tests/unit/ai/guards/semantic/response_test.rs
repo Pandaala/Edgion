@@ -292,7 +292,6 @@ async fn pending_release_continues_to_charge_work_and_exhaustion_stages_fail() {
 
 #[test]
 fn rollback_reservation_is_inclusive_and_checked() {
-    let mut processor = processor(true);
     let remaining = VecDeque::from([
         WindowRecord::raw(vec![Bytes::from_static(b"ta"), Bytes::new()]),
         WindowRecord::raw(Vec::new()),
@@ -302,14 +301,62 @@ fn rollback_reservation_is_inclusive_and_checked() {
         .iter()
         .try_fold(0usize, |total, record| total.checked_add(record.raw_len()));
     assert_eq!(scanned, Some(4));
-    assert!(processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 8, 4, scanned));
-    assert!(!processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 7, 4, scanned));
-    assert!(!processor.rollback_fits(usize::MAX, 1, scanned));
-    assert!(!processor.rollback_fits(usize::MAX - 1, 1, scanned));
-    assert!(!processor.rollback_fits(0, 0, None));
-    assert!(processor.rollback_fits(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES, 0, Some(0)));
-    let output = GuardrailResponseProcessor::output_buffer().unwrap();
-    assert_eq!(output.capacity(), MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES);
+    assert_eq!(
+        GuardrailResponseProcessor::rollback_bound(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 8, 4, scanned),
+        Some(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
+    );
+    assert!(
+        GuardrailResponseProcessor::rollback_bound(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES - 7, 4, scanned).is_none()
+    );
+    assert!(GuardrailResponseProcessor::rollback_bound(usize::MAX, 1, scanned).is_none());
+    assert!(GuardrailResponseProcessor::rollback_bound(usize::MAX - 1, 1, scanned).is_none());
+    assert!(GuardrailResponseProcessor::rollback_bound(0, 0, None).is_none());
+    assert_eq!(
+        GuardrailResponseProcessor::rollback_bound(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES, 0, Some(0)),
+        Some(MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES)
+    );
+}
+
+#[test]
+fn callback_output_is_reserved_to_its_admitted_bound() {
+    let mut output = BytesMut::new();
+    assert_eq!(output.capacity(), 0);
+    // Rejected admission never allocates.
+    assert!(!GuardrailResponseProcessor::reserve_rollback(
+        &mut output,
+        MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES,
+        Some(1)
+    ));
+    assert_eq!(output.capacity(), 0);
+    assert!(
+        GuardrailResponseProcessor::reserve_output(&mut output, MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES + 1).is_err()
+    );
+    assert_eq!(output.capacity(), 0);
+
+    // A small decision admits the inclusive rollback bound but reserves only
+    // its own output, never the callback limit or the retained remainder.
+    assert!(GuardrailResponseProcessor::reserve_rollback(&mut output, 5, Some(3)));
+    assert_eq!(output.capacity(), 5);
+    GuardrailResponseProcessor::append_output(&mut output, WindowOutput::Replace(Bytes::from_static(b"hello")))
+        .unwrap();
+    assert_eq!(output.capacity(), 5);
+    GuardrailResponseProcessor::append_output(&mut output, WindowOutput::Release(vec![Bytes::from_static(b"abc")]))
+        .unwrap();
+    assert_eq!(output.capacity(), 8);
+    assert_eq!(&output[..], b"helloabc");
+
+    // Growth beyond the reservation goes to the exact bound and preserves bytes.
+    GuardrailResponseProcessor::append_output(&mut output, WindowOutput::Replace(Bytes::from(vec![b'x'; 4096])))
+        .unwrap();
+    assert_eq!(output.capacity(), 8 + 4096);
+    assert_eq!(output.len(), 8 + 4096);
+    assert!(output.starts_with(b"helloabc"));
+
+    // Appends past the callback limit fail before copying anything.
+    let before = output.len();
+    let oversized = Bytes::from(vec![0u8; MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES]);
+    assert!(GuardrailResponseProcessor::append_output(&mut output, WindowOutput::Replace(oversized)).is_err());
+    assert_eq!(output.len(), before);
 }
 
 #[test]
