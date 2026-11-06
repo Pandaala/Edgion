@@ -492,3 +492,26 @@ fn conditional_request_filter_carries_dye_plan() {
     assert!(filter.dye_plan().is_some());
     assert_eq!(filter.dye_plan().unwrap().type_prefix, "canary");
 }
+
+#[tokio::test]
+async fn test_conditional_filter_empty_conditions_forward_lazily_to_inner() {
+    let (inner, run_count) = CountingFilter::new("test-filter");
+    // A present container with neither `skip` nor `run` takes the direct-forward path.
+    let filter = ConditionalRequestFilter::new(Box::new(inner), Some(PluginConditions::default()));
+
+    // No mock expectations: any condition-input read would panic.
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("test");
+
+    let fut = filter.run_request(&mut session, &mut log);
+    assert_eq!(
+        run_count.load(Ordering::SeqCst),
+        0,
+        "inner must not run before first poll"
+    );
+    let result = fut.await;
+
+    assert_eq!(result, PluginRunningResult::Nothing);
+    assert!(!log.is_cond_skipped());
+    assert_eq!(run_count.load(Ordering::SeqCst), 1);
+}

@@ -58,6 +58,8 @@ before applying a decision to current code.
 
 - [Scoped response-body filter dispatch](regression-guards/scoped-response-body-filter-dispatch.md)
 
+- [Conditional request wrapper forwards unconditioned entries directly](regression-guards/conditional-request-wrapper-direct-forward.md)
+
 ## Superseded
 
 - [Historical per-reference HTTP generation boundary](superseded/request-plugin-reference-generation-boundary.md)

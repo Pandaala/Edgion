@@ -6,6 +6,8 @@
 
 use async_trait::async_trait;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,7 +68,9 @@ impl ConditionalRequestFilter {
     }
 }
 
-#[async_trait]
+// `run_request` is written by hand (matching the `#[async_trait]` signature) so
+// an unconditioned entry returns the inner filter's boxed future directly instead
+// of allocating a second forwarding future on every request.
 impl RequestFilter for ConditionalRequestFilter {
     fn name(&self) -> &str {
         self.inner.name()
@@ -84,22 +88,33 @@ impl RequestFilter for ConditionalRequestFilter {
         self.inner.suppress_automatic_log()
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if let Some(conditions) = &self.conditions {
-            if conditions.should_evaluate() {
-                let eval = match conditions.evaluate_detail_async(session, log).await {
-                    Ok(eval) => eval,
-                    Err(result) => return result,
-                };
-                if eval.result == EvaluationResult::Skip {
-                    if let Some(cause) = eval.cause {
-                        log.set_cond_skip(eval.action, cause);
-                    }
-                    return PluginRunningResult::Nothing;
+    fn run_request<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        session: &'life1 mut dyn PluginSession,
+        log: &'life2 mut PluginLog,
+    ) -> Pin<Box<dyn Future<Output = PluginRunningResult> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        let Some(conditions) = self.conditions.as_ref().filter(|c| c.should_evaluate()) else {
+            return self.inner.run_request(session, log);
+        };
+        Box::pin(async move {
+            let eval = match conditions.evaluate_detail_async(session, log).await {
+                Ok(eval) => eval,
+                Err(result) => return result,
+            };
+            if eval.result == EvaluationResult::Skip {
+                if let Some(cause) = eval.cause {
+                    log.set_cond_skip(eval.action, cause);
                 }
+                return PluginRunningResult::Nothing;
             }
-        }
-        self.inner.run_request(session, log).await
+            self.inner.run_request(session, log).await
+        })
     }
 }
 
