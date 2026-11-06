@@ -14,6 +14,17 @@ fn header(name: &str, value: &str) -> ResponseHeaderEntry {
     }
 }
 
+fn response_map(entries: &[(&str, &str)]) -> http::HeaderMap {
+    let mut map = http::HeaderMap::new();
+    for (name, value) in entries {
+        map.append(
+            http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            http::HeaderValue::from_str(value).unwrap(),
+        );
+    }
+    map
+}
+
 fn io_error() -> crate::plugins::runtime::traits::session::PluginSessionError {
     std::io::Error::other("injected test failure").into()
 }
@@ -89,14 +100,15 @@ fn status_and_header_actions_preserve_order_and_duplicates() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_| Ok(()));
+    session.expect_get_response_header().never();
+    session.expect_set_response_header().never();
     session
-        .expect_get_response_header()
-        .with(mockall::predicate::eq("X-Old"))
+        .expect_response_header_map()
         .times(1)
         .in_sequence(&mut sequence)
-        .return_const(Some("old".to_string()));
+        .return_const(response_map(&[("X-Old", "old")]));
     session
-        .expect_set_response_header()
+        .expect_set_response_header_value()
         .withf(|name, value| name == "X-New" && value == "old")
         .times(1)
         .in_sequence(&mut sequence)
@@ -158,10 +170,9 @@ fn missing_rename_source_is_a_silent_noop() {
     let mut log = PluginLog::new(PLUGIN_NAME);
 
     session
-        .expect_get_response_header()
-        .with(mockall::predicate::eq("X-NonExistent"))
+        .expect_response_header_map()
         .times(1)
-        .return_const(None);
+        .return_const(http::HeaderMap::new());
 
     let result = plugin.run_upstream_response_filter(&mut session, &mut log);
 
@@ -224,12 +235,12 @@ fn writer_failures_use_static_logs_and_processing_continues() {
         .in_sequence(&mut sequence)
         .returning(|_| Err(io_error()));
     session
-        .expect_get_response_header()
+        .expect_response_header_map()
         .times(1)
         .in_sequence(&mut sequence)
-        .return_const(Some("old".to_string()));
+        .return_const(response_map(&[("X-Old", "old")]));
     session
-        .expect_set_response_header()
+        .expect_set_response_header_value()
         .withf(|name, _| name == "X-New")
         .times(1)
         .in_sequence(&mut sequence)
@@ -280,12 +291,12 @@ fn failed_rename_source_removal_is_logged_without_rollback() {
     let mut session = MockPluginSession::new();
     let mut sequence = Sequence::new();
     session
-        .expect_get_response_header()
+        .expect_response_header_map()
         .times(1)
         .in_sequence(&mut sequence)
-        .return_const(Some("old".to_string()));
+        .return_const(response_map(&[("X-Old", "old")]));
     session
-        .expect_set_response_header()
+        .expect_set_response_header_value()
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
@@ -439,4 +450,151 @@ fn prepared_values_share_first_clone_and_preserve_repeated_set_and_add() {
         PluginRunningResult::GoodNext
     );
     assert_eq!(log.render_for_test(), "header rewrite");
+}
+
+fn rename_plugin(pairs: &[(&str, &str)]) -> ResponseRewrite {
+    ResponseRewrite::new(&ResponseRewriteConfig {
+        status_code: None,
+        headers: Some(ResponseHeaderActions {
+            set: None,
+            add: None,
+            remove: None,
+            rename: Some(
+                pairs
+                    .iter()
+                    .map(|(from, to)| HeaderRename {
+                        from: (*from).to_string(),
+                        to: (*to).to_string(),
+                    })
+                    .collect(),
+            ),
+        }),
+    })
+}
+
+/// Runs the plugin against a real adapter bound to `response` and returns the plugin log.
+async fn run_renames_on_bound_response(
+    plugin: &ResponseRewrite,
+    response: &mut pingora_http::ResponseHeader,
+) -> String {
+    use crate::plugins::runtime::session_adapter::record_outcome_tests::test_session;
+    let mut session = test_session().await;
+    let mut ctx = crate::EdgionHttpContext::default();
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    {
+        let mut adapter =
+            crate::plugins::runtime::PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, response);
+        assert_eq!(
+            plugin.run_upstream_response_filter(&mut adapter, &mut log),
+            PluginRunningResult::GoodNext
+        );
+    }
+    assert!(!ctx.has_pending_response_header_ops());
+    log.render_for_test()
+}
+
+#[tokio::test]
+async fn real_adapter_rename_preserves_bytes_and_sensitivity() {
+    // HeaderValue equality ignores sensitivity, so every case asserts the flag explicitly.
+    for (bytes, sensitive) in [
+        (&b"secret-token"[..], true),
+        (&b"public-value"[..], false),
+        (&b""[..], true),
+        (&b""[..], false),
+    ] {
+        let mut value = http::HeaderValue::from_bytes(bytes).unwrap();
+        value.set_sensitive(sensitive);
+        let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+        response.insert_header("x-source", value).unwrap();
+
+        let log = run_renames_on_bound_response(&rename_plugin(&[("X-Source", "X-Destination")]), &mut response).await;
+
+        assert_eq!(log, "header rewrite");
+        assert!(!response.headers.contains_key("x-source"));
+        let renamed: Vec<_> = response.headers.get_all("x-destination").iter().collect();
+        assert_eq!(renamed.len(), 1);
+        assert_eq!(renamed[0].as_bytes(), bytes);
+        assert_eq!(renamed[0].is_sensitive(), sensitive);
+    }
+}
+
+#[tokio::test]
+async fn real_adapter_rename_moves_only_the_first_of_multiple_source_values() {
+    let mut first = http::HeaderValue::from_static("first");
+    first.set_sensitive(true);
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    response.append_header("x-source", first).unwrap();
+    response.append_header("x-source", "second").unwrap();
+    response.insert_header("x-destination", "stale").unwrap();
+
+    let log = run_renames_on_bound_response(&rename_plugin(&[("x-source", "x-destination")]), &mut response).await;
+
+    assert_eq!(log, "header rewrite");
+    assert!(!response.headers.contains_key("x-source"));
+    let renamed: Vec<_> = response.headers.get_all("x-destination").iter().collect();
+    assert_eq!(renamed.len(), 1);
+    assert_eq!(renamed[0].as_bytes(), b"first");
+    assert!(renamed[0].is_sensitive());
+}
+
+#[tokio::test]
+async fn real_adapter_rename_skips_opaque_first_value_and_missing_source() {
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    response
+        .append_header("x-opaque", http::HeaderValue::from_bytes(b"\xffbinary").unwrap())
+        .unwrap();
+    response.append_header("x-opaque", "text").unwrap();
+
+    let log = run_renames_on_bound_response(
+        &rename_plugin(&[("x-opaque", "x-renamed"), ("x-missing", "x-other")]),
+        &mut response,
+    )
+    .await;
+
+    assert_eq!(log, "");
+    let kept: Vec<_> = response.headers.get_all("x-opaque").iter().collect();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0].as_bytes(), b"\xffbinary");
+    assert!(!response.headers.contains_key("x-renamed"));
+    assert!(!response.headers.contains_key("x-other"));
+}
+
+#[tokio::test]
+async fn real_adapter_chained_renames_observe_prior_mutations() {
+    let mut value = http::HeaderValue::from_static("carried");
+    value.set_sensitive(true);
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    response.insert_header("x-a", value).unwrap();
+
+    let log = run_renames_on_bound_response(&rename_plugin(&[("x-a", "x-b"), ("x-b", "x-c")]), &mut response).await;
+
+    assert_eq!(log, "header rewrite");
+    assert!(!response.headers.contains_key("x-a"));
+    assert!(!response.headers.contains_key("x-b"));
+    assert_eq!(response.headers["x-c"].as_bytes(), b"carried");
+    assert!(response.headers["x-c"].is_sensitive());
+}
+
+#[tokio::test]
+async fn real_adapter_rename_without_bound_response_is_a_noop() {
+    use crate::plugins::runtime::session_adapter::record_outcome_tests::test_session;
+    let mut session = test_session().await;
+    let mut ctx = crate::EdgionHttpContext::default();
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    {
+        let mut adapter = crate::plugins::runtime::PingoraSessionAdapter::new(&mut session, &mut ctx);
+        // A queued source write is not a live response header, so rename must not consult it.
+        adapter
+            .set_response_header_value("x-source", http::HeaderValue::from_static("queued"))
+            .unwrap();
+        assert_eq!(
+            rename_plugin(&[("x-source", "x-destination")]).run_upstream_response_filter(&mut adapter, &mut log),
+            PluginRunningResult::GoodNext
+        );
+    }
+    assert_eq!(log.render_for_test(), "");
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    ctx.apply_pending_response_header_ops(&mut response);
+    assert_eq!(response.headers["x-source"].as_bytes(), b"queued");
+    assert!(!response.headers.contains_key("x-destination"));
 }

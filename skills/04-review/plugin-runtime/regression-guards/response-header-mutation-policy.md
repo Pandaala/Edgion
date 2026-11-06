@@ -108,6 +108,7 @@ the exact ordinary-mutation policy was approved for this task.
 ## Resolution references
 
 - `unify-response-header-mutation-policy` — fixed and verified; unified response policy with preserved body-owner framing.
+- `response-02-rename-value-fidelity` — fixed and verified; rename copies the typed value, preserving bytes and sensitivity.
 
 ## Prepared fixed values
 
@@ -125,8 +126,8 @@ admission and application keep their independent canonical protection checks.
 
 Native modifiers keep their first-equivalent deduplication. ResponseRewrite
 instead retains every configured duplicate and its rename/add/set/remove order.
-Its rename values remain dynamic owned strings; only fixed add/set values use
-the prepared owner. Invalid direct construction remains a logged no-op, and
+Only fixed add/set values use the prepared owner; rename values are read
+live. Invalid direct construction remains a logged no-op, and
 publication continues to reject invalid configuration through existing gates.
 Do not infer that header names, queues, response maps or plugin logs allocate
 nothing from the zero-allocation prepared-value clone tests.
@@ -138,5 +139,32 @@ unchanged. Configuration validation still precedes preparation, and session writ
 guards remain in place. Each prepared rename adds a boolean and possible layout
 padding. This removes repeated policy scans, not dynamic value reads or copies.
 Tests cover both protected sides, mixed case, Proxy-Connection, pseudo-headers,
-and independence from subsequent caller-configuration changes. Response value
-fidelity remains a separate review boundary.
+and independence from subsequent caller-configuration changes.
+
+## Rename value fidelity
+
+Finding `response-02-rename-value-fidelity`: rename used to read the source through
+`get_response_header` (a `to_str` String copy) and write it back through the
+String `set_response_header`, which re-parsed the text. That allocated per rename
+and dropped `HeaderValue::is_sensitive`, contrary to the
+[secret header sensitivity rule](../../security/mandatory-design/secret-header-values-must-be-sensitive.md)
+that a boundary never discards known sensitive metadata from a source header.
+The loss was latent: no current response-side producer sets the flag, and
+Pingora's upstream response parser never does.
+
+Rename now borrows `response_header_map()`, takes the first value, keeps the
+existing `to_str().is_ok()` text gate, clones the typed `HeaderValue` (bytes and
+sensitivity), and writes it with `set_response_header_value`. The value is read
+at each rename's execution point, so chained renames observe prior mutations.
+Unchanged: no bound response means the empty map and no rename (pending queued
+ops are not consulted); protected-name rejection; a failed destination write
+keeps the source; a failed source removal leaves the destination and logs the
+static rename failure; rename/add/set/remove order. Opaque (non-text) first
+values are still skipped; supporting them is a separate product decision.
+Do not reintroduce a String round trip on this path.
+
+Verified on 2026-11-06 with `cargo test -p edgion-gateway --lib response_rewrite`
+(15 passed). Real-adapter tests assert bytes and `is_sensitive()` explicitly,
+because `HeaderValue` equality ignores sensitivity: sensitive/ordinary/empty
+sources, multiple source values, opaque first value, missing source, no bound
+response, and chained renames.

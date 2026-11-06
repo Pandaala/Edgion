@@ -91,6 +91,10 @@ Elasticsearch Basic/APIKey/Bearer headers and the CLI bearer header carry the sa
 metadata. Regression coverage checks exact bytes, custom header names, clones,
 duplicate forwarding, and the real adapter's deferred overwrite behavior.
 
+ResponseRewrite rename (`response-02-rename-value-fidelity`) copies the typed first source value,
+so a sensitive response header keeps its flag under the new name; see the
+[response header mutation policy](../../plugin-runtime/regression-guards/response-header-mutation-policy.md#rename-value-fidelity).
+
 - CI-R2 security review, 2026-08-27
 - `edgion-gateway/src/plugins/http/credential_injector/plugin.rs`
 - `edgion-gateway/src/ctx.rs`

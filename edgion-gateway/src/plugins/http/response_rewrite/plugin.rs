@@ -126,8 +126,15 @@ impl ResponseRewrite {
                         continue;
                     }
                     let entry = &rename.entry;
-                    if let Some(value) = session.get_response_header(&entry.from) {
-                        if let Err(_e) = session.set_response_header(&entry.to, &value) {
+                    // Clone the typed first value so bytes and sensitivity survive the
+                    // rename; the text gate keeps non-text first values out of scope.
+                    let value = session
+                        .response_header_map()
+                        .get(&entry.from)
+                        .filter(|value| value.to_str().is_ok())
+                        .cloned();
+                    if let Some(value) = value {
+                        if let Err(_e) = session.set_response_header_value(&entry.to, value) {
                             plugin_log.push_err("header rename fail");
                         } else {
                             modified = true;
