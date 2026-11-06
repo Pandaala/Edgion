@@ -37,6 +37,9 @@ resolution still prefers the request value.
   `defaults.maxOutputTokens` only when absent. A
   TPM-limited credential is invalid when no maximum-output bound can be resolved.
 - Known final usage reconciles the reservation.
+- A definitive non-2xx provider status (retried or final) reconciles to the provider-reported usage,
+  or to zero tokens when none was reported, even if the error body is not valid JSON or is cut
+  short. The dispatched request still counts against RPM. Intermediary timeouts (504, 524) stay ambiguous. Disabled usage observation keeps retaining.
 - A pre-dispatch cancellation releases it.
 - A stream ended by the gateway — over quota, or quota no longer enforceable — reconciles only
   with reported or valid estimated usage. Closing the upstream removes transport ambiguity, not

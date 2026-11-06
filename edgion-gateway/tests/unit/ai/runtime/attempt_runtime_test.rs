@@ -944,3 +944,109 @@ async fn failed_query_projection_releases_undispatched_ai_reservation_at_logging
         assert!(!state.ever_dispatched());
     }
 }
+
+#[tokio::test]
+async fn definitive_provider_rejections_charge_only_reported_usage() {
+    use edgion_resources::resources::edgion_plugins::AiUsageObservation;
+
+    // Retried 429 on an estimating API: no prompt estimate is charged.
+    let mut state = AiAttemptRuntimeState::default();
+    let mut retried = attempt(120, 0, false);
+    retried.record_response(429, Some(FailureClass::Application));
+    state.install(retried);
+    state.mark_dispatched();
+    state.finish_failure(AiAttemptFailure::Known(FailureClass::Application));
+
+    // Final 400 whose JSON error body would otherwise be estimated as output.
+    let mut rejected = attempt(120, 64, true);
+    rejected.record_response(400, None);
+    state.install(rejected);
+    state.mark_dispatched();
+    state.finalize(None).await;
+
+    assert_eq!(
+        state.settlement_decisions_for_test(),
+        [SettlementOperation::Reconcile(0), SettlementOperation::Reconcile(0)]
+    );
+    assert_eq!(state.charged_request_tokens(), Ok(0));
+    assert_eq!(state.unresolved_usage_source(), None);
+    assert!(state
+        .attempts()
+        .iter()
+        .all(|entry| { entry.input_tokens == Some(0) && entry.output_tokens == Some(0) }));
+    assert_eq!(state.attempts()[0].status, Some(429));
+    assert_eq!(state.attempts()[1].status, Some(400));
+
+    // Reported-only API: an error body without usage settles instead of retaining.
+    let mut reported_only = AiAttemptRuntimeState::default();
+    let mut native = attempt(120, 0, true);
+    native.usage = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
+    native.record_response(400, None);
+    reported_only.install(native);
+    reported_only.mark_dispatched();
+    reported_only.finalize(None).await;
+    assert_eq!(
+        reported_only.settlement_decisions_for_test(),
+        [SettlementOperation::Reconcile(0)]
+    );
+    assert_eq!(reported_only.charged_request_tokens(), Ok(0));
+
+    // A non-JSON error page, and a cut error body, are still definitive rejections.
+    for eos in [true, false] {
+        let mut state = AiAttemptRuntimeState::default();
+        let mut page = attempt(120, 64, eos);
+        page.usage.mark_observation_unavailable();
+        page.record_response(502, Some(FailureClass::Gateway));
+        state.install(page);
+        state.mark_dispatched();
+        state.finalize(None).await;
+        assert_eq!(
+            state.settlement_decisions_for_test(),
+            [SettlementOperation::Reconcile(0)]
+        );
+        assert_eq!(state.charged_request_tokens(), Ok(0));
+    }
+
+    // Usage the provider itself reported on an error is still charged.
+    let mut billed = AiAttemptRuntimeState::default();
+    let mut reported = attempt(120, 0, true);
+    reported.usage.observe_reported_usage(11, 7, 0, 0);
+    reported.record_response(400, None);
+    billed.install(reported);
+    billed.mark_dispatched();
+    billed.finalize(None).await;
+    assert_eq!(
+        billed.settlement_decisions_for_test(),
+        [SettlementOperation::Reconcile(18)]
+    );
+    assert_eq!(billed.charged_request_tokens(), Ok(18));
+
+    // Intermediary timeouts stay ambiguous: the prompt estimate is still charged.
+    for status in [504, 524] {
+        let mut state = AiAttemptRuntimeState::default();
+        let mut timeout = attempt(120, 0, false);
+        timeout.record_response(status, Some(FailureClass::Gateway));
+        state.install(timeout);
+        state.mark_dispatched();
+        state.finish_failure(AiAttemptFailure::Known(FailureClass::Gateway));
+        assert_eq!(
+            state.settlement_decisions_for_test(),
+            [SettlementOperation::Reconcile(120)]
+        );
+        assert_eq!(state.charged_request_tokens(), Ok(120));
+    }
+
+    // Disabled observation keeps its existing not-observed retention.
+    let mut off_state = AiAttemptRuntimeState::default();
+    let mut off = attempt(120, 0, true);
+    off.usage = Arc::new(AiUsageShared::observation_disabled());
+    off.record_response(400, None);
+    off_state.install(off);
+    off_state.mark_dispatched();
+    off_state.finalize(None).await;
+    assert_eq!(off_state.settlement_decisions_for_test(), [SettlementOperation::Retain]);
+    assert_eq!(
+        off_state.unresolved_usage_source(),
+        Some(GenAiAttemptUsageSource::NotObserved)
+    );
+}

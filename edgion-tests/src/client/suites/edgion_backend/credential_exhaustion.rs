@@ -393,7 +393,9 @@ fn credential_first_then_service_next(
             };
             let charged = attempt["input_tokens"].as_u64().unwrap_or_default()
                 + attempt["output_tokens"].as_u64().unwrap_or_default();
-            if rpm != 1 || tpm != charged || charged == 0 {
+            // Every attempt was a provider 503: the request still counts against
+            // RPM, while TPM reconciles to zero because nothing was consumed.
+            if rpm != 1 || tpm != 0 || charged != 0 {
                 return TestResult::failed(
                     start.elapsed(),
                     format!(

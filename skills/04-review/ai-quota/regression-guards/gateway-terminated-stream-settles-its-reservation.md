@@ -42,6 +42,8 @@ or "`incomplete_response` is correct because the response really was incomplete"
 are **not accepted** for valid reported/estimated accounting. Unknown observation
 (including unsupported encoding or incomplete Chat JSON) retains the credential
 reservation even at EOS or a gateway cut, without claiming a provider failure.
+Exception: a definitive non-2xx provider status settles to reported usage or zero; see
+[provider-rejection-settles-as-zero-consumption](provider-rejection-settles-as-zero-consumption.md).
 
 ## Core Rationale
 

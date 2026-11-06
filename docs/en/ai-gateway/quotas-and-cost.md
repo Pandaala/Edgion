@@ -17,7 +17,11 @@ quota Redis work.
 Business quota checks accumulated consumption without reserving the whole request's input or maximum
 output at admission. Active requests flush observed output in batches. Terminal settlement charges
 accountable input and output across all dispatched attempts, including retries, rather than only the
-last successful attempt. Concurrent requests and delayed flushes permit overshoot; this is not a
+last successful attempt. An attempt the provider answered with a non-2xx status (a retried 429/5xx,
+or a final 4xx/5xx) charges only usage the provider itself reported, and otherwise charges zero
+tokens and zero cost. Intermediary timeouts (504, 524) stay ambiguous and keep the prior
+estimate-or-unknown behavior.
+Concurrent requests and delayed flushes permit overshoot; this is not a
 strict zero-overshoot budget. Credential TPM is a separate maximum-consumption reservation mechanism;
 see [Credentials and Limits](./credentials-and-limits.md#reservation-semantics).
 

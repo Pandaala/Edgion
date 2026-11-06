@@ -126,6 +126,7 @@ impl AiAttemptRuntime {
 
     pub fn record_response(&mut self, status: u16, class: Option<FailureClass>) {
         self.status = Some(status);
+        self.usage.observe_upstream_status(status);
         if let Some(class) = class {
             self.record_failure_once(class);
         }
@@ -515,7 +516,8 @@ impl AiAttemptRuntimeState {
     ///
     /// `settled` means the gateway knows the exchange is over — the upstream
     /// delivered EOS, or the gateway itself terminated the stream. Reconciliation
-    /// additionally requires reported or valid estimated usage. Ambiguous
+    /// additionally requires reported or valid estimated usage. A definitive
+    /// non-2xx provider status reconciles to its reported usage, or zero. Ambiguous
     /// transport or unavailable accounting retains the full input + max-output
     /// charge to protect the credential from unobserved consumption. A gateway
     /// cut with valid accounting reconciles its reservation; retaining that known
@@ -535,7 +537,9 @@ impl AiAttemptRuntimeState {
         if !active.dispatched {
             return SettlementOperation::Release;
         }
-        if !settled {
+        // A definitive non-2xx status already settles consumption; a cut error
+        // body cannot add billable work, so it skips the transport-ambiguity retain.
+        if !settled && !active.usage.provider_rejected() {
             return SettlementOperation::Retain;
         }
         if eos

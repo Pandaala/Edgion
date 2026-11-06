@@ -14,6 +14,7 @@ before applying a decision to current code.
 - [Shared cumulative buckets preserve active-marker retention](regression-guards/shared-cumulative-bucket-retention.md)
 - [Anthropic translation owns usage and fallback estimation](regression-guards/anthropic-usage-observation-is-estimation-only.md)
 - [A gateway-terminated AI stream settles its credential reservation and is not an upstream truncation — FIXED](regression-guards/gateway-terminated-stream-settles-its-reservation.md)
+- [A definitive provider rejection settles as zero consumption — FIXED](regression-guards/provider-rejection-settles-as-zero-consumption.md)
 - [A gateway-injected SSE error event must carry its own event boundary — FIXED](regression-guards/injected-error-event-needs-its-own-sse-boundary.md)
 - [SSE decoder degradation must not silently disable mid-stream quota enforcement — FIXED](regression-guards/sse-degradation-must-not-disable-enforcement.md)
 - [Malformed SSE events must not disable quota enforcement — FIXED](regression-guards/sse-malformed-events-must-not-disable-enforcement.md)

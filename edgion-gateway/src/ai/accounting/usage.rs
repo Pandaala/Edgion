@@ -1,6 +1,6 @@
 //! Bounded OpenAI usage extraction for streaming and non-streaming responses.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use arc_swap::ArcSwapOption;
@@ -383,6 +383,8 @@ pub struct AiUsageShared {
     json_started: AtomicBool,
     json_complete: AtomicBool,
     gateway_terminated: AtomicBool,
+    /// Final upstream status of this attempt; zero until a response header arrives.
+    upstream_status: AtomicU16,
 }
 
 impl AiUsageShared {
@@ -398,6 +400,19 @@ impl AiUsageShared {
             reported_only: true,
             ..Self::with_observation(observation)
         }
+    }
+
+    pub(crate) fn observe_upstream_status(&self, status: u16) {
+        self.upstream_status.store(status, Ordering::Release);
+    }
+
+    /// True when the provider answered this attempt with a definitive non-2xx
+    /// status. Such a rejection performed no billable work unless the provider
+    /// itself reported usage. Intermediary timeouts (504, 524) are excluded:
+    /// the provider may still be generating behind them, so they stay ambiguous.
+    pub(crate) fn provider_rejected(&self) -> bool {
+        let status = self.upstream_status.load(Ordering::Acquire);
+        status != 0 && !(200..300).contains(&status) && status != 504 && status != 524
     }
 
     pub(crate) fn observe_response_outcome(&self, outcome: ResponseOutcome) {
@@ -504,6 +519,21 @@ impl AiUsageShared {
             return AiUsageSnapshot {
                 source: GenAiAttemptUsageSource::NotObserved,
                 usage: None,
+                unavailable: None,
+            };
+        } else if self.provider_rejected() && self.reported_usage().is_none() {
+            // A definitive provider rejection (retried 429/5xx, final 4xx, or a
+            // non-JSON error page) consumed nothing. Charging the prompt estimate
+            // or retaining the reservation as unknown usage would bill tenants
+            // and hold shared credential capacity for unbilled work.
+            return AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::Estimated,
+                usage: Some(ReportedAiUsage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_write_input_tokens: 0,
+                }),
                 unavailable: None,
             };
         } else if self.observation_unavailable() {

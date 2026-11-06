@@ -16,6 +16,9 @@ unknown attempts, the known portion is not an authoritative request total.
 `usage_source` is `reported`, `estimated`, `unknown`, or `notObserved`. Unknown
 usage omits token counts and cost; it does not mean zero. `usage_estimated` is
 true only for `estimated`, so false alone does not prove provider-reported usage.
+An attempt the provider rejected with a non-2xx status (other than the 504/524
+intermediary timeouts) and no reported usage is `estimated` with zero tokens and
+zero cost, on every API including reported-only Responses and Messages.
 Any unknown attempt, or a mixture of observed and unobserved attempts, makes the
 request summary unknown. All-unobserved attempts yield `notObserved`. Known
 attempt entries remain available even when the request summary is unknown.

@@ -1347,6 +1347,7 @@ fn priority_retry_business_quota(
                 || attempts[0]["status"] != 503
                 || attempts[0]["failure"] != "retryable_status"
                 || attempts[0]["usage_source"] != "estimated"
+                || attempts[0]["input_tokens"] != 0
                 || attempts[0]["output_tokens"] != 0
                 || attempts[1]["status"] != 200
                 || !attempts[1]["failure"].is_null()
@@ -1356,14 +1357,9 @@ fn priority_retry_business_quota(
             {
                 return Err(format!("invalid retry quota ledger: {genai}"));
             }
-            let failed_input = attempts[0]["input_tokens"]
-                .as_u64()
-                .ok_or("missing estimated failed input")?;
-            if failed_input <= 2 {
-                return Err("retry fixture cannot discriminate successful-only charging".into());
-            }
-            let total = failed_input + 18;
-            if genai["input_tokens"] != 11 || genai["output_tokens"] != 7 || genai["quota_status"] != "over_limit" {
+            // The provider-rejected 503 attempt consumed nothing, so only the
+            // successful attempt's 18 reported tokens reach the 20-token quota.
+            if genai["input_tokens"] != 11 || genai["output_tokens"] != 7 || genai["quota_status"] != "charged" {
                 return Err(format!("retry winning-response summary changed: {genai}"));
             }
             let after_ms = std::time::SystemTime::now()
@@ -1378,10 +1374,12 @@ fn priority_retry_business_quota(
                 after_ms,
             )
             .await?;
-            if used != total {
-                return Err(format!("Redis charged {used}, expected all attempts {total}"));
+            if used != 18 {
+                return Err(format!(
+                    "Redis charged {used}, expected only the successful attempt (18)"
+                ));
             }
-            let followup = format!("retry-quota-reject-{}", uuid::Uuid::new_v4());
+            let followup = format!("retry-quota-followup-{}", uuid::Uuid::new_v4());
             let response = post_with_quota_identity_on_host(
                 &ctx,
                 "ai-retry-quota.example.com",
@@ -1391,11 +1389,14 @@ fn priority_retry_business_quota(
                 Some(&followup),
             )
             .await?;
-            if response.status() != 429 {
-                return Err(format!("retry sum did not close next admission: {}", response.status()));
+            if response.status() != 200 {
+                return Err(format!(
+                    "a rejected retry attempt closed the next admission: {}",
+                    response.status()
+                ));
             }
             response.bytes().await.map_err(|e| e.to_string())?;
-            let entry = client
+            client
                 .get_access_log_with_retry(&followup, 15, 200)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -1403,9 +1404,6 @@ fn priority_retry_business_quota(
                 .require_single_write(&followup)
                 .await
                 .map_err(|e| e.to_string())?;
-            if entry.upstream_count() != 0 {
-                return Err("quota rejection dispatched another attempt".into());
-            }
             Ok::<(), String>(())
         }
         .await;
@@ -1499,7 +1497,7 @@ fn priority_retry_attempt_ledger(
             || first["status"] != 503
             || first["failure"] != "retryable_status"
             || first["usage_source"] != "estimated"
-            || first["input_tokens"].as_u64().unwrap_or_default() == 0
+            || first["input_tokens"] != 0
             || first["output_tokens"] != 0
         {
             return TestResult::failed(start.elapsed(), format!("unexpected first attempt ledger: {first}"));
@@ -1524,10 +1522,11 @@ fn priority_retry_attempt_ledger(
             .iter()
             .filter_map(|attempt| attempt["output_tokens"].as_u64())
             .sum::<u64>();
-        if summed_input <= 11 || summed_output != 7 {
+        // The provider-rejected 503 attempt charges nothing; only the success counts.
+        if summed_input != 11 || summed_output != 7 {
             return TestResult::failed(
                 start.elapsed(),
-                format!("attempt usage was not summed across retry and success: {attempts:?}"),
+                format!("rejected retry attempt was charged as consumption: {attempts:?}"),
             );
         }
         let rendered = entry.data.to_string();
@@ -3088,7 +3087,7 @@ impl TestSuite for SingleProviderTestSuite {
             ),
             TestCase::new(
                 "priority_retry_business_quota",
-                "Business Redis quota charges failed and successful dispatched attempts",
+                "Business Redis quota charges the successful attempt and nothing for a provider-rejected retry",
                 priority_retry_business_quota,
             ),
             TestCase::new(
