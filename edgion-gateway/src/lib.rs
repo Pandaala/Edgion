@@ -63,9 +63,26 @@ pub fn allocator_name() -> &'static str {
 /// Integration scripts consume this output before starting the process. Keep
 /// the format Bash 3.2-friendly and bump the version before incompatible edits.
 /// The Gateway always builds against the Edgion Pingora fork, so the body
-/// capture seam is unconditionally present.
+/// capture seam is unconditionally present. Optional subsystems report
+/// `subsystem-<name>=enabled|disabled` (additive lines within v1).
 pub fn build_capabilities() -> &'static str {
-    "format=edgion-build-capabilities/v1\nbody-buffering=enabled\npingora-mode=edgion-fork\n"
+    static CAPABILITIES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let mut out =
+            String::from("format=edgion-build-capabilities/v1\nbody-buffering=enabled\npingora-mode=edgion-fork\n");
+        for (name, enabled) in [
+            ("kafka", cfg!(feature = "kafka")),
+            ("otlp", cfg!(feature = "otlp")),
+            ("ldap", cfg!(feature = "ldap")),
+            ("geoip", cfg!(feature = "geoip")),
+            ("wasm", cfg!(feature = "wasm")),
+        ] {
+            out.push_str("subsystem-");
+            out.push_str(name);
+            out.push_str(if enabled { "=enabled\n" } else { "=disabled\n" });
+        }
+        out
+    });
+    &CAPABILITIES
 }
 
 pub mod ai;

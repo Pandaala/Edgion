@@ -18,6 +18,7 @@ before applying a decision to current code.
 - [No cross-kind dependency ordering — routes can be applied before their backends arrive — ACCEPTED-TRADEOFF (matches Envoy/Istio default baseline)](intentional-design/cross-kind-dependency-ordering-not-enforced.md)
 - [No cross-resource-kind snapshot atomicity for the data-plane push (controller/push side) — ACCEPTED-TRADEOFF](intentional-design/cross-kind-push-no-snapshot-atomicity-controller-side.md)
 - [No local config snapshot / warm-start on Gateway cold restart — ACCEPTED-TRADEOFF (matches Envoy/Istio default baseline)](intentional-design/gateway-no-local-config-snapshot.md)
+- [One Controller instance is one conf_sync trust domain — ACCEPTED-TRADEOFF (dedicated Gateways are not a secret boundary)](intentional-design/controller-instance-is-the-trust-domain.md)
 - [No ACK/NACK feedback loop on the Watch stream — ACCEPTED-TRADEOFF (control-plane ingest validation replaces data-plane ACK/NACK)](intentional-design/no-ack-nack-control-plane-validation.md)
 - [Fixed-capacity per-kind ring buffer — TooOldVersion forces a full relist — ACCEPTED-TRADEOFF (capacity is configurable; compaction is a large feature)](intentional-design/ring-buffer-fixed-capacity-toooldversion-relist.md)
 

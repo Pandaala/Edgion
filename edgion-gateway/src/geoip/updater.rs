@@ -79,6 +79,13 @@ fn sensitive_authorization_header(env_name: &str, raw: &str) -> Result<HeaderVal
 /// internal database mapping only RFC1918 space are all legitimate, and any
 /// probe address would reject them forever. The checks below catch the failure
 /// this step exists for: a truncated, empty, or non-MMDB candidate.
+#[cfg(not(feature = "geoip"))]
+pub(crate) fn validate_structural(_path: &Path) -> Result<(), String> {
+    Err(super::GEOIP_NOT_COMPILED.to_string())
+}
+
+/// Structural validation of a candidate MMDB (see the `geoip` build above).
+#[cfg(feature = "geoip")]
 pub(crate) fn validate_structural(path: &Path) -> Result<(), String> {
     // SAFETY: see the note in `provider.rs` — the candidate file is written by
     // this process and is not mutated in place.
@@ -703,6 +710,6 @@ impl GeoIpUpdater {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "geoip"))]
 #[path = "../../tests/unit/geoip/updater_test.rs"]
 mod tests;

@@ -1,9 +1,12 @@
 use super::*;
 use crate::ctx::{RequestGeoInfo, WafLogMode, WafLogSource, WafSelection};
-use crate::geoip::{GeoInfo, GeoIpProvider};
+use crate::geoip::GeoInfo;
+#[cfg(feature = "geoip")]
+use crate::geoip::GeoIpProvider;
 use crate::request_trace_id::CompiledRequestIdRule;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use http::{HeaderMap, HeaderValue};
+#[cfg(feature = "geoip")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -279,6 +282,7 @@ fn partial_geo_dimensions_and_coordinates_leave_the_other_slot_unresolved() {
 }
 
 #[test]
+#[cfg(feature = "geoip")]
 fn captured_geo_survives_provider_replacement_and_json_outlives_context() {
     let json = {
         let provider = GeoIpProvider::new();

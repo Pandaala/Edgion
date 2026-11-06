@@ -75,6 +75,18 @@ When building any of the three binaries from source, select the allocator with
 The dependency crate names `tikv-jemallocator` and `mimalloc` are not Cargo
 feature names for these binaries.
 
+The Gateway also has optional subsystem features: `kafka`, `otlp`, `ldap`,
+`geoip`, and `wasm`. The aggregate `full` feature selects all of them and is part
+of the default set. When you build with `--no-default-features` and an explicit
+feature list, add `full` (or the individual subsystems you need); otherwise they
+are compiled out. A compiled-out subsystem never fails open: a primary Kafka/OTLP
+log output, or an OTLP SSL-log output, stops Gateway startup (a fallback output is
+skipped with a warning),
+`LdapAuth` and `Wasm` plugin entries are rejected, and GeoIP lookups report the
+database as unavailable so each `GeoIpLocation` plugin's `failOpen` setting
+decides. `edgion-gateway --print-build-capabilities` lists which subsystems a
+binary contains.
+
 ### Running the container image in a non-Kubernetes mode
 
 The `start.sh` path above uses the release binaries with the CRD schemas already on disk under

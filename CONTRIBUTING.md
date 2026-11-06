@@ -58,7 +58,7 @@ cargo fmt --all
 > allocators (`allocator-jemalloc`/`allocator-mimalloc`/`allocator-system`) are
 > mutually exclusive; enabling more than one fails the build by design. Lint a
 > non-default combination explicitly, e.g.
-> `cargo clippy --all-targets --no-default-features --features boringssl,allocator-mimalloc`.
+> `cargo clippy -p edgion-gateway --all-targets --no-default-features --features boringssl,allocator-mimalloc,full`.
 > Note: the gateway data plane currently builds only against `boringssl`; the
 > `rustls` backend compiles for the controller but not yet for the gateway.
 

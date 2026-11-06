@@ -280,6 +280,7 @@ fn ai_ordering_failure_overrides_dsl_and_waf_retention() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn dye_stage_policy_and_inert_entries_have_controller_gateway_parity() {
     use edgion_resources::resources::edgion_plugins::{
         DyeStage, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,

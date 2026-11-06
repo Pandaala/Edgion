@@ -44,7 +44,7 @@ FIPS 在**镜像构建期**启用，而非运行时。普通发布 workflow、�
 `cargo build` **不**包含 FIPS。请通过仓库提供的 Linux 多架构 builder 显式构建：
 
 ```bash
-FEATURES="allocator-jemalloc,fips" \
+FEATURES="allocator-jemalloc,fips,full" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 

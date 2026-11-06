@@ -455,6 +455,7 @@ struct StoreStatsResponse {
     plugin_publication: crate::plugins::publication::PublicationStats,
     plugin_publication_inventory: crate::plugins::publication::PublicationInventory,
     wasm_admission: crate::plugins::http::wasm::admission::Stats,
+    #[cfg(feature = "wasm")]
     wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats,
     http_routes: crate::routes::http::HttpRouteManagerStats,
     grpc_routes: crate::routes::grpc::GrpcRouteManagerStats,
@@ -577,6 +578,7 @@ struct PluginStoreStatsV2 {
 
 /// Collect statistics from all derived stores for config-sync leak detection.
 async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<StoreStatsResponse>> {
+    #[cfg(feature = "wasm")]
     let wasm_oci_cache = crate::plugins::http::wasm::oci::cache::memory_cache_stats();
     let http_routes = crate::routes::http::get_global_http_route_managers().stats();
     let grpc_routes = crate::routes::grpc::get_global_grpc_route_managers().stats();
@@ -687,6 +689,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         plugin_publication: publication.stats(),
         plugin_publication_inventory: publication.inventory().clone(),
         wasm_admission: crate::plugins::http::wasm::admission::stats(),
+        #[cfg(feature = "wasm")]
         wasm_oci_cache,
         http_routes,
         grpc_routes,

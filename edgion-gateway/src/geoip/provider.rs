@@ -12,15 +12,21 @@
 use arc_swap::ArcSwapOption;
 use std::net::IpAddr;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+#[cfg(feature = "geoip")]
+use std::sync::Arc;
+use std::sync::LazyLock;
 
-use super::info::{normalize_addr, project, GeoLookup};
+use super::info::GeoLookup;
+#[cfg(feature = "geoip")]
+use super::info::{normalize_addr, project};
 
 #[cfg(test)]
 use std::cell::Cell;
 
 /// One loaded database plus the build timestamp used by the staleness metric.
+#[cfg_attr(not(feature = "geoip"), allow(dead_code))]
 struct LoadedDb {
+    #[cfg(feature = "geoip")]
     reader: maxminddb::Reader<memmap2::Mmap>,
     build_epoch: u64,
 }
@@ -74,7 +80,14 @@ impl GeoIpProvider {
         self.db.store(None);
     }
 
+    /// Without the `geoip` feature no database can be loaded.
+    #[cfg(not(feature = "geoip"))]
+    pub fn load_from(&self, _path: &Path) -> Result<(), String> {
+        Err(super::GEOIP_NOT_COMPILED.to_string())
+    }
+
     /// Memory-map `path` and swap it in. Never panics; never exits.
+    #[cfg(feature = "geoip")]
     pub fn load_from(&self, path: &Path) -> Result<(), String> {
         // SAFETY: `open_mmap` is unsafe in maxminddb 0.30 because a concurrent
         // in-place rewrite of the mapped file causes SIGBUS. The operator
@@ -113,6 +126,18 @@ impl GeoIpProvider {
         let Some(db) = guard.as_ref() else {
             return GeoLookup::Unavailable;
         };
+        #[cfg(not(feature = "geoip"))]
+        {
+            // Unreachable: `load_from` never stores a database in this build.
+            let _ = (db, ip);
+            GeoLookup::Unavailable
+        }
+        #[cfg(feature = "geoip")]
+        Self::lookup_loaded(db, ip)
+    }
+
+    #[cfg(feature = "geoip")]
+    fn lookup_loaded(db: &LoadedDb, ip: IpAddr) -> GeoLookup {
         let addr = normalize_addr(ip);
 
         // maxminddb 0.30: `lookup` returns a `LookupResult` that must then be
@@ -149,6 +174,6 @@ impl Default for GeoIpProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "geoip"))]
 #[path = "../../tests/unit/geoip/provider_test.rs"]
 mod tests;

@@ -1350,6 +1350,7 @@ async fn request_body_buffer_fails_closed_when_capture_is_unimplemented() {
 }
 
 #[tokio::test]
+#[cfg(feature = "wasm")]
 async fn add_from_request_filters_wraps_wasm_with_operator_body() {
     // Wasm has no INTRINSIC body_requirement() (the guest's hooks are only
     // known after module load), so it opts into request buffer mode purely
@@ -3173,6 +3174,7 @@ fn oidc_actual_tls_preflight_precedes_cache_and_fresh_generations_recover() {
     assert_eq!(first_filter.name(), "OpenidConnect");
 }
 
+#[cfg(feature = "ldap")]
 #[test]
 fn ldap_actual_tls_preflight_precedes_cache_and_fresh_generations_recover() {
     use edgion_common::link_sys_core::outbound_tls::{
@@ -3431,6 +3433,7 @@ async fn ext_proc_actual_tls_preflight_precedes_cache_and_fresh_generations_reco
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn wasm_actual_tls_precedes_all_three_stage_caches() {
     for stage in [
         "requestPlugins",
@@ -3860,6 +3863,7 @@ async fn acl_and_required_condition_share_actual_dispatch_adapter_snapshot() {
 }
 
 #[tokio::test]
+#[cfg(feature = "wasm")]
 async fn wasm_attached_bundle_retains_body_metadata_and_skipped_companion_is_inert() {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
@@ -4052,5 +4056,47 @@ async fn region_route_unavailable_policy_survives_compilation_and_real_dispatch(
                 assert_eq!(ctx.final_downstream_status(), if rejects { Some(500) } else { None });
             }
         }
+    }
+}
+
+#[cfg(not(feature = "ldap"))]
+#[test]
+fn compiled_out_ldap_auth_entry_fails_closed() {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "ldap-off", "namespace": "apps"},
+        "spec": {"requestPlugins": [{"type": "LdapAuth",
+            "config": {"ldapHost": "ldap.example.com", "baseDn": "dc=example", "attribute": "uid"}}]}
+    }))
+    .unwrap();
+    let mut runtime = PluginRuntime::new();
+    let errors = runtime.add_resource_filters_with_cache(&owner, &mut EntryCache::default());
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("(LdapAuth)") && error.contains("cargo feature `ldap`")),
+        "{errors:?}"
+    );
+    assert_eq!(runtime.request_plugins_iter().count(), 0);
+    assert!(!runtime.invalid_plugins.is_empty());
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn compiled_out_wasm_request_and_attached_entries_fail_closed() {
+    for config in [
+        serde_json::json!({"source": {"file": "absent.wasm"}}),
+        serde_json::json!({"source": {"file": "absent.wasm"}, "response": {"body": true}}),
+    ] {
+        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "wasm-off", "namespace": "apps"},
+            "spec": {"requestPlugins": [{"type": "Wasm", "config": config}]}
+        }))
+        .unwrap();
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_resource_filters_with_cache(&owner, &mut EntryCache::default());
+        assert!(errors.iter().any(|error| error.contains("(Wasm)")), "{errors:?}");
+        assert_eq!(runtime.request_plugins_iter().count(), 0);
+        assert_eq!(runtime.upstream_response_async_plugins_count(), 0);
+        assert!(!runtime.invalid_plugins.is_empty());
     }
 }

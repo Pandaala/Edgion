@@ -50,7 +50,7 @@ workspace build, and local `cargo build` do **not** include FIPS. Build it expli
 repository's Linux multi-architecture builder:
 
 ```bash
-FEATURES="allocator-jemalloc,fips" \
+FEATURES="allocator-jemalloc,fips,full" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 

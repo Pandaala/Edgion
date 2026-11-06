@@ -2,6 +2,10 @@
 //!
 //! Guest bytes cover linear memory and table slots, not host payloads, compiler
 //! heap, Engine virtual reservations or RSS. Charges outlive their Store.
+//!
+//! Without the `wasm` feature only the configuration and its validation are
+//! reachable; the runtime admission state is kept for a single definition.
+#![cfg_attr(not(feature = "wasm"), allow(dead_code))]
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, OnceLock,
@@ -9,7 +13,7 @@ use std::sync::{
 
 use serde::{Deserialize, Serialize};
 
-use super::host_abi::{MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS};
+use super::limits::{MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub const DEFAULT_GUEST_MEMORY_BYTES: usize = 512 * 1024 * 1024;
@@ -297,6 +301,6 @@ pub fn stats() -> Stats {
     ADMISSION.get().map_or_else(Stats::default, Admission::stats)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wasm"))]
 #[path = "../../../../tests/unit/plugins/http/wasm/admission_test.rs"]
 mod tests;

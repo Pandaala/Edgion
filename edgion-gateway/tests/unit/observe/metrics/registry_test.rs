@@ -40,6 +40,7 @@ pub(super) fn lifetime_recorder() -> edgion_common::observe::metrics_api::TestRe
     })
     .unwrap()
 }
+#[cfg(feature = "wasm")]
 fn lifetime_render(recorder: &edgion_common::observe::metrics_api::TestRecorder) -> String {
     recorder
         .render()
@@ -47,6 +48,7 @@ fn lifetime_render(recorder: &edgion_common::observe::metrics_api::TestRecorder)
         .replace("{service=\"test\"}", "")
 }
 #[test]
+#[cfg(feature = "wasm")]
 fn wasm_module_metrics_follow_overlapping_generation_lifetimes() {
     let recorder = lifetime_recorder();
     let (old, replacement) = recorder.with(|| (wasm_module_metrics("test-module"), wasm_module_metrics("test-module")));
@@ -59,6 +61,7 @@ fn wasm_module_metrics_follow_overlapping_generation_lifetimes() {
     assert!(output.contains("edgion_wasm_module_released_total{module=\"test-module\"} 2"));
 }
 #[test]
+#[cfg(feature = "wasm")]
 fn wasm_module_metrics_survive_idle_eviction_across_sources_and_generations() {
     let recorder = lifetime_recorder();
     let (a, b) = recorder.with(|| {

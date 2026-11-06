@@ -15,7 +15,7 @@ ordinary release workflow and default builds remain non-FIPS. The canonical
 entry point is:
 
 ```bash
-FEATURES="allocator-jemalloc,fips" \
+FEATURES="allocator-jemalloc,fips,full" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 

@@ -75,6 +75,9 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 - TLS backend: `boringssl` (default and only supported Gateway backend); the mutually exclusive
   `rustls` feature is a dormant future-development seam, not a supported build target
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
+- Gateway optional subsystems (additive, not exclusive): `kafka`, `otlp`, `ldap`, `geoip`, `wasm`;
+  the aggregate `full` is in the default set. An explicit `--no-default-features` list must name
+  `full` to keep them. See `skills/02-features/01-binary-and-deployment/02-feature-flags.md`.
 
 ### ACME scope
 

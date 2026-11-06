@@ -165,6 +165,6 @@ fn hash_auth_material(h: &mut FingerprintHasher, ls: &LinkSys) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "kafka"))]
 #[path = "../../../../tests/unit/link_sys/providers/kafka/apply_test.rs"]
 mod tests;

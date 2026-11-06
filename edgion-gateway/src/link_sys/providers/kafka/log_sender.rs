@@ -12,10 +12,14 @@ pub struct KafkaLogSender {
 
 impl KafkaLogSender {
     pub fn new(link_sys_ref: LinkSysRef, topic: String) -> Result<Self> {
-        Ok(Self {
-            key: link_sys_ref.key().map_err(anyhow::Error::msg)?,
-            topic,
-        })
+        let key = link_sys_ref.key().map_err(anyhow::Error::msg)?;
+        #[cfg(not(feature = "kafka"))]
+        {
+            let _ = (key, topic);
+            anyhow::bail!(super::client::KAFKA_NOT_COMPILED)
+        }
+        #[cfg(feature = "kafka")]
+        Ok(Self { key, topic })
     }
 }
 

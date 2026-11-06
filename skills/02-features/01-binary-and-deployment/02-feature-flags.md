@@ -1,6 +1,6 @@
 ---
 name: feature-flags
-description: Per-package Cargo feature reference for allocators, TLS backends, Gateway FIPS, and build commands.
+description: Per-package Cargo feature reference for allocators, TLS backends, Gateway FIPS, optional Gateway subsystems, and build commands.
 ---
 
 # Feature Flags
@@ -18,6 +18,8 @@ individual binary crates, so feature-selecting commands must name a package with
 | `boringssl` | Yes | No | No | Default and only supported Gateway TLS backend; mutually exclusive with `rustls` |
 | `rustls` | Dormant | No | No | Unsupported future-development seam; not a build, release, or runtime contract |
 | `fips` | Yes | No | No | Opt-in image build; implies `boringssl`, uses Boring 5's bundled FIPS module source by default |
+| `full` | Yes | No | No | Default; enables every optional Gateway subsystem below |
+| `kafka` / `otlp` / `ldap` / `geoip` / `wasm` | Yes | No | No | Optional subsystems selected by `full`; additive |
 
 Allocator selection and `#[global_allocator]` live in each binary entry point,
 not in a workspace-root library. Only the Gateway selects a TLS backend.
@@ -52,6 +54,38 @@ that use rustls; this does not change the Pingora data-plane backend.
 
 The Controller no longer links Pingora. TLS-backend selection is Gateway-local.
 
+## Optional Gateway Subsystems
+
+Each subsystem feature owns its third-party dependencies, so disabling it removes
+that code and its CVE surface from the Gateway binary.
+
+| Feature | Removes | Behavior when compiled out |
+|---------|---------|----------------------------|
+| `kafka` | `rskafka` | Kafka LinkSys never builds a client (runner logs the build failure); a primary Kafka log output fails Gateway startup; a Kafka fallback output is dropped with a WARN |
+| `otlp` | `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` | Same as `kafka` for OTLP LinkSys and OTLP log outputs; an OTLP SSL-log output also fails startup (the full build only warns that it is unsupported) |
+| `ldap` | `ldap3` | Every `LdapAuth` entry fails TLS preflight and is recorded as an invalid plugin (fail-closed) |
+| `geoip` | `maxminddb`, `memmap2` | No database can load; a configured `geoip.db_path` or `update_url` logs an error, lookups report `Unavailable`, and each `GeoIpLocation` plugin applies its own `failOpen` |
+| `wasm` | `wasmtime`, `edgion-wasm` | Every `Wasm` entry fails preflight and is recorded as an invalid plugin (fail-closed); `wasm_limits` still parses and validates |
+
+Disabled builds swap in an uninhabited placeholder for the provider client or
+plugin, so the existing failure paths handle the configuration; there is no
+extra request-path check. The Controller still validates these resources
+without knowing which subsystems a Gateway binary contains, so it can report
+`Accepted=True` for a plugin that the Gateway then rejects. Gateway capability
+reporting is tracked in `tasks/todo/arch-03-build-time-extension-selection.md`.
+
+The `edgion-waf` crate is not optional: `edgion-resources` validates WAF rules
+with it and AI usage parsing reuses its bounded JSON reader. AI, Elasticsearch,
+Redis, etcd, webhook and local-file outputs are always compiled.
+
+`edgion-gateway --print-build-capabilities` reports one
+`subsystem-<name>=enabled|disabled` line per subsystem. The CI `gateway-core`
+job checks and unit-tests the `core` combination (`--no-default-features
+--features allocator-jemalloc,boringssl`) with `-D warnings`, and the
+`gateway-build` job asserts that the default build reports every subsystem
+enabled. `cicd/build-image.sh` warns when an explicit `FEATURES` list names no
+subsystem; the FIPS recipe is `FEATURES="allocator-jemalloc,fips,full"`.
+
 ## Pingora Fork Source Policy
 
 The seven direct fork dependencies (`pingora-core`, `pingora-http`,
@@ -79,9 +113,17 @@ cargo build
 # A specific default binary
 cargo build -p edgion-gateway --bin edgion-gateway
 
-# Gateway with mimalloc + BoringSSL
+# Gateway with mimalloc + BoringSSL and every optional subsystem
 cargo build -p edgion-gateway --bin edgion-gateway --release \
-  --no-default-features --features allocator-mimalloc,boringssl
+  --no-default-features --features allocator-mimalloc,boringssl,full
+
+# Minimal "core" Gateway: no Kafka, OTLP, LDAP, GeoIP or Wasm
+cargo build -p edgion-gateway --bin edgion-gateway --release \
+  --no-default-features --features allocator-jemalloc,boringssl
+
+# Core plus only OTLP log export
+cargo build -p edgion-gateway --bin edgion-gateway --release \
+  --no-default-features --features allocator-jemalloc,boringssl,otlp
 
 # Controller with system allocator
 cargo build -p edgion-controller --bin edgion-controller \

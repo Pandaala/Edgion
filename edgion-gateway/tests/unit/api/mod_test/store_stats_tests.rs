@@ -33,6 +33,7 @@ fn store_stats_response_serializes() {
         plugin_publication: Default::default(),
         plugin_publication_inventory: Default::default(),
         wasm_admission: crate::plugins::http::wasm::admission::stats(),
+        #[cfg(feature = "wasm")]
         wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats {
             entries: 0,
             keys: Vec::new(),
@@ -139,9 +140,14 @@ fn store_stats_response_serializes() {
     ] {
         assert!(json["wasm_admission"][name].is_u64(), "{name}");
     }
-    assert_eq!(json["wasm_oci_cache"]["entries"], 0);
-    assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
-    assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));
+    #[cfg(feature = "wasm")]
+    {
+        assert_eq!(json["wasm_oci_cache"]["entries"], 0);
+        assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
+        assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));
+    }
+    #[cfg(not(feature = "wasm"))]
+    assert!(json.get("wasm_oci_cache").is_none());
     assert_eq!(json["tls_routes"]["total_candidate_entries_in_tables"], 0);
     assert_eq!(json["udp_routes"]["total_routes_in_tables"], 0);
     assert!(json.get("client_caches").is_some());

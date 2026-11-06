@@ -32,7 +32,7 @@ cargo build
 cargo build --release
 
 # Select supported features on an owning package
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl,full"
 
 # Project quick pre-commit sequence
 cargo fmt --all

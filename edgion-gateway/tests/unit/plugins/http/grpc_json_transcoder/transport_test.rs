@@ -223,6 +223,7 @@ async fn correction_extproc_body_ownership_and_registration_are_sticky() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn correction_scoped_body_consumers_preserve_header_only_targets() {
     use crate::plugins::runtime::PluginRuntime;
     use edgion_resources::resources::edgion_plugins::EdgionPlugins;
@@ -263,6 +264,7 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
     use crate::plugins::runtime::PluginRuntime;
     use edgion_resources::resources::edgion_plugins::EdgionPlugins;

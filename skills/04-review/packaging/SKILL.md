@@ -12,3 +12,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Runtime Image Entrypoint Is Fixed at Build Time](regression-guards/runtime-image-entrypoint.md)
+
+## Intentional design
+
+- [Gateway Optional Subsystems Are Cargo Features With Fail-Closed Placeholders](intentional-design/gateway-optional-subsystem-features.md)

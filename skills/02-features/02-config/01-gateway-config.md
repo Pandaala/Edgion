@@ -268,6 +268,9 @@ be nonempty and requires scope; UID errors take precedence over malformed scope.
 Startup and parent-based Route/EdgionTls cold projection share this finite parser.
 Malformed direct parent projection cannot match an equally malformed parent; EdgionAcme
 attachment-key equality remains separate. This selection is not ReferenceGrant authority.
+It is also not a secret or tenant isolation boundary: the process still receives
+every resource its Controller serves; isolate tenants with separate Controller
+instances (see [the trust-domain decision](../../04-review/conf-sync/intentional-design/controller-instance-is-the-trust-domain.md)).
 Use it with a dedicated Deployment and Service for each Gateway that needs
 independent traffic on a shared external port. The Service must carry
 `edgion.io/gateway-service-ref: namespace/name` and

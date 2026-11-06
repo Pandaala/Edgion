@@ -1,11 +1,16 @@
 //! Key-only OTLP consumer. Connection, credentials and SDK ownership live in LinkSys.
-use std::time::{Duration, SystemTime};
+#[cfg(feature = "otlp")]
+use std::time::Duration;
+use std::time::SystemTime;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use edgion_resources::output::LinkSysRef;
+#[cfg(feature = "otlp")]
 use edgion_resources::sensitive::apply_sensitive;
+#[cfg(feature = "otlp")]
 use opentelemetry::logs::{AnyValue, LogRecord, Logger, LoggerProvider, Severity};
+#[cfg(feature = "otlp")]
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 
 use crate::link_sys::runtime::store::get_otlp_client;
@@ -17,9 +22,14 @@ pub struct OtlpLogSender {
 
 impl OtlpLogSender {
     pub fn new(reference: LinkSysRef) -> Result<Self> {
-        Ok(Self {
-            key: reference.key().map_err(anyhow::Error::msg)?,
-        })
+        let key = reference.key().map_err(anyhow::Error::msg)?;
+        #[cfg(not(feature = "otlp"))]
+        {
+            let _ = key;
+            anyhow::bail!(super::client::OTLP_NOT_COMPILED)
+        }
+        #[cfg(feature = "otlp")]
+        Ok(Self { key })
     }
 }
 
@@ -51,6 +61,7 @@ impl DataSender<String> for OtlpLogSender {
     }
 }
 
+#[cfg(feature = "otlp")]
 pub(super) fn emit_record(provider: &SdkLoggerProvider, data: String, meta: &LogMeta<'_>) {
     let logger = provider.logger("edgion-gateway");
     let mut record = logger.create_log_record();
@@ -73,6 +84,7 @@ pub(super) fn emit_record(provider: &SdkLoggerProvider, data: String, meta: &Log
     logger.emit(record);
 }
 
+#[cfg(feature = "otlp")]
 fn attach_request_trace_id(record: &mut impl LogRecord, trace_id: Option<[u8; 16]>) {
     if let Some(trace_id) = trace_id {
         // The SDK requires a SpanId; INVALID means no span association.
@@ -94,6 +106,7 @@ fn attach_request_trace_id(record: &mut impl LogRecord, trace_id: Option<[u8; 16
 /// log callers only produce 0/9/13/17 (from `severity_from_status`), so no
 /// precision is lost in practice. Future callers that emit finer-grained numbers
 /// should extend this to the full 24-variant map.
+#[cfg(feature = "otlp")]
 pub(crate) fn numeric_to_severity(n: u32) -> Option<Severity> {
     match n {
         1..=4 => Some(Severity::Trace),
@@ -106,11 +119,12 @@ pub(crate) fn numeric_to_severity(n: u32) -> Option<Severity> {
     }
 }
 
+#[cfg(feature = "otlp")]
 #[inline]
 fn render_sensitive_path(path: &str) -> String {
     apply_sensitive(path, str::to_owned)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "otlp"))]
 #[path = "../../../../tests/unit/link_sys/providers/otlp/log_sender_test.rs"]
 mod tests;

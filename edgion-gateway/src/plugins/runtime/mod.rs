@@ -14,6 +14,8 @@ mod prepared_header;
 mod reject_filter;
 pub(crate) mod response_stream_session;
 pub mod session_adapter;
+// Only the Wasm runtime owns plugin-scoped background tasks today.
+#[cfg(feature = "wasm")]
 pub(crate) mod task_scope;
 pub mod traits;
 

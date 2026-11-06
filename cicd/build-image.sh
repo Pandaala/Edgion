@@ -67,6 +67,16 @@ configure_gateway_features() {
     else
         GATEWAY_FEATURES="${FEATURES}"
         GATEWAY_NO_DEFAULT_FEATURES=true
+        local subsystem
+        local has_subsystem=false
+        for subsystem in full kafka otlp ldap geoip wasm; do
+            if gateway_features_include "${subsystem}"; then
+                has_subsystem=true
+            fi
+        done
+        if [[ "${has_subsystem}" == "false" ]]; then
+            log_warning "FEATURES='${FEATURES}' names no optional Gateway subsystem; Kafka, OTLP, LDAP, GeoIP and Wasm are compiled out (add 'full' to keep them)"
+        fi
     fi
 }
 
@@ -193,7 +203,9 @@ Environment Variables:
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
     VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
     RUST_VERSION        Rust version for builder (default: 1.99.1)
-    FEATURES            Gateway Cargo features (default: default)
+    FEATURES            Gateway Cargo features (default: default). An explicit list
+                        replaces the defaults; include `full` to keep Kafka, OTLP,
+                        LDAP, GeoIP and Wasm support
 
 Examples:
     # Build for current architecture only

@@ -149,7 +149,7 @@ It supplies the Linux build environment Boring 5 needs and, whenever the exact
 profile test before packaging an image:
 
 ```bash
-FEATURES="allocator-jemalloc,fips" \
+FEATURES="allocator-jemalloc,fips,full" \
   ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 

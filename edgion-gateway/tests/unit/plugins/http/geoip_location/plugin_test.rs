@@ -1,5 +1,7 @@
 use super::*;
-use crate::geoip::{inject_lookup_fault, GeoIpProvider, GeoLookup, LookupFault};
+#[cfg(feature = "geoip")]
+use crate::geoip::{inject_lookup_fault, LookupFault};
+use crate::geoip::{GeoIpProvider, GeoLookup};
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::EdgionHttpContext;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{DefaultAction, GeoRule, GeoRuleGroup, GeoRuleKey};
@@ -177,6 +179,7 @@ async fn cidr_only_config_is_unaffected_by_db_unavailability() {
 }
 
 #[tokio::test]
+#[cfg(feature = "geoip")]
 async fn cidr_only_config_is_unaffected_by_lookup_failure() {
     let _lock = crate::geoip::GEO_TEST_LOCK.lock();
     load_fixture_db();
@@ -230,6 +233,7 @@ async fn init_failure_fails_closed() {
     );
 }
 
+#[cfg(feature = "geoip")]
 fn load_fixture_db() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
     GeoIpProvider::global()
@@ -238,6 +242,7 @@ fn load_fixture_db() {
 }
 
 #[tokio::test]
+#[cfg(feature = "geoip")]
 async fn lookup_failed_fail_closed_denies() {
     let _lock = crate::geoip::GEO_TEST_LOCK.lock();
     load_fixture_db();
@@ -261,6 +266,7 @@ async fn lookup_failed_fail_closed_denies() {
 }
 
 #[tokio::test]
+#[cfg(feature = "geoip")]
 async fn lookup_failed_fail_open_passes() {
     let _lock = crate::geoip::GEO_TEST_LOCK.lock();
     load_fixture_db();
@@ -274,6 +280,7 @@ async fn lookup_failed_fail_open_passes() {
 }
 
 #[tokio::test]
+#[cfg(feature = "geoip")]
 async fn parse_only_mode_passes_through_lookup_failure() {
     let _lock = crate::geoip::GEO_TEST_LOCK.lock();
     load_fixture_db();

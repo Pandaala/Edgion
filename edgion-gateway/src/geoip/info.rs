@@ -70,6 +70,7 @@ pub fn normalize_addr(ip: IpAddr) -> IpAddr {
 ///
 /// Empty strings are filtered out: an MMDB record can carry a present-but-empty
 /// field, and treating that as a value would make a rule match on `""`.
+#[cfg(feature = "geoip")]
 pub fn project(rec: &maxminddb::geoip2::City) -> GeoInfo {
     GeoInfo {
         country_iso: rec
@@ -94,6 +95,6 @@ pub fn project(rec: &maxminddb::geoip2::City) -> GeoInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "geoip"))]
 #[path = "../../tests/unit/geoip/info_test.rs"]
 mod tests;

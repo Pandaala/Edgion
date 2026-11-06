@@ -127,6 +127,6 @@ fn fingerprint_otlp_fields(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "otlp"))]
 #[path = "../../../../tests/unit/link_sys/providers/otlp/apply_test.rs"]
 mod tests;

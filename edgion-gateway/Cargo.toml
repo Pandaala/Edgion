@@ -20,7 +20,19 @@ workspace = true
 # Integration harness access to canonical DNS selection, never operator configuration.
 test-util = []
 # Default features
-default = ["allocator-jemalloc", "boringssl"]
+default = ["allocator-jemalloc", "boringssl", "full"]
+
+# Optional subsystems. `full` selects all of them; an explicit feature list
+# built with `--no-default-features` must name `full` (or individual
+# subsystems) to keep them. Disabling one removes its third-party dependencies
+# from the binary; configuration that needs a compiled-out subsystem fails
+# explicitly instead of being ignored.
+full = ["kafka", "otlp", "ldap", "geoip", "wasm"]
+kafka = ["dep:rskafka"]
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+ldap = ["dep:ldap3"]
+geoip = ["dep:maxminddb", "dep:memmap2"]
+wasm = ["dep:wasmtime", "dep:edgion-wasm"]
 
 # Memory allocator selection (mutually exclusive) — lives with the binary.
 allocator-jemalloc = ["dep:tikv-jemallocator"]
@@ -152,9 +164,9 @@ metrics-exporter-prometheus.workspace = true
 # CLI
 clap.workspace = true
 tracing.workspace = true
-opentelemetry.workspace      = true
-opentelemetry_sdk.workspace  = true
-opentelemetry-otlp.workspace = true
+opentelemetry      = { workspace = true, optional = true }
+opentelemetry_sdk  = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
 http.workspace = true
 percent-encoding.workspace = true
 
@@ -169,18 +181,18 @@ url = { workspace = true }
 md-5.workspace = true
 cookie.workspace = true
 sha1.workspace = true
-ldap3.workspace = true
-rskafka.workspace = true
+ldap3 = { workspace = true, optional = true }
+rskafka = { workspace = true, optional = true }
 tower.workspace = true
 # Runtime body storage (request-body disk spill).
 tempfile.workspace = true
 # Wasm runtime for the proxy-wasm host plugin
-wasmtime.workspace = true
-edgion-wasm.workspace = true
+wasmtime = { workspace = true, optional = true }
+edgion-wasm = { workspace = true, optional = true }
 
 # MaxMind GeoIP2/GeoLite2 MMDB reader for the GeoIP country/city restriction plugin.
-maxminddb.workspace = true
-memmap2.workspace = true
+maxminddb = { workspace = true, optional = true }
+memmap2 = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Disk-usage probe for LocalFile log sink health (statvfs).
@@ -202,7 +214,7 @@ tracing-subscriber.workspace = true
 [[test]]
 name = "otlp_transport"
 path = "tests/otlp_transport.rs"
-required-features = ["test-util"]
+required-features = ["test-util", "otlp"]
 
 [[bench]]
 name = "waf_header_ingestion"
@@ -228,11 +240,17 @@ harness = false
 name = "wasm_instance_reuse"
 path = "tests/benches/wasm_instance_reuse.rs"
 harness = false
+required-features = ["wasm"]
+
+[[test]]
+name = "geoip_fixture_readback"
+path = "tests/geoip_fixture_readback.rs"
+required-features = ["geoip"]
 
 [[test]]
 name = "wasm_stream_transport"
 path = "tests/wasm_stream_transport.rs"
-required-features = ["test-util"]
+required-features = ["test-util", "wasm"]
 
 [[bench]]
 name = "request_cookie"

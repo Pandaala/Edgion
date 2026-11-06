@@ -43,6 +43,30 @@ jobs:
       - name: Run cargo check
         run: cargo check --locked --workspace --all-targets
 
+  # Minimal Gateway: every optional subsystem (kafka/otlp/ldap/geoip/wasm)
+  # compiled out. Guards the feature gating and the fail-closed placeholders.
+  gateway-core:
+    name: Gateway Core Features
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.99.1"
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-gateway-core"
+
+      - name: Check Gateway core build
+        run: cargo check --locked -p edgion-gateway --all-targets --no-default-features --features allocator-jemalloc,boringssl
+
+      - name: Test Gateway core library
+        run: cargo test --locked -p edgion-gateway --lib --no-default-features --features allocator-jemalloc,boringssl
+
   gateway-build:
     name: Gateway Build
     runs-on: ubuntu-latest
@@ -68,6 +92,9 @@ jobs:
           grep -qx 'format=edgion-build-capabilities/v1' <<<"$capabilities"
           grep -qx 'body-buffering=enabled' <<<"$capabilities"
           grep -qx 'pingora-mode=edgion-fork' <<<"$capabilities"
+          for subsystem in kafka otlp ldap geoip wasm; do
+            grep -qx "subsystem-${subsystem}=enabled" <<<"$capabilities"
+          done
 
       - name: Verify Pingora source isolation
         run: |
@@ -179,13 +206,14 @@ jobs:
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, gateway-build, fmt, agent-docs, clippy, test, ext_proc_fixture]
+    needs: [check, gateway-core, gateway-build, fmt, agent-docs, clippy, test, ext_proc_fixture]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.check.result }}" != "success" ]] || \
+             [[ "${{ needs.gateway-core.result }}" != "success" ]] || \
              [[ "${{ needs.gateway-build.result }}" != "success" ]] || \
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.agent-docs.result }}" != "success" ]] || \

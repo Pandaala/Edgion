@@ -988,11 +988,13 @@ pub fn record_wasm_compile_duration(module: &str, ms: f64) {
 /// and old generations retained by outstanding leases. Capturing the fixed handle
 /// and private renewable release proxy
 /// keeps destruction paired with the same recorder as construction.
+#[cfg(feature = "wasm")]
 pub(crate) struct WasmModuleMetrics {
     loaded: Gauge,
     released: DynamicCounter,
 }
 
+#[cfg(feature = "wasm")]
 pub(crate) fn wasm_module_metrics(module: &str) -> WasmModuleMetrics {
     let loaded = fixed_gauge!(names::WASM_MODULES_LOADED);
     loaded.increment(1.);
@@ -1001,6 +1003,7 @@ pub(crate) fn wasm_module_metrics(module: &str) -> WasmModuleMetrics {
         released: dynamic_counter!(names::WASM_MODULE_RELEASED_TOTAL,"module"=>module.to_string()),
     }
 }
+#[cfg(feature = "wasm")]
 impl Drop for WasmModuleMetrics {
     fn drop(&mut self) {
         self.loaded.decrement(1.);
@@ -1021,6 +1024,7 @@ pub fn record_wasm_instance_discard(module: &str, reason: &'static str) {
 }
 
 /// One module generation owns its pooled VM contribution.
+#[cfg(feature = "wasm")]
 pub(crate) fn wasm_pool_size_contribution(module: &str) -> GaugeContribution {
     GaugeContribution::new(metrics::Key::from_parts(
         names::WASM_POOL_SIZE,
@@ -1059,6 +1063,7 @@ pub fn record_wasm_callout(module: &str, result: &'static str) {
 }
 
 /// Each store owns a committed contribution; same-module generations aggregate.
+#[cfg(feature = "wasm")]
 pub(crate) fn wasm_shared_data_bytes_gauge(module: &str) -> GaugeContribution {
     GaugeContribution::new(metrics::Key::from_parts(
         names::WASM_SHARED_DATA_BYTES,

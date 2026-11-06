@@ -68,14 +68,14 @@ cargo build --release -p edgion-tests --bin test_server --bin test_client
 Common combinations:
 
 ```bash
-# Default: jemalloc + boringssl
+# Default: jemalloc + boringssl + full (all optional Gateway subsystems)
 cargo build
 
 # mimalloc + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl,full"
 
 # system allocator + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl,full"
 ```
 
 The Gateway's rustls backend feature is an unsupported future-development seam

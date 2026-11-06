@@ -5,7 +5,12 @@ pub mod info;
 pub mod provider;
 pub mod updater;
 
+#[cfg(feature = "geoip")]
 use std::path::Path;
+
+#[cfg(not(feature = "geoip"))]
+pub(crate) const GEOIP_NOT_COMPILED: &str =
+    "GeoIP support is not compiled into this gateway build (cargo feature `geoip`)";
 
 pub use config::GeoIpConfig;
 pub use info::{GeoInfo, GeoLookup};
@@ -23,6 +28,7 @@ pub use updater::GeoIpUpdater;
 /// atomic within one filesystem, so if the parent directory cannot be written
 /// the hot swap the whole updater design depends on can never succeed — refuse
 /// to start rather than spawn a task that spins forever.
+#[cfg(feature = "geoip")]
 fn ensure_swap_directory_ready(db_path: &Path) -> Result<(), String> {
     debug_assert_eq!(
         updater::tmp_path(db_path).parent(),
@@ -67,6 +73,19 @@ fn ensure_swap_directory_ready(db_path: &Path) -> Result<(), String> {
 /// unavailability means for that plugin's own traffic decision. There is
 /// deliberately no readiness gate here.
 pub fn init(cfg: &GeoIpConfig) {
+    #[cfg(not(feature = "geoip"))]
+    {
+        crate::observe::metrics::set_geoip_db_loaded(false);
+        if cfg.db_path.is_some() || !cfg.update_url.as_deref().unwrap_or("").is_empty() {
+            tracing::error!("{GEOIP_NOT_COMPILED}; geo lookups will report Unavailable");
+        }
+    }
+    #[cfg(feature = "geoip")]
+    init_enabled(cfg);
+}
+
+#[cfg(feature = "geoip")]
+fn init_enabled(cfg: &GeoIpConfig) {
     let provider = GeoIpProvider::global();
 
     match &cfg.db_path {

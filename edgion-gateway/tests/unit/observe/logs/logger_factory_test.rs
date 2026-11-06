@@ -2,6 +2,7 @@
 use super::*;
 use edgion_resources::LinkSysRef;
 
+#[cfg(feature = "otlp")]
 fn assert_counter(rendered: &str, name: &str, value: u64) {
     let expected = format!("{name} {value}");
     assert!(
@@ -11,6 +12,7 @@ fn assert_counter(rendered: &str, name: &str, value: u64) {
 }
 
 #[test]
+#[cfg(feature = "otlp")]
 fn async_logger_propagates_log_type_to_drop_metric() {
     const CHILD_ENV: &str = "EDGION_LOGGER_FACTORY_TYPED_DROP_TEST_CHILD";
     const TEST_MODULE: &str = "observe::logs::logger_factory::tests";
@@ -52,6 +54,7 @@ fn async_logger_propagates_log_type_to_drop_metric() {
 }
 
 #[tokio::test]
+#[cfg(feature = "otlp")]
 async fn missing_otlp_primary_starts_with_first_healthy_fallback() {
     let directory = tempfile::tempdir().unwrap();
     let config = LogConfig {

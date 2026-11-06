@@ -172,6 +172,8 @@ re-key runbook live in
 gateway client leaf** (the `edgion-conf-sync-certs` Secret every gateway mounts) and a
 **per-replica controller server leaf** (minted in memory, never persisted). Code:
 `edgion-controller/src/services/conf_sync_ca/`.
+One Controller instance and all gateways sharing that client leaf form one trust
+domain; see [the trust-domain decision](../../04-review/conf-sync/intentional-design/controller-instance-is-the-trust-domain.md).
 
 **Two reconcilers, deliberately split — this is the crux of correctness under HA:**
 

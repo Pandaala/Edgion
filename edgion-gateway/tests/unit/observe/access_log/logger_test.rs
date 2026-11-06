@@ -180,6 +180,7 @@ fn drop_metrics_follow_logger_type_and_failure_path() {
 }
 
 #[tokio::test]
+#[cfg(feature = "otlp")]
 async fn unresolved_otlp_reference_uses_first_healthy_fallback() {
     let otlp = crate::link_sys::providers::otlp::OtlpLogSender::new(edgion_resources::LinkSysRef {
         namespace: "fallback-test".into(),

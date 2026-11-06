@@ -710,6 +710,7 @@ async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_co
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn transport_facts_follow_policy_views_cache_release_and_retained_generations() {
     for (stage, entry, ai, unary) in [
         (

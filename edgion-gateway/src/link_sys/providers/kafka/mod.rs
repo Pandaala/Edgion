@@ -1,4 +1,8 @@
 pub(crate) mod apply;
+#[cfg(feature = "kafka")]
+pub mod client;
+#[cfg(not(feature = "kafka"))]
+#[path = "client_disabled.rs"]
 pub mod client;
 pub mod log_sender;
 

@@ -565,6 +565,7 @@ impl EdgionGatewayCli {
         crate::plugins::http::wasm::admission::initialize(config.gateway.wasm_limits).map_err(anyhow::Error::msg)?;
 
         // 4f. Wasm OCI artifacts are retained only in bounded process memory.
+        #[cfg(feature = "wasm")]
         {
             use crate::plugins::http::wasm::oci::cache::{configure_oci_memory_cache, OciMemoryCacheConfig};
             configure_oci_memory_cache(OciMemoryCacheConfig {
@@ -817,6 +818,6 @@ impl EdgionGatewayCli {
 #[path = "../../tests/unit/cli/mod_test/config_diagnostic_tests.rs"]
 mod config_diagnostic_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "otlp"))]
 #[path = "../../tests/unit/cli/mod_test/otlp_startup_tests.rs"]
 mod otlp_startup_tests;

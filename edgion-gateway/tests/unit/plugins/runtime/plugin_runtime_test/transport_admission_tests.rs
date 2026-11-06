@@ -93,6 +93,7 @@ fn invalid_ai_owner_cannot_publish_or_replay_cached_membership() {
 }
 
 #[test]
+#[cfg(feature = "wasm")]
 fn unary_membership_is_stage_specific_and_requires_executable_body_filter() {
     let wasm = json!({"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"transport-probe"}}});
     for stage in [

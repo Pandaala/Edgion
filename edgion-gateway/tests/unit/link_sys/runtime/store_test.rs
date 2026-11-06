@@ -494,6 +494,7 @@ async fn es_relist_and_pending_update_preserve_published_generation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(feature = "kafka")]
 async fn kafka_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_kafka_linksys_sasl("test", "link", InjectedSecret::Valid);
@@ -517,6 +518,7 @@ async fn kafka_relist_and_pending_update_preserve_published_generation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(feature = "otlp")]
 async fn otlp_relist_and_pending_update_preserve_published_generation() {
     let registry = RuntimeRegistry::new();
     let resource = create_otlp_linksys("test", "link", InjectedSecret::Valid);
@@ -573,6 +575,7 @@ async fn old_probe_result_cannot_overwrite_published_health_gauge() {
     new.await_join().await;
 }
 
+#[cfg(all(feature = "kafka", feature = "otlp"))]
 #[tokio::test(flavor = "current_thread")]
 async fn typed_getters_only_return_the_current_provider() {
     let _guard = I5_DISPATCH_LOCK.lock().await;
@@ -1714,6 +1717,7 @@ async fn webhook_same_rv_active_reference_failure_obeys_ordinary_and_forced_poli
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(all(feature = "kafka", feature = "otlp"))]
 async fn mismatched_auth_blocks_initial_activation_and_ordinary_updates_retain_current_clients() {
     macro_rules! check {
         ($make:ident, $apply:ty, $variant:ident) => {{

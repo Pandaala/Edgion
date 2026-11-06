@@ -928,7 +928,7 @@ include!("../../../tests/support/link_sys/runtime/store_test/999_static_item.rs"
 #[cfg(test)]
 include!("../../../tests/support/link_sys/runtime/store_test/1002_static_item.rs");
 
-#[cfg(test)]
+#[cfg(all(test, feature = "otlp"))]
 include!("../../../tests/support/link_sys/runtime/store_test/1005_function_item.rs");
 
 #[cfg(test)]
