@@ -29,12 +29,10 @@ The `tasks/` layout has two independent axes:
 **Review-batch axis** — global review passes:
 - `tasks/review-<batch-or-slug>/` — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
 
-A batch may define independent file-existence closure in its local `AGENTS.md`.
-For such a batch, existing finding files are the open-task set. After required
-workflow gates pass, deletion closes the selected finding without updating shared
-INDEX, PLAN, STATE, coverage, counts or closure receipts. Shared review artifacts
-retain historical provenance; do not restore deleted tasks from them. This local
-policy overrides the default per-finding index maintenance requirement.
+A review batch has no index file. The existing finding files are the open-task
+set: after the required workflow gates pass, deleting the finding file closes it.
+Do not create or maintain a shared INDEX, PLAN, STATE, coverage, count or closure
+receipt for a batch, and do not restore deleted findings from older artifacts.
 
 Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
 
@@ -49,7 +47,7 @@ as a current task.
 |---------|----------------|----------------|-------------|---------|
 | `feature` | `<name>.md` (Meta + scope) | Full 7-doc set: `00-context.md` ... `07-changelog.md` | Multi-module changes, new features, design needed | `tasks/todo/<feature-name>/` |
 | `investigation` | `README.md` | `01-...07-` numbered reports; optional `issues/` pool | Pure research, competitor analysis, scoping work | `tasks/todo/<investigation-name>/` |
-| `review-batch` | `INDEX.md` | One file per finding: `<area>-NN-<slug>.md` | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-<batch-or-slug>/` |
+| `review-batch` | One file per finding: `<area>-NN-<slug>.md` | none | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-<batch-or-slug>/` |
 | `docs` / `single-file` | `<name>.md` | none | Small docs alignment, single-feature TODO, hotfix tracking | `tasks/todo/core-api-group-alias-contract.md` |
 
 The phase pruning table below applies primarily to `feature` profile. For `investigation`, skip phases 4 (Test) and 5 (Review) — the deliverable is the report, not code. For `review-batch`, the entire batch is itself a workflow output; no per-finding phases.

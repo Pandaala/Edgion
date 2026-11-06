@@ -69,10 +69,8 @@ Record the resolved `ISSUE_DIR` and confirm it to the user before continuing.
 
 - If `TARGET_FILE` was resolved, use it.
 - If the user named a specific issue ID or filename, locate that finding under `ISSUE_DIR`.
-- Otherwise, select the first finding file alphabetically while excluding batch
-  metadata and templates:
-  `find <ISSUE_DIR> -maxdepth 1 -type f -name '*.md' ! -name 'INDEX.md' ! -name '_*' | sort`.
-- Never process `INDEX.md` as a finding.
+- Otherwise, select the first finding file alphabetically while excluding templates:
+  `find <ISSUE_DIR> -maxdepth 1 -type f -name '*.md' ! -name '_*' | sort`.
 
 ### P2 — Read the issue file completely.
 

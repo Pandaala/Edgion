@@ -35,9 +35,8 @@ description: Use when running or preparing a global codebase review pass that pr
 5. Each finding is emitted as a standalone file with: ID, Disposition
    (`confirmed` or `confirmed-downgraded`), Severity, Location, Summary,
    Details, Impact, Suggested fix, and Notes. Name it `<area>-NN-<slug>.md`.
-6. Collect finding files into `tasks/review-<batch-or-slug>/` and generate `INDEX.md`
-   (columns: ID, Severity, Dimension, Title).
-   `INDEX.md` is batch metadata, never a finding.
+6. Collect finding files into `tasks/review-<batch-or-slug>/`. Do not generate an
+   index file; each finding file is self-contained, and deleting it closes it.
 7. Search the owning function pages by symbol, behavior, and ID. Compare current
    evidence with the rule scope and re-evaluation triggers. Drop an already resolved
    finding only after confirming the same behavior still holds; superseded guidance
