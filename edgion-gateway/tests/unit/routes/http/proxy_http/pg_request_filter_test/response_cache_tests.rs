@@ -566,12 +566,12 @@ async fn actual_typed_header_only_terminal_publishes_but_trailer_boundary_discar
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actual_response_denial_discards_private_fill_and_never_delivers_origin_body() {
-    use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseFilterEntry};
+    use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseEntry};
     let fixture = Harness::new(1024);
     let proxy = proxy();
     let mut runtime = PluginRuntime::new();
-    let errors = runtime.add_from_upstream_response_filters(
-        &[UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+    let errors = runtime.add_from_upstream_responses(
+        &[UpstreamResponseEntry::new(EdgionPlugin::Dsl(DslConfig {
             name: "c0-denial".into(),
             source: Some("return deny(403, \"denied\")".into()),
             ..Default::default()

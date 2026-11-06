@@ -161,9 +161,9 @@ Ordinary HTTP plugins execute across Pingora's 4 stages:
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
 | `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimitLocal, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Guardrail`, `Wasm` |
-| `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
+| `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, `Wasm` |
 | `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
-| `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | No directly configurable plugin currently; ExtProc installs an internal companion from its request entry |
+| `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous; runs after every synchronous response-header entry | DSL (the only directly configurable plugin); ExtProc and Guardrail install internal companions from their request entries, and the `spec.waf` response phase also runs here |
 
 Each entry uses the flattened wire shape `enable + type + config`. A plugin may
 only be placed in stages admitted by the exhaustive Rust

@@ -489,7 +489,7 @@ if service == "internal.AdminService" {
 }
 ```
 
-> `requestPlugins` 和 `upstreamResponseFilterPlugins` 均支持此操作。请求阶段直接写入 trailers-only 响应；响应阶段中止上游响应，并将准确的状态码和可选消息保留给统一终止响应写入器。线缆 HTTP 状态保持 `200`，`grpc_status` 独立记录 gRPC 应用状态。详见 [DSL 插件 — gRPC 错误返回](./README.md#grpc-错误返回)。
+> `requestPlugins` 和 `upstreamResponsePlugins` 均支持此操作。请求阶段直接写入 trailers-only 响应；响应阶段中止上游响应，并将准确的状态码和可选消息保留给统一终止响应写入器。线缆 HTTP 状态保持 `200`，`grpc_status` 独立记录 gRPC 应用状态。详见 [DSL 插件 — gRPC 错误返回](./README.md#grpc-错误返回)。
 
 ### 6.5 隐式返回
 

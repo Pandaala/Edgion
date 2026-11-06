@@ -474,7 +474,7 @@ spec:
 
 ### 4.1 安全响应头注入
 
-在 `upstreamResponseFilterPlugins` 阶段，为每个响应统一注入标准安全响应头，减少上游服务重复配置的负担。
+在 `upstreamResponsePlugins` 阶段，为每个响应统一注入标准安全响应头，减少上游服务重复配置的负担。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -483,7 +483,7 @@ metadata:
   name: security-headers
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "inject-security-headers"
@@ -527,7 +527,7 @@ metadata:
   name: cache-control-policy
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "cache-control-policy"
@@ -578,7 +578,7 @@ metadata:
   name: strip-debug-headers
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "strip-debug-headers"
@@ -712,7 +712,7 @@ spec:
 
           return next()
 
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "latency-marker-resp"
@@ -930,7 +930,7 @@ metadata:
   name: grpc-response-error
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: grpc-response-error

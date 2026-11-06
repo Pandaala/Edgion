@@ -4,9 +4,9 @@ metadata:
   name: dsl-response-http-timeout
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     # A successful slow call proves that the same destination is reachable and
-    # the synchronous response hook can drive an async call through suspension.
+    # the async response stage can drive the call through suspension.
     - enable: true
       type: Dsl
       config:

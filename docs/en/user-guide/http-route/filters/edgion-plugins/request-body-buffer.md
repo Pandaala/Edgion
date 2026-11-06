@@ -2,7 +2,7 @@
 
 `RequestBodyBuffer` explicitly captures the proxied request body during
 `requestPlugins` and keeps it in the request-scoped shared body cache. A later
-plugin, such as a DSL entry in `upstreamResponseFilterPlugins`, can then read
+plugin, such as a DSL entry in `upstreamResponsePlugins`, can then read
 the cached request body after it has been forwarded upstream.
 
 ```yaml
@@ -12,7 +12,7 @@ spec:
       config: {}
       body:
         maxBodySize: 1MiB
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: inspect-request-after-upstream

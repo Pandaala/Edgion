@@ -1,6 +1,6 @@
 use crate::resources::edgion_plugins::dye::{DyeOutcome, DyeRule, DyeSuite};
 use crate::resources::edgion_plugins::{
-    EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
+    EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseEntry,
 };
 
 fn with_request_plugins(entries: Vec<RequestFilterEntry>) -> EdgionPlugins {
@@ -75,11 +75,11 @@ fn set_clobber_collision_within_one_array_detected_by_validate_plugins() {
 #[test]
 fn set_clobber_collision_across_stage_arrays_detected_by_validate_plugins() {
     // Success rule lives in requestPlugins, the colliding failure rule in
-    // upstreamResponseFilterPlugins — the clobber check runs once per
+    // upstreamResponsePlugins — the clobber check runs once per
     // resource over all four stage arrays chained, not per-array.
     let success_entry = valid_selection_dye_entry("X-Dye", DyeOutcome::Success);
 
-    let mut fallback_entry = UpstreamResponseFilterEntry::new(
+    let mut fallback_entry = UpstreamResponseEntry::new(
         serde_json::from_value(serde_json::json!({
             "type": "Dsl",
             "config": {"name": "response-dye", "source": "return next()", "errorPolicy": "ignore"}
@@ -92,7 +92,7 @@ fn set_clobber_collision_across_stage_arrays_detected_by_validate_plugins() {
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
             current_status: None,
-            upstream_response_filter_plugins: Some(vec![fallback_entry.clone()]),
+            upstream_response_plugins: Some(vec![fallback_entry.clone()]),
             ..Default::default()
         },
         status: None,
@@ -104,7 +104,7 @@ fn set_clobber_collision_across_stage_arrays_detected_by_validate_plugins() {
         spec: EdgionPluginsSpec {
             current_status: None,
             request_plugins: Some(vec![success_entry]),
-            upstream_response_filter_plugins: Some(vec![fallback_entry]),
+            upstream_response_plugins: Some(vec![fallback_entry]),
             ..Default::default()
         },
         status: None,

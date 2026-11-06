@@ -275,7 +275,7 @@ spec:
 **Response phase — append upstream timing header:**
 
 ```yaml
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

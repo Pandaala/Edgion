@@ -19,7 +19,7 @@ spec:
           }
           req.remove_header("X-Dsl-Context-Write")
         errorPolicy: deny
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

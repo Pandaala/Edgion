@@ -1,7 +1,7 @@
 //! Tests for ctx.* builtins: get / set / remove and ctx.get string limits.
 //!
 //! Covers present and missing values, reading a pre-existing value in the
-//! upstream_response_filter phase, and the ApiError path returned by fallible
+//! async upstream response stage, and the ApiError path returned by fallible
 //! session.set_ctx_var / remove_ctx_var.
 
 use super::*;
@@ -97,9 +97,9 @@ fn test_ctx_get_value_exceeding_max_string_len_returns_exact_error() {
     assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
 }
 
-// ── Cross-phase: ctx.get in upstream_response_filter ─────────────────────────
+// ── Cross-phase: ctx.get in the async upstream response stage ────────────────
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn test_ctx_get_reads_pre_existing_value_in_upstream_response() {
     use crate::plugins::http::dsl::config::DslConfig;
     use crate::plugins::http::dsl::plugin::DslPlugin;
@@ -125,7 +125,9 @@ if value != nil { resp.set_header("X-Ctx-Out", value) }"#
     let plugin = DslPlugin::from_config_response(&config).expect("from_config_response failed");
     let mut log = PluginLog::new("test");
     let mut s = session;
-    let result = plugin.run_upstream_response_filter(&mut s as &mut dyn PluginSession, &mut log);
+    let result = plugin
+        .run_upstream_response(&mut s as &mut dyn PluginSession, &mut log)
+        .await;
     assert_eq!(result, good_next());
 }
 

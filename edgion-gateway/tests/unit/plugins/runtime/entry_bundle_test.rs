@@ -56,7 +56,7 @@ fn response_cache_certificate_requires_exact_hidden_header_auth_profile() {
 fn response_cache_response_companions_and_unknown_effects_stay_unsafe() {
     let dsl = plugin(json!({"type": "Dsl", "config": {"name": "request-only", "source": "let a = 1"}}));
     assert!(CacheCapabilities::for_constructed(&dsl, EntryStage::Request).safe);
-    assert!(!CacheCapabilities::for_constructed(&dsl, EntryStage::ResponseFilter).safe);
+    assert!(!CacheCapabilities::for_constructed(&dsl, EntryStage::Response).safe);
     let safe =
         plugin(json!({"type": "ResponseHeaderModifier", "config": {"set": [{"name":"x-public", "value":"yes"}]}}));
     assert!(CacheCapabilities::for_constructed(&safe, EntryStage::ResponseFilter).safe);

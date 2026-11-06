@@ -397,7 +397,7 @@ FIPS build 中保留该兼容 API，并不代表 MD5 是获批的安全算法。
 
 - 请求阶段脚本静态引用 `req.body` 时，使用唯一的共享、有界请求 body 捕获；未引用
   的脚本没有捕获开销。
-- `upstreamResponseFilterPlugins` 中的脚本只能读取请求阶段
+- `upstreamResponsePlugins` 中的脚本只能读取请求阶段
   `RequestBodyBuffer` 已填充的缓存，绝不会启动晚捕获。
 - 已知无 body 的请求无需分配缓存，使用空 Body。
 - VM 执行前的 body gate 固定 fail-close：请求体超过上限时返回空响应体的 413，
@@ -667,7 +667,7 @@ if req.method == "HEAD" {
 
 ## 响应读取（resp.*）
 
-> **注意**：以下函数仅在响应阶段（`upstreamResponseFilterPlugins`）有效。在请求阶段调用时，读取函数通常返回 `nil`，状态码返回 `nil`。
+> **注意**：以下函数仅在响应阶段（`upstreamResponsePlugins`）有效。在请求阶段调用时，读取函数通常返回 `nil`，状态码返回 `nil`。
 
 ### resp.status
 
@@ -2056,7 +2056,7 @@ if len(token) < 16 {
 - `code`（Int）— gRPC 状态码（0–16）
 - `message`（Str | Nil）— 错误消息，传 `nil` 则无消息
 
-在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponseFilterPlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
+在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponsePlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
 
 **常用 gRPC 状态码**：
 - `0` — OK

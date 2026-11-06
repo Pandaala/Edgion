@@ -41,7 +41,8 @@ optimization changes the DSL read path without changing storage or script semant
   lifecycle continuity either.
 - The new `32_EdgionPlugins_dsl-request-response-context.yaml` writes fixed,
   non-sensitive markers in `requestPlugins` and reads them only in
-  `upstreamResponseFilterPlugins`. The response reader emits an explicit
+  `upstreamResponsePlugins` (the async response stage; the reader was in
+  `upstreamResponseFilterPlugins` before dsl-08). The response reader emits an explicit
   `missing` sentinel for `nil`, so skipping the reader cannot pass a negative
   assertion. The write-control header is removed before proxying.
 - One test case sends alpha, no-write, beta, no-write sequentially, asserting

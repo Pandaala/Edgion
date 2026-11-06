@@ -11,7 +11,7 @@ spec:
   # `x-deny-mode` selects which shape to exercise:
   #   http -> ErrResponse, whose status fail_to_proxy maps to a gRPC code
   #   grpc -> ErrGrpcError, whose gRPC code must survive verbatim
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

@@ -882,7 +882,7 @@ impl DslTestSuite {
     fn test_response_inject() -> TestCase {
         TestCase::new(
             "dsl_response_inject",
-            "DSL upstreamResponseFilter: CORS headers injected in response",
+            "DSL upstreamResponse: CORS headers injected in response",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -931,7 +931,7 @@ impl DslTestSuite {
     fn test_resp_status_404() -> TestCase {
         TestCase::new(
             "dsl_resp_status_404",
-            "DSL upstreamResponseFilter: 404 → X-Not-Found: true",
+            "DSL upstreamResponse: 404 → X-Not-Found: true",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -972,7 +972,7 @@ impl DslTestSuite {
     fn test_resp_status_200_no_header() -> TestCase {
         TestCase::new(
             "dsl_resp_status_200_no_header",
-            "DSL upstreamResponseFilter: 200 → no X-Not-Found",
+            "DSL upstreamResponse: 200 → no X-Not-Found",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1448,7 +1448,7 @@ impl DslTestSuite {
     fn test_resp_set_status_rewrite() -> TestCase {
         TestCase::new(
             "dsl_resp_set_status_rewrite",
-            "DSL upstreamResponseFilter: 200 → rewritten to 201 with X-Status-Rewritten",
+            "DSL upstreamResponse: 200 → rewritten to 201 with X-Status-Rewritten",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1496,7 +1496,7 @@ impl DslTestSuite {
     fn test_resp_replace_body() -> TestCase {
         TestCase::new(
             "dsl_resp_replace_body",
-            "DSL upstreamResponseFilter: upstream 502 → body replaced with normalized envelope",
+            "DSL upstreamResponse: upstream 502 → body replaced with normalized envelope",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

@@ -312,7 +312,7 @@ fn fixed_link_sys_source_updates_publish_new_views_and_keep_captured_generations
         GatewayInput::from_gateway(&gateway),
     )]));
     let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
-        "metadata":{"name":"fixed-links","namespace":"apps"},"spec":{"upstreamResponseFilterPlugins":[{
+        "metadata":{"name":"fixed-links","namespace":"apps"},"spec":{"upstreamResponsePlugins":[{
             "type":"Dsl","config":{"name":"program","source":"let x = 1","linkSysRefs":[{"namespace":"apps","name":"first"}]}
         }]}
     })).unwrap();
@@ -324,7 +324,7 @@ fn fixed_link_sys_source_updates_publish_new_views_and_keep_captured_generations
     let first = captured.http("apps/fixed-links").unwrap();
     assert!(first.is_activatable, "{:?}", first.preparse_errors);
     let edgion_resources::resources::edgion_plugins::EdgionPlugin::Dsl(config) =
-        &mut owner.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].plugin
+        &mut owner.spec.upstream_response_plugins.as_mut().unwrap()[0].plugin
     else {
         unreachable!()
     };

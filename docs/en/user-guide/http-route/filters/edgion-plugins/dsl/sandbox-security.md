@@ -254,11 +254,11 @@ The DSL plugin can run in two phases. Available APIs differ between phases.
 | Phase | Available APIs | Unavailable APIs | Notes |
 |-------|---------------|-----------------|-------|
 | `requestPlugins` | `req.*`, `ctx.*`, `deny`, `next`, `terminate`, `grpc_error` | `resp.set_status` (returns `nil`, has no effect) | Runs before the request is forwarded |
-| `upstreamResponseFilterPlugins` | `req.*` (read-only), `resp.*`, `ctx.*`, `deny`, `next`, `grpc_error`, `terminate` | — | Runs during the response header phase |
+| `upstreamResponsePlugins` | `req.*` (read-only), `resp.*`, `ctx.*`, `deny`, `next`, `grpc_error`, `terminate` | — | Runs during the response header phase |
 
 In the response phase, `req.*` functions are still callable, but request-body reads can use only a body that was captured during the request phase. A late response-stage read never starts downstream capture. Request-body mutation methods are rejected during configuration validation outside `requestPlugins`; other request mutations such as `req.set_header()` cannot change a request that has already been forwarded.
 
-In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponseFilterPlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
+In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponsePlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
 
 ## Per-Function Limit Summary
 

@@ -496,7 +496,7 @@ if service == "internal.AdminService" {
 }
 ```
 
-> Supported in both `requestPlugins` and `upstreamResponseFilterPlugins`. The request phase writes a direct trailers-only response; the response phase aborts the upstream response and preserves the exact code and optional message for the canonical terminal writer. Wire HTTP status remains `200`; `grpc_status` records the independent gRPC application status. See [DSL Plugin — gRPC Error Returns](./README.md#grpc-error-returns).
+> Supported in both `requestPlugins` and `upstreamResponsePlugins`. The request phase writes a direct trailers-only response; the response phase aborts the upstream response and preserves the exact code and optional message for the canonical terminal writer. Wire HTTP status remains `200`; `grpc_status` records the independent gRPC application status. See [DSL Plugin — gRPC Error Returns](./README.md#grpc-error-returns).
 
 ### 6.5 Implicit Return
 

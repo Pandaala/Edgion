@@ -474,7 +474,7 @@ Notes:
 
 ### 4.1 Security Response Header Injection
 
-In the `upstreamResponseFilterPlugins` phase, uniformly inject standard security response headers into every response, reducing the burden of repeated configuration on upstream services.
+In the `upstreamResponsePlugins` phase, uniformly inject standard security response headers into every response, reducing the burden of repeated configuration on upstream services.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -483,7 +483,7 @@ metadata:
   name: security-headers
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "inject-security-headers"
@@ -527,7 +527,7 @@ metadata:
   name: cache-control-policy
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "cache-control-policy"
@@ -578,7 +578,7 @@ metadata:
   name: strip-debug-headers
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "strip-debug-headers"
@@ -712,7 +712,7 @@ spec:
 
           return next()
 
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "latency-marker-resp"
@@ -930,7 +930,7 @@ metadata:
   name: grpc-response-error
   namespace: production
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: grpc-response-error

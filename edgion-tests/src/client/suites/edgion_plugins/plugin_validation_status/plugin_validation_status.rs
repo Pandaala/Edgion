@@ -12,6 +12,7 @@
 //   06_EdgionPlugins_ep-validation-dsl-invalid.yaml             — Dsl: uncompilable inline source
 //   07_EdgionPlugins_ep-validation-cors-regex-invalid.yaml      — Cors: allowCredentials=true + catch-all allowOriginsByRegex
 //   08_EdgionPlugins_ep-validation-fault-injection-invalid.yaml — FaultInjection: ratio out of range + mutual exclusion
+//   10_EdgionPlugins_ep-validation-dsl-sync-response-stage.yaml — Dsl: placed in the sync upstreamResponseFilterPlugins stage
 //
 // Scenarios:
 //   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "issuerGroups"
@@ -24,6 +25,7 @@
 //   8. fault_injection_invalid   → Accepted=False/Invalid, message contains "delay.ratio"
 //   9. condition_set_structural_invalid → malformed bounded boolean shapes are rejected by the Admin API
 //  10. condition_set_empty_invalid      → an empty operator is retained with Accepted=False/Invalid
+//  11. dsl_sync_response_stage_invalid  → Accepted=False/Invalid, message names the wrong stage
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers::{controller_local_conditions, expect_admin_yaml_admission_rejected};
@@ -243,6 +245,31 @@ impl PluginValidationStatusTestSuite {
     }
 
     // =========================================================================
+    // Dsl in the synchronous upstreamResponseFilterPlugins stage
+    //             → Accepted=False/Invalid
+    //
+    // DSL response scripts run only in the async upstreamResponsePlugins stage;
+    // the shared stage table rejects the synchronous placement at preparse.
+    // =========================================================================
+
+    fn dsl_sync_response_stage_invalid() -> TestCase {
+        TestCase::new(
+            "dsl_sync_response_stage_invalid",
+            "Dsl 'ep-validation-dsl-sync-response-stage': sync response stage → Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    assert_accepted_false(
+                        &ctx,
+                        "ep-validation-dsl-sync-response-stage",
+                        "(Dsl): plugin is not valid for upstream response filter stage",
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    // =========================================================================
     // Scenario 7: Cors with allowCredentials=true + catch-all allowOriginsByRegex
     //             → Accepted=False/Invalid
     //
@@ -396,6 +423,7 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::rate_limit_invalid(),
             Self::alias_invalid(),
             Self::dsl_invalid(),
+            Self::dsl_sync_response_stage_invalid(),
             Self::cors_regex_invalid(),
             Self::fault_injection_invalid(),
             Self::condition_set_structural_invalid(),

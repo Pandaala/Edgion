@@ -1072,6 +1072,7 @@ impl PluginRuntime {
             owner.spec.upstream_response_plugins.as_deref().unwrap_or_default(),
             namespace,
             cache,
+            bindings.as_ref(),
             ip.as_ref(),
         ));
         errors
@@ -1931,25 +1932,6 @@ impl PluginRuntime {
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                let link_sys_config = if matches!(&entry.plugin, EdgionPlugin::Dsl(config) if !config.linksys_refs.is_empty())
-                {
-                    match bound_entries
-                        .get(index)
-                        .and_then(|entry| entry.link_sys_config().ok())
-                        .flatten()
-                    {
-                        Some(HttpLinkSysConfig::Dsl(config)) => Some(config),
-                        _ => {
-                            self.invalid_plugins.record_non_retainable("Dsl");
-                            errors.push(format!(
-                                "upstreamResponseFilterPlugins[{index}] (Dsl): invalid owning LinkSys reference"
-                            ));
-                            continue;
-                        }
-                    }
-                } else {
-                    None
-                };
                 let wasm_defaults = matches!(entry.plugin, EdgionPlugin::Wasm(_))
                     .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
                 if let Some(defaults) = wasm_defaults.as_deref() {
@@ -2065,10 +2047,7 @@ impl PluginRuntime {
                                 .and_then(|(entry, defaults)| WasmPlugin::create_response_filter(entry, defaults)),
                         )
                     } else {
-                        match link_sys_config {
-                            Some(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
-                            None => Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace),
-                        }
+                        Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace)
                     };
                     match created {
                         CreateResult::Ok(Some(filter)) => {
@@ -2126,7 +2105,7 @@ impl PluginRuntime {
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) -> Vec<String> {
-        self.add_from_upstream_responses_with_cache(entries, namespace, &mut EntryCache::default(), None)
+        self.add_from_upstream_responses_with_cache(entries, namespace, &mut EntryCache::default(), None, None)
     }
 
     pub(crate) fn add_from_upstream_responses_with_cache(
@@ -2134,14 +2113,40 @@ impl PluginRuntime {
         entries: &[UpstreamResponseEntry],
         namespace: &str,
         cache: &mut EntryCache,
+        bindings: Option<&PluginBindings<'_>>,
         ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
+        let bound_entries: Vec<_> = bindings
+            .into_iter()
+            .flat_map(|binding| binding.response_entries())
+            .collect();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // A DSL script with LinkSys references is built only from its
+                // validated owning binding, never from the raw entry.
+                let link_sys_config = if matches!(&entry.plugin, EdgionPlugin::Dsl(config) if !config.linksys_refs.is_empty())
+                {
+                    match bound_entries
+                        .get(index)
+                        .and_then(|entry| entry.link_sys_config().ok())
+                        .flatten()
+                    {
+                        Some(HttpLinkSysConfig::Dsl(config)) => Some(config),
+                        _ => {
+                            self.invalid_plugins.record_non_retainable("Dsl");
+                            errors.push(format!(
+                                "upstreamResponsePlugins[{index}] (Dsl): invalid owning LinkSys reference"
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let slot = EntrySlot {
                     stage: EntryStage::Response,
                     index,
@@ -2239,7 +2244,11 @@ impl PluginRuntime {
                         None
                     };
 
-                    match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
+                    let created = match link_sys_config {
+                        Some(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
+                        None => Self::create_upstream_response_from_edgion(&entry.plugin, namespace),
+                    };
+                    match created {
                         CreateResult::Ok(Some(filter)) => {
                             // Resolve the effective body requirement (operator tunes
                             // size/conditions but cannot downgrade an intrinsic
@@ -2758,8 +2767,8 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(DebugAccessLogToHeaderFilter::new(config))))
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
-            EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
-            EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
+            // DSL awaits its VM, so it belongs to the async upstream-response stage.
+            EdgionPlugin::Dsl(_) | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
@@ -2819,8 +2828,14 @@ impl PluginRuntime {
         plugin: &EdgionPlugin,
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
+        // Reference-bearing DSL is constructed from its bound LinkSys view by
+        // the caller; reaching here without one is a misconfiguration.
+        if HttpLinkSysConfig::is_reference_bearing(plugin) {
+            return CreateResult::WrongStage;
+        }
         match plugin {
             EdgionPlugin::Unsupported => CreateResult::WrongStage,
+            EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
             EdgionPlugin::ExtProc(_) | EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             // Every other variant belongs to a different stage. Exhaustive
             // (no `_`), matching the other three `create_*_from_edgion`
@@ -2874,7 +2889,6 @@ impl PluginRuntime {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
-            | EdgionPlugin::Dsl(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::RequestId(_)
             | EdgionPlugin::RequestAccessPolicy(_)

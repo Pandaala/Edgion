@@ -1,9 +1,8 @@
 //! Unit tests for EdgionDSL VM execution semantics.
 //!
 //! Most tests use `MockPluginSession` with synchronous `#[test]` helpers that
-//! create a current-thread Tokio runtime. Tests exercising the synchronous
-//! upstream-response bridge use `#[tokio::test(flavor = "multi_thread")]`
-//! because `block_in_place` requires a multi-thread runtime.
+//! create a current-thread Tokio runtime. The async upstream-response stage
+//! awaits the VM directly and runs on any Tokio runtime flavor.
 
 pub(super) use super::lang::bytecode::{CompiledScript, OpCode};
 pub(super) use super::lang::error::RuntimeError;

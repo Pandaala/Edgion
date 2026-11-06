@@ -103,8 +103,10 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
     ("ResponseRewrite", StageSet::new(false, true, false, false)),
     // Upstream-response-body-filter-stage-only plugins.
     ("BandwidthLimit", StageSet::new(false, false, true, false)),
-    // DSL runs in both the request and the upstream-response-filter stages.
-    ("Dsl", StageSet::new(true, true, false, false)),
+    // DSL runs in the request stage and the async upstream-response stage.
+    // Its VM awaits `http.call` / `redis.*`, so it must never run in the
+    // synchronous upstream-response-filter stage.
+    ("Dsl", StageSet::new(true, false, false, true)),
     // Wasm (proxy-wasm guest) runs in the request, upstream-response-filter,
     // and upstream-response-body-filter (read-only observation) stages,
     // matching the Gateway stage constructors.
@@ -114,9 +116,9 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
 /// Which execution stages a plugin type name is valid for.
 ///
 /// This mirrors `edgion-gateway`'s `create_*_from_edgion` stage gating: a
-/// variant that those functions answer with `WrongStage` is `false` here. The
-/// The async upstream-response stage currently has no directly configurable
-/// plugin. ExtProc response processing is owned by its request-stage entry.
+/// variant that those functions answer with `WrongStage` is `false` here.
+/// DSL is the only directly configurable async upstream-response plugin.
+/// ExtProc response processing is owned by its request-stage entry.
 pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
     if type_name == "Unsupported" {
         return StageSet::new(false, false, false, false);

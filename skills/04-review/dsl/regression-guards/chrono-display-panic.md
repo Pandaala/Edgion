@@ -69,7 +69,7 @@ exact/over limits, UTC fields, escaped percent, whitespace and multibyte literal
 
 **3. Why this matters for the data plane**
 
-Both `DslPlugin::run_request` and `run_upstream_response_filter` call
+Both `DslPlugin::run_request` and `run_upstream_response` call
 `execute_safe` (`edgion-gateway/src/plugins/http/dsl/lang/vm.rs`). That function
 wraps the VM future in `AssertUnwindSafe(...).catch_unwind().await`. A captured
 unwinding panic does not escape the VM boundary: its payload is discarded,

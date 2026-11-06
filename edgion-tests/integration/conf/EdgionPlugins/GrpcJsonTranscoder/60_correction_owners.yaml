@@ -278,7 +278,7 @@ metadata:
   name: grpc-header-only
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
   - type: Dsl
     config:
       name: grpc-header-companion
@@ -291,7 +291,7 @@ metadata:
   name: grpc-late-conflict
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
   - type: Dsl
     config:
       name: grpc-protected-request-mutation

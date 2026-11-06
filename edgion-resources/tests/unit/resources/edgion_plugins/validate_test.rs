@@ -5,8 +5,8 @@ use crate::resources::edgion_plugins::plugin_configs::{
     JsonSchemaValidationConfig, WasmConfig, WasmRawConfig, MAX_WASM_RAW_CONFIG_BYTES,
 };
 use crate::resources::edgion_plugins::{
-    BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
-    ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+    BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseEntry,
+    UpstreamResponseFilterEntry, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::HTTPHeaderFilter;
 use serde_json::json;
@@ -486,7 +486,7 @@ fn dsl_unknown_redis_link_surfaces_at_schema_layer() {
 
 #[test]
 fn dsl_request_body_mutation_is_rejected_in_response_stage() {
-    let entry = UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+    let entry = UpstreamResponseEntry::new(EdgionPlugin::Dsl(DslConfig {
         name: "late-mutation".to_string(),
         source: Some("req.body.clear()".to_string()),
         ..Default::default()
@@ -495,7 +495,7 @@ fn dsl_request_body_mutation_is_rejected_in_response_stage() {
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
             current_status: None,
-            upstream_response_filter_plugins: Some(vec![entry]),
+            upstream_response_plugins: Some(vec![entry]),
             ..Default::default()
         },
         status: None,
@@ -511,9 +511,28 @@ fn dsl_request_body_mutation_is_rejected_in_response_stage() {
 
 #[test]
 fn dsl_request_body_read_is_allowed_in_response_stage() {
-    let entry = UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+    let entry = UpstreamResponseEntry::new(EdgionPlugin::Dsl(DslConfig {
         name: "late-read".to_string(),
         source: Some("let found = req.body.contains(\"needle\")".to_string()),
+        ..Default::default()
+    }));
+    let plugins = EdgionPlugins {
+        metadata: Default::default(),
+        spec: EdgionPluginsSpec {
+            current_status: None,
+            upstream_response_plugins: Some(vec![entry]),
+            ..Default::default()
+        },
+        status: None,
+    };
+    assert!(plugins.validate_plugins().is_empty());
+}
+
+#[test]
+fn dsl_in_sync_response_filter_stage_is_wrong_stage() {
+    let entry = UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+        name: "sync-stage".to_string(),
+        source: Some("resp.set_header(\"X-A\", \"1\")".to_string()),
         ..Default::default()
     }));
     let plugins = EdgionPlugins {
@@ -525,7 +544,13 @@ fn dsl_request_body_read_is_allowed_in_response_stage() {
         },
         status: None,
     };
-    assert!(plugins.validate_plugins().is_empty());
+    assert_eq!(
+        plugins.validate_plugins(),
+        vec![
+            "upstreamResponseFilterPlugins[0] (Dsl): plugin is not valid for upstream response filter stage"
+                .to_string()
+        ]
+    );
 }
 
 #[test]

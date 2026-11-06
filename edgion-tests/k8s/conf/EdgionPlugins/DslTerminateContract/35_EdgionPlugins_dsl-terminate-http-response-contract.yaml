@@ -12,7 +12,7 @@ spec:
         source: |
           resp.set_header("x-dsl-queued", "response-stage")
         errorPolicy: deny
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

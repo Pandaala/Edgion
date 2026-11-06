@@ -1,4 +1,4 @@
-//! Tests for response builtins: status read/write, header read/write, upstream response filter phase.
+//! Tests for response builtins: status read/write, header read/write, async upstream response stage.
 
 use super::*;
 
@@ -297,8 +297,10 @@ if result == nil { resp.set_header("X-Result", "nil") }"#,
     assert_eq!(result, good_next());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_upstream_response_filter_phase() {
+// A current-thread runtime is what Pingora builds per worker when
+// `work_stealing` is disabled; the async response stage must run there.
+#[tokio::test(flavor = "current_thread")]
+async fn test_upstream_response_phase_runs_on_current_thread_runtime() {
     use crate::plugins::http::dsl::config::DslConfig;
     use crate::plugins::http::dsl::plugin::DslPlugin;
     let mut session = MockPluginSession::new();
@@ -316,7 +318,8 @@ async fn test_upstream_response_filter_phase() {
     let plugin = DslPlugin::from_config_response(&config).expect("from_config_response failed");
     let mut log = PluginLog::new("test");
     let mut s = session;
-    // run_upstream_response_filter uses block_in_place — requires multi-thread Tokio runtime
-    let result = plugin.run_upstream_response_filter(&mut s as &mut dyn PluginSession, &mut log);
+    let result = plugin
+        .run_upstream_response(&mut s as &mut dyn PluginSession, &mut log)
+        .await;
     assert_eq!(result, good_next());
 }

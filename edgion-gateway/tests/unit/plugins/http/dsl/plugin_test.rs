@@ -134,9 +134,9 @@ fn standalone_factories_enforce_plugin_log_name_capacity() {
     let valid = config_with_name("a".repeat(DslConfig::MAX_NAME_BYTES));
     let request_filter = DslPlugin::from_config(&valid).expect("36-byte request plugin name must be accepted");
     assert_eq!(request_filter.name(), valid.name);
-    let response_filter =
+    let response_plugin =
         DslPlugin::from_config_response(&valid).expect("36-byte response plugin name must be accepted");
-    assert_eq!(response_filter.name(), valid.name);
+    assert_eq!(response_plugin.name(), valid.name);
 
     let overlong = config_with_name("a".repeat(DslConfig::MAX_NAME_BYTES + 1));
     assert!(DslPlugin::from_config(&overlong).is_none());

@@ -4,7 +4,7 @@ metadata:
   name: dsl-response-inject
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

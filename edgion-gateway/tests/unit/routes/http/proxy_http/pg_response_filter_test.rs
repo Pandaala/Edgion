@@ -84,7 +84,7 @@ async fn dsl_terminate_h2_local_reply_finishes_before_session_drop() {
     use crate::plugins::runtime::PluginRuntime;
     use crate::PendingHeaderOp;
     use edgion_dsl::validator::{compile_dsl_source, ValidationLimits};
-    use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseFilterEntry};
+    use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseEntry};
     use pingora_core::protocols::http::v2::server::{handshake, H2Accept, HttpSession as H2Session};
     use pingora_core::protocols::Digest;
     use std::time::Duration;
@@ -151,14 +151,14 @@ async fn dsl_terminate_h2_local_reply_finishes_before_session_drop() {
                 };
                 let mut runtime = PluginRuntime::new();
                 let entries = [
-                    UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(config)),
-                    UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                    UpstreamResponseEntry::new(EdgionPlugin::Dsl(config)),
+                    UpstreamResponseEntry::new(EdgionPlugin::Dsl(DslConfig {
                         name: "after-terminate".to_string(),
                         source: Some("resp.set_header(\"x-after-terminate\", \"unexpected\")".to_string()),
                         ..Default::default()
                     })),
                 ];
-                let errors = runtime.add_from_upstream_response_filters(&entries, "test");
+                let errors = runtime.add_from_upstream_responses(&entries, "test");
                 assert!(errors.is_empty(), "{errors:?}");
                 let mut ctx = EdgionHttpContext::default();
                 for name in ["Content-Length", "Connection", "Transfer-Encoding", "Proxy-Connection"] {
@@ -173,7 +173,9 @@ async fn dsl_terminate_h2_local_reply_finishes_before_session_drop() {
                 });
                 let mut upstream = ResponseHeader::build(200, None).unwrap();
                 upstream.insert_header("x-upstream-private", "discard").unwrap();
-                runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+                runtime
+                    .run_upstream_response_plugins_async(&mut session, &mut ctx, &mut upstream)
+                    .await;
                 assert_eq!(ctx.stage_logs()[0].filters.len(), 1);
                 let proxy = proxy();
                 let error = response_filter(&proxy, &mut session, &mut upstream, &mut ctx)
@@ -759,4 +761,45 @@ fn response_sanitizer_spilled_names_preserve_removal_and_atomic_failure() {
             }
         }
     }
+}
+
+// The async response chain is the last late request-body consumer: the sync
+// hook must keep the captured view, and `response_filter` releases it only
+// after a response-stage DSL has read it.
+#[tokio::test]
+async fn late_request_body_view_survives_sync_hook_until_async_dsl_reads_it() {
+    use crate::plugins::runtime::PluginRuntime;
+    use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseEntry};
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    let (mut storage, view) = crate::request_body::BodyStorage::new(64, 1024);
+    storage.write(&bytes::Bytes::from_static(b"late-body")).await.unwrap();
+    storage.finish().await.unwrap();
+    let mut runtime = PluginRuntime::new();
+    let errors = runtime.add_from_upstream_responses(
+        &[UpstreamResponseEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "late-body-reader".into(),
+            source: Some("if req.body == \"late-body\" { resp.set_header(\"x-late-body\", \"matched\") }".into()),
+            ..Default::default()
+        }))],
+        "test",
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let (_client, mut session) = h1_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_body.install(view);
+    ctx.install_resolved_global_plugins(vec![Arc::new(runtime)]);
+    let proxy = proxy();
+    let mut upstream = ResponseHeader::build(200, None).unwrap();
+
+    super::super::pg_upstream_response_filter::upstream_response_filter(&proxy, &mut session, &mut upstream, &mut ctx)
+        .unwrap();
+    assert!(ctx.request_body.read_text_range(0, 64, 64, 64).await.is_ok());
+
+    response_filter(&proxy, &mut session, &mut upstream, &mut ctx)
+        .await
+        .unwrap();
+    assert_eq!(upstream.headers["x-late-body"], "matched");
+    assert!(ctx.request_body.read_text_range(0, 64, 64, 64).await.is_err());
 }

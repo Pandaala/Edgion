@@ -266,12 +266,11 @@ async fn dsl_terminate_response_stages_empty_local_reply() {
             let mut upstream = ResponseHeader::build(upstream_status, None).unwrap();
             upstream.insert_header("x-upstream-private", "discard").unwrap();
             let mut runtime = PluginRuntime::new();
-            runtime.add_upstream_response_filter(
-                DslPlugin::from_config_response(&terminate_dsl_config(bytecode)).unwrap(),
-            );
+            runtime.add_upstream_response(DslPlugin::from_config_response(&terminate_dsl_config(bytecode)).unwrap());
+            runtime.add_upstream_response(DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap());
             runtime
-                .add_upstream_response_filter(DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap());
-            runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+                .run_upstream_response_plugins_async(&mut session, &mut ctx, &mut upstream)
+                .await;
             assert!(ctx.plugin_terminated());
             assert_eq!(ctx.response_denial(), None);
             assert!(!ctx
@@ -316,9 +315,11 @@ async fn dsl_terminate_response_refusal_arms_denial_without_plugin_bug() {
         ctx.is_grpc_route_matched = grpc_route;
         let mut upstream = ResponseHeader::build(upstream_status, None).unwrap();
         let mut runtime = PluginRuntime::new();
-        runtime.add_upstream_response_filter(DslPlugin::from_config_response(&terminate_dsl_config(false)).unwrap());
-        runtime.add_upstream_response_filter(DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap());
-        runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+        runtime.add_upstream_response(DslPlugin::from_config_response(&terminate_dsl_config(false)).unwrap());
+        runtime.add_upstream_response(DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap());
+        runtime
+            .run_upstream_response_plugins_async(&mut session, &mut ctx, &mut upstream)
+            .await;
         assert!(ctx.plugin_terminated());
         assert!(ctx.take_pending_response_local_reply().is_none());
         assert_eq!(ctx.response_denial(), Some(&ResponseStageDenial::Http(502)));
@@ -1908,6 +1909,31 @@ fn ai_proxy_is_constructed_only_for_request_stage() {
     assert_eq!(PluginRuntime::get_plugin_name(&plugin), "AiProxy");
 }
 
+#[test]
+fn dsl_in_sync_response_filter_stage_fails_closed() {
+    use edgion_resources::resources::edgion_plugins::{UpstreamResponseEntry, UpstreamResponseFilterEntry};
+
+    let config = after_terminate_dsl_config();
+    let mut runtime = PluginRuntime::new();
+    let errors = runtime.add_from_upstream_response_filters(
+        &[UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(config.clone()))],
+        "default",
+    );
+    assert_eq!(
+        errors,
+        vec!["upstreamResponseFilterPlugins[0] (Dsl): plugin is not valid for upstream response filter stage"]
+    );
+    assert_eq!(runtime.upstream_response_plugins_count(), 0);
+    assert_eq!(runtime.upstream_response_async_plugins_count(), 0);
+    assert_sealed_invalid(&mut runtime);
+
+    let mut runtime = PluginRuntime::new();
+    assert!(runtime
+        .add_from_upstream_responses(&[UpstreamResponseEntry::new(EdgionPlugin::Dsl(config))], "default")
+        .is_empty());
+    assert_eq!(runtime.upstream_response_async_plugins_count(), 1);
+}
+
 #[tokio::test]
 async fn native_guard_invocation_marker_respects_disable_condition_and_policy_bypass() {
     use pingora_core::protocols::http::RequestBodyBuffer;
@@ -2362,7 +2388,7 @@ impl PluginRuntime {
 
 #[test]
 fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() {
-    for stage in ["requestPlugins", "upstreamResponseFilterPlugins"] {
+    for stage in ["requestPlugins", "upstreamResponsePlugins"] {
         let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
             "metadata":{"name":"cache-owner","namespace":"apps"},"spec":{stage:[{"type":"Dsl","config":{
                 "name":"program","source":"return next()","linkSysRefs":[{"namespace":"apps","name":"cache"}]
@@ -2377,10 +2403,7 @@ fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() 
                 "apps/cache-owner",
             )
         } else {
-            detached.add_from_upstream_response_filters(
-                owner.spec.upstream_response_filter_plugins.as_deref().unwrap(),
-                "apps",
-            )
+            detached.add_from_upstream_responses(owner.spec.upstream_response_plugins.as_deref().unwrap(), "apps")
         };
         assert!(errors
             .iter()
@@ -2391,8 +2414,8 @@ fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() 
         assert!(first.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
         assert_eq!(first.request_plugins_count(), usize::from(stage == "requestPlugins"));
         assert_eq!(
-            first.upstream_response_plugins_count(),
-            usize::from(stage == "upstreamResponseFilterPlugins")
+            first.upstream_response_async_plugins_count(),
+            usize::from(stage == "upstreamResponsePlugins")
         );
         owner.metadata.name = None;
         let mut next = PluginRuntime::new();
@@ -2405,7 +2428,7 @@ fn actual_dsl_link_sys_source_gate_precedes_shared_entry_cache_in_both_stages() 
             Some(InvalidUpdatePolicy::ReplaceFailClosed)
         );
         assert_eq!(next.request_plugins_count(), 0);
-        assert_eq!(next.upstream_response_plugins_count(), 0);
+        assert_eq!(next.upstream_response_async_plugins_count(), 0);
         assert_sealed_invalid(&mut next);
     }
 }
@@ -3534,7 +3557,7 @@ fn waf_hooks_are_not_an_independent_complete_consumer() {
 fn conditional_consumers_keep_capability_through_entry_cache() {
     for stage in [
         "requestPlugins",
-        "upstreamResponseFilterPlugins",
+        "upstreamResponsePlugins",
         "upstreamResponseBodyFilterPlugins",
     ] {
         let plugin = if stage == "upstreamResponseBodyFilterPlugins" {

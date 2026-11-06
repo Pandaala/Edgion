@@ -103,7 +103,7 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 - 通过 `grpc_error()` 返回原生 gRPC 状态码
 - 通过 `ctx.set()` 向后续插件传递上下文值
 
-### `upstreamResponseFilterPlugins` — 响应阶段
+### `upstreamResponsePlugins` — 响应阶段
 
 在收到上游响应后、将响应发送至客户端之前执行。此阶段可以：
 
@@ -116,9 +116,21 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 响应阶段的 DSL 绝不会启动请求 body 捕获。请求 body 修改若不在
 `requestPlugins` 中，会在配置校验阶段被拒绝。
 
+响应阶段是异步执行的：`http.call` 和 `redis.*` 会挂起脚本而不会阻塞网关
+worker 线程，因此网关以 `server.work_stealing: false` 运行时同样可用。由于
+DSL 可能执行 I/O，它不能配置在同步的 `upstreamResponseFilterPlugins` 阶段，
+此类条目会在配置校验阶段被拒绝。异步响应插件在同一请求所有同步
+`upstreamResponseFilterPlugins` 条目（路由、后端、Gateway 与全局各级）之后
+执行，因此 DSL 脚本能看到这些同步过滤器已经设置的响应头。`ExtProc`、`Guardrail`
+从 `requestPlugins` 安装的响应处理以及 `spec.waf` 的响应阶段同样运行在这个
+异步阶段；同一级别下它们先于 DSL 条目执行，因此 DSL 脚本能看到并可能覆盖它们
+对响应头的修改。除 `101 Switching Protocols` 响应外，异步阶段运行时逐跳
+（hop-by-hop）响应头（`Connection`、`Transfer-Encoding`、`Keep-Alive` 等）
+已被移除：脚本读不到它们，脚本设置的此类响应头也会在响应下发前被移除。
+
 ## gRPC 错误返回
 
-在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponseFilterPlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
+在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponsePlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
 
 ## 文档导航
 

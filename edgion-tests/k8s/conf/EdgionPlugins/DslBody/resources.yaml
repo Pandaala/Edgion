@@ -158,7 +158,7 @@ spec:
                   type: header
                   name: X-Capture-Body
                 values: ["yes"]
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "late-body-reader"
@@ -174,7 +174,7 @@ metadata:
   name: dsl-late-body-unbuffered
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "late-body-reader-without-buffer"

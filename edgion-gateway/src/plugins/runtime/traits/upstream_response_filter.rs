@@ -16,9 +16,11 @@ use edgion_resources::filters::PluginRunningResult;
 /// plugins, downstream header commit, and response body forwarding.
 ///
 /// Implementations may mutate the current response headers through the session,
-/// but own no response-body bytes. They cannot await and ordinary implementations
-/// must perform no blocking I/O. The bounded DSL bridge is the documented
-/// exception to that ordinary no-blocking rule.
+/// but own no response-body bytes. They cannot await and must perform no
+/// blocking I/O; a plugin that needs I/O belongs in the async
+/// [`super::UpstreamResponse`] stage. Never bridge with `block_in_place` /
+/// `Handle::block_on`: Pingora runs current-thread runtimes when
+/// `work_stealing` is disabled.
 ///
 /// The result either continues the chain or terminates it. `ErrResponse` leaves
 /// bounded local-reply ownership to the framework; `ErrTerminateRequest` is valid

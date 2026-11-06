@@ -16,7 +16,7 @@ spec:
               req.set_uri(substr(p, len(prefix), len(p)))
           }
         errorPolicy: deny
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

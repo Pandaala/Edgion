@@ -11,7 +11,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [DSL `run_upstream_response_filter` `block_in_place` Requires Multi-Thread Runtime — DESIGN-TRADEOFF (documented)](intentional-design/block-in-place-multi-thread-runtime.md)
 - [etcd Leadership Gate Cannot Fence a Stale Leader at the Transaction Boundary — ACCEPTED-RISK](intentional-design/etcd-leadership-gate-not-fenced-at-txn.md)
 - [`CacheData::reset()` dispatches `full_set` under the write lock — DESIGN-TRADEOFF](intentional-design/full-set-under-write-lock-intentional.md)
 - [`LeaderHandle` 100–200ms Polling is Not Worth Replacing With watch::channel](intentional-design/leader-handle-polling.md)
@@ -28,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [DSL response stage is async; no `block_in_place` bridge (dsl-08; supersedes plugins F-008)](regression-guards/dsl-response-stage-async-no-block-in-place.md)
 - [Etcd leader diagnostics cannot delay term supervision](regression-guards/etcd-leader-diagnostic-supervision.md)
 
 - [Proxy shutdown notification and streaming drain](regression-guards/proxy-shutdown-notification.md)

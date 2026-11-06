@@ -80,7 +80,7 @@ An unsupported outcome reports a configuration error and disables that entry's
 | `RateLimitRedis` | Request: `onRedisFailure: Allow` permits `fail-open`; `Deny` permits `fail-close`. |
 | `ExtProc` | Request entry, including attached callbacks before response headers commit: the outcome selected by `failureModeAllow`. |
 | `Wasm` | Request or upstream response filter: the outcome selected by `failOpen`. No response-body dye. |
-| `Dsl` | Request or upstream response filter: `deny`/`denyWith` permit `fail-close`; `ignore` also permits `fail-open`. Hard body/scanner errors remain fail-close. |
+| `Dsl` | Request or async upstream response (`upstreamResponsePlugins`): `deny`/`denyWith` permit `fail-close`; `ignore` also permits `fail-open`. Hard body/scanner errors remain fail-close. |
 | `OpenidConnect` | Request: JWKS stale-cache `fail-open` and unavailable `fail-close`, when JWKS verification, nonce validation, or session renewal (`bearerOnly: false`, `renewAccessTokenOnExpiry: true`) is enabled. Session refresh timeouts can reach JWKS even with `IntrospectionOnly`; introspection verification itself produces neither. |
 | `ForwardAuth`, `LdapAuth` | Request: `fail-close` for dependency failures. |
 | `AiProxy` and other plugins | No entry-level dye. |

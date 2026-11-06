@@ -1,6 +1,6 @@
 # RequestBodyBuffer 插件
 
-`RequestBodyBuffer` 在 `requestPlugins` 阶段显式捕获被代理的请求 body，并将其保存在请求级共享缓存中。之后的插件（例如位于 `upstreamResponseFilterPlugins` 的 DSL 条目）可在请求 body 已转发给上游之后读取这份缓存。
+`RequestBodyBuffer` 在 `requestPlugins` 阶段显式捕获被代理的请求 body，并将其保存在请求级共享缓存中。之后的插件（例如位于 `upstreamResponsePlugins` 的 DSL 条目）可在请求 body 已转发给上游之后读取这份缓存。
 
 ```yaml
 spec:
@@ -9,7 +9,7 @@ spec:
       config: {}
       body:
         maxBodySize: 1MiB
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: inspect-request-after-upstream

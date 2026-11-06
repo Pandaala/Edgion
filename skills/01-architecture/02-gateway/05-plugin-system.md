@@ -586,9 +586,9 @@ The category tables below are a conceptual guide, not an exhaustive registry.
 
 ## DSL script engine (DslPlugin)
 
-EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`edgion-gateway/src/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and `UpstreamResponseFilter`; the UpstreamResponseFilter path bridges the sync trait into the `async fn execute` VM via `tokio::task::block_in_place`. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
+EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`edgion-gateway/src/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and the async `UpstreamResponse` stage (`upstreamResponsePlugins`); both await the `async fn execute` VM directly, and DSL is not valid in the synchronous `upstreamResponseFilterPlugins` stage. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
 
-The full architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
+The full architecture — data flow, source layout, plugin entry points, async execution and termination, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
 `Value::Str` / `Value::List` type design (why `Arc<str>`, not SSO or `ImmutableString`): [`skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md`](../../04-review/dsl/intentional-design/sso-migration-not-worth-it.md).
 

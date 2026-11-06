@@ -105,7 +105,7 @@ Executes before the request is forwarded to the upstream. In this phase you can:
 - Return a native gRPC status code via `grpc_error()`.
 - Pass context values to downstream plugins via `ctx.set()`.
 
-### `upstreamResponseFilterPlugins` — Response Phase
+### `upstreamResponsePlugins` — Response Phase
 
 Executes after the upstream response is received, before it is sent to the client. In this phase you can:
 
@@ -118,9 +118,25 @@ Executes after the upstream response is received, before it is sent to the clien
 A response-stage DSL never starts request-body capture. Request-body mutation
 is rejected during configuration validation outside `requestPlugins`.
 
+The response phase is asynchronous: `http.call` and `redis.*` suspend the
+script without blocking a gateway worker thread, so it also works when the
+gateway runs with `server.work_stealing: false`. Because DSL may perform I/O,
+it is not accepted in the synchronous `upstreamResponseFilterPlugins` stage;
+such an entry is rejected during configuration validation. Asynchronous
+response plugins run after every synchronous `upstreamResponseFilterPlugins`
+entry of the same request (route, backend, Gateway and global levels), so a
+DSL script observes headers already set by those synchronous filters. Response
+handlers that `ExtProc` and `Guardrail` install from `requestPlugins`, and the
+`spec.waf` response phase, also run in this asynchronous stage; at the same
+level they run before the DSL entries, so a DSL script sees, and may overwrite,
+their header changes. Except on a `101 Switching Protocols` response,
+hop-by-hop headers (`Connection`, `Transfer-Encoding`, `Keep-Alive`, ...) are
+already stripped when the asynchronous stage runs: a script cannot read them,
+and any it sets are removed before the response is sent.
+
 ## gRPC Error Returns
 
-In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponseFilterPlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
+In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponsePlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
 
 ## Documentation Navigation
 

@@ -4,7 +4,7 @@ metadata:
   name: dsl-terminate-grpc-response-contract
   namespace: edgion-test
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

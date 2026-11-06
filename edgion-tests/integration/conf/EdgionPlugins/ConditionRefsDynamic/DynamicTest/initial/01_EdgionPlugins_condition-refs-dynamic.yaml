@@ -43,7 +43,7 @@ spec:
           stable:
             name: condition-refs-dynamic-backend
         onInvalid: reject
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

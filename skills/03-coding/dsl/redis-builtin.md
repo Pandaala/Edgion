@@ -115,7 +115,7 @@ Integration fixtures live under
 `edgion-tests/integration/conf/EdgionPlugins/Dsl/25_EdgionPlugins_dsl-redis.yaml` and
 the EdgionPlugins DSL client suite.
 
-Both request and response-filter resource compilation now borrow actual DSL
+Both request and async upstream-response resource compilation now borrow actual DSL
 configuration through the existing prepared plugin topology before cache reuse
 or alias-map construction. Intrinsically invalid source identity is
 non-retainable; ordinary invalid scripts under a valid owner retain the existing

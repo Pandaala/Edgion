@@ -409,7 +409,7 @@ search patterns and invalid ranges are rejected. Mutation outside
 - A request-stage script that statically references `req.body` uses the one
   shared bounded request-body capture. A script without such a reference pays
   no capture cost.
-- An `upstreamResponseFilterPlugins` script may read a cache populated earlier
+- An `upstreamResponsePlugins` script may read a cache populated earlier
   by `RequestBodyBuffer`; it never starts late capture.
 - A known bodyless request uses an empty Body without allocating a cache.
 - The pre-VM body gate always fails closed: request-body limit failures return
@@ -683,7 +683,7 @@ if req.method == "HEAD" {
 
 ## Response Reading (resp.*)
 
-> **Note**: The following functions are only valid in the response phase (`upstreamResponseFilterPlugins`). When called in the request phase, read functions typically return `nil`, and the status code also returns `nil`.
+> **Note**: The following functions are only valid in the response phase (`upstreamResponsePlugins`). When called in the request phase, read functions typically return `nil`, and the status code also returns `nil`.
 
 ### resp.status
 
@@ -2114,7 +2114,7 @@ Returns a standard gRPC error to the client, sending `grpc-status` and `grpc-mes
 - `code` (Int) — gRPC status code (0–16)
 - `message` (Str | Nil) — Error message; pass `nil` for no message
 
-In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponseFilterPlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
+In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponsePlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
 
 **Common gRPC status codes**:
 - `0` — OK

@@ -49,7 +49,7 @@ fn response_cache_actual_construction_cache_reuse_preserves_certificates_and_run
         &reused.upstream_response_plugins[0]
     ));
     let mut unsafe_owner = owner.clone();
-    unsafe_owner.spec.upstream_response_filter_plugins = Some(vec![serde_json::from_value(serde_json::json!({
+    unsafe_owner.spec.upstream_response_plugins = Some(vec![serde_json::from_value(serde_json::json!({
         "type":"Dsl", "config":{"name":"response-dsl", "source":"let a = 1"}
     }))
     .unwrap()]);

@@ -1,4 +1,4 @@
-//! DslPlugin — implements RequestFilter and UpstreamResponseFilter for EdgionDSL scripts
+//! DslPlugin — implements RequestFilter and the async UpstreamResponse stage for EdgionDSL scripts
 //!
 //! Created from DslConfig by compiling source or deserializing bytecode,
 //! then instantiating a sandboxed VM. Execution is wrapped via execute_safe()
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::plugins::runtime::traits::UpstreamResponseFilter;
+use crate::plugins::runtime::traits::UpstreamResponse;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 
@@ -98,8 +98,8 @@ impl DslPlugin {
         }
     }
 
-    /// Create from DslConfig (used by PluginRuntime factory for upstream response filter stage)
-    pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
+    /// Create from DslConfig (used by PluginRuntime factory for the async upstream response stage)
+    pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponse>> {
         let (script, limits, policy, runtime) = match Self::resolve_parts(config) {
             Ok(parts) => parts,
             Err(e) => {
@@ -139,42 +139,19 @@ impl RequestFilter for DslPlugin {
     }
 }
 
-impl UpstreamResponseFilter for DslPlugin {
+/// The response-header DSL stage runs in Pingora's async `response_filter`
+/// hook, so the VM is awaited directly. It must never be bridged into the
+/// synchronous `UpstreamResponseFilter` stage: blocking on `http.call` or
+/// `redis.*` there would pin a worker thread and panic on the current-thread
+/// runtimes Pingora builds when `work_stealing` is disabled.
+#[async_trait]
+impl UpstreamResponse for DslPlugin {
     fn name(&self) -> &str {
         &self.name
     }
 
-    /// Bridges the **sync** `UpstreamResponseFilter` hook to the async DSL VM.
-    ///
-    /// REQUIRES a multi-thread Tokio runtime. `block_in_place` panics with
-    /// "Cannot use `block_in_place` inside a `current_thread` runtime". On a
-    /// multi-thread runtime it is also *required*: a bare `Handle::block_on`
-    /// from a worker thread would itself panic ("Cannot block the current
-    /// thread from within a runtime"), so `block_in_place` is the only safe
-    /// sync→async bridge from this worker thread.
-    ///
-    /// The shipped gateway always builds the Tokio default (multi-thread)
-    /// runtime, so this is safe in production. Tests that drive this method
-    /// must use `#[tokio::test(flavor = "multi_thread")]` — see
-    /// `tests/response_builtins.rs::test_upstream_response_filter_phase`.
-    ///
-    /// `spawn_blocking` is not a usable alternative: `session` and `log` are
-    /// non-`'static`, non-`Send` borrows, while `spawn_blocking` requires a
-    /// `'static + Send` closure.
-    fn run_upstream_response_filter(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(execute_safe(
-                &self.vm,
-                session,
-                log,
-                &self.error_policy,
-                &self.runtime,
-            ))
-        })
+    async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        execute_safe(&self.vm, session, log, &self.error_policy, &self.runtime).await
     }
 }
 

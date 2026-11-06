@@ -2748,7 +2748,7 @@ fn fixed_link_sys_resource(kind: &str, response: bool) -> EdgionPlugins {
         _ => unreachable!(),
     };
     let stage = if response {
-        "upstreamResponseFilterPlugins"
+        "upstreamResponsePlugins"
     } else {
         "requestPlugins"
     };
@@ -2803,7 +2803,7 @@ async fn fixed_link_sys_actual_sources_gate_all_factories_but_preserve_masks() {
                 bypass.preparse_errors
             );
             if response {
-                invalid.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].enable = false;
+                invalid.spec.upstream_response_plugins.as_mut().unwrap()[0].enable = false;
             } else {
                 invalid.spec.request_plugins.as_mut().unwrap()[0].enable = false;
             }
@@ -2856,7 +2856,7 @@ async fn fixed_link_sys_dsl_invalid_owner_prevents_retention_without_changing_sc
         let valid = compile_source(&owner);
         let mut bad_script = owner.clone();
         let plugin = if response {
-            &mut bad_script.spec.upstream_response_filter_plugins.as_mut().unwrap()[0].plugin
+            &mut bad_script.spec.upstream_response_plugins.as_mut().unwrap()[0].plugin
         } else {
             &mut bad_script.spec.request_plugins.as_mut().unwrap()[0].plugin
         };
@@ -2884,8 +2884,8 @@ async fn fixed_link_sys_dsl_invalid_owner_prevents_retention_without_changing_sc
         assert!(store.scope().http(&key).unwrap().is_activatable);
         if response {
             assert!(Arc::ptr_eq(
-                old.upstream_response_plugins_iter().next().unwrap(),
-                retained.upstream_response_plugins_iter().next().unwrap()
+                old.upstream_response_async_plugins_iter().next().unwrap(),
+                retained.upstream_response_async_plugins_iter().next().unwrap()
             ));
         } else {
             assert!(Arc::ptr_eq(

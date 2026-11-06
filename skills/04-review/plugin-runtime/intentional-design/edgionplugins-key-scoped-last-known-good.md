@@ -164,7 +164,7 @@ in-flight captured scopes and independent-kind publication boundaries remain.
 
 An enabled HTTP fixed-LinkSys entry with intrinsically invalid or missing actual
 source identity cannot reuse an entry bundle or retain a previous DSL runtime.
-The check covers request DSL and response-filter DSL before cache lookup.
+The check covers request DSL and async upstream-response DSL before cache lookup.
 Valid-owner program errors retain the established key-scoped policy; disabled
 and policy-masked entries remain inert. This is an owner-boundary guard, not an
 immediate revocation rule for captured in-flight views or provider failures.

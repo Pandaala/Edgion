@@ -1,0 +1,17 @@
+# Scenario: Dsl plugin placed in the synchronous upstreamResponseFilterPlugins stage
+# Expect: Accepted=False/Invalid, message contains "not valid for upstream response filter stage"
+#
+# DSL response scripts run only in the async upstreamResponsePlugins stage.
+# The shared stage table rejects DSL in the synchronous stage during preparse.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-dsl-sync-response-stage
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: dsl-sync-stage
+        source: 'resp.set_header("x-sync-stage", "1")'

@@ -1,6 +1,6 @@
 ---
 name: gateway-dsl-engine
-description: DSL engine architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, DslRuntime lifecycle. The architecture entry for DslPlugin maintainers; user-facing syntax / builtin reference lives in docs/.
+description: DSL engine architecture — data flow, source layout, plugin entry points, async execution and termination, panic isolation, DslRuntime lifecycle. The architecture entry for DslPlugin maintainers; user-facing syntax / builtin reference lives in docs/.
 ---
 
 # DSL engine architecture (DslPlugin)
@@ -65,14 +65,14 @@ The language core (parser, AST, compiler, bytecode, errors, value, validator) li
 | DSL-owned JSON/regex scanners and compiled selection plans | `lang/body_scanners.rs` |
 | Generic body scanners, bounded text collection, and mutations | `edgion-gateway/src/request_body/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
 | Runtime errors | `edgion-dsl/src/error.rs` |
-| Plugin entry (RequestFilter + UpstreamResponseFilter impls, config-to-plugin factory) | `plugin.rs` |
+| Plugin entry (RequestFilter + async UpstreamResponse impls, config-to-plugin factory) | `plugin.rs` |
 | Per-plugin external-call context (limits + redis link table) | `runtime.rs` — `DslRuntime` |
 | Static config schema + `compile_and_validate()` wrapper | `config.rs` — `DslConfig` (`edgion-resources` crate) |
 | Unit & integration tests | `tests/` |
 
 ## 3. Plugin entry points
 
-`DslPlugin` implements both `RequestFilter` (RequestFilter phase, async) and `UpstreamResponseFilter` (UpstreamResponseFilter phase, sync) — built via `from_config()` and `from_config_response()` respectively from the same `DslConfig` (see `plugin.rs::resolve_parts`).
+`DslPlugin` implements both `RequestFilter` (`requestPlugins`, async) and `UpstreamResponse` (`upstreamResponsePlugins`, async, Pingora `response_filter` hook) — built via `from_config()` and `from_config_response()` respectively from the same `DslConfig` (see `plugin.rs::resolve_parts`). DSL is not valid in the synchronous `upstreamResponseFilterPlugins` stage; the shared stage table (`HTTP_PLUGIN_STAGE_EXCEPTIONS` in `edgion-resources/.../edgion_plugins/validate.rs`) rejects it there at configuration validation.
 
 Both factories call `resolve_parts()`, which:
 
@@ -189,7 +189,7 @@ output/publication failures are fixed BodyAccess. Pure-string limits retain the
 normal DSL policy. There is no response-body XML API or external XML resolution.
 See [the regression contract](../../04-review/dsl/regression-guards/bounded-xml-primitives.md).
 
-## 4. Async / sync bridging
+## 4. Async execution and termination
 
 ### Explicit termination decisions
 
@@ -204,16 +204,18 @@ The opcode and bytecode format are unchanged: source and validated bytecode
 both reach the same VM branch. For response ownership, header/body changes,
 and verification limits, see [the termination regression guard](../../04-review/dsl/regression-guards/terminate-explicit-local-response.md).
 
-### Execution bridge
+### Async execution
 
-`Vm::execute` is `async fn` (so it can await `http.call` and `redis.*` builtins). It must run from both an async filter phase (RequestFilter) and a sync one (UpstreamResponseFilter):
+`Vm::execute` is `async fn` (so it can await `http.call` and `redis.*` builtins). Both DSL entry points are async, so the VM is always awaited directly:
 
-| Phase | Trait method | Bridge |
+| Phase | Trait method | Execution |
 |---|---|---|
 | RequestFilter | `async fn run_request(...)` | direct `.await` on `execute_safe(...)` |
-| UpstreamResponseFilter | `fn run_upstream_response_filter(...)` (sync) | `tokio::task::block_in_place(|| Handle::current().block_on(execute_safe(...)))` |
+| UpstreamResponse | `async fn run_upstream_response(...)` | direct `.await` on `execute_safe(...)` |
 
-`block_in_place` is required: Pingora calls the sync filter from inside the runtime worker thread, so a naive `block_on` would deadlock the worker. `block_in_place` lets Tokio move the current task aside and keep scheduling other tasks during the blocking call.
+There is no sync-to-async bridge. The former response entry point lived in the synchronous `UpstreamResponseFilter` stage and used `block_in_place(|| Handle::block_on(...))`; that panicked on the current-thread runtimes Pingora builds per worker when `server.work_stealing` is `false`, and pinned a worker thread for the duration of every `http.call` / `redis.*` call. Keep DSL out of synchronous stages; see [the regression guard](../../04-review/concurrency/regression-guards/dsl-response-stage-async-no-block-in-place.md).
+
+Stage-order consequence: the async response chain runs in `response_filter`, after every synchronous `upstreamResponseFilterPlugins` entry at all levels. In the same chain, request-owned response companions (ExtProc, Guardrail) and the `spec.waf` response phase of a runtime run before that runtime's DSL entries, and inner-level companions run before outer-level DSL, so DSL can overwrite a companion's header edits. The late request-body view is released after the async chain (`pg_response_filter.rs`), so a response-stage DSL can still read a request body captured by `RequestBodyBuffer`.
 
 `UpstreamResponseBodyFilter` has no DSL entry point on purpose — that phase fires once per chunk, and the body-phase hot-path rules in [`05-plugin-system.md`](05-plugin-system.md) (the "no PluginLog in body phase" constraint) forbid per-chunk allocation. Running the VM there would violate them outright.
 

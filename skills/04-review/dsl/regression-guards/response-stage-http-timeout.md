@@ -20,9 +20,11 @@ no production timeout or synchronous-bridge defect was established or changed.
 
 ## Rationale and evidence
 
-- [DSL engine bridging](../../../01-architecture/02-gateway/dsl-engine.md#4-async--sync-bridging)
-  defines the response hook's `block_in_place` and `Handle::block_on` bridge.
-  `edgion-gateway/src/plugins/http/dsl/plugin.rs` implements this hook.
+- [DSL engine async execution](../../../01-architecture/02-gateway/dsl-engine.md#4-async-execution-and-termination)
+  defines the response hook, which awaits the VM directly in the async
+  `upstreamResponsePlugins` stage (the former `block_in_place` bridge was
+  removed by dsl-08). `edgion-gateway/src/plugins/http/dsl/plugin.rs`
+  implements this hook.
 - `DslConfig.http_max_timeout_ms` is resolved into immutable
   `DslRuntime.max_timeout_ms` at plugin construction. `call_builtin_http` in
   `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` clamps the script timeout
@@ -34,7 +36,7 @@ no production timeout or synchronous-bridge defect was established or changed.
   against `/health` with requested timeout 2000 ms and cap 3000 ms. It exercises
   neither response-stage suspension nor a requested timeout above the cap.
 - The new `33_EdgionPlugins_dsl-response-http-timeout.yaml` uses two
-  `upstreamResponseFilterPlugins` against test_server's `/delay/1`. A control
+  `upstreamResponsePlugins` entries against test_server's `/delay/1`. A control
   with requested timeout and cap both 3000 ms must return HTTP 200 and the exact
   delayed body. A subsequent call requests 3000 ms with cap 10 ms and must
   return status zero, an empty body, and empty headers. The two plugins emit
@@ -64,6 +66,11 @@ unchanged. No user documentation change is needed because the public contract
 is unchanged.
 
 ## Verification and re-evaluation
+
+Historical verification (2026-09-11) below predates dsl-08 and ran with the
+response scripts in the synchronous `upstreamResponseFilterPlugins` stage. The
+fixture now uses the async `upstreamResponsePlugins` stage and has not been
+re-run since that move.
 
 Verified on 2026-09-11:
 

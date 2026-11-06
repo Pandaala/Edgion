@@ -43,7 +43,8 @@ and the lock-resolved fork revision above:
   and [read-only body trait](../../../../edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs):
   retain their own synchronous phase contracts. The
   [DSL plugin](../../../../edgion-gateway/src/plugins/http/dsl/plugin.rs)
-  still bridges its header trait through `block_in_place`.
+  no longer uses the synchronous header trait; its response script runs in
+  the async `UpstreamResponse` stage without a `block_in_place` bridge.
 
 The fork's `proxy_trait.rs`, `response_pipeline.rs`, `response_body_sink.rs`,
 `response_terminal.rs`, and `response_head_barrier.rs` own the generic
@@ -88,9 +89,9 @@ task rather than treating this record as implementation approval.
 
 The historical `filter-02` decision from 2026-05-29 accepted synchronous plugin
 iteration and the bounded DSL bridge. Its original assertion that the underlying
-Pingora hooks were necessarily synchronous is superseded by current code.
-The multi-thread runtime/borrow boundary remains documented in
-[the DSL bridge rule](../../concurrency/intentional-design/block-in-place-multi-thread-runtime.md).
+Pingora hooks were necessarily synchronous is superseded by current code, and
+the DSL bridge itself was removed by dsl-08; see
+[the DSL async response-stage guard](../../concurrency/regression-guards/dsl-response-stage-async-no-block-in-place.md).
 The historical response-replacement gap is superseded by
 [response-stage denial handling](../../http-body/regression-guards/response-stage-denial-must-terminate.md).
 

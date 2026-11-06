@@ -60,7 +60,7 @@ Controller 和 Gateway 共用 `EdgionPlugin::dye_capabilities(DyeStage)`。
 | `RateLimitRedis` | 请求阶段：`onRedisFailure: Allow` 支持 `fail-open`，`Deny` 支持 `fail-close`。 |
 | `ExtProc` | 请求条目及其挂载的响应头提交前回调：由 `failureModeAllow` 决定失败结果。 |
 | `Wasm` | 请求阶段或上游响应头过滤阶段：由 `failOpen` 决定失败结果；响应体阶段不支持染色。 |
-| `Dsl` | 请求阶段或上游响应头过滤阶段：`deny`/`denyWith` 支持 `fail-close`；`ignore` 还支持 `fail-open`。请求体或扫描器硬错误仍固定 fail-close。 |
+| `Dsl` | 请求阶段或异步上游响应阶段（`upstreamResponsePlugins`）：`deny`/`denyWith` 支持 `fail-close`；`ignore` 还支持 `fail-open`。请求体或扫描器硬错误仍固定 fail-close。 |
 | `OpenidConnect` | 请求阶段：启用 JWKS 验证、nonce 验证或会话续期（`bearerOnly: false`、`renewAccessTokenOnExpiry: true`）时，支持旧缓存 `fail-open` 和不可用 `fail-close`。即使使用 `IntrospectionOnly`，会话刷新等待超时仍可进入 JWKS 路径；introspection 验证本身不产生这两种结果。 |
 | `ForwardAuth`、`LdapAuth` | 请求阶段：依赖失败的 `fail-close`。 |
 | `AiProxy` 和其他插件 | 无条目级染色能力。 |

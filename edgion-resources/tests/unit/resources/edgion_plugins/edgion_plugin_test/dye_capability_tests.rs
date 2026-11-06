@@ -188,7 +188,7 @@ fn oidc_session_refresh_dye_requires_session_mode_and_renewal() {
 }
 
 #[test]
-fn dsl_ignore_retains_hard_error_capability_in_both_header_stages() {
+fn dsl_ignore_retains_hard_error_capability_in_request_and_async_response_stages() {
     use super::super::plugin_configs::DslErrorPolicy;
     for policy in [
         None,
@@ -211,7 +211,7 @@ fn dsl_ignore_retains_hard_error_capability_in_both_header_stages() {
         for stage in STAGES {
             assert_eq!(
                 plugin.dye_capabilities(stage),
-                if matches!(stage, DyeStage::Request | DyeStage::UpstreamResponseFilter) {
+                if matches!(stage, DyeStage::Request | DyeStage::UpstreamResponse) {
                     expected
                 } else {
                     &[]

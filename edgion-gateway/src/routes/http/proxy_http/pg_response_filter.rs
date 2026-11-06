@@ -1,7 +1,9 @@
 use super::content_type::classify_response_stream_kind;
 use super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL;
 use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
-use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
+use super::pg_upstream_response_filter::{
+    is_interim_informational, release_late_request_body_view, response_denial_error, response_stage_settled,
+};
 use super::EdgionHttpProxy;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::http::common::http_client::connection_option_tokens;
@@ -269,6 +271,9 @@ pub async fn response_filter(
             }
         }
     }
+
+    // The async chain above is the last late request-body consumer.
+    release_late_request_body_view(ctx);
 
     // Async response plugins run after H1 made its framing choice. Remove a
     // stale length once more so they cannot produce CL+TE or incorrect H2

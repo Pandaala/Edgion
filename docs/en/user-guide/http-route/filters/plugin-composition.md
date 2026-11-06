@@ -22,8 +22,8 @@ Edgion splits plugin execution into four stages that line up with the proxy life
 |-------|--------------|--------------|
 | **Request** | After the route matches, before the upstream is contacted | async |
 | **Upstream response (header)** | When the upstream response headers arrive | sync |
+| **Upstream response (async)** | After every synchronous upstream-response header entry, before the response header is sent downstream (`upstreamResponsePlugins`; DSL runs here) | async |
 | **Upstream response body** | For each body chunk streamed back from the upstream | sync |
-| **Upstream response (async)** | Reserved async response hook (no built-in plugins map here today) | async |
 
 Each plugin kind is valid only in specific stages. If you place a plugin in a stage it does not support, the route fails closed (see [Fail-closed behavior](#fail-closed-behavior)).
 
@@ -69,9 +69,9 @@ When you write a standard filter in `rules[].filters`, Edgion routes it to the r
 | `URLRewrite` | Request |
 | `RequestMirror` | Request (non-blocking) |
 | `ResponseHeaderModifier` | Upstream response (header) |
-| `ExtensionRef` | Request + upstream response (header) + upstream response body |
+| `ExtensionRef` | Request + upstream response (header) + upstream response (async) + upstream response body |
 
-`ExtensionRef` is special: the referenced `EdgionPlugins` resource may declare plugins for any stage, so a single `ExtensionRef` entry is attached to the request, response-header, and response-body stages at once. At runtime each stage only runs the plugins from that resource that are valid for it.
+`ExtensionRef` is special: the referenced `EdgionPlugins` resource may declare plugins for any stage, so a single `ExtensionRef` entry is attached to the request, response-header, async upstream-response, and response-body stages at once. At runtime each stage only runs the plugins from that resource that are valid for it.
 
 > Load-balancing policy `ExtensionRef`s are unsupported. Configure load balancing with an `EdgionBackendTrafficPolicy` instead; load-balancing policy references do not enter the plugin pipeline.
 

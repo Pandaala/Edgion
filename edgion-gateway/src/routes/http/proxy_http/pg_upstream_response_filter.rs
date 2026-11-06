@@ -73,12 +73,13 @@ pub(super) fn response_denial_error(denial: &ResponseStageDenial) -> Box<pingora
 }
 
 #[inline]
-fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
-    // The final response-header plugin chain is the last supported late
-    // request-body consumer. Release its view here so an SSE/large download
-    // cannot retain spilled-body file descriptors or materialized bytes for
-    // the lifetime of the response. Retry early returns deliberately occur
-    // before this point and keep the view for the next attempt.
+pub(super) fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
+    // The async response-header plugin chain (`response_filter`) is the last
+    // supported late request-body consumer. Release its view there so an
+    // SSE/large download cannot retain spilled-body file descriptors or
+    // materialized bytes for the lifetime of the response. Retry early returns
+    // deliberately occur before this point and keep the view for the next
+    // attempt.
     ctx.request_body.release_view();
 }
 
@@ -442,12 +443,15 @@ fn run_response_header_sync_tail(
         enforce_stream_processor_framing(upstream_response, ctx);
     }
 
-    release_late_request_body_view(ctx);
+    // The late request-body view stays alive for the async response stage;
+    // `response_filter` releases it after that chain.
 
     // A denial no local reply could carry aborts here: returning Ok would hand
     // the untouched upstream response to `response_filter` and on to the client.
-    if let Some(denial) = ctx.response_denial() {
-        return Err(response_denial_error(denial));
+    // `response_filter` never runs on this path, so release the view here.
+    if let Some(error) = ctx.response_denial().map(response_denial_error) {
+        release_late_request_body_view(ctx);
+        return Err(error);
     }
 
     Ok(())

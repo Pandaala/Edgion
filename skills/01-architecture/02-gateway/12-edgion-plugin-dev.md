@@ -839,7 +839,7 @@ records enforcement boundaries and regression evidence.
 
 ### Fixed LinkSys fields at HTTP resource compilation
 
-DSL (request and response-filter), RateLimitRedis, GraphqlRateLimit,
+DSL (request and async upstream-response), RateLimitRedis, GraphqlRateLimit,
 WebhookKeyGet, and AiProxy token quota borrow their actual configurations through
 PreparedPluginReferences. Exact LinkSys fields join the existing stage/entry
 topology; one cold binding serves both stages. Check actual source identity

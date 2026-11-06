@@ -56,7 +56,8 @@ inspect. `set_upstream_method` (`session_adapter.rs`) rewrites the live header
 in place and is reachable from `proxy_rewrite`
 (`plugins/http/proxy_rewrite/plugin.rs`) and from DSL's `req.set_method`
 (`plugins/http/dsl/lang/builtins.rs`, which is **not** stage-gated, so it is
-callable from `upstreamResponseFilterPlugins` too). Crucially, `self.inner` is
+callable from the response-stage DSL in `upstreamResponsePlugins` too; before
+dsl-08 that stage was `upstreamResponseFilterPlugins`). Crucially, `self.inner` is
 the *downstream* `pingora_proxy::Session`, so that rewrite also changes what
 pingora itself sees.
 
@@ -81,8 +82,9 @@ The **status** input has the same two-direction disagreement shape. `set_respons
 (`session_adapter.rs`) writes straight into the bound response header, and is
 reachable from DSL's `resp.set_status` (`plugins/http/dsl/lang/builtins.rs`)
 and from `response_rewrite`'s `status_code`
-(`plugins/http/response_rewrite/plugin.rs`), both at the
-`upstreamResponseFilterPlugins` stage. In the historical reproduction, before
+(`plugins/http/response_rewrite/plugin.rs`). `response_rewrite` runs in
+`upstreamResponseFilterPlugins`; the response-stage DSL ran there too until
+dsl-08 moved it to the async `upstreamResponsePlugins` stage. In the historical reproduction, before
 configuration validation rejected `resp.body`, `resp.set_status(204)` followed by
 `resp.body` — or a `response_rewrite {status_code: 204}` entry ordered ahead of
 a DSL `resp.body` entry in the same array — could hand the consumer

@@ -234,7 +234,7 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
         } else if consumer == 1 {
             serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"100kb"}}]})
         } else {
-            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]})
+            serde_json::json!({"upstreamResponsePlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]})
         };
         let plugins: EdgionPlugins=serde_json::from_value(serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{"name":"companion","namespace":"default"},"spec":spec})).unwrap();
         crate::plugins::http::plugin_generation::PluginGeneration::new(plugins)
@@ -296,7 +296,7 @@ fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
             true,
         ),
         (
-            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]}),
+            serde_json::json!({"upstreamResponsePlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]}),
             true,
         ),
     ] {

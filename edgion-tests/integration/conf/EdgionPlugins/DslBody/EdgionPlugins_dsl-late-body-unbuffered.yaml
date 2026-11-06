@@ -4,7 +4,7 @@ metadata:
   name: dsl-late-body-unbuffered
   namespace: edgion-default
 spec:
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - type: Dsl
       config:
         name: "late-body-reader-without-buffer"

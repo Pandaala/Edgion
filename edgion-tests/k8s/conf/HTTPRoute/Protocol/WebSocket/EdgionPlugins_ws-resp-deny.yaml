@@ -10,7 +10,7 @@ spec:
   # replacing the response. Before that abort existed the denial was a log line
   # and the upgrade completed, i.e. a response-stage policy silently did nothing
   # on exactly the traffic it was written to stop.
-  upstreamResponseFilterPlugins:
+  upstreamResponsePlugins:
     - enable: true
       type: Dsl
       config:

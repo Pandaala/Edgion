@@ -10,7 +10,7 @@ knowledge_type: mandatory-design
 
 `RequestBodyBuffer` is the canonical opt-in mechanism for a
 `requestPlugins` entry to capture the complete proxied request body before
-upstream forwarding. A later DSL entry in `upstreamResponseFilterPlugins` may
+upstream forwarding. A later DSL entry in `upstreamResponsePlugins` may
 read that existing shared cache.
 
 The stage boundary separates capture from access:
@@ -28,8 +28,11 @@ exists is request-scoped runtime state under explicit operator control.
 ## Lifetime boundary
 
 Keep the read-only `BodyStorageView` through all final response-header plugin
-layers: route, backend, Gateway, then global. Release it immediately after that
-chain. Interim 1xx responses and status-retry decisions return before the
+layers: the synchronous `upstream_response_filter` chain and then the async
+`response_filter` chain, each across route, backend, Gateway, then global.
+Release it immediately after the async chain (`pg_response_filter.rs`), the
+last late request-body consumer since DSL moved to `upstreamResponsePlugins`
+(dsl-08). Interim 1xx responses and status-retry decisions return before the
 release point so the final response or retry can still use the cache.
 
 This release point is required for streaming responses. Retaining the view
