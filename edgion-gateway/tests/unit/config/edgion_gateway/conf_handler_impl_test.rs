@@ -728,9 +728,11 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
     let in_flight = get_egc_dns_resolver_default().expect("lowest store key must win");
     assert_eq!(
         in_flight.candidate().cloned(),
-        Some(ResolverCandidate::Servers(vec!["192.0.2.1:53".to_string()]))
+        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
+            vec!["192.0.2.1:53".to_string()]
+        )))
     );
-    assert_eq!(in_flight.cache_ttl(), Duration::from_secs(10));
+    assert_eq!(in_flight.cache_policy().fallback_ttl(), Duration::from_secs(10));
 
     let without_dns = make_config("metadata-second");
     handler.partial_update(
@@ -741,17 +743,21 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
     let next = get_egc_dns_resolver_default().expect("remaining resolver must become the winner");
     assert_eq!(
         next.candidate().cloned(),
-        Some(ResolverCandidate::Servers(vec!["192.0.2.2:53".to_string()]))
+        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
+            vec!["192.0.2.2:53".to_string()]
+        )))
     );
-    assert_eq!(next.cache_ttl(), Duration::from_secs(20));
+    assert_eq!(next.cache_policy().fallback_ttl(), Duration::from_secs(20));
     assert!(!Arc::ptr_eq(&in_flight, &next));
     assert_eq!(
         in_flight.candidate().cloned(),
-        Some(ResolverCandidate::Servers(vec!["192.0.2.1:53".to_string()])),
+        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
+            vec!["192.0.2.1:53".to_string()]
+        ))),
         "a loaded Arc must pin its candidate generation"
     );
     assert_eq!(
-        in_flight.cache_ttl(),
+        in_flight.cache_policy().fallback_ttl(),
         Duration::from_secs(10),
         "a loaded Arc must pin its TTL generation"
     );
@@ -770,7 +776,10 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
     );
     let invalid = get_egc_dns_resolver_default().expect("configured system resolver remains represented");
     assert_eq!(invalid.candidate(), None);
-    assert_eq!(invalid.cache_ttl(), crate::backends::DEFAULT_DNS_CACHE_TTL);
+    assert_eq!(
+        invalid.cache_policy().fallback_ttl(),
+        crate::backends::DEFAULT_DNS_CACHE_TTL
+    );
 
     let mut zero_ttl = make_config("metadata-first");
     zero_ttl.spec.dns_resolver = Some(DnsResolverConfig {
@@ -787,7 +796,8 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
     assert_eq!(
         get_egc_dns_resolver_default()
             .expect("zero TTL is a valid configured generation")
-            .cache_ttl(),
+            .cache_policy()
+            .fallback_ttl(),
         Duration::ZERO
     );
 
@@ -1557,7 +1567,7 @@ fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
         ]));
         let selected = snapshot.dns_resolver_default.unwrap();
         assert!(selected.candidate().is_none(), "{case}");
-        assert_eq!(selected.cache_ttl(), Duration::from_secs(17));
+        assert_eq!(selected.cache_policy().fallback_ttl(), Duration::from_secs(17));
         assert!(matches!(
             resolve_effective_spec(&[selected.candidate()], |_| panic!("invalid reference lookup")),
             ResolverSpec::System
@@ -1566,9 +1576,11 @@ fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
         let inline = ResolvedDnsResolverDefault::resolve(&first);
         assert_eq!(
             inline.candidate(),
-            Some(&ResolverCandidate::Servers(vec!["192.0.2.1".into()]))
+            Some(&ResolverCandidate::Servers(
+                edgion_common::dns::StandardDnsServers::new(vec!["192.0.2.1".into()])
+            ))
         );
-        assert_eq!(inline.cache_ttl(), Duration::from_secs(17));
+        assert_eq!(inline.cache_policy().fallback_ttl(), Duration::from_secs(17));
     }
 }
 

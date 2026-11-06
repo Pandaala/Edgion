@@ -80,25 +80,18 @@ async fn system_spec_resolves_localhost() {
 #[test]
 fn fingerprint_distinguishes_resolvers() {
     let system = ResolverSpec::System.fingerprint();
-    let dns_a = ResolverSpec::StandardDns {
-        servers: vec!["1.1.1.1".to_string()],
-    }
-    .fingerprint()
-    .into_owned();
-    let dns_b = ResolverSpec::StandardDns {
-        servers: vec!["8.8.8.8".to_string()],
-    }
-    .fingerprint()
-    .into_owned();
+    let dns_a = ResolverSpec::StandardDns(crate::dns::StandardDnsServers::new(vec!["1.1.1.1".to_string()]))
+        .fingerprint()
+        .into_owned();
+    let dns_b = ResolverSpec::StandardDns(crate::dns::StandardDnsServers::new(vec!["8.8.8.8".to_string()]))
+        .fingerprint()
+        .into_owned();
     assert_ne!(system, dns_a);
     assert_ne!(dns_a, dns_b, "different server lists must fingerprint differently");
     // Same servers → same fingerprint (cache hit across requests).
     assert_eq!(
         dns_a,
-        ResolverSpec::StandardDns {
-            servers: vec!["1.1.1.1".to_string()]
-        }
-        .fingerprint()
+        ResolverSpec::StandardDns(crate::dns::StandardDnsServers::new(vec!["1.1.1.1".to_string()])).fingerprint()
     );
 }
 
@@ -431,7 +424,12 @@ fn malformed_global_owner_cannot_reuse_equal_policy_or_construct_httpdns_client(
     );
     let recovered = prepare_with_defaults(config.clone(), Arc::clone(&a));
     assert!(recovered.is_ready());
-    assert_eq!(failed.address_fingerprint, first.address_fingerprint);
+    // A fallback-only generation never shares cached answers with a ready one,
+    // while an equally ready recovery keeps the ready identity.
+    assert_ne!(failed.address_fingerprint, first.address_fingerprint);
+    assert_eq!(recovered.address_fingerprint, first.address_fingerprint);
+    assert!(first.address_fingerprint.starts_with("httpdns:ready:"));
+    assert!(failed.address_fingerprint.starts_with("httpdns:fallback:"));
     config
         .connection
         .as_mut()
@@ -540,9 +538,12 @@ fn fingerprints_borrow_fixed_and_prepared_identity() {
     for (servers, literal) in cases {
         let servers: Vec<String> = servers.iter().map(|server| (*server).to_string()).collect();
         let expected = format!("std:{}", servers.join(","));
-        let spec = ResolverSpec::StandardDns { servers };
+        let spec = ResolverSpec::StandardDns(crate::dns::StandardDnsServers::new(servers));
         let fingerprint = spec.fingerprint();
-        assert!(matches!(fingerprint, Cow::Owned(_)));
+        assert!(
+            matches!(fingerprint, Cow::Borrowed(_)),
+            "prepared server lists borrow their identity"
+        );
         assert_eq!(fingerprint, *literal);
         assert_eq!(fingerprint, expected);
     }

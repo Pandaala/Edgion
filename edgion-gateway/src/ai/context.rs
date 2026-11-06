@@ -1,5 +1,6 @@
 //! Lazily allocated state for one AI HTTP exchange.
 
+use crate::ai::http::attempt::DialedAddrs;
 use crate::ai::protocols::openai::terminal::AiClientStreamDialect;
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::ctx::{DeferredCredentialMutations, EdgionHttpContext, ResponseHeadHoldClaim};
@@ -62,6 +63,9 @@ pub(crate) struct AiHttpState {
     pub(crate) canonical_record_batch: Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch>,
     /// Canonical semantic guard, run after the AI source processor.
     pub(crate) semantic_processor: Option<Box<dyn StreamingResponseProcessor>>,
+    /// Upstream addresses already dialed by this request, so a later attempt
+    /// prefers an address it has not tried.
+    pub(crate) dialed_addrs: DialedAddrs,
 }
 
 impl EdgionHttpContext {

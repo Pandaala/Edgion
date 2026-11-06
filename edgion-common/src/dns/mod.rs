@@ -3,6 +3,7 @@
 //! backend uses hickory-resolver, HTTP DNS reuses link_sys_core's HTTP client,
 //! and the no-config path falls back to the system resolver.
 
+pub mod cache;
 mod hickory;
 pub mod http_fetcher;
 pub mod httpdns;
@@ -14,9 +15,12 @@ pub use edgion_resources::resources::common::DnsLookupFamily;
 use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
+
+pub use cache::{egress_answer_cache, DnsAnswerCache, DnsAnswerCacheStats, DnsCachePolicy};
 
 /// Explicit query intent: infrastructure preserves its native resolver behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DnsQueryPolicy {
     Native,
     Family(DnsLookupFamily),
@@ -49,6 +53,29 @@ pub(super) fn require_addresses(ips: Vec<IpAddr>) -> Result<Vec<IpAddr>, DnsErro
         Err(DnsError::NoAddresses)
     } else {
         Ok(ips)
+    }
+}
+
+/// A resolver answer: the addresses plus the remaining record lifetime when the
+/// resolver reports one (`None` for the System resolver and TTL-less HTTPDNS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DnsAnswer {
+    pub addrs: Vec<IpAddr>,
+    pub ttl: Option<Duration>,
+}
+
+impl DnsAnswer {
+    /// An answer whose lifetime the resolver did not report.
+    pub fn without_ttl(addrs: Vec<IpAddr>) -> Self {
+        Self { addrs, ttl: None }
+    }
+}
+
+/// Smallest reported TTL; an unreported TTL does not shorten a reported one.
+pub(super) fn min_ttl(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
     }
 }
 
@@ -157,11 +184,17 @@ impl HttpDnsCandidate {
     /// Even failed preparation publishes the actual configuration's fallback.
     pub fn prepare(self) -> Arc<PreparedHttpDns> {
         let config = self.config();
+        let fetcher = self.build_fetcher().ok();
+        // Readiness is part of the address identity: a fallback-only generation
+        // must never share cached answers with a ready one.
         let address_fingerprint = {
             let _redact = edgion_resources::redact::AdminRedactGuard::new();
-            format!("httpdns:{}", serde_json::to_string(config).unwrap_or_default())
+            let readiness = if fetcher.is_some() { "ready" } else { "fallback" };
+            format!(
+                "httpdns:{readiness}:{}",
+                serde_json::to_string(config).unwrap_or_default()
+            )
         };
-        let fetcher = self.build_fetcher().ok();
         // Clone only query policy: never copy connection/Secret bodies to discard.
         let query = HttpDnsResolverConfig {
             preset: config.preset.clone(),
@@ -245,13 +278,37 @@ pub(crate) fn strip_brackets(s: &str) -> &str {
     s.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(s)
 }
 
+/// A configuration-prepared standard-DNS server list with its precomputed
+/// cache identity, shared by `Arc` so per-request resolver selection never
+/// clones the list or rebuilds the fingerprint.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StandardDnsServers {
+    servers: Vec<String>,
+    fingerprint: String,
+}
+
+impl StandardDnsServers {
+    pub fn new(servers: Vec<String>) -> Arc<Self> {
+        let fingerprint = format!("std:{}", servers.join(","));
+        Arc::new(Self { servers, fingerprint })
+    }
+
+    pub fn servers(&self) -> &[String] {
+        &self.servers
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.servers.is_empty()
+    }
+}
+
 /// A fully-resolved resolver choice (precedence resolution happens in callers).
 #[derive(Debug, Clone)]
 pub enum ResolverSpec {
     /// OS/system resolver (no configuration).
     System,
     /// Standard DNS against an explicit server list (`ip[:port]`).
-    StandardDns { servers: Vec<String> },
+    StandardDns(Arc<StandardDnsServers>),
     /// HTTP DNS via a configuration-prepared LinkSys generation.
     HttpDns(Arc<PreparedHttpDns>),
 }
@@ -261,27 +318,17 @@ impl ResolverSpec {
     /// key component so a resolver change (different servers, a swapped httpdns
     /// config) invalidates cached addresses instead of serving stale ones.
     ///
-    /// HTTP DNS returns a precomputed admin-redacted address-cache identity.
-    /// Secret bytes belong only to the private preparation identity; rotating
-    /// them does not invalidate otherwise unchanged resolved backend addresses.
+    /// HTTP DNS returns a precomputed admin-redacted address-cache identity
+    /// that includes the generation's readiness. Secret bytes belong only to
+    /// the private preparation identity; rotating them does not invalidate
+    /// otherwise unchanged resolved backend addresses.
+    ///
+    /// Every variant borrows a precomputed value, so cache lookups allocate
+    /// nothing for the resolver identity.
     pub fn fingerprint(&self) -> Cow<'_, str> {
         match self {
             ResolverSpec::System => Cow::Borrowed("system"),
-            ResolverSpec::StandardDns { servers } => {
-                let capacity = servers.iter().fold(
-                    4usize.saturating_add(servers.len().saturating_sub(1)),
-                    |size, server| size.saturating_add(server.len()),
-                );
-                let mut fingerprint = String::with_capacity(capacity);
-                fingerprint.push_str("std:");
-                for (index, server) in servers.iter().enumerate() {
-                    if index > 0 {
-                        fingerprint.push(',');
-                    }
-                    fingerprint.push_str(server);
-                }
-                Cow::Owned(fingerprint)
-            }
+            ResolverSpec::StandardDns(servers) => Cow::Borrowed(&servers.fingerprint),
             ResolverSpec::HttpDns(prepared) => Cow::Borrowed(&prepared.address_fingerprint),
         }
     }
@@ -310,9 +357,16 @@ impl std::error::Error for DnsError {}
 
 /// Resolve `domain` per `spec`. Returns all resolved addresses.
 pub async fn resolve(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<Vec<IpAddr>, DnsError> {
+    resolve_answer(spec, domain, policy).await.map(|answer| answer.addrs)
+}
+
+/// Resolve `domain` per `spec`, returning the addresses and the remaining
+/// record lifetime when the resolver reports one. Uncached; callers that want
+/// caching go through [`DnsAnswerCache`].
+pub async fn resolve_answer(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<DnsAnswer, DnsError> {
     if policy != DnsQueryPolicy::Native {
         if let Ok(ip) = strip_brackets(domain).parse::<IpAddr>() {
-            return require_addresses(policy.select(vec![ip]));
+            return require_addresses(policy.select(vec![ip])).map(DnsAnswer::without_ttl);
         }
     }
     match spec {
@@ -320,13 +374,9 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) 
             let addrs = system::resolve_system(domain, policy)
                 .await
                 .map_err(|e| DnsError::Io(e.to_string()))?;
-            if addrs.is_empty() {
-                Err(DnsError::NoAddresses)
-            } else {
-                Ok(addrs)
-            }
+            require_addresses(addrs).map(DnsAnswer::without_ttl)
         }
-        ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain, policy).await,
+        ResolverSpec::StandardDns(servers) => standard::resolve_standard(servers.servers(), domain, policy).await,
         ResolverSpec::HttpDns(prepared) => match prepared.fetcher.as_ref() {
             Some(fetcher) => {
                 httpdns::resolve_http_dns_prepared(fetcher, &prepared.config, &prepared.query, domain, policy).await

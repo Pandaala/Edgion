@@ -10,7 +10,7 @@
 //! LinkSys reference to its config; [`resolve_effective_spec`] returns the
 //! winning [`ResolverSpec`].
 
-use super::PreparedHttpDns;
+use super::{PreparedHttpDns, StandardDnsServers};
 use edgion_resources::resources::refs::dns_fields::{DnsLinkSysKey, DnsResolverOwner, EgcDnsResolverField};
 use std::sync::Arc;
 
@@ -39,8 +39,9 @@ impl LinkSysKey {
 /// One layer's resolver choice, before an httpdns ref is resolved to a config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolverCandidate {
-    /// Inline standard-DNS server list (`ip[:port]`).
-    Servers(Vec<String>),
+    /// Inline standard-DNS server list (`ip[:port]`), prepared once with its
+    /// cache identity when the owning configuration is parsed.
+    Servers(Arc<StandardDnsServers>),
     /// httpdns LinkSys reference.
     HttpDnsRef(LinkSysKey),
 }
@@ -80,7 +81,7 @@ pub fn candidate_from_dns_owner(owner: DnsResolverOwner<'_>) -> Option<ResolverC
         }));
     }
     let servers = parse_dns_server_list(owner.inline_servers()?);
-    (!servers.is_empty()).then_some(ResolverCandidate::Servers(servers))
+    (!servers.is_empty()).then(|| ResolverCandidate::Servers(StandardDnsServers::new(servers)))
 }
 
 /// The selected actual EGC owns this administrative reference. An invalid
@@ -100,7 +101,7 @@ pub fn candidate_from_egc_default(owner: &edgion_resources::EdgionGatewayConfig)
         .as_ref()
         .filter(|servers| !servers.is_empty())
         .cloned()
-        .map(ResolverCandidate::Servers)
+        .map(|servers| ResolverCandidate::Servers(StandardDnsServers::new(servers)))
 }
 
 /// Resolve the effective [`ResolverSpec`] from ordered candidate layers
@@ -121,9 +122,7 @@ where
     // unconfigured (`None`) layers.
     match layers.iter().flatten().next() {
         None => ResolverSpec::System,
-        Some(ResolverCandidate::Servers(servers)) if !servers.is_empty() => ResolverSpec::StandardDns {
-            servers: servers.clone(),
-        },
+        Some(ResolverCandidate::Servers(servers)) if !servers.is_empty() => ResolverSpec::StandardDns(servers.clone()),
         Some(ResolverCandidate::Servers(_)) => ResolverSpec::System,
         Some(ResolverCandidate::HttpDnsRef(key)) => match lookup(key) {
             Some(prepared) => ResolverSpec::HttpDns(prepared),

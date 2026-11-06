@@ -9,6 +9,7 @@ pub mod kube_client;
 pub mod link_sys_core;
 pub mod observe;
 pub mod secret;
+pub mod singleflight;
 pub mod startup;
 pub mod test_mode;
 pub mod time;

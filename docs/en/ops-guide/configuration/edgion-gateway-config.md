@@ -543,3 +543,36 @@ the Controller/Service policy instead; no connection racing is introduced.
 See the [backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).
 
 The DNS default owner is the existing deterministic minimum store-key winner across EGC resources defining DNS settings, not the current GatewayClass alone. A family-only DNS block participates in that selection.
+
+## Backend DNS answer caching
+
+Cached ExternalName self-resolution (`gateway` mode and the `controller`-mode
+bridge) and AI provider hostnames share one bounded DNS answer cache in the
+Gateway, sized from the `lru_cache` defaults. Answers are keyed by resolver,
+hostname and address family, and every use still applies the upstream address
+safety checks.
+
+- An answer is fresh for the record TTL reported by the resolver, clamped to
+  5–300 seconds (the 5-second floor matches Envoy's `dns_min_refresh_rate`). Standard DNS servers report record TTLs; HTTP DNS reports one
+  when its JSON response format has a `ttlPath` (the `aliyun` preset does).
+- `cacheTtl` (default `5s`, capped at 300 seconds) is the freshness of answers
+  whose resolver reports no TTL, such as the system resolver. `cacheTtl: 0s`
+  disables caching.
+- For 30 seconds after an answer expires it is still served while one request
+  refreshes it. If the resolver is failing, the last good answer keeps being
+  served for as long as it is still requested (as Envoy keeps its last
+  resolution); an answer nobody requests for 30 seconds expires. Refreshes during
+  an outage back off exponentially from 1 to 10 seconds.
+- An authoritative empty answer (NXDOMAIN, or no records with SOA evidence)
+  replaces the answer immediately. The system resolver cannot distinguish
+  NXDOMAIN from an outage, and standard DNS treats an empty answer without SOA
+  evidence as ambiguous; in those cases a removed name keeps being served until
+  the resolver answers successfully or the name stops being requested.
+- A failed lookup with no answer to fall back on is cached for 1 second,
+  doubling per consecutive failure up to 10 seconds, and concurrent lookups of
+  the same cold name share a single resolver query.
+- `edgion.io/dns-resolution-mode: per-request` bypasses the cache.
+
+Requests rotate their starting address across the resolved set, so traffic is
+spread over every address and one dead address does not capture every request.
+AI attempts also prefer an address the same request has not dialed yet.

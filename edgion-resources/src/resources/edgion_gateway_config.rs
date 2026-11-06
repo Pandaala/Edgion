@@ -147,7 +147,9 @@ pub struct DnsResolverConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub servers: Option<Vec<String>>,
 
-    /// Data-plane resolution cache TTL (GEP-2257 duration, default "5s").
+    /// Freshness of data-plane DNS answers whose resolver reports no record TTL
+    /// (GEP-2257 duration, default "5s", capped at 300 s; "0s" disables caching). Reported record
+    /// TTLs are honored within the shared answer cache's 5-300 s bounds.
     #[serde(default = "default_dns_cache_ttl")]
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub cache_ttl: String,

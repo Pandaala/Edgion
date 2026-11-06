@@ -28,8 +28,9 @@ accepted**. They still put a `tracing::*` call on a request/connection path.
 
 The actual-owner managed client builder installs `EgressResolver` for URL targets.
 `ForwardAuth::run_request` and Webhook outbound calls execute the resulting
-`reqwest::Client`; on a resolver-cache miss, `Resolve::resolve` calls
-`filter_addrs` before allowing the connection. A blocked DNS answer therefore
+`reqwest::Client`; on every resolution, `Resolve::resolve` classifies the
+(possibly cached) raw answer before allowing the connection (common-02 moved
+caching to the shared answer cache, so this runs per use, not per miss). A blocked DNS answer therefore
 reaches the function during live request processing even though the resolver
 object itself was constructed during config assembly.
 

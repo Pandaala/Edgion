@@ -83,6 +83,16 @@ because integration mode uses the logging fallback path. Reverse verification
 must independently break expiration and owner release and confirm that these
 exact residue paths fail; restore both faults before final verification.
 
+## DNS answer cache entries
+
+The shared DNS answer caches (`gateway.dns_answer_cache.{upstream,egress}`,
+`controller.dns_answer_cache`) retain capacity-bounded answers for up to 330
+seconds (300 s record-TTL cap plus the 30 s stale window; longer while a failing
+resolver keeps a still-requested answer), beyond the 75-second poll, and carry no
+resource identity, so wipe-all cannot release them.
+Their exact `entries` paths are exempt. `in_flight` (live single-flight
+registrations) must reach zero; `in_flight_keys` names any stuck key.
+
 ## Adding a new ignore-path
 
 An ignore-path is a structural constant (a legitimate value that never returns to zero), such as:

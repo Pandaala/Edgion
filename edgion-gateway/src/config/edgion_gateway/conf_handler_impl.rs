@@ -8,7 +8,7 @@ use crate::routes::http::proxy_http::ParsedTimeouts;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
-use edgion_common::dns::DnsLookupFamily;
+use edgion_common::dns::{DnsCachePolicy, DnsLookupFamily};
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_gateway_config::{resolve_tcp_connect_timeout, resolve_tcp_idle_timeout};
@@ -198,13 +198,13 @@ fn default_remote_ip_header() -> http::HeaderName {
 
 /// Request-path-ready data-plane DNS default resolved from an EdgionGatewayConfig.
 ///
-/// The canonical resolver candidate, address family and cache TTL are derived while publishing
+/// The canonical resolver candidate, address family and answer-cache policy are derived while publishing
 /// the immutable configuration snapshot. Consumers only clone the containing
 /// `Arc`; httpdns LinkSys references remain resolved against the live store.
 #[derive(Debug)]
 pub struct ResolvedDnsResolverDefault {
     candidate: Option<ResolverCandidate>,
-    cache_ttl: Duration,
+    cache_policy: DnsCachePolicy,
     lookup_family: DnsLookupFamily,
 }
 
@@ -217,7 +217,11 @@ impl ResolvedDnsResolverDefault {
             .expect("selected DNS owner has a DNS field");
         Self {
             candidate: candidate_from_egc_default(owner),
-            cache_ttl: parse_duration(&config.cache_ttl).unwrap_or(crate::backends::DEFAULT_DNS_CACHE_TTL),
+            // `cacheTtl` is the freshness of answers without a record TTL;
+            // reported record TTLs are honored within the cache's fixed bounds.
+            cache_policy: DnsCachePolicy::new(
+                parse_duration(&config.cache_ttl).unwrap_or(crate::backends::DEFAULT_DNS_CACHE_TTL),
+            ),
             lookup_family: config.lookup_family,
         }
     }
@@ -226,8 +230,8 @@ impl ResolvedDnsResolverDefault {
         self.candidate.as_ref()
     }
 
-    pub fn cache_ttl(&self) -> Duration {
-        self.cache_ttl
+    pub fn cache_policy(&self) -> DnsCachePolicy {
+        self.cache_policy
     }
 
     pub fn lookup_family(&self) -> DnsLookupFamily {

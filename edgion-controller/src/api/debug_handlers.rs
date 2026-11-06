@@ -9,6 +9,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::
 use crate::conf_mgr::sync_runtime::resource_processor::ref_manager::RefManagerStats;
 use crate::conf_mgr::CenterLifeCycle;
 use axum::{extract::State, response::Json};
+use edgion_common::dns::{egress_answer_cache, DnsAnswerCacheStats};
 use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -51,6 +52,9 @@ pub struct ControllerStoreStats {
     pub credential_memory_keys: usize,
     pub event_store: EventStoreStats,
     pub watch_objects: WatchObjectsStats,
+    /// Egress DNS answer cache. `in_flight` must return to zero once requests
+    /// settle; `entries` is capacity-bounded and exempt from residue.
+    pub dns_answer_cache: DnsAnswerCacheStats,
 }
 
 #[derive(Serialize)]
@@ -98,6 +102,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         credential_memory_keys,
         event_store: EventStoreStats { next_resource_version },
         watch_objects: WatchObjectsStats { count: watch_count },
+        dns_answer_cache: egress_answer_cache().stats(),
     }))
 }
 

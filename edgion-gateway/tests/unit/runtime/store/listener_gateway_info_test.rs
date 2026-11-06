@@ -177,7 +177,10 @@ fn annotation_projection_preserves_plugin_namespace_fallback() {
 
 #[test]
 fn annotation_projection_preserves_dns_candidate_precedence() {
-    let servers = ResolverCandidate::Servers(vec!["1.1.1.1".to_owned(), "8.8.8.8:5353".to_owned()]);
+    let servers = ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(vec![
+        "1.1.1.1".to_owned(),
+        "8.8.8.8:5353".to_owned(),
+    ]));
     let reference = ResolverCandidate::HttpDnsRef(LinkSysKey {
         namespace: "dns".to_owned(),
         name: "resolver".to_owned(),
@@ -466,7 +469,9 @@ fn dns_gateway_owner_and_inline_are_independent_and_old_info_stays_pinned() {
     store.rebuild(&[gateway]);
     assert_eq!(
         store.get(&key)[0].dns_resolver_candidate,
-        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
+            vec!["192.0.2.53".into()]
+        )))
     );
     assert!(matches!(
         old[0].dns_resolver_candidate,

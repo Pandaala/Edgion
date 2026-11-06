@@ -44,7 +44,8 @@ fn callout_permits() -> &'static tokio::sync::Semaphore {
 /// link-local (169.254.169.254) / RFC1918. The `EgressResolver` classifies the
 /// exact IPs reqwest connects to — the same guard the webhook/forward_auth
 /// path uses — and redirect-Deny prevents a redirect-based escape. One shared
-/// client is enough: its address memo is capped (`EGRESS_CACHE_MAX_ENTRIES`).
+/// client is enough: resolved answers live in the bounded process-wide egress
+/// answer cache, and classification runs on every use.
 /// Callouts run on the request hot path, so blocked addresses emit only the
 /// bounded egress metric; per-address tracing is intentionally disabled.
 fn callout_client() -> Result<&'static reqwest::Client, &'static str> {

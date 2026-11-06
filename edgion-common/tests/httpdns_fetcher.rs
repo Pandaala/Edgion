@@ -263,7 +263,7 @@ async fn end_to_end_preset_parse_via_stub() {
     )
     .await
     .unwrap();
-    assert_eq!(ips.len(), 2);
+    assert_eq!(ips.addrs.len(), 2);
 }
 
 #[tokio::test]
@@ -741,9 +741,8 @@ async fn standard_family_requires_terminal_negative_evidence() {
                     socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
                 }
             });
-            let spec = ResolverSpec::StandardDns {
-                servers: vec![address.to_string()],
-            };
+            let spec =
+                ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![address.to_string()]));
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
                 resolve(
@@ -836,9 +835,7 @@ async fn standard_family_all_requires_both_complete_answers() {
                 socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
             }
         });
-        let spec = ResolverSpec::StandardDns {
-            servers: vec![address.to_string()],
-        };
+        let spec = ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![address.to_string()]));
         let result = resolve(&spec, "family.example.", DnsQueryPolicy::Family(DnsLookupFamily::All)).await;
         server.abort();
         if failed_family.is_some() {
@@ -884,7 +881,7 @@ async fn httpdns_typed_requests_share_primary_deadline() {
 
 #[tokio::test]
 async fn standard_family_queries_preserve_cname_and_ipv6_answers() {
-    use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+    use edgion_common::dns::{resolve_answer, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
     use hickory_resolver::proto::{
         op::Message,
         rr::{
@@ -922,24 +919,98 @@ async fn standard_family_queries_preserve_cname_and_ipv6_answers() {
             socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
         }
     });
-    let spec = ResolverSpec::StandardDns {
-        servers: vec![address.to_string()],
-    };
+    let spec = ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![address.to_string()]));
     for (family, expected) in [
         (DnsLookupFamily::Ipv4Only, vec!["192.0.2.1"]),
         (DnsLookupFamily::Ipv6Only, vec!["2001:db8::1"]),
         (DnsLookupFamily::All, vec!["192.0.2.1", "2001:db8::1"]),
     ] {
-        let actual = resolve(&spec, "alias.family.example.", DnsQueryPolicy::Family(family))
+        let actual = resolve_answer(&spec, "alias.family.example.", DnsQueryPolicy::Family(family))
             .await
             .unwrap();
+        // The record TTL (30 s) is reported so the answer cache can honor it.
+        let ttl = actual.ttl.expect("standard DNS reports the record TTL");
+        assert!(
+            ttl <= Duration::from_secs(30) && ttl >= Duration::from_secs(25),
+            "{ttl:?}"
+        );
         assert_eq!(
-            actual,
+            actual.addrs,
             expected
                 .into_iter()
                 .map(|ip| ip.parse::<std::net::IpAddr>().unwrap())
                 .collect::<Vec<_>>()
         );
     }
+    server.abort();
+}
+
+#[tokio::test]
+async fn standard_nxdomain_is_authoritative_and_native_answers_report_ttl() {
+    use edgion_common::dns::{resolve_answer, DnsError, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+    use hickory_resolver::proto::{
+        op::{Message, ResponseCode},
+        rr::{
+            rdata::{A, SOA},
+            Name, RData, Record, RecordType,
+        },
+    };
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = socket.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut bytes = [0; 2048];
+        loop {
+            let (len, peer) = socket.recv_from(&mut bytes).await.unwrap();
+            let query = Message::from_vec(&bytes[..len]).unwrap();
+            let mut response = Message::response(query.id, query.op_code);
+            response.metadata.recursion_available = true;
+            response.metadata.authoritative = true;
+            for question in &query.queries {
+                response.add_query(question.clone());
+                if question.name().to_ascii().starts_with("gone.") {
+                    response.metadata.response_code = ResponseCode::NXDomain;
+                    response.add_authority(Record::from_rdata(
+                        Name::from_ascii("nx.example.").unwrap(),
+                        30,
+                        RData::SOA(SOA::new(
+                            Name::from_ascii("ns.nx.example.").unwrap(),
+                            Name::from_ascii("hostmaster.nx.example.").unwrap(),
+                            1,
+                            60,
+                            60,
+                            60,
+                            30,
+                        )),
+                    ));
+                } else if question.query_type() == RecordType::A {
+                    response.add_answer(Record::from_rdata(
+                        question.name().clone(),
+                        45,
+                        RData::A(A(std::net::Ipv4Addr::new(192, 0, 2, 7))),
+                    ));
+                }
+            }
+            socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
+        }
+    });
+    let spec = ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![address.to_string()]));
+    for family in [DnsLookupFamily::Ipv4Only, DnsLookupFamily::All] {
+        // NXDOMAIN must surface as an authoritative empty answer so the answer
+        // cache drops a stale entry instead of serving it as a transient failure.
+        assert_eq!(
+            resolve_answer(&spec, "gone.nx.example.", DnsQueryPolicy::Family(family)).await,
+            Err(DnsError::NoAddresses),
+            "{family:?}"
+        );
+    }
+    let answer = resolve_answer(&spec, "live.nx.example.", DnsQueryPolicy::Native)
+        .await
+        .unwrap();
+    assert_eq!(answer.addrs, vec!["192.0.2.7".parse::<std::net::IpAddr>().unwrap()]);
+    let ttl = answer.ttl.expect("the native lookup reports the record TTL");
+    assert!(
+        ttl <= Duration::from_secs(45) && ttl >= Duration::from_secs(40),
+        "{ttl:?}"
+    );
     server.abort();
 }

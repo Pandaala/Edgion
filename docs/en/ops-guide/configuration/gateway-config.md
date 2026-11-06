@@ -532,10 +532,11 @@ These process defaults apply when OIDC introspection omits its
 `maxLogicalBytes` together. The total logical budget controls TinyUFO record
 weights for one cache instance and is not an exact allocator or RSS limit;
 enforce the Gateway process hard limit with Kubernetes/cgroup memory limits.
-OIDC access-token caching and the data-plane `ExternalName` DNS cache use the
-independent `lru_cache` defaults; those defaults are what bounds the DNS cache's
-retention across Service, hostname, and resolver churn. The DNS cache takes the
-capacity but applies its own shard floor, because it is read on every
+OIDC access-token caching and the data-plane upstream DNS answer cache (AI
+provider endpoints and cached `ExternalName` self-resolution) use the
+independent `lru_cache` defaults; those defaults bound the DNS cache's entry
+count across hostname and resolver churn. The DNS cache takes the capacity but
+applies its own shard floor, because it is read on every AI attempt and cached
 `ExternalName` request — setting `default_shards` below that floor does not lower
 its shard count. LDAP authentication is never cached.
 Absolute safety ceilings are 65,536 cache entries, 4,194,304 TinyUFO weight

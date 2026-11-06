@@ -1,8 +1,11 @@
 //! Standard DNS backend using hickory-resolver against an explicit server list.
 
 use std::net::{IpAddr, SocketAddr};
+use std::time::Instant;
 
-use super::{hickory, require_addresses, strip_brackets, system, DnsError, DnsLookupFamily, DnsQueryPolicy};
+use super::{
+    hickory, min_ttl, require_addresses, strip_brackets, system, DnsAnswer, DnsError, DnsLookupFamily, DnsQueryPolicy,
+};
 
 /// Parse a `ip` or `ip:port` server string into a SocketAddr (default port 53).
 /// Accepts a bracketed IPv6 literal without a port (e.g. `"[::1]"`).
@@ -22,20 +25,12 @@ fn parse_servers(servers: &[String]) -> Vec<SocketAddr> {
 }
 
 /// Resolve `domain` against the given DNS servers. Empty list ⇒ system resolver.
-pub async fn resolve_standard(
-    servers: &[String],
-    domain: &str,
-    policy: DnsQueryPolicy,
-) -> Result<Vec<IpAddr>, DnsError> {
+pub async fn resolve_standard(servers: &[String], domain: &str, policy: DnsQueryPolicy) -> Result<DnsAnswer, DnsError> {
     if servers.is_empty() {
         let addrs = system::resolve_system(domain, policy)
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?;
-        return if addrs.is_empty() {
-            Err(DnsError::NoAddresses)
-        } else {
-            Ok(addrs)
-        };
+        return require_addresses(addrs).map(DnsAnswer::without_ttl);
     }
 
     use hickory_resolver::net::runtime::TokioRuntimeProvider;
@@ -58,15 +53,20 @@ pub async fn resolve_standard(
             rr::{RData, RecordType},
         };
         let query = async |record_type| match resolver.lookup(domain, record_type).await {
-            Ok(records) => Ok(records
-                .answers()
-                .iter()
-                .filter_map(|r| match &r.data {
-                    hickory_resolver::proto::rr::RData::A(a) => Some(IpAddr::V4(a.0)),
-                    hickory_resolver::proto::rr::RData::AAAA(a) => Some(IpAddr::V6(a.0)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()),
+            Ok(records) => {
+                let addrs = records
+                    .answers()
+                    .iter()
+                    .filter_map(|r| match &r.data {
+                        hickory_resolver::proto::rr::RData::A(a) => Some(IpAddr::V4(a.0)),
+                        hickory_resolver::proto::rr::RData::AAAA(a) => Some(IpAddr::V6(a.0)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                // Only a family that returned addresses bounds the answer lifetime.
+                let ttl = (!addrs.is_empty()).then(|| records.valid_until().saturating_duration_since(Instant::now()));
+                Ok((addrs, ttl))
+            }
             // Hickory 0.26.1 also synthesizes NoError on exhausted CNAME chains,
             // possibly with an SOA but without preserved authorities. Only wire
             // negative responses retain matching SOA authority evidence. Treat
@@ -83,21 +83,29 @@ pub async fn resolve_standard(
                         })
                     }) =>
             {
-                Ok(Vec::new())
+                Ok((Vec::new(), None))
+            }
+            // NXDOMAIN is an authoritative statement that the name does not
+            // exist, so it is an empty answer rather than a transient failure.
+            Err(NetError::Dns(HickoryDnsError::NoRecordsFound(records)))
+                if records.response_code == ResponseCode::NXDomain =>
+            {
+                Ok((Vec::new(), None))
             }
             Err(error) => Err(DnsError::Io(error.to_string())),
         };
-        let addresses = match family {
+        let (addresses, ttl) = match family {
             DnsLookupFamily::Ipv4Only => query(RecordType::A).await?,
             DnsLookupFamily::Ipv6Only => query(RecordType::AAAA).await?,
             DnsLookupFamily::All => {
                 let (v4, v6) = tokio::join!(query(RecordType::A), query(RecordType::AAAA));
-                let mut out = v4?;
-                out.extend(v6?);
-                out
+                let (mut out, v4_ttl) = v4?;
+                let (v6_addrs, v6_ttl) = v6?;
+                out.extend(v6_addrs);
+                (out, min_ttl(v4_ttl, v6_ttl))
             }
         };
-        return require_addresses(policy.select(addresses));
+        return require_addresses(policy.select(addresses)).map(|addrs| DnsAnswer { addrs, ttl });
     }
     let lookup = resolver.lookup_ip(domain).await.map_err(|e| {
         if matches!(e, NetError::Dns(HickoryDnsError::NoRecordsFound(_))) {
@@ -107,11 +115,8 @@ pub async fn resolve_standard(
         }
     })?;
     let out: Vec<IpAddr> = lookup.iter().collect();
-    if out.is_empty() {
-        Err(DnsError::NoAddresses)
-    } else {
-        Ok(out)
-    }
+    let ttl = lookup.valid_until().saturating_duration_since(Instant::now());
+    require_addresses(out).map(|addrs| DnsAnswer { addrs, ttl: Some(ttl) })
 }
 
 #[cfg(test)]

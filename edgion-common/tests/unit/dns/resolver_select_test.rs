@@ -92,7 +92,7 @@ fn service_inline_wins_over_gateway_and_egc() {
     });
     let spec = resolve_effective_spec(&[service, gateway, egc], lookup_aliyun);
     match spec {
-        ResolverSpec::StandardDns { servers } => assert_eq!(servers, vec!["9.9.9.9".to_string()]),
+        ResolverSpec::StandardDns(servers) => assert_eq!(servers.servers(), vec!["9.9.9.9".to_string()]),
         other => panic!("expected service inline to win, got {other:?}"),
     }
 }
@@ -108,7 +108,7 @@ fn gateway_wins_when_service_absent() {
     });
     let spec = resolve_effective_spec(&[None, gateway, egc], lookup_aliyun);
     match spec {
-        ResolverSpec::StandardDns { servers } => assert_eq!(servers, vec!["1.1.1.1".to_string()]),
+        ResolverSpec::StandardDns(servers) => assert_eq!(servers.servers(), vec!["1.1.1.1".to_string()]),
         other => panic!("expected gateway to win, got {other:?}"),
     }
 }
@@ -123,7 +123,7 @@ fn egc_default_wins_when_service_and_gateway_absent() {
     });
     let spec = resolve_effective_spec(&[None, None, egc], lookup_aliyun);
     match spec {
-        ResolverSpec::StandardDns { servers } => assert_eq!(servers, vec!["8.8.8.8".to_string()]),
+        ResolverSpec::StandardDns(servers) => assert_eq!(servers.servers(), vec!["8.8.8.8".to_string()]),
         other => panic!("expected EGC default, got {other:?}"),
     }
 }
@@ -178,10 +178,12 @@ fn egc_link_sys_ref_candidate_built_from_struct() {
 fn control_plane_service_over_controller_default() {
     // The control plane assembles just [service, controller_default].
     let service = candidate_from_annotations(&ann(&[(DNS_RESOLVER, "9.9.9.9")]));
-    let controller_default = Some(ResolverCandidate::Servers(vec!["8.8.8.8".to_string()]));
+    let controller_default = Some(ResolverCandidate::Servers(crate::dns::StandardDnsServers::new(vec![
+        "8.8.8.8".to_string(),
+    ])));
     let spec = resolve_effective_spec(&[service, controller_default], lookup_aliyun);
     match spec {
-        ResolverSpec::StandardDns { servers } => assert_eq!(servers, vec!["9.9.9.9".to_string()]),
+        ResolverSpec::StandardDns(servers) => assert_eq!(servers.servers(), vec!["9.9.9.9".to_string()]),
         other => panic!("expected service to win control-plane, got {other:?}"),
     }
 }
@@ -193,7 +195,9 @@ fn unsupported_linksys_does_not_reuse_httpdns_and_falls_back_to_system() {
         namespace: "dns".into(),
         name: "resolver".into(),
     }));
-    let fallback = Some(ResolverCandidate::Servers(vec!["9.9.9.9".into()]));
+    let fallback = Some(ResolverCandidate::Servers(crate::dns::StandardDnsServers::new(vec![
+        "9.9.9.9".into(),
+    ])));
     for config in [
         SystemConfig::HttpDns(dummy_httpdns()),
         SystemConfig::Unsupported,
@@ -260,7 +264,9 @@ fn owning_candidate_reference_failures_preserve_only_independent_inline_settings
     service.metadata.annotations = Some(ann(&[(DNS_RESOLVER_REF, "dns/resolver"), (DNS_RESOLVER, "192.0.2.53")]));
     assert_eq!(
         candidate_from_dns_owner(DnsResolverOwner::Service(&service)),
-        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+        Some(ResolverCandidate::Servers(crate::dns::StandardDnsServers::new(vec![
+            "192.0.2.53".into()
+        ])))
     );
     service.metadata.name = Some("source".into());
     assert!(matches!(
@@ -285,6 +291,8 @@ fn owning_candidate_reference_failures_preserve_only_independent_inline_settings
     egc.spec.dns_resolver.as_mut().unwrap().link_sys_ref = None;
     assert_eq!(
         super::candidate_from_egc_default(&egc),
-        Some(ResolverCandidate::Servers(vec!["192.0.2.53".into()]))
+        Some(ResolverCandidate::Servers(crate::dns::StandardDnsServers::new(vec![
+            "192.0.2.53".into()
+        ])))
     );
 }

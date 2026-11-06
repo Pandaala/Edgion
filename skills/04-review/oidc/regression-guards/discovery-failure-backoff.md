@@ -46,9 +46,8 @@ failed-discovery lifetime.
 
 If the lock holder is cancelled, the mutex guard drops and the next waiter
 re-checks cache and backoff, then fetches. That is the same shape already
-accepted for JWKS and recorded as the proportionate alternative to
-`Shared<Future>` in
-[externalname-dns-miss-coalescing-not-implemented.md](../../backends/intentional-design/externalname-dns-miss-coalescing-not-implemented.md).
+accepted for JWKS; the shared DNS answer cache now uses it as well (see
+[DNS answer cache identity and lifecycle](../../backends/regression-guards/dns-answer-cache-identity-and-lifecycle.md)).
 
 ## Fix Suggestions Not Accepted
 

@@ -14,20 +14,21 @@ use crate::ai::AiProxyError;
 use crate::backends::peer_builder::{create_tls_peer, extract_tls_config, record_tls_to_upstream};
 use crate::backends::policy::BackendTlsPolicyLookup;
 use crate::backends::runtime::CompiledBackendTarget;
-use crate::backends::FailureClass;
+use crate::backends::{compute_routed_external_resolver, next_address_rotation, upstream_dns_cache, FailureClass};
 use crate::ctx::{BackendContext, BackendSource};
 use crate::observe::metrics::record_retry_budget_denied;
 use crate::plugins::http::common::outbound::egress::{default_block_private, filter_resolved_addrs, EgressPolicy};
 use crate::routes::http::proxy_http::{backfill_upstream_addr, configure_peer_timeouts, EdgionHttpProxy};
 use crate::{end_response_500, end_response_503, EdgionHttpContext, PeerTimeoutSource};
 use bytes::Bytes;
-use edgion_common::dns::{resolve, DnsQueryPolicy};
+use edgion_common::dns::DnsQueryPolicy;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::{BError, Error as PingoraError, Error, ErrorSource, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use std::net::{IpAddr, SocketAddr};
 
 /// Live transport facts captured at the callback's existing retry boundary.
 /// They are passed by value, never retained in the request context.
@@ -237,30 +238,77 @@ async fn try_ai_backend_peer(
     record_tls_to_upstream(ctx, use_tls, sni);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
+    ctx.ensure_ai_state().dialed_addrs.record(addr);
     Ok(peer)
+}
+
+/// Upstream addresses one AI request has dialed. Pre-connect failures consume
+/// no dispatch, so the number of attempts is not bounded by
+/// `MAX_AI_DISPATCH_ATTEMPTS`; recording saturates and rotation alone spreads
+/// later attempts.
+#[derive(Debug, Default)]
+pub(crate) struct DialedAddrs {
+    addrs: [Option<SocketAddr>; 8],
+    len: usize,
+}
+
+impl DialedAddrs {
+    pub(crate) fn record(&mut self, addr: SocketAddr) {
+        if self.contains(&addr) {
+            return;
+        }
+        if let Some(slot) = self.addrs.get_mut(self.len) {
+            *slot = Some(addr);
+            self.len += 1;
+        }
+    }
+
+    fn contains(&self, addr: &SocketAddr) -> bool {
+        self.addrs[..self.len]
+            .iter()
+            .any(|dialed| dialed.as_ref() == Some(addr))
+    }
+}
+
+/// Pick the address for one attempt: starting at `rotation` (spread across
+/// requests, since cached answers keep their order for the record TTL), the
+/// first allowed address this request has not dialed yet; once every address
+/// was dialed, the rotated address.
+fn select_ai_addr(allowed: &[IpAddr], port: u16, dialed: &DialedAddrs, rotation: usize) -> Option<SocketAddr> {
+    let len = allowed.len();
+    if len == 0 {
+        return None;
+    }
+    let start = rotation % len;
+    let candidate = |offset: usize| SocketAddr::new(allowed[(start + offset) % len], port);
+    (0..len)
+        .map(candidate)
+        .find(|addr| !dialed.contains(addr))
+        .or_else(|| Some(candidate(0)))
 }
 
 async fn resolve_ai_endpoint(
     ctx: &EdgionHttpContext,
     domain: &str,
     port: u16,
-) -> Result<std::net::SocketAddr, AiPeerPredispatchFailure> {
-    let (spec, family) =
-        crate::backends::compute_routed_external_resolver(ctx).map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
-    let addrs = resolve(&spec, domain, DnsQueryPolicy::Family(family))
+) -> Result<SocketAddr, AiPeerPredispatchFailure> {
+    let (spec, family, policy) =
+        compute_routed_external_resolver(ctx).map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
+    let addrs = upstream_dns_cache()
+        .lookup(&spec, domain, DnsQueryPolicy::Family(family), &policy)
         .await
         .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
-    filter_resolved_addrs(
+    let allowed = filter_resolved_addrs(
         addrs,
         EgressPolicy {
             block_private: default_block_private(),
         },
         ctx.allow_loopback_upstream,
-    )
-    .into_iter()
-    .next()
-    .map(|ip| std::net::SocketAddr::new(ip, port))
-    .ok_or(AiPeerPredispatchFailure::Endpoint)
+    );
+    let rotation = next_address_rotation();
+    let dialed = ctx.ai_state().map(|state| &state.dialed_addrs);
+    select_ai_addr(&allowed, port, dialed.unwrap_or(&DialedAddrs::default()), rotation)
+        .ok_or(AiPeerPredispatchFailure::Endpoint)
 }
 
 fn begin_ai_peer_attempt(ctx: &mut EdgionHttpContext) {

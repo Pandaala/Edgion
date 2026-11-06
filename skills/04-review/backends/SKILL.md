@@ -12,7 +12,6 @@ before applying a decision to current code.
 ## Intentional design
 
 - [Active health-check transport is independent of BackendTLSPolicy](intentional-design/active-health-check-transport-is-independent.md)
-- [ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — DESIGN-TRADEOFF](intentional-design/externalname-dns-miss-coalescing-not-implemented.md)
 - [backends-F016 — Probe semaphore acquired per probe, not per cycle](intentional-design/probe-semaphore-per-cycle.md)
 
 ## Compatibility constraints
@@ -43,7 +42,7 @@ before applying a decision to current code.
 - [Captured Service policy generation and degrade-threshold selection](regression-guards/ebtp-atomic-service-snapshot.md)
 - [backends-F013 — no-port EndpointSlices fail closed instead of defaulting to 8080](regression-guards/ep-slice-no-port-fail-closed.md)
 - [EndpointSlice ownership transitions rebuild both Service generations](regression-guards/endpoint-slice-ownership-transitions.md)
-- [ExternalName DNS Cache Identity and Lifecycle (task-externalname-dns-cache-identity-and-lifecycle, origin D0001) — FIXED](regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
+- [DNS Answer Cache Identity and Lifecycle (common-02; origin D0001) — FIXED](regression-guards/dns-answer-cache-identity-and-lifecycle.md)
 - [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)
 - [backends-F001 — IPv6 health-probe URLs are bracketed; gRPC probe no longer panics](regression-guards/ipv6-probe-url-brackets.md)
 - [Service section port proofs and DirectEndpoint authorization](regression-guards/named-port-resolve-against-originating-slice.md)
@@ -57,6 +56,7 @@ before applying a decision to current code.
 
 ## Superseded decisions
 
+- [ExternalName DNS miss coalescing not implemented (superseded by common-02)](superseded/externalname-dns-miss-coalescing-not-implemented.md)
 - [BackendTLSPolicyStore rebuild-strategy complexity comment](superseded/backend-tls-policy-rebuild-strategy-comment.md)
 - [backends-F009 — preload collect_*_routes five identical bodies](superseded/preload-collect-routes-macro.md)
 - [backends-F005 — `warm_cell` startup hydration is now an atomic `hydrate_if_empty`](superseded/warm-cell-toctou-stale-overwrite.md)

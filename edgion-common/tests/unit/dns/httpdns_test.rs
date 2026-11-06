@@ -26,7 +26,8 @@ async fn complete_dual_answer_distinguishes_empty_from_failed_family() {
     assert_eq!(
         resolve_http_dns_with(&fetcher, &cfg, "backend.test", policy)
             .await
-            .unwrap(),
+            .unwrap()
+            .addrs,
         vec!["192.0.2.1".parse::<IpAddr>().unwrap()]
     );
     for v6 in [
@@ -61,6 +62,7 @@ fn complete_parser_rejects_overflow_and_canonicalizes_before_dedup() {
         response
             .parse_complete(r#"{"ips":["192.0.2.1","::ffff:192.0.2.1"]}"#)
             .unwrap()
+            .addrs
             .len(),
         1
     );
@@ -101,6 +103,7 @@ async fn fallback_preserves_family_for_literal() {
         )
         .await
         .unwrap()
+        .addrs
         .len(),
         1
     );
@@ -475,7 +478,7 @@ async fn fetch_failure_uses_system_fallback() {
     let ips = resolve_http_dns_with(&FailingFetcher, &cfg, "localhost", crate::dns::DnsQueryPolicy::Native)
         .await
         .unwrap();
-    assert!(ips.iter().any(|ip| ip.is_loopback()));
+    assert!(ips.addrs.iter().any(|ip| ip.is_loopback()));
 }
 
 #[tokio::test]
@@ -540,7 +543,7 @@ async fn preset_plus_url_template_uses_custom_url_and_preset_format() {
     let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com", crate::dns::DnsQueryPolicy::Native)
         .await
         .unwrap();
-    assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    assert_eq!(ips.addrs, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
 }
 
 #[tokio::test]
@@ -552,7 +555,12 @@ async fn aliyun_preset_parses_json_ips_ignoring_user_response() {
     let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com", crate::dns::DnsQueryPolicy::Native)
         .await
         .unwrap();
-    assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    assert_eq!(ips.addrs, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    assert_eq!(
+        ips.ttl,
+        Some(std::time::Duration::from_secs(30)),
+        "the preset ttlPath is honored"
+    );
 }
 
 #[tokio::test]
@@ -564,7 +572,7 @@ async fn tencent_preset_parses_semicolon_delimited_ignoring_user_response() {
         .await
         .unwrap();
     assert_eq!(
-        ips,
+        ips.addrs,
         vec![
             "1.2.3.4".parse::<IpAddr>().unwrap(),
             "5.6.7.8".parse::<IpAddr>().unwrap()
@@ -613,7 +621,7 @@ fn prepared_response_keeps_branch_local_delimiter_checks_and_error_order() {
     format.ip_path = Some("changed".into());
     for _ in 0..3 {
         assert_eq!(
-            response.parse(r#"{"data":{"ips":["192.0.2.1"]}}"#).unwrap(),
+            response.parse(r#"{"data":{"ips":["192.0.2.1"]}}"#).unwrap().addrs,
             vec!["192.0.2.1".parse::<IpAddr>().unwrap()]
         );
     }
@@ -680,4 +688,64 @@ async fn complete_query_rejects_merged_overflow_and_overflow_before_family_filte
     )
     .await
     .is_err());
+}
+
+#[test]
+fn ttl_path_accepts_integer_numbers_and_strings_and_ignores_anything_else() {
+    let format = HttpDnsResponseFormat {
+        ttl_path: Some("data.ttl".into()),
+        ..HttpDnsResponseFormat::default()
+    };
+    let response = PreparedResponse::from_format(&format);
+    let secs = |n| Some(std::time::Duration::from_secs(n));
+    for (body, expected) in [
+        (r#"{"ips":["192.0.2.1"],"data":{"ttl":60}}"#, secs(60)),
+        (r#"{"ips":["192.0.2.1"],"data":{"ttl":" 15 "}}"#, secs(15)),
+        (r#"{"ips":["192.0.2.1"],"data":{"ttl":-5}}"#, None),
+        (r#"{"ips":["192.0.2.1"],"data":{"ttl":1.5}}"#, None),
+        (r#"{"ips":["192.0.2.1"],"data":{"ttl":"soon"}}"#, None),
+        (r#"{"ips":["192.0.2.1"]}"#, None),
+    ] {
+        let answer = response.parse(body).unwrap();
+        assert_eq!(answer.addrs, vec!["192.0.2.1".parse::<IpAddr>().unwrap()], "{body}");
+        assert_eq!(answer.ttl, expected, "{body}");
+        assert_eq!(response.parse_complete(body).unwrap().ttl, expected, "{body}");
+    }
+    let without_path = PreparedResponse::from_format(&HttpDnsResponseFormat::default());
+    assert_eq!(
+        without_path.parse(r#"{"ips":["192.0.2.1"],"ttl":60}"#).unwrap().ttl,
+        None
+    );
+}
+
+#[tokio::test]
+async fn typed_answer_ttl_is_the_minimum_over_families_with_addresses() {
+    let format = HttpDnsResponseFormat {
+        ttl_path: Some("ttl".into()),
+        ..HttpDnsResponseFormat::default()
+    };
+    let cfg = generic("https://dns.test/?host={domain}&type={recordType}", format);
+    let all = DnsQueryPolicy::Family(DnsLookupFamily::All);
+    let secs = |n| Some(std::time::Duration::from_secs(n));
+    for (v4, v6, expected) in [
+        (
+            r#"{"ips":["192.0.2.1"],"ttl":60}"#,
+            r#"{"ips":["2001:db8::1"],"ttl":20}"#,
+            secs(20),
+        ),
+        // An empty family does not shorten the answer lifetime.
+        (r#"{"ips":["192.0.2.1"],"ttl":60}"#, r#"{"ips":[],"ttl":1}"#, secs(60)),
+        // A family without a TTL does not erase the other family's TTL.
+        (
+            r#"{"ips":["192.0.2.1"],"ttl":60}"#,
+            r#"{"ips":["2001:db8::1"]}"#,
+            secs(60),
+        ),
+        (r#"{"ips":["192.0.2.1"]}"#, r#"{"ips":["2001:db8::1"]}"#, None),
+    ] {
+        let answer = resolve_http_dns_with(&TypedFetcher { v4, v6 }, &cfg, "backend.test", all)
+            .await
+            .unwrap();
+        assert_eq!(answer.ttl, expected, "{v4} / {v6}");
+    }
 }

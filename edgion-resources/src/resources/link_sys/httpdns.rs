@@ -163,7 +163,9 @@ pub struct HttpDnsResponseFormat {
     /// For `delimited`: the separator between IPs (default ",").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delimiter: Option<String>,
-    /// Optional dotted JSON path to a TTL value (parsed for future use).
+    /// Optional dotted JSON path to the answer TTL in seconds (integer number or
+    /// integer string; `json` responses only). An absent or invalid value falls
+    /// back to the consumer's cache TTL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_path: Option<String>,
 }

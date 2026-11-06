@@ -523,7 +523,7 @@ spec:
                         type: string
                     cacheTtl:
                       type: string
-                      description: "Data-plane resolution cache TTL (default 5s)"
+                      description: "Freshness of data-plane DNS answers whose resolver reports no record TTL (default 5s, capped at 300s; 0s disables caching). Reported record TTLs are honored within 5-300s."
                       default: "5s"
                       pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 

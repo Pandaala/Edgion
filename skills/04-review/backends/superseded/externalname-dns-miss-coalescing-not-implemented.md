@@ -1,13 +1,23 @@
 ---
 name: externalname-dns-miss-coalescing-not-implemented
-description: Use when reviewing concurrent ExternalName DNS resolution; covers why the cached self-resolve path deliberately does not coalesce misses or negative-cache failures, and which trigger conditions would reopen that decision.
-status: accepted-tradeoff
+description: Historical record only (superseded 2026-11-06 by common-02). Explains why ExternalName miss coalescing was once declined and which shape was prescribed if reopened; do not apply it as a current gate.
+status: superseded
 finding_id: task-externalname-dns-miss-coalescing
 closed: 2026-09-03
-knowledge_type: intentional-design
+knowledge_type: superseded
 ---
 
-# ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — DESIGN-TRADEOFF
+# ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — SUPERSEDED
+
+> **Inactive.** Superseded on 2026-11-06 by finding `common-02`. DNS answers for AI upstreams,
+> cached ExternalName self-resolution and every `EgressResolver` now go through the shared
+> `DnsAnswerCache`, which coalesces same-key cold misses, caches failures for 1 s and serves
+> bounded stale answers. The implementation adopted this page's "Shape To Use If This Is
+> Reopened" (per-key `tokio::sync::Mutex` + cache re-check, no admission budget, short negative
+> entry). Current rule: [DNS answer cache identity and lifecycle](../regression-guards/dns-answer-cache-identity-and-lifecycle.md).
+> The trigger that reopened it: the AI upstream path resolved on every attempt with no cache at
+> all, which this page's rationale (centered on the ExternalName bridge) did not cover. The text
+> below is historical evidence.
 
 ## Conclusion
 
@@ -144,7 +154,7 @@ the price of a new fail-closed error path on the request hot path.
   propagation, and error-cloning constraints to a request hot path, for a `minor` steady-state win.
 - **Negative-cache DNS failures inside `DnsCache` itself** — would put a failure marker under the
   same key as a success and risk it surviving a generation change; the identity contract in
-  [externalname-dns-cache-identity-and-lifecycle.md](../regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
+  [dns-answer-cache-identity-and-lifecycle.md](../regression-guards/dns-answer-cache-identity-and-lifecycle.md)
   is deliberately about resolved addresses only.
 - **Extend coalescing to `mode=per-request`** — that mode's contract is "re-resolve every request";
   coalescing would silently violate it.
@@ -169,7 +179,7 @@ Re-evaluate with current source or deployment evidence, including:
 - Origin: a `tasks/todo/externalname-dns-miss-coalescing.md` entry, never committed to git and
   deleted on closure (2026-09-03) without implementation. Nothing else points to it: its
   requirements are the ones restated and rejected above, so this file is the complete record.
-- Prerequisite (implemented): [externalname-dns-cache-identity-and-lifecycle.md](../regression-guards/externalname-dns-cache-identity-and-lifecycle.md).
+- Prerequisite (implemented): [dns-answer-cache-identity-and-lifecycle.md](../regression-guards/dns-answer-cache-identity-and-lifecycle.md).
 - Source: `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips_with`),
   `edgion-gateway/src/backends/discovery/dns_cache.rs`,
   `edgion-controller/src/services/dns_resolver/service.rs`.

@@ -536,7 +536,9 @@ fn controller_default_candidate_prefers_ref_then_servers() {
     };
     assert_eq!(
         controller_default_candidate(&servers_cfg),
-        Some(ResolverCandidate::Servers(vec!["1.1.1.1".to_string()]))
+        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
+            vec!["1.1.1.1".to_string()]
+        )))
     );
 
     assert_eq!(controller_default_candidate(&DnsResolverConfig::default()), None);

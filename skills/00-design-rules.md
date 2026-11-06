@@ -283,7 +283,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 
 > Detail: `skills/04-review/concurrency/`, `skills/01-architecture/02-gateway/11-conf-handler-guidelines.md`.
 
-- 🔴 **Never hold an async lock guard across a network round-trip** — clone the cheap handle (`Client`/`Channel`) under a brief guard, drop it, then do I/O. *A guard held across an RPC blocks every other reader for the RPC's duration.* → `04-review/concurrency/regression-guards/async-write-lock-across-rpc.md`.
+- 🔴 **Never hold an async lock guard across a network round-trip** — clone the cheap handle (`Client`/`Channel`) under a brief guard, drop it, then do I/O. *A guard held across an RPC blocks every other reader for the RPC's duration.* → `04-review/concurrency/regression-guards/async-write-lock-across-rpc.md`. Narrow exemption: a data-free per-key single-flight mutex whose waiters re-check a cache → `04-review/concurrency/intentional-design/single-flight-mutex-across-io.md`.
 - 🔴 **A check-then-mutate on shared state is ONE atomic operation** — in-memory: `compare_exchange` loop / `ArcSwap::rcu`; cross-process resource: a per-key async lock spanning the full get→modify→write. *A non-atomic RMW loses concurrent updates or over-admits past a limit.* → `04-review/concurrency/`.
 - 🟡 **Jointly-invariant derived fields publish behind ONE `ArcSwap`/lock** (a single snapshot struct), never two back-to-back `store()` calls (a cross-epoch read window).
 - 🟡 **`ArcSwap` is data-plane (gateway) only; the controller uses `RwLock`** — write pattern clone→modify→`store(Arc::new(...))`. Don't nest `ArcSwap` (a write-once inner swap inside an `ArcSwap`'d container pays an atomic-load per request for nothing). → `11-conf-handler-guidelines.md` §3.3.

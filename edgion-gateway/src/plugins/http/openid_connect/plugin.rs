@@ -25,7 +25,6 @@ use super::jwks_provider::{
     DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, DISCOVERY_FAILURE_BACKOFF,
 };
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
-use super::refresh_flight_registry::RefreshFlightRegistry;
 use crate::cache::{LogicalWeight, TinyUfoTtlCache};
 use crate::cli::config::{
     get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
@@ -46,6 +45,7 @@ use edgion_common::link_sys_core::outbound_tls::{
     resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection,
     GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection,
 };
+use edgion_common::singleflight::FlightRegistry;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
 use edgion_resources::resources::backend_tls_policy::SubjectAltName;
@@ -313,7 +313,7 @@ pub struct OpenidConnect {
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: TinyUfoTtlCache<String, IntrospectionCacheEntry>,
     access_token_cache: ShardedLruCache<String, AccessTokenCacheEntry>,
-    refresh_singleflight: RefreshFlightRegistry,
+    refresh_singleflight: FlightRegistry,
     refresh_singleflight_results: ShardedLruCache<String, OidcSessionCookie>,
     #[cfg(test)]
     session_clock: Option<Arc<std::sync::atomic::AtomicU64>>,
@@ -507,7 +507,7 @@ impl OpenidConnect {
             jwks_provider,
             introspection_cache: TinyUfoTtlCache::new(introspection_limits).map_err(|e| e.to_string())?,
             access_token_cache: ShardedLruCache::new(access_token_capacity, access_token_shards),
-            refresh_singleflight: RefreshFlightRegistry::new(get_refresh_singleflight_max_registered_keys())?,
+            refresh_singleflight: FlightRegistry::new(get_refresh_singleflight_max_registered_keys())?,
             refresh_singleflight_results: ShardedLruCache::new(shared_lru_capacity, shared_lru_shards),
             #[cfg(test)]
             session_clock: None,

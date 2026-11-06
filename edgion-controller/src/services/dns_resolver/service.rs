@@ -29,7 +29,9 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_common::dns::resolver_select::{
     parse_dns_server_list, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
-use edgion_common::dns::{resolve, DnsLookupFamily, DnsQueryPolicy, HttpDnsCandidate, PreparedHttpDns, ResolverSpec};
+use edgion_common::dns::{
+    resolve, DnsLookupFamily, DnsQueryPolicy, HttpDnsCandidate, PreparedHttpDns, ResolverSpec, StandardDnsServers,
+};
 use edgion_common::time::now_rfc3339;
 use edgion_resources::constants::annotations::edgion::{
     DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION,
@@ -533,7 +535,7 @@ fn service_resolver_candidate(service: &Service, runtime: &ControllerRuntime) ->
     }
     let servers = service.metadata.annotations.as_ref()?.get(DNS_RESOLVER_ANNOTATION)?;
     let servers = parse_dns_server_list(servers);
-    (!servers.is_empty()).then_some(ResolverCandidate::Servers(servers))
+    (!servers.is_empty()).then(|| ResolverCandidate::Servers(StandardDnsServers::new(servers)))
 }
 
 /// Publication identity using the caller's sorted/deduplicated IPs and the
@@ -631,7 +633,9 @@ fn controller_default_candidate(config: &DnsResolverConfig) -> Option<ResolverCa
         }
     }
     if !config.servers.is_empty() {
-        return Some(ResolverCandidate::Servers(config.servers.clone()));
+        return Some(ResolverCandidate::Servers(StandardDnsServers::new(
+            config.servers.clone(),
+        )));
     }
     None
 }

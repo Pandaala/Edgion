@@ -220,8 +220,13 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   HTTPDNS clients are prepared when configuration is published or reconciled;
   resolution never constructs a client or audits TLS. Controller
   background resolution:
-  `edgion-controller/src/services/dns_resolver/service.rs`; gateway
-  data-plane cache: `edgion-gateway/src/backends/discovery/dns_cache.rs`.
+  `edgion-controller/src/services/dns_resolver/service.rs`. Answer caching:
+  `edgion-common/src/dns/cache.rs` (`DnsAnswerCache`: TTL-honoring, per-key
+  single-flight, stale-while-revalidate/stale-on-error, short negative
+  entries). Instances: the egress cache behind every `EgressResolver`, and the
+  Gateway upstream cache (`upstream_dns_cache()` in
+  `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI and cached
+  ExternalName resolution. Callers do not add another DNS cache.
 - **Rule**: any resolution driven by operator resolver configuration MUST go
   through `ResolverSpec`; do not embed another resolver library or hand-roll
   lookups.
@@ -548,4 +553,6 @@ for infrastructure or `Family(...)` for backend DNS. Service/Gateway annotations
 are parsed at cold publication; queries never parse them. Controller, Gateway DNS
 and native AI reuse this core. Standard All requires complete A/AAAA outcomes;
 typed HTTPDNS has one primary deadline and same-family fallback. No separate
-resolver implementation, address cache, or Happy Eyeballs mechanism is introduced.
+resolver implementation or Happy Eyeballs mechanism is introduced; answers are
+cached only through the shared `DnsAnswerCache` keyed by query policy. AI peer
+selection rotates across the cached allowed addresses (no connection racing).

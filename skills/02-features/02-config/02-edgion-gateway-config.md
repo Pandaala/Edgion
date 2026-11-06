@@ -381,7 +381,7 @@ Hostname/SAN pinning remains rejected by the existing Phase1 validation guard.
 | `linkSysRef` | `LinkSysRef?` | — | Namespaced httpdns LinkSys reference. |
 | `servers` | `Vec<String>?` | — | Inline `ip[:port]` DNS servers. |
 | `lookupFamily` | `DnsLookupFamily` | `ipv4Only` | Backend DNS family: `ipv4Only`, `ipv6Only`, or `all`; independent of resolver selection. |
-| `cacheTtl` | `Duration` | `5s` | Data-plane ExternalName resolution cache TTL. |
+| `cacheTtl` | `Duration` | `5s` | Fallback freshness of upstream DNS answers (cached ExternalName self-resolution and AI provider hosts) whose resolver reports no record TTL (capped at 300 s); `0s` disables caching. Record TTLs are honored within 5–300 s; see `edgion_common::dns::DnsAnswerCache`. |
 
 `linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
 data-plane fallback; Controller-side resolution uses Controller YAML.

@@ -18,6 +18,7 @@ before applying a decision to current code.
 - [Holding a Write Lock Across `metrics` Calls — Style Concern, Not a Latency Bug](intentional-design/lock-around-atomic-metrics.md)
 - [`CacheData::set_conf_processor` background debounce task — `JoinHandle` intentionally discarded, no double-call guard](intentional-design/orphaned-bg-task-accepted.md)
 - [runtime F-005 — cross-store rebuild ordering in `partial_update` — DESIGN-TRADEOFF](intentional-design/partial-update-inconsistency-windows.md)
+- [Data-free per-key single-flight mutex held across I/O is exempt from V-1 (common-02)](intentional-design/single-flight-mutex-across-io.md)
 - [`CacheData` write lock kept across `partial_update` — DESIGN-TRADEOFF](intentional-design/partial-update-under-lock-intentional.md)
 - [`ClientCache::start_watch` keeps backoff+jitter on every watch-break relist — DESIGN-TRADEOFF](intentional-design/relist-backoff-on-server-switch-intentional.md)
 - [ConfigSyncServer Generation Detection via 1s Polling — DESIGN-TRADEOFF](intentional-design/reload-detection-polling-vs-event-driven.md)

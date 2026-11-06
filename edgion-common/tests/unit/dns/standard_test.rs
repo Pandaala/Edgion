@@ -6,7 +6,27 @@ async fn empty_servers_falls_back_to_system() {
     let addrs = resolve_standard(&[], "localhost", crate::dns::DnsQueryPolicy::Native)
         .await
         .expect("system fallback resolves");
-    assert!(addrs.iter().any(|ip| ip.is_loopback()));
+    assert!(addrs.addrs.iter().any(|ip| ip.is_loopback()));
+    assert_eq!(addrs.ttl, None, "the system resolver reports no record TTL");
+}
+
+#[test]
+fn min_ttl_ignores_unreported_lifetimes() {
+    use crate::dns::min_ttl;
+    use std::time::Duration;
+    assert_eq!(
+        min_ttl(Some(Duration::from_secs(5)), Some(Duration::from_secs(9))),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(
+        min_ttl(None, Some(Duration::from_secs(9))),
+        Some(Duration::from_secs(9))
+    );
+    assert_eq!(
+        min_ttl(Some(Duration::from_secs(5)), None),
+        Some(Duration::from_secs(5))
+    );
+    assert_eq!(min_ttl(None, None), None);
 }
 
 #[test]

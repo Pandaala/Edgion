@@ -1,30 +1,45 @@
 use super::*;
+use crate::dns::{DnsAnswer, StandardDnsServers};
 use std::str::FromStr;
 
-impl EgressResolver {
-    fn cached(&self, host: &str, now: Instant) -> Option<Vec<IpAddr>> {
-        self.inner.cached(host, now)
-    }
+/// A private answer cache so tests never share state with the process-wide one.
+fn private_cache() -> &'static DnsAnswerCache {
+    Box::leak(Box::new(DnsAnswerCache::new(64, 1)))
+}
 
-    fn store(&self, host: &str, addrs: Vec<IpAddr>, now: Instant) {
-        self.inner.store(host, addrs, now)
-    }
+/// Seed `cache` with a raw resolver answer for `host` without any network I/O.
+async fn seed(cache: &DnsAnswerCache, spec: &ResolverSpec, host: &str, addrs: &[&str]) {
+    let addrs: Vec<IpAddr> = addrs.iter().map(|value| ip(value)).collect();
+    cache
+        .lookup_with(
+            spec,
+            host,
+            DnsQueryPolicy::Native,
+            &DnsCachePolicy::new(Duration::from_secs(60)),
+            |_, _, _| std::future::ready(Ok(DnsAnswer::without_ttl(addrs))),
+        )
+        .await
+        .unwrap();
+}
 
-    fn cache_len(&self) -> usize {
-        self.inner.cache.read().len()
-    }
+fn resolver_with(
+    cache: &'static DnsAnswerCache,
+    spec: ResolverSpec,
+    block_private: bool,
+    observer: Option<EgressBlockObserver>,
+) -> EgressResolver {
+    EgressResolver::with_cache(
+        spec,
+        EgressPolicy { block_private },
+        Duration::from_secs(5),
+        false,
+        observer,
+        cache,
+    )
 }
 
 fn ip(value: &str) -> IpAddr {
     value.parse().unwrap()
-}
-
-fn resolver(block_private: bool) -> EgressResolver {
-    EgressResolver::new(
-        ResolverSpec::System,
-        EgressPolicy { block_private },
-        Duration::from_secs(5),
-    )
 }
 
 #[test]
@@ -131,128 +146,56 @@ fn observed_filter_preserves_address_order_and_drop_reasons() {
     }
 }
 
-#[test]
-fn cache_hit_negative_expiry_and_bound() {
-    let resolver = resolver(true);
-    let now = Instant::now();
-    resolver.store("api.example.com", vec![ip("93.184.216.34")], now);
-    resolver.store("evil.example.com", vec![], now);
-    assert_eq!(resolver.cached("api.example.com", now), Some(vec![ip("93.184.216.34")]));
-    assert_eq!(resolver.cached("evil.example.com", now), Some(vec![]));
-
-    let short = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_millis(1));
-    short.store("expired.example.com", vec![ip("93.184.216.34")], now);
+#[tokio::test]
+async fn cached_raw_answer_is_classified_by_each_resolver_on_every_use() {
+    thread_local! {
+        static DROPS: std::cell::RefCell<Vec<EgressBlockReason>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn observe(reason: EgressBlockReason) {
+        DROPS.with(|drops| drops.borrow_mut().push(reason));
+    }
+    let cache = private_cache();
+    seed(
+        cache,
+        &ResolverSpec::System,
+        "mixed.example.com",
+        &["93.184.216.34", "10.0.0.1"],
+    )
+    .await;
+    let strict = resolver_with(cache, ResolverSpec::System, true, Some(observe));
+    let lenient = resolver_with(cache, ResolverSpec::System, false, None);
+    for _ in 0..2 {
+        assert_eq!(
+            strict.resolve_socket_addrs("mixed.example.com", 443).await.unwrap(),
+            vec![SocketAddr::new(ip("93.184.216.34"), 443)]
+        );
+    }
     assert_eq!(
-        short.cached("expired.example.com", now + Duration::from_millis(50)),
-        None
+        lenient.resolve_socket_addrs("mixed.example.com", 443).await.unwrap(),
+        vec![
+            SocketAddr::new(ip("93.184.216.34"), 443),
+            SocketAddr::new(ip("10.0.0.1"), 443)
+        ],
+        "the cache stores the raw answer, not one consumer's filtered view"
     );
-
-    for index in 0..(EGRESS_CACHE_MAX_ENTRIES * 3) {
-        resolver.store(&format!("host-{index}.example.com"), vec![ip("93.184.216.34")], now);
-    }
-    assert!(resolver.cache_len() <= EGRESS_CACHE_MAX_ENTRIES);
-}
-
-#[test]
-fn full_cache_replacement_refreshes_negative_entry_without_clearing_other_hosts() {
-    let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_secs(10));
-    let now = Instant::now();
-    let address = ip("93.184.216.34");
-    let hosts: Vec<_> = (0..EGRESS_CACHE_MAX_ENTRIES)
-        .map(|index| format!("host-{index}.example.com"))
-        .collect();
-    for host in &hosts {
-        resolver.store(host, vec![address], now);
-    }
-
-    let refreshed = now + Duration::from_secs(1);
-    resolver.store(&hosts[0], vec![], refreshed);
-    assert_eq!(resolver.cache_len(), EGRESS_CACHE_MAX_ENTRIES);
-    assert_eq!(resolver.cached(&hosts[0], refreshed), Some(vec![]));
-    for host in &hosts[1..] {
-        assert_eq!(resolver.cached(host, refreshed), Some(vec![address]));
-    }
-    // Read-only future samples verify that replacement owns a refreshed TTL.
-    assert_eq!(resolver.cached(&hosts[0], now + Duration::from_secs(10)), Some(vec![]));
-    assert_eq!(resolver.cached(&hosts[0], now + Duration::from_secs(11)), None);
-
-    // Every stored entry is still fresh at this insertion sample.
-    let next = now + Duration::from_secs(2);
-    resolver.store("new.example.com", vec![address], next);
-    assert_eq!(resolver.cache_len(), 1);
-    assert_eq!(resolver.cached("new.example.com", next), Some(vec![address]));
-    for host in &hosts {
-        assert_eq!(resolver.cached(host, next), None);
-    }
-}
-
-#[test]
-fn cache_freshness_is_strict_at_ttl_boundary_and_pruning_matches() {
-    let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_millis(10));
-    let inserted_at = Instant::now();
-    let address = ip("93.184.216.34");
-    resolver.store("old.example.com", vec![address], inserted_at);
-
-    assert_eq!(
-        resolver.cached("old.example.com", inserted_at + Duration::from_millis(9)),
-        Some(vec![address])
-    );
-    let boundary = inserted_at + Duration::from_millis(10);
-    assert_eq!(resolver.cached("old.example.com", boundary), None);
-
-    resolver.store("new.example.com", vec![address], boundary);
-    assert_eq!(resolver.cache_len(), 1);
-    assert_eq!(resolver.cached("old.example.com", boundary), None);
-    assert_eq!(resolver.cached("new.example.com", boundary), Some(vec![address]));
-}
-
-#[test]
-fn zero_ttl_expires_immediately_in_lookup_and_pruning() {
-    let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::ZERO);
-    let now = Instant::now();
-    let address = ip("93.184.216.34");
-    resolver.store("old.example.com", vec![address], now);
-    assert_eq!(resolver.cached("old.example.com", now), None);
-
-    resolver.store("new.example.com", vec![address], now);
-    assert_eq!(resolver.cache_len(), 1);
-    assert_eq!(resolver.cached("old.example.com", now), None);
-    assert_eq!(resolver.cached("new.example.com", now), None);
-}
-
-#[test]
-fn cache_freshness_handles_reversed_samples_and_huge_ttl() {
-    let address = ip("93.184.216.34");
-    let earlier = Instant::now();
-    let later = earlier + Duration::from_millis(10);
-    let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_secs(1));
-    resolver.store("future.example.com", vec![address], later);
-    assert_eq!(resolver.cached("future.example.com", earlier), Some(vec![address]));
-    resolver.store("current.example.com", vec![address], earlier);
-    assert_eq!(resolver.cache_len(), 2);
-
-    let huge = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::MAX);
-    huge.store("huge.example.com", vec![address], earlier);
-    assert_eq!(
-        huge.cached("huge.example.com", earlier + Duration::from_secs(1)),
-        Some(vec![address])
-    );
+    DROPS.with(|drops| assert_eq!(*drops.borrow(), vec![EgressBlockReason::Private; 2], "observed per use"));
+    assert_eq!(cache.stats().entries, 1);
 }
 
 #[tokio::test]
 async fn reqwest_resolve_uses_cached_port_zero_and_rejects_empty() {
-    let resolver = resolver(true);
-    let now = Instant::now();
-    resolver.store("api.example.com", vec![ip("93.184.216.34")], now);
+    let cache = private_cache();
+    let resolver = resolver_with(cache, ResolverSpec::System, true, None);
+    seed(cache, &ResolverSpec::System, "api.example.com", &["93.184.216.34"]).await;
     let name = Name::from_str("api.example.com").unwrap();
     let addrs: Vec<_> = Resolve::resolve(&resolver, name).await.unwrap().collect();
     assert_eq!(addrs, vec![SocketAddr::new(ip("93.184.216.34"), 0)]);
 
-    resolver.store("evil.example.com", vec![], now);
+    seed(cache, &ResolverSpec::System, "evil.example.com", &["169.254.169.254"]).await;
     let name = Name::from_str("evil.example.com").unwrap();
     let result = Resolve::resolve(&resolver, name).await;
     let Err(error) = result else {
-        panic!("all-blocked cache entry must surface as an error");
+        panic!("an answer whose every address is blocked must surface as an error");
     };
     assert_eq!(
         error.to_string(),
@@ -269,14 +212,10 @@ async fn reqwest_resolve_uses_cached_port_zero_and_rejects_empty() {
 
 #[tokio::test]
 async fn cache_hit_does_not_touch_network() {
-    let resolver = EgressResolver::new(
-        ResolverSpec::StandardDns {
-            servers: vec!["203.0.113.1:53".to_string()],
-        },
-        EgressPolicy::default(),
-        Duration::from_secs(5),
-    );
-    resolver.store("cached.example.com", vec![ip("93.184.216.34")], Instant::now());
+    let cache = private_cache();
+    let spec = ResolverSpec::StandardDns(StandardDnsServers::new(vec!["203.0.113.1:53".to_string()]));
+    seed(cache, &spec, "cached.example.com", &["93.184.216.34"]).await;
+    let resolver = resolver_with(cache, spec, false, None);
     let name = Name::from_str("cached.example.com").unwrap();
     let addrs: Vec<_> = tokio::time::timeout(Duration::from_secs(2), Resolve::resolve(&resolver, name))
         .await
@@ -296,12 +235,14 @@ async fn zero_ttl_skips_retention_but_preserves_policy_and_observation() {
     }
     // Numeric System inputs are parsed locally without an OS lookup.
     for ttl in [Duration::ZERO, Duration::MAX] {
-        let resolver = EgressResolver::new_with_options(
+        let cache = private_cache();
+        let resolver = EgressResolver::with_cache(
             ResolverSpec::System,
             EgressPolicy { block_private: true },
             ttl,
             false,
             Some(observe),
+            cache,
         );
         DROPS.with(|drops| drops.borrow_mut().clear());
         for _ in 0..2 {
@@ -314,10 +255,29 @@ async fn zero_ttl_skips_retention_but_preserves_policy_and_observation() {
                 "egress policy blocked all resolved addresses"
             );
         }
-        let expected_drops = if ttl.is_zero() { 2 } else { 1 };
+        // Classification and observation run on every use; IP literals never
+        // enter the answer cache.
         DROPS.with(|drops| {
-            assert_eq!(*drops.borrow(), vec![EgressBlockReason::LinkLocal; expected_drops]);
+            assert_eq!(*drops.borrow(), vec![EgressBlockReason::LinkLocal; 2]);
         });
-        assert_eq!(resolver.cache_len(), if ttl.is_zero() { 0 } else { 2 });
+        assert_eq!(cache.stats().entries, 0);
+    }
+}
+
+#[tokio::test]
+async fn hostname_answers_are_retained_unless_the_ttl_is_zero() {
+    // `localhost` resolves through the OS resolver without network access.
+    for (ttl, retained) in [(Duration::ZERO, 0), (Duration::from_secs(5), 1), (Duration::MAX, 1)] {
+        let cache = private_cache();
+        let resolver = EgressResolver::with_cache(
+            ResolverSpec::System,
+            EgressPolicy { block_private: false },
+            ttl,
+            true,
+            None,
+            cache,
+        );
+        resolver.resolve_socket_addrs("localhost", 443).await.unwrap();
+        assert_eq!(cache.stats().entries, retained, "ttl {ttl:?}");
     }
 }

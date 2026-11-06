@@ -521,3 +521,53 @@ fn test_metrics_attempt_timing_is_latency_only_and_survives_retries() {
         assert!(ctx.test_hash_key().is_none());
     }
 }
+
+fn addr(ip: &str, port: u16) -> std::net::SocketAddr {
+    std::net::SocketAddr::new(ip.parse().unwrap(), port)
+}
+
+#[test]
+fn ai_address_selection_rotates_the_first_attempt_across_requests() {
+    let allowed: Vec<std::net::IpAddr> = vec!["192.0.2.1".parse().unwrap(), "192.0.2.2".parse().unwrap()];
+    let fresh = DialedAddrs::default();
+    assert_eq!(select_ai_addr(&allowed, 443, &fresh, 0), Some(addr("192.0.2.1", 443)));
+    assert_eq!(select_ai_addr(&allowed, 443, &fresh, 1), Some(addr("192.0.2.2", 443)));
+    assert_eq!(select_ai_addr(&allowed, 443, &fresh, 2), Some(addr("192.0.2.1", 443)));
+    assert_eq!(select_ai_addr(&[], 443, &fresh, 7), None);
+}
+
+#[test]
+fn ai_address_selection_prefers_addresses_this_request_has_not_dialed() {
+    let allowed: Vec<std::net::IpAddr> = vec![
+        "192.0.2.1".parse().unwrap(),
+        "192.0.2.2".parse().unwrap(),
+        "192.0.2.3".parse().unwrap(),
+    ];
+    let mut dialed = DialedAddrs::default();
+    dialed.record(addr("192.0.2.2", 443));
+    // Rotation lands on the dialed address; the next untried one is chosen.
+    assert_eq!(select_ai_addr(&allowed, 443, &dialed, 1), Some(addr("192.0.2.3", 443)));
+    // The same IP on another port is a different upstream.
+    assert_eq!(
+        select_ai_addr(&allowed, 8443, &dialed, 1),
+        Some(addr("192.0.2.2", 8443))
+    );
+    dialed.record(addr("192.0.2.3", 443));
+    dialed.record(addr("192.0.2.1", 443));
+    // Every address was dialed: fall back to rotation.
+    assert_eq!(select_ai_addr(&allowed, 443, &dialed, 4), Some(addr("192.0.2.2", 443)));
+}
+
+#[test]
+fn dialed_address_record_deduplicates_and_saturates_without_panicking() {
+    let mut dialed = DialedAddrs::default();
+    dialed.record(addr("192.0.2.1", 443));
+    dialed.record(addr("192.0.2.1", 443));
+    for last in 2..=20u8 {
+        dialed.record(addr(&format!("192.0.2.{last}"), 443));
+    }
+    // A repeated address does not consume a slot, so eight distinct addresses
+    // fit; later ones are not tracked.
+    assert!(dialed.contains(&addr("192.0.2.8", 443)));
+    assert!(!dialed.contains(&addr("192.0.2.9", 443)));
+}

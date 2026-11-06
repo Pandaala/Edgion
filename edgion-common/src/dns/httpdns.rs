@@ -8,7 +8,10 @@ use edgion_resources::resources::link_sys::httpdns::{
     HttpDnsBodyKind, HttpDnsFallback, HttpDnsResolverConfig, HttpDnsResponseFormat,
 };
 
-use super::{require_addresses, standard, strip_brackets, system, DnsError, DnsLookupFamily, DnsQueryPolicy};
+use super::{
+    min_ttl, require_addresses, standard, strip_brackets, system, DnsAnswer, DnsError, DnsLookupFamily, DnsQueryPolicy,
+};
+use std::time::Duration;
 
 /// Hard cap on unique HTTP DNS addresses. Native queries retain their historical
 /// prefix truncation; family-aware queries reject overflow before filtering, so
@@ -98,6 +101,8 @@ pub(super) enum PreparedResponse {
         path: String,
         pointer: String,
         delimiter: Option<String>,
+        /// JSON pointer of the provider's answer TTL (seconds), from `ttlPath`.
+        ttl_pointer: Option<String>,
     },
     Delimited {
         delimiter: Option<String>,
@@ -122,6 +127,11 @@ impl PreparedResponse {
                     path: path.to_string(),
                     pointer: json_pointer_path(path),
                     delimiter,
+                    ttl_pointer: format
+                        .ttl_path
+                        .as_deref()
+                        .filter(|path| !path.is_empty())
+                        .map(json_pointer_path),
                 }
             }
             HttpDnsBodyKind::Delimited => Self::Delimited { delimiter },
@@ -159,33 +169,52 @@ fn require_non_empty_delimiter(delimiter: Option<&str>) -> Result<&str, DnsError
 /// Parse the response body into a de-duplicated IP list, capped at
 /// [`MAX_HTTP_DNS_ADDRS`].
 pub fn parse_body(fmt: &HttpDnsResponseFormat, body: &str) -> Result<Vec<IpAddr>, DnsError> {
-    PreparedResponse::from_format(fmt).parse(body)
+    PreparedResponse::from_format(fmt)
+        .parse(body)
+        .map(|answer| answer.addrs)
+}
+
+/// Read a provider TTL in seconds: a non-negative integer number or an integer
+/// string. Anything else is ignored — a TTL is advisory and never fails a lookup.
+fn ttl_at(value: &serde_json::Value, pointer: Option<&str>) -> Option<Duration> {
+    let node = value.pointer(pointer?)?;
+    let seconds = match node {
+        serde_json::Value::Number(number) => number.as_u64()?,
+        serde_json::Value::String(text) => text.trim().parse::<u64>().ok()?,
+        _ => return None,
+    };
+    Some(Duration::from_secs(seconds))
 }
 
 impl PreparedResponse {
-    fn parse(&self, body: &str) -> Result<Vec<IpAddr>, DnsError> {
+    fn parse(&self, body: &str) -> Result<DnsAnswer, DnsError> {
         match self {
             Self::Json {
                 path,
                 pointer,
                 delimiter,
+                ttl_pointer,
             } => {
                 let v: serde_json::Value = serde_json::from_str(body).map_err(|e| DnsError::Parse(e.to_string()))?;
                 let node = v
                     .pointer(pointer)
                     .ok_or_else(|| DnsError::Parse(format!("ipPath '{path}' not found in response")))?;
-                match node {
+                let addrs = match node {
                     serde_json::Value::Array(items) => parse_ip_candidates(items.iter().filter_map(|i| i.as_str())),
                     serde_json::Value::String(s) => {
                         let delim = require_non_empty_delimiter(delimiter.as_deref())?;
                         parse_ip_candidates(s.split(delim).map(str::trim))
                     }
                     _ => Err(DnsError::Parse("ipPath did not point to array/string".into())),
-                }
+                }?;
+                Ok(DnsAnswer {
+                    addrs,
+                    ttl: ttl_at(&v, ttl_pointer.as_deref()),
+                })
             }
             Self::Delimited { delimiter } => {
                 let delim = require_non_empty_delimiter(delimiter.as_deref())?;
-                parse_ip_candidates(body.split(delim).map(str::trim))
+                parse_ip_candidates(body.split(delim).map(str::trim)).map(DnsAnswer::without_ttl)
             }
         }
     }
@@ -232,8 +261,9 @@ pub(super) fn primary_timeout(cfg: &HttpDnsResolverConfig) -> std::time::Duratio
 
 impl PreparedResponse {
     /// Complete family-aware answers reject malformed values and overflow before filtering.
-    fn parse_complete(&self, body: &str) -> Result<Vec<IpAddr>, DnsError> {
+    fn parse_complete(&self, body: &str) -> Result<DnsAnswer, DnsError> {
         let mut addresses = Vec::new();
+        let mut ttl = None;
         let mut insert = |raw: &str| -> Result<(), DnsError> {
             let ip = strip_brackets(raw.trim())
                 .parse::<IpAddr>()
@@ -258,9 +288,15 @@ impl PreparedResponse {
         };
         match self {
             Self::Delimited { delimiter } => parse_string(body, delimiter.as_deref())?,
-            Self::Json { pointer, delimiter, .. } => {
+            Self::Json {
+                pointer,
+                delimiter,
+                ttl_pointer,
+                ..
+            } => {
                 let value: serde_json::Value =
                     serde_json::from_str(body).map_err(|_| DnsError::Parse("invalid JSON DNS response".into()))?;
+                ttl = ttl_at(&value, ttl_pointer.as_deref());
                 match value.pointer(pointer) {
                     Some(serde_json::Value::String(value)) => parse_string(value, delimiter.as_deref())?,
                     Some(serde_json::Value::Array(values)) => {
@@ -276,7 +312,7 @@ impl PreparedResponse {
                 }
             }
         }
-        Ok(addresses)
+        Ok(DnsAnswer { addrs: addresses, ttl })
     }
 }
 
@@ -284,17 +320,13 @@ async fn apply_fallback(
     fallback: &HttpDnsFallback,
     domain: &str,
     policy: DnsQueryPolicy,
-) -> Result<Vec<IpAddr>, DnsError> {
+) -> Result<DnsAnswer, DnsError> {
     match fallback {
         HttpDnsFallback::System => {
             let a = system::resolve_system(domain, policy)
                 .await
                 .map_err(|e| DnsError::Io(e.to_string()))?;
-            if a.is_empty() {
-                Err(DnsError::NoAddresses)
-            } else {
-                Ok(a)
-            }
+            require_addresses(a).map(DnsAnswer::without_ttl)
         }
         HttpDnsFallback::Dns { servers } => {
             // An empty server list is a misconfiguration, not "no DNS fallback
@@ -320,7 +352,7 @@ pub async fn resolve_via_fallback(
     cfg: &HttpDnsResolverConfig,
     domain: &str,
     policy: DnsQueryPolicy,
-) -> Result<Vec<IpAddr>, DnsError> {
+) -> Result<DnsAnswer, DnsError> {
     apply_fallback(&cfg.fallback, domain, policy).await
 }
 
@@ -330,7 +362,7 @@ pub async fn resolve_http_dns_with<F: HttpDnsFetcher + ?Sized>(
     cfg: &HttpDnsResolverConfig,
     domain: &str,
     policy: DnsQueryPolicy,
-) -> Result<Vec<IpAddr>, DnsError> {
+) -> Result<DnsAnswer, DnsError> {
     let query = PreparedQuery::from_config(cfg);
     resolve_http_dns_prepared(fetcher, cfg, &query, domain, policy).await
 }
@@ -341,7 +373,7 @@ pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
     query: &PreparedQuery,
     domain: &str,
     policy: DnsQueryPolicy,
-) -> Result<Vec<IpAddr>, DnsError> {
+) -> Result<DnsAnswer, DnsError> {
     let primary = async {
         let url = render_url(cfg, domain)?;
         if policy == DnsQueryPolicy::Native {
@@ -352,6 +384,7 @@ pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
             return Err(DnsError::Parse("preset requires a custom URL for IPv6 queries".into()));
         }
         let mut addresses = Vec::new();
+        let mut ttl = None;
         if matches!(query.mode, QueryMode::Typed) {
             let families: &[(DnsLookupFamily, &str)] = match policy {
                 DnsQueryPolicy::Family(DnsLookupFamily::Ipv4Only) => &[(DnsLookupFamily::Ipv4Only, "A")],
@@ -361,12 +394,20 @@ pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
             for &(family, record_type) in families {
                 let body = fetcher.get(&url.replace("{recordType}", record_type)).await?;
                 let parsed = query.response.parse_complete(&body)?;
-                if parsed.iter().any(|ip| !DnsQueryPolicy::Family(family).accepts(*ip)) {
+                if parsed
+                    .addrs
+                    .iter()
+                    .any(|ip| !DnsQueryPolicy::Family(family).accepts(*ip))
+                {
                     return Err(DnsError::Parse(
                         "typed DNS response contains the wrong address family".into(),
                     ));
                 }
-                for ip in parsed {
+                // An empty family answer does not bound the lifetime of the other family.
+                if !parsed.addrs.is_empty() {
+                    ttl = min_ttl(ttl, parsed.ttl);
+                }
+                for ip in parsed.addrs {
                     if !addresses.contains(&ip) {
                         addresses.push(ip);
                     }
@@ -377,9 +418,11 @@ pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
             }
         } else {
             let body = fetcher.get(&url).await?;
-            addresses = query.response.parse_complete(&body)?;
+            let parsed = query.response.parse_complete(&body)?;
+            addresses = parsed.addrs;
+            ttl = parsed.ttl;
         }
-        require_addresses(policy.select(addresses))
+        require_addresses(policy.select(addresses)).map(|addrs| DnsAnswer { addrs, ttl })
     };
     let attempt = if policy == DnsQueryPolicy::Native {
         primary.await

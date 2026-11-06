@@ -37,12 +37,13 @@ stream. The plugin still passes `ldap://host:port` or `ldaps://host:port`, so
 SNI, certificate verification, custom CA, SAN pinning, and mTLS keep using
 `ldapHost`.
 
-**3. The address memo already lives on the plugin instance**
+**3. DNS answers are cached by the canonical egress answer cache**
 
-`LdapAuth` holds an `EgressResolver`. That resolver's bounded TTL HashMap is
-the canonical per-instance memo. A second `HashMap`/`ArcSwap` on the plugin,
-in LinkSys, or on the CR is a duplicate cache. Concurrent first misses may
-each resolve DNS; that stampede is accepted.
+`LdapAuth` holds an `EgressResolver`, which resolves through the process-wide
+egress `DnsAnswerCache` (TTL-honoring, same-key misses coalesced, raw answers
+classified on every use; common-02). A second `HashMap`/`ArcSwap` on the
+plugin, in LinkSys, or on the CR is a duplicate cache. See
+[DNS answer cache identity and lifecycle](../../backends/regression-guards/dns-answer-cache-identity-and-lifecycle.md).
 
 **4. Multi-address fallback matches ext_proc**
 

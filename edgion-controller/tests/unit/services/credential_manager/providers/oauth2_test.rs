@@ -225,9 +225,9 @@ fn literal_issuer_egress_uses_source_policy_and_shared_testing_exception() {
                     &prepared,
                     Duration::from_secs(3),
                     Duration::from_secs(8),
-                    ResolverSpec::StandardDns {
-                        servers: vec!["192.0.2.53:53".into()],
-                    },
+                    ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(
+                        vec!["192.0.2.53:53".into()],
+                    )),
                 );
                 let allowed = match expected {
                     Public => true,

@@ -19,7 +19,7 @@ use edgion_common::egress::{
 
 use crate::observe::metrics::record_egress_blocked;
 
-pub use edgion_common::egress::{EgressPolicy, EGRESS_CACHE_MAX_ENTRIES};
+pub use edgion_common::egress::EgressPolicy;
 
 static EGRESS_BLOCK_PRIVATE: AtomicBool = AtomicBool::new(false);
 static EGRESS_DNS_TTL_MS: AtomicU64 = AtomicU64::new(5_000);

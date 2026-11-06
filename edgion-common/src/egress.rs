@@ -6,20 +6,14 @@
 //! and IP-classification policy without introducing a Controller -> Gateway
 //! dependency.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use parking_lot::RwLock;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
-use crate::dns::DnsError;
-use crate::dns::{resolve as dns_resolve, ResolverSpec};
+use crate::dns::{egress_answer_cache, DnsAnswerCache, DnsCachePolicy, DnsError, DnsQueryPolicy, ResolverSpec};
 use crate::test_mode::is_integration_testing_mode;
-
-/// Hard cap on each resolver's address memo.
-pub const EGRESS_CACHE_MAX_ENTRIES: usize = 16;
 
 /// Coarse, policy-free IP segments used by outbound egress decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,24 +107,13 @@ pub struct EgressPolicy {
     pub block_private: bool,
 }
 
-struct CacheEntry {
-    addrs: Vec<IpAddr>,
-    inserted_at: Instant,
-}
-
-impl CacheEntry {
-    fn is_fresh(&self, now: Instant, ttl: Duration) -> bool {
-        now.saturating_duration_since(self.inserted_at) < ttl
-    }
-}
-
 struct Inner {
     spec: ResolverSpec,
     policy: EgressPolicy,
-    ttl: Duration,
+    cache_policy: DnsCachePolicy,
     allow_loopback: bool,
     observer: Option<EgressBlockObserver>,
-    cache: RwLock<HashMap<String, CacheEntry>>,
+    cache: &'static DnsAnswerCache,
 }
 
 /// DNS resolver that applies egress policy to every resolved address.
@@ -147,6 +130,10 @@ enum ResolveFailure {
 impl EgressResolver {
     /// Construct a resolver with production-safe loopback policy and no
     /// binary-specific observation hook.
+    ///
+    /// `ttl` is the freshness of an answer whose resolver reports no record TTL;
+    /// reported TTLs are honored within the shared answer cache's bounds. A zero
+    /// `ttl` disables caching for this resolver.
     pub fn new(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
         Self::new_with_options(spec, policy, ttl, false, None)
     }
@@ -160,14 +147,26 @@ impl EgressResolver {
         allow_loopback: bool,
         observer: Option<EgressBlockObserver>,
     ) -> Self {
+        Self::with_cache(spec, policy, ttl, allow_loopback, observer, egress_answer_cache())
+    }
+
+    /// Construct a resolver backed by an explicit answer cache instance.
+    pub(crate) fn with_cache(
+        spec: ResolverSpec,
+        policy: EgressPolicy,
+        ttl: Duration,
+        allow_loopback: bool,
+        observer: Option<EgressBlockObserver>,
+        cache: &'static DnsAnswerCache,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spec,
                 policy,
-                ttl,
+                cache_policy: DnsCachePolicy::new(ttl),
                 allow_loopback,
                 observer,
-                cache: RwLock::new(HashMap::new()),
+                cache,
             }),
         }
     }
@@ -182,61 +181,22 @@ impl EgressResolver {
         Ok(allowed.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
     }
 
+    /// Resolve through the shared answer cache, then classify the exact
+    /// addresses about to be dialed. The cache holds raw answers, so the
+    /// policy and observer of this resolver run on every use.
     async fn resolve_ips(&self, host: &str) -> Result<Vec<IpAddr>, ResolveFailure> {
-        // A zero-TTL entry can never be fresh; avoid memo work entirely.
-        let cache_enabled = !self.inner.ttl.is_zero();
-        let cached = if cache_enabled {
-            self.inner.cached(host, Instant::now())
-        } else {
-            None
-        };
-        let allowed = match cached {
-            Some(hit) => hit,
-            None => {
-                let raw = dns_resolve(&self.inner.spec, host, crate::dns::DnsQueryPolicy::Native)
-                    .await
-                    .map_err(ResolveFailure::Dns)?;
-                let allowed = filter_resolved_addrs_with_observer(
-                    raw,
-                    self.inner.policy,
-                    self.inner.allow_loopback,
-                    self.inner.observer,
-                );
-                if cache_enabled {
-                    self.inner.store(host, allowed.clone(), Instant::now());
-                }
-                allowed
-            }
-        };
+        let raw = self
+            .inner
+            .cache
+            .lookup(&self.inner.spec, host, DnsQueryPolicy::Native, &self.inner.cache_policy)
+            .await
+            .map_err(ResolveFailure::Dns)?;
+        let allowed =
+            filter_resolved_addrs_with_observer(raw, self.inner.policy, self.inner.allow_loopback, self.inner.observer);
         if allowed.is_empty() {
             return Err(ResolveFailure::Blocked);
         }
         Ok(allowed)
-    }
-}
-
-impl Inner {
-    fn cached(&self, host: &str, now: Instant) -> Option<Vec<IpAddr>> {
-        let guard = self.cache.read();
-        let entry = guard.get(host)?;
-        entry.is_fresh(now, self.ttl).then(|| entry.addrs.clone())
-    }
-
-    fn store(&self, host: &str, addrs: Vec<IpAddr>, now: Instant) {
-        let mut guard = self.cache.write();
-        guard.retain(|_, entry| entry.is_fresh(now, self.ttl));
-        let entry = CacheEntry {
-            addrs,
-            inserted_at: now,
-        };
-        if guard.len() >= EGRESS_CACHE_MAX_ENTRIES {
-            if let Some(current) = guard.get_mut(host) {
-                *current = entry;
-                return;
-            }
-            guard.clear();
-        }
-        guard.insert(host.to_string(), entry);
     }
 }
 

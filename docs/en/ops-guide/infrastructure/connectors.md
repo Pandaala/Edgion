@@ -78,9 +78,16 @@ spec:
     response:
       kind: json
       ipPath: ips
+      ttlPath: ttl
     fallback:
       type: system
 ```
+
+`response.ttlPath` (JSON responses only) names the field holding the answer TTL
+in seconds, as an integer number or integer string. When present, Gateway caches
+the answer for that TTL (clamped to 5–300 seconds); an absent or invalid value
+falls back to the consumer's cache TTL and never fails resolution. The `aliyun`
+preset reads `ttl`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -316,8 +323,10 @@ Redis endpoints are resolved by the Gateway when redis-rs opens a connection, no
 not once per Redis command. The same dial-time resolver covers configured seeds, automatic reconnects,
 Sentinel-discovered primaries, Cluster primaries already known to the published client, and redirected nodes.
 Results use the system DNS
-mode of Edgion's shared resolver and are cached for `outbound_egress_dns_cache_ttl_ms` (5 seconds by
-default).
+mode of Edgion's shared resolver and are kept in the process-wide egress DNS answer cache for
+`outbound_egress_dns_cache_ttl_ms` (5 seconds by default), because the system resolver reports no
+record TTL. An expired answer may still be served for up to 30 seconds while one dial refreshes it;
+while the resolver is failing, the last good answer keeps being served for as long as it is still used.
 
 Every resolved address is classified immediately before redis-rs connects. Loopback, link-local, and
 unspecified addresses are always rejected in production. Private and unique-local addresses follow the
@@ -664,8 +673,9 @@ operator's TLS intent — neither is acceptable, so it is rejected instead of gu
 
 **Dedicated connection pool.** A URL target always builds its own `reqwest::Client` — including when
 no `tls` block is set at all — and never falls back to the shared process-global HTTP client that
-other consumers use. This is what lets each URL target own its own DNS resolution and address cache
-(see [Egress policy](#egress-policy-ssrf-protection)); it also means URL targets do not share
+other consumers use. Each URL target therefore has its own egress resolver and policy (see
+[Egress policy](#egress-policy-ssrf-protection)); resolved answers live raw in the process-wide
+egress DNS answer cache and are classified by that resolver on every use. URL targets do not share
 connection-pool exhaustion or health state with unrelated webhooks.
 
 ### Egress policy (SSRF protection)
@@ -700,7 +710,7 @@ owns the process-wide HTTP/2 response-header limit for Gateway-initiated reqwest
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for guarded outbound targets. A webhook's `target.blockPrivate` may override it; Redis may not. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
-| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long guarded outbound DNS results, including Redis results, are cached after classification before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | Freshness of guarded outbound DNS answers, including Redis, in the shared egress answer cache when the resolver reports no record TTL (capped at 300 seconds; reported TTLs are honored within 5–300 seconds). Answers are cached raw and classified on every use. `0` disables caching. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
 | `outbound_http2_max_header_list_size` (gateway config file) | Integer (bytes) | `16384` | Decoded HTTP/2 response-header-list limit shared by Gateway-initiated reqwest calls. Accepts `16384..=65536` and requires a Gateway restart. It does not affect client-to-Gateway traffic or Pingora route upstreams. |
 
 **Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always

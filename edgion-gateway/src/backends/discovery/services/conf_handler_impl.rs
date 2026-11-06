@@ -1,4 +1,4 @@
-use crate::backends::discovery::{get_global_dns_cache, ServiceDiscoveryCoordinator};
+use crate::backends::discovery::ServiceDiscoveryCoordinator;
 use edgion_common::conf_sync::traits::ConfHandler;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
@@ -18,20 +18,11 @@ impl ConfHandler<Service> for ServiceHandler {
     fn full_set(&self, data: &HashMap<String, Arc<Service>>) {
         tracing::info!(component = "service_store", cnt = data.len(), "full set");
 
-        // Snapshot the previous key set before the swap so Self-resolved
-        // ExternalName addresses can be dropped from the DNS cache. Per-service
-        // policy config is owned by EdgionBackendTrafficPolicy; membership and
-        // runtime cells are owned by the coordinator.
-        let old_keys: HashSet<String> = self.coordinator.load_generation().services.keys().cloned().collect();
+        // Per-service policy config is owned by EdgionBackendTrafficPolicy;
+        // membership and runtime cells are owned by the coordinator. Cached DNS
+        // answers carry no Service identity (hostname, resolver and family
+        // describe the answer), so a removed Service leaves nothing to reclaim.
         self.coordinator.replace_services(data);
-
-        let removed_keys: HashSet<String> = old_keys
-            .into_iter()
-            .filter(|old_key| !data.contains_key(old_key))
-            .collect();
-        if !removed_keys.is_empty() {
-            get_global_dns_cache().invalidate_services(&removed_keys);
-        }
     }
 
     fn partial_update(
@@ -47,10 +38,7 @@ impl ConfHandler<Service> for ServiceHandler {
             rm = remove.len(),
             "partial update"
         );
-        self.coordinator.update_services(add, update, remove.clone());
-        if !remove.is_empty() {
-            get_global_dns_cache().invalidate_services(&remove);
-        }
+        self.coordinator.update_services(add, update, remove);
     }
 }
 

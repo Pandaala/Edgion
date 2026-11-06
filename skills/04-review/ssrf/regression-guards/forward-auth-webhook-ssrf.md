@@ -114,8 +114,10 @@ Policy (both enforcement points implement the same one):
   `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE` (default `false`); an explicit
   `target.blockPrivate` on the resource always wins over that default.
 - A URL target always gets its own dedicated `reqwest::Client` (never the process-global shared
-  client), so its `EgressResolver` and address memo are never shared across webhooks — the cache is
-  owned by the client and dies with it.
+  client) and `EgressResolver`. Resolved answers live raw in the process-wide egress
+  `DnsAnswerCache` (keyed by resolver, name and query policy) and each resolver classifies them with
+  its own policy on every use, so sharing an answer never shares an egress decision (common-02,
+  [DNS answer cache identity and lifecycle](../../backends/regression-guards/dns-answer-cache-identity-and-lifecycle.md)).
 
 Rejections increment `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` —
 but only on the **hostname** path: `filter_addrs` in `egress.rs` records all three reasons via

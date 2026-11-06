@@ -3849,9 +3849,9 @@ async fn oidc_egress_dns_failure_fails_closed() {
     use edgion_common::dns::ResolverSpec;
 
     let resolver = EgressResolver::new(
-        ResolverSpec::StandardDns {
-            servers: vec!["not-a-dns-server".to_string()],
-        },
+        ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![
+            "not-a-dns-server".to_string()
+        ])),
         EgressPolicy {
             block_private: default_block_private(),
         },

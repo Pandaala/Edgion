@@ -144,6 +144,13 @@ const IGNORE_PATHS: &[&str] = &[
     "controller.metrics.key_bytes",
     "controller.event_store.next_resource_version",
     "controller.watch_objects.count",
+    // DNS answer caches hold capacity-bounded answers for up to 330 s (record
+    // TTL cap plus stale window; longer while a failing resolver keeps a
+    // still-requested answer), beyond this gate's 75-second poll, and carry no
+    // resource identity. `in_flight` remains a mandatory zero check.
+    "gateway.dns_answer_cache.upstream.entries",
+    "gateway.dns_answer_cache.egress.entries",
+    "controller.dns_answer_cache.entries",
 ];
 
 enum ExitDecision {

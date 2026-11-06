@@ -595,9 +595,9 @@ impl DnsPeer {
         }
     }
     fn resolver(&self) -> ResolverSpec {
-        ResolverSpec::StandardDns {
-            servers: vec![self.address.to_string()],
-        }
+        ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![self
+            .address
+            .to_string()]))
     }
     async fn shutdown(self) {
         self.stop.cancel();

@@ -152,7 +152,7 @@ spec:
 - Redis retries connection establishment with fixed bounded exponential backoff, but does not transparently replay an ordinary command after an ambiguous connection failure.
 - Redis logging and metrics are owned by the Gateway binary; Redis has no per-connector observability block or arbitrary metric labels.
 - `auth` uses `BasicAuthResolver`: the Secret must provide at least `password`; `username` is optional (Redis 6+ ACL).
-- redis-rs resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and results use `outbound_egress_dns_cache_ttl_ms`.
+- redis-rs resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and answers live in the shared egress DNS answer cache with `outbound_egress_dns_cache_ttl_ms` as their fallback freshness (classification runs on every use).
 
 ### `type: etcd`
 
@@ -428,12 +428,12 @@ spec:
 
 ### `type: httpdns`
 
-An HTTP DNS resolver: resolves external domains via an HTTP(S) endpoint instead of standard DNS. The `HttpDnsResolverConfig` schema and the shared resolver core live in `edgion-common/src/dns/`. The gateway data-plane wiring is live: a native HTTP/gRPC `Service` reference to an actual `spec.type: ExternalName` Service whose effective resolver (Service → Gateway → EGC precedence) points at an httpdns LinkSys is resolved through this config, cached briefly, and SSRF-validated. See [`docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md`](../../../docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md) for the full design.
+An HTTP DNS resolver: resolves external domains via an HTTP(S) endpoint instead of standard DNS. The `HttpDnsResolverConfig` schema and the shared resolver core live in `edgion-common/src/dns/`. The gateway data-plane wiring is live: a native HTTP/gRPC `Service` reference to an actual `spec.type: ExternalName` Service whose effective resolver (Service → Gateway → EGC precedence) points at an httpdns LinkSys is resolved through this config, cached in the Gateway upstream DNS answer cache, and SSRF-validated. See [`docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md`](../../../docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md) for the full design.
 
 Key fields:
 - `preset` (`aliyun` | `tencent`) — selects the response **format** (Aliyun JSON `ips`; Tencent DNSPod `;`-delimited) plus a best-effort built-in URL. The built-in URLs are plain HTTP against the vendors' public resolving IPs and are account-less, so for real vendor accounts combine `preset` with an explicit `urlTemplate`.
 - `urlTemplate` — request URL with a `{domain}` placeholder. **Wins over a preset's built-in URL**, so `preset` + `urlTemplate` = the preset's response format with a custom (account-scoped / correct-scheme) endpoint. Required only when no `preset` is set.
-- `response` — parsing rules (`json` with `ipPath`, or `delimited` with `delimiter`); ignored when a `preset` is set.
+- `response` — parsing rules (`json` with `ipPath` and optional `ttlPath`, or `delimited` with `delimiter`); ignored when a `preset` is set. `ttlPath` feeds the answer TTL to the shared DNS answer cache (the `aliyun` preset reads `ttl`).
 - `connection` — outbound TLS, total/connect timeouts, native HTTP connection pool,
   bounded response size, and per-resolver loopback exception (no `target`). See the
   [operator connection reference](../../../docs/en/ops-guide/infrastructure/connectors.md#http-dns-resolver)

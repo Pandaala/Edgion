@@ -91,8 +91,13 @@ fn response_serializes_with_expected_keys() {
             next_resource_version: 1,
         },
         watch_objects: WatchObjectsStats { count: 19 },
+        dns_answer_cache: edgion_common::dns::DnsAnswerCacheStats::default(),
     };
     let v = serde_json::to_value(&resp).unwrap();
+    // Residue detection exempts `entries` and requires `in_flight` to reach zero.
+    assert_eq!(v["dns_answer_cache"]["entries"], 0);
+    assert_eq!(v["dns_answer_cache"]["in_flight"], 0);
+    assert!(v["dns_answer_cache"]["in_flight_keys"].is_array());
     assert!(v.get("conf_center_storage").is_some());
     assert!(v.get("raw_cache").is_some());
     assert!(v.get("raw_cache_keys").is_some());
@@ -103,7 +108,11 @@ fn response_serializes_with_expected_keys() {
     assert_eq!(v.get("credential_memory_sources").unwrap().as_u64(), Some(0));
     assert_eq!(v.get("credential_memory_keys").unwrap().as_u64(), Some(0));
     assert!(v.get("event_store").is_some());
-    let dump = v.to_string();
+    // Credential stores expose counts only: no generated-secret entries may be
+    // listed. The DNS answer cache's numeric `entries` count is unrelated.
+    let mut credential_view = v.clone();
+    credential_view.as_object_mut().unwrap().remove("dns_answer_cache");
+    let dump = credential_view.to_string();
     assert!(!dump.contains("entries"));
     assert!(!dump.contains("generated"));
 }

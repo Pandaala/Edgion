@@ -1,5 +1,6 @@
 use crate::backends::policy::backend_traffic::store::{TargetObservation, OBSERVATION_MAX_TARGET_BYTES};
 use crate::backends::policy::backend_traffic::BackendTrafficPolicySnapshot;
+use crate::backends::upstream_dns_cache;
 use crate::conf_sync::ConfigClient;
 use crate::runtime::server::proxy_protocol_policy::get_global_proxy_protocol_policy_runtime;
 use axum::{
@@ -8,6 +9,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use edgion_common::dns::{egress_answer_cache, DnsAnswerCacheStats};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
 use serde::{Deserialize, Serialize};
@@ -486,6 +488,26 @@ struct StoreStatsResponse {
     link_sys_runtime: LinkSysRuntimeStats,
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
+    dns_answer_cache: DnsAnswerCacheStoreStats,
+}
+
+/// DNS answer caches. `in_flight` must return to zero once requests settle;
+/// `entries` is capacity-bounded, can outlive the residue poll (330 s
+/// normally, longer while a failing resolver keeps a requested answer) and is
+/// exempt from the zero-after-wipe residue check.
+#[derive(Serialize)]
+struct DnsAnswerCacheStoreStats {
+    upstream: DnsAnswerCacheStats,
+    egress: DnsAnswerCacheStats,
+}
+
+impl DnsAnswerCacheStoreStats {
+    fn snapshot() -> Self {
+        Self {
+            upstream: upstream_dns_cache().stats(),
+            egress: egress_answer_cache().stats(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -720,6 +742,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         link_sys_runtime,
         plugin_store_v2,
         stream_plugin_store_v2,
+        dns_answer_cache: DnsAnswerCacheStoreStats::snapshot(),
     }))
 }
 

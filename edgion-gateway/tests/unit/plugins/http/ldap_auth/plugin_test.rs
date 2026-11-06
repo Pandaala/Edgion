@@ -760,9 +760,9 @@ async fn link_local_literal_is_blocked_at_dial_time() {
 #[tokio::test]
 async fn dns_resolution_failure_fails_closed() {
     let resolver = EgressResolver::new(
-        ResolverSpec::StandardDns {
-            servers: vec!["not-a-dns-server".to_string()],
-        },
+        ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![
+            "not-a-dns-server".to_string()
+        ])),
         EgressPolicy {
             block_private: default_block_private(),
         },

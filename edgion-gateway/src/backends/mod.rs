@@ -18,9 +18,9 @@ pub use degrade_threshold::{
     resolve_degrade_threshold,
 };
 pub use discovery::{
-    create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_dns_cache,
-    get_global_service_store, get_roundrobin_store, get_service_discovery_coordinator, DnsResolutionMode,
-    EndpointSliceExt, EpSliceStore, ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
+    create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_service_store,
+    get_roundrobin_store, get_service_discovery_coordinator, upstream_dns_cache, DnsResolutionMode, EndpointSliceExt,
+    EpSliceStore, ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
 };
 pub use outlier_detection::{get_outlier_detection_store, FailureClass, OutlierCompletionToken};
 
@@ -44,9 +44,10 @@ use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
-use discovery::DnsCache;
 use edgion_common::dns::resolver_select::{resolve_effective_spec, LinkSysKey, ResolverCandidate};
-use edgion_common::dns::{resolve, DnsError, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
+use edgion_common::dns::{
+    resolve_answer, DnsAnswer, DnsAnswerCache, DnsCachePolicy, DnsError, DnsLookupFamily, DnsQueryPolicy, ResolverSpec,
+};
 #[cfg(test)]
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
@@ -61,7 +62,7 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::future::Future;
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
@@ -209,10 +210,10 @@ where
             // This attempt owns one Service geometry and one resolver candidate/TTL
             // generation through the await. A later attempt recaptures both.
             let egc_default = crate::config::get_egc_dns_resolver_default();
-            let cache_ttl = egc_default
+            let cache_policy = egc_default
                 .as_ref()
-                .map(|resolved| resolved.cache_ttl())
-                .unwrap_or(DEFAULT_DNS_CACHE_TTL);
+                .map(|resolved| resolved.cache_policy())
+                .unwrap_or(DnsCachePolicy::new(DEFAULT_DNS_CACHE_TTL));
             let spec = compute_external_name_resolver(
                 captured.dns_resolver_candidate(),
                 ctx,
@@ -228,12 +229,12 @@ where
                 spec: &spec,
                 family,
                 cache,
-                ttl: cache_ttl,
-                dns_cache: get_global_dns_cache(),
+                policy: cache_policy,
+                dns_cache: upstream_dns_cache(),
             };
             // Self-resolution has no EndpointSlice affinity contract: a sticky
             // target cannot replace the captured hostname's admitted DNS result.
-            build_external_name_peer_with_resolver(ctx, &input, &captured, gateway_key_ref, dns, resolve).await
+            build_external_name_peer_with_resolver(ctx, &input, &captured, gateway_key_ref, dns, resolve_answer).await
         }
     }
 }
@@ -266,9 +267,9 @@ fn native_service_path(captured: &CapturedServiceSelection) -> Result<ExternalNa
 struct ExternalNameResolution<'a> {
     spec: &'a ResolverSpec,
     family: DnsLookupFamily,
-    dns_cache: &'a DnsCache,
+    dns_cache: &'a DnsAnswerCache,
     cache: bool,
-    ttl: Duration,
+    policy: DnsCachePolicy,
 }
 
 async fn build_external_name_peer_with_resolver<'a, R, Fut>(
@@ -281,17 +282,16 @@ async fn build_external_name_peer_with_resolver<'a, R, Fut>(
 ) -> Result<Box<HttpPeer>, EdgionErrorCode>
 where
     R: FnOnce(&'a ResolverSpec, &'a str, DnsQueryPolicy) -> Fut,
-    Fut: Future<Output = Result<Vec<IpAddr>, DnsError>>,
+    Fut: Future<Output = Result<DnsAnswer, DnsError>>,
 {
     let hostname = external_name(captured)?;
     let port = captured.section().identity.number.get();
     let backend_app_protocol = captured.section().prepared_app_protocol;
-    let ips = resolve_external_ips_with(
+    let mut ips = resolve_external_ips_with(
         hostname,
         dns.spec,
-        input.service.key(),
         dns.cache,
-        dns.ttl,
+        &dns.policy,
         dns.dns_cache,
         dns.family,
         resolver,
@@ -304,6 +304,12 @@ where
         }
         EdgionErrorCode::BackendDnsResolutionFailed
     })?;
+    // Cached answers keep their order for the record TTL; rotate the start so
+    // traffic spreads over every address and one dead address cannot capture
+    // every request. A per-request lookup keeps the resolver's own order.
+    if dns.cache {
+        rotate_addresses(&mut ips, next_address_rotation());
+    }
     let addr = match first_safe_inet_addr(&ips, port, ctx.allow_loopback_upstream) {
         Ok(addr) => addr,
         Err(status) => {
@@ -355,11 +361,28 @@ where
     resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], lookup)
 }
 
+/// Process-wide rotation for spreading attempts over resolved addresses. Shared
+/// by AI endpoints and `ExternalName` self-resolution.
+static ADDRESS_ROTATION: AtomicUsize = AtomicUsize::new(0);
+
+/// Next rotation offset for one upstream attempt.
+pub(crate) fn next_address_rotation() -> usize {
+    ADDRESS_ROTATION.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Rotate `addrs` so that index `rotation % len` comes first.
+pub(crate) fn rotate_addresses<T>(addrs: &mut [T], rotation: usize) {
+    if !addrs.is_empty() {
+        addrs.rotate_left(rotation % addrs.len());
+    }
+}
+
 /// Resolve the request's Gateway-scoped DNS policy for a routed external
 /// EdgionBackend. Unlike ExternalName there is no Service annotation layer.
+/// Resolver, family and answer-cache policy come from one EGC snapshot load.
 pub(crate) fn compute_routed_external_resolver(
     ctx: &EdgionHttpContext,
-) -> Result<(ResolverSpec, DnsLookupFamily), DnsError> {
+) -> Result<(ResolverSpec, DnsLookupFamily, DnsCachePolicy), DnsError> {
     let gateway_layer = ctx
         .gateway_info
         .as_deref()
@@ -367,10 +390,14 @@ pub(crate) fn compute_routed_external_resolver(
     let egc_default = crate::config::get_egc_dns_resolver_default();
     let egc_layer = egc_default.as_ref().and_then(|resolved| resolved.candidate());
     let family = compute_lookup_family(None, ctx, egc_default.as_ref().map(|resolved| resolved.lookup_family()))?;
+    let policy = egc_default
+        .as_ref()
+        .map(|resolved| resolved.cache_policy())
+        .unwrap_or(DnsCachePolicy::new(DEFAULT_DNS_CACHE_TTL));
     let spec = resolve_effective_spec(&[gateway_layer, egc_layer], |key: &LinkSysKey| {
         httpdns_config_for_ref(key)
     });
-    Ok((spec, family))
+    Ok((spec, family, policy))
 }
 
 /// Family inheritance is independent of resolver selection and captured before DNS I/O.
@@ -394,26 +421,25 @@ fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<Arc<edgion_common::dns::Pr
     crate::link_sys::runtime::store::get_httpdns_client(&store_key)
 }
 
-/// Resolve an `ExternalName` to IPs through `spec`, honoring the short-TTL
-/// data-plane cache when `cache` is set.
+/// Resolve an `ExternalName` to IPs through `spec`, through the shared
+/// upstream answer cache when `cache` is set (`per-request` mode resolves every
+/// time).
 ///
 /// An IP-literal `external_name` short-circuits the resolver (and the cache):
 /// there is nothing to resolve, and running a name resolver on a literal would
 /// be both wrong and wasteful.
-#[allow(clippy::too_many_arguments)]
 async fn resolve_external_ips_with<'a, R, Fut>(
     external_name: &'a str,
     spec: &'a ResolverSpec,
-    service_key: &str,
     cache: bool,
-    cache_ttl: Duration,
-    dns_cache: &DnsCache,
+    policy: &DnsCachePolicy,
+    dns_cache: &DnsAnswerCache,
     family: DnsLookupFamily,
     resolver: R,
 ) -> Result<Vec<IpAddr>, DnsError>
 where
     R: FnOnce(&'a ResolverSpec, &'a str, DnsQueryPolicy) -> Fut,
-    Fut: Future<Output = Result<Vec<IpAddr>, DnsError>>,
+    Fut: Future<Output = Result<DnsAnswer, DnsError>>,
 {
     if let Ok(ip) = external_name.parse::<IpAddr>() {
         return if family.allows(ip) {
@@ -422,24 +448,13 @@ where
             Err(DnsError::NoAddresses)
         };
     }
+    let query = DnsQueryPolicy::Family(family);
     if !cache {
-        return resolver(spec, external_name, DnsQueryPolicy::Family(family)).await;
+        return resolver(spec, external_name, query).await.map(|answer| answer.addrs);
     }
-    let fingerprint = spec.fingerprint();
-    if let Some(cached) = dns_cache.get(service_key, external_name, &fingerprint, Instant::now(), family) {
-        return Ok(cached);
-    }
-    let ips = resolver(spec, external_name, DnsQueryPolicy::Family(family)).await?;
-    dns_cache.insert(
-        service_key,
-        external_name,
-        &fingerprint,
-        ips.clone(),
-        cache_ttl,
-        Instant::now(),
-        family,
-    );
-    Ok(ips)
+    dns_cache
+        .lookup_with(spec, external_name, query, policy, resolver)
+        .await
 }
 
 /// Session-persistence-aware selection within one captured Service section.
