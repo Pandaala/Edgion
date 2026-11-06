@@ -9,7 +9,7 @@ impl OpenidConnect {
         &self,
         _session: &mut dyn PluginSession,
         token: &str,
-    ) -> VerifyResult<Value> {
+    ) -> VerifyResult<Arc<Value>> {
         let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
         let endpoint = self
             .config
@@ -67,6 +67,7 @@ impl OpenidConnect {
 
         self.validate_claims_from_value(&claims, Some(discovery.issuer.as_str()))?;
         self.validate_required_scopes(&claims)?;
+        let claims = Arc::new(claims);
         self.cache_introspection_claims(token, &claims).await;
         Ok(claims)
     }
@@ -201,9 +202,9 @@ impl OpenidConnect {
         matches!(jwt_error, OidcVerifyError::InvalidFormat)
     }
 
-    pub(super) async fn verify_token(&self, session: &mut dyn PluginSession, token: &str) -> VerifyResult<Value> {
+    pub(super) async fn verify_token(&self, session: &mut dyn PluginSession, token: &str) -> VerifyResult<Arc<Value>> {
         match self.config.verification_mode {
-            VerificationMode::JwksOnly => self.verify_jwt_token(session, token).await,
+            VerificationMode::JwksOnly => self.verify_jwt_token(session, token).await.map(Arc::new),
             VerificationMode::IntrospectionOnly => self.verify_token_via_introspection(session, token).await,
             VerificationMode::Auto => {
                 let header = self.config.use_jwks.then(|| Self::decode_jwt_header(token)).flatten();
@@ -212,7 +213,7 @@ impl OpenidConnect {
                         .verify_jwt_token_with_header(session, token, header, true, None, true)
                         .await
                     {
-                        Ok(claims) => Ok(claims),
+                        Ok(claims) => Ok(Arc::new(claims)),
                         Err(jwt_error) if Self::should_auto_fallback_to_introspection(&jwt_error) => {
                             match self.verify_token_via_introspection(session, token).await {
                                 Ok(claims) => Ok(claims),
@@ -233,7 +234,7 @@ impl OpenidConnect {
         URL_SAFE_NO_PAD.encode(digest)
     }
 
-    pub(super) async fn get_cached_introspection_claims(&self, token: &str) -> Option<Value> {
+    pub(super) async fn get_cached_introspection_claims(&self, token: &str) -> Option<Arc<Value>> {
         if self.config.introspection_cache_ttl == 0 {
             return None;
         }
@@ -241,7 +242,7 @@ impl OpenidConnect {
         self.introspection_cache.get(&key).0.map(|entry| entry.claims)
     }
 
-    pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Value) {
+    pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Arc<Value>) {
         if self.config.introspection_cache_ttl == 0 || claims.get("active") != Some(&Value::Bool(true)) {
             return;
         }
@@ -251,8 +252,13 @@ impl OpenidConnect {
         if ttl.is_zero() {
             return;
         }
-        self.introspection_cache
-            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
+        self.introspection_cache.insert(
+            key,
+            IntrospectionCacheEntry {
+                claims: Arc::clone(claims),
+            },
+            ttl,
+        );
         // Non-retention is a normal cache miss; the current request still uses
         // the authoritative introspection result.
     }

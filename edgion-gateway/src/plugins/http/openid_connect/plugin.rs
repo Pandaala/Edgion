@@ -245,9 +245,10 @@ struct TokenEndpointResponse {
     token_type: Option<String>,
 }
 
+/// Cache hits share the claims tree through `Arc` instead of deep-cloning it.
 #[derive(Clone)]
 struct IntrospectionCacheEntry {
-    claims: Value,
+    claims: Arc<Value>,
 }
 
 #[derive(Clone)]
@@ -288,7 +289,11 @@ impl std::fmt::Debug for AccessTokenCacheEntry {
 impl crate::cache::tiny_ufo::sealed::Sealed for IntrospectionCacheEntry {}
 impl LogicalWeight for IntrospectionCacheEntry {
     fn logical_weight(&self) -> usize {
-        self.claims.logical_weight()
+        // The root `Value` and the Arc reference counts live in the shared heap
+        // allocation, so count them together with the reachable JSON tree.
+        size_of::<Value>()
+            .saturating_add(2 * size_of::<usize>())
+            .saturating_add(self.claims.logical_weight())
     }
 }
 

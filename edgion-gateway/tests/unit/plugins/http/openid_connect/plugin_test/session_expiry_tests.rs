@@ -53,9 +53,9 @@ async fn plugin(now: u64, action: UnauthAction) -> (OpenidConnect, Arc<AtomicU64
     plugin
         .cache_introspection_claims(
             "live-token",
-            &json!({
+            &Arc::new(json!({
                 "active": true, "iss": "https://idp.example.com", "exp": OpenidConnect::now_unix_secs() + 3600
-            }),
+            })),
         )
         .await;
     (plugin, clock)

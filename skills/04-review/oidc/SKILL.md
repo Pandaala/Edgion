@@ -24,6 +24,7 @@ before applying a decision to current code.
 
 - [OIDC dependency error projection](regression-guards/dependency-error-projection.md)
 - [OIDC authentication response byte caps](regression-guards/authentication-response-byte-caps.md)
+- [OIDC introspection cache shares claims instead of deep-cloning them](regression-guards/introspection-claims-shared-ownership.md)
 
 - [OpenID Connect Dial-time Egress Policy — FIXED](regression-guards/dial-time-egress-policy.md)
 - [OpenID Connect Discovery Failure Backoff — FIXED](regression-guards/discovery-failure-backoff.md)

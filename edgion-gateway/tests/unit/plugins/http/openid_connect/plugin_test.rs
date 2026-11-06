@@ -125,7 +125,7 @@ fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     }))
     .unwrap();
     let introspection = IntrospectionCacheEntry {
-        claims: json!({"sub": "private-identity"}),
+        claims: Arc::new(json!({"sub": "private-identity"})),
     };
     let access = super::AccessTokenCacheEntry {
         token: "private-access".to_string(),
@@ -230,9 +230,9 @@ async fn authenticated_bearer_claim_cleanup_failure_prevents_upstream_continuati
     plugin
         .cache_introspection_claims(
             "cached-token",
-            &json!({
+            &Arc::new(json!({
                 "active":true, "iss":"https://idp.example.com", "exp":OpenidConnect::now_unix_secs()+3600
-            }),
+            })),
         )
         .await;
     let mut session = MockPluginSession::new();
@@ -838,7 +838,7 @@ fn sanitize_redirect_target_rejects_cross_origin_forms() {
 fn test_introspection_cache_entry_has_no_expires_at() {
     // Compile-time check: IntrospectionCacheEntry must not have expires_at
     let _entry = IntrospectionCacheEntry {
-        claims: serde_json::json!({"sub": "test"}),
+        claims: Arc::new(serde_json::json!({"sub": "test"})),
         // If expires_at still exists, this will fail to compile with "missing field"
     };
 }
@@ -1929,11 +1929,11 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
     plugin
         .cache_introspection_claims(
             token,
-            &json!({
+            &Arc::new(json!({
                 "active": true,
                 "iss": "https://idp.example.com",
                 "exp": now + 120
-            }),
+            })),
         )
         .await;
 
@@ -2016,11 +2016,11 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     plugin
         .cache_introspection_claims(
             refreshed_token,
-            &json!({
+            &Arc::new(json!({
                 "active": true,
                 "iss": "https://idp.example.com",
                 "exp": now + 120
-            }),
+            })),
         )
         .await;
 
@@ -2106,14 +2106,14 @@ async fn test_run_request_expired_refresh_publishes_updated_session_token() {
     plugin.introspection_cache.insert(
         OpenidConnect::introspection_cache_key("old-token"),
         IntrospectionCacheEntry {
-            claims: json!({"active": true, "iss": "https://idp.example.com", "exp": now - 120}),
+            claims: Arc::new(json!({"active": true, "iss": "https://idp.example.com", "exp": now - 120})),
         },
         Duration::from_secs(60),
     );
     plugin
         .cache_introspection_claims(
             "new-token",
-            &json!({"active": true, "iss": "https://idp.example.com", "exp": now + 3600}),
+            &Arc::new(json!({"active": true, "iss": "https://idp.example.com", "exp": now + 3600})),
         )
         .await;
     let mut payload = OidcSessionCookie {
@@ -2372,7 +2372,9 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
             // bypassing network I/O and normal cache TTL clipping at token expiry.
             plugin.introspection_cache.insert(
                 OpenidConnect::introspection_cache_key(&token),
-                IntrospectionCacheEntry { claims },
+                IntrospectionCacheEntry {
+                    claims: Arc::new(claims),
+                },
                 Duration::from_secs(60),
             );
             let payload = OidcSessionCookie {
@@ -2808,7 +2810,7 @@ async fn test_introspection_cache_put_and_get() {
     cfg.introspection_cache_ttl = 60;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
-    let claims = json!({"active": true, "sub": "u1"});
+    let claims = Arc::new(json!({"active": true, "sub": "u1"}));
     plugin.cache_introspection_claims("token-a", &claims).await;
 
     assert_eq!(
@@ -2819,15 +2821,38 @@ async fn test_introspection_cache_put_and_get() {
 }
 
 #[tokio::test]
+async fn introspection_cache_hits_share_claims_without_reducing_weight() {
+    use crate::cache::LogicalWeight;
+
+    let mut cfg = base_config();
+    cfg.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let claims = Arc::new(json!({"active": true, "sub": "u1", "groups": ["a", "b"]}));
+    plugin.cache_introspection_claims("token-a", &claims).await;
+
+    let first = plugin.get_cached_introspection_claims("token-a").await.unwrap();
+    let second = plugin.get_cached_introspection_claims("token-a").await.unwrap();
+    assert!(Arc::ptr_eq(&first, &claims));
+    assert!(Arc::ptr_eq(&first, &second));
+
+    let entry = IntrospectionCacheEntry { claims };
+    // Root value, Arc counters and the reachable tree, so the byte budget does not shrink.
+    assert_eq!(
+        entry.logical_weight(),
+        std::mem::size_of::<serde_json::Value>() + 2 * std::mem::size_of::<usize>() + entry.claims.logical_weight()
+    );
+}
+
+#[tokio::test]
 async fn zero_ttl_introspection_result_neither_inserts_nor_replaces_live_claims() {
     let mut config = base_config();
     config.introspection_cache_ttl = 60;
     let plugin = OpenidConnect::new(&config, "default".to_string());
-    let expired = json!({"active": true, "exp": 0, "sub": "expired"});
+    let expired = Arc::new(json!({"active": true, "exp": 0, "sub": "expired"}));
     plugin.cache_introspection_claims("same-token", &expired).await;
     assert!(plugin.get_cached_introspection_claims("same-token").await.is_none());
 
-    let live = json!({"active": true, "sub": "live"});
+    let live = Arc::new(json!({"active": true, "sub": "live"}));
     plugin.cache_introspection_claims("same-token", &live).await;
     plugin.cache_introspection_claims("same-token", &expired).await;
     assert_eq!(plugin.get_cached_introspection_claims("same-token").await, Some(live));
@@ -2847,18 +2872,22 @@ fn zero_ttl_introspection_skips_the_discarded_claims_copy() {
             plugin.config.introspection_cache_ttl,
             OpenidConnect::now_unix_secs(),
         );
-        plugin
-            .introspection_cache
-            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
+        plugin.introspection_cache.insert(
+            key,
+            IntrospectionCacheEntry {
+                claims: Arc::new(claims.clone()),
+            },
+            ttl,
+        );
     }
 
     let mut config = base_config();
     config.introspection_cache_ttl = 60;
     let plugin = OpenidConnect::new(&config, "default".to_string());
-    let claims = json!({
+    let claims = Arc::new(json!({
         "active": true, "exp": 0,
         "details": (0..64).map(|index| json!({"name": format!("claim-{index}"), "value": "payload".repeat(32)})).collect::<Vec<_>>()
-    });
+    }));
     let (old_done, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
         previous_insert(&plugin, "expired-token", &claims).now_or_never()
     });
@@ -2882,7 +2911,7 @@ async fn inactive_introspection_result_is_never_cached() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
     plugin
-        .cache_introspection_claims("inactive-token", &json!({"active": false, "sub": "u1"}))
+        .cache_introspection_claims("inactive-token", &Arc::new(json!({"active": false, "sub": "u1"})))
         .await;
 
     assert_eq!(plugin.get_cached_introspection_claims("inactive-token").await, None);
@@ -2927,7 +2956,7 @@ async fn expired_introspection_result_remains_a_miss_after_another_insert() {
     plugin.introspection_cache.insert(
         expired_key.clone(),
         IntrospectionCacheEntry {
-            claims: json!({"active": true, "sub": "old"}),
+            claims: Arc::new(json!({"active": true, "sub": "old"})),
         },
         StdDuration::from_millis(1),
     );
@@ -2935,7 +2964,7 @@ async fn expired_introspection_result_remains_a_miss_after_another_insert() {
     tokio::time::sleep(StdDuration::from_millis(10)).await;
 
     plugin
-        .cache_introspection_claims("fresh-token", &json!({"active": true, "sub": "new"}))
+        .cache_introspection_claims("fresh-token", &Arc::new(json!({"active": true, "sub": "new"})))
         .await;
 
     // Unchanged TinyUFO reclaims expired slots through normal eviction, but
@@ -2967,11 +2996,11 @@ async fn test_verify_token_auto_falls_back_to_introspection_cache_on_invalid_jwt
 
     let token = "bad.header.payload";
     let now = OpenidConnect::now_unix_secs();
-    let claims = json!({
+    let claims = Arc::new(json!({
         "active": true,
         "iss": "https://issuer.example.com",
         "exp": now + 120
-    });
+    }));
     plugin.cache_introspection_claims(token, &claims).await;
 
     let mut session = MockPluginSession::new();
@@ -4383,7 +4412,7 @@ async fn auto_header_routing_preserves_jwt_failures_and_introspection_choice() {
             let mut cached = claims.clone();
             cached["sub"] = json!("introspection-user");
             cached["active"] = json!(true);
-            plugin.cache_introspection_claims(token, &cached).await;
+            plugin.cache_introspection_claims(token, &Arc::new(cached)).await;
             let result = plugin
                 .verify_token(&mut MockPluginSession::new(), token)
                 .await
@@ -4565,10 +4594,10 @@ async fn introspection_endpoint_presence_precedes_cache_and_url_admission_follow
                 revocation_endpoint: None,
             })
             .await;
-        let claims = json!({
+        let claims = Arc::new(json!({
             "active": true, "iss": "https://issuer.example.com",
             "exp": OpenidConnect::now_unix_secs() + 120
-        });
+        }));
         plugin.cache_introspection_claims("cached-token", &claims).await;
         let mut session = MockPluginSession::new();
         let result = plugin
@@ -4631,7 +4660,9 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
             .unwrap();
             plugin.introspection_cache.insert(
                 OpenidConnect::introspection_cache_key(&token),
-                IntrospectionCacheEntry { claims },
+                IntrospectionCacheEntry {
+                    claims: Arc::new(claims),
+                },
                 Duration::from_secs(60),
             );
             let payload = OidcSessionCookie {
@@ -4650,7 +4681,7 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
                 plugin
                     .cache_introspection_claims(
                         "replacement-token",
-                        &json!({"active":true,"iss":"https://idp.example.com","exp":now+3600}),
+                        &Arc::new(json!({"active":true,"iss":"https://idp.example.com","exp":now+3600})),
                     )
                     .await;
                 let mut refreshed = payload.clone();

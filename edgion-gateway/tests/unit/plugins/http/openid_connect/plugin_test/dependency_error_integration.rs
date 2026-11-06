@@ -204,7 +204,9 @@ async fn userinfo_failure_keeps_authenticated_request_and_claim_header_fallback(
         cfg.userinfo_max_response_bytes = 256;
         let plugin = OpenidConnect::new(&cfg, "default".into());
         plugin.jwks_provider.seed_discovery(discovery(&server.uri())).await;
-        let claims = json!({"active":true, "iss":server.uri(), "sub":"fixture-user", "exp":OpenidConnect::now_unix_secs() + 3600});
+        let claims = Arc::new(
+            json!({"active":true, "iss":server.uri(), "sub":"fixture-user", "exp":OpenidConnect::now_unix_secs() + 3600}),
+        );
         plugin.cache_introspection_claims("private-access-token", &claims).await;
         let mut session = request(Some("private-access-token"));
         session
@@ -213,7 +215,7 @@ async fn userinfo_failure_keeps_authenticated_request_and_claim_header_fallback(
             .returning(move |name, value| {
                 assert_eq!(name, "X-Userinfo");
                 assert!(value.is_sensitive());
-                assert_eq!(serde_json::from_slice::<Value>(value.as_bytes()).unwrap(), claims);
+                assert_eq!(serde_json::from_slice::<Value>(value.as_bytes()).unwrap(), *claims);
                 Ok(())
             });
         let mut log = PluginLog::new("OpenidConnect");
@@ -304,7 +306,7 @@ async fn failed_preemptive_refresh_does_not_invalidate_existing_valid_token() {
     plugin
         .cache_introspection_claims(
             "private-access-token",
-            &json!({"active":true, "iss":server.uri(), "exp":expiry}),
+            &Arc::new(json!({"active":true, "iss":server.uri(), "exp":expiry})),
         )
         .await;
     let cookie: OidcSessionCookie = OidcSessionCookie {

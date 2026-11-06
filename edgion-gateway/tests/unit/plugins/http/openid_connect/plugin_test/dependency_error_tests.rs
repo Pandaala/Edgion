@@ -178,7 +178,9 @@ async fn callback_scope_rejection_remains_401_while_bearer_rejection_remains_403
     let mut cfg = config();
     cfg.required_scopes = Some(vec!["write".into()]);
     let plugin = OpenidConnect::new(&cfg, "default".into());
-    let claims = json!({"active": true, "iss": "https://idp.example.test", "exp": OpenidConnect::now_unix_secs() + 3600, "scope": "read"});
+    let claims = Arc::new(
+        json!({"active": true, "iss": "https://idp.example.test", "exp": OpenidConnect::now_unix_secs() + 3600, "scope": "read"}),
+    );
     let error = plugin.validate_required_scopes(&claims).unwrap_err();
     assert_eq!(error.http_status(), 403);
     let mut callback = request(None);
