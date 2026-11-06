@@ -140,9 +140,32 @@ duplex streams and channels, not a live server. Workspace check/Clippy and the
 repository guards passed. This is scoped ownership and fidelity evidence, not
 a new wire interoperability run or a throughput benchmark.
 
+## Local-reply diagnostics publication
+
+extproc-03 (`local-reply-scan-and-diagnostics`): the streamed request-body
+handler publishes its PluginLog only when `has_log` is set. It previously set
+that flag from a separate protected-name pre-scan, so an ImmediateResponse
+header with an allowed name but invalid value bytes logged `invalid header value`
+that was never published, and protected names were checked twice.
+`local_reply_ops` now returns `(ops, diagnosed)`, where `diagnosed` is true when
+any protected/pseudo rejection or invalid-value diagnostic was recorded; the
+streamed handler ORs it into `has_log` and no longer pre-scans. `decoded_value`
+distinguishes a silent empty-value skip (`Ok(None)`) from a logged invalid value
+(`Err(())`). Produced operations, order, and typed bytes are unchanged, and log
+entries remain static strings. Verified on 2026-11-06 by `cargo test -p edgion-gateway --lib ext_proc`: the
+streamed tests `immediate_response_invalid_header_value_publishes_log` (invalid
+value beside a kept valid header; fails on the pre-fix code) and
+`immediate_response_pseudo_header_only_publishes_log` (regression guard only;
+the old pre-scan already covered pseudo names), plus the updated mutation and
+existing protected-rejection tests. No integration run was needed for this
+log-only change. Re-evaluate if another lazily published
+log consumes `local_reply_ops` or `decoded_value` gains new silent skips.
+
 ## Resolution references
 
 - D0152 / `preserve-ext-proc-opaque-header-fidelity`: confirmed correctness defect;
   implementation authorized after scope and performance discussion.
 - `verify-ext-proc-opaque-header-wire-fidelity`: Full HTTP/1 and HTTP/2
   downstream wire verification completed.
+- extproc-03 / `local-reply-scan-and-diagnostics`: confirmed observability
+  defect; fixed by returning the local-reply diagnostic flag (see above).

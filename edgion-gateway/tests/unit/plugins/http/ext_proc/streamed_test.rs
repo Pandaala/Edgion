@@ -254,6 +254,101 @@ async fn immediate_response_headers_are_carried_and_filtered() {
         .is_some_and(|log| log.contains("protected header mutation rejected")));
 }
 
+/// An immediate-response header with an allowed name but invalid value bytes is
+/// dropped while valid siblings are kept, and its diagnostic must still be
+/// published through `take_log`.
+#[tokio::test]
+async fn immediate_response_invalid_header_value_publishes_log() {
+    use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption};
+
+    let immediate = ProcessingResponse {
+        response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+            status: Some(HttpStatus { code: 403 }),
+            headers: Some(HeaderMutation {
+                set_headers: vec![
+                    HeaderValueOption {
+                        header: Some(HeaderValue {
+                            key: "x-reason".to_string(),
+                            value: String::new(),
+                            raw_value: b"bad\r\nvalue".to_vec(),
+                        }),
+                        append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                        keep_empty_value: false,
+                    },
+                    HeaderValueOption {
+                        header: Some(HeaderValue {
+                            key: "x-denied-by".to_string(),
+                            value: "policy".to_string(),
+                            raw_value: Vec::new(),
+                        }),
+                        append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                        keep_empty_value: false,
+                    },
+                ],
+                remove_headers: Vec::new(),
+            }),
+            body: b"no".to_vec(),
+            ..Default::default()
+        })),
+        mode_override: None,
+    };
+    let mut handler = handler_with(vec![Ok(immediate)], false);
+    let mut chunk = Some(Bytes::from_static(b"payload"));
+    match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
+        ChunkVerdict::Terminate { status, header_ops, .. } => {
+            assert_eq!(status, 403);
+            assert!(matches!(
+                header_ops.as_slice(),
+                [crate::PendingHeaderOp::Set { name, value }]
+                    if name == "x-denied-by" && value == "policy"
+            ));
+        }
+        ChunkVerdict::Continue => panic!("immediate response must terminate"),
+    }
+    let log = handler.take_log().expect("invalid value diagnostic must be published");
+    assert!(log.contains("invalid header value"));
+    assert!(!log.contains("bad\r\nvalue"));
+}
+
+/// Pseudo-header-only immediate-response mutations are rejected, and their
+/// diagnostic must still be published through `take_log`.
+#[tokio::test]
+async fn immediate_response_pseudo_header_only_publishes_log() {
+    use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption};
+
+    let immediate = ProcessingResponse {
+        response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+            status: Some(HttpStatus { code: 403 }),
+            headers: Some(HeaderMutation {
+                set_headers: vec![HeaderValueOption {
+                    header: Some(HeaderValue {
+                        key: ":status".to_string(),
+                        value: "200".to_string(),
+                        raw_value: Vec::new(),
+                    }),
+                    append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                    keep_empty_value: false,
+                }],
+                remove_headers: vec![":authority".to_string()],
+            }),
+            body: b"no".to_vec(),
+            ..Default::default()
+        })),
+        mode_override: None,
+    };
+    let mut handler = handler_with(vec![Ok(immediate)], false);
+    let mut chunk = Some(Bytes::from_static(b"payload"));
+    match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
+        ChunkVerdict::Terminate { status, header_ops, .. } => {
+            assert_eq!(status, 403);
+            assert!(header_ops.is_empty());
+        }
+        ChunkVerdict::Continue => panic!("immediate response must terminate"),
+    }
+    let log = handler.take_log().expect("pseudo header diagnostic must be published");
+    assert!(log.contains("pseudo header mutation rejected"));
+}
+
 #[tokio::test]
 async fn transport_error_fail_close_terminates_500() {
     let mut handler = handler_with(vec![Err(tonic::Status::unavailable("down"))], false);

@@ -45,22 +45,27 @@ pub(super) fn is_protected_header(name: &str) -> bool {
 /// Decode a processor-supplied header value, preferring the modern `raw_value`
 /// (bytes) field and falling back to the legacy `value` (string) field.
 ///
-/// Empty values require `keep_empty_value`. Invalid HTTP value bytes are logged
-/// and skipped without exposing or rewriting processor-supplied contents.
-fn decoded_value(opt: &HeaderValueOption, hv: &HeaderValue, log: &mut PluginLog) -> Option<http::HeaderValue> {
+/// Empty values require `keep_empty_value` and are skipped silently (`Ok(None)`).
+/// Invalid HTTP value bytes are logged and skipped (`Err(())`) without exposing
+/// or rewriting processor-supplied contents.
+fn decoded_value(
+    opt: &HeaderValueOption,
+    hv: &HeaderValue,
+    log: &mut PluginLog,
+) -> Result<Option<http::HeaderValue>, ()> {
     let raw = if hv.raw_value.is_empty() {
         hv.value.as_bytes()
     } else {
         &hv.raw_value
     };
     if raw.is_empty() && !opt.keep_empty_value {
-        return None;
+        return Ok(None);
     }
     match http::HeaderValue::from_bytes(raw) {
-        Ok(value) => Some(value),
+        Ok(value) => Ok(Some(value)),
         Err(_) => {
             log.push_err("invalid header value");
-            None
+            Err(())
         }
     }
 }
@@ -123,7 +128,7 @@ pub fn apply_to_request(session: &mut dyn PluginSession, mutation: &HeaderMutati
         if reject_protected_request(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv, log) else {
+        let Ok(Some(value)) = decoded_value(opt, hv, log) else {
             continue;
         };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
@@ -165,7 +170,7 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
         if reject_protected(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv, log) else {
+        let Ok(Some(value)) = decoded_value(opt, hv, log) else {
             continue;
         };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
@@ -202,7 +207,7 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
 /// reply. Conditions are deliberately evaluated when the fresh header exists,
 /// rather than against an upstream response that the local reply replaces.
 pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: HeaderMutation, log: &mut PluginLog) -> usize {
-    let ops = local_reply_ops(mutation, log);
+    let (ops, _) = local_reply_ops(mutation, log);
     let mut queued = 0;
     for op in ops {
         if session.queue_local_reply_header_op(op).is_ok() {
@@ -217,15 +222,26 @@ pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: HeaderMu
 /// Convert ExtProc wire mutations into runtime-owned local-reply operations.
 /// This is also used by streamed body handlers, which cannot hold a session
 /// borrow while awaiting the processor.
-pub fn local_reply_ops(mutation: HeaderMutation, log: &mut PluginLog) -> Vec<PendingHeaderOp> {
+///
+/// The returned flag is true when any rejection or invalid-value diagnostic was
+/// pushed to `log` (even if a full buffer dropped it), so callers that publish
+/// their log lazily know to do so.
+pub fn local_reply_ops(mutation: HeaderMutation, log: &mut PluginLog) -> (Vec<PendingHeaderOp>, bool) {
     let mut ops = Vec::new();
+    let mut diagnosed = false;
     for mut opt in mutation.set_headers {
         let Some(hv) = opt.header.take() else { continue };
         if reject_protected(&hv.key, log) {
+            diagnosed = true;
             continue;
         }
-        let Some(value) = decoded_value(&opt, &hv, log) else {
-            continue;
+        let value = match decoded_value(&opt, &hv, log) {
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(()) => {
+                diagnosed = true;
+                continue;
+            }
         };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
         let op = match action {
@@ -238,11 +254,12 @@ pub fn local_reply_ops(mutation: HeaderMutation, log: &mut PluginLog) -> Vec<Pen
     }
     for name in mutation.remove_headers {
         if reject_protected(&name, log) {
+            diagnosed = true;
             continue;
         }
         ops.push(PendingHeaderOp::Remove { name });
     }
-    ops
+    (ops, diagnosed)
 }
 
 /// Log-and-skip helper: returns true if the processor must not mutate `name` —

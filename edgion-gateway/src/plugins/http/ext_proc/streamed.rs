@@ -234,20 +234,13 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 exchange.terminal("immediate-response", "request-immediate");
                 // Carry the immediate response's header mutations into the
                 // local reply, matching the request-stage `immediate_reply`
-                // semantics. Protected/pseudo headers are rejected here (with
-                // the same log lines as the mutation module) so the hook can
-                // apply the pairs verbatim.
+                // semantics. Protected/pseudo headers and invalid values are
+                // rejected by the mutation module, which reports whether it
+                // logged anything so the diagnostics reach the access log.
                 let header_ops = imm.headers.map_or_else(Vec::new, |mutation| {
-                    self.has_log |= mutation
-                        .set_headers
-                        .iter()
-                        .filter_map(|option| option.header.as_ref())
-                        .any(|header| super::mutation::is_protected_header(&header.key))
-                        || mutation
-                            .remove_headers
-                            .iter()
-                            .any(|name| super::mutation::is_protected_header(name));
-                    super::mutation::local_reply_ops(mutation, &mut self.log)
+                    let (ops, diagnosed) = super::mutation::local_reply_ops(mutation, &mut self.log);
+                    self.has_log |= diagnosed;
+                    ops
                 });
                 ChunkVerdict::Terminate {
                     status: imm.status,

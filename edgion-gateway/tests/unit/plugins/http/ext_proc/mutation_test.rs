@@ -58,7 +58,9 @@ async fn response_policy_covers_conditional_and_local_reply_ops_without_changing
                 let mut log = PluginLog::new("ExtProc");
                 assert_eq!(apply_to_response(&mut adapter, &mutation, &mut log), 0);
                 assert_eq!(queue_for_local_reply(&mut adapter, mutation.clone(), &mut log), 0);
-                assert!(local_reply_ops(mutation.clone(), &mut log).is_empty());
+                let (ops, diagnosed) = local_reply_ops(mutation.clone(), &mut log);
+                assert!(ops.is_empty());
+                assert!(diagnosed);
                 assert!(apply_to_request(&mut adapter, &mutation, &mut log) >= 1);
                 assert!(log.contains("protected header mutation rejected"));
             }
@@ -205,7 +207,9 @@ fn invalid_processor_bytes_are_skipped_without_exposing_contents() {
         let mut log = PluginLog::new("ExtProc");
         assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
         assert_eq!(apply_to_response(&mut session, &mutation, &mut log), 0);
-        assert!(local_reply_ops(mutation, &mut log).is_empty());
+        let (ops, diagnosed) = local_reply_ops(mutation, &mut log);
+        assert!(ops.is_empty());
+        assert!(diagnosed);
         assert!(log.contains("invalid header value"));
         assert!(!log.contains("private"));
     }
@@ -228,7 +232,8 @@ fn local_reply_ops_preserve_append_conditions_removal_empty_and_duplicates() {
         remove_headers: vec!["x-remove".to_string()],
     };
     let mut log = PluginLog::new("ExtProc");
-    let ops = local_reply_ops(mutation, &mut log);
+    let (ops, diagnosed) = local_reply_ops(mutation, &mut log);
+    assert!(!diagnosed);
     let mut response = pingora_http::ResponseHeader::build(403, Some(8)).expect("valid response");
     response.insert_header("x-present", "old").unwrap();
     response.insert_header("x-remove", "gone").unwrap();
@@ -506,7 +511,8 @@ fn local_reply_ops_move_accepted_header_name_storage() {
         remove_headers: vec![remove_name],
     };
     let mut log = PluginLog::new("ExtProc");
-    let ops = local_reply_ops(mutation, &mut log);
+    let (ops, diagnosed) = local_reply_ops(mutation, &mut log);
+    assert!(!diagnosed);
     assert_eq!(ops.len(), 2);
     let PendingHeaderOp::Set { name, value } = &ops[0] else {
         panic!("expected set operation");
