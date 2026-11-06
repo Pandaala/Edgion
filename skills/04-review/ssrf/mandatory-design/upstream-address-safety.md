@@ -18,6 +18,19 @@ Any path along which the Gateway data plane will establish an upstream connectio
 
 RFC1918 private addresses (`10/8`, `172.16/12`, `192.168/16`) are allowed by default; K8s Service, Pod, cross-cluster gateway, and enterprise internal APIs all rely on these addresses.
 
+### Open gap: vendor metadata endpoints outside link-local (common-01)
+
+The built-in classifier blocks only protocol-defined ranges. Vendor metadata
+endpoints outside them — Alibaba `100.100.100.200`, AWS IPv6 IMDS `fd00:ec2::254`,
+GCP IPv6 `fd20:ce::254` — are currently allowed. This is a real, unresolved
+P2 gap, not a false positive. Decision (2026-11-06): do not hard-code vendor
+addresses into the classifier (they can be legitimate addresses in other
+environments); instead add an operator-configured, additive, default-empty
+blocked-CIDR list. Tracked in
+[`tasks/todo/egress-configurable-blocked-cidrs.md`](../../../../tasks/todo/egress-configurable-blocked-cidrs.md),
+which also owns CGNAT, NAT64/6to4 normalization and reserved-range follow-ups.
+Re-reports of these addresses should point to that task until it lands.
+
 ## Review Decision
 
 If a path applies only the authorization constraint but does not apply the address safety constraint before the final dial, it counts as a real issue, typically rated **P2 security hardening / defense bypass**. It is not arbitrary user SSRF, but it bypasses Edgion's existing defenses against cloud metadata / link-local. Missing loopback in external/DNS-style upstreams is treated the same way.
