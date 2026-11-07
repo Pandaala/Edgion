@@ -1248,6 +1248,7 @@ fn single_regex_program_rejects_scratch_from_another_program() {
         left.is_match(b"a", &mut boolean_scratch),
         Err(RegexScratchError::ScratchShape)
     );
+    assert!(boolean_scratch.cache.is_none(), "owner check precedes cache creation");
 
     let left = CompiledCaptureRegexProgram::compile_one("(a)", RegexProgramLimits::default()).unwrap();
     let right = CompiledCaptureRegexProgram::compile_one("(b)", RegexProgramLimits::default()).unwrap();
@@ -1615,7 +1616,12 @@ fn scratch_upper_bounds_first_use_epsilon_growth_for_boolean_and_capture_program
     );
     let mut boolean_scratch = boolean.create_scratch();
     assert!(!boolean.is_match(b"abcdabcd", &mut boolean_scratch).unwrap());
-    let boolean_actual = size_of::<RegexBooleanScratch>() + boolean_scratch.cache.memory_usage();
+    let boolean_actual = size_of::<RegexBooleanScratch>()
+        + boolean_scratch
+            .cache
+            .as_ref()
+            .expect("VM ran for an 8-byte haystack")
+            .memory_usage();
     assert!(boolean_actual <= boolean_required);
 
     let capture_source = "(?:(a?)|(b?)|(c?)|(d?)){8}z";
@@ -1631,6 +1637,113 @@ fn scratch_upper_bounds_first_use_epsilon_growth_for_boolean_and_capture_program
         + capture_scratch.cache.memory_usage()
         + capture_scratch.captures.slots().len() * size_of::<usize>();
     assert!(capture_actual <= capture_required);
+}
+
+#[test]
+fn boolean_scratch_cache_is_lazy_for_exact_hint() {
+    let mut program = CompiledRegexProgram::compile_one("^abc$", RegexProgramLimits::default()).unwrap();
+    assert!(program.lower_simple(guard_budget()).unwrap().1);
+    let mut scratch = program.create_scratch();
+    assert!(scratch.cache.is_none());
+    assert!(program.is_match(b"abc", &mut scratch).unwrap());
+    assert!(!program.is_match(b"xabc", &mut scratch).unwrap());
+    assert!(!program.is_match(b"", &mut scratch).unwrap());
+    assert!(scratch.cache.is_none(), "exact hint must not build the VM cache");
+}
+
+#[test]
+fn boolean_scratch_cache_is_lazy_for_guard_miss() {
+    let mut program = CompiledRegexProgram::compile_one("alpha[0-9]", RegexProgramLimits::default()).unwrap();
+    assert!(program.add_literal_guard(guard_budget()).unwrap().owned > 0);
+    let mut scratch = program.create_scratch();
+    let haystack = vec![b'z'; 1024];
+    assert!(!program.may_match(&haystack));
+    assert!(!program.is_match(&haystack, &mut scratch).unwrap());
+    assert!(scratch.cache.is_none(), "guard miss must not build the VM cache");
+
+    let mut hit = vec![b'z'; 1024];
+    hit.extend_from_slice(b"alpha7");
+    assert!(program.is_match(&hit, &mut scratch).unwrap());
+    assert!(scratch.cache.is_some(), "guard hit confirms through the VM");
+}
+
+#[test]
+fn boolean_scratch_cache_initializes_once_on_vm_path() {
+    let program = CompiledRegexProgram::compile_one("(?:a?|b?|c?|d?){8}z", RegexProgramLimits::default()).unwrap();
+    let mut scratch = program.create_scratch();
+    assert!(scratch.cache.is_none());
+    assert!(!program.is_match(b"abcdabcd", &mut scratch).unwrap());
+    let first = scratch.cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert!(program.is_match(b"abcdz", &mut scratch).unwrap());
+    let second = scratch.cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert_eq!(first, second, "the cache is created once and retained");
+}
+
+#[test]
+fn lazy_cache_results_equal_eager_reference() {
+    enum Hint {
+        None,
+        Simple,
+        Guard,
+    }
+    let fixtures: [(&str, Hint, &[&[u8]]); 6] = [
+        ("^alpha$", Hint::Simple, &[b"alpha", b"alpha\n", b"otheralpha", b""]),
+        ("alpha[0-9]", Hint::Guard, &[b"alpha1", b"alpha!", b"zzzalpha9", b""]),
+        ("beta[0-9]", Hint::None, &[b"beta2", b"beta", b"xbeta0y"]),
+        ("(?:a?|b?|c?|d?){8}z", Hint::None, &[b"abcdabcd", b"abcdz", b"z"]),
+        ("(?-u:\\xFF)", Hint::None, &[b"\xff", b"abc"]),
+        ("", Hint::None, &[b"", b"\xff"]),
+    ];
+    for (source, hint, haystacks) in fixtures {
+        let mut program = CompiledRegexProgram::compile_one(source, RegexProgramLimits::default()).unwrap();
+        match hint {
+            Hint::None => {}
+            Hint::Simple => assert!(program.lower_simple(guard_budget()).unwrap().1),
+            Hint::Guard => assert!(program.add_literal_guard(guard_budget()).unwrap().owned > 0),
+        }
+        let mut scratch = program.create_scratch();
+        for &short in haystacks {
+            for padding in [0_usize, 1024] {
+                let mut input = vec![b'q'; padding];
+                input.extend_from_slice(short);
+                let mut eager = program.core.vm.create_cache();
+                assert_eq!(
+                    program.is_match(&input, &mut scratch).unwrap(),
+                    program.core.vm.is_match(&mut eager, &input),
+                    "source={source} padding={padding}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn matcher_reference_scan_after_accelerated_initializes_cache_once() {
+    let patterns = [PatternSpec::Regex("^alpha$"), PatternSpec::Regex("^alpha$")];
+    let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
+    assert!(
+        matcher
+            .regex_program_mut()
+            .unwrap()
+            .lower_simple(guard_budget())
+            .unwrap()
+            .1
+    );
+    let mut scratch = matcher.create_scratch();
+    let accelerated = ids(matcher.scan(b"alpha", &mut scratch).unwrap());
+    assert_eq!(accelerated, [0, 1]);
+    assert!(scratch.regex_scratch.as_ref().unwrap().cache.is_none());
+
+    let reference = ids(matcher.scan_reference(b"alpha", &mut scratch).unwrap());
+    assert_eq!(reference, accelerated);
+    let first = scratch.regex_scratch.as_ref().unwrap().cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert_eq!(
+        ids(matcher.scan_reference(b"nope", &mut scratch).unwrap()),
+        Vec::<usize>::new()
+    );
+    assert_eq!(ids(matcher.scan(b"alpha", &mut scratch).unwrap()), accelerated);
+    let second = scratch.regex_scratch.as_ref().unwrap().cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert_eq!(first, second, "the cache is created once and retained");
 }
 
 #[test]

@@ -1283,6 +1283,20 @@ impl CompiledRegexProgram {
         Self::compile_one_with_peak_budget(source, limits, usize::MAX)
     }
 
+    fn finish_single(core: RegexCore, limits: RegexProgramLimits) -> Result<Self, RegexProgramError> {
+        let actual = core.retained_bytes;
+        if actual > limits.max_program_bytes {
+            return Err(RegexProgramError::ProgramByteLimit {
+                actual,
+                limit: limits.max_program_bytes,
+            });
+        }
+        Ok(Self {
+            core,
+            execution_hint: RegexExecutionHint::None,
+        })
+    }
+
     pub(crate) fn compile_one_with_peak_budget(
         source: &str,
         limits: RegexProgramLimits,
@@ -1297,17 +1311,7 @@ impl CompiledRegexProgram {
             true,
             MatchKind::LeftmostFirst,
         )?;
-        let actual = core.retained_bytes;
-        if actual > limits.max_program_bytes {
-            return Err(RegexProgramError::ProgramByteLimit {
-                actual,
-                limit: limits.max_program_bytes,
-            });
-        }
-        Ok(Self {
-            core,
-            execution_hint: RegexExecutionHint::None,
-        })
+        Self::finish_single(core, limits)
     }
 
     pub(crate) fn compile_one_pcre_bytes_with_peak_budget(
@@ -1324,17 +1328,7 @@ impl CompiledRegexProgram {
             false,
             MatchKind::LeftmostFirst,
         )?;
-        let actual = core.retained_bytes;
-        if actual > limits.max_program_bytes {
-            return Err(RegexProgramError::ProgramByteLimit {
-                actual,
-                limit: limits.max_program_bytes,
-            });
-        }
-        Ok(Self {
-            core,
-            execution_hint: RegexExecutionHint::None,
-        })
+        Self::finish_single(core, limits)
     }
 
     pub(crate) fn compile_one_ascii_case_insensitive_with_peak_budget(
@@ -1351,24 +1345,14 @@ impl CompiledRegexProgram {
             false,
             MatchKind::LeftmostFirst,
         )?;
-        let actual = core.retained_bytes;
-        if actual > limits.max_program_bytes {
-            return Err(RegexProgramError::ProgramByteLimit {
-                actual,
-                limit: limits.max_program_bytes,
-            });
-        }
-        Ok(Self {
-            core,
-            execution_hint: RegexExecutionHint::None,
-        })
+        Self::finish_single(core, limits)
     }
 
     pub fn create_scratch(&self) -> RegexBooleanScratch {
         debug_assert_eq!(self.core.token.discriminator, 1);
         RegexBooleanScratch {
             token: Arc::clone(&self.core.token),
-            cache: self.core.vm.create_cache(),
+            cache: None,
         }
     }
 
@@ -1376,9 +1360,9 @@ impl CompiledRegexProgram {
         if !Arc::ptr_eq(&scratch.token, &self.core.token) {
             return Err(RegexScratchError::ScratchShape);
         }
-        Ok(self
-            .exact_match(haystack)
-            .unwrap_or_else(|| self.may_match(haystack) && self.core.vm.is_match(&mut scratch.cache, haystack)))
+        Ok(self.exact_match(haystack).unwrap_or_else(|| {
+            self.may_match(haystack) && self.core.vm.is_match(scratch.cache_mut(&self.core.vm), haystack)
+        }))
     }
 
     fn may_match(&self, input: &[u8]) -> bool {
@@ -1557,10 +1541,22 @@ impl CompiledRegexProgram {
     }
 }
 
+/// Caller-owned reusable boolean-match state tied to one exact program instance.
+///
+/// The VM cache is built only before the first VM call, so exact-hint and
+/// guard-miss inputs never pay its NFA-sized allocations. Compile-time
+/// admission still charges the full cache envelope.
 #[derive(Debug)]
 pub struct RegexBooleanScratch {
     token: Arc<CaptureShapeToken>,
-    cache: PikeCache,
+    cache: Option<PikeCache>,
+}
+
+impl RegexBooleanScratch {
+    /// Callers must have validated the owner token against `vm`'s program.
+    fn cache_mut(&mut self, vm: &PikeVM) -> &mut PikeCache {
+        self.cache.get_or_insert_with(|| vm.create_cache())
+    }
 }
 
 /// Caller-owned reusable capture state tied to one exact program instance.
@@ -2018,15 +2014,7 @@ impl MatcherBuildProjection {
                     .and_then(|ends| value.checked_add(ends))
             })
             .ok_or(MatcherCompileError::PeakArithmetic)?;
-        let ac_limits = AcBuildLimits {
-            max_patterns: limits.max_patterns,
-            max_pattern_bytes: limits.max_pattern_bytes,
-            max_states: limits.max_phrase_states,
-            max_transitions: limits.max_phrase_transitions,
-            max_outputs: limits.max_phrase_outputs,
-            max_compiled_bytes: limits.max_phrase_compiled_bytes,
-            max_dfa_cells: limits.max_phrase_dfa_cells,
-        };
+        let ac_limits = phrase_build_limits(limits);
         let sensitive_phrase_peak =
             crate::aho_corasick::phrase_build_projection(counts.sensitive_phrases, bytes.sensitive_phrases, ac_limits)
                 .ok_or(MatcherCompileError::PeakArithmetic)?;
@@ -2197,15 +2185,7 @@ impl PhraseGroup {
         let mut builder = AcBuilder::new();
         builder
             .ascii_case_insensitive(ascii_case_insensitive)
-            .limits(AcBuildLimits {
-                max_patterns: limits.max_patterns,
-                max_pattern_bytes: limits.max_pattern_bytes,
-                max_states: limits.max_phrase_states,
-                max_transitions: limits.max_phrase_transitions,
-                max_outputs: limits.max_phrase_outputs,
-                max_compiled_bytes: limits.max_phrase_compiled_bytes,
-                max_dfa_cells: limits.max_phrase_dfa_cells,
-            });
+            .limits(phrase_build_limits(limits));
         let matcher = builder
             .build(patterns.iter().map(|(_, pattern)| pattern.as_bytes()))
             .map_err(map_phrase_build_error)?;
@@ -2306,6 +2286,18 @@ impl PhraseStreamState {
     }
 }
 
+fn phrase_build_limits(limits: MatcherLimits) -> AcBuildLimits {
+    AcBuildLimits {
+        max_patterns: limits.max_patterns,
+        max_pattern_bytes: limits.max_pattern_bytes,
+        max_states: limits.max_phrase_states,
+        max_transitions: limits.max_phrase_transitions,
+        max_outputs: limits.max_phrase_outputs,
+        max_compiled_bytes: limits.max_phrase_compiled_bytes,
+        max_dfa_cells: limits.max_phrase_dfa_cells,
+    }
+}
+
 fn map_phrase_build_error(error: AcBuildError) -> MatcherCompileError {
     match error {
         AcBuildError::PatternLimit { actual, limit } => MatcherCompileError::PatternLimit { actual, limit },
@@ -2388,15 +2380,7 @@ impl CompiledCapturePhraseProgram {
         builder
             .ascii_case_insensitive(true)
             .match_kind(AcMatchKind::LeftmostLongest)
-            .limits(AcBuildLimits {
-                max_patterns: limits.max_patterns,
-                max_pattern_bytes: limits.max_pattern_bytes,
-                max_states: limits.max_phrase_states,
-                max_transitions: limits.max_phrase_transitions,
-                max_outputs: limits.max_phrase_outputs,
-                max_compiled_bytes: limits.max_phrase_compiled_bytes,
-                max_dfa_cells: limits.max_phrase_dfa_cells,
-            });
+            .limits(phrase_build_limits(limits));
         let matcher = builder
             .build(patterns.iter().map(|pattern| pattern.as_bytes()))
             .map_err(map_phrase_build_error)?;
@@ -2919,7 +2903,7 @@ impl CompiledMatcher {
                 }
             } else if !accelerated || regex.may_match(haystack) {
                 regex.core.vm.which_overlapping_matches(
-                    &mut regex_scratch.cache,
+                    regex_scratch.cache_mut(&regex.core.vm),
                     &Input::new(haystack),
                     &mut scratch.regex_matches,
                 );
