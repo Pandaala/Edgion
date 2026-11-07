@@ -129,7 +129,7 @@ tiny_ufo_ttl_cache:
   default_max_entries: 1024
   default_max_logical_bytes: 4MiB
 
-# LRU defaults, including OIDC access-token caching.
+# LRU defaults, including the OIDC refresh-result cache.
 lru_cache:
   default_capacity: 1024
   default_shards: 0
@@ -561,7 +561,7 @@ These process defaults apply when OIDC introspection omits its
 `maxLogicalBytes` together. The total logical budget controls TinyUFO record
 weights for one cache instance and is not an exact allocator or RSS limit;
 enforce the Gateway process hard limit with Kubernetes/cgroup memory limits.
-OIDC access-token caching and the data-plane upstream DNS answer cache (AI
+The short-lived OIDC refresh-result cache and the data-plane upstream DNS answer cache (AI
 provider endpoints and cached `ExternalName` self-resolution) use the
 independent `lru_cache` defaults; those defaults bound the DNS cache's entry
 count across hostname and resolver churn. The DNS cache takes the capacity but

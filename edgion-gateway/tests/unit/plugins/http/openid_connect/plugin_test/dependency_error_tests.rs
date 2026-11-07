@@ -34,15 +34,25 @@ pub(super) fn discovery(origin: &str) -> DiscoveryDocument {
 }
 
 pub(super) fn request(token: Option<&str>) -> MockPluginSession {
+    request_with_cookie(token, None)
+}
+
+/// Request mock whose headers optionally carry a sealed `edgion_oidc_session` cookie.
+pub(super) fn request_with_cookie(token: Option<&str>, session_cookie: Option<&str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const("/resource".to_owned());
     session.expect_request_query().return_const(None);
     session.expect_downstream_is_tls().return_const(Some(true));
     let authorization = token.map(|token| format!("Bearer {token}"));
-    match authorization.as_deref() {
-        Some(value) => setup_header_mocks(&mut session, &[("authorization", value)]),
-        None => setup_header_mocks(&mut session, &[]),
+    let cookie = session_cookie.map(|value| format!("edgion_oidc_session={value}"));
+    let mut headers = Vec::new();
+    if let Some(value) = authorization.as_deref() {
+        headers.push(("authorization", value));
     }
+    if let Some(value) = cookie.as_deref() {
+        headers.push(("cookie", value));
+    }
+    setup_header_mocks(&mut session, &headers);
     session
 }
 
@@ -104,7 +114,6 @@ async fn missing_and_invalid_authorization_endpoints_return_fixed_dependency_res
         doc.authorization_endpoint = endpoint;
         plugin.jwks_provider.seed_discovery(doc).await;
         let mut session = request(None);
-        session.expect_get_cookie().returning(|_| None);
         let mut log = PluginLog::new("OpenidConnect");
         // No response writer expectation: fixed dependency errors belong to runtime.
         assert_bad_gateway(plugin.run_request(&mut session, &mut log).await);
@@ -212,7 +221,6 @@ async fn missing_refresh_endpoint_preserves_all_session_unauth_actions() {
         doc.token_endpoint = None;
         plugin.jwks_provider.seed_discovery(doc).await;
         let cookie = OidcSessionCookie {
-            session_ref: "private-missing-cache-entry".into(),
             access_token: String::new(),
             created_at: OpenidConnect::now_unix_secs(),
             session_expires_at: OpenidConnect::now_unix_secs() + 3600,
@@ -221,8 +229,7 @@ async fn missing_refresh_endpoint_preserves_all_session_unauth_actions() {
             refresh_token: Some("private-refresh-token".into()),
         };
         let encoded = OpenidConnect::encode_signed_cookie_payload(&cookie, plugin.session_cipher().unwrap()).unwrap();
-        let mut session = request(None);
-        session.expect_get_cookie().returning(move |_| Some(encoded.clone()));
+        let mut session = request_with_cookie(None, Some(&encoded));
         match action {
             UnauthAction::Pass => {
                 session

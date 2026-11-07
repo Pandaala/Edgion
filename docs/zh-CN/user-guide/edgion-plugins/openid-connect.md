@@ -12,7 +12,8 @@
 - Authorization Code Flow（含可选 PKCE）
 - State/Nonce 校验
 - Session Cookie 管理（AES-256-GCM 加密）
-- Session 内 access token 内存缓存（cookie 不持久化 access token）
+- 无状态会话：加密 Cookie 携带 access、refresh 和 ID token，任意 Gateway 副本或插件 generation 都能直接服务会话（无需会话粘滞）
+- 大令牌的会话 Cookie 分片
 - Token 刷新与 singleflight 并发控制
 - 登出（本地清理、可选调用 revoke、可选 end_session 重定向）
 - Claims 映射到 Header（dot-notation、注入防护、大小限制）
@@ -55,17 +56,18 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `sessionSecretRef` | Object | 无 | 引用包含 session 加密密钥的 K8s Secret（`unauthAction=Auth` 时必填） |
-| `sessionCookieName` | String | `"edgion_oidc_session"` | Session Cookie 名称。该 Cookie 与 `edgion_oidc_state` 由 Gateway 持有，代理到上游前始终从请求中移除；应用自己的 Cookie 保持不变。 |
+| `sessionCookieName` | String | `"edgion_oidc_session"` | Session Cookie 名称。该 Cookie、其分片 Cookie（`<name>_chunks`、`<name>_0` .. `<name>_15`）与 `edgion_oidc_state` 由 Gateway 持有，代理到上游前始终从请求中移除；其他应用 Cookie 保持不变。 |
 | `sessionLifetime` | Integer | `3600` | 登录时固定、由 Gateway 强制执行的会话绝对有效期（秒） |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite 属性。可选值：`Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly 属性 |
 | `sessionCookieSecure` | Boolean | `true` | Cookie Secure 属性（`SameSite=None` 时必须为 `true`） |
-| `maxSessionCookieBytes` | Integer | `3800` | Session Cookie 最大字节数 |
+| `maxSessionCookieBytes` | Integer | `3800` | 单条会话 `Set-Cookie`（单个 Cookie 或每个分片 Cookie）的最大字节数 |
+| `maxSessionCookieChunks` | Integer | `8` | 单个会话最多使用的分片 Cookie 数（`1`–`16`；`1` 表示不分片）。`maxSessionCookieBytes` × `maxSessionCookieChunks` 不得超过 `32768` |
 | `renewAccessTokenOnExpiry` | Boolean | `true` | Access Token 过期时是否自动刷新 |
-| `accessTokenExpiresLeeway` | Integer | `0` | Access Token 过期容差（秒） |
+| `accessTokenExpiresLeeway` | Integer | `0` | 在 access token 过期前多少秒刷新（不超过有效期的一半）；也是刷新进行中时仍可使用刚过期令牌的时长 |
 
 会话到达经过认证保护的截止时间即失效，即使保留的 Cookie 含有可用的刷新令牌，
-或缓存的访问令牌仍然有效。刷新令牌不会延长会话截止时间；刷新后的 Cookie
+或其中的访问令牌仍然有效。刷新令牌不会延长会话截止时间；刷新后的 Cookie
 仅以会话剩余时间设置 `Max-Age`。访问令牌过期和会话过期分别判断。
 有效期为零或截止时间计算溢出时，不能建立会话。
 
@@ -81,6 +83,49 @@
 
 引入服务端截止时间之前签发的 Cookie 缺少必填截止时间，升级后需要重新登录。
 只有完成 Gateway 实例升级后才能依赖服务端过期限制；旧二进制不会执行该限制。
+
+### 无状态会话与 Cookie 分片
+
+会话 Cookie 就是完整的会话：其中包含 access token、（如签发）refresh token 与 ID token、
+刷新时间点和绝对截止时间，并以 AES-256-GCM 封装。Gateway 不保存任何按副本划分的会话状态，
+因此请求落到任意副本、Gateway 重启或 EdgionPlugins 更新之后，都能直接认证，无需刷新令牌。
+令牌校验本身不变：冷启动的副本仍会拉取 discovery/JWKS，introspection 结果按副本缓存。
+修改 `sessionSecretRef` 仍会使已有会话失效。
+
+封装后的值放不进一个 `maxSessionCookieBytes` 大小的 Cookie 时，会拆分为
+`<name>_0` .. `<name>_{N-1}`，并额外写入保存 `N` 的 `<name>_chunks` Cookie（与 Envoy OAuth2
+过滤器的命名一致）。每次写入都会让另一种形态的 Cookie 过期；登出会让单个 Cookie 与全部分片位过期。
+分片不完整或无效，或同时带有分片与单个 Cookie 时，请求按未认证处理（不会回退到另一种形态）。
+登录时会话超过 `maxSessionCookieChunks` 个 Cookie，会返回 `Session cookie exceeds configured size limit`；
+刷新后的会话放不下时，Gateway 记录 `session cookie too large` 并结束会话（当前请求仍继续），
+而不是保留一个 refresh token 可能已被轮换的旧 Cookie。
+
+刷新需要 `renewAccessTokenOnExpiry: true` 且存在 refresh token。access token 被判定过期、
+Cookie 中没有 access token，或到达刷新时间点时触发刷新。刷新时间点为 `expires_in` 减去
+`clockSkewSeconds` 与 `accessTokenExpiresLeeway` 中的较大者，且提前量不超过有效期的一半；
+身份提供方未返回 `expires_in` 或返回 `0` 时按 300 秒计。通过 introspection 校验的不透明令牌依赖该刷新时间点。
+同一副本上的并发请求共享一次刷新；不同副本同时刷新同一个已过期会话时可能各自调用 token 端点，
+启用严格 refresh token 重用检测的身份提供方可能将其视为重用。
+
+运维与安全说明：
+
+- 建议使用带 `__Host-` 前缀的 `sessionCookieName`（例如 `__Host-edgion_oidc_session`，
+  配合默认的 `sessionCookieSecure: true`）。分片名会继承该前缀，浏览器因此会拒绝非安全来源
+  或兄弟子域写入分片 Cookie。
+- 登出只会让浏览器中的 Cookie 过期。登出前被复制的 Cookie 带有 refresh token，在默认配置下
+  会持续认证（必要时自动刷新），直到会话绝对截止时间（`sessionLifetime`）。请开启
+  `revokeTokensOnLogout`，在登出时撤销 refresh token；本地（JWKS）校验时当前 access token
+  仍可用到过期为止，若要求被撤销的令牌立即失效，还应使用基于 introspection 的校验。
+- 无状态会话之前签发的 Cookie 不含 access token：只有在存在 refresh token 且
+  `renewAccessTokenOnExpiry: true` 时才能通过刷新继续认证，否则需要重新登录。
+- 默认预算（3800 × 8 字节）使 Cookie 请求头远低于下游 HTTP/2 头部列表上限（64 KiB）。
+  令牌较大时，前置代理或 CDN 可能需要调大请求与响应头缓冲（例如 nginx 的
+  `large_client_header_buffers` 和 `proxy_buffer_size`）。
+- 名为 `<sessionCookieName>_chunks` 或 `<sessionCookieName>_0` .. `_15` 的应用 Cookie
+  会被视为 Gateway 所有并被剥离；请选择不会与之冲突的 `sessionCookieName`。
+  修改 `sessionCookieName` 后，旧 Cookie 会遗留到过期为止；旧名称不再被剥离，这些封装后的
+  Cookie 在此期间会被转发到上游。
+- 调小 `maxSessionCookieBytes` 可能使已有分片会话失效（重组后大小超过新值的 16 倍）。
 
 ### Token 验证参数
 
@@ -105,25 +150,20 @@ discovery 拉取失败会记住 5 秒，并发或紧随其后的请求复用同�
 
 ### 内存缓存限制
 
-只有 positive introspection 结果使用 TinyUFO/S3-FIFO。Access Token 间接存储
-保留 LRU，因为 logout 和 refresh 需要显式失效：
+只有 positive introspection 结果使用 TinyUFO/S3-FIFO：
 
 ```yaml
 introspection:
   tinyUfoTtlCache:
     maxEntries: 2048
     maxLogicalBytes: 8MiB
-accessToken:
-  lruCache:
-    capacity: 2048
-    shards: 8
 ```
 
-两类缓存分别继承 Gateway 的 `tiny_ufo_ttl_cache` 和 `lru_cache` 默认值。
-覆盖 TinyUFO 配置时必须同时设置两个字段；省略两个字段则继承进程默认值。显式设置
-LRU capacity 时，`shards: 0` 表示单分片；仅覆盖 shards 是无效配置。TinyUFO 字节
-字段表示单个缓存实例的总逻辑记录权重预算，并非精确 RSS 上限。Discovery/JWKS 继续
-使用专用 snapshot provider；refresh singleflight registry 也独立于两类缓存。
+该配置继承 Gateway 的 `tiny_ufo_ttl_cache` 默认值。覆盖时必须同时设置两个字段；
+省略两个字段则继承进程默认值。字节字段表示单个缓存实例的总逻辑记录权重预算，
+并非精确 RSS 上限。不存在 access token 缓存：会话 Cookie 自身携带 access token。
+让并发请求共享一次刷新的短期（5 秒）刷新结果缓存使用 Gateway 的 `lru_cache` 默认值。
+Discovery/JWKS 继续使用专用 snapshot provider；refresh singleflight registry 也相互独立。
 
 ### Header 转发参数
 
@@ -302,7 +342,8 @@ generation 的规范 outbound client 消费；
 - Header 大小限制：
   - `maxHeaderValueBytes`（默认 `4096`）
   - `maxTotalHeaderBytes`（默认 `16384`）
-- Session cookie 大小限制：`maxSessionCookieBytes`（默认 `3800`）
+- Session cookie 大小限制：每个 Cookie `maxSessionCookieBytes`（默认 `3800`），
+  每个会话最多 `maxSessionCookieChunks`（默认 `8`）个 Cookie
 
 ## 常见排查
 
@@ -311,7 +352,7 @@ generation 的规范 outbound client 消费；
 - IdP 依赖故障
   - 需要终止请求的依赖故障返回固定的 `502 Bad Gateway`；请检查访问日志中的失败操作及静态原因分类，SAN 校验失败还可查看既有出站 TLS SAN mismatch 指标
 - `Session cookie exceeds configured size limit`
-  - 减少 claims/header 透传，或调低 session 内数据量
+  - 封装后的会话（access、refresh、ID token）需要超过 `maxSessionCookieChunks` 个 Cookie；请在身份提供方侧减小令牌体积，或在 32768 字节预算内调大 `maxSessionCookieChunks`
 
 ## 相关文档
 
@@ -321,7 +362,7 @@ generation 的规范 outbound client 消费；
 
 ### 请求 Cookie 清理失败
 
-所有继续转发的路径（包括未认证 Pass）都会原子删除 Gateway 的会话和状态 Cookie。
+所有继续转发的路径（包括未认证 Pass）都会原子删除 Gateway 的会话 Cookie、其分片 Cookie 和状态 Cookie。
 Cookie 字段包含非 UTF-8 字节时清理失败并返回 HTTP 400；内部更新失败返回 HTTP 500，
 均不会转发未清理的原始请求。成功清理保留应用 Cookie 的名称和值，但可能规范化分隔符并合并字段。
 没有匹配的 Gateway Cookie 时，保留原始字段。

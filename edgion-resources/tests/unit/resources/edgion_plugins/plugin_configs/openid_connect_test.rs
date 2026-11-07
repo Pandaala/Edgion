@@ -6,9 +6,7 @@ use std::collections::HashMap;
 fn oidc_cache_defaults_inherit_gateway_limits() {
     let cfg = OpenidConnectConfig::default();
     assert_eq!(cfg.introspection.tiny_ufo_ttl_cache.max_entries, 0);
-    assert_eq!(cfg.access_token.lru_cache.capacity, 0);
     assert_eq!(cfg.introspection.tiny_ufo_ttl_cache.max_logical_bytes, None);
-    assert_eq!(cfg.access_token.lru_cache.shards, 0);
 }
 
 #[test]
@@ -23,14 +21,25 @@ fn oidc_cache_schema_recognizes_algorithm_specific_paths() {
                 "maxLogicalBytes": "4MiB"
             }
         },
-        "accessToken": {
-            "lruCache": {
-                "capacity": 2048,
-                "shards": 8
-            }
-        }
+        "maxSessionCookieBytes": 3800,
+        "maxSessionCookieChunks": 8
     });
     assert!(crate::schema_check::unknown_key_paths(&value, &schema).is_empty());
+}
+
+#[test]
+fn oidc_access_token_cache_section_is_an_unknown_key() {
+    // The session cookie owns the access token; there is no access-token cache to size.
+    let schema = schemars::schema_for!(OpenidConnectConfig);
+    let value = json!({
+        "discovery": "https://idp.example.com/.well-known/openid-configuration",
+        "clientId": "client",
+        "accessToken": {"lruCache": {"capacity": 2048, "shards": 8}}
+    });
+    assert_eq!(
+        crate::schema_check::unknown_key_paths(&value, &schema),
+        vec!["accessToken".to_string()]
+    );
 }
 
 #[test]
@@ -42,17 +51,11 @@ fn oidc_cache_schema_rejects_wrong_cache_kinds() {
         "introspection": {
             "lruCache": {"capacity": 1024, "shards": 2},
             "memoryCache": {"maxEntries": 1024}
-        },
-        "accessToken": {
-            "memoryCache": {"maxEntries": 2048},
-            "tinyUfoTtlCache": {"maxEntries": 2048}
         }
     });
     assert_eq!(
         crate::schema_check::unknown_key_paths(&value, &schema),
         vec![
-            "accessToken.memoryCache".to_string(),
-            "accessToken.tinyUfoTtlCache".to_string(),
             "introspection.lruCache".to_string(),
             "introspection.memoryCache".to_string(),
         ]
@@ -77,24 +80,6 @@ fn oidc_rejects_invalid_logical_record_budget_during_validation() {
     assert_eq!(
         cfg.get_validation_error(),
         Some("maxLogicalBytes must be a valid byte size")
-    );
-}
-
-#[test]
-fn oidc_rejects_unsafe_access_token_lru_limits() {
-    let cfg = OpenidConnectConfig {
-        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
-        client_id: "client".to_string(),
-        bearer_only: true,
-        verification_mode: VerificationMode::JwksOnly,
-        access_token: super::OidcAccessTokenCacheSection {
-            lru_cache: super::LruCacheConfig { capacity: 4, shards: 5 },
-        },
-        ..Default::default()
-    };
-    assert_eq!(
-        cfg.get_validation_error(),
-        Some("lruCache.shards must not exceed capacity")
     );
 }
 
@@ -365,4 +350,58 @@ fn validation_rejects_claim_destination_owned_by_enabled_fixed_header() {
             "destination: {destination}"
         );
     }
+}
+
+fn session_cookie_limit_config(bytes: u64, chunks: u32) -> OpenidConnectConfig {
+    OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "my-web-app".to_string(),
+        bearer_only: false,
+        unauth_action: UnauthAction::Auth,
+        resolved_oidc_client_secret: Some("client-secret".to_string()),
+        resolved_session_secret: Some("session-secret".to_string()),
+        max_session_cookie_bytes: bytes,
+        max_session_cookie_chunks: chunks,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn session_cookie_chunk_defaults_fit_the_total_budget() {
+    let cfg = OpenidConnectConfig::default();
+    assert_eq!(cfg.max_session_cookie_bytes, 3800);
+    assert_eq!(cfg.max_session_cookie_chunks, 8);
+    let parsed: OpenidConnectConfig = serde_json::from_value(json!({
+        "discovery": "https://idp.example.com/.well-known/openid-configuration",
+        "clientId": "client"
+    }))
+    .unwrap();
+    assert_eq!(parsed.max_session_cookie_chunks, 8);
+    assert_eq!(session_cookie_limit_config(3800, 8).get_validation_error(), None);
+}
+
+#[test]
+fn session_cookie_chunk_count_range_is_enforced() {
+    let message = Some("maxSessionCookieChunks must be between 1 and 16");
+    assert_eq!(session_cookie_limit_config(1024, 0).get_validation_error(), message);
+    assert_eq!(session_cookie_limit_config(1024, 17).get_validation_error(), message);
+    assert_eq!(session_cookie_limit_config(1024, 1).get_validation_error(), None);
+    assert_eq!(session_cookie_limit_config(2048, 16).get_validation_error(), None);
+}
+
+#[test]
+fn session_cookie_total_budget_is_enforced_without_overflow() {
+    let message = Some("maxSessionCookieBytes * maxSessionCookieChunks must not exceed 32768");
+    assert_eq!(session_cookie_limit_config(4096, 8).get_validation_error(), None);
+    assert_eq!(session_cookie_limit_config(4097, 8).get_validation_error(), message);
+    assert_eq!(session_cookie_limit_config(8192, 8).get_validation_error(), message);
+    // A wrapping multiply would yield 0 and pass; the checked multiply must reject it.
+    assert_eq!(
+        session_cookie_limit_config(1u64 << 61, 8).get_validation_error(),
+        message
+    );
+    assert_eq!(
+        session_cookie_limit_config(u64::MAX, 16).get_validation_error(),
+        message
+    );
 }

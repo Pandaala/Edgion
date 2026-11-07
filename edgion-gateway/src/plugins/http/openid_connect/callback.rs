@@ -88,6 +88,43 @@ impl OpenidConnect {
         }
     }
 
+    /// Session payload for a successful authorization-code exchange. The sealed cookie
+    /// carries the access token; nothing about the session is kept in process memory.
+    pub(super) fn new_session_payload(
+        &self,
+        token_response: TokenEndpointResponse,
+        now: u64,
+        created_at: u64,
+        session_expires_at: u64,
+        should_persist_id_token: bool,
+    ) -> OidcSessionCookie {
+        OidcSessionCookie {
+            expires_at: Some(self.refresh_horizon(now, token_response.expires_in)),
+            access_token: token_response.access_token,
+            created_at,
+            session_expires_at,
+            id_token: if should_persist_id_token {
+                token_response.id_token.filter(|v| !v.is_empty())
+            } else {
+                None
+            },
+            refresh_token: token_response.refresh_token,
+        }
+    }
+
+    /// Callback Set-Cookie lines: the session cookies (expiring any stale shape the
+    /// request carried) followed by the state-cookie expiration.
+    pub(super) fn callback_set_cookies(
+        &self,
+        session: &dyn PluginSession,
+        sealed: &str,
+        max_age: u64,
+    ) -> Result<Vec<String>, ()> {
+        let mut cookies = self.build_session_set_cookies(sealed, max_age, self.prior_session_chunks(session))?;
+        cookies.push(self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path()));
+        Ok(cookies)
+    }
+
     pub(super) async fn send_redirect_with_cookies(
         &self,
         session: &mut dyn PluginSession,
@@ -286,34 +323,19 @@ impl OpenidConnect {
             return self.send_oidc_error(session, &err).await;
         }
 
-        let expires_at = token_response.expires_in.map(|ttl| now.saturating_add(ttl));
         let created_at = self.session_now();
         let session_expires_at = match Self::session_deadline(created_at, self.config.session_lifetime) {
             Ok(deadline) => deadline,
             Err(err) => return self.send_oidc_error(session, &err).await,
         };
         let should_persist_id_token = self.should_persist_id_token(&discovery);
-        let mut session_cookie_payload = OidcSessionCookie {
-            session_ref: Self::generate_session_ref(),
-            access_token: token_response.access_token,
+        let session_cookie_payload = self.new_session_payload(
+            token_response,
+            now,
             created_at,
             session_expires_at,
-            expires_at,
-            id_token: if should_persist_id_token {
-                token_response.id_token.filter(|v| !v.is_empty())
-            } else {
-                None
-            },
-            refresh_token: token_response.refresh_token,
-        };
-        self.cache_access_token(
-            &session_cookie_payload.session_ref,
-            &session_cookie_payload.access_token,
-            session_cookie_payload.expires_at,
-        )
-        .await;
-        session_cookie_payload.access_token.clear();
-
+            should_persist_id_token,
+        );
         let encoded_session = match self.session_cipher() {
             Some(cipher) => Self::encode_signed_cookie_payload(&session_cookie_payload, cipher),
             None => {
@@ -339,21 +361,14 @@ impl OpenidConnect {
             }
         };
 
-        let session_cookie = self.build_cookie_header_value(
-            self.session_cookie_name(),
-            &session_cookie_value,
-            remaining_lifetime,
-            "/",
-        );
-        if self.ensure_session_cookie_size_limit(&session_cookie).is_err() {
+        let Ok(cookies) = self.callback_set_cookies(session, &session_cookie_value, remaining_lifetime) else {
+            plugin_log.push_err("session cookie too large");
             let _ = self
                 .send_plain_error(session, 500, "Session cookie exceeds configured size limit")
                 .await;
             return PluginRunningResult::ErrTerminateRequest;
-        }
-        let clear_state_cookie = self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path());
+        };
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
-        let cookies = [session_cookie, clear_state_cookie];
         let _ = self
             .send_redirect_with_cookies(session, redirect_target, &cookies)
             .await;

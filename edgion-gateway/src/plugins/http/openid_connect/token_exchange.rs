@@ -1,6 +1,8 @@
 use super::super::error::read_oidc_json;
 use super::*;
 const AUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+/// Access-token lifetime assumed when the token response omits `expires_in`.
+const DEFAULT_ACCESS_TOKEN_TTL_SECS: u64 = 300;
 
 pub(super) async fn read_auth_response<T: serde::de::DeserializeOwned>(
     response: reqwest::Response,
@@ -17,104 +19,70 @@ impl OpenidConnect {
         URL_SAFE_NO_PAD.encode(digest)
     }
 
-    pub(super) async fn cache_access_token(&self, session_ref: &str, token: &str, expires_at: Option<u64>) {
-        if session_ref.is_empty() || token.is_empty() {
-            return;
-        }
-        let clock_skew = self.config.clock_skew_seconds;
-        // TTL = token exp - now - clock_skew, capped at 1 hour, fallback 5 min
-        let ttl = expires_at
-            .and_then(|exp| exp.checked_sub(Self::now_unix_secs()))
-            .and_then(|secs| secs.checked_sub(clock_skew))
-            .map(|secs| Duration::from_secs(secs).min(Duration::from_secs(3600)))
-            .filter(|d| !d.is_zero())
-            .unwrap_or(Duration::from_secs(300));
-        self.access_token_cache.insert(
-            session_ref.to_string(),
-            AccessTokenCacheEntry {
-                token: token.to_string(),
-            },
-            Some(ttl),
-        );
+    /// Refresh horizon for a freshly issued access token.
+    ///
+    /// `expires_in` falls back to 300 s when the IdP omits it or reports 0. The early-refresh margin is
+    /// the larger of `clockSkewSeconds` and `accessTokenExpiresLeeway`, clamped to half the
+    /// lifetime, so no configuration refreshes a fresh token on every request.
+    pub(super) fn refresh_horizon(&self, now: u64, expires_in: Option<u64>) -> u64 {
+        let ttl = expires_in
+            .filter(|ttl| *ttl > 0)
+            .unwrap_or(DEFAULT_ACCESS_TOKEN_TTL_SECS);
+        let margin = self
+            .config
+            .clock_skew_seconds
+            .max(self.config.access_token_expires_leeway)
+            .min(ttl / 2);
+        now.saturating_add(ttl - margin)
     }
 
-    pub(super) async fn get_cached_access_token(&self, session_ref: &str) -> Option<String> {
-        if session_ref.is_empty() {
-            return None;
-        }
-        // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
-        self.access_token_cache.get(session_ref).map(|entry| entry.token)
-    }
-
-    pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
-        if session_ref.is_empty() {
-            return;
-        }
-        self.access_token_cache.remove(session_ref);
-    }
-
-    pub(super) async fn resolve_access_token_from_session(&self, session_cookie: &OidcSessionCookie) -> Option<String> {
-        if !session_cookie.access_token.trim().is_empty() {
-            return Some(session_cookie.access_token.clone());
-        }
-        self.get_cached_access_token(&session_cookie.session_ref).await
-    }
-
-    pub(super) fn should_preemptive_refresh(&self, resolved_access_token: &str, payload: &OidcSessionCookie) -> bool {
+    pub(super) fn should_preemptive_refresh(&self, payload: &OidcSessionCookie) -> bool {
         if !self.config.renew_access_token_on_expiry {
             return false;
         }
         if payload.refresh_token.as_deref().is_none() {
             return false;
         }
-        if resolved_access_token.trim().is_empty() {
+        if payload.access_token.trim().is_empty() {
             return true;
         }
-        let Some(exp) = payload.expires_at else {
-            return false;
-        };
-        let now = Self::now_unix_secs();
-        now.saturating_add(self.config.access_token_expires_leeway) >= exp
+        // `expires_at` is the refresh horizon; the leeway is already folded into it.
+        payload
+            .expires_at
+            .is_some_and(|horizon| Self::now_unix_secs() >= horizon)
     }
 
     pub(super) async fn maybe_set_session_cookie_header(
         &self,
         session: &mut dyn PluginSession,
         payload: &OidcSessionCookie,
+        prior_chunks: usize,
+        plugin_log: &mut PluginLog,
     ) {
-        if payload.remaining_lifetime(self.session_now()).is_err() {
-            return;
-        }
-        let cache_token = !payload.access_token.trim().is_empty();
-        let generated_ref = payload.session_ref.is_empty().then(Self::generate_session_ref);
-        let session_ref = generated_ref.as_deref().unwrap_or(&payload.session_ref);
-        let persisted_payload = payload.for_persistence(session_ref, cache_token);
-        if cache_token {
-            self.cache_access_token(
-                persisted_payload.session_ref,
-                &payload.access_token,
-                persisted_payload.expires_at,
-            )
-            .await;
-        }
-
-        let Some(cipher) = self.session_cipher() else {
-            return;
-        };
-        let Ok(value) = Self::encode_signed_cookie_payload(&persisted_payload, cipher) else {
-            return;
-        };
         let Ok(remaining_lifetime) = payload.remaining_lifetime(self.session_now()) else {
             return;
         };
-        let cookie = self.build_cookie_header_value(self.session_cookie_name(), &value, remaining_lifetime, "/");
-        if self.ensure_session_cookie_size_limit(&cookie).is_err() {
+        let Some(cipher) = self.session_cipher() else {
             return;
-        }
+        };
+        let Ok(value) = Self::encode_signed_cookie_payload(payload, cipher) else {
+            return;
+        };
+        let cookies = match self.build_session_set_cookies(&value, remaining_lifetime, prior_chunks) {
+            Ok(cookies) => cookies,
+            Err(()) => {
+                // Keeping the old cookie would replay a possibly rotated refresh token, so the
+                // session ends instead; the current request still uses the fresh token.
+                plugin_log.push_err("session cookie too large");
+                self.expired_session_cookies()
+            }
+        };
         // Append, not set: Set-Cookie is a multi-value header; insert_header would
         // wipe every upstream/other-plugin Set-Cookie. append_header preserves them
         // (RFC 6265 §3 / RFC 7230 §3.2.2 list-syntax exception).
-        let _ = session.append_response_header("Set-Cookie", &cookie);
+        for cookie in &cookies {
+            let _ = session.append_response_header("Set-Cookie", cookie);
+        }
     }
 
     pub(super) async fn exchange_code_for_token(
@@ -244,12 +212,7 @@ impl OpenidConnect {
         };
 
         let refresh_token = session_cookie.refresh_token.as_deref().filter(|v| !v.trim().is_empty());
-        let cached_access_token = self.get_cached_access_token(&session_cookie.session_ref).await;
-        let access_token = if session_cookie.access_token.trim().is_empty() {
-            cached_access_token.as_deref()
-        } else {
-            Some(session_cookie.access_token.as_str())
-        };
+        let access_token = Some(session_cookie.access_token.as_str()).filter(|v| !v.trim().is_empty());
         if refresh_token.is_none() && access_token.is_none() {
             return;
         }
@@ -341,9 +304,6 @@ impl OpenidConnect {
 
     pub(super) async fn try_refresh_session_token(&self, session_cookie: &mut OidcSessionCookie) -> VerifyResult<()> {
         session_cookie.remaining_lifetime(self.session_now())?;
-        if session_cookie.session_ref.is_empty() {
-            session_cookie.session_ref = Self::generate_session_ref();
-        }
         let refresh_token = session_cookie
             .refresh_token
             .as_deref()
@@ -352,11 +312,32 @@ impl OpenidConnect {
         session_cookie.remaining_lifetime(self.session_now())?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
         session_cookie.remaining_lifetime(self.session_now())?;
-
-        let now = Self::now_unix_secs();
         let should_persist_id_token = self.should_persist_id_token(&discovery);
+        self.apply_refresh_response(
+            session_cookie,
+            token_response,
+            should_persist_id_token,
+            Self::now_unix_secs(),
+        )
+    }
+
+    /// Merge a token-endpoint refresh response into the session payload.
+    pub(super) fn apply_refresh_response(
+        &self,
+        session_cookie: &mut OidcSessionCookie,
+        token_response: TokenEndpointResponse,
+        should_persist_id_token: bool,
+        now: u64,
+    ) -> VerifyResult<()> {
+        if token_response.access_token.trim().is_empty() {
+            // Never persist a token-less session: it would refresh on every request.
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::Refresh,
+                OidcDependencyFailure::InvalidDocument,
+            ));
+        }
         session_cookie.access_token = token_response.access_token;
-        session_cookie.expires_at = token_response.expires_in.map(|ttl| now.saturating_add(ttl));
+        session_cookie.expires_at = Some(self.refresh_horizon(now, token_response.expires_in));
         if should_persist_id_token {
             let new_id_token = token_response.id_token.filter(|v| !v.is_empty());
             if let Some(new_id_token) = new_id_token {

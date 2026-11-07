@@ -127,7 +127,7 @@ tiny_ufo_ttl_cache:
   default_max_entries: 1024
   default_max_logical_bytes: 4MiB
 
-# LRU 默认值，包括 OIDC Access Token 缓存。
+# LRU 默认值，包括 OIDC 刷新结果缓存。
 lru_cache:
   default_capacity: 1024
   default_shards: 0
@@ -447,7 +447,7 @@ tiny_ufo_ttl_cache:
 OIDC introspection 未配置 `tinyUfoTtlCache` 覆盖值时使用这些进程默认值。
 覆盖配置必须同时设置 `maxEntries` 和 `maxLogicalBytes`。总逻辑预算控制单个
 TinyUFO 实例的记录权重，不是精确的分配器或 RSS 上限；Gateway 进程的硬上限应由
-Kubernetes/cgroup 内存限制保证。OIDC Access Token 缓存与数据面上游 DNS 应答缓存
+Kubernetes/cgroup 内存限制保证。OIDC 短期刷新结果缓存与数据面上游 DNS 应答缓存
 （AI 供应商端点及带缓存的 `ExternalName` 自解析）使用独立的 `lru_cache` 默认值；
 该默认值也是 DNS 缓存在主机名、解析器变动下的条目数上界。DNS 缓存只沿用容量，
 分片数另有下限——每次 AI 尝试和带缓存的 `ExternalName` 请求都会读取它，因此把

@@ -28,7 +28,7 @@ use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg
 use crate::cache::{LogicalWeight, TinyUfoTtlCache};
 use crate::cli::config::{
     get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
-    resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
+    resolve_tiny_ufo_ttl_cache_limits,
 };
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::auth_common::{send_gateway_auth_error_response, Claims, PreparedAuthChallenge};
@@ -36,7 +36,7 @@ use crate::plugins::http::common::outbound::client::extract_ip_literal;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, is_ip_allowed, EgressPolicy, EgressResolver,
 };
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::tls::validation::build_verified_outbound_tls;
 use edgion_algo::cache::ShardedLruCache;
 use edgion_common::dns::ResolverSpec;
@@ -54,6 +54,7 @@ use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
 use edgion_resources::resources::edgion_plugins::{
     ClaimHeaderProjectionPlan, EdgionPlugin, EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
 };
+use session_cookie::SessionCookieNames;
 
 type OidcError = Box<dyn std::error::Error + Send + Sync>;
 type OidcResult<T> = Result<T, OidcError>;
@@ -194,48 +195,29 @@ struct AuthorizationStateCookie {
     created_at: u64,
 }
 
-fn cookie_text_is_empty<S: AsRef<str>>(value: &S) -> bool {
-    value.as_ref().is_empty()
-}
-
+/// The complete, stateless session. The sealed cookie is the only source of truth, so any
+/// replica or plugin generation holding the session secret can serve it.
 #[derive(Clone, Serialize, Deserialize)]
-struct OidcSessionCookie<S: AsRef<str> = String> {
-    #[serde(default, skip_serializing_if = "cookie_text_is_empty")]
-    session_ref: S,
-    #[serde(default, skip_serializing_if = "cookie_text_is_empty")]
-    access_token: S,
+struct OidcSessionCookie {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    access_token: String,
     created_at: u64,
     // Absolute session deadline, independent of the renewable access token.
     session_expires_at: u64,
+    // Refresh horizon for the access token, computed at write time (`refresh_horizon`).
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    id_token: Option<S>,
+    id_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    refresh_token: Option<S>,
-}
-
-impl OidcSessionCookie {
-    fn for_persistence<'a>(&'a self, session_ref: &'a str, cache_token: bool) -> OidcSessionCookie<&'a str> {
-        OidcSessionCookie {
-            session_ref,
-            access_token: if cache_token { "" } else { &self.access_token },
-            created_at: self.created_at,
-            session_expires_at: self.session_expires_at,
-            expires_at: self.expires_at,
-            id_token: self.id_token.as_deref(),
-            refresh_token: self.refresh_token.as_deref(),
-        }
-    }
+    refresh_token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct TokenEndpointResponse {
     access_token: String,
-    #[allow(dead_code)]
     #[serde(default)]
     id_token: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     refresh_token: Option<String>,
     #[serde(default)]
@@ -251,18 +233,13 @@ struct IntrospectionCacheEntry {
     claims: Arc<Value>,
 }
 
-#[derive(Clone)]
-struct AccessTokenCacheEntry {
-    token: String,
-}
-
 impl std::fmt::Debug for AuthorizationStateCookie {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthorizationStateCookie").finish_non_exhaustive()
     }
 }
 
-impl<S: AsRef<str>> std::fmt::Debug for OidcSessionCookie<S> {
+impl std::fmt::Debug for OidcSessionCookie {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OidcSessionCookie").finish_non_exhaustive()
     }
@@ -277,12 +254,6 @@ impl std::fmt::Debug for TokenEndpointResponse {
 impl std::fmt::Debug for IntrospectionCacheEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IntrospectionCacheEntry").finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for AccessTokenCacheEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AccessTokenCacheEntry").finish_non_exhaustive()
     }
 }
 
@@ -312,7 +283,7 @@ pub struct OpenidConnect {
     pub(super) client: Arc<reqwest::Client>,
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: TinyUfoTtlCache<String, IntrospectionCacheEntry>,
-    access_token_cache: ShardedLruCache<String, AccessTokenCacheEntry>,
+    session_cookie_names: SessionCookieNames,
     refresh_singleflight: FlightRegistry,
     refresh_singleflight_results: ShardedLruCache<String, OidcSessionCookie>,
     #[cfg(test)]
@@ -398,7 +369,6 @@ impl OpenidConnect {
         });
 
         let introspection_limits = resolve_tiny_ufo_ttl_cache_limits(&config.introspection.tiny_ufo_ttl_cache)?;
-        let (access_token_capacity, access_token_shards) = resolve_lru_cache_limits(&config.access_token.lru_cache)?;
         let shared_lru_capacity = get_default_lru_cache_capacity();
         let shared_lru_shards = get_default_lru_cache_shards();
 
@@ -495,6 +465,7 @@ impl OpenidConnect {
             spawn_discovery_prewarm(Arc::downgrade(&jwks_provider));
         }
 
+        let session_cookie_names = SessionCookieNames::new(&config.session_cookie_name);
         Ok(Self {
             auth_challenge: PreparedAuthChallenge::new("Bearer", &config.realm),
             name: PLUGIN_NAME,
@@ -506,7 +477,7 @@ impl OpenidConnect {
             client: outbound_client,
             jwks_provider,
             introspection_cache: TinyUfoTtlCache::new(introspection_limits).map_err(|e| e.to_string())?,
-            access_token_cache: ShardedLruCache::new(access_token_capacity, access_token_shards),
+            session_cookie_names,
             refresh_singleflight: FlightRegistry::new(get_refresh_singleflight_max_registered_keys())?,
             refresh_singleflight_results: ShardedLruCache::new(shared_lru_capacity, shared_lru_shards),
             #[cfg(test)]

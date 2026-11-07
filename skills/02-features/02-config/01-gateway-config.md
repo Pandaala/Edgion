@@ -437,7 +437,7 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
   safety ceilings are 65,536 cache entries, 4,194,304 TinyUFO weight units
   (256 MiB of 64-byte logical units). These ceilings are not defaults.
 - `lru_cache` configures retained LRU users:
-  OIDC access-token caching and the data-plane upstream DNS answer cache (AI
+  the short-lived OIDC refresh-result cache and the data-plane upstream DNS answer cache (AI
   endpoints and cached `ExternalName` self-resolution), whose capacity bound these
   defaults supply. The DNS cache takes the capacity but
   applies its own shard floor, so a `default_shards` below that floor does not

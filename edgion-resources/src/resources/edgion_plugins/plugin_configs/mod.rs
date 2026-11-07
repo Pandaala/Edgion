@@ -136,9 +136,11 @@ pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCrede
 pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
 pub use linksys_ref::LinkSysRef;
-pub use lru_cache_config::{LruCacheConfig, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS};
+pub use lru_cache_config::{MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS};
 pub use mock::MockConfig;
-pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
+pub use openid_connect::{
+    EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode, MAX_SESSION_COOKIE_CHUNKS,
+};
 pub use proxy_rewrite::{
     CompiledJsonBodyRewrite, CompiledJsonPatchOperation, CompiledJsonPatchValue, HeaderActions, HeaderEntry,
     HostFromHeader, HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,

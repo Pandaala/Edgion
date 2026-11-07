@@ -1,6 +1,6 @@
 //! OpenID Connect plugin configuration
 
-use super::{lru_cache_config::LruCacheConfig, tiny_ufo_ttl_cache_config::TinyUfoTtlCacheConfig};
+use super::tiny_ufo_ttl_cache_config::TinyUfoTtlCacheConfig;
 
 crate::redact::impl_redacted_debug!(OpenidConnectConfig);
 use crate::resources::common::OutboundTlsLocal;
@@ -13,20 +13,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
+/// Upper bound for `maxSessionCookieChunks`; the Gateway reader never reassembles more chunks.
+pub const MAX_SESSION_COOKIE_CHUNKS: u32 = 16;
+/// Upper bound for `maxSessionCookieBytes * maxSessionCookieChunks`. It keeps the session
+/// Cookie header well below the downstream HTTP/2 header-list limit (64 KiB).
+pub const MAX_SESSION_COOKIE_TOTAL_BYTES: u64 = 32 * 1024;
+// The validation messages below spell these limits out literally.
+const _: () = assert!(MAX_SESSION_COOKIE_CHUNKS == 16 && MAX_SESSION_COOKIE_TOTAL_BYTES == 32768);
+
 /// Positive introspection-result cache settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OidcIntrospectionCacheSection {
     #[serde(default)]
     pub tiny_ufo_ttl_cache: TinyUfoTtlCacheConfig,
-}
-
-/// Access-token cache settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default, rename_all = "camelCase")]
-pub struct OidcAccessTokenCacheSection {
-    #[serde(default)]
-    pub lru_cache: LruCacheConfig,
 }
 
 /// Behavior when request is unauthenticated.
@@ -113,8 +113,13 @@ pub struct OpenidConnectConfig {
     pub session_cookie_http_only: bool,
     #[serde(default = "default_true")]
     pub session_cookie_secure: bool,
+    /// Maximum size of one session Set-Cookie string (a single cookie or each chunk).
     #[serde(default = "default_max_session_cookie_bytes")]
     pub max_session_cookie_bytes: u64,
+    /// Maximum number of chunk cookies one sealed session may be split into.
+    /// `1` disables chunking.
+    #[serde(default = "default_max_session_cookie_chunks")]
+    pub max_session_cookie_chunks: u32,
     #[serde(default = "default_true")]
     pub renew_access_token_on_expiry: bool,
     #[serde(default)]
@@ -153,10 +158,6 @@ pub struct OpenidConnectConfig {
     /// Introspection result cache settings.
     #[serde(default)]
     pub introspection: OidcIntrospectionCacheSection,
-
-    /// Access token cache settings.
-    #[serde(default)]
-    pub access_token: OidcAccessTokenCacheSection,
 
     #[serde(default)]
     pub token_endpoint_auth_method: EndpointAuthMethod,
@@ -298,6 +299,9 @@ fn default_session_cookie_same_site() -> String {
 fn default_max_session_cookie_bytes() -> u64 {
     3800
 }
+fn default_max_session_cookie_chunks() -> u32 {
+    8
+}
 fn default_logout_path() -> String {
     "/logout".to_string()
 }
@@ -341,6 +345,7 @@ impl Default for OpenidConnectConfig {
             session_cookie_http_only: default_true(),
             session_cookie_secure: default_true(),
             max_session_cookie_bytes: default_max_session_cookie_bytes(),
+            max_session_cookie_chunks: default_max_session_cookie_chunks(),
             renew_access_token_on_expiry: default_true(),
             access_token_expires_leeway: 0,
             verification_mode: VerificationMode::default(),
@@ -357,7 +362,6 @@ impl Default for OpenidConnectConfig {
             introspection_endpoint_auth_method: EndpointAuthMethod::default(),
             introspection_cache_ttl: 0,
             introspection: OidcIntrospectionCacheSection::default(),
-            access_token: OidcAccessTokenCacheSection::default(),
             token_endpoint_auth_method: EndpointAuthMethod::default(),
             set_access_token_header: false,
             set_id_token_header: false,
@@ -450,9 +454,6 @@ impl OpenidConnectConfig {
         if let Some(error) = self.introspection.tiny_ufo_ttl_cache.validation_error() {
             return Some(error);
         }
-        if let Some(error) = self.access_token.lru_cache.validation_error() {
-            return Some(error);
-        }
         if self.session_cookie_name.trim().is_empty() {
             return Some("sessionCookieName cannot be empty");
         }
@@ -474,6 +475,16 @@ impl OpenidConnectConfig {
         }
         if self.max_session_cookie_bytes == 0 {
             return Some("maxSessionCookieBytes must be greater than 0");
+        }
+        if self.max_session_cookie_chunks == 0 || self.max_session_cookie_chunks > MAX_SESSION_COOKIE_CHUNKS {
+            return Some("maxSessionCookieChunks must be between 1 and 16");
+        }
+        let within_budget = self
+            .max_session_cookie_bytes
+            .checked_mul(u64::from(self.max_session_cookie_chunks))
+            .is_some_and(|total| total <= MAX_SESSION_COOKIE_TOTAL_BYTES);
+        if !within_budget {
+            return Some("maxSessionCookieBytes * maxSessionCookieChunks must not exceed 32768");
         }
         if self.jwks_cache_ttl == 0 {
             return Some("jwksCacheTtl must be greater than 0");
