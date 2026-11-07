@@ -256,6 +256,16 @@ SCOPED_EXCEPTIONS = {
         "test-only canonical JSON cursor oracle initializer",
     ("edgion-waf", Path("seclang/transaction/units.rs"), re.compile(r"if self\.force_json_cursor \{")):
         "test-only branch bypassing optional JSON summary replay",
+    ("edgion-waf", Path("seclang/transaction/mod.rs"), re.compile(r"force_generic_selection: bool,")):
+        "test-only switch for the generic TX selection oracle",
+    ("edgion-waf", Path("seclang/transaction/mod.rs"), re.compile(r"force_generic_selection: false,")):
+        "test-only generic TX selection oracle initializer",
+    ("edgion-waf", Path("seclang/transaction/units.rs"), re.compile(r"generic_selection: self\.force_generic_selection,")):
+        "test-only generic TX selection oracle switch passed to the selection context",
+    ("edgion-waf", Path("seclang/transaction/selection.rs"), re.compile(r"(?:pub\(super\) )?generic_selection: bool,")):
+        "test-only selection context switch for the generic TX selection oracle",
+    ("edgion-waf", Path("seclang/transaction/selection.rs"), re.compile(r"let direct = !ctx\.generic_selection;")):
+        "test-only branch disabling the direct TX walk for the generic selection oracle",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::Completions\b")):
         "test-only JSON mechanism measurement at the owning operation",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::GrammarInstances\b")):
