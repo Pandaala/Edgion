@@ -655,6 +655,7 @@ pub(super) fn apply_member_match(
     limits: RuntimeLimits,
     request: &RequestState,
     mut json_budget: Option<&mut InspectionBudget>,
+    mut journal: Option<&mut TxJournal>,
 ) -> Result<(), RuntimeError> {
     if let (Some(value), Some(name)) = (&matched.matched_var, &matched.matched_var_name) {
         if staged.matched_vars.len() == limits.max_tx_variables {
@@ -691,6 +692,7 @@ pub(super) fn apply_member_match(
             key.bytes(request, json_budget.as_deref_mut())?,
             request,
             json_budget.as_deref_mut(),
+            journal.as_deref_mut(),
         )?;
     }
     capture_keys.clear();
@@ -699,7 +701,14 @@ pub(super) fn apply_member_match(
         .map_err(|_| RuntimeError::Allocation)?;
     for capture in matched.captures {
         let stored_key = capture.key.try_clone()?;
-        staged.set(capture.key, capture.value, limits, request, json_budget.as_deref_mut())?;
+        staged.set(
+            capture.key,
+            capture.value,
+            limits,
+            request,
+            json_budget.as_deref_mut(),
+            journal.as_deref_mut(),
+        )?;
         capture_keys.push(stored_key);
     }
     Ok(())
@@ -717,12 +726,17 @@ pub(super) fn try_clone_keys(values: &[MatchValue]) -> Result<Vec<MatchValue>, R
 }
 
 pub(super) fn chain_branch_bytes(branch: &ChainBranch) -> Result<usize, RuntimeError> {
-    branch.capture_keys.iter().try_fold(
-        branch
-            .capture_keys
+    staged_branch_bytes(&branch.tx, &branch.capture_keys)
+}
+
+/// Charge of one frontier branch, also used for the in-place staged unit that
+/// seeds the frontier without being copied into a `ChainBranch`.
+pub(super) fn staged_branch_bytes(tx: &TxState, capture_keys: &[MatchValue]) -> Result<usize, RuntimeError> {
+    capture_keys.iter().try_fold(
+        capture_keys
             .len()
             .checked_mul(size_of::<MatchValue>())
-            .and_then(|value| value.checked_add(branch.tx.retained_bytes))
+            .and_then(|value| value.checked_add(tx.retained_bytes))
             .ok_or(RuntimeError::Arithmetic)?,
         |total, key| total.checked_add(key.len()).ok_or(RuntimeError::Arithmetic),
     )

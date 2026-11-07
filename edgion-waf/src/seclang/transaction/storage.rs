@@ -624,6 +624,63 @@ pub(super) struct ChainBranch {
     pub(super) setvar_actions: usize,
 }
 
+/// One reversible edit of the TX state staged by the current rule unit.
+/// Displaced values are moved here, never copied.
+pub(super) enum TxUndo {
+    /// `entries[index].value` was replaced; holds the displaced value.
+    Replaced { index: usize, value: MatchValue },
+    /// One entry was appended to `entries`.
+    Pushed,
+    /// `entries[index]` was removed; holds the removed entry.
+    Removed { index: usize, entry: TxEntry },
+    /// One unit was inserted into `removed_units` at this index.
+    InsertedRemovedUnit(usize),
+    /// One exclusion was inserted into `target_exclusions` at this index.
+    InsertedTargetExclusion(usize),
+}
+
+/// Transaction-owned undo log for the rule unit being staged in place. It is
+/// cleared, never reallocated, between units, so its capacity is reused for
+/// the whole transaction. Only displaced values are retained here, and they
+/// replace the whole-map copy the former per-unit snapshot held.
+#[derive(Default)]
+pub(super) struct TxJournal {
+    pub(super) steps: Vec<TxUndo>,
+}
+
+impl TxJournal {
+    /// Reserve the slot before the edit so recording can never fail after it.
+    fn reserve(journal: &mut Option<&mut Self>) -> Result<(), RuntimeError> {
+        match journal {
+            Some(journal) => journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation),
+            None => Ok(()),
+        }
+    }
+
+    fn record(journal: Option<&mut Self>, step: TxUndo) {
+        if let Some(journal) = journal {
+            journal.steps.push(step);
+        }
+    }
+
+    /// Commit: drop the displaced values and keep the capacity.
+    pub(super) fn clear(&mut self) {
+        self.steps.clear();
+    }
+}
+
+/// Whole fields a rolled-back unit restores, moved out by `TxState::begin_unit`.
+pub(super) struct TxCheckpoint {
+    matched_var: Option<MatchValue>,
+    matched_var_name: Option<MatchValue>,
+    matched_vars: Vec<TxEntry<MatchValue, MatchValue>>,
+    matched_vars_payload_bytes: u128,
+    entry_payload_bytes: u128,
+    request_body_processor: Option<super::super::super::BodyProcessorSelection>,
+    force_request_body_variable: Option<super::super::OnOff>,
+    retained_bytes: usize,
+}
+
 #[derive(Clone)]
 pub(super) enum GenerationHandle<'generation> {
     Borrowed(&'generation CompiledGeneration),
@@ -642,7 +699,12 @@ impl Deref for GenerationHandle<'_> {
 }
 
 impl TxState {
-    pub(super) fn add_removed_unit(&mut self, unit: usize, limits: RuntimeLimits) -> Result<(), RuntimeError> {
+    pub(super) fn add_removed_unit(
+        &mut self,
+        unit: usize,
+        limits: RuntimeLimits,
+        mut journal: Option<&mut TxJournal>,
+    ) -> Result<(), RuntimeError> {
         let Err(index) = self.removed_units.binary_search(&unit) else {
             return Ok(());
         };
@@ -654,7 +716,9 @@ impl TxState {
         self.removed_units
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
+        TxJournal::reserve(&mut journal)?;
         self.removed_units.insert(index, unit);
+        TxJournal::record(journal, TxUndo::InsertedRemovedUnit(index));
         self.refresh_retained_bytes();
         if self.retained_bytes > limits.max_tx_bytes {
             return Err(RuntimeError::TxByteLimit {
@@ -668,6 +732,7 @@ impl TxState {
         &mut self,
         entry: ActiveTargetExclusion,
         limits: RuntimeLimits,
+        mut journal: Option<&mut TxJournal>,
     ) -> Result<(), RuntimeError> {
         let start = self
             .target_exclusions
@@ -684,7 +749,9 @@ impl TxState {
         self.target_exclusions
             .try_reserve(1)
             .map_err(|_| RuntimeError::Allocation)?;
+        TxJournal::reserve(&mut journal)?;
         self.target_exclusions.insert(end, entry);
+        TxJournal::record(journal, TxUndo::InsertedTargetExclusion(end));
         self.refresh_retained_bytes();
         if self.retained_bytes > limits.max_tx_bytes {
             return Err(RuntimeError::TxByteLimit {
@@ -738,12 +805,15 @@ impl TxState {
         key: &[u8],
         request: &RequestState,
         json_budget: Option<&mut InspectionBudget>,
+        mut journal: Option<&mut TxJournal>,
     ) -> Result<(), RuntimeError> {
         if let Some(index) = self.find_entry(key, request, json_budget)? {
             let entry = &self.entries[index];
             let removed = tx_payload_bytes(entry.key.len(), entry.value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, removed, 0)?;
-            self.entries.remove(index);
+            TxJournal::reserve(&mut journal)?;
+            let entry = self.entries.remove(index);
+            TxJournal::record(journal, TxUndo::Removed { index, entry });
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         }
@@ -757,13 +827,16 @@ impl TxState {
         limits: RuntimeLimits,
         request: &RequestState,
         mut json_budget: Option<&mut InspectionBudget>,
+        mut journal: Option<&mut TxJournal>,
     ) -> Result<(), RuntimeError> {
         let key = key.into();
         let value = value.into();
         if let Some(index) = self.find_entry(key.bytes(request, json_budget.as_deref_mut())?, request, json_budget)? {
             let entry = &mut self.entries[index];
             let total = tx_payload_delta(self.entry_payload_bytes, entry.value.len() as u128, value.len() as u128)?;
-            entry.value = value;
+            TxJournal::reserve(&mut journal)?;
+            let value = std::mem::replace(&mut entry.value, value);
+            TxJournal::record(journal, TxUndo::Replaced { index, value });
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         } else {
@@ -775,7 +848,9 @@ impl TxState {
             self.entries.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
             let payload = tx_payload_bytes(key.len(), value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, 0, payload)?;
+            TxJournal::reserve(&mut journal)?;
             self.entries.push(TxEntry { key, value });
+            TxJournal::record(journal, TxUndo::Pushed);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         }
@@ -787,33 +862,22 @@ impl TxState {
         Ok(())
     }
 
+    /// Whole-state copy for a chain frontier branch. Rule units stage in place
+    /// through `begin_unit` and a `TxJournal` instead of copying the map.
     pub(super) fn try_clone(&self) -> Result<Self, RuntimeError> {
-        self.try_clone_with_matches(true)
-    }
-
-    pub(super) fn try_clone_for_unit(&self) -> Result<Self, RuntimeError> {
         #[cfg(test)]
-        measurements::record(Event::UnitTxClones, 1);
-        self.try_clone_with_matches(false)
-    }
-
-    fn try_clone_with_matches(&self, keep_matches: bool) -> Result<Self, RuntimeError> {
+        measurements::record(Event::TxStateClones, 1);
         let entries = try_clone_entries(&self.entries)?;
-        let matched_vars = if keep_matches {
-            let mut cloned = Vec::new();
-            cloned
-                .try_reserve_exact(self.matched_vars.len())
-                .map_err(|_| RuntimeError::Allocation)?;
-            for entry in &self.matched_vars {
-                cloned.push(TxEntry {
-                    key: entry.key.try_clone()?,
-                    value: entry.value.try_clone()?,
-                });
-            }
-            cloned
-        } else {
-            Vec::new()
-        };
+        let mut matched_vars = Vec::new();
+        matched_vars
+            .try_reserve_exact(self.matched_vars.len())
+            .map_err(|_| RuntimeError::Allocation)?;
+        for entry in &self.matched_vars {
+            matched_vars.push(TxEntry {
+                key: entry.key.try_clone()?,
+                value: entry.value.try_clone()?,
+            });
+        }
         let mut removed_units = Vec::new();
         removed_units
             .try_reserve_exact(self.removed_units.len())
@@ -830,22 +894,10 @@ impl TxState {
             force_unpruned_inspection: self.force_unpruned_inspection,
             entries,
             entry_payload_bytes: self.entry_payload_bytes,
-            matched_var: if keep_matches {
-                self.matched_var.as_ref().map(MatchValue::try_clone).transpose()?
-            } else {
-                None
-            },
-            matched_var_name: if keep_matches {
-                self.matched_var_name.as_ref().map(MatchValue::try_clone).transpose()?
-            } else {
-                None
-            },
+            matched_var: self.matched_var.as_ref().map(MatchValue::try_clone).transpose()?,
+            matched_var_name: self.matched_var_name.as_ref().map(MatchValue::try_clone).transpose()?,
             matched_vars,
-            matched_vars_payload_bytes: if keep_matches {
-                self.matched_vars_payload_bytes
-            } else {
-                0
-            },
+            matched_vars_payload_bytes: self.matched_vars_payload_bytes,
             removed_units,
             target_exclusions,
             request_body_processor: self.request_body_processor,
@@ -854,6 +906,67 @@ impl TxState {
         };
         cloned.refresh_retained_bytes();
         Ok(cloned)
+    }
+
+    /// Start staging one matched rule unit in place. Prior-unit match observers
+    /// are moved out (the unit starts without them) together with every scalar
+    /// a later rollback restores wholesale; vector edits go to the journal.
+    pub(super) fn begin_unit(&mut self) -> TxCheckpoint {
+        let checkpoint = TxCheckpoint {
+            matched_var: self.matched_var.take(),
+            matched_var_name: self.matched_var_name.take(),
+            matched_vars: std::mem::take(&mut self.matched_vars),
+            matched_vars_payload_bytes: self.matched_vars_payload_bytes,
+            entry_payload_bytes: self.entry_payload_bytes,
+            request_body_processor: self.request_body_processor,
+            force_request_body_variable: self.force_request_body_variable,
+            retained_bytes: self.retained_bytes,
+        };
+        self.matched_vars_payload_bytes = 0;
+        self.refresh_retained_bytes();
+        checkpoint
+    }
+
+    /// Undo every journaled edit in reverse order and restore the checkpoint,
+    /// leaving the state exactly as it was before `begin_unit`. Displaced
+    /// values move back; nothing is copied and no allocation is needed because
+    /// vectors never shrink while a unit is staged.
+    pub(super) fn rollback_unit(&mut self, journal: &mut TxJournal, checkpoint: TxCheckpoint) {
+        while let Some(step) = journal.steps.pop() {
+            match step {
+                TxUndo::Replaced { index, value } => {
+                    if let Some(entry) = self.entries.get_mut(index) {
+                        entry.value = value;
+                    }
+                }
+                TxUndo::Pushed => {
+                    self.entries.pop();
+                }
+                TxUndo::Removed { index, entry } => {
+                    if index <= self.entries.len() {
+                        self.entries.insert(index, entry);
+                    }
+                }
+                TxUndo::InsertedRemovedUnit(index) => {
+                    if index < self.removed_units.len() {
+                        self.removed_units.remove(index);
+                    }
+                }
+                TxUndo::InsertedTargetExclusion(index) => {
+                    if index < self.target_exclusions.len() {
+                        self.target_exclusions.remove(index);
+                    }
+                }
+            }
+        }
+        self.matched_var = checkpoint.matched_var;
+        self.matched_var_name = checkpoint.matched_var_name;
+        self.matched_vars = checkpoint.matched_vars;
+        self.matched_vars_payload_bytes = checkpoint.matched_vars_payload_bytes;
+        self.entry_payload_bytes = checkpoint.entry_payload_bytes;
+        self.request_body_processor = checkpoint.request_body_processor;
+        self.force_request_body_variable = checkpoint.force_request_body_variable;
+        self.retained_bytes = checkpoint.retained_bytes;
     }
 
     /// Payload totals stay exact; only the public semantic charge saturates.

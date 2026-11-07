@@ -364,7 +364,8 @@ fn no_hit_summary_reuses_existing_selected_capacity_without_changing_it() {
         ResultLimits::default(),
         true,
     );
-    let staged = fast.tx.try_clone_for_unit().unwrap();
+    let mut staged = fast.tx.try_clone().unwrap();
+    let _checkpoint = staged.begin_unit();
     assert!(fast.evaluate_member_matches(0, 0, &staged, false).unwrap().is_empty());
     let capacity = fast.selected_scratch.capacity();
     assert!(capacity > 0);
@@ -1084,6 +1085,7 @@ fn sealed_replay_and_chain_clones_reference_one_payload() {
             tx.limits,
             &tx.request,
             tx.json_budget.as_mut(),
+            None,
         )
         .unwrap();
         let branch = staged.try_clone().unwrap();
@@ -2634,10 +2636,12 @@ fn sealed_names_and_capture_values_share_through_match_tx_and_branch_clones() {
             tx.limits,
             &tx.request,
             tx.json_budget.as_mut(),
+            None,
         )
         .unwrap();
         let branch = staged.try_clone().unwrap();
-        let unit = staged.try_clone_for_unit().unwrap();
+        let mut unit = staged.try_clone().unwrap();
+        let _checkpoint = unit.begin_unit();
         for state in [&staged, &branch, &unit] {
             let value = state.get(b"1", &tx.request, tx.json_budget.as_mut()).unwrap().unwrap();
             assert_eq!(value.len(), length);
@@ -2737,10 +2741,12 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
         tx.limits,
         &tx.request,
         tx.json_budget.as_mut(),
+        None,
     )
     .unwrap();
     let full = staged.try_clone().unwrap();
-    let unit = staged.try_clone_for_unit().unwrap();
+    let mut unit = staged.try_clone().unwrap();
+    let _checkpoint = unit.begin_unit();
     let cloned_keys = try_clone_keys(&keys).unwrap();
     for state in [&staged, &full, &unit] {
         for (index, entry) in state.entries.iter().enumerate() {
@@ -2762,7 +2768,7 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
     assert!(staged.get(b"name", &tx.request, None).is_err());
     let other = Transaction::new(&generation, head(b"/"), tx.limits).unwrap();
     assert!(staged.observed_get(b"Name", &other.request).is_err());
-    assert!(staged.delete(b"Name", &other.request, None).is_err());
+    assert!(staged.delete(b"Name", &other.request, None, None).is_err());
     assert_eq!(staged.entries.len(), 3);
     staged
         .set(
@@ -2771,6 +2777,7 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
             tx.limits,
             &tx.request,
             tx.json_budget.as_mut(),
+            None,
         )
         .unwrap();
     assert_eq!(staged.entries[2].key.observed_bytes(&tx.request).unwrap(), b"Name");
@@ -2785,6 +2792,7 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
             tx.limits,
             &tx.request,
             tx.json_budget.as_mut(),
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -2805,7 +2813,9 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
             .unwrap(),
         b"distinct"
     );
-    staged.delete(b"nAmE", &tx.request, tx.json_budget.as_mut()).unwrap();
+    staged
+        .delete(b"nAmE", &tx.request, tx.json_budget.as_mut(), None)
+        .unwrap();
     assert!(staged.observed_get(b"Name", &tx.request).unwrap().is_none());
     tx.tx = full;
     tx.capture_keys = keys;
@@ -2822,10 +2832,14 @@ fn sealed_capture_keys_share_through_tx_cleanup_and_clones_with_checked_reads() 
             b"lost".to_vec(),
             tx.limits,
             &tx.request,
-            tx.json_budget.as_mut()
+            tx.json_budget.as_mut(),
+            None
         )
         .is_err());
-    assert!(tx.tx.delete(b"Name", &tx.request, tx.json_budget.as_mut()).is_err());
+    assert!(tx
+        .tx
+        .delete(b"Name", &tx.request, tx.json_budget.as_mut(), None)
+        .is_err());
     assert_eq!(tx.tx.retained_bytes, retained);
     assert_eq!(tx.tx_value(b"Name"), Some(b"a".as_slice()));
 }
@@ -2857,13 +2871,14 @@ fn shared_capture_key_reads_enforce_exact_and_one_less_physical_work() {
                     .tx
                     .get(b"name", &tx.request, tx.json_budget.as_mut())
                     .map(|value| assert!(value.is_some())),
-                "delete" => tx.tx.delete(b"NAME", &tx.request, tx.json_budget.as_mut()),
+                "delete" => tx.tx.delete(b"NAME", &tx.request, tx.json_budget.as_mut(), None),
                 "set" => tx.tx.set(
                     b"nAmE".to_vec(),
                     b"new".to_vec(),
                     tx.limits,
                     &tx.request,
                     tx.json_budget.as_mut(),
+                    None,
                 ),
                 _ => unreachable!(),
             };

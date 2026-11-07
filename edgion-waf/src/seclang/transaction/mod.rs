@@ -557,6 +557,8 @@ pub struct Transaction<'generation> {
     unit_work_bytes: usize,
     ctl_work_bytes: usize,
     tx: TxState,
+    /// Undo log of the rule unit staged in place in `tx`; reused across units.
+    tx_journal: TxJournal,
     capture_keys: Vec<MatchValue>,
     response: Option<ResponseState>,
     request_body_error: Option<BodyError>,
@@ -755,6 +757,7 @@ impl<'generation> Transaction<'generation> {
                 check_policy,
                 ..TxState::default()
             },
+            tx_journal: TxJournal::default(),
             capture_keys: Vec::new(),
             response: None,
             request_body_error: None,

@@ -264,7 +264,10 @@ fn tx_cached_totals_cover_sealed_captures_controls_and_later_phases() {
     ));
     assert_tx_accounting(&tx.tx);
     assert_tx_accounting(&tx.tx.try_clone().unwrap());
-    assert_tx_accounting(&tx.tx.try_clone_for_unit().unwrap());
+    let checkpoint = tx.tx.begin_unit();
+    assert_tx_accounting(&tx.tx);
+    tx.tx.rollback_unit(&mut TxJournal::default(), checkpoint);
+    assert_tx_accounting(&tx.tx);
     tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
     tx.execute_response_headers().unwrap();
     assert_eq!(tx.tx_value(b"later"), Some(b"12".as_slice()));
@@ -336,7 +339,7 @@ fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
     for index in 0..64 {
         let key = format!("key{index}").into_bytes();
         state
-            .set(key.clone(), vec![b'a'; index], limits, &owned_key_request(), None)
+            .set(key.clone(), vec![b'a'; index], limits, &owned_key_request(), None, None)
             .unwrap();
         assert_tx_accounting(&state);
         state
@@ -345,6 +348,7 @@ fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
                 vec![b'b'; 64 - index],
                 limits,
                 &owned_key_request(),
+                None,
                 None,
             )
             .unwrap();
@@ -364,16 +368,17 @@ fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
             limits,
             &owned_key_request(),
             None,
+            None,
         )
         .unwrap();
         assert_tx_accounting(&state);
     }
     for index in (0..64).rev() {
         state
-            .delete(format!("KEY{index}").as_bytes(), &owned_key_request(), None)
+            .delete(format!("KEY{index}").as_bytes(), &owned_key_request(), None, None)
             .unwrap();
         assert_tx_accounting(&state);
-        state.delete(b"absent", &owned_key_request(), None).unwrap();
+        state.delete(b"absent", &owned_key_request(), None, None).unwrap();
         assert_tx_accounting(&state);
     }
     apply_member_match(
@@ -383,23 +388,35 @@ fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
         limits,
         &owned_key_request(),
         None,
+        None,
     )
     .unwrap();
     assert_tx_accounting(&state);
-    state.add_removed_unit(7, limits).unwrap();
-    state.add_removed_unit(7, limits).unwrap();
+    state.add_removed_unit(7, limits, None).unwrap();
+    state.add_removed_unit(7, limits, None).unwrap();
     assert_tx_accounting(&state);
     assert_tx_accounting(&state.try_clone().unwrap());
-    let unit = state.try_clone_for_unit().unwrap();
-    assert_tx_accounting(&unit);
-    assert_eq!(unit.matched_vars_payload_bytes, 0);
-    assert!(unit.matched_vars.is_empty());
+    let retained = state.retained_bytes;
+    let checkpoint = state.begin_unit();
+    assert_tx_accounting(&state);
+    assert_eq!(state.matched_vars_payload_bytes, 0);
+    assert!(state.matched_vars.is_empty());
+    state.rollback_unit(&mut TxJournal::default(), checkpoint);
+    assert_eq!(state.retained_bytes, retained);
+    assert_tx_accounting(&state);
     let limited = RuntimeLimits {
         max_tx_bytes: state.retained_bytes,
         ..limits
     };
     assert!(matches!(
-        state.set(b"failed".to_vec(), vec![b'a'; 128], limited, &owned_key_request(), None),
+        state.set(
+            b"failed".to_vec(),
+            vec![b'a'; 128],
+            limited,
+            &owned_key_request(),
+            None,
+            None
+        ),
         Err(RuntimeError::TxByteLimit { .. })
     ));
     assert_eq!(
@@ -417,6 +434,7 @@ fn tx_cached_totals_match_frozen_recount_after_mutations_and_failures() {
                 ..limits
             },
             &owned_key_request(),
+            None,
             None
         ),
         Err(RuntimeError::TxVariableLimit { .. })
@@ -445,11 +463,12 @@ fn tx_wide_payload_totals_saturate_only_the_final_charge() {
             RuntimeLimits::default(),
             &owned_key_request(),
             None,
+            None,
         )
         .unwrap();
     state.entry_payload_bytes = 0;
     assert_eq!(
-        state.delete(b"KEY", &owned_key_request(), None),
+        state.delete(b"KEY", &owned_key_request(), None, None),
         Err(RuntimeError::Arithmetic)
     );
     assert_eq!(state.get(b"key", &owned_key_request(), None).unwrap().unwrap().len(), 5);
@@ -622,7 +641,7 @@ fn no_hit_first_members_borrow_tx_and_restore_prior_observers() {
         let g = generation(source);
         let headers = [RequestHeader::new(b"X-Probe", b"miss")];
         let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
-        tx.tx.set(b"saved".to_vec(), vec![b'a'; 4096], tx.limits, &tx.request, tx.json_budget.as_mut()).unwrap();
+        tx.tx.set(b"saved".to_vec(), vec![b'a'; 4096], tx.limits, &tx.request, tx.json_budget.as_mut(), None).unwrap();
         tx.tx.matched_var = Some(b"previous".to_vec().into());
         tx.tx.matched_var_name = Some(b"ARGS:previous".to_vec().into());
         tx.tx.matched_vars.push(TxEntry {
@@ -635,7 +654,7 @@ fn no_hit_first_members_borrow_tx_and_restore_prior_observers() {
         let pointer = tx.tx_value(b"saved").unwrap().as_ptr();
         let scope = measurements::start();
         assert!(!tx.evaluate_unit(0, None).unwrap());
-        assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
+        assert_eq!(scope.counts().get(Event::TxStateClones), 0);
         assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
         assert_eq!(tx.tx.retained_bytes, retained);
         assert_tx_accounting(&tx.tx);
@@ -658,6 +677,7 @@ fn first_member_errors_restore_tx_before_propagation() {
                 tx.limits,
                 &tx.request,
                 tx.json_budget.as_mut(),
+                None,
             )
             .unwrap();
         tx.tx.matched_var = Some(b"previous".to_vec().into());
@@ -673,7 +693,7 @@ fn first_member_errors_restore_tx_before_propagation() {
             result,
             Err(RuntimeError::IntegerConversion | RuntimeError::RetainedByteLimit { .. })
         ));
-        assert_eq!(scope.counts().get(Event::UnitTxClones), 0);
+        assert_eq!(scope.counts().get(Event::TxStateClones), 0);
         assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
         assert_eq!(tx.tx.retained_bytes, retained);
         assert_tx_accounting(&tx.tx);
@@ -682,7 +702,7 @@ fn first_member_errors_restore_tx_before_propagation() {
 }
 
 #[test]
-fn matched_units_clone_after_first_member_and_failed_chains_roll_back() {
+fn matched_chains_copy_only_frontier_branches_and_failed_chains_roll_back() {
     for succeeds in [false, true] {
         let g = generation(&format!(
             "SecRule REQUEST_HEADERS:X-Probe \"@rx (hit)\" \"id:1,phase:1,pass,capture,chain,setvar:tx.saved=changed\"\nSecRule TX:saved \"@streq {}\" \"\"\n",
@@ -697,13 +717,14 @@ fn matched_units_clone_after_first_member_and_failed_chains_roll_back() {
                 tx.limits,
                 &tx.request,
                 tx.json_budget.as_mut(),
+                None,
             )
             .unwrap();
         tx.tx.matched_var = Some(b"previous".to_vec().into());
         tx.tx.recount();
         let scope = measurements::start();
         assert_eq!(tx.evaluate_unit(0, None).unwrap(), succeeds);
-        assert_eq!(scope.counts().get(Event::UnitTxClones), 1);
+        assert_eq!(scope.counts().get(Event::TxStateClones), 1);
         assert_eq!(
             tx.tx_value(b"saved"),
             Some(if succeeds {
@@ -4314,7 +4335,7 @@ fn predicate_capture_admission_precedes_allocation_and_preserves_semantic_limits
 }
 
 #[test]
-fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
+fn new_unit_staging_hides_matches_but_preserves_entries_and_controls() {
     let limits = RuntimeLimits::default();
     let mut state = TxState::default();
     state
@@ -4324,9 +4345,10 @@ fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
             limits,
             &owned_key_request(),
             None,
+            None,
         )
         .unwrap();
-    state.add_removed_unit(7, limits).unwrap();
+    state.add_removed_unit(7, limits, None).unwrap();
     state.request_body_processor = Some(crate::seclang::BodyProcessorSelection::Json);
     state.matched_var = Some(vec![b'x'; 4096].into());
     state.matched_var_name = Some(b"ARGS:json.name".to_vec().into());
@@ -4338,17 +4360,24 @@ fn new_unit_clone_omits_matches_but_preserves_entries_and_controls() {
     let full = state.try_clone().unwrap();
     assert_eq!(full.retained_bytes, state.retained_bytes);
     assert_eq!(full.matched_vars.len(), 1);
-    let unit = state.try_clone_for_unit().unwrap();
+    let base_retained = state.retained_bytes;
+    let checkpoint = state.begin_unit();
     assert_eq!(
-        unit.get(b"capture", &owned_key_request(), None).unwrap(),
+        state.get(b"capture", &owned_key_request(), None).unwrap(),
         Some(&MatchValue::Owned(b"persistent".to_vec()))
     );
-    assert_eq!(unit.removed_units, [7]);
-    assert_eq!(unit.request_body_processor, state.request_body_processor);
-    assert!(unit.matched_var.is_none());
-    assert!(unit.matched_var_name.is_none());
-    assert_eq!(unit.matched_vars.capacity(), 0);
-    assert!(unit.retained_bytes < state.retained_bytes);
+    assert_eq!(state.removed_units, [7]);
+    assert_eq!(state.request_body_processor, full.request_body_processor);
+    assert!(state.matched_var.is_none());
+    assert!(state.matched_var_name.is_none());
+    assert_eq!(state.matched_vars.capacity(), 0);
+    assert!(state.retained_bytes < base_retained);
+    assert_tx_accounting(&state);
+    state.rollback_unit(&mut TxJournal::default(), checkpoint);
+    assert_eq!(state.retained_bytes, base_retained);
+    assert_eq!(state.matched_vars.len(), 1);
+    assert_eq!(state.matched_var, full.matched_var);
+    assert_tx_accounting(&state);
 }
 
 #[test]
@@ -4486,6 +4515,7 @@ fn retained_selection_capacity_is_checked_before_staged_branch_selection() {
             b"y".to_vec(),
             RuntimeLimits::default(),
             &owned_key_request(),
+            None,
             None,
         )
         .unwrap();
@@ -4924,7 +4954,7 @@ fn final_chain_move_matches_frozen_frontier_order_rollback_and_limits() {
                         (b"bad", b"invalid"),
                     ] {
                         tx.tx
-                            .set(key.to_vec(), value.to_vec(), tx.limits, &tx.request, None)
+                            .set(key.to_vec(), value.to_vec(), tx.limits, &tx.request, None, None)
                             .unwrap();
                     }
                     tx.limits = limits;
@@ -5054,6 +5084,30 @@ fn final_chain_move_matches_frozen_frontier_order_rollback_and_limits() {
     }
 }
 
+/// Frozen former per-unit snapshot: a whole-map copy without prior-unit
+/// observers. Production stages units in place; this is the oracle only.
+fn frozen_unit_clone(state: &TxState) -> Result<TxState, RuntimeError> {
+    let mut unit = state.try_clone()?;
+    unit.matched_var = None;
+    unit.matched_var_name = None;
+    unit.matched_vars = Vec::new();
+    unit.matched_vars_payload_bytes = 0;
+    unit.refresh_retained_bytes();
+    Ok(unit)
+}
+
+fn frozen_commit(
+    tx: &mut Transaction<'_>,
+    unit: crate::seclang::compiler::CompiledRuleUnit,
+    staged: TxState,
+    capture_keys: Vec<MatchValue>,
+) -> Result<bool, RuntimeError> {
+    tx.admit_unit_commit(unit, &staged)?;
+    tx.tx = staged;
+    tx.capture_keys = capture_keys;
+    Ok(true)
+}
+
 fn frozen_clone_unit_into(
     tx: &mut Transaction<'_>,
     unit_id: usize,
@@ -5078,7 +5132,7 @@ fn frozen_clone_unit_into(
     if matches.is_empty() {
         return Ok(false);
     }
-    let mut initial = tx.tx.try_clone_for_unit()?;
+    let mut initial = frozen_unit_clone(&tx.tx)?;
     if unit.member_count == 1 {
         let mut capture_keys = try_clone_keys(&tx.capture_keys)?;
         let mut setvar_actions = 0_usize;
@@ -5090,10 +5144,11 @@ fn frozen_clone_unit_into(
                 tx.limits,
                 &tx.request,
                 tx.json_budget.as_mut(),
+                None,
             )?;
-            tx.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions)?;
+            tx.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions, None)?;
         }
-        return tx.commit_unit_match(unit, initial, capture_keys);
+        return frozen_commit(tx, unit, initial, capture_keys);
     }
     let mut frontier = Vec::new();
     frontier.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
@@ -5124,10 +5179,11 @@ fn frozen_clone_unit_into(
                     tx.limits,
                     &tx.request,
                     tx.json_budget.as_mut(),
+                    None,
                 )?;
-                tx.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions)?;
+                tx.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions, None)?;
                 if final_member {
-                    return tx.commit_unit_match(unit, candidate.tx, candidate.capture_keys);
+                    return frozen_commit(tx, unit, candidate.tx, candidate.capture_keys);
                 }
                 if frontier.len().saturating_add(next.len()) >= tx.limits.max_operator_evaluations {
                     return Err(RuntimeError::OperatorEvaluationLimit {
@@ -5807,12 +5863,15 @@ fn ordinary_current_group_marker_publishes_only_valid_scans_and_ranges() {
 }
 #[test]
 fn unpruned_oracle_survives_both_explicit_clone_policies() {
-    let tx = TxState {
+    let mut tx = TxState {
         force_unpruned_inspection: true,
         ..TxState::default()
     };
     assert!(tx.try_clone().unwrap().force_unpruned_inspection);
-    assert!(tx.try_clone_for_unit().unwrap().force_unpruned_inspection);
+    let checkpoint = tx.begin_unit();
+    assert!(tx.force_unpruned_inspection);
+    tx.rollback_unit(&mut TxJournal::default(), checkpoint);
+    assert!(tx.force_unpruned_inspection);
 }
 
 #[test]
@@ -5835,7 +5894,9 @@ fn optional_check_policy_survives_unpruned_inspection_and_chain_clones() {
         .unwrap();
         tx.tx.force_unpruned_inspection = unpruned;
         assert!(!tx.tx.try_clone().unwrap().check_policy.expensive_checks);
-        assert!(!tx.tx.try_clone_for_unit().unwrap().check_policy.expensive_checks);
+        let checkpoint = tx.tx.begin_unit();
+        assert!(!tx.tx.check_policy.expensive_checks);
+        tx.tx.rollback_unit(&mut TxJournal::default(), checkpoint);
         tx.execute_request_headers().unwrap();
         tx.publish_request_body(RequestBody::new(
             bytes::Bytes::from_static(br#"{"probe":"attack"}"#),
@@ -5869,7 +5930,9 @@ fn target_exclusion_insertion_keeps_unit_groups_and_duplicate_budget() {
         (0, CollectionKind::Args),
         (9, CollectionKind::Args),
     ] {
-        state.add_target_exclusion(entry(unit, collection), limits).unwrap();
+        state
+            .add_target_exclusion(entry(unit, collection), limits, None)
+            .unwrap();
     }
     assert_eq!(
         state.target_exclusions,
@@ -5884,12 +5947,12 @@ fn target_exclusion_insertion_keeps_unit_groups_and_duplicate_budget() {
     );
     let retained = state.retained_bytes;
     state
-        .add_target_exclusion(entry(7, CollectionKind::Args), limits)
+        .add_target_exclusion(entry(7, CollectionKind::Args), limits, None)
         .unwrap();
     assert_eq!(state.target_exclusions.len(), 6);
     assert_eq!(state.retained_bytes, retained);
     assert_eq!(
-        state.add_target_exclusion(entry(6, CollectionKind::Args), limits),
+        state.add_target_exclusion(entry(6, CollectionKind::Args), limits, None),
         Err(RuntimeError::CtlEntryLimit { limit: 6 })
     );
 }
@@ -5910,4 +5973,282 @@ fn request_head_projection_matches_decimal_boundaries() {
             Some(&digits[start..])
         );
     }
+}
+
+type TxEntrySnapshot = (Vec<u8>, Vec<u8>);
+
+#[derive(Debug, PartialEq, Eq)]
+struct TxSnapshot {
+    entries: Vec<TxEntrySnapshot>,
+    entry_payload_bytes: u128,
+    matched_var: Option<Vec<u8>>,
+    matched_var_name: Option<Vec<u8>>,
+    matched_vars: Vec<TxEntrySnapshot>,
+    matched_vars_payload_bytes: u128,
+    removed_units: Vec<usize>,
+    target_exclusions: Vec<ActiveTargetExclusion>,
+    request_body_processor: Option<crate::seclang::BodyProcessorSelection>,
+    force_request_body_variable: Option<crate::seclang::compiler::OnOff>,
+    tx_retained_bytes: usize,
+    /// Transaction total minus reusable scratch capacity, which a unit may
+    /// grow (and keep charged) whether or not it commits.
+    retained_bytes_without_scratch: usize,
+    capture_keys: Vec<Vec<u8>>,
+}
+
+fn tx_snapshot(tx: &Transaction<'_>) -> TxSnapshot {
+    let bytes = |value: &MatchValue| value.observed_bytes(&tx.request).unwrap().to_vec();
+    let entries = |entries: &[TxEntry]| {
+        entries
+            .iter()
+            .map(|entry| (bytes(&entry.key), bytes(&entry.value)))
+            .collect::<Vec<_>>()
+    };
+    TxSnapshot {
+        entries: entries(&tx.tx.entries),
+        entry_payload_bytes: tx.tx.entry_payload_bytes,
+        matched_var: tx.tx.matched_var.as_ref().map(bytes),
+        matched_var_name: tx.tx.matched_var_name.as_ref().map(bytes),
+        matched_vars: entries(&tx.tx.matched_vars),
+        matched_vars_payload_bytes: tx.tx.matched_vars_payload_bytes,
+        removed_units: tx.tx.removed_units.clone(),
+        target_exclusions: tx.tx.target_exclusions.clone(),
+        request_body_processor: tx.tx.request_body_processor,
+        force_request_body_variable: tx.tx.force_request_body_variable,
+        tx_retained_bytes: tx.tx.retained_bytes,
+        retained_bytes_without_scratch: tx.retained_bytes() - tx.scratch_bytes,
+        capture_keys: tx.capture_keys.iter().map(bytes).collect(),
+    }
+}
+
+/// Seed a base with entries, prior-unit observers, a removal and an exclusion
+/// so every journaled edit and every checkpointed field has something to undo.
+fn seeded_staging_transaction<'g>(
+    generation: &'g CompiledGeneration,
+    headers: &'g [RequestHeader<'g>],
+    limits: RuntimeLimits,
+) -> Transaction<'g> {
+    let mut tx = Transaction::new(generation, request(headers, b"/"), RuntimeLimits::default()).unwrap();
+    for (key, value) in [
+        (b"keep".as_slice(), b"persistent".as_slice()),
+        (b"count", b"10"),
+        (b"other", b"value"),
+    ] {
+        tx.tx
+            .set(key.to_vec(), value.to_vec(), tx.limits, &tx.request, None, None)
+            .unwrap();
+    }
+    tx.tx.add_removed_unit(usize::MAX - 1, tx.limits, None).unwrap();
+    tx.tx
+        .add_target_exclusion(
+            ActiveTargetExclusion {
+                unit: usize::MAX - 1,
+                collection: CollectionKind::Args,
+                selector: crate::seclang::compiler::CompiledTargetSelector::None,
+            },
+            tx.limits,
+            None,
+        )
+        .unwrap();
+    tx.tx.matched_var = Some(b"previous".to_vec().into());
+    tx.tx.matched_var_name = Some(b"ARGS:previous".to_vec().into());
+    tx.tx.matched_vars.push(TxEntry {
+        key: b"ARGS:previous".to_vec().into(),
+        value: b"previous".to_vec().into(),
+    });
+    tx.capture_keys.push(b"0".to_vec().into());
+    tx.tx
+        .set(
+            b"0".to_vec(),
+            b"old-capture".to_vec(),
+            tx.limits,
+            &tx.request,
+            None,
+            None,
+        )
+        .unwrap();
+    tx.tx.recount();
+    tx.limits = limits;
+    tx
+}
+
+const STAGING_SOURCES: [&str; 4] = [
+    // Single member: delete-then-set, += / -= over staged values, macros over
+    // staged values and captures, new variables and both ctl list kinds.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)(i)t$\" \"id:1,phase:1,pass,capture,",
+        "setvar:'!tx.keep',setvar:tx.keep=reset,setvar:tx.count=+5,setvar:tx.count=-2,",
+        "setvar:'tx.copy=%{tx.count}-%{tx.keep}-%{tx.1}',setvar:tx.new_a=aaaaaaaaaaaaaaaa,",
+        "setvar:tx.new_b=bbbbbbbbbbbbbbbb,ctl:ruleRemoveByTag=gone,ctl:ruleRemoveTargetByTag=kept;REQUEST_HEADERS:x\"\n",
+        "SecRule REQUEST_HEADERS \"@streq gone\" \"id:2,phase:1,pass,tag:gone\"\n",
+        "SecRule REQUEST_HEADERS \"@streq kept\" \"id:3,phase:1,pass,tag:kept\"\n",
+    ),
+    // Single member, several matches: each match replaces the captures and
+    // runs the actions against the state staged by the previous match.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(.*)$\" \"id:1,phase:1,pass,capture,",
+        "setvar:tx.n=+1,setvar:'tx.v_%{tx.n}=%{tx.1}',setvar:'!tx.other'\"\n",
+    ),
+    // Chain whose later members read the staged setvar by macro and count.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)\" \"id:1,phase:1,pass,capture,chain,setvar:tx.staged=abc,setvar:tx.count=+1\"\n",
+        "SecRule &TX:staged \"@eq 1\" \"chain,setvar:tx.mid=%{tx.staged}\"\n",
+        "SecRule TX:mid \"@streq %{tx.staged}\" \"setvar:'tx.seen=%{tx.staged}-%{tx.count}'\"\n",
+    ),
+    // The same chain failing at its final member.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)\" \"id:1,phase:1,pass,capture,chain,setvar:tx.staged=abc,setvar:tx.count=+1\"\n",
+        "SecRule &TX:staged \"@eq 1\" \"chain,setvar:tx.mid=%{tx.staged}\"\n",
+        "SecRule TX:mid \"@streq never\" \"setvar:tx.seen=1\"\n",
+    ),
+];
+
+#[test]
+fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit() {
+    let headers = [
+        RequestHeader::new(b"X-Probe", b"hit"),
+        RequestHeader::new(b"X-Probe", b"hot"),
+    ];
+    for source in STAGING_SOURCES {
+        let generation = generation(source);
+        let check = |limits: RuntimeLimits| {
+            let mut actual = seeded_staging_transaction(&generation, &headers, limits);
+            let mut oracle = seeded_staging_transaction(&generation, &headers, limits);
+            let base = tx_snapshot(&actual);
+            let expected = frozen_clone_unit_into(&mut oracle, 0, None, &mut Vec::new());
+            let result = actual.evaluate_unit(0, None);
+            assert_eq!(result, expected, "{source}: {limits:?}");
+            let after = tx_snapshot(&actual);
+            assert_eq!(after, tx_snapshot(&oracle), "{source}: {limits:?}");
+            assert_eq!(actual.retained_bytes(), oracle.retained_bytes());
+            assert_eq!(actual.scratch_bytes, oracle.scratch_bytes);
+            assert_eq!(actual.ctl_work_bytes, oracle.ctl_work_bytes);
+            assert_eq!(actual.unit_work_bytes, oracle.unit_work_bytes);
+            assert_tx_accounting(&actual.tx);
+            assert!(actual.tx_journal.steps.is_empty());
+            if result != Ok(true) {
+                // Rollback restores the base exactly, including cached charges.
+                assert_eq!(after, base, "{source}: {limits:?}");
+            }
+            result
+        };
+        let unlimited = RuntimeLimits::default();
+        let committed = !source.contains("never");
+        assert_eq!(check(unlimited), Ok(committed), "{source}");
+        let reference = seeded_staging_transaction(&generation, &headers, unlimited);
+        let base_retained = reference.retained_bytes();
+        let base_tx_bytes = reference.tx.retained_bytes;
+        let mut outcomes = std::collections::BTreeSet::new();
+        for max_tx_variables in 0..12 {
+            outcomes.insert(format!(
+                "{:?}",
+                check(RuntimeLimits {
+                    max_tx_variables,
+                    ..unlimited
+                })
+            ));
+        }
+        for max_tx_bytes in base_tx_bytes.saturating_sub(64)..base_tx_bytes + 1024 {
+            outcomes.insert(format!(
+                "{:?}",
+                check(RuntimeLimits {
+                    max_tx_bytes,
+                    ..unlimited
+                })
+            ));
+        }
+        for max_ctl_entries in 0..5 {
+            outcomes.insert(format!(
+                "{:?}",
+                check(RuntimeLimits {
+                    max_ctl_entries,
+                    ..unlimited
+                })
+            ));
+        }
+        for max_retained_bytes in base_retained..base_retained + 1024 {
+            outcomes.insert(format!(
+                "{:?}",
+                check(RuntimeLimits {
+                    max_retained_bytes,
+                    ..unlimited
+                })
+            ));
+        }
+        // Every sweep crosses a real threshold, not only the success case.
+        assert!(
+            outcomes.iter().any(|outcome| outcome.contains("TxVariableLimit")),
+            "{source}: {outcomes:?}"
+        );
+        assert!(
+            outcomes.iter().any(|outcome| outcome.contains("TxByteLimit")),
+            "{source}: {outcomes:?}"
+        );
+        assert!(
+            outcomes.iter().any(|outcome| outcome.contains("RetainedByteLimit")),
+            "{source}: {outcomes:?}"
+        );
+    }
+}
+
+#[test]
+fn matched_single_member_units_stage_in_place_without_copying_tx() {
+    let generation = generation(STAGING_SOURCES[0]);
+    let headers = [RequestHeader::new(b"X-Probe", b"hit")];
+    let mut tx = seeded_staging_transaction(&generation, &headers, RuntimeLimits::default());
+    let pointer = tx.tx_value(b"other").unwrap().as_ptr();
+    let scope = measurements::start();
+    assert!(tx.evaluate_unit(0, None).unwrap());
+    assert_eq!(scope.counts().get(Event::TxStateClones), 0);
+    drop(scope);
+    // Untouched entries stay in their original allocation.
+    assert_eq!(tx.tx_value(b"other").unwrap().as_ptr(), pointer);
+    assert_eq!(tx.tx_value(b"keep"), Some(b"reset".as_slice()));
+    assert_eq!(tx.tx_value(b"count"), Some(b"13".as_slice()));
+    assert_eq!(tx.tx_value(b"copy"), Some(b"13-reset-h".as_slice()));
+    assert_eq!(tx.tx_value(b"1"), Some(b"h".as_slice()));
+    assert_eq!(tx.tx_value(b"0"), Some(b"hit".as_slice()));
+    assert_eq!(tx.tx.matched_var, Some(b"hit".to_vec().into()));
+    assert_eq!(tx.tx.matched_vars.len(), 1);
+    assert!(tx.tx.removed_units.contains(&1));
+    assert!(tx.tx.target_exclusions.iter().any(|exclusion| exclusion.unit == 2));
+    // The journal keeps its capacity for the next unit and holds nothing.
+    assert!(tx.tx_journal.steps.is_empty());
+    let capacity = tx.tx_journal.steps.capacity();
+    assert!(capacity > 0);
+    assert!(tx.evaluate_unit(0, None).unwrap());
+    assert_eq!(tx.tx_journal.steps.capacity(), capacity);
+    assert_eq!(tx.tx_value(b"count"), Some(b"16".as_slice()));
+}
+
+#[test]
+fn staged_values_are_visible_to_later_chain_members_and_skip_after_commits_once() {
+    let generation = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)\" \"id:1,phase:1,pass,capture,chain,setvar:tx.staged=%{tx.1}x,skipAfter:END\"\n",
+        "SecRule &TX:staged \"@eq 1\" \"chain,setvar:tx.count=+1\"\n",
+        "SecRule TX:staged \"@streq %{tx.0}x\" \"setvar:'tx.seen=%{tx.staged}-%{tx.count}'\"\n",
+        "SecAction \"id:2,phase:1,pass,setvar:tx.skipped=1\"\n",
+        "SecMarker END\n",
+        "SecAction \"id:3,phase:1,pass,setvar:tx.after=1\"\n",
+    ));
+    // Branch "hot" fails the final member; branch "h" commits in winner order.
+    let headers = [
+        RequestHeader::new(b"X-Probe", b"hot"),
+        RequestHeader::new(b"X-Probe", b"h"),
+    ];
+    let mut tx = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+    let outcome = tx.execute_request_headers().unwrap();
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(tx.tx_value(b"staged"), Some(b"hx".as_slice()));
+    assert_eq!(tx.tx_value(b"seen"), Some(b"hx-1".as_slice()));
+    assert_eq!(tx.tx_value(b"skipped"), None);
+    assert_eq!(tx.tx_value(b"after"), Some(b"1".as_slice()));
+    assert_tx_accounting(&tx.tx);
 }

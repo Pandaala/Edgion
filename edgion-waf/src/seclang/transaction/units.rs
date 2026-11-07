@@ -36,31 +36,98 @@ impl<'generation> Transaction<'generation> {
         if matches.is_empty() {
             return Ok(false);
         }
-        let mut initial = self.tx.try_clone_for_unit()?;
-        if unit.member_count == 1 {
-            let mut capture_keys = try_clone_keys(&self.capture_keys)?;
-            let mut setvar_actions = 0_usize;
-            for matched in matches.drain(..) {
-                apply_member_match(
-                    &mut initial,
-                    &mut capture_keys,
-                    matched,
-                    self.limits,
-                    &self.request,
-                    self.json_budget.as_mut(),
-                )?;
-                self.apply_member_actions(unit.member_start, &mut initial, &mut setvar_actions)?;
+        // Stage the unit in place instead of copying the TX map: the base state
+        // moves into `staged` and a placeholder keeping the base retained charge
+        // stands in for it, exactly as the base stayed charged beside the former
+        // per-unit copy. Edits are journaled; a unit that does not commit (no
+        // match or any error) rolls back to the identical base state.
+        let mut staged = std::mem::take(&mut self.tx);
+        self.tx.retained_bytes = staged.retained_bytes;
+        let checkpoint = staged.begin_unit();
+        let mut journal = std::mem::take(&mut self.tx_journal);
+        // A copied chain branch commits as `Some(tx)`; a single-member unit
+        // commits the in-place staged state itself.
+        let result = if unit.member_count == 1 {
+            self.stage_single_member_unit(unit, &mut staged, &mut journal, matches)
+                .map(|capture_keys| Some((None, capture_keys)))
+        } else {
+            self.stage_chain_unit(unit_id, unit, end, &staged, matches)
+                .map(|winner| winner.map(|branch| (Some(branch.tx), branch.capture_keys)))
+        };
+        let committed = match result {
+            Ok(Some((branch, capture_keys))) => {
+                self.tx = branch.unwrap_or(staged);
+                self.capture_keys = capture_keys;
+                Ok(true)
             }
-            return self.commit_unit_match(unit, initial, capture_keys);
+            Ok(None) => {
+                staged.rollback_unit(&mut journal, checkpoint);
+                self.tx = staged;
+                Ok(false)
+            }
+            Err(error) => {
+                staged.rollback_unit(&mut journal, checkpoint);
+                self.tx = staged;
+                Err(error)
+            }
+        };
+        journal.clear();
+        self.tx_journal = journal;
+        committed
+    }
+
+    /// Apply every first-member match and its actions to the in-place staged
+    /// unit, journaling each edit, then admit the commit.
+    fn stage_single_member_unit(
+        &mut self,
+        unit: super::super::CompiledRuleUnit,
+        staged: &mut TxState,
+        journal: &mut TxJournal,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<Vec<MatchValue>, RuntimeError> {
+        let mut capture_keys = try_clone_keys(&self.capture_keys)?;
+        let mut setvar_actions = 0_usize;
+        for matched in matches.drain(..) {
+            apply_member_match(
+                staged,
+                &mut capture_keys,
+                matched,
+                self.limits,
+                &self.request,
+                self.json_budget.as_mut(),
+                Some(&mut *journal),
+            )?;
+            self.apply_member_actions(unit.member_start, staged, &mut setvar_actions, Some(&mut *journal))?;
         }
+        self.admit_unit_commit(unit, staged)?;
+        Ok(capture_keys)
+    }
+
+    /// Evaluate a chain over a frontier of branch copies. The in-place staged
+    /// unit is the single seed branch: it is only read and copied into
+    /// children, never edited, and it is charged as one frontier branch.
+    fn stage_chain_unit(
+        &mut self,
+        unit_id: usize,
+        unit: super::super::CompiledRuleUnit,
+        end: usize,
+        staged: &TxState,
+        matches: &mut Vec<MemberMatch>,
+    ) -> Result<Option<ChainBranch>, RuntimeError> {
+        let seed_bytes = size_of::<ChainBranch>()
+            .checked_add(staged_branch_bytes(staged, &self.capture_keys)?)
+            .ok_or(RuntimeError::Arithmetic)?;
         let mut frontier = Vec::new();
-        frontier.try_reserve_exact(1).map_err(|_| RuntimeError::Allocation)?;
-        frontier.push(ChainBranch {
-            tx: initial,
-            capture_keys: try_clone_keys(&self.capture_keys)?,
-            setvar_actions: 0,
-        });
-        for member_id in unit.member_start..end {
+        let mut next_bytes = 0_usize;
+        for matched in matches.drain(..) {
+            let capture_keys = try_clone_keys(&self.capture_keys)?;
+            let candidate = self.chain_child(unit.member_start, staged.try_clone()?, capture_keys, 0, matched)?;
+            self.admit_chain_child(1, seed_bytes, &mut frontier, &mut next_bytes, candidate)?;
+        }
+        if frontier.is_empty() {
+            return Ok(None);
+        }
+        for member_id in unit.member_start + 1..end {
             let final_member = member_id + 1 == end;
             let current_count = frontier.len();
             let current_bytes = chain_branches_bytes(&frontier)?;
@@ -77,59 +144,91 @@ impl<'generation> Transaction<'generation> {
                             self.limits,
                             &self.request,
                             self.json_budget.as_mut(),
+                            None,
                         )?;
-                        self.apply_member_actions(member_id, &mut branch.tx, &mut branch.setvar_actions)?;
-                        return self.commit_unit_match(unit, branch.tx, branch.capture_keys);
+                        self.apply_member_actions(member_id, &mut branch.tx, &mut branch.setvar_actions, None)?;
+                        self.admit_unit_commit(unit, &branch.tx)?;
+                        return Ok(Some(branch));
                     }
                 }
-                return Ok(false);
+                return Ok(None);
             }
             let mut next = Vec::new();
             let mut next_bytes = 0_usize;
             for branch in &frontier {
-                if member_id != unit.member_start {
-                    self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, final_member, matches)?;
-                }
+                self.evaluate_member_matches_into(unit_id, member_id, &branch.tx, final_member, matches)?;
                 for matched in matches.drain(..) {
-                    let mut candidate = ChainBranch {
-                        tx: branch.tx.try_clone()?,
-                        capture_keys: try_clone_keys(&branch.capture_keys)?,
-                        setvar_actions: branch.setvar_actions,
-                    };
-                    apply_member_match(
-                        &mut candidate.tx,
-                        &mut candidate.capture_keys,
+                    let candidate = self.chain_child(
+                        member_id,
+                        branch.tx.try_clone()?,
+                        try_clone_keys(&branch.capture_keys)?,
+                        branch.setvar_actions,
                         matched,
-                        self.limits,
-                        &self.request,
-                        self.json_budget.as_mut(),
                     )?;
-                    self.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions)?;
-                    if current_count.saturating_add(next.len()) >= self.limits.max_operator_evaluations {
-                        return Err(RuntimeError::OperatorEvaluationLimit {
-                            limit: self.limits.max_operator_evaluations,
-                        });
-                    }
-                    next_bytes = next_bytes
-                        .checked_add(chain_branch_bytes(&candidate)?)
-                        .ok_or(RuntimeError::Arithmetic)?;
-                    if current_bytes.checked_add(next_bytes).ok_or(RuntimeError::Arithmetic)?
-                        > self.limits.max_operator_work_bytes
-                    {
-                        return Err(RuntimeError::OperatorWorkLimit {
-                            limit: self.limits.max_operator_work_bytes,
-                        });
-                    }
-                    next.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
-                    next.push(candidate);
+                    self.admit_chain_child(current_count, current_bytes, &mut next, &mut next_bytes, candidate)?;
                 }
             }
             if next.is_empty() {
-                return Ok(false);
+                return Ok(None);
             }
             frontier = next;
         }
-        Ok(false)
+        Ok(None)
+    }
+
+    /// Apply one member match and its actions to a copied frontier child.
+    fn chain_child(
+        &mut self,
+        member_id: usize,
+        tx: TxState,
+        capture_keys: Vec<MatchValue>,
+        setvar_actions: usize,
+        matched: MemberMatch,
+    ) -> Result<ChainBranch, RuntimeError> {
+        let mut candidate = ChainBranch {
+            tx,
+            capture_keys,
+            setvar_actions,
+        };
+        apply_member_match(
+            &mut candidate.tx,
+            &mut candidate.capture_keys,
+            matched,
+            self.limits,
+            &self.request,
+            self.json_budget.as_mut(),
+            None,
+        )?;
+        self.apply_member_actions(member_id, &mut candidate.tx, &mut candidate.setvar_actions, None)?;
+        Ok(candidate)
+    }
+
+    /// Bound the next frontier by live branch count and branch bytes.
+    fn admit_chain_child(
+        &self,
+        current_count: usize,
+        current_bytes: usize,
+        next: &mut Vec<ChainBranch>,
+        next_bytes: &mut usize,
+        candidate: ChainBranch,
+    ) -> Result<(), RuntimeError> {
+        if current_count.saturating_add(next.len()) >= self.limits.max_operator_evaluations {
+            return Err(RuntimeError::OperatorEvaluationLimit {
+                limit: self.limits.max_operator_evaluations,
+            });
+        }
+        *next_bytes = next_bytes
+            .checked_add(chain_branch_bytes(&candidate)?)
+            .ok_or(RuntimeError::Arithmetic)?;
+        if current_bytes.checked_add(*next_bytes).ok_or(RuntimeError::Arithmetic)? > self.limits.max_operator_work_bytes
+        {
+            return Err(RuntimeError::OperatorWorkLimit {
+                limit: self.limits.max_operator_work_bytes,
+            });
+        }
+        next.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
+        next.push(candidate);
+        Ok(())
     }
 
     /// Loan persistent TX storage while hiding prior-unit match observers.
@@ -165,13 +264,14 @@ impl<'generation> Transaction<'generation> {
         result
     }
 
-    pub(super) fn commit_unit_match(
+    /// Validate runtime-expanded actions and the retained charge of the state
+    /// about to replace the base TX. Nothing is published on error.
+    pub(super) fn admit_unit_commit(
         &mut self,
         unit: super::super::CompiledRuleUnit,
-        staged: TxState,
-        capture_keys: Vec<MatchValue>,
-    ) -> Result<bool, RuntimeError> {
-        self.validate_runtime_actions(unit, &staged)?;
+        staged: &TxState,
+    ) -> Result<(), RuntimeError> {
+        self.validate_runtime_actions(unit, staged)?;
         let total_retained = self
             .request
             .retained_bytes
@@ -184,9 +284,7 @@ impl<'generation> Transaction<'generation> {
                 limit: self.limits.max_retained_bytes,
             });
         }
-        self.tx = staged;
-        self.capture_keys = capture_keys;
-        Ok(true)
+        Ok(())
     }
 
     fn boolean_member_matches_into(
@@ -745,6 +843,7 @@ impl<'generation> Transaction<'generation> {
         member_id: usize,
         staged: &mut TxState,
         setvar_actions: &mut usize,
+        mut journal: Option<&mut TxJournal>,
     ) -> Result<(), RuntimeError> {
         let member = *self
             .generation
@@ -767,7 +866,7 @@ impl<'generation> Transaction<'generation> {
                 .get(action_index)
                 .ok_or(RuntimeError::GenerationInvariant)?;
             if let super::super::CompiledActionOperand::Ctl(ctl) = action.operand {
-                self.apply_ctl(ctl, staged)?;
+                self.apply_ctl(ctl, staged, journal.as_deref_mut())?;
                 continue;
             }
             let super::super::CompiledActionOperand::SetVar(setvar_id) = action.operand else {
@@ -808,7 +907,7 @@ impl<'generation> Transaction<'generation> {
             };
             match setvar.operation {
                 super::super::SetVarOperation::Delete => {
-                    staged.delete(&key, &self.request, self.json_budget.as_mut())?
+                    staged.delete(&key, &self.request, self.json_budget.as_mut(), journal.as_deref_mut())?
                 }
                 super::super::SetVarOperation::Assign => {
                     let value = setvar_value(
@@ -825,6 +924,7 @@ impl<'generation> Transaction<'generation> {
                         self.limits,
                         &self.request,
                         self.json_budget.as_mut(),
+                        journal.as_deref_mut(),
                     )?;
                 }
                 super::super::SetVarOperation::Add | super::super::SetVarOperation::Subtract => {
@@ -859,6 +959,7 @@ impl<'generation> Transaction<'generation> {
                         self.limits,
                         &self.request,
                         self.json_budget.as_mut(),
+                        journal.as_deref_mut(),
                     )?;
                 }
             }
@@ -866,7 +967,12 @@ impl<'generation> Transaction<'generation> {
         Ok(())
     }
 
-    fn apply_ctl(&mut self, ctl: super::super::CompiledCtl, staged: &mut TxState) -> Result<(), RuntimeError> {
+    fn apply_ctl(
+        &mut self,
+        ctl: super::super::CompiledCtl,
+        staged: &mut TxState,
+        mut journal: Option<&mut TxJournal>,
+    ) -> Result<(), RuntimeError> {
         charge_ctl_work(&mut self.ctl_work_bytes, 1, self.limits.max_operator_work_bytes)?;
         match ctl {
             super::super::CompiledCtl::ForceRequestBodyVariable(value) => {
@@ -894,7 +1000,7 @@ impl<'generation> Transaction<'generation> {
                         staged.removed_units.len().saturating_add(1),
                         self.limits.max_operator_work_bytes,
                     )?;
-                    staged.add_removed_unit(entry.unit, self.limits)?;
+                    staged.add_removed_unit(entry.unit, self.limits, journal.as_deref_mut())?;
                 }
             }
             super::super::CompiledCtl::RuleRemoveTargetByTag {
@@ -918,6 +1024,7 @@ impl<'generation> Transaction<'generation> {
                             selector,
                         },
                         self.limits,
+                        journal.as_deref_mut(),
                     )?;
                 }
             }
