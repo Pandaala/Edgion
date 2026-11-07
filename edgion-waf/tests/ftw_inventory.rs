@@ -7,7 +7,7 @@ use edgion_waf::seclang::{
     compile_executable_profile_with_includes, BodyProcessorSelection, CompiledGeneration, EvaluationMode,
     FrontendLimits, IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, Phase, PhaseDefaults, PhaseOutcome,
     PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink, PhraseAssetSource, RequestBody, RequestHead,
-    RequestHeader, ResponseHead, ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits,
+    RequestHeader, ResponseHead, ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuntimeError, RuntimeLimits,
     SemanticValidationContext, Transaction,
 };
 use serde::Deserialize;
@@ -572,12 +572,13 @@ fn observe(
         b"edgion-ftw",
         &headers,
     );
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         generation,
         request,
         RuntimeLimits::default(),
         evaluation_mode,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )?;
     let mut logged_rule_ids = Vec::new();
     append_logged(&mut logged_rule_ids, &transaction.execute_request_headers()?);

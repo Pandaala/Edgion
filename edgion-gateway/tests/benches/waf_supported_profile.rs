@@ -206,12 +206,13 @@ fn transaction(g: &Arc<CompiledGeneration>, f: &Fixture, mode: RuleEngineMode) -
         b"profile.example.com",
         &headers,
     );
-    Transaction::new_shared_with_modes(
+    Transaction::new_shared_with_policy(
         g.clone(),
         head,
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         mode,
+        RuleCheckPolicy::default(),
     )
     .unwrap()
 }

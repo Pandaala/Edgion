@@ -10,7 +10,7 @@ use bytes::Bytes;
 use edgion_resources::resources::edgion_config_data::WafRuleSelection;
 use edgion_waf::seclang::{
     BodyProcessorSelection, CompiledGeneration, EvaluationMode, RequestBody, RequestHead, RequestHeader,
-    RuleEngineMode, RuntimeLimits, Transaction,
+    RuleCheckPolicy, RuleEngineMode, RuntimeLimits, Transaction,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -104,12 +104,13 @@ fn raw_magic(generation: &CompiledGeneration) -> bool {
         b"selection",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(
+    let mut tx = Transaction::new_with_policy(
         generation,
         head,
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     tx.execute_request_headers().unwrap();

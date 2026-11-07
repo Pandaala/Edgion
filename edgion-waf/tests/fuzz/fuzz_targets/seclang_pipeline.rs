@@ -3,7 +3,8 @@
 use edgion_waf::seclang::{
     compile_with_includes, BodyProcessorSelection, EvaluationMode, FrontendLimits, IncludeFailure, IncludeRequest,
     IncludeSink, IncludeSource, Phase, PhaseDefaults, RequestBody, RequestHead, RequestHeader, ResponseHead,
-    ResponseHeader, ResponseWindow, RuleEngineMode, RuntimeLimits, SemanticValidationContext, Transaction,
+    ResponseHeader, ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuntimeLimits, SemanticValidationContext,
+    Transaction,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -57,19 +58,21 @@ fuzz_target!(|data: &[u8]| {
         &headers,
     );
     let limits = RuntimeLimits::default();
-    let accelerated = Transaction::new_with_modes(
+    let accelerated = Transaction::new_with_policy(
         &generation,
         request,
         limits,
         EvaluationMode::Accelerated,
         RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     );
-    let reference = Transaction::new_with_modes(
+    let reference = Transaction::new_with_policy(
         &generation,
         request,
         limits,
         EvaluationMode::Reference,
         RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     );
     let (mut accelerated, mut reference) = match (accelerated, reference) {
         (Ok(accelerated), Ok(reference)) => (accelerated, reference),

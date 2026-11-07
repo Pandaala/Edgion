@@ -3035,13 +3035,15 @@ async fn waf_capability_preserves_election_stage_and_freeze_before_native_reject
 #[tokio::test]
 async fn waf_capability_rejected_install_keeps_resident_transaction() {
     use crate::ctx::{WafLogMode, WafLogSource, WafSelection};
-    use edgion_waf::seclang::{EvaluationMode, RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+    use edgion_waf::seclang::{
+        EvaluationMode, RequestHead, RuleCheckPolicy, RuleEngineMode, RuntimeLimits, Transaction,
+    };
 
     let transaction = |status| {
         let config =
             crate::plugins::http::waf::fixture::config(&format!("SecAction \"id:1,phase:1,deny,status:{status}\"\n"));
         let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
-        Transaction::new_shared_with_modes(
+        Transaction::new_shared_with_policy(
             generation,
             RequestHead::new(
                 b"GET / HTTP/1.1",
@@ -3056,6 +3058,7 @@ async fn waf_capability_rejected_install_keeps_resident_transaction() {
             RuntimeLimits::default(),
             EvaluationMode::Accelerated,
             RuleEngineMode::On,
+            RuleCheckPolicy::default(),
         )
         .expect("test transaction is valid")
     };

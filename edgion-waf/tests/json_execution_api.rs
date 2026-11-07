@@ -273,12 +273,13 @@ fn scoped_detection_only_syntax_stop_keeps_complete_length_and_raw_fallback() {
         b"json-api",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(
+    let mut tx = Transaction::new_with_policy(
         &generation,
         head,
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     tx.execute_request_headers().unwrap();

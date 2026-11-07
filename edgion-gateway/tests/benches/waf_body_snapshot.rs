@@ -304,12 +304,13 @@ fn transaction<'g>(
         b"snapshot-benchmark",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(
+    let mut tx = Transaction::new_with_policy(
         generation,
         head,
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         mode,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     tx.execute_request_headers().unwrap();

@@ -1,6 +1,6 @@
 use super::*;
 use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
-use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+use edgion_waf::seclang::{RequestHead, RuleCheckPolicy, RuleEngineMode, RuntimeLimits, Transaction};
 
 fn request_headers_outcome(rules: &str, uri: &'static [u8]) -> edgion_waf::seclang::PhaseOutcome {
     let config = WafConfig {
@@ -18,12 +18,13 @@ fn request_headers_outcome(rules: &str, uri: &'static [u8]) -> edgion_waf::secla
         b"request-1",
         &[],
     );
-    let mut transaction = Transaction::new_shared_with_modes(
+    let mut transaction = Transaction::new_shared_with_policy(
         generation,
         request,
         RuntimeLimits::default(),
         edgion_waf::seclang::EvaluationMode::Accelerated,
         RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap()

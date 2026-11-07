@@ -1456,12 +1456,13 @@ fn detection_only_reports_deny_rules_without_short_circuiting_the_phase() {
         "SecRule REQUEST_URI \"@contains private\" \"id:2,phase:1,deny\"\n",
         "SecRule REQUEST_URI \"@contains private\" \"id:3,phase:1,pass\"\n",
     ));
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         request(&[], b"/private"),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
 
@@ -1981,7 +1982,7 @@ fn phrase_capture_spans_preserve_selection_negation_and_limits() {
             for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
                 for limit in [required.saturating_sub(1), required] {
                     let headers = [RequestHeader::new(b"X-Probe", input.as_bytes())];
-                    let mut tx = Transaction::new_with_modes(
+                    let mut tx = Transaction::new_with_policy(
                         &g,
                         request(&headers, b"/"),
                         RuntimeLimits {
@@ -1990,6 +1991,7 @@ fn phrase_capture_spans_preserve_selection_negation_and_limits() {
                         },
                         mode,
                         RuleEngineMode::On,
+                        RuleCheckPolicy::default(),
                     )
                     .unwrap();
                     let outcome = tx.execute_request_headers();
@@ -2021,12 +2023,13 @@ fn reused_phrase_capture_is_discarded_with_failed_chain() {
     ));
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
         let headers = [RequestHeader::new(b"X-Probe", b"ABC")];
-        let mut tx = Transaction::new_with_modes(
+        let mut tx = Transaction::new_with_policy(
             &g,
             request(&headers, b"/"),
             RuntimeLimits::default(),
             mode,
             RuleEngineMode::On,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         assert!(tx.execute_request_headers().unwrap().findings().is_empty());
@@ -2444,12 +2447,13 @@ fn shared_selector_programs_preserve_include_exclude_count_and_tx_case() {
         (b"/?name=value".as_slice(), &[1, 3, 5][..]),
     ] {
         for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
-            let mut tx = Transaction::new_with_modes(
+            let mut tx = Transaction::new_with_policy(
                 &generation,
                 request(&[], uri),
                 RuntimeLimits::default(),
                 mode,
                 RuleEngineMode::On,
+                RuleCheckPolicy::default(),
             )
             .unwrap();
             tx.execute_request_headers().unwrap();
@@ -2485,12 +2489,13 @@ fn duplicate_boolean_regexes_keep_ordered_effects_negation_and_chain_results() {
         (b"/?x=b".as_slice(), &[3, 4][..], false),
     ] {
         for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
-            let mut tx = Transaction::new_with_modes(
+            let mut tx = Transaction::new_with_policy(
                 &generation,
                 request(&[], uri),
                 RuntimeLimits::default(),
                 mode,
                 RuleEngineMode::On,
+                RuleCheckPolicy::default(),
             )
             .unwrap();
             tx.execute_request_headers().unwrap();
@@ -2772,12 +2777,13 @@ fn prefix_mixes_header_and_body_rules_in_schedule_order() {
         assert!(generation.requires_complete_request_body());
         assert!(generation.request_body_execution_summary().requires_request_body());
         for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-            let mut transaction = Transaction::new_with_modes(
+            let mut transaction = Transaction::new_with_policy(
                 &generation,
                 request(&headers, b"/"),
                 RuntimeLimits::default(),
                 EvaluationMode::Accelerated,
                 mode,
+                RuleCheckPolicy::default(),
             )
             .unwrap();
             transaction.execute_request_headers().unwrap();
@@ -2865,12 +2871,13 @@ fn prefix_short_circuits_deny_before_unreachable_work() {
     );
 
     for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-        let mut transaction = Transaction::new_with_modes(
+        let mut transaction = Transaction::new_with_policy(
             &generation,
             request(&[], b"/"),
             RuntimeLimits::default(),
             EvaluationMode::Accelerated,
             mode,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         transaction.execute_request_headers().unwrap();
@@ -2905,12 +2912,13 @@ fn prefix_borrowed_input_preserves_output_limit_and_detection_findings() {
             kind: RuntimeTransformError::OutputLimit
         })
     ));
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         request(&[], b"/"),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap();
@@ -2989,12 +2997,13 @@ fn prefix_completion_preserves_body_absence_and_advances_phase_once() {
 #[test]
 fn prefix_detection_only_uses_pm_transform_and_short_body_completion() {
     let generation = generation("SecRule REQUEST_BODY \"@pm forbidden blocked\" \"id:1,phase:2,deny,t:lowercase\"\n");
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         request(&[], b"/"),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap();
@@ -3072,12 +3081,13 @@ fn raw_phrase_body_stream_is_chunk_exact_and_constant_memory() {
         "SecRule REQUEST_BODY \"!@pm present\" \"id:71,phase:2,pass\"\n",
         "SecRule REQUEST_METHOD \"@streq GET\" \"id:72,phase:2,pass\"\n",
     ));
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         request(&[], b"/"),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap();
@@ -3197,12 +3207,13 @@ fn multipart_boundary_search_preserves_phase_two_decisions_in_both_modes() {
     )];
     let body = b"--edge\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n--edge--\r\n";
     for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-        let mut transaction = Transaction::new_with_modes(
+        let mut transaction = Transaction::new_with_policy(
             &generation,
             request(&headers, b"/"),
             RuntimeLimits::default(),
             EvaluationMode::Accelerated,
             mode,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         transaction.execute_request_headers().unwrap();
@@ -3291,12 +3302,13 @@ fn detection_only_retains_malformed_body_signal_and_executes_raw_phase_two_rules
         "SecRule REQBODY_PROCESSOR \"@streq JSON\" \"id:1,phase:2,pass,chain\"\n",
         "SecRule REQUEST_BODY \"@contains private\"\n",
     ));
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         request(&[], b"/"),
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         RuleEngineMode::DetectionOnly,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap();
@@ -3473,18 +3485,22 @@ fn accelerated_and_reference_transactions_are_outcome_equivalent() {
             _ => {}
         }
         let headers = [RequestHeader::new(b"X-Probe", &value)];
-        let mut accelerated = Transaction::new_with_evaluation(
+        let mut accelerated = Transaction::new_with_policy(
             &generation,
             request(&headers, b"/"),
             RuntimeLimits::default(),
             EvaluationMode::Accelerated,
+            RuleEngineMode::On,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
-        let mut reference = Transaction::new_with_evaluation(
+        let mut reference = Transaction::new_with_policy(
             &generation,
             request(&headers, b"/"),
             RuntimeLimits::default(),
             EvaluationMode::Reference,
+            RuleEngineMode::On,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         let accelerated_outcome = accelerated.execute_request_headers().unwrap();
@@ -4080,7 +4096,7 @@ fn structured_reference_enforced_deny_hides_later_error_but_detection_only_does_
     ));
     let body = format!(r#"{{"z":"{}","a":"hit"}}"#, "x".repeat(512));
     for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
-        let mut transaction = Transaction::new_with_modes(
+        let mut transaction = Transaction::new_with_policy(
             &generation,
             request(&[], b"/"),
             RuntimeLimits {
@@ -4089,6 +4105,7 @@ fn structured_reference_enforced_deny_hides_later_error_but_detection_only_does_
             },
             EvaluationMode::Accelerated,
             mode,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         transaction.execute_request_headers().unwrap();
@@ -4398,11 +4415,13 @@ fn selection_cursor_preserves_target_multiplicity_exclusions_and_count() {
         "SecRule &ARGS \"@eq 3\" \"id:2,phase:2,pass\"\n",
     ));
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
-        let mut transaction = Transaction::new_with_evaluation(
+        let mut transaction = Transaction::new_with_policy(
             &generation,
             request(&[], b"/?a=one&b=two&c=three"),
             RuntimeLimits::default(),
             mode,
+            RuleEngineMode::On,
+            RuleCheckPolicy::default(),
         )
         .unwrap();
         let matches = transaction
@@ -5312,8 +5331,15 @@ fn ordinary_current_input_reuses_group_bits_and_preserves_ordered_effects() {
         let mut outcomes = Vec::new();
         for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
             let scope = measurements::start();
-            let mut tx =
-                Transaction::new_with_evaluation(&g, request(&[], uri), RuntimeLimits::default(), mode).unwrap();
+            let mut tx = Transaction::new_with_policy(
+                &g,
+                request(&[], uri),
+                RuntimeLimits::default(),
+                mode,
+                RuleEngineMode::On,
+                RuleCheckPolicy::default(),
+            )
+            .unwrap();
             let outcome = tx.execute_request_headers().unwrap();
             assert_eq!(
                 scope.counts().get(Event::FullScans),
@@ -5337,7 +5363,14 @@ fn query_alias_transaction<'g>(
     limits: RuntimeLimits,
     mode: EvaluationMode,
 ) -> Result<Transaction<'g>, RuntimeError> {
-    let mut tx = Transaction::new_with_evaluation(generation, head, limits, mode)?;
+    let mut tx = Transaction::new_with_policy(
+        generation,
+        head,
+        limits,
+        mode,
+        RuleEngineMode::On,
+        RuleCheckPolicy::default(),
+    )?;
     tx.execute_request_headers()?;
     tx.publish_request_body(RequestBody::new(
         bytes::Bytes::new(),
@@ -5613,8 +5646,15 @@ fn ordinary_current_input_switches_fields_profiles_and_uncacheable_operands() {
     ];
     let mut outcomes = Vec::new();
     for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
-        let mut tx =
-            Transaction::new_with_evaluation(&g, request(&headers, b"/"), RuntimeLimits::default(), mode).unwrap();
+        let mut tx = Transaction::new_with_policy(
+            &g,
+            request(&headers, b"/"),
+            RuntimeLimits::default(),
+            mode,
+            RuleEngineMode::On,
+            RuleCheckPolicy::default(),
+        )
+        .unwrap();
         outcomes.push((
             tx.execute_request_headers().unwrap(),
             tx.tx_value(b"saved").map(Vec::from),

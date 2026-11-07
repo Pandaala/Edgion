@@ -53,12 +53,13 @@ fn transaction(rules: &str, mode: RuleEngineMode) -> Transaction<'static> {
         b"capture-test",
         &headers,
     );
-    let mut tx = Transaction::new_shared_with_modes(
+    let mut tx = Transaction::new_shared_with_policy(
         Arc::new(generation),
         head,
         RuntimeLimits::default(),
         edgion_waf::seclang::EvaluationMode::Accelerated,
         mode,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     tx.execute_request_headers().unwrap();

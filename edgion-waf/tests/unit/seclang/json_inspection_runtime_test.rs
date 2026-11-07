@@ -298,11 +298,13 @@ fn no_hit_summary_transform_errors_and_reference_mode_keep_cursor() {
     );
     assert_no_hit_cursor_parity(&mut fast, &mut cursor);
     assert!(fast.selected_scratch.capacity() > 0);
-    let mut reference = Transaction::new_with_evaluation(
+    let mut reference = Transaction::new_with_policy(
         &generation,
         head(b"/"),
         RuntimeLimits::default(),
         EvaluationMode::Reference,
+        RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     reference.execute_request_headers().unwrap();
@@ -822,11 +824,13 @@ fn query_no_hit_tail_replacement_malformed_reference_and_exclusions_keep_semanti
     assert_eq!(fast.selected_scratch.capacity(), 0);
     let generation = compile("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"");
     let json = query_tail_json(16);
-    let mut reference = Transaction::new_with_evaluation(
+    let mut reference = Transaction::new_with_policy(
         &generation,
         head(b"/?q=hit"),
         RuntimeLimits::default(),
         EvaluationMode::Reference,
+        RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     reference.execute_request_headers().unwrap();
@@ -2143,9 +2147,15 @@ fn scheduler_modes_findings_skips_and_deferred_failures_match_full_form_outcomes
                     ..RuntimeLimits::default()
                 };
                 let run = |processor, data| {
-                    let mut tx =
-                        Transaction::new_with_modes(&generation, head(b"/"), limits, EvaluationMode::Accelerated, mode)
-                            .unwrap();
+                    let mut tx = Transaction::new_with_policy(
+                        &generation,
+                        head(b"/"),
+                        limits,
+                        EvaluationMode::Accelerated,
+                        mode,
+                        RuleCheckPolicy::default(),
+                    )
+                    .unwrap();
                     tx.execute_request_headers().unwrap();
                     tx.publish_request_body(RequestBody::new(Bytes::from_static(data), processor))
                         .unwrap();
@@ -3242,8 +3252,15 @@ fn supported_oracle_transaction<'g>(
         b"profile.example.com",
         &headers,
     );
-    let mut tx =
-        Transaction::new_with_modes(g, head, RuntimeLimits::default(), EvaluationMode::Accelerated, mode).unwrap();
+    let mut tx = Transaction::new_with_policy(
+        g,
+        head,
+        RuntimeLimits::default(),
+        EvaluationMode::Accelerated,
+        mode,
+        RuleCheckPolicy::default(),
+    )
+    .unwrap();
     let outcome = (|| {
         tx.execute_request_headers()?;
         tx.tx.force_unpruned_inspection = force;

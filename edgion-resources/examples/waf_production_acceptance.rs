@@ -7,7 +7,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedWafBund
 use edgion_resources::resources::edgion_plugins::plugin_configs::WafConfig;
 use edgion_waf::seclang::{
     BodyProcessorSelection, EvaluationMode, PhaseOutcome, RequestBody, RequestHead, RequestHeader, ResponseHead,
-    ResponseWindow, RuleEngineMode, RuntimeLimits, Transaction,
+    ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuntimeLimits, Transaction,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -140,12 +140,13 @@ fn observe(config: &WafConfig, case: &Case) -> Result<(u16, Option<u64>), String
             RuleEngineMode::DetectionOnly
         }
     };
-    let mut transaction = Transaction::new_with_modes(
+    let mut transaction = Transaction::new_with_policy(
         &generation,
         head,
         RuntimeLimits::default(),
         EvaluationMode::Accelerated,
         mode,
+        RuleCheckPolicy::default(),
     )
     .map_err(|error| error.to_string())?;
     let mut observed_rule = None;

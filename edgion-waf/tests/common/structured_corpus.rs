@@ -6,8 +6,8 @@ use edgion_waf::seclang::{
     compile_with_includes, BodyError, BodyProcessorSelection, CompiledGeneration, EvaluationMode, FrontendLimits,
     IncludeFailure, IncludeRequest, IncludeSink, IncludeSource, JsonInspectionLimits, Phase, PhaseDefaults,
     PhaseOutcome, PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink, PhraseAssetSource, RequestBody, RequestHead,
-    RequestHeader, RuleEngineMode, RuntimeError, RuntimeLimits, SemanticValidationContext, Transaction,
-    XmlInspectionLimits,
+    RequestHeader, RuleCheckPolicy, RuleEngineMode, RuntimeError, RuntimeLimits, SemanticValidationContext,
+    Transaction, XmlInspectionLimits,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -226,7 +226,14 @@ pub fn observe(
         b"structured.test",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(generation, head, RuntimeLimits::default(), evaluation, mode)?;
+    let mut tx = Transaction::new_with_policy(
+        generation,
+        head,
+        RuntimeLimits::default(),
+        evaluation,
+        mode,
+        RuleCheckPolicy::default(),
+    )?;
     tx.execute_request_headers()?;
     let processor = if xml {
         BodyProcessorSelection::Xml

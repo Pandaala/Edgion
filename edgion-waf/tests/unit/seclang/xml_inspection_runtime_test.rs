@@ -41,7 +41,15 @@ fn transaction(g: &CompiledGeneration, mode: RuleEngineMode, limits: RuntimeLimi
         b"xml-runtime",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(g, head, limits, EvaluationMode::Accelerated, mode).unwrap();
+    let mut tx = Transaction::new_with_policy(
+        g,
+        head,
+        limits,
+        EvaluationMode::Accelerated,
+        mode,
+        RuleCheckPolicy::default(),
+    )
+    .unwrap();
     tx.execute_request_headers().unwrap();
     tx
 }

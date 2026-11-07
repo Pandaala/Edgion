@@ -21,8 +21,15 @@ fn chunked(g: &CompiledGeneration, body: &Bytes, mode: RuleEngineMode, chunk: us
         b"benchmark",
         &headers,
     );
-    let mut tx =
-        Transaction::new_with_modes(g, head, RuntimeLimits::default(), EvaluationMode::Accelerated, mode).unwrap();
+    let mut tx = Transaction::new_with_policy(
+        g,
+        head,
+        RuntimeLimits::default(),
+        EvaluationMode::Accelerated,
+        mode,
+        RuleCheckPolicy::default(),
+    )
+    .unwrap();
     tx.execute_request_headers().unwrap();
     let mut session = tx.start_xml_inspection(XmlInspectionLimits::default(), None).unwrap();
     for data in body.chunks(chunk) {

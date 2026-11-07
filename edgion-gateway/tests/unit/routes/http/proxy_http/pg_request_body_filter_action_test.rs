@@ -2,7 +2,7 @@ use super::*;
 use crate::observe::RequestDiagnostic;
 use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
 use edgion_resources::EdgionErrorCode;
-use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+use edgion_waf::seclang::{RequestHead, RuleCheckPolicy, RuleEngineMode, RuntimeLimits, Transaction};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -157,12 +157,13 @@ fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
         b"request-1",
         &[],
     );
-    let mut transaction = Transaction::new_shared_with_modes(
+    let mut transaction = Transaction::new_shared_with_policy(
         generation,
         request,
         RuntimeLimits::default(),
         edgion_waf::seclang::EvaluationMode::Accelerated,
         RuleEngineMode::On,
+        RuleCheckPolicy::default(),
     )
     .unwrap();
     transaction.execute_request_headers().unwrap();

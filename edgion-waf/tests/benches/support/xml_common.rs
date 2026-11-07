@@ -74,7 +74,15 @@ pub(crate) fn execute(
         b"benchmark",
         &headers,
     );
-    let mut tx = Transaction::new_with_modes(g, head, RuntimeLimits::default(), evaluation, mode).unwrap();
+    let mut tx = Transaction::new_with_policy(
+        g,
+        head,
+        RuntimeLimits::default(),
+        evaluation,
+        mode,
+        RuleCheckPolicy::default(),
+    )
+    .unwrap();
     tx.execute_request_headers().unwrap();
     let outcome = tx
         .publish_request_body(RequestBody::new(body.clone(), BodyProcessorSelection::Auto))

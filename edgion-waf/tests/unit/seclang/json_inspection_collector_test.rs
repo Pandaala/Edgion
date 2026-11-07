@@ -236,7 +236,15 @@ fn current_name_selector_cache_resets_per_field_and_preserves_exclusion_replay()
         let mut outcomes = Vec::new();
         for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
             let runtime = RuntimeLimits::default();
-            let mut tx = Transaction::new_with_evaluation(&g, request(), runtime, mode).unwrap();
+            let mut tx = Transaction::new_with_policy(
+                &g,
+                request(),
+                runtime,
+                mode,
+                RuleEngineMode::On,
+                RuleCheckPolicy::default(),
+            )
+            .unwrap();
             tx.execute_request_headers().unwrap();
             tx.publish_request_body(RequestBody::new(
                 bytes::Bytes::copy_from_slice(input),

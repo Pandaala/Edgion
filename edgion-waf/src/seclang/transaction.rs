@@ -1244,29 +1244,12 @@ impl Transaction<'static> {
         request: RequestHead<'_>,
         limits: RuntimeLimits,
     ) -> Result<Self, RuntimeError> {
-        Self::new_shared_with_modes(
+        Self::new_shared_with_policy(
             generation,
             request,
             limits,
             EvaluationMode::Accelerated,
             RuleEngineMode::On,
-        )
-    }
-
-    /// Create a shared-generation transaction with explicit execution modes.
-    pub fn new_shared_with_modes(
-        generation: Arc<CompiledGeneration>,
-        request: RequestHead<'_>,
-        limits: RuntimeLimits,
-        evaluation_mode: EvaluationMode,
-        rule_engine_mode: RuleEngineMode,
-    ) -> Result<Self, RuntimeError> {
-        Self::new_shared_with_policy(
-            generation,
-            request,
-            limits,
-            evaluation_mode,
-            rule_engine_mode,
             RuleCheckPolicy::default(),
         )
     }
@@ -1297,33 +1280,12 @@ impl<'generation> Transaction<'generation> {
         request: RequestHead<'_>,
         limits: RuntimeLimits,
     ) -> Result<Self, RuntimeError> {
-        Self::new_with_evaluation(generation, request, limits, EvaluationMode::Accelerated)
-    }
-
-    /// Create a transaction with an explicit matcher evaluation path.
-    pub fn new_with_evaluation(
-        generation: &'generation CompiledGeneration,
-        request: RequestHead<'_>,
-        limits: RuntimeLimits,
-        evaluation_mode: EvaluationMode,
-    ) -> Result<Self, RuntimeError> {
-        Self::new_with_modes(generation, request, limits, evaluation_mode, RuleEngineMode::On)
-    }
-
-    /// Create a transaction with explicit matcher and disruptive-action modes.
-    pub fn new_with_modes(
-        generation: &'generation CompiledGeneration,
-        request: RequestHead<'_>,
-        limits: RuntimeLimits,
-        evaluation_mode: EvaluationMode,
-        rule_engine_mode: RuleEngineMode,
-    ) -> Result<Self, RuntimeError> {
         Self::new_with_policy(
             generation,
             request,
             limits,
-            evaluation_mode,
-            rule_engine_mode,
+            EvaluationMode::Accelerated,
+            RuleEngineMode::On,
             RuleCheckPolicy::default(),
         )
     }
