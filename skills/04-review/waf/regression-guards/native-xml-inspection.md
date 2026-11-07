@@ -21,11 +21,10 @@ XPath or schema validation.
 `xml_stream.rs` owns lexical validation, namespace scope and duplicate attributes.
 It borrows complete contiguous attribute values during synchronous callbacks.
 Attribute escapes, normalization and cross-chunk values use reusable 1024-byte
-inline token scratch. Element character data is copied once into a reusable
-`content` buffer (1024 inline bytes) shared by all open elements; each frame
-records the offset of its first significant byte, so publishing an element reads
-`content[first..]` without another copy, and the root close empties the buffer
-while keeping its capacity. Names and the structural arena each have 256 inline bytes. Inline storage
+inline token scratch. Element character data is copied once into one reusable
+`content` buffer (1024 inline bytes) that starts at the root's first significant
+byte; the root close publishes it and empties the buffer while keeping its
+capacity. Names and the structural arena each have 256 inline bytes. Inline storage
 may live inside an async future; it is not necessarily thread-stack memory.
 Fallible growth preserves capacity for reuse and never shrinks on the hot path.
 
@@ -43,16 +42,19 @@ unbound-prefix Syntax before later work: exact-budget and one-less tests disting
 malformed DetectionOnly fallback from a physical fail-close.
 
 Attributes, including namespace declarations, are observed in source order under
-their lexical QName at their start tag. Element text is published per element when
-the element closes (post-order). The value is the element's whole character
-content: literal text, decoded references and CDATA of the element and all its
-descendants in document order, the libxml2 `xmlNodeGetContent` value that
-ModSecurity's `XML:/*` inspects. Comments and PIs are removed and never split the
-value, so `SEL<!---->ECT` is one `SELECT` candidate (finding `waf3-03`, decision
-commit D-3). Outer literal XML whitespace of that content is trimmed; CDATA and
-character-reference whitespace stay significant, and an empty CDATA section still
-makes its element publish an empty value. Elements whose content is empty or only
-literal whitespace publish nothing. Comments, PI and element names are not values.
+their lexical QName at their start tag. Element text is `XML:/*`, which in
+ModSecurity is the XPath `/*`, the root element, so it is published exactly once
+per document, at the root close: the root's whole character content, i.e. literal
+text, decoded references and CDATA of every element in document order (libxml2
+`xmlNodeGetContent`). Comments and PIs are removed and never split the value, so
+`SEL<!---->ECT` is one `SELECT` candidate, and a payload nested at any depth is
+one value, matched and scored once. Non-root elements publish no text value
+(finding `waf3-03`, decision commit D-3 and its root-only follow-up). Outer
+literal XML whitespace of the content is trimmed; CDATA and character-reference
+whitespace stay significant. A root without text, including `<r/>`, publishes one
+empty value, as libxml2 returns an empty string and ModSecurity publishes it, so
+`&XML:/*` is 1 for every accepted document. Comments, PI and element names are
+not values.
 In text, a pending `]` sends the next byte to the byte-wise path so `]]>` stays a
 syntax error.
 CR/CRLF normalization and attribute literal whitespace follow the supported XML
@@ -86,14 +88,15 @@ Source/raw token, names, definitive decoded bytes, events, depth, attributes,
 namespace bindings, active structural bytes, heap capacity and work have independent
 limits. Definitive decoded bytes and known name/structure/growth-copy costs are
 admitted before copying or allocation. Pending outer literal whitespace is still
-raw/work/heap bounded and is charged when it becomes interior. The element
-content buffer retains the open root's character data until the root closes; its
-growth is admitted against `max_retained_bytes` like the token scratch (the
-default 32 MiB exceeds the 16 MiB source cap). Element values repeat their
-descendants' text, so published bytes, value events, work and the logical
-decoded-byte and entry limits scale with nesting depth; the CRS bench
-`post_xml_4k` (depth 4) rose from about 7.6 ms to 18 ms p50 and about 1 MB more
-allocation per request with this projection. Fixed markup
+raw/work/heap bounded and is charged when it becomes interior. The content
+buffer retains the root's character data until the root closes; its growth is
+admitted against `max_retained_bytes` like the token scratch (the default 32 MiB
+exceeds the 16 MiB source cap). Because the whole document text is one value,
+rules see it as a single input: per-value runtime bounds such as the 4 MiB
+`max_transformation_output_bytes` and the 4 MiB injection-detector input cap now
+apply to the document's total text, where the former fragment projection applied
+them to each fragment. `max_value_bytes` bounds request-head values only and does
+not apply here. Fixed markup
 discriminators consume raw/work/heap budget, not lexical/structural name budget.
 Successful growth refreshes actual retained capacity even if a later step fails.
 Spare-capacity token append still admits copy work before pushing each byte;

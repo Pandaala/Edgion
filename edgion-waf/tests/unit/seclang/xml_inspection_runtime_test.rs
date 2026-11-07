@@ -90,7 +90,7 @@ fn source_order_chain_capture_and_qualified_names_replay_after_seal() {
 #[test]
 fn count_dynamic_exclusion_and_controls_apply_at_their_source_position() {
     let g = compile(concat!(
-        "SecAction \"id:1,phase:2,pass,setvar:tx.count=3\"\n",
+        "SecAction \"id:1,phase:2,pass,setvar:tx.count=1\"\n",
         "SecRule &XML:/* \"@eq %{TX.count}\" \"id:2,phase:2,pass,setvar:tx.counted=yes\"\n",
         "SecRule XML:/*|XML://@*|!XML://@* \"@streq attack\" \"id:3,phase:2,pass,setvar:tx.before=yes,tag:check\"\n",
         "SecRule TX:counted \"@streq yes\" \"id:901181,phase:2,pass,ctl:ruleRemoveTargetByTag=check;XML://@*\"\n",
@@ -98,8 +98,8 @@ fn count_dynamic_exclusion_and_controls_apply_at_their_source_position() {
         "SecRule XML:/* \"@streq attack\" \"id:5,phase:2,pass,setvar:tx.literal=yes\"\n"
     ));
     let mut tx = transaction(&g, RuleEngineMode::On, RuntimeLimits::default());
-    // Element values: `x`, `y`, then `r`'s deep content `attacksafe`.
-    publish(&mut tx, b"<r a='attack' b='attack'><x>attack</x><y>safe</y></r>").unwrap();
+    // `XML:/*` is one value: the root's whole text `attack`.
+    publish(&mut tx, b"<r a='attack' b='attack'><x>att</x><!---->ack</r>").unwrap();
     let outcome = tx.execute_request_body().unwrap();
     assert!(outcome.intervention.is_none());
     assert_eq!(tx.tx_value(b"counted"), Some(b"yes".as_slice()));

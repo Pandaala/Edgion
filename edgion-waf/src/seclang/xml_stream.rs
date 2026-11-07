@@ -111,9 +111,6 @@ struct Frame {
     name: Span,
     mark: usize,
     bindings: usize,
-    /// Offset in `content` of this element's first significant byte; `None`
-    /// while its content is empty or only literal whitespace.
-    first: Option<usize>,
 }
 #[derive(Clone, Copy)]
 struct Binding {
@@ -171,13 +168,13 @@ pub struct XmlStream {
     failure: Option<XmlStreamError>,
     complete: bool,
     token: SmallVec<[u8; 1024]>,
-    /// Character data of every open element in document order. Each element
-    /// publishes `content[first..]` (minus pending whitespace) at its close.
+    /// Character data of the root element in document order, starting at its
+    /// first significant byte. The root publishes it once at its close.
     content: SmallVec<[u8; 1024]>,
     /// Trailing literal whitespace in `content`, not yet charged as decoded.
     content_trailing: usize,
-    /// Innermost open frames without significant content yet.
-    unresolved: usize,
+    /// Whether the root element has significant content yet.
+    content_started: bool,
     name: SmallVec<[u8; 256]>,
     arena: SmallVec<[u8; 256]>,
     frames: Vec<Frame>,
@@ -217,7 +214,7 @@ impl XmlStream {
             token: SmallVec::new(),
             content: SmallVec::new(),
             content_trailing: 0,
-            unresolved: 0,
+            content_started: false,
             name: SmallVec::new(),
             arena: SmallVec::new(),
             frames: Vec::new(),
@@ -419,12 +416,11 @@ impl XmlStream {
         self.content.extend_from_slice(bytes);
         self.refresh()
     }
-    /// Literal XML whitespace. It is outer (trimmed) for the innermost
-    /// elements without significant content, so it stays pending and is
-    /// charged only when a later significant byte makes it interior. With no
-    /// significant content in any open element it can never be published.
+    /// Literal XML whitespace. Before the root's first significant byte it is
+    /// outer and dropped; afterwards it stays pending and is charged only when
+    /// a later significant byte makes it interior.
     fn content_space(&mut self, bytes: &[u8]) -> Result<(), XmlStreamError> {
-        if bytes.is_empty() || self.unresolved == self.frames.len() {
+        if bytes.is_empty() || !self.content_started {
             return Ok(());
         }
         self.content_push(bytes)?;
@@ -432,24 +428,29 @@ impl XmlStream {
         Ok(())
     }
     /// Significant character data: non-whitespace text, decoded references
-    /// and CDATA (an empty CDATA section still marks its element as having
-    /// content). Comments and PIs never reach the content.
+    /// and CDATA. Comments and PIs never reach the content.
     fn content_significant(&mut self, bytes: &[u8]) -> Result<(), XmlStreamError> {
         self.decoded(add(self.content_trailing, bytes.len())?)?;
         if self.frames.is_empty() {
             return Err(XmlStreamError::Syntax);
         }
         self.content_trailing = 0;
-        if self.unresolved != 0 {
-            self.work(self.unresolved)?;
-            let first = Some(self.content.len());
-            let open = self.frames.len();
-            for frame in &mut self.frames[open - self.unresolved..] {
-                frame.first = first;
-            }
-            self.unresolved = 0;
-        }
+        self.content_started = true;
         self.content_push(bytes)
+    }
+    /// `XML:/*` is the root element (XPath `/*`); its value is the root's whole
+    /// text content (libxml2 `xmlNodeGetContent`), published once per document
+    /// at the root close. An element without text publishes an empty value.
+    fn publish_root(&mut self, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
+        let end = self.content.len() - self.content_trailing;
+        let result = self.prepare_emit(end, None).and_then(|()| {
+            sink.value(None, &self.content[..end])
+                .map_err(|_| XmlStreamError::SinkRejected)
+        });
+        self.content.clear();
+        self.content_trailing = 0;
+        self.content_started = false;
+        result
     }
     /// Literal text between markup: only its outer literal whitespace is
     /// subject to element-edge trimming.
@@ -755,9 +756,6 @@ impl XmlStream {
         self.tag_trailing = 0;
     }
     fn prepare_emit(&mut self, value_len: usize, name: Option<Span>) -> Result<(), XmlStreamError> {
-        if name.is_none() && self.frames.is_empty() {
-            return Err(XmlStreamError::Syntax);
-        }
         self.event()?;
 
         self.summary.value_count = add(self.summary.value_count, 1)?;
@@ -959,7 +957,7 @@ impl XmlStream {
         }
         Ok(())
     }
-    fn close_start(&mut self, empty: bool) -> Result<(), XmlStreamError> {
+    fn close_start(&mut self, empty: bool, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
         self.uri(self.element, false)?;
         self.sort_attrs(false)?;
         for index in 1..self.attrs.len() {
@@ -999,6 +997,10 @@ impl XmlStream {
             self.arena.truncate(self.tag_mark);
             self.bindings.truncate(self.binding_mark);
             self.event()?;
+            // A self-closing root still publishes its (empty) text content.
+            if self.frames.is_empty() {
+                self.publish_root(sink)?;
+            }
         } else {
             // Compact only the bindings introduced by this tag; ordinary attribute
             // identities cease to be live after namespace/duplicate validation.
@@ -1037,9 +1039,7 @@ impl XmlStream {
                 name: self.element,
                 mark: self.tag_mark,
                 bindings: self.binding_mark,
-                first: None,
             });
-            self.unresolved = add(self.unresolved, 1)?;
         }
         self.attrs.clear();
         self.summary.traversal_work = add(self.summary.traversal_work, self.tag_work - self.tag_trailing)?;
@@ -1055,24 +1055,11 @@ impl XmlStream {
         if self.name.as_slice() != self.span(frame.name) {
             return Err(XmlStreamError::Syntax);
         }
-        // The element's value is its whole character content, descendants
-        // included, with comments and PIs removed and outer literal
-        // whitespace trimmed (libxml2 xmlNodeGetContent as used by `XML:/*`).
-        match frame.first {
-            Some(first) => {
-                let end = self.content.len() - self.content_trailing;
-                self.prepare_emit(end - first, None)?;
-                sink.value(None, &self.content[first..end])
-                    .map_err(|_| XmlStreamError::SinkRejected)?;
-            }
-            None => self.unresolved -= 1,
+        if self.frames.len() == 1 {
+            self.publish_root(sink)?;
         }
         self.name.clear();
         self.frames.pop();
-        if self.frames.is_empty() {
-            self.content.clear();
-            self.content_trailing = 0;
-        }
         self.arena.truncate(frame.mark);
         self.bindings.truncate(frame.bindings);
         self.event()?;
@@ -1239,7 +1226,7 @@ impl XmlStream {
                 }
             }
             State::Between => match byte {
-                b'>' => self.close_start(false)?,
+                b'>' => self.close_start(false, sink)?,
                 b'/' => self.state = State::Slash,
                 byte if xml_ws(byte) => {}
                 _ => {
@@ -1311,7 +1298,7 @@ impl XmlStream {
                 if byte != b'>' {
                     return Err(XmlStreamError::Syntax);
                 }
-                self.close_start(true)?;
+                self.close_start(true, sink)?;
             }
             State::EndName => {
                 if byte == b'>' {

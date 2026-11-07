@@ -144,7 +144,8 @@ fn parser_caps_charge_unselected_content_and_structural_events() {
             3,
             b"<r>abc</r>",
         ),
-        (XmlStreamLimit::Events, |l, n| l.max_events = n, 4, b"<r><i/></r>"),
+        // Four tag events plus the root's single (empty) text value.
+        (XmlStreamLimit::Events, |l, n| l.max_events = n, 5, b"<r><i/></r>"),
         (XmlStreamLimit::Depth, |l, n| l.max_depth = n, 2, b"<r><i/></r>"),
         (
             XmlStreamLimit::Attributes,
@@ -205,9 +206,14 @@ fn tag_only_identity_is_reclaimed_and_attribute_values_are_borrowed() {
     for input in [b"<r a='plain'/>".as_slice(), b"<r a=''/>"] {
         struct Borrow<'a>(&'a [u8]);
         impl XmlStreamSink for Borrow<'_> {
-            fn value(&mut self, _: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
-                let p = value.as_ptr() as usize;
-                assert!(p >= self.0.as_ptr() as usize && p + value.len() <= self.0.as_ptr() as usize + self.0.len());
+            fn value(&mut self, name: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
+                // The root's empty text value comes from the content buffer.
+                if name.is_some() {
+                    let p = value.as_ptr() as usize;
+                    assert!(
+                        p >= self.0.as_ptr() as usize && p + value.len() <= self.0.as_ptr() as usize + self.0.len()
+                    );
+                }
                 Ok(())
             }
         }
@@ -278,7 +284,8 @@ fn namespace_reserved_bindings_default_scope_and_large_sorted_attributes() {
     }
     input.extend_from_slice(b"/>");
     let result = parse(&input, input.len()).unwrap();
-    assert_eq!(result.2.value_count, 10_000);
+    // 10,000 attributes plus the root's empty text value.
+    assert_eq!(result.2.value_count, 10_001);
     assert!(result.1.work < 16 << 20, "charged work {}", result.1.work);
 }
 #[test]
@@ -345,7 +352,8 @@ fn whitespace_chunks_are_linear_and_probes_stop_at_admission_limits() {
     assert!(parser.usage().work < input.len() * 6);
     let external = [spaces.as_slice(), b"<r/>", &spaces].concat();
     let parsed = parse(&external, external.len()).unwrap();
-    assert_eq!(parsed.2.value_count, 0);
+    // Outer whitespace is not content; the root publishes one empty value.
+    assert_eq!(parsed.2.value_count, 1);
     assert!(parsed.1.work < external.len() * 6);
     for kind in [
         XmlStreamLimit::SourceBytes,
@@ -547,7 +555,6 @@ fn growth_copy_work_is_admitted_before_allocation_and_usage_tracks_real_capacity
             name: Span::default(),
             mark: 0,
             bindings: 0,
-            first: None,
         },
     );
     let heap = frames.capacity() * size_of::<Frame>();
@@ -737,7 +744,7 @@ fn unprefixed_attribute_uniqueness_uses_lexical_names_with_namespace_declaration
             qualified.push_str("/>");
             let plain = parse(plain.as_bytes(), 16 * 1024).unwrap();
             let qualified = parse(qualified.as_bytes(), 16 * 1024).unwrap();
-            assert_eq!(plain.2.value_count, count + 2);
+            assert_eq!(plain.2.value_count, count + 3);
             assert_eq!(plain.2.decoded_bytes + 2 * count, qualified.2.decoded_bytes);
             assert!(plain.1.work < qualified.1.work);
             assert_eq!(plain.0 .0[0].0.as_deref(), Some(b"xmlns".as_slice()));
@@ -933,32 +940,38 @@ fn element_text_concatenates_across_comments_cdata_and_pis_at_every_split() {
     }
 }
 #[test]
-fn element_text_is_deep_content_published_per_element_at_close() {
+fn root_publishes_its_whole_text_content_once_per_document() {
     for (input, expected) in [
-        (b"<a>x<b>y</b>z</a>".as_slice(), &[b"y".as_slice(), b"xyz"][..]),
+        (b"<a>x<b>y</b>z</a>".as_slice(), &[b"xyz".as_slice()][..]),
         (
             b"<r><s><id>1 UNION SEL<!---->ECT</id></s><n>2</n></r>",
-            &[
-                b"1 UNION SELECT".as_slice(),
-                b"1 UNION SELECT",
-                b"2",
-                b"1 UNION SELECT2",
-            ],
+            &[b"1 UNION SELECT2".as_slice()],
         ),
-        (b"<a>x<b> y </b>z</a>", &[b"y".as_slice(), b"x y z"]),
+        (b"<a>x<b> y </b>z</a>", &[b"x y z".as_slice()]),
         (b"<a><b/>x<c/></a>", &[b"x".as_slice()]),
+        // A payload three elements deep is one value, not one per ancestor.
+        (b"<a><b><c>' or 1=1--</c></b></a>", &[b"' or 1=1--".as_slice()]),
     ] {
         assert_eq!(text_values(input), expected, "{:?}", String::from_utf8_lossy(input));
     }
 }
 #[test]
-fn whitespace_only_text_publishes_nothing_for_any_element() {
-    for (input, expected) in [
-        (b"<r>  </r>".as_slice(), &[][..]),
-        (b"<r>\n  <a> </a>\n  <b>v</b>\n</r>", &[b"v".as_slice(), b"v"]),
-        (b"<r> <!-- c --> <?pi x?> </r>", &[]),
-        (b"<r><a/>\n<b></b></r>", &[]),
+fn root_without_text_publishes_one_empty_value() {
+    // libxml2 xmlNodeGetContent returns an empty string for an element
+    // without text, and ModSecurity publishes it, so `&XML:/*` is 1.
+    for input in [
+        b"<r/>".as_slice(),
+        b"<r>  </r>",
+        b"<r> <!-- c --> <?pi x?> </r>",
+        b"<r><a/>\n<b></b></r>",
+        b"<r><![CDATA[]]></r>",
     ] {
-        assert_eq!(text_values(input), expected, "{:?}", String::from_utf8_lossy(input));
+        assert_eq!(
+            text_values(input),
+            [b"".to_vec()],
+            "{:?}",
+            String::from_utf8_lossy(input)
+        );
     }
+    assert_eq!(text_values(b"<r>\n  <a> </a>\n  <b>v</b>\n</r>"), [b"v".to_vec()]);
 }

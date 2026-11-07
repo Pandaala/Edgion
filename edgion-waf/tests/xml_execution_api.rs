@@ -84,8 +84,8 @@ fn all_two_part_sources_have_owned_capture_chain_and_count_outcomes() {
 fn all_values_boundary_includes_three_metadata_entries_even_without_demands() {
     let g = compile("SecAction \"id:1,phase:2,pass\"");
     for values in [DEFAULT_MAX_BODY_ENTRIES - 3, DEFAULT_MAX_BODY_ENTRIES - 2] {
-        // Each child element publishes one value and the root one more.
-        let bytes = Bytes::from(format!("<r>{}</r>", "<i>x</i>".repeat(values - 1)));
+        // Each child attribute is one value; the root's text is one more.
+        let bytes = Bytes::from(format!("<r>{}</r>", "<i a=''/>".repeat(values - 1)));
         let mut transaction = tx(&g);
         let result = transaction.publish_request_body(RequestBody::new(bytes, BodyProcessorSelection::Xml));
         if values == DEFAULT_MAX_BODY_ENTRIES - 3 {
@@ -162,5 +162,33 @@ fn comment_cdata_and_pi_split_payloads_are_inspected_whole_at_every_cut() {
             assert_eq!(scoped.execute_request_body().unwrap(), expected, "cut {cut}");
             assert_eq!(scoped.tx_value(b"sqli"), owned.tx_value(b"sqli"));
         }
+    }
+}
+#[test]
+fn nested_payload_is_one_root_value_and_scored_once_at_every_cut() {
+    let g = compile(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.score=0\"\n",
+        "SecRule XML:/* \"@detectSQLi\" \"id:2,phase:2,pass,setvar:'tx.score=+5'\"\n",
+        "SecRule &XML:/* \"@eq 1\" \"id:3,phase:2,pass,setvar:tx.single=yes\"\n",
+    ));
+    let xml = b"<a><b><c>' or 1=1--</c></b></a>";
+    for cut in 0..=xml.len() {
+        let mut scoped = tx(&g);
+        let mut session = scoped
+            .start_xml_inspection(XmlInspectionLimits::default(), None)
+            .unwrap();
+        session.feed(&xml[..cut]).unwrap();
+        session.feed(&xml[cut..]).unwrap();
+        session.complete(xml.len()).unwrap();
+        session.finish(None).unwrap();
+        let outcome = scoped.execute_request_body().unwrap();
+        let ids = outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [2, 3], "cut {cut}");
+        assert_eq!(scoped.tx_value(b"score"), Some(b"5".as_slice()), "cut {cut}");
+        assert_eq!(scoped.tx_value(b"single"), Some(b"yes".as_slice()), "cut {cut}");
     }
 }
