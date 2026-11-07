@@ -472,7 +472,7 @@ pub(crate) fn on_raw_response(
         && !ctx.response_write_started()
         && !transport.final_response_written
         && transport.relay_allows_retry;
-    match handle_ai_response(ctx, wants_retry, gates_allow_retry)
+    match handle_ai_response(ctx, status_code, wants_retry, gates_allow_retry)
         .map_err(|_| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?
     {
         AiRetryDecision::Retry => {

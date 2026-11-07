@@ -787,7 +787,7 @@ fn target_selection_allocations_follow_backend_scans_and_retry_rounds() {
 
         plan.scheduler.start_dispatch().unwrap();
         plan.scheduler
-            .finish_dispatch(DispatchOutcome::RetryableFailure)
+            .finish_dispatch(DispatchOutcome::RetryableFailure(FailureScope::Credential))
             .unwrap();
         let (retry, retry_stats) =
             crate::test_allocation_counter::count_allocation_stats(|| select_target(&mut plan, 0));
@@ -807,7 +807,7 @@ fn target_selection_allocations_follow_backend_scans_and_retry_rounds() {
 
         plan.scheduler.start_dispatch().unwrap();
         plan.scheduler
-            .finish_dispatch(DispatchOutcome::RetryableFailure)
+            .finish_dispatch(DispatchOutcome::RetryableFailure(FailureScope::Credential))
             .unwrap();
         assert_eq!(
             plan.scheduler.next_step(),
@@ -944,8 +944,109 @@ fn ambiguous_failure_replays_only_when_explicitly_requested() {
     let Some(AiAttemptPlan::Ready(allowed)) = allowed_ctx.ai_state().unwrap().attempt_plan.as_ref() else {
         panic!("ready plan must remain installed");
     };
-    assert!(matches!(allowed.scheduler.next_step(), NextStep::PickCredential(_)));
+    assert_eq!(
+        allowed.scheduler.next_step(),
+        NextStep::PickBackend(crate::ai::runtime::attempt::PickBackend {
+            round: 0,
+            excluded_backends: 1,
+        })
+    );
     assert_eq!(allowed.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
+}
+
+#[test]
+fn response_retry_scope_follows_the_failure_domain() {
+    // The fixture backend has two credentials, so a credential-scoped retry
+    // can stay on it while an endpoint-scoped retry must leave it.
+    for (status, credential_scoped) in [
+        (401, true),
+        (403, true),
+        (429, true),
+        (500, false),
+        (503, false),
+        (529, false),
+    ] {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_query.capture(None).unwrap();
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+        mark_ai_dispatch_started(&mut ctx).unwrap();
+        assert_eq!(
+            handle_ai_response(&mut ctx, status, true, true),
+            Ok(AiRetryDecision::Retry)
+        );
+        let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+            panic!("ready plan must remain installed");
+        };
+        if credential_scoped {
+            assert!(
+                matches!(ready.scheduler.next_step(), NextStep::PickCredential(step) if step.backend == 0),
+                "status {status}"
+            );
+        } else {
+            assert_eq!(
+                ready.scheduler.next_step(),
+                NextStep::PickBackend(crate::ai::runtime::attempt::PickBackend {
+                    round: 0,
+                    excluded_backends: 1,
+                }),
+                "status {status}"
+            );
+        }
+        assert_eq!(ready.scheduler.failures()[0].kind, DispatchFailureKind::Retryable);
+    }
+}
+
+#[test]
+fn endpoint_scoped_response_retry_selects_the_next_backend() {
+    let credential = |name: &str| RuntimeAiCredential {
+        name: name.to_string(),
+        weight: 1,
+        credential: format!("secret-{name}"),
+        limits: None,
+    };
+    let mut plan = selectable_plan(vec![credential("primary-a"), credential("primary-b")]);
+    let mut fallback = selectable_plan(vec![credential("fallback-a")]).candidates.remove(0);
+    fallback.slot = 1;
+    fallback.order = 1;
+    plan.candidates.push(fallback);
+    plan.scheduler =
+        AttemptScheduler::new([&[1, 1][..], &[1][..]].iter().map(|weights| weights.iter().copied()), 1).unwrap();
+    assert_eq!(select_target(&mut plan, 0).unwrap().candidate, 0);
+
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+    mark_ai_dispatch_started(&mut ctx).unwrap();
+    assert_eq!(
+        handle_ai_response(&mut ctx, 503, true, true),
+        Ok(AiRetryDecision::Retry)
+    );
+    let Some(AiAttemptPlan::Ready(mut plan)) = ctx.take_ai_attempt_plan() else {
+        panic!("ready plan must remain installed");
+    };
+    assert_eq!(
+        select_target(&mut plan, 0).unwrap(),
+        SelectedTarget {
+            candidate: 1,
+            credential: 0
+        }
+    );
+}
+
+#[test]
+fn transport_timeout_retry_fails_over_the_backend() {
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_query.capture(None).unwrap();
+    ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+    mark_ai_dispatch_started(&mut ctx).unwrap();
+    assert_eq!(
+        handle_ai_transport_failure(&mut ctx, true, true, false),
+        Ok(AiRetryDecision::Retry)
+    );
+    let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
+        panic!("ready plan must remain installed");
+    };
+    assert!(matches!(ready.scheduler.next_step(), NextStep::PickBackend(step) if step.excluded_backends == 1));
 }
 
 #[tokio::test]
@@ -1281,7 +1382,9 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
     );
     plan.scheduler.start_dispatch().unwrap();
     plan.scheduler
-        .finish_dispatch(crate::ai::runtime::attempt::DispatchOutcome::RetryableFailure)
+        .finish_dispatch(crate::ai::runtime::attempt::DispatchOutcome::RetryableFailure(
+            FailureScope::Credential,
+        ))
         .unwrap();
     plan.candidates[0].model.as_mut().unwrap().provider_model = "logical".into();
     let second = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
@@ -1385,7 +1488,7 @@ async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
                 ready.scheduler.start_dispatch().unwrap();
                 ready
                     .scheduler
-                    .finish_dispatch(DispatchOutcome::RetryableFailure)
+                    .finish_dispatch(DispatchOutcome::RetryableFailure(FailureScope::Credential))
                     .unwrap();
                 ctx.restore_ai_attempt_plan(saved);
             } else {

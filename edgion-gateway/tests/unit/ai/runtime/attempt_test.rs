@@ -28,7 +28,10 @@ fn single_backend_retries_in_a_new_round() {
             credential: 0
         }
     );
-    let failed = dispatch_failure(&mut scheduler, DispatchOutcome::RetryableFailure);
+    let failed = dispatch_failure(
+        &mut scheduler,
+        DispatchOutcome::RetryableFailure(FailureScope::Credential),
+    );
     assert!(matches!(failed.next, NextStep::PickCredential(_)));
 
     let exhausted = scheduler.select_credential(u16::MAX, 0).unwrap();
@@ -68,7 +71,10 @@ fn rotates_weighted_credentials_before_reselecting_backend() {
             credential: 1
         })
     );
-    dispatch_failure(&mut scheduler, DispatchOutcome::RetryableFailure);
+    dispatch_failure(
+        &mut scheduler,
+        DispatchOutcome::RetryableFailure(FailureScope::Credential),
+    );
 
     let selected = scheduler.select_credential(u16::MAX, 5).unwrap();
     assert_eq!(
@@ -78,7 +84,10 @@ fn rotates_weighted_credentials_before_reselecting_backend() {
             credential: 0
         })
     );
-    dispatch_failure(&mut scheduler, DispatchOutcome::RetryableFailure);
+    dispatch_failure(
+        &mut scheduler,
+        DispatchOutcome::RetryableFailure(FailureScope::Credential),
+    );
 
     let exhausted = scheduler.select_credential(u16::MAX, 0).unwrap();
     assert_eq!(exhausted.event, SchedulerEvent::BackendExhausted { backend: 0 });
@@ -95,6 +104,80 @@ fn rotates_weighted_credentials_before_reselecting_backend() {
             backend: 1,
             credential: 0
         }
+    );
+}
+
+#[test]
+fn failure_scope_classifies_credential_statuses() {
+    for status in [401, 403, 429] {
+        assert_eq!(
+            FailureScope::from_http_status(status),
+            FailureScope::Credential,
+            "{status}"
+        );
+    }
+    for status in [408, 500, 502, 503, 504, 529] {
+        assert_eq!(
+            FailureScope::from_http_status(status),
+            FailureScope::Endpoint,
+            "{status}"
+        );
+    }
+}
+
+#[test]
+fn endpoint_failure_fails_over_without_scanning_sibling_credentials() {
+    let mut scheduler = scheduler(&[&[1, 1, 1, 1], &[1]], 2);
+    choose(&mut scheduler, 0, u16::MAX, 0);
+    let failed = dispatch_failure(
+        &mut scheduler,
+        DispatchOutcome::RetryableFailure(FailureScope::Endpoint),
+    );
+    assert_eq!(
+        failed.next,
+        NextStep::PickBackend(PickBackend {
+            round: 0,
+            excluded_backends: 1,
+        })
+    );
+    assert_eq!(scheduler.select_backend(0), Err(SchedulerError::BackendAlreadyExcluded));
+    assert_eq!(
+        choose(&mut scheduler, 1, u16::MAX, 0),
+        AttemptTarget {
+            backend: 1,
+            credential: 0
+        }
+    );
+    scheduler.start_dispatch().unwrap();
+    let completed = scheduler.finish_dispatch(DispatchOutcome::Completed).unwrap();
+    assert_eq!(completed.next, NextStep::Stop(StopReason::Completed));
+    assert_eq!(scheduler.dispatch_count(), 2);
+}
+
+#[test]
+fn endpoint_failure_on_single_backend_retries_in_a_new_round() {
+    let mut scheduler = scheduler(&[&[1, 1]], 1);
+    choose(&mut scheduler, 0, u16::MAX, 0);
+    dispatch_failure(
+        &mut scheduler,
+        DispatchOutcome::RetryableFailure(FailureScope::Endpoint),
+    );
+    let advanced = scheduler.complete_backend_scan().unwrap();
+    assert_eq!(
+        advanced.event,
+        SchedulerEvent::RoundAdvanced {
+            previous: 0,
+            current: 1
+        }
+    );
+    choose(&mut scheduler, 0, u16::MAX, 0);
+    scheduler.start_dispatch().unwrap();
+    assert_eq!(
+        scheduler
+            .finish_dispatch(DispatchOutcome::RetryableFailure(FailureScope::Endpoint))
+            .unwrap()
+            .next,
+        NextStep::Stop(StopReason::RetryLimitReached)
     );
 }
 
@@ -137,7 +220,9 @@ fn seven_retries_allow_exactly_eight_dispatches() {
     for expected_attempt in 1..=8 {
         choose(&mut scheduler, 0, u16::MAX, 0);
         scheduler.start_dispatch().unwrap();
-        let failed = scheduler.finish_dispatch(DispatchOutcome::RetryableFailure).unwrap();
+        let failed = scheduler
+            .finish_dispatch(DispatchOutcome::RetryableFailure(FailureScope::Credential))
+            .unwrap();
         assert_eq!(scheduler.dispatch_count(), expected_attempt);
         if expected_attempt == 8 {
             assert_eq!(failed.next, NextStep::Stop(StopReason::RetryLimitReached));
@@ -185,7 +270,13 @@ fn explicitly_replayed_ambiguity_keeps_ambiguous_attribution() {
     scheduler.start_dispatch().unwrap();
 
     let transition = scheduler.retry_ambiguous_dispatch().unwrap();
-    assert!(matches!(transition.next, NextStep::PickCredential(_)));
+    assert_eq!(
+        transition.next,
+        NextStep::PickBackend(PickBackend {
+            round: 0,
+            excluded_backends: 1,
+        })
+    );
     assert_eq!(
         scheduler.failures(),
         &[DispatchFailure {

@@ -1,4 +1,4 @@
-//! Credential-first scheduling, RPM exhaustion, and TPM reconciliation.
+//! Endpoint-scoped failover, RPM exhaustion, and TPM reconciliation.
 
 use super::gateway_admin::{admin_base, authed, backend_uid, CREDENTIAL_RESERVATION_KEY_PREFIX as KEY_PREFIX};
 use crate::framework::{test_backend_hosts, TestCase, TestContext, TestResult, TestSuite};
@@ -275,7 +275,7 @@ fn safe_attempts(genai: &Value) -> Result<&Vec<Value>, String> {
     Ok(attempts)
 }
 
-fn credential_first_then_service_next(
+fn endpoint_failover_then_credential_exhaustion(
     ctx: TestContext,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
     Box::pin(async move {
@@ -307,23 +307,20 @@ fn credential_first_then_service_next(
             Ok(value) => value,
             Err(error) => return TestResult::failed(start.elapsed(), error),
         };
+        // Multi-replica observations are merged and sorted, so only the set is
+        // checked here; the access-log attempt ledger below checks the order.
         let observed = observations["observations"].as_array();
         let observations_ok = observed.is_some_and(|items| {
-            items.len() == 3
-                && items[0]["backend"] == "primary"
-                && items[1]["backend"] == "primary"
-                && [
-                    items[0]["credential_generation"].as_str(),
-                    items[1]["credential_generation"].as_str(),
-                ]
-                .contains(&Some("a"))
-                && [
-                    items[0]["credential_generation"].as_str(),
-                    items[1]["credential_generation"].as_str(),
-                ]
-                .contains(&Some("b"))
-                && items[2]["backend"] == "secondary"
-                && items[2]["credential_generation"] == "a"
+            let mut seen: Vec<_> = items
+                .iter()
+                .map(|item| (item["backend"].as_str(), item["credential_generation"].as_str()))
+                .collect();
+            seen.sort();
+            seen == [
+                (Some("primary"), Some("a")),
+                (Some("primary"), Some("b")),
+                (Some("secondary"), Some("a")),
+            ]
         });
         if !observations_ok {
             return TestResult::failed(
@@ -347,17 +344,20 @@ fn credential_first_then_service_next(
         if attempts.len() != 3 {
             return TestResult::failed(start.elapsed(), format!("expected three attempts, got {attempts:?}"));
         }
-        let primary_credentials = [attempts[0]["credential"].as_str(), attempts[1]["credential"].as_str()];
+        let primary_credentials = [attempts[0]["credential"].as_str(), attempts[2]["credential"].as_str()];
         if !primary_credentials.contains(&Some("primary-a")) || !primary_credentials.contains(&Some("primary-b")) {
             return TestResult::failed(
                 start.elapsed(),
                 format!("primary credentials were not each attempted once: {attempts:?}"),
             );
         }
+        // A provider 503 is endpoint-scoped: the first retry fails over to the
+        // secondary backend, and the next round returns to the primary backend
+        // on its untried credential because the first one exhausted its RPM.
         let expected_backends = [
             "edgion-test/credential-exhaustion-primary",
-            "edgion-test/credential-exhaustion-primary",
             "edgion-test/credential-exhaustion-secondary",
+            "edgion-test/credential-exhaustion-primary",
         ];
         for (index, backend) in expected_backends.iter().enumerate() {
             let failure_ok = if index < 2 {
@@ -366,7 +366,7 @@ fn credential_first_then_service_next(
                 attempts[index]["failure"].is_null()
             };
             if attempts[index]["backend"] != *backend
-                || (index == 2 && attempts[index]["credential"] != "secondary-a")
+                || (index == 1 && attempts[index]["credential"] != "secondary-a")
                 || attempts[index]["provider"] != "openai_compatible"
                 || attempts[index]["status"] != 503
                 || !failure_ok
@@ -431,7 +431,7 @@ fn credential_first_then_service_next(
         }
         TestResult::passed_with_message(
             start.elapsed(),
-            "credential-first dispatch exhausted both primary credentials before the secondary backend; RPM was exhausted, TPM was reconciled, and the follow-up failed locally with a fixed 503"
+            "endpoint-scoped 503 failed over to the secondary backend before the next round used the untried primary credential; RPM was exhausted, TPM was reconciled, and the follow-up failed locally with a fixed 503"
                 .to_string(),
         )
     })
@@ -449,9 +449,9 @@ impl TestSuite for CredentialExhaustionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![TestCase::new(
-            "credential_first_then_service_next",
-            "Credential exhaustion rotates within one AI backend before advancing to the next backend",
-            credential_first_then_service_next,
+            "endpoint_failover_then_credential_exhaustion",
+            "An endpoint-scoped provider failure fails over to the next AI backend before a new round skips the RPM-exhausted credential",
+            endpoint_failover_then_credential_exhaustion,
         )
         .with_timeout(Duration::from_secs(90))]
     }

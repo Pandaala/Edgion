@@ -19,7 +19,7 @@ before applying a decision to current code.
 - [Adaptive telemetry pre-rotates the next second's bucket](regression-guards/adaptive-buckets-pre-rotate-next-second.md): gw-ai3-05 phase-independent sample retention.
 - [AI stores expose one count and key accessor per snapshot](regression-guards/ai-store-single-count-accessors.md)
 - [gw-01 — CostWeighted read only `max_tokens` — FIXED](regression-guards/ai-cost-weighted-request-output-bound-parsing.md)
-- [AI endpoint failure skips the service](regression-guards/ai-endpoint-failure-skips-the-service.md)
+- [AI endpoint failure skips the service](regression-guards/ai-endpoint-failure-skips-the-service.md): gw-08 predispatch and gw-ai3-08 dispatched failure scope.
 - [AI failover tests must cross runtime boundaries](regression-guards/ai-failover-tests-must-cross-runtime-boundaries.md)
 - [AI Predispatch Scans Re-check End-to-End Deadlines](regression-guards/ai-predispatch-scan-rechecks-deadlines.md)
 - [AI quota throttle must wait and readmit once](regression-guards/ai-quota-throttle-must-wait-and-readmit-once.md)

@@ -21,7 +21,8 @@ use crate::ai::conversion::chat_to_anthropic::{
 };
 use crate::ai::routing::candidate::{pick, CandidateEligibility, CostSnapshot, PickerInput, RouteCandidate};
 use crate::ai::runtime::attempt::{
-    AttemptScheduler, DispatchFailureKind, DispatchOutcome, NextStep, SchedulerEvent, MAX_AI_ROUTE_RETRIES,
+    AttemptScheduler, DispatchFailureKind, DispatchOutcome, FailureScope, NextStep, SchedulerEvent,
+    MAX_AI_ROUTE_RETRIES,
 };
 use crate::ai::SelectedAiBackend;
 use crate::ai::{
@@ -274,22 +275,40 @@ pub fn handle_ai_predispatch_service_failure(ctx: &mut EdgionHttpContext) -> boo
 }
 
 /// Resolve one final response header before provider translation runs.
+///
+/// `status` selects the failure scope of a permitted retry.
 pub fn handle_ai_response(
     ctx: &mut EdgionHttpContext,
+    status: u16,
     wants_retry: bool,
     gates_allow_retry: bool,
 ) -> Result<AiRetryDecision, AiDispatchError> {
-    handle_dispatched_outcome(ctx, wants_retry, gates_allow_retry, false, false)
+    handle_dispatched_outcome(
+        ctx,
+        wants_retry,
+        gates_allow_retry,
+        false,
+        false,
+        FailureScope::from_http_status(status),
+    )
 }
 
-/// Resolve a post-dispatch transport/proxy failure.
+/// Resolve a post-dispatch transport/proxy failure. Timeouts and transport
+/// errors depend on the shared endpoint, so a retry fails over the backend.
 pub fn handle_ai_transport_failure(
     ctx: &mut EdgionHttpContext,
     retryable: bool,
     gates_allow_retry: bool,
     ambiguous: bool,
 ) -> Result<AiRetryDecision, AiDispatchError> {
-    handle_dispatched_outcome(ctx, retryable, gates_allow_retry, ambiguous, true)
+    handle_dispatched_outcome(
+        ctx,
+        retryable,
+        gates_allow_retry,
+        ambiguous,
+        true,
+        FailureScope::Endpoint,
+    )
 }
 
 fn handle_dispatched_outcome(
@@ -298,6 +317,7 @@ fn handle_dispatched_outcome(
     gates_allow_retry: bool,
     ambiguous: bool,
     transport_failure: bool,
+    scope: FailureScope,
 ) -> Result<AiRetryDecision, AiDispatchError> {
     let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return Err(AiDispatchError::InvalidConfiguration);
@@ -356,7 +376,7 @@ fn handle_dispatched_outcome(
             } else {
                 ready
                     .scheduler
-                    .finish_dispatch(DispatchOutcome::RetryableFailure)
+                    .finish_dispatch(DispatchOutcome::RetryableFailure(scope))
                     .map(|_| AiRetryDecision::Retry)
                     .map_err(|_| AiDispatchError::InvalidConfiguration)
             }

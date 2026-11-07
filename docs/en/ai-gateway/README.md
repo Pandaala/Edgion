@@ -18,7 +18,7 @@ Clients never hold provider API keys.
 | [EdgionBackend](./edgion-backend.md) | Provider endpoint, model catalog, and typed AI backends |
 | [Routing and Selection](./routing.md) | Weighted, Priority, LowestLatency, LowestUsage, CostWeighted |
 | [Credentials and Limits](./credentials-and-limits.md) | Credential pools, RPM/TPM reservation, rotation, cooldowns |
-| [Resilience and Failover](./resilience.md) | Credential-first retry, SSE commitment, outlier half-open, EBTP |
+| [Resilience and Failover](./resilience.md) | Failure-scoped retry, SSE commitment, outlier half-open, EBTP |
 | [Providers](./providers.md) | OpenAI / OpenAI-compatible passthrough and Anthropic translation |
 | [Quotas and Cost](./quotas-and-cost.md) | Token quota actions and estimated cost |
 | [Observability](./observability.md) | Access-log `genai` ledger and optional token metrics |
@@ -29,7 +29,7 @@ Clients never hold provider API keys.
 - **Typed AI backends** — HTTPRoute `backendRefs` name `edgion.io/EdgionBackend` directly
 - **Credential isolation** — Secret-backed pools with weighted rotation; RPM/TPM via Redis
 - **Intelligent selection** — five `backendSelection` algorithms without embedding a provider list in AiProxy
-- **Bounded resilience** — shared attempt ceiling, credential-first rounds, no mid-stream failover
+- **Bounded resilience** — shared attempt ceiling, failure-scoped retry rounds, no mid-stream failover
 - **Usage and cost** — durable per-attempt access-log ledger plus optional process-local Prometheus rates
 
 Current support covers Chat JSON/SSE, limited JSON/SSE conversion to Anthropic, and native

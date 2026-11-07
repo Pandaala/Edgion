@@ -1,6 +1,6 @@
 # Resilience and Failover
 
-AI resilience combines HTTPRoute retry permission, credential-first rounds inside each
+AI resilience combines HTTPRoute retry permission, failure-scoped credential rotation inside each
 EdgionBackend, route-level backend failover, and optional EdgionBackendTrafficPolicy (EBTP)
 destination controls.
 
@@ -32,15 +32,21 @@ the child's own `status.parents` entries (one per `kind: HTTPRoute` parentRef); 
 the parent's status. `AiProxy` is not allowed on a delegating rule, because a delegating rule has
 no backends of its own.
 
-## Credential-first rounds
+## Failure-scoped retry rounds
 
-On a retryable failure:
+A retryable failure is first classified by the configuration it depends on:
 
-1. Prefer another eligible credential in the same EdgionBackend.
-2. Only when the selected backend has no eligible credential, move to another route backend via
-   `backendSelection`.
-3. After every currently eligible destination was scanned and retry capacity remains, a new round
-   may start if the previous round contained at least one dispatched retryable failure.
+- **Credential-scoped** — provider status `401`, `403` or `429`. The next attempt prefers another
+  eligible credential in the same EdgionBackend, and moves to another route backend via
+  `backendSelection` only when the selected backend has no eligible credential left.
+- **Endpoint-scoped** — every other retryable status (for example `500`, `502`, `503`, `529`), a
+  backend request timeout, or a replayed ambiguous transport failure. Every credential of the
+  backend shares the failed endpoint, so the backend is excluded for the rest of the round and the
+  next attempt goes to another route backend via `backendSelection`.
+
+After every currently eligible destination was scanned and retry capacity remains, a new round
+may start if the previous round contained at least one dispatched retryable failure. A route with
+a single backend therefore still retries that backend after an endpoint-scoped failure.
 
 Scheduler pre-dispatch skips (no eligible credential, model mismatch, credential/backend saturation) consume neither an
 HTTPRoute retry nor a retry-budget counter. Every actual dispatch charges the selected AI backend's

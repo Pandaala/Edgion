@@ -2,7 +2,9 @@
 //!
 //! Backend selection remains the responsibility of the AiProxy route picker.
 //! This state machine exposes its request-local exclusions to that picker,
-//! rotates credentials within the selected backend, and owns the single
+//! rotates credentials within the selected backend after credential-scoped
+//! failures, fails over to another backend after endpoint-scoped failures,
+//! and owns the single
 //! HTTPRoute dispatch budget shared by retries and failover.
 
 pub const MAX_AI_BACKENDS: usize = 16;
@@ -75,9 +77,32 @@ pub struct DispatchFailure {
     pub kind: DispatchFailureKind,
 }
 
+/// The configuration a retryable dispatched failure depends on.
+///
+/// Credential-scoped failures are retried on another credential of the same
+/// backend. Endpoint-scoped failures are shared by every credential of the
+/// backend, so the backend is excluded for the rest of the current round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureScope {
+    Credential,
+    Endpoint,
+}
+
+impl FailureScope {
+    /// Classify a provider response status. Authentication, authorization and
+    /// per-key rate limits depend on the credential; every other retryable
+    /// status (5xx, 529, ...) depends on the shared provider endpoint.
+    pub fn from_http_status(status: u16) -> Self {
+        match status {
+            401 | 403 | 429 => Self::Credential,
+            _ => Self::Endpoint,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DispatchOutcome {
-    RetryableFailure,
+    RetryableFailure(FailureScope),
     NonRetryableFailure,
     AmbiguousFailure,
     Completed,
@@ -383,10 +408,10 @@ impl AttemptScheduler {
             return Ok(self.transition(SchedulerEvent::DispatchCompleted { attempt }));
         }
 
-        let kind = match outcome {
-            DispatchOutcome::RetryableFailure => DispatchFailureKind::Retryable,
-            DispatchOutcome::NonRetryableFailure => DispatchFailureKind::NonRetryable,
-            DispatchOutcome::AmbiguousFailure => DispatchFailureKind::Ambiguous,
+        let (kind, scope) = match outcome {
+            DispatchOutcome::RetryableFailure(scope) => (DispatchFailureKind::Retryable, scope),
+            DispatchOutcome::NonRetryableFailure => (DispatchFailureKind::NonRetryable, FailureScope::Endpoint),
+            DispatchOutcome::AmbiguousFailure => (DispatchFailureKind::Ambiguous, FailureScope::Endpoint),
             DispatchOutcome::Completed => return Err(SchedulerError::UnexpectedState),
         };
         let failure = DispatchFailure {
@@ -398,10 +423,7 @@ impl AttemptScheduler {
 
         self.phase = match kind {
             DispatchFailureKind::Retryable if self.dispatches < self.max_dispatches => {
-                self.round_had_replayable_dispatch = true;
-                Phase::PickCredential {
-                    backend: attempt.target.backend,
-                }
+                self.replay_phase(attempt.target.backend, scope)
             }
             DispatchFailureKind::Retryable => Phase::Stopped(StopReason::RetryLimitReached),
             DispatchFailureKind::NonRetryable => Phase::Stopped(StopReason::NonRetryableFailure),
@@ -411,9 +433,9 @@ impl AttemptScheduler {
     }
 
     /// Record an ambiguous dispatched failure while explicitly allowing a
-    /// replay. The failure keeps its ambiguity classification for accounting,
-    /// but advances through the same credential/backend path as a retryable
-    /// failure.
+    /// replay. The failure keeps its ambiguity classification for accounting.
+    /// An ambiguous transport failure depends on the shared endpoint, so the
+    /// replay excludes the failed backend like an endpoint-scoped retry.
     pub fn retry_ambiguous_dispatch(&mut self) -> Result<Transition, SchedulerError> {
         let Phase::InFlight(attempt) = self.phase else {
             return Err(SchedulerError::UnexpectedState);
@@ -425,10 +447,7 @@ impl AttemptScheduler {
         };
         self.record_failure(failure)?;
         self.phase = if self.dispatches < self.max_dispatches {
-            self.round_had_replayable_dispatch = true;
-            Phase::PickCredential {
-                backend: attempt.target.backend,
-            }
+            self.replay_phase(attempt.target.backend, FailureScope::Endpoint)
         } else {
             Phase::Stopped(StopReason::RetryLimitReached)
         };
@@ -469,6 +488,18 @@ impl AttemptScheduler {
         self.failures[index] = failure;
         self.failure_count += 1;
         Ok(())
+    }
+
+    /// Choose where a permitted replay continues after a dispatched failure.
+    fn replay_phase(&mut self, backend: u8, scope: FailureScope) -> Phase {
+        self.round_had_replayable_dispatch = true;
+        match scope {
+            FailureScope::Credential => Phase::PickCredential { backend },
+            FailureScope::Endpoint => {
+                self.tried_backends |= bit(backend);
+                Phase::PickBackend
+            }
+        }
     }
 
     fn transition(&self, event: SchedulerEvent) -> Transition {

@@ -17,7 +17,7 @@
 | [EdgionBackend](./edgion-backend.md) | 提供商 Endpoint、模型目录与类型化 AI 后端 |
 | [路由与选择](./routing.md) | Weighted、Priority、LowestLatency、LowestUsage、CostWeighted |
 | [凭据与限额](./credentials-and-limits.md) | 凭据池、RPM/TPM 预留、轮转与冷却 |
-| [弹性与故障切换](./resilience.md) | 凭据优先重试、SSE 承诺、outlier half-open、EBTP |
+| [弹性与故障切换](./resilience.md) | 按失败范围重试、SSE 承诺、outlier half-open、EBTP |
 | [提供商](./providers.md) | OpenAI / OpenAI-compatible 透传与 Anthropic 转换 |
 | [配额与成本](./quotas-and-cost.md) | Token 配额动作与估算成本 |
 | [可观测性](./observability.md) | Access log `genai` 账本与可选 token 指标 |
@@ -28,7 +28,7 @@
 - **类型化 AI 后端** — HTTPRoute `backendRefs` 直接引用 `edgion.io/EdgionBackend`
 - **凭据隔离** — Secret 凭据池按权重轮转；RPM/TPM 走 Redis
 - **智能选择** — 五种 `backendSelection`，AiProxy 不内嵌提供商列表
-- **有界弹性** — 共享尝试上限、凭据优先轮次、不在流中途切换后端
+- **有界弹性** — 共享尝试上限、按失败范围的重试轮次、不在流中途切换后端
 - **用量与成本** — 持久化的 per-attempt access log 账本，外加可选进程本地 Prometheus 速率
 
 当前支持 Chat JSON/SSE、原生 OpenAI Responses JSON/SSE，以及到 Anthropic 的有限 JSON/SSE 转换。原生
