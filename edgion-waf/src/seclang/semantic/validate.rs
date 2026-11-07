@@ -634,7 +634,10 @@ fn reject_duplicate_ids(draft: &SemanticDraft<'_>, index: &[RuleIdIndexRecord]) 
                     second = Some(location);
                 }
             }
-            let candidate = (first.expect("duplicate group"), second.expect("duplicate group"));
+            let candidate = (
+                first.expect("a duplicate group spans at least two index entries"),
+                second.expect("a duplicate group spans at least two index entries"),
+            );
             if duplicate.is_none_or(|(_, current)| candidate.1 < current) {
                 duplicate = Some(candidate);
             }
@@ -1096,14 +1099,24 @@ fn target_base_matches(
     }
     let (left, right) = match base.selector_kind {
         SelectorKind::Regex(_) => (
-            base.regex_body.expect("regex base body").text(),
-            candidate.regex_body.expect("regex candidate body").text(),
+            base.regex_body
+                .expect("a regex selector kind always carries a regex body")
+                .text(),
+            candidate
+                .regex_body
+                .expect("selector kinds are equal, so the candidate also carries a regex body")
+                .text(),
         ),
         SelectorKind::Literal | SelectorKind::Path => (
-            base.selector.expect("selected base").text(),
-            candidate.selector.expect("selected candidate").text(),
+            base.selector
+                .expect("a literal or path selector kind always carries selector text")
+                .text(),
+            candidate
+                .selector
+                .expect("selector kinds are equal, so the candidate also carries selector text")
+                .text(),
         ),
-        SelectorKind::None => unreachable!(),
+        SelectorKind::None => unreachable!("a None base selector returned Ok(true) above"),
     };
     let bytes = left
         .len()

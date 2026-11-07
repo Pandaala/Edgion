@@ -91,3 +91,22 @@ Recommendation: (1) plus the TX-definition check from (2). Exclusion-only usage 
 - `edgion-waf/src/seclang/tag_selection.rs:865` still computes `selected = unit.is_active() && include && !exclude` with no required-unit notion; `include.rs`/`semantic.rs` `apply_selection_mask` unchanged.
 - `static-tag-selection-before-compilation.md` and the CRS 949/901 data are unchanged.
 - `git diff feature-08-30..HEAD` shows no change under `edgion-gateway/src/plugins/http/waf/`, `edgion-gateway/src/ctx.rs`, `edgion-gateway/src/request_body/config.rs`, or `edgion-waf/src/` apart from a `serde_yaml`→`yaml_serde` dependency rename and a `fetch_update`→`try_update` rename in `json_inspection.rs:12`; none touch this finding's code paths.
+
+## Recommendation (2026-11-07 second pass)
+
+- **Status**: open; contract decision for the owner (no code change in the second pass, by design).
+- Re-checked at HEAD after the module splits: selection is still `unit.is_active() && include && !exclude`
+  per unit (`edgion-waf/src/seclang/tag_selection.rs:865`, `PreparedWafRuleSelection::select`), with no notion of
+  required units.
+- Recommended rule: an **infrastructure closure**. Whenever a selection carries an `include` filter, always
+  keep the CRS infrastructure units regardless of the filter: initialization `901*`, the per-file paranoia
+  gates `9xx011`-`9xx018`, blocking evaluation `949110` / `959100`, and reporting/correlation `980*`.
+  Selection then narrows detections only, and the anomaly-scoring machinery keeps working.
+- Acceptable alternative: refuse an `include` selection unless the profile sets an explicit
+  acknowledgement (for example `includeInfrastructure: false` with a status condition naming the removed
+  infrastructure unit IDs), so an operator cannot produce a non-blocking WAF by accident.
+- Either variant should add the TX-definition check from option (2) above as a validation error, because an
+  empty `%{tx.inbound_anomaly_score_threshold}` operand still aborts the transaction (waf3-01).
+- The ID list is CRS-specific; the owner must decide whether the closure is expressed as an ID set, a bundle
+  `required` tag, or a structural rule (units that only `setvar`/`skipAfter`, or whose disruptive action
+  reads anomaly totals).

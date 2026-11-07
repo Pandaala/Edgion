@@ -436,7 +436,7 @@ pub(super) fn compile_operator_plan<'view, 'source>(
                 OperatorKind::EndsWith => StringRelation::EndsWith,
                 OperatorKind::Streq => StringRelation::Equals,
                 OperatorKind::Within => StringRelation::Within,
-                _ => unreachable!(),
+                _ => unreachable!("the enclosing arm admits only the five string relation operators"),
             };
             CompiledOperatorOperand::String {
                 relation,
@@ -454,7 +454,7 @@ pub(super) fn compile_operator_plan<'view, 'source>(
                 OperatorKind::Ge => IntegerRelation::GreaterOrEqual,
                 OperatorKind::Gt => IntegerRelation::Greater,
                 OperatorKind::Lt => IntegerRelation::Less,
-                _ => unreachable!(),
+                _ => unreachable!("the enclosing arm admits only the Eq, Ge, Gt and Lt operators"),
             };
             let operand = match constant {
                 Some(value) => CompiledIntegerOperand::Static(value),

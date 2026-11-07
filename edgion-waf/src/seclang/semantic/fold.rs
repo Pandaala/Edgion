@@ -406,7 +406,7 @@ fn inspect_fold(
                         ActionKind::Block => DisruptiveKind::Block,
                         ActionKind::Deny => DisruptiveKind::Deny,
                         ActionKind::Pass => DisruptiveKind::Pass,
-                        _ => unreachable!(),
+                        _ => unreachable!("the enclosing arm admits only Block, Deny and Pass"),
                     };
                     if disruptive == DisruptiveKind::Pass && record.status.is_some() {
                         status_pass.get_or_insert(position);
@@ -1040,7 +1040,9 @@ fn commit_final_graph(draft: &mut SemanticDraft<'_>, registry: &HashMap<&str, Ma
                     let phase = match root_phase {
                         FinalPhaseState::Explicit { phase, .. } => FinalPhaseState::Inherited { phase, root },
                         FinalPhaseState::RequiresDefault { owner } => FinalPhaseState::RequiresDefault { owner },
-                        FinalPhaseState::Inherited { .. } => unreachable!(),
+                        FinalPhaseState::Inherited { .. } => {
+                            unreachable!("only chain children inherit a phase; a root never does")
+                        }
                     };
                     if fold.chain_action.is_some() {
                         active = Some((chain_index, root, root_phase, ordinal + 1));

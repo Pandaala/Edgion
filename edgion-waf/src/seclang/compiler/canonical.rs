@@ -499,7 +499,7 @@ fn copy_target_plan(
                 match record.selector {
                     CandidateTargetSelector::Literal(_) => CompiledTargetSelector::Literal(owned),
                     CandidateTargetSelector::Path(_) => CompiledTargetSelector::Path(owned),
-                    _ => unreachable!(),
+                    _ => unreachable!("the enclosing arm admits only Literal and Path selectors"),
                 }
             }
             CandidateTargetSelector::Regex { style, program } => CompiledTargetSelector::Regex { style, program },

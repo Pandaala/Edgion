@@ -8,6 +8,14 @@ description: Review knowledge for the native WAF engine and its SecLang operator
 Read [routing and classification](../knowledge-routing.md) before changing a rule.
 Check the current compiler, transaction, and detector code before applying a past conclusion.
 
+## Mandatory design
+
+- [Engine trust boundaries and the gateway contract](mandatory-design/engine-trust-boundaries-and-gateway-contract.md)
+
+## Review evidence
+
+- [Known bypass-class audit (2026-11)](review-evidence/known-bypass-class-audit-2026-11.md)
+
 ## Regression guards
 
 - [Semantic folds commit only surviving transformation indices](regression-guards/semantic-transformation-reset-output.md)
@@ -48,13 +56,25 @@ contiguous-input implementation and its verification limits.
 The request-path optimizations formerly tracked as `tasks/todo/waf-06`
 (borrowed marker-free decoders), `waf-15` (lazy boolean-regex VM cache) and
 `waf-21` (static SQLi delimiter tables) were completed in the 2026-11-07
-optimization pass and are recorded by the guards above. Open WAF work lives in
-`tasks/improve-issues/waf-*.md` (note the unrelated open item that reuses the
-`waf-06` id) and `tasks/todo/waf-streaming-raw-member-msg-action.md`. The
-following were deliberately dropped, not completed: representative Gateway performance measurement, Kubernetes
-admission/reload validation (including the audited language-selection
-profiles), and x86-64 hardware verification. Do not cite them as passed; if
-needed, gather fresh evidence via the
+optimization pass and are recorded by the guards above. The 2026-11-07 second
+pass added a crate-level transaction benchmark over the supported CRS bundles
+(`edgion-waf/tests/benches/transaction_crs.rs`) and took a local sampling
+profile with it; that is crate-level evidence, not gateway-level measurement.
+Three measured request-path changes followed: `dda14f1cd` (capture regexes
+decide without capture tracking,
+[regex scratch guard](regression-guards/regex-boolean-scratch-lazy-vm-cache.md)),
+`c26ae71fc` (rule-unit TX staging in place,
+[TX staging guard](regression-guards/tx-unit-staging-in-place.md)) and
+`9ddd70ff9` (direct TX walk for TX selectors,
+[TX selection guard](regression-guards/tx-selection-direct-walk.md)).
+
+Open WAF work lives in `tasks/improve-issues/waf*.md` (including the
+`waf5-*.md` findings of the 2026-11 audit; note the unrelated open item that
+reuses the `waf-06` id) and `tasks/todo/waf-streaming-raw-member-msg-action.md`.
+The following were deliberately dropped, not completed: representative Gateway
+performance measurement, Kubernetes admission/reload validation (including the
+audited language-selection profiles), and x86-64 hardware verification. Do not
+cite them as passed; if needed, gather fresh evidence via the
 [testing guide](../../05-testing/01-integration-testing.md).
 
 Speculative optimizations (shared raw/structured body inspection, native SIMD
