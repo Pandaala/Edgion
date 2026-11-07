@@ -7951,16 +7951,7 @@ fn resolve_exception_union(
                     limit: limits.max_selector_work,
                     position,
                 })?;
-        if cumulative
-            .selector_work
-            .checked_add(local.selector_work)
-            .is_none_or(|value| value > limits.max_selector_work)
-        {
-            return Err(SemanticValidationError::SelectorWorkLimit {
-                limit: limits.max_selector_work,
-                position,
-            });
-        }
+        check_selector_work(&cumulative, &local, limits, position)?;
         for entry in &index[start..end] {
             local.raw = local
                 .raw
@@ -8027,32 +8018,33 @@ fn resolve_exception_union(
                             limit: limits.max_selector_work,
                             position,
                         })?;
-                if cumulative
-                    .selector_work
-                    .checked_add(local.selector_work)
-                    .is_none_or(|value| value > limits.max_selector_work)
-                {
-                    return Err(SemanticValidationError::SelectorWorkLimit {
-                        limit: limits.max_selector_work,
-                        position,
-                    });
-                }
+                check_selector_work(&cumulative, &local, limits, position)?;
                 seen[unit] = generation;
                 affected.push(entry.unit);
             }
-            if cumulative
-                .selector_work
-                .checked_add(local.selector_work)
-                .is_none_or(|value| value > limits.max_selector_work)
-            {
-                return Err(SemanticValidationError::SelectorWorkLimit {
-                    limit: limits.max_selector_work,
-                    position,
-                });
-            }
+            check_selector_work(&cumulative, &local, limits, position)?;
         }
     }
     Ok(local)
+}
+
+fn check_selector_work(
+    cumulative: &ExceptionCounters,
+    local: &ExceptionCounters,
+    limits: ValidationLimits,
+    position: SourcePosition,
+) -> Result<(), SemanticValidationError> {
+    if cumulative
+        .selector_work
+        .checked_add(local.selector_work)
+        .is_none_or(|value| value > limits.max_selector_work)
+    {
+        return Err(SemanticValidationError::SelectorWorkLimit {
+            limit: limits.max_selector_work,
+            position,
+        });
+    }
+    Ok(())
 }
 
 const fn ceil_log2(value: usize) -> usize {

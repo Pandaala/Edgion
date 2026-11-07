@@ -1269,28 +1269,27 @@ impl CompiledGeneration {
     }
 }
 
+fn member_group_key(plan: CompiledMemberPlan, multi_match: bool) -> Result<CompiledMatcherGroupKey, CompilerError> {
+    Ok(CompiledMatcherGroupKey {
+        phase: plan.phase,
+        target_plan: plan.target_plan.ok_or(CompilerError::PrivateInvariant {
+            kind: CompilerInvariant::InvalidByteRange,
+        })?,
+        transformation_plan: plan.transformation_plan.ok_or(CompilerError::PrivateInvariant {
+            kind: CompilerInvariant::InvalidByteRange,
+        })?,
+        multi_match,
+        capture_mode: CaptureMode::None,
+        byte_view: ByteView::RawBytes,
+    })
+}
+
 fn prefix_actions_supported(generation: &CompiledGeneration, member: CompiledMemberPlan) -> bool {
     generation.actions[member.action_start..member.action_start + member.action_count]
         .iter()
         .all(|action| match action.kind {
             ActionEnvelopeKind::Transformation => true,
-            ActionEnvelopeKind::Action(kind) => matches!(
-                kind,
-                super::ActionKind::AuditLog
-                    | super::ActionKind::Block
-                    | super::ActionKind::Deny
-                    | super::ActionKind::Id
-                    | super::ActionKind::Log
-                    | super::ActionKind::NoAuditLog
-                    | super::ActionKind::NoLog
-                    | super::ActionKind::Pass
-                    | super::ActionKind::Phase
-                    | super::ActionKind::Severity
-                    | super::ActionKind::Status
-                    | super::ActionKind::Tag
-                    | super::ActionKind::Ver
-                    | super::ActionKind::Msg
-            ),
+            ActionEnvelopeKind::Action(kind) => is_streaming_safe_action(kind) || kind == super::ActionKind::Msg,
         })
 }
 
@@ -1486,23 +1485,32 @@ pub(super) fn is_streaming_raw_member(generation: &CompiledGeneration, member_in
     };
     actions.iter().all(|action| match action.kind {
         ActionEnvelopeKind::Transformation => true,
-        ActionEnvelopeKind::Action(kind) => matches!(
-            kind,
-            super::ActionKind::AuditLog
-                | super::ActionKind::Block
-                | super::ActionKind::Deny
-                | super::ActionKind::Id
-                | super::ActionKind::Log
-                | super::ActionKind::NoAuditLog
-                | super::ActionKind::NoLog
-                | super::ActionKind::Pass
-                | super::ActionKind::Phase
-                | super::ActionKind::Severity
-                | super::ActionKind::Status
-                | super::ActionKind::Tag
-                | super::ActionKind::Ver
-        ),
+        ActionEnvelopeKind::Action(kind) => is_streaming_safe_action(kind),
     })
+}
+
+/// Actions a streaming raw-body member may carry. The request-prefix path
+/// additionally accepts `Msg` (see `prefix_actions_supported`): `Msg`/`LogData`
+/// templates are expanded at finding time (`transaction.rs` `expand_template`)
+/// and a streaming raw member has no retained value for them. Follow-up F-1 in
+/// the 2026-11-07 WAF optimization spec tracks whether to unify.
+fn is_streaming_safe_action(kind: super::ActionKind) -> bool {
+    matches!(
+        kind,
+        super::ActionKind::AuditLog
+            | super::ActionKind::Block
+            | super::ActionKind::Deny
+            | super::ActionKind::Id
+            | super::ActionKind::Log
+            | super::ActionKind::NoAuditLog
+            | super::ActionKind::NoLog
+            | super::ActionKind::Pass
+            | super::ActionKind::Phase
+            | super::ActionKind::Severity
+            | super::ActionKind::Status
+            | super::ActionKind::Tag
+            | super::ActionKind::Ver
+    )
 }
 
 const fn merge_request_body_class(
@@ -3180,21 +3188,10 @@ impl<'source> GroupedMatcherState<'source> {
                 );
                 if is_phrase {
                     if unit.is_active() && !capture {
-                        let member_plan = state.asset_templates.members[source_member_index];
-                        let key = CompiledMatcherGroupKey {
-                            phase: member_plan.phase,
-                            target_plan: member_plan.target_plan.ok_or(CompilerError::PrivateInvariant {
-                                kind: CompilerInvariant::InvalidByteRange,
-                            })?,
-                            transformation_plan: member_plan.transformation_plan.ok_or(
-                                CompilerError::PrivateInvariant {
-                                    kind: CompilerInvariant::InvalidByteRange,
-                                },
-                            )?,
-                            multi_match: member.rule().fold().multi_match_action().is_some(),
-                            capture_mode: CaptureMode::None,
-                            byte_view: ByteView::RawBytes,
-                        };
+                        let key = member_group_key(
+                            state.asset_templates.members[source_member_index],
+                            member.rule().fold().multi_match_action().is_some(),
+                        )?;
                         let hash = hash_group_key(key, &mut canonical_work, limits)?;
                         let group = insert_group_key(
                             key,
@@ -3284,21 +3281,10 @@ impl<'source> GroupedMatcherState<'source> {
                             kind: CompilerInvariant::UnexpectedActionOperand,
                         });
                     };
-                    let member_plan = state.asset_templates.members[source_member_index];
-                    let key = CompiledMatcherGroupKey {
-                        phase: member_plan.phase,
-                        target_plan: member_plan.target_plan.ok_or(CompilerError::PrivateInvariant {
-                            kind: CompilerInvariant::InvalidByteRange,
-                        })?,
-                        transformation_plan: member_plan.transformation_plan.ok_or(
-                            CompilerError::PrivateInvariant {
-                                kind: CompilerInvariant::InvalidByteRange,
-                            },
-                        )?,
-                        multi_match: member.rule().fold().multi_match_action().is_some(),
-                        capture_mode: CaptureMode::None,
-                        byte_view: ByteView::RawBytes,
-                    };
+                    let key = member_group_key(
+                        state.asset_templates.members[source_member_index],
+                        member.rule().fold().multi_match_action().is_some(),
+                    )?;
                     let hash = hash_group_key(key, &mut canonical_work, limits)?;
                     let group = insert_group_key(
                         key,
