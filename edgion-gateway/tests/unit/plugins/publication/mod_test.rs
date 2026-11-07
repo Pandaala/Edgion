@@ -2016,7 +2016,7 @@ fn geo_stream_typed_invalid_replaces_cached_policy_and_clean_publication_restore
             let ConnectionView::Ready(runtime) = publisher.snapshot().connection(&listener) else {
                 panic!("existing listener must remain bound");
             };
-            let ctx = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+            let ctx = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1, 1);
             let result = runtime
                 .stream_plugin_runtime
                 .run(&ctx)
@@ -2087,7 +2087,7 @@ async fn acl_stream_actual_publication_replaces_invalid_generation_and_clean_rec
         let clean: Arc<EdgionStreamPlugins> = Arc::new(serde_json::from_value(authored.clone()).unwrap());
         publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(), clean.clone())]));
         let held = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
-        let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+        let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1, 1);
         assert!(matches!(
             held.stream_plugin_runtime.run(&context).await,
             StreamPluginResult::Allow
@@ -2134,7 +2134,7 @@ async fn acl_stream_actual_publication_replaces_invalid_generation_and_clean_rec
     )]));
     publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"stream","namespace":"apps"},"spec":{"plugins":[{"type":"GeoIpLocation","config":{}}]}})).unwrap()))]));
     let invalid = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
-    let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+    let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1, 1);
     assert!(matches!(
         invalid.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Deny(_)

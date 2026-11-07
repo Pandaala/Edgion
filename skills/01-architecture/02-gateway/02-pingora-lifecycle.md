@@ -331,11 +331,19 @@ Wrap-up phase after the request completes:
 
 ## ConnectionFilter (TCP layer)
 
-**File**: `plugins/stream/connection_filter_bridge.rs`
+**Files**: `runtime/server/downstream_connections.rs`, `plugins/stream/connection_filter_bridge.rs`
+
+`ListenerAdmissionFilter` implements the Edgion Pingora fork's
+`ConnectionFilter::admit(addr: Option<&SocketAddr>) -> ConnectionAdmission`. In
+order it applies the process-fatal PROXY-policy guard, takes a slot from the
+process connection counter (optional `server.max_downstream_connections` cap) and
+the listener's counter, then runs `StreamPluginConnectionFilter::accept` with the
+listener ordinal. An admitted socket carries a `ConnectionPermit` that releases
+both slots when the l4 stream drops; see
+[downstream connection admission](../../04-review/listeners/regression-guards/downstream-connection-admission.md).
 
 `StreamPluginConnectionFilter` filters raw TCP connections before TLS handshake and HTTP parsing:
 
-- Implements Pingora's `ConnectionFilter` trait method `should_accept(addr: Option<&SocketAddr>) -> bool`.
 - Runs after the process-fatal PROXY-policy guard and before inbound PROXY parsing.
 - Captures one immutable `PluginPublication` snapshot and reads the physical listener's `ConnectionView`.
 - Uses the view that publication derived by comparing every serving Gateway's effective connection policy; `Unavailable` fails closed and `Ready` pins one `CompiledStreamPlugins` generation.
@@ -344,7 +352,7 @@ Wrap-up phase after the request completes:
 - After policy availability is established, missing address information (`addr == None`) retains the narrow non-inet allow behavior.
 - Allows when the shared listener view is `Empty` or its pinned runtime has no active plugin.
 
-Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiting.
+Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiting, concurrent-connection caps (`ConnectionLimit`).
 
 ## EdgionHttpContext: per-request state carrier
 

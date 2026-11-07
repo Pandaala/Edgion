@@ -46,7 +46,7 @@ async fn scopes_share_the_real_rate_limit_budget_and_revoke_releases_owner() {
     let owner = Arc::downgrade(cached);
     let second = generation.compile(&allow, CONNECTION);
     assert_eq!(owner.strong_count(), 3, "one cache and two views share the same filter");
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18491, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18491, StreamLayer::Stage1, 1);
     assert!(matches!(
         first.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Allow
@@ -77,7 +77,7 @@ async fn scopes_share_the_real_rate_limit_budget_and_revoke_releases_owner() {
 #[tokio::test]
 async fn denied_and_unreferenced_stages_never_construct_entries() {
     let mut generation = StreamPluginGeneration::new(source());
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18492, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18492, StreamLayer::Stage1, 1);
     let blocked = generation.compile(&policy("block"), CONNECTION);
     assert!(matches!(
         blocked.stream_plugin_runtime.run(&context).await,
@@ -137,7 +137,7 @@ async fn failed_entries_stay_fail_closed_and_do_not_pollute_bypassed_scope() {
     // reuse; the published runtime still denies instead of retaining an Err.
     assert!(generation.connection[0].is_none());
     assert_eq!(generation.cached_entry_count(), 0);
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18493, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18493, StreamLayer::Stage1, 1);
     assert!(matches!(
         invalid.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Deny(_)
@@ -164,7 +164,7 @@ async fn unsupported_stream_source_denies_both_stages_despite_disable_or_policy_
     }
     .compile()
     .unwrap();
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 443, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 443, StreamLayer::Stage1, 1);
     let rsc = crate::Rsc::new("TLSRoute", "default", "test");
     let tls_context = TlsRouteContext {
         direct_peer_ip: "127.0.0.1".parse().unwrap(),
@@ -235,7 +235,7 @@ async fn standalone_generation_default_target_live_updates_and_disabled_owner_po
         let pinned = generation.compile(&allow, stages);
         let again = generation.compile(&allow, stages);
         assert_eq!(generation.cached_entry_count(), 2);
-        let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18497, StreamLayer::Stage1);
+        let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18497, StreamLayer::Stage1, 1);
         let rsc = crate::Rsc::new("TLSRoute", "default", "r5c2-live");
         let tls = crate::plugins::stream::TlsRouteContext {
             direct_peer_ip: context.direct_peer_ip,
@@ -302,7 +302,7 @@ async fn gcir_selector_fresh_retarget_generation_and_pinned_view_keep_live_snaps
     };
     let mut first = StreamPluginGeneration::new(source("r5e-selector-first"));
     let pinned = first.compile(&CompiledPluginPolicy::default(), CONNECTION);
-    let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18502, StreamLayer::Stage1);
+    let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18502, StreamLayer::Stage1, 1);
     assert!(matches!(
         pinned.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Allow
@@ -342,7 +342,7 @@ async fn active_redis_generation_checks_new_owner_without_revoking_captured_view
     let captured = first.compile(&policy, CONNECTION);
     let repeated = first.compile(&policy, CONNECTION);
     assert_eq!(first.cached_entry_count(), 1);
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21983, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21983, StreamLayer::Stage1, 1);
     assert!(matches!(
         captured.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Allow

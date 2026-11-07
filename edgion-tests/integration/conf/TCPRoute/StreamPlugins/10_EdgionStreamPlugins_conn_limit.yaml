@@ -1,0 +1,12 @@
+# EdgionStreamPlugins: ConnectionLimit at the TCPRoute layer (maxConnections: 2).
+# Counts connections in the TCP listener's route stage, held for the relay.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-conn-limit-route
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionLimit
+      config:
+        maxConnections: 2

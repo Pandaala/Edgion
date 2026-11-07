@@ -422,12 +422,9 @@ spec:
   source-address session, not once per datagram.
 - **Bounds connection rate, NOT concurrent fds.** A slowloris-style adversary
   that opens connections slowly and never closes them can still exhaust fds
-  without tripping any rate. Defending against that needs concurrent-count
-  limiting (blocked on a Pingora connection-close hook) and/or handshake/idle
-  timeouts + OS-level limits. Pair this plugin with those, not as a substitute.
-- The source task's process-wide fd-exhaustion safety net remains open after
-  this plugin — see
-  `docs/superpowers/specs/2026-06-12-connection-rate-limit-stream-plugin-design.md`.
+  without tripping any rate. Pair it with the `ConnectionLimit` concurrency cap
+  (below), the process-wide `server.max_downstream_connections` cap, and
+  handshake/idle timeouts.
 
 Reject metric: `edgion_connection_rate_limit_rejected_total` with labels
 `dimension={listener|source_ip}` and `stage={local|redis}` (fixed, low
@@ -444,6 +441,27 @@ User-facing config reference (canonical): see
 `docs/en/user-guide/tcp-route/stream-plugins.md` — "ConnectionRateLimit"
 (`redisTimeout`, the inbound-fd vs outbound-pool rationale, the `perSourceIp`
 no-backstop caveat, and the PromQL alert example).
+
+## ConnectionLimit (concurrent connection cap)
+
+`EdgionStreamPlugin::ConnectionLimit { maxConnections }` caps live connections in
+the attachment scope. The plugin is stateless: the scope owner counts the
+connection before the chain runs and passes its ordinal in
+`StreamContext::active_connections`; the plugin denies `ordinal > maxConnections`
+and records `edgion_downstream_connections_rejected_total{reason}`
+(`Stage1` → `listener`, `Tcp` → `route`). Scope owners, all created once per
+listener at startup (so reloads never reset counts):
+
+- Gateway listener: `ListenerAdmissionFilter` in
+  `runtime/server/downstream_connections.rs`; the slot is stored in the Pingora
+  `ConnectionPermit` owned by the accepted l4 stream.
+- TCPRoute: `EdgionTcpProxy::route_connections`; the slot lives in
+  `handle_connection` for the whole relay.
+- UDPRoute: `EdgionUdpProxy::route_sessions`; the slot lives in `ClientSession`.
+
+Any new `StreamContext::new` caller must pass the ordinal of a slot it holds for
+the connection's lifetime. Design and limits:
+[downstream connection admission](../../04-review/listeners/regression-guards/downstream-connection-admission.md).
 
 ## Key differences from HTTP plugins
 

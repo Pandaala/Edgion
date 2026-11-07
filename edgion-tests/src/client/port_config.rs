@@ -19,6 +19,7 @@ pub struct SuitePorts {
     pub tcp: Option<u16>,
     pub tcp_filtered: Option<u16>,
     pub tcp_bare: Option<u16>,
+    pub tcp_conn_limit: Option<u16>,
     pub tls: Option<u16>,
     pub udp: Option<u16>,
 }

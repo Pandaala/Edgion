@@ -74,7 +74,7 @@ async fn blocked_bypassed_disabled_and_invalid_chains_cannot_activate_new_budget
             "default",
             &key,
         );
-        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18090, StreamLayer::Stage1);
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18090, StreamLayer::Stage1, 1);
         assert!(matches!(old.run(&ctx).await, StreamPluginResult::Allow));
         cfg.per_listener.as_mut().unwrap().rate = 100;
         let mut candidate = entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()));
@@ -111,8 +111,8 @@ async fn repeated_listener_route_attachment_consumes_twice_and_other_entries_are
     let key = "default/local-gate-layered-runtime";
     let one = entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()));
     let runtime = StreamPluginRuntime::from_stream_plugins(std::slice::from_ref(&one), "default", key);
-    let listener = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Stage1);
-    let route = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Tcp);
+    let listener = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Stage1, 1);
+    let route = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Tcp, 1);
     assert!(matches!(runtime.run(&listener).await, StreamPluginResult::Allow));
     assert!(matches!(runtime.run(&route).await, StreamPluginResult::Allow));
     assert!(matches!(runtime.run(&listener).await, StreamPluginResult::Deny(_)));
@@ -148,7 +148,7 @@ async fn assert_invalid_gate_precedes_rate_limit(
         entry(invalid_plugin),
     ];
     let runtime = StreamPluginRuntime::from_stream_plugins(&entries, "default", resource_key);
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18080, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18080, StreamLayer::Stage1, 1);
     assert!(matches!(
         runtime.run(&ctx).await,
         StreamPluginResult::Deny(reason) if reason == expected_reason
@@ -172,7 +172,7 @@ async fn block_policy_denies_connection_bypass_policy_skips() {
         plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
     };
     let runtime = policy_runtime(&[blocked], "default/test-esp", PolicyActionKind::Block);
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1, 1);
     match runtime.run(&ctx).await {
         StreamPluginResult::Deny(Cow::Owned(reason)) => {
             assert_eq!(reason, "plugin disabled by policy: stream/ConnectionRateLimit")
@@ -200,7 +200,7 @@ async fn block_policy_dominates_regardless_of_entry_position() {
         plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
     };
     let runtime = policy_runtime(&[normal, blocked], "default/test-esp", PolicyActionKind::Block);
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081, StreamLayer::Stage1, 1);
     match runtime.run(&ctx).await {
         StreamPluginResult::Deny(reason) => {
             assert!(reason.contains("plugin disabled by policy: stream/ConnectionRateLimit"))
@@ -297,7 +297,7 @@ async fn invalid_geoip_config_installs_an_always_deny_gate() {
     let runtime = StreamPluginRuntime::from_stream_plugins(&[invalid], "default", "default/test-esp");
     assert!(!runtime.is_empty());
 
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(
         runtime.run(&ctx).await,
         StreamPluginResult::Deny(Cow::Borrowed("invalid stream/GeoIpLocation configuration"))
@@ -318,7 +318,7 @@ async fn invalid_geoip_config_cannot_be_undone_and_policy_block_stays_first() {
             },
         ]
     };
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1, 1);
 
     let runtime = StreamPluginRuntime::from_stream_plugins(&geo_entries(), "default", "default/test-esp");
     assert!(matches!(
@@ -349,7 +349,7 @@ async fn standalone_entries_are_allowed() {
     };
     let runtime = StreamPluginRuntime::from_stream_plugins(&[entry], "default", "default/test-esp");
     assert!(!runtime.is_empty());
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8082, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8082, StreamLayer::Stage1, 1);
     assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));
 }
 
@@ -362,7 +362,7 @@ async fn unsupported_direct_stream_entries_deny_before_disable_and_policy_checks
     }
     .compile()
     .unwrap();
-    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 443, StreamLayer::Stage1);
+    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 443, StreamLayer::Stage1, 1);
     assert!(matches!(
         StreamPluginRuntime::unsupported_source().run(&ctx).await,
         StreamPluginResult::Deny(Cow::Borrowed("unsupported stream plugin type"))
@@ -443,7 +443,7 @@ impl StreamPlugin for CountedPassingStreamPlugin {
 
 #[tokio::test]
 async fn active_redis_owner_gate_precedes_allow_failure_policy_and_cached_execution() {
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21981, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21981, StreamLayer::Stage1, 1);
     for per_source in [false, true] {
         let valid = active_redis_owner(per_source);
         let mut cache = vec![None];
@@ -488,7 +488,7 @@ async fn active_redis_owner_gate_precedes_allow_failure_policy_and_cached_execut
 
 #[tokio::test]
 async fn stream_redis_owner_gate_respects_local_activity_and_policy_precedence() {
-    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21982, StreamLayer::Stage1);
+    let context = StreamContext::new("127.0.0.1".parse().unwrap(), 21982, StreamLayer::Stage1, 1);
     let mut owner = active_redis_owner(false);
     owner.metadata.name = None;
     let EdgionStreamPlugin::ConnectionRateLimit(config) = &mut owner.spec.plugins.as_mut().unwrap()[0].plugin else {

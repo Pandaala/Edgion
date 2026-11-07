@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Downstream connection admission and exact live counts](regression-guards/downstream-connection-admission.md)
 - [Retained listener managers stop serving removed routes](regression-guards/retained-listener-manager-clearing-wire-coverage.md)
 - [Gateway Add final-value publication](regression-guards/gateway-add-final-value-publication.md)
 

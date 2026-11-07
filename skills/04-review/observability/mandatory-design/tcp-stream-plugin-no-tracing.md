@@ -1,6 +1,6 @@
 ---
 name: tcp-stream-plugin-no-tracing
-description: Use when reviewing findings that the TCP `check_stream_plugins` fail-close branches should warn (tracing) when the client address is unparseable or the referenced EdgionStreamPlugins is missing, or that the listener-level `StreamPluginConnectionFilter::should_accept` silently drops its deny reason; explains why the per-connection warns were removed and replaced with a bounded access-log reason, and why the ConnectionFilter listener gate is structurally observability-limited.
+description: Use when reviewing findings that the TCP `check_stream_plugins` fail-close branches should warn (tracing) when the client address is unparseable or the referenced EdgionStreamPlugins is missing, or that the listener-level `StreamPluginConnectionFilter::accept` silently drops its deny reason; explains why the per-connection warns were removed and replaced with a bounded access-log reason, and why the ConnectionFilter listener gate is structurally observability-limited.
 knowledge_type: mandatory-design
 ---
 
@@ -39,8 +39,9 @@ The no-tracing rule does not mean that every stream denial is metric-only.
 `GeoIpLocation` is registered in `EdgionStreamPlugins.spec.plugins`; the attachment
 owner determines the execution point. Current source boundaries are:
 
-- `plugins/stream/connection_filter_bridge.rs::should_accept` constructs
-  `StreamContext` with `StreamLayer::Stage1`. A denial returns `false` before a
+- `plugins/stream/connection_filter_bridge.rs::accept` (called from the listener's
+  `ListenerAdmissionFilter::admit`) constructs `StreamContext` with
+  `StreamLayer::Stage1`. A denial returns `false` before a
   protocol log context exists, so GeoIP's denial counter is its only signal.
 - `routes/tcp/edgion_tcp.rs::check_stream_plugins` uses `StreamLayer::Tcp` after
   route matching and before backend selection. It collapses plugin reasons to
@@ -85,7 +86,7 @@ When a review re-reports any of:
    unparseable client address / missing ESP"
 2. "the TCP deny reason should be a dynamic `format!` carrying `store_key` /
    `direct_peer_ip` (parity with the TLS `ctx.err_log = Some(format!(...))`)"
-3. "`StreamPluginConnectionFilter::should_accept`
+3. "`StreamPluginConnectionFilter::accept`
    (`edgion-gateway/src/plugins/stream/connection_filter_bridge.rs`) collapses
    `StreamPluginResult::Deny(reason)` to `false` with no `tracing` / counter /
    access-log field — operators cannot tell which listener-level deny fired or
@@ -97,7 +98,7 @@ When a review re-reports any of:
 - `edgion_tcp.rs` `check_stream_plugins` contains no `tracing::` calls.
 - `StreamPluginCheck::Deny(&'static str)` and `TcpContext.deny_reason` /
   `TcpLogEntry.deny_reason` are present.
-- `connection_filter_bridge.rs` `should_accept` still returns plain `bool`
+- `connection_filter_bridge.rs` `accept` still returns plain `bool`
   with no `tracing::*` call (the listener-level deny remains silent by
   design — see (3) below).
 
@@ -109,8 +110,8 @@ classifies the failure; verbose detail is not worth the allocation / leakage
 surface.
 
 Re-report **(3)** is **not accepted**: Pingora's `ConnectionFilter` trait
-exposes only `async fn should_accept(&self, addr: Option<&SocketAddr>) -> bool`
-— no context object, no log buffer, no return-side metadata channel. The
+exposes only a decision (`should_accept`, or the fork's `admit`, which adds an
+opaque lifetime permit) — no context object, no log buffer, no reason channel. The
 three previously-proposed fixes are all closed:
 
 - *Emit `tracing::info!/warn!` per denied connection* — violates Iron rule 3
@@ -126,7 +127,7 @@ three previously-proposed fixes are all closed:
   either.
 - *Add an access-log entry on listener-level deny* — by construction the
   `TcpLogEntry` lifecycle starts inside `EdgionTcpProxy::process_new`, which
-  is only reached *after* `ConnectionFilter::should_accept` admits the
+  is only reached *after* `ConnectionFilter::admit` admits the
   connection. Forcing a log emission from the filter would require building a
   parallel "rejected-connection log" sink, which is a feature, not a fix, and
   would itself be subject to the per-connection hot-path constraint.

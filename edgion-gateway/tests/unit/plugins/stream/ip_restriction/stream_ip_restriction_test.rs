@@ -38,12 +38,12 @@ async fn deny_refs_block_referenced_ip() {
         ..Default::default()
     }]);
     let plugin = from_owner(&owner(&rules, ns));
-    let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(
         plugin.on_connection(&ctx_block).await,
         StreamPluginResult::Deny(_)
     ));
-    let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
 }
 
@@ -70,7 +70,7 @@ async fn l4_denied_allow_ref_contributes_no_key() {
     // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
     // Empty key lists keep the snapshot absent, so on_connection reaches
     // check_ip_with_refs with empty ref slices — a whitelist miss → Deny.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(
         matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
         "denied allow_ref → empty allow matchers → non-matching IP must be DENIED (deny-all fail-closed)",
@@ -142,7 +142,7 @@ async fn owning_connection_invalid_slots_keep_allow_intent_and_deny_set_drop() {
                 continue;
             }
             let plugin = result.unwrap();
-            let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1);
+            let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1, 1);
             let result = plugin.on_connection(&context).await;
             assert_eq!(matches!(result, StreamPluginResult::Allow), allow, "{case} / {bad}");
         }
@@ -198,8 +198,8 @@ async fn removed_http_fields_do_not_change_reference_acl_runtime_decisions() {
         ns,
         "arch056-advisory-acl/runtime",
     );
-    let denied = StreamContext::new("192.0.2.1".parse().unwrap(), 8080, StreamLayer::Stage1);
-    let allowed = StreamContext::new("198.51.100.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let denied = StreamContext::new("192.0.2.1".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
+    let allowed = StreamContext::new("198.51.100.1".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(
         plugin.on_connection(&denied).await,
         StreamPluginResult::Deny(_)

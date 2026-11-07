@@ -13,6 +13,9 @@ fn startup_context(gateway: &Gateway) -> listener_builder::ListenerContext {
         egc: crate::config::bind_gateway_config(None),
         server_conf: Arc::new(Default::default()),
         downstream_h2_policy: DownstreamH2Policy::try_from(&crate::cli::config::ServerConfig::default()).unwrap(),
+        downstream_connections: Arc::new(
+            crate::runtime::server::downstream_connections::ConnectionCounter::unlimited(),
+        ),
         enable_http2: parse_enable_http2_annotation(gateway),
         gateway_annotations: gateway
             .metadata

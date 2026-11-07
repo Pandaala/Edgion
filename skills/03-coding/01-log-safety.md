@@ -166,7 +166,8 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 - `RequestFilter` / `UpstreamResponse*` implementations under `plugins/runtime/traits/**`
 - `plugins/runtime/conditional_filter.rs`, `plugins/runtime/session_adapter.rs`, `plugins/runtime/gateway_api_filters/**`
 - `filter` / `apply` / `on_request` methods of `plugins/http/**/plugin.rs`
-- `plugins/stream/stream_plugin_runtime.rs`, `plugins/stream/connection_filter_bridge.rs` (`impl ConnectionFilter`), `plugins/stream/*/plugin.rs` (`impl StreamPlugin`)
+- `runtime/server/downstream_connections.rs` (`ListenerAdmissionFilter::admit` listener admission, connection counters and permits, run per accepted socket)
+- `plugins/stream/stream_plugin_runtime.rs`, `plugins/stream/connection_filter_bridge.rs` (listener Stage-1 chain), `plugins/stream/*/plugin.rs` (`impl StreamPlugin`)
 - `plugins/stream/tls_route/tls_route_plugin_runtime.rs`, `plugins/stream/tls_route/*.rs` (`impl TlsRoutePlugin`, route plugins after the TLS handshake)
 
 **Shared modules entered via the callback chain** (data plane when called from there; not when called only at config/startup time):
@@ -298,7 +299,8 @@ rg -n 'tracing::' \
   edgion-gateway/src/backends/outlier_detection/store.rs \
   edgion-gateway/src/backends/policy/ \
   edgion-gateway/src/cache/ \
-  edgion-gateway/src/runtime/server/error_response.rs
+  edgion-gateway/src/runtime/server/error_response.rs \
+  edgion-gateway/src/runtime/server/downstream_connections.rs
 ```
 
 **Expected**: only the exempt items listed in the exception table remain (the access-log-send failure warn in `pg_logging.rs`, the panic-capture error in `mtls_verify_callback.rs`, etc.). Any new hit must either:

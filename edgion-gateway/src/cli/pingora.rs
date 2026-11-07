@@ -3,6 +3,7 @@
 use crate::cli::config::EdgionGatewayConfig;
 use crate::conf_sync::ConfigClient;
 use crate::runtime::server::base::GatewayBase;
+use crate::runtime::server::downstream_connections::ConnectionCounter;
 use crate::runtime::server::downstream_h2::DownstreamH2Policy;
 use crate::runtime::server::proxy_protocol_policy::{
     get_global_proxy_protocol_policy_runtime, ProxyProtocolPolicyRuntime,
@@ -92,6 +93,8 @@ pub fn create_and_configure_server(
     gateway_config: &EdgionGatewayConfig,
 ) -> Result<Server> {
     let downstream_h2_policy = DownstreamH2Policy::try_from(&gateway_config.server)?;
+    // One process-wide counter for every Pingora listener; unset = unlimited.
+    let downstream_connections = Arc::new(ConnectionCounter::new(gateway_config.server.max_downstream_connections));
     // 1. Create ServerConf from local YAML configuration
     let server_conf = create_server_conf(gateway_config)?;
 
@@ -107,7 +110,12 @@ pub fn create_and_configure_server(
     let gateways = config_client.list_gateways().data;
 
     // 5. Configure all listeners on the Pingora server
-    gateway_base.configure_listeners(&mut pingora_server, gateways, &downstream_h2_policy)?;
+    gateway_base.configure_listeners(
+        &mut pingora_server,
+        gateways,
+        &downstream_h2_policy,
+        &downstream_connections,
+    )?;
     tracing::info!("Gateway listeners configured");
 
     Ok(pingora_server)

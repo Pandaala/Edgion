@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig;
 use crate::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
+use crate::resources::edgion_stream_plugins::connection_limit_config::ConnectionLimitConfig;
 use crate::resources::edgion_stream_plugins::connection_rate_limit_config::ConnectionRateLimitConfig;
 use crate::resources::edgion_stream_plugins::global_connection_ip_restriction::GlobalConnectionIpRestrictionConfig;
 
@@ -27,6 +28,10 @@ pub enum EdgionStreamPlugin {
     /// L4 connection-rate limiter (local gate + optional Redis).
     ConnectionRateLimit(ConnectionRateLimitConfig),
 
+    /// L4 concurrent-connection cap for the attachment scope (Gateway
+    /// listener, TCPRoute route stage, or UDPRoute sessions).
+    ConnectionLimit(ConnectionLimitConfig),
+
     /// L4 connection-phase geo resolution/restriction. Same config shape as
     /// the HTTP `GeoIpLocation` (`edgion_plugins::plugin_configs::GeoIpLocationConfig`);
     /// only `DirectPeerIp`-sourced rules are legal here (no XFF at L4).
@@ -44,6 +49,7 @@ impl EdgionStreamPlugin {
             EdgionStreamPlugin::IpRestriction(_) => "IpRestriction",
             EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
             EdgionStreamPlugin::ConnectionRateLimit(_) => "ConnectionRateLimit",
+            EdgionStreamPlugin::ConnectionLimit(_) => "ConnectionLimit",
             EdgionStreamPlugin::GeoIpLocation(_) => "GeoIpLocation",
         }
     }

@@ -1004,3 +1004,28 @@ fn request_body_budget_is_a_strict_startup_configuration_subtree() {
     assert!(unknown.paths().next().is_none());
     assert!(deserialize_process_config("gateway:\n  request_body_budget:\n    memory_limt: 1MiB\n").is_err());
 }
+
+#[test]
+fn max_downstream_connections_is_unset_by_default_and_rejects_zero() {
+    assert_eq!(EdgionGatewayConfig::default().server.max_downstream_connections, None);
+
+    let (config, unknown) = deserialize_process_config("server:\n  max_downstream_connections: 50000\n").unwrap();
+    assert!(unknown.paths().next().is_none());
+    assert_eq!(config.server.max_downstream_connections.map(|v| v.get()), Some(50_000));
+
+    assert!(deserialize_process_config("server:\n  max_downstream_connections: 0\n").is_err());
+    assert!(deserialize_process_config("server:\n  max_downstream_connections: -1\n").is_err());
+}
+
+#[test]
+fn max_downstream_connections_cli_overrides_file_and_absent_cli_keeps_file() {
+    let mut base = EdgionGatewayConfig::default();
+    base.server.max_downstream_connections = std::num::NonZeroU64::new(100);
+    EdgionGatewayConfig::merge(&mut base, &EdgionGatewayConfig::default());
+    assert_eq!(base.server.max_downstream_connections.map(|v| v.get()), Some(100));
+
+    let mut cli = EdgionGatewayConfig::default();
+    cli.server.max_downstream_connections = std::num::NonZeroU64::new(7);
+    EdgionGatewayConfig::merge(&mut base, &cli);
+    assert_eq!(base.server.max_downstream_connections.map(|v| v.get()), Some(7));
+}

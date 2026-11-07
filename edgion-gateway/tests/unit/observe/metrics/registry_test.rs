@@ -1,6 +1,12 @@
 use super::*;
 use metrics_exporter_prometheus::PrometheusBuilder;
 
+/// Fresh `GatewayMetrics` bound to the current (test-local) recorder, for tests
+/// in other modules that must observe what a component records.
+pub(crate) fn fresh_gateway_metrics() -> GatewayMetrics {
+    GatewayMetrics::new()
+}
+
 #[test]
 fn dropped_log_counts_keep_zero_lazy_and_add_batches() {
     let recorder = PrometheusBuilder::new().build_recorder();
@@ -147,7 +153,15 @@ fn gateway_metrics_registration_policy() {
             rendered.contains("edgion_gateway_response_bytes_total"),
             "hot counter response_bytes must register eagerly, got:\n{rendered}"
         );
+        assert!(
+            rendered.contains("edgion_downstream_connections_active"),
+            "hot gauge downstream_connections_active must register eagerly, got:\n{rendered}"
+        );
         // Cold handles: absent until called.
+        assert!(
+            !rendered.contains("edgion_downstream_connections_rejected_total"),
+            "cold counter downstream_connections_rejected must not appear before first call, got:\n{rendered}"
+        );
         assert!(
             !rendered.contains("edgion_access_log_dropped_total"),
             "cold counter access_log_dropped must not appear before first call, got:\n{rendered}"
@@ -191,6 +205,38 @@ fn context_lifecycle_balances_the_active_gauge() {
         drop(release);
         let rendered = handle.render();
         assert!(rendered.lines().any(|line| line == "edgion_ctx_active 0"));
+    });
+}
+
+#[test]
+fn downstream_connection_metrics_balance_and_use_bounded_reasons() {
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+
+    metrics::with_local_recorder(&recorder, || {
+        let metrics = GatewayMetrics::new();
+        metrics.downstream_connection_opened();
+        metrics.downstream_connection_opened();
+        let rendered = handle.render();
+        assert!(rendered
+            .lines()
+            .any(|line| line == "edgion_downstream_connections_active 2"));
+        metrics.downstream_connection_closed();
+        metrics.downstream_connection_closed();
+        let rendered = handle.render();
+        assert!(rendered
+            .lines()
+            .any(|line| line == "edgion_downstream_connections_active 0"));
+
+        metrics.downstream_connection_rejected(DownstreamConnectionRejectReason::Global);
+        metrics.downstream_connection_rejected(DownstreamConnectionRejectReason::Listener);
+        metrics.downstream_connection_rejected(DownstreamConnectionRejectReason::Route);
+        metrics.downstream_connection_rejected(DownstreamConnectionRejectReason::Route);
+        let rendered = handle.render();
+        for (reason, count) in [("global", 1), ("listener", 1), ("route", 2)] {
+            let line = format!("edgion_downstream_connections_rejected_total{{reason=\"{reason}\"}} {count}");
+            assert!(rendered.lines().any(|l| l == line), "missing `{line}` in:\n{rendered}");
+        }
     });
 }
 

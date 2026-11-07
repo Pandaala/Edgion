@@ -20,6 +20,7 @@
 // - 31271: TCP (deny-all ConnectionFilter)
 // - 31272: TCP (qualified Gateway reference rejected, fail-close)
 // - 31269: TCP (allow-all ConnectionFilter, bare name -> namespace normalization)
+// - 31268: TCP (ConnectionLimit maxConnections: 2; 08_/09_/10_ conn_limit files)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -273,6 +274,37 @@ impl StreamPluginsTestSuite {
             },
         )
     }
+    /// Test: Gateway-attached ConnectionLimit caps concurrent sockets on the
+    /// listener at accept (maxConnections: 2, port 31268).
+    fn test_tcp_conn_limit_listener() -> TestCase {
+        TestCase::new(
+            "tcp_connection_limit_listener",
+            "Gateway ConnectionLimit: at most 2 concurrent connections, slot released on close",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let port = match crate::port_config::PortConfig::load() {
+                        Ok(cfg) => cfg
+                            .get_ports("Gateway/StreamPlugins")
+                            .ok()
+                            .and_then(|ports| ports.tcp_conn_limit),
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("ports.json: {e}")),
+                    };
+                    let Some(port) = port else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "ports.json Gateway/StreamPlugins.tcp_conn_limit is not set".to_string(),
+                        );
+                    };
+                    let addr = format!("{}:{}", ctx.target_host, port);
+                    match crate::suites::tcp_route::verify_concurrent_connection_cap(&addr, 2).await {
+                        Ok(message) => TestResult::passed_with_message(start.elapsed(), message),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for StreamPluginsTestSuite {
@@ -287,6 +319,7 @@ impl TestSuite for StreamPluginsTestSuite {
             Self::test_tcp_qualified_name_rejected(),
             Self::test_tcp_bare_name_allowed(),
             Self::test_tcp_denied_multiple(),
+            Self::test_tcp_conn_limit_listener(),
         ]
     }
 }

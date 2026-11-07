@@ -2,7 +2,8 @@
 
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::plugins::stream::{
-    ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
+    ConnectionLimitPlugin, ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin,
+    StreamIpRestriction,
 };
 use edgion_resources::refs::ip_list_fields::{IpListSide, StreamIpListBindings};
 use edgion_resources::refs::stream_plugin_fields::StreamConnectionRateLimitField;
@@ -220,6 +221,9 @@ impl StreamPluginRuntime {
                     config,
                     &crate::plugins::common::entry_scope(resource_key, None, index),
                 )))
+            }
+            EdgionStreamPlugin::ConnectionLimit(config) => {
+                ConnectionLimitPlugin::new(config).map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
             }
             EdgionStreamPlugin::GeoIpLocation(_) => GeoIpLocationStreamPlugin::from_bound(
                 binding.geo_entry(index).ok_or("invalid owning Geo IP reference")?,

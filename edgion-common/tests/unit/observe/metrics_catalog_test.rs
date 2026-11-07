@@ -1,7 +1,7 @@
 use super::*;
 #[test]
 fn catalog_has_exact_classes_and_no_open_fixed_domains() {
-    assert_eq!(DEFINITIONS.len(), 102);
+    assert_eq!(DEFINITIONS.len(), 104);
     let mut names = std::collections::HashSet::new();
     for def in DEFINITIONS {
         assert!(names.insert(def.name), "duplicate metric family");
@@ -23,7 +23,7 @@ fn catalog_has_exact_classes_and_no_open_fixed_domains() {
     }
     assert_eq!(
         DEFINITIONS.iter().filter(|def| def.class == MetricClass::Fixed).count(),
-        75
+        77
     );
     assert_eq!(
         DEFINITIONS

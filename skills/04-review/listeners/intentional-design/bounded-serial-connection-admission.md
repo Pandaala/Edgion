@@ -26,6 +26,10 @@ The inspected Cargo.lock pins Edgion Pingora `edgion_v0.9.1` at
 2026-11-06; originally recorded at `edgion_v4@518f7274`). Its call chain is
 `Service::run_endpoint` -> `TransportStack::accept` ->
 `ListenerEndpoint::accept` -> `ConnectionFilter::should_accept().await`.
+(Current fork: `ListenerEndpoint::accept` calls `ConnectionFilter::admit`, which
+may attach a connection permit to the accepted stream; Edgion's listener filter
+counts the socket before running the Stage-1 chain. See
+[downstream connection admission](../regression-guards/downstream-connection-admission.md).)
 Only after filtering returns does the service spawn the handshake task.
 `ServerConf.listener_tasks_per_fd` defaults to one and controls the number of
 parallel accept tasks. Each such task holds at most one socket undergoing
@@ -35,7 +39,9 @@ timeout starts after filtering. The service selects between accept and
 shutdown, so shutdown can cancel the pending filter future.
 
 Edgion's `runtime/server/listener_builder.rs::apply_connection_filter` installs
-the fatal PROXY-policy guard before the optional stream bridge.
+`ListenerAdmissionFilter` (`runtime/server/downstream_connections.rs`): the
+fatal PROXY-policy guard, then the process connection cap and listener slot,
+then the stream bridge.
 The bridge captures one immutable `PluginPublication` snapshot and obtains the
 physical listener's `ConnectionView`. Publication compares the effective views
 of every serving Gateway; disagreement or unavailable policy yields

@@ -35,6 +35,7 @@ metadata:
 | `IpRestriction` | IpList 引用 | 通过有序的 allowRefs/denyRefs 引用中心 IpList，分组和 CIDR 仅写在 IpList 中。 |
 | `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 命名 `profiles` 在插件中仅保存 IpList 引用和动作；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
 | `ConnectionRateLimit` | `config` 对象 | 本地监听器保护与可选的 Redis 共享限额；Gateway 挂载在 TLS 前执行，UDPRoute 挂载作用于新会话准入。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-连接与-udp-会话接入限流)。 |
+| `ConnectionLimit` | `config` 对象 | 限制挂载作用域内的**并发**连接数（UDP 为 session 数）。挂载到 Gateway 时，超限 socket 在 PROXY 解析和 TLS 握手之前关闭。详见下文 [ConnectionLimit 小节](#connectionlimit-并发连接上限)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
 
@@ -432,6 +433,52 @@ spec:
         - name: app-service
           port: 8080
 ```
+
+## ConnectionLimit: 并发连接上限
+
+`ConnectionRateLimit` 限制新连接到达的速度；`ConnectionLimit` 限制**同时**打开的连接数。真正耗尽文件描述符和内存的是长连接（空闲 keep-alive、HTTP/2、WebSocket、SSE、慢客户端），只有并发上限能约束它们。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: conn-limit
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionLimit
+      config:
+        maxConnections: 10000   # 1..=10000000
+```
+
+不挂载就不生效。计数对象取决于挂载位置：
+
+| 挂载位置 | 计数对象 | 超限连接何时被关闭 |
+|---|---|---|
+| Gateway 注解 | 该 Gateway **每个**物理 listener 上的存活 socket（上限按 listener 计，不是按 Gateway）。UDP listener 不执行 Gateway 挂载。 | accept 时，在 PROXY 协议解析和 TLS 握手之前。 |
+| TCPRoute 注解 | 该 TCP listener 进入路由阶段的连接，整个转发期间都占用名额。 | 路由匹配之后、连接后端之前。 |
+| UDPRoute 注解 | 该 UDP listener 的 session，直到 session 被回收。 | 新来源地址将要创建 session 时。 |
+
+同一个资源可以同时挂在 Gateway 和 TCPRoute 上，两层各自计数。计数归 listener 所有，listener 只在启动时创建一次，因此配置变更不会清零或重复计数；调低 `maxConnections` 不会断开已有连接，只会在计数降到上限以下之前拒绝新连接。
+
+各挂载点之间的计数互不共享：
+
+- 路由阶段的计数属于 **listener**，而不是某一条路由。它包含该 listener 路由阶段中的所有连接，包括配置变更前由旧路由建立、仍未结束的转发。新路由如果上限更低，会在这些转发结束前拒绝新连接。
+- 挂在多个 listener 上的 TCPRoute 或 UDPRoute，在每个 listener 上分别计算上限。
+- 同一个 `EdgionStreamPlugins` 资源被多个 Gateway 或路由引用时，每个挂载点各自计数；资源本身不保存共享状态。
+
+注意：
+
+- 上限统计的是所有客户端的总数，不是按客户端限制。单个来源就可能占满上限并拒绝其他所有客户端。目前还没有按客户端的并发限制；按来源的速率预算请使用 `ConnectionRateLimit`。
+- 把 `ConnectionLimit` 放在 `plugins` 的**第一位**，超限连接就不会再执行后面更昂贵的条目（例如依赖 Redis 的 `ConnectionRateLimit`）。如果放在 `ConnectionRateLimit` 之后，超限客户端的重连会先消耗速率令牌（包括按来源 IP 的预算），并等待 Redis 往返后才被拒绝；挂在 Gateway 上时，这个等待发生在 listener 的串行 accept 循环中，会推迟后续连接。在前面条目中等待的连接已经被计数。
+- 上限统计的是下游 socket。一个 HTTP/2 连接可以承载多个 stream 和上游连接；基于内存的保护是另一项能力。
+- 指向已达上限 listener 的 L4 负载均衡或 kubelet TCP 探活会失败。Admin、探活和 metrics 端口不计入。
+- UDP session 被回收后，名额最多约 1 秒后释放（上游接收任务在下一次轮询时才发现回收）。
+- UDP 来源地址可以被伪造：每个伪造来源的一个数据报就会创建一个 session，并占用名额直到 session 超时（60 秒）。因此挂在 UDPRoute 上的 `ConnectionLimit` 能被少量伪造数据报占满，导致新的合法客户端被拒绝。它限制资源占用，不能防御伪造源洪泛。
+- `pluginPolicy` 照常生效：`Block` `stream/ConnectionLimit` 会让该挂载 fail-closed，`Bypass` 会去掉上限。
+- 拒绝计入 `edgion_downstream_connections_rejected_total{reason="listener"|"route"}`（UDP 按每个被拒绝的新 session 准入尝试计数，也就是每个数据报）；TCP/UDP access log 中显示通用的 `stream plugin policy denied`。
+
+如需跨所有 listener 的进程级上限，请在 gateway 配置中设置 [`server.max_downstream_connections`](../../ops-guide/configuration/gateway-config.md)。
 
 ## 故障排除
 

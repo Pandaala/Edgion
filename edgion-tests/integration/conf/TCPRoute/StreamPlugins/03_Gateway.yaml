@@ -1,6 +1,6 @@
 # Gateway for TCPRoute StreamPlugins testing
-# 4 listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close,
-#              connection-rate-limit (local token-bucket, no Redis)
+# Listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close,
+#            connection-rate-limit (local and Redis), connection-limit (route stage)
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -24,3 +24,6 @@ spec:
     - name: tcp-conn-rate-redis
       protocol: TCP
       port: 31278
+    - name: tcp-conn-limit
+      protocol: TCP
+      port: 31279

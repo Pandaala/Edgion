@@ -21,6 +21,9 @@ use crate::plugins::StreamLayer;
 pub mod names {
     pub const CTX_CREATED: &str = "edgion_ctx_created_total";
     pub const CTX_ACTIVE: &str = "edgion_ctx_active";
+    // Downstream connection admission (listener accept + route stages)
+    pub const DOWNSTREAM_CONNECTIONS_ACTIVE: &str = "edgion_downstream_connections_active";
+    pub const DOWNSTREAM_CONNECTIONS_REJECTED_TOTAL: &str = "edgion_downstream_connections_rejected_total";
     pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
     pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
@@ -276,6 +279,8 @@ pub struct GatewayMetrics {
     ctx_created: Counter,
     /// Currently active contexts
     ctx_active: Gauge,
+    /// Currently open downstream sockets admitted by a Pingora listener
+    downstream_connections_active: Gauge,
     /// Total gateway request bytes proxied (downstream → upstream)
     gateway_request_bytes: Counter,
     /// Total gateway response bytes proxied (upstream → downstream)
@@ -291,6 +296,20 @@ pub struct GatewayMetrics {
     access_log_backfill_failed: OnceLock<Counter>,
     config_reload_signals: OnceLock<Counter>,
     config_relist_total: OnceLock<Counter>,
+    downstream_connections_rejected_global: OnceLock<Counter>,
+    downstream_connections_rejected_listener: OnceLock<Counter>,
+    downstream_connections_rejected_route: OnceLock<Counter>,
+}
+
+/// Bounded `reason` label of `edgion_downstream_connections_rejected_total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownstreamConnectionRejectReason {
+    /// Process-wide `server.max_downstream_connections` cap.
+    Global,
+    /// `ConnectionLimit` at Gateway listener admission.
+    Listener,
+    /// `ConnectionLimit` at TCPRoute / UDPRoute admission.
+    Route,
 }
 
 /// Balances the active-context gauge when terminal request logging finishes.
@@ -398,6 +417,7 @@ impl GatewayMetrics {
             // Hot handles: eager
             ctx_created: fixed_counter!(names::CTX_CREATED),
             ctx_active: fixed_gauge!(names::CTX_ACTIVE),
+            downstream_connections_active: fixed_gauge!(names::DOWNSTREAM_CONNECTIONS_ACTIVE),
             gateway_request_bytes: fixed_counter!(names::GATEWAY_REQUEST_BYTES),
             gateway_response_bytes: fixed_counter!(names::GATEWAY_RESPONSE_BYTES),
             // Cold handles: lazy
@@ -410,7 +430,37 @@ impl GatewayMetrics {
             access_log_backfill_failed: OnceLock::new(),
             config_reload_signals: OnceLock::new(),
             config_relist_total: OnceLock::new(),
+            downstream_connections_rejected_global: OnceLock::new(),
+            downstream_connections_rejected_listener: OnceLock::new(),
+            downstream_connections_rejected_route: OnceLock::new(),
         }
+    }
+
+    /// Charge one admitted downstream socket; balanced by
+    /// [`Self::downstream_connection_closed`] from the owning permit's `Drop`.
+    #[inline]
+    pub(crate) fn downstream_connection_opened(&self) {
+        self.downstream_connections_active.increment(1.0);
+    }
+
+    /// Release one admitted downstream socket's active-gauge charge.
+    #[inline]
+    pub(crate) fn downstream_connection_closed(&self) {
+        self.downstream_connections_active.decrement(1.0);
+    }
+
+    /// Count one connection rejected by a connection cap (UDP: one denied
+    /// new-session admission attempt, i.e. one datagram). Each reason's handle
+    /// is registered on its first rejection, so a flood does not rebuild keys.
+    #[inline]
+    pub(crate) fn downstream_connection_rejected(&self, reason: DownstreamConnectionRejectReason) {
+        let (slot, value) = match reason {
+            DownstreamConnectionRejectReason::Global => (&self.downstream_connections_rejected_global, "global"),
+            DownstreamConnectionRejectReason::Listener => (&self.downstream_connections_rejected_listener, "listener"),
+            DownstreamConnectionRejectReason::Route => (&self.downstream_connections_rejected_route, "route"),
+        };
+        slot.get_or_init(|| fixed_counter!(names::DOWNSTREAM_CONNECTIONS_REJECTED_TOTAL, "reason" => value))
+            .increment(1);
     }
 
     /// Record a new proxy context.
@@ -1195,7 +1245,7 @@ mod wasm_shared_data_metric_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/unit/observe/metrics/registry_test.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "../../../tests/unit/observe/metrics/registry_test/lb_degrade_counter_tests.rs"]

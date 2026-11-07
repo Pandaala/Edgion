@@ -454,6 +454,7 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 | `downstream_h2_stream_window_size` | `u32?` | `65535` | Startup HTTP/2 stream receive window in bytes |
 | `downstream_h2_connection_window_size` | `u32?` | `65535` | Startup HTTP/2 connection receive window in bytes |
 | `downstream_h2_max_concurrent_streams` | `u32?` | `100` | Startup HTTP/2 concurrent client streams per connection |
+| `max_downstream_connections` | `NonZeroU64?` | unlimited | Startup process-wide cap on concurrent downstream sockets (HTTP/HTTPS/TCP/TLS listeners, UDP excluded); enforced at accept before PROXY/TLS; see [downstream connection admission](../../04-review/listeners/regression-guards/downstream-connection-admission.md) |
 | `work_stealing` | `bool` | `true` | Tokio task stealing |
 | `grace_period_seconds` | `u64` | `30` | Graceful shutdown wait time in seconds |
 | `graceful_shutdown_timeout_seconds` | `u64` | `10` | Shutdown timeout in seconds |

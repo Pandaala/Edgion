@@ -25,7 +25,7 @@ async fn local_budget_survives_full_delta_delete_and_disabled_generations() {
     let store = StreamPluginStore::new();
     let name = "local-budget-store-reload";
     let key = format!("default/{name}");
-    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18089, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18089, StreamLayer::Stage1, 1);
     store.full_set(&HashMap::from([(key.clone(), local_limit_resource(name, 2, true))]));
     let old = store.get(&key).unwrap();
     for _ in 0..2 {

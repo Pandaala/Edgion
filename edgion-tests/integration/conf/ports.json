@@ -187,14 +187,16 @@
       "http": 31270,
       "tcp": 31271,
       "tcp_filtered": 31272,
-      "tcp_bare": 31269
+      "tcp_bare": 31269,
+      "tcp_conn_limit": 31268
     },
     "TCPRoute/StreamPlugins": {
       "tcp": 31274,
       "tcp_filtered": 31275,
       "tcp_fail_close": 31273,
       "tcp_conn_rate": 31277,
-      "tcp_conn_rate_redis": 31278
+      "tcp_conn_rate_redis": 31278,
+      "tcp_conn_limit": 31279
     },
     "TCPRoute/StreamPlugins/Dynamic": {
       "tcp": 31388

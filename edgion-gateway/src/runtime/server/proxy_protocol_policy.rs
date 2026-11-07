@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use async_trait::async_trait;
 use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::gateway::Listener;
@@ -20,7 +19,6 @@ use edgion_resources::resources::proxy_protocol::{
 };
 use edgion_resources::{Gateway, ResourceMeta};
 use parking_lot::Mutex;
-use pingora_core::listeners::ConnectionFilter;
 use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
 use tokio::sync::watch;
 
@@ -521,42 +519,6 @@ fn is_tcp_listener(listener: &Listener) -> bool {
         listener.protocol.to_ascii_uppercase().as_str(),
         "HTTP" | "HTTPS" | "TCP" | "TLS"
     )
-}
-
-/// Always-installed TCP filter. The process-fatal guard is checked before an
-/// optional StreamPlugins filter, so no plugin code runs after the socket
-/// policy has diverged.
-pub struct GuardFirstConnectionFilter {
-    runtime: Arc<ProxyProtocolPolicyRuntime>,
-    stream_filter: Option<Arc<dyn ConnectionFilter>>,
-}
-
-impl GuardFirstConnectionFilter {
-    pub fn new(runtime: Arc<ProxyProtocolPolicyRuntime>, stream_filter: Option<Arc<dyn ConnectionFilter>>) -> Self {
-        Self { runtime, stream_filter }
-    }
-}
-
-impl fmt::Debug for GuardFirstConnectionFilter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GuardFirstConnectionFilter")
-            .field("fatal", &self.runtime.is_fatal())
-            .field("has_stream_filter", &self.stream_filter.is_some())
-            .finish()
-    }
-}
-
-#[async_trait]
-impl ConnectionFilter for GuardFirstConnectionFilter {
-    async fn should_accept(&self, addr: Option<&std::net::SocketAddr>) -> bool {
-        if self.runtime.is_fatal() {
-            return false;
-        }
-        match &self.stream_filter {
-            Some(filter) => filter.should_accept(addr).await,
-            None => true,
-        }
-    }
 }
 
 #[cfg(test)]

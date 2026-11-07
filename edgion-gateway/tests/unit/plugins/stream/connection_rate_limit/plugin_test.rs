@@ -51,7 +51,7 @@ async fn reload_keeps_local_budget_independent_of_redis_prefix_and_old_parameter
     let mut cfg = cfg_local_only(1);
     cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
     let scope = "default/local-reload-prefix/#0";
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64120, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64120, StreamLayer::Stage1, 1);
     let old = ConnectionRateLimitPlugin::new(&cfg, scope);
     assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
 
@@ -82,7 +82,7 @@ async fn redis_denial_does_not_refund_local_token_and_next_attempt_stops_locally
     listener.redis_distributed = true;
     cfg.redis_ref = Some("default/local-gate-test-unavailable".to_string());
     let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/local-before-redis/#0");
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64121, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64121, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await,
             StreamPluginResult::Deny(reason) if reason == "connrate:deny:listener:redis"));
     assert!(matches!(plugin.on_connection(&ctx).await,
@@ -101,7 +101,7 @@ async fn redis_source_failure_default_allow_preserves_local_enforcement() {
         interval_duration: None,
     });
     let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/local-source-failure/#0");
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64122, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64122, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
     assert!(matches!(plugin.on_connection(&ctx).await,
             StreamPluginResult::Deny(reason) if reason == "connrate:deny:listener:local"));
@@ -117,7 +117,7 @@ async fn exhausted_generation_denies_new_runtime_without_disabling_live_one() {
     let exhausted = ConnectionRateLimitPlugin::new(&cfg, scope);
     assert!(exhausted.init_failed);
     assert!(exhausted.local_gate.is_none());
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64123, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64123, StreamLayer::Stage1, 1);
     assert!(matches!(exhausted.on_connection(&ctx).await,
             StreamPluginResult::Deny(reason) if reason == "connrate:deny:invalid-config"));
     assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
@@ -146,7 +146,7 @@ async fn local_gate_denies_over_rate() {
     // Use a unique port so the global registry slot is isolated from other tests.
     let port = 64111u16;
     let plugin = ConnectionRateLimitPlugin::new(&cfg_local_only(2), "default/test-esp/#0");
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), port, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), port, StreamLayer::Stage1, 1);
     let mut admitted = 0;
     for _ in 0..5 {
         if matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow) {
@@ -162,7 +162,7 @@ async fn invalid_config_without_dimension_denies_before_runtime_work() {
     let mut cfg = cfg_local_only(1);
     cfg.per_listener = None;
     let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/invalid-empty/#0");
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64112, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64112, StreamLayer::Stage1, 1);
 
     assert!(matches!(
         plugin.on_connection(&ctx).await,
@@ -181,7 +181,7 @@ async fn missing_redis_ref_denies_even_when_failure_policy_defaults_allow() {
         interval_duration: None,
     });
     let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/invalid-redis/#0");
-    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64113, StreamLayer::Stage1);
+    let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64113, StreamLayer::Stage1, 1);
 
     assert!(matches!(
         plugin.on_connection(&ctx).await,

@@ -685,6 +685,14 @@ pub struct ServerConfig {
     #[serde(default)]
     pub downstream_h2_max_concurrent_streams: Option<u32>,
 
+    /// Process-wide cap on concurrently open downstream connections across all
+    /// HTTP/HTTPS/TCP/TLS listeners (UDP excluded). Unset = unlimited. Over-cap
+    /// connections are closed at accept, before PROXY parsing and the TLS
+    /// handshake. Startup-only.
+    #[arg(long = "max-downstream-connections", value_name = "NUM")]
+    #[serde(default)]
+    pub max_downstream_connections: Option<std::num::NonZeroU64>,
+
     /// Dedicated downstream TLS handshake pools per terminating listener (1..=4).
     #[arg(long = "downstream-tls-offload-threadpools", value_name = "NUM")]
     #[serde(default)]
@@ -1284,6 +1292,10 @@ impl EdgionGatewayConfig {
         }
         if cli.server.downstream_h2_max_concurrent_streams.is_some() {
             base.server.downstream_h2_max_concurrent_streams = cli.server.downstream_h2_max_concurrent_streams;
+        }
+
+        if cli.server.max_downstream_connections.is_some() {
+            base.server.max_downstream_connections = cli.server.max_downstream_connections;
         }
 
         if cli.server.downstream_tls_offload_threadpools.is_some() {

@@ -83,6 +83,7 @@ DP_FILES = [
     "backends/validation.rs",
     "backends/circuit_breaker/store.rs",
     "runtime/server/error_response.rs",
+    "runtime/server/downstream_connections.rs",
 ]
 DP_GLOBS = [
     "plugins/http/*/plugin.rs",

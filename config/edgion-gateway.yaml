@@ -143,6 +143,11 @@ server:
   # downstream_h2_connection_window_size: 65535
   # downstream_h2_max_concurrent_streams: 100
 
+  # Optional process-wide cap on concurrently open downstream connections across
+  # all HTTP/HTTPS/TCP/TLS listeners (UDP excluded). Unset = unlimited; >= 1.
+  # Over-cap connections are closed at accept, before PROXY parsing and TLS.
+  # max_downstream_connections: 50000
+
   # Optional downstream TLS handshake offload, disabled when both are omitted.
   # Each terminating HTTPS/TLS listener owns its own pool; total threads must be <= 64.
   # downstream_tls_offload_threadpools: 2

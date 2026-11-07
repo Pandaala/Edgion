@@ -288,3 +288,14 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 debug = 1
+
+# TEMPORARY local development override for the Pingora fork admission-permit
+# change. Remove once the fork commit is pushed and the lockfile is updated.
+[patch."https://github.com/Pandaala/pingora.git"]
+pingora-core = { path = "/Volumes/ExtStore/ws3/pingora/pingora-core" }
+pingora-http = { path = "/Volumes/ExtStore/ws3/pingora/pingora-http" }
+pingora-proxy = { path = "/Volumes/ExtStore/ws3/pingora/pingora-proxy" }
+pingora-limits = { path = "/Volumes/ExtStore/ws3/pingora/pingora-limits" }
+pingora-load-balancing = { path = "/Volumes/ExtStore/ws3/pingora/pingora-load-balancing" }
+pingora-ketama = { path = "/Volumes/ExtStore/ws3/pingora/pingora-ketama" }
+TinyUFO = { path = "/Volumes/ExtStore/ws3/pingora/tinyufo" }

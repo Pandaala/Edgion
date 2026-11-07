@@ -335,6 +335,7 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 | `downstream_h2_stream_window_size` | `Integer` | `65535` | HTTP/2 receive window per stream in bytes; `65535`–`16777216` |
 | `downstream_h2_connection_window_size` | `Integer` | `65535` | HTTP/2 receive window per connection in bytes; `65535`–`16777216` |
 | `downstream_h2_max_concurrent_streams` | `Integer` | `100` | Maximum simultaneous client streams per HTTP/2 connection; `1`–`1024` |
+| `max_downstream_connections` | `Integer` | Unlimited | Process-wide cap on concurrently open downstream connections across all HTTP/HTTPS/TCP/TLS listeners (UDP excluded); `≥ 1`. Over-cap connections are closed at accept, before PROXY parsing and the TLS handshake |
 | `downstream_tls_offload_threadpools` | `Integer` | Disabled | Dedicated handshake pools per terminating TLS listener; `1`–`4`, requires the paired field |
 | `downstream_tls_offload_thread_per_pool` | `Integer` | Disabled | Threads per handshake pool; `1`–`4`, requires the paired field |
 | `work_stealing` | `Boolean` | `true` | Enable Tokio work-stealing to improve CPU utilization |
@@ -373,6 +374,34 @@ disabled, do not change upstream connection windows, and leave HTTP/1 unchanged.
 Larger receive windows may help uploads or client-to-server gRPC messages over
 high-latency links. Measure resource use and throughput for your traffic before
 increasing them; they do not directly enlarge the client's download receive window.
+
+`max_downstream_connections` bounds the whole process, independent of any
+Gateway or route configuration. It bounds downstream TCP-family sockets, the
+largest consumer of the file descriptors shared with upstream connections,
+config sync, and logging; one HTTP/2 socket can still drive up to
+`downstream_h2_max_concurrent_streams` upstream connections. UDP
+listeners are not covered (each new UDP source also binds an upstream socket).
+Size it below the process `NOFILE` limit with room for upstream sockets (roughly
+half of it is a common starting point).
+
+A socket is counted from accept until it closes, including while it is still in
+listener admission (for example waiting on a Redis-backed stream plugin), during
+the TLS handshake (up to 60 s), and while idle on a keep-alive or TCP relay.
+`edgion_downstream_connections_active` reports sockets that completed listener
+admission, so it can read slightly below the cap while
+`edgion_downstream_connections_rejected_total{reason="global"}` is increasing.
+Over-cap connections are closed without a response.
+
+The cap is shared by every listener: one client that holds many idle sockets on
+one listener can push all other listeners to the cap. Pair it with a
+per-listener [`ConnectionLimit`](../../user-guide/tcp-route/stream-plugins.md#connectionlimit-concurrent-connection-cap)
+below the process cap to isolate listeners, and with handshake and idle
+timeouts. Admin, probe and metrics ports are not counted, so they stay
+reachable at the cap. CLI `--max-downstream-connections` overrides the YAML
+field; `0` is rejected.
+
+The cap applies to each Gateway process (each pod), not to the cluster. During
+a rolling restart, old and new pods each admit up to the cap.
 
 TLS handshake offload applies to HTTPS and TLS termination listeners. Each distinct
 terminating listener owns its own pool: `listeners × pools × threads per pool` must

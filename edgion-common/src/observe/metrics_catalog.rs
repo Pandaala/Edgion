@@ -1414,6 +1414,24 @@ pub static DEFINITIONS: &[Definition] = &[
         ],
         contribution: false,
     },
+    Definition {
+        name: "edgion_downstream_connections_active",
+        kind: MetricType::Gauge,
+        class: MetricClass::Fixed,
+        labels: &[],
+        contribution: false,
+    },
+    Definition {
+        name: "edgion_downstream_connections_rejected_total",
+        kind: MetricType::Counter,
+        class: MetricClass::Fixed,
+        labels: &[LabelDefinition {
+            key: "reason",
+            domain: LabelDomain::Closed(&["global", "listener", "route"]),
+            required: true,
+        }],
+        contribution: false,
+    },
 ];
 
 pub fn definition(name: &str) -> Option<&'static Definition> {
@@ -1520,6 +1538,8 @@ pub fn definition(name: &str) -> Option<&'static Definition> {
         "edgion_acme_challenge_lookup_total" => Some(&DEFINITIONS[99]),
         "edgion_link_sys_redis_connections" => Some(&DEFINITIONS[100]),
         "edgion_link_sys_redis_topology_events_total" => Some(&DEFINITIONS[101]),
+        "edgion_downstream_connections_active" => Some(&DEFINITIONS[102]),
+        "edgion_downstream_connections_rejected_total" => Some(&DEFINITIONS[103]),
         _ => None,
     }
 }

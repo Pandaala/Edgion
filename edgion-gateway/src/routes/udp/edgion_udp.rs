@@ -25,6 +25,7 @@ use crate::routes::common::{
 };
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::routes::udp::{UdpPortRouteManager, UdpRouteUnit};
+use crate::runtime::server::downstream_connections::{ConnectionCounter, ConnectionSlot};
 use edgion_resources::ListenerKey;
 
 /// UDP session idle timeout: a session is reclaimed after 60 seconds without
@@ -150,6 +151,8 @@ fn pinned_endpoint_removed(
 /// Client session information with statistics
 struct ClientSession {
     _session_permit: OwnedSemaphorePermit,
+    /// Route-stage session count; released when the last session handle drops.
+    _route_slot: ConnectionSlot,
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
     pinned_endpoint: PinnedServiceEndpoint,
@@ -195,6 +198,9 @@ pub struct EdgionUdpProxy {
     pub socket: Arc<UdpSocket>,
     client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
     session_permits: Arc<Semaphore>,
+    /// Live sessions admitted on this listener's route stage. Owned by the
+    /// listener's single proxy instance, so it survives config reloads.
+    route_sessions: Arc<ConnectionCounter>,
     cancel_token: CancellationToken,
     child_tasks: TaskTracker,
 }
@@ -217,6 +223,7 @@ impl EdgionUdpProxy {
             socket: Arc::new(socket),
             client_sessions: Arc::new(DashMap::new()),
             session_permits: Arc::new(Semaphore::new(MAX_UDP_SESSIONS)),
+            route_sessions: Arc::new(ConnectionCounter::unlimited()),
             cancel_token,
             child_tasks,
         }
@@ -360,11 +367,15 @@ impl EdgionUdpProxy {
         let resource = unit.stream_plugin_store_key().and_then(|key| scope.stream(key));
         drop(scope);
         drop(publication);
+        // Counted from here; moved into the new session, or dropped on any
+        // earlier exit.
+        let (route_slot, route_ordinal) = self.route_sessions.acquire();
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
             unit.stream_plugin_store_key(),
             resource.as_deref(),
             &direct_peer_ip,
             self.listener_port,
+            route_ordinal,
         )
         .await
         {
@@ -446,7 +457,7 @@ impl EdgionUdpProxy {
         }
 
         let session = match self
-            .get_or_create_session(direct_peer_addr, upstream_addr, pinned_endpoint, children)
+            .get_or_create_session(direct_peer_addr, upstream_addr, pinned_endpoint, route_slot, children)
             .await
         {
             Ok(session) => session,
@@ -475,6 +486,7 @@ impl EdgionUdpProxy {
         direct_peer_addr: std::net::SocketAddr,
         upstream_addr: std::net::SocketAddr,
         pinned_endpoint: PinnedServiceEndpoint,
+        route_slot: ConnectionSlot,
         children: &mut JoinSet<()>,
     ) -> Result<Arc<ClientSession>, UdpStatus> {
         if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
@@ -500,6 +512,7 @@ impl EdgionUdpProxy {
 
         let session = Arc::new(ClientSession {
             _session_permit: session_permit,
+            _route_slot: route_slot,
             upstream_socket,
             upstream_addr,
             pinned_endpoint,

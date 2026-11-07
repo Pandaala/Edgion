@@ -4,15 +4,16 @@
 //! protocol listeners to the gateway server. It separates listener construction logic
 //! from the main gateway bootstrap process.
 
+use crate::runtime::server::downstream_connections::{ConnectionCounter, ListenerAdmissionFilter};
 use crate::runtime::server::downstream_h2::DownstreamH2Policy;
 use crate::runtime::server::proxy_protocol_policy::{
-    get_global_proxy_protocol_policy_runtime, GuardFirstConnectionFilter, PreparedProxyProtocolPolicy,
+    get_global_proxy_protocol_policy_runtime, PreparedProxyProtocolPolicy,
 };
 use crate::runtime::ServerHeaderOpts;
 use anyhow::{bail, Context, Result};
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
-use pingora_core::listeners::{ConnectionFilter, Listeners, TcpSocketOptions};
+use pingora_core::listeners::{Listeners, TcpSocketOptions};
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
 use pingora_core::services::listening::Service;
@@ -50,6 +51,9 @@ pub struct ListenerContext {
     pub server_conf: Arc<ServerConf>,
     /// Validated startup-only process policy for TLS H2 and h2c.
     pub downstream_h2_policy: DownstreamH2Policy,
+    /// Process-wide downstream connection counter shared by every listener;
+    /// carries the optional `server.max_downstream_connections` cap.
+    pub downstream_connections: Arc<ConnectionCounter>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
     /// Gateway annotations
@@ -328,6 +332,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
         tcp_route_manager,
         egc: context.egc.clone(),
         connector: TransportConnector::new(None),
+        route_connections: Arc::new(ConnectionCounter::unlimited()),
     };
 
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
@@ -570,10 +575,10 @@ pub fn add_listener(
     }
 }
 
-/// Apply the always-on policy guard followed by an optional StreamPlugins
-/// filter. Pingora's locked listener implementation invokes this composite in
-/// `ListenerEndpoint::accept()` before `UninitializedStream::handshake()` calls
-/// `proxy_protocol::apply()`.
+/// Install the listener admission filter: the fatal PROXY-policy guard, the
+/// process connection cap, this listener's connection count and its Stage-1
+/// StreamPlugins chain. Pingora calls it from `ListenerEndpoint::accept()`
+/// before `UninitializedStream::handshake()` calls `proxy_protocol::apply()`.
 ///
 /// The annotation value must be an unqualified resource name and is expanded with the
 /// Gateway's namespace. Route-level StreamPlugins references have a separate contract
@@ -581,19 +586,14 @@ pub fn add_listener(
 ///
 /// The filter runs at TCP level, before TLS handshake or HTTP parsing.
 fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
-    let stream_filter = build_stream_connection_filter(context);
-    let filter = Arc::new(GuardFirstConnectionFilter::new(
+    // One service per physical listener, built once at startup: this counter
+    // lives as long as the listener and is never reset by config reloads.
+    let filter = Arc::new(ListenerAdmissionFilter::for_listener(
         get_global_proxy_protocol_policy_runtime(),
-        stream_filter,
+        Arc::clone(&context.downstream_connections),
+        StreamPluginConnectionFilter::new(context.listener_key.clone(), context.listener.port as u16),
     ));
     service.set_connection_filter(filter);
-}
-
-fn build_stream_connection_filter(context: &ListenerContext) -> Option<Arc<dyn ConnectionFilter>> {
-    Some(Arc::new(StreamPluginConnectionFilter::new(
-        context.listener_key.clone(),
-        context.listener.port as u16,
-    )))
 }
 
 #[cfg(test)]

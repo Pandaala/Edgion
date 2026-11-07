@@ -95,14 +95,14 @@ fn insert_ed(ns: &str, name: &str, enable: bool, data: ConfigEntry) -> String {
 #[tokio::test]
 async fn no_selector_base_allow_loopback() {
     let plugin = plugin_deny_nonloopback();
-    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
 }
 
 #[tokio::test]
 async fn no_selector_base_deny_non_loopback() {
     let plugin = plugin_deny_nonloopback();
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
 }
 
@@ -116,9 +116,9 @@ async fn absent_selector_falls_back_to_base() {
     });
     let plugin = from_owner(&fixture_owner(&config, "default")).expect("valid config");
 
-    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
-    let ctx2 = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx2 = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx2).await, StreamPluginResult::Deny(_)));
 }
 
@@ -127,7 +127,7 @@ async fn enable_false_allows_all_connections() {
     let mut config = make_config("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
     config.enable = false;
     let plugin = from_owner(&fixture_owner(&config, "default")).expect("valid config");
-    let ctx = StreamContext::new("1.2.3.4".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("1.2.3.4".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
 }
 
@@ -176,7 +176,7 @@ async fn selector_switches_active_profile() {
         .unwrap();
     assert!(std::ptr::eq(selected, plugin.profiles["open"].as_ref()));
     // Selector switches active profile to "open" → 8.8.8.8 is allowed.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
 }
 
@@ -195,7 +195,7 @@ async fn selector_active_null_is_noop_uses_base() {
     let config = two_profile_config(ns, "sel-null");
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // active: null → no override → base "deny" profile → 8.8.8.8 denied.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
 }
 
@@ -214,7 +214,7 @@ async fn selector_unknown_profile_falls_back_to_base() {
     let config = two_profile_config(ns, "sel-bad");
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Unknown profile → fail-to-base → base "deny" → 8.8.8.8 denied.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
 }
 
@@ -231,7 +231,7 @@ async fn type_mismatch_falls_back_to_base() {
     let config = two_profile_config(ns, "not-a-selector");
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Wrong variant → fail-to-base → base "deny" → 8.8.8.8 denied.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
 }
 
@@ -252,10 +252,10 @@ async fn envelope_disabled_falls_back_to_base() {
     let config = two_profile_config(ns, "sel-envelope-off");
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Envelope disabled → selector ignored → base "deny" → 8.8.8.8 denied.
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     // Loopback still allowed by base.
-    let ctx_lo = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx_lo = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx_lo).await, StreamPluginResult::Allow));
 }
 
@@ -298,7 +298,7 @@ async fn gcir_denied_active_profile_ref_falls_back_to_base() {
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Denied ref → active_profile_ref_key is None → base "deny" profile used.
     // 8.8.8.8 must be denied (not allowed by "open").
-    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(
         matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
         "denied active_profile_ref must not switch profile; base deny must apply"
@@ -332,12 +332,12 @@ async fn profile_deny_refs_block_referenced_ip() {
         active_profile_ref: None,
     };
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid");
-    let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(
         plugin.on_connection(&ctx_block).await,
         StreamPluginResult::Deny(_)
     ));
-    let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1, 1);
     assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
 }
 
@@ -409,7 +409,7 @@ async fn owning_gcir_invalid_slots_keep_allow_intent_and_deny_set_drop() {
                 continue;
             }
             let plugin = result.unwrap();
-            let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1);
+            let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1, 1);
             let result = plugin.on_connection(&context).await;
             assert_eq!(matches!(result, StreamPluginResult::Allow), allow, "{case} / {bad}");
         }
@@ -459,7 +459,7 @@ async fn owning_gcir_selector_invalid_slot_uses_base_and_invalid_owner_rejects()
         let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
         let binding = prepared.bind_stream_plugins(&owner).unwrap();
         let plugin = GlobalConnectionIpRestrictionPlugin::from_bound(binding.global_entry(0).unwrap()).unwrap();
-        let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18501, StreamLayer::Stage1);
+        let context = StreamContext::new("198.51.100.9".parse().unwrap(), 18501, StreamLayer::Stage1, 1);
         assert!(matches!(
             plugin.on_connection(&context).await,
             StreamPluginResult::Allow

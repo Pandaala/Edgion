@@ -16,6 +16,7 @@ pub use registry::{
     record_outbound_success_predicate_fail, record_outbound_template_fallback, record_region_route_config_event,
     record_request_body_storage_io_failure, record_request_duration, record_retry_budget_denied,
     record_waf_body_bytes_inspected, record_waf_compile, record_waf_execution_micros, record_webhook_resolve_error,
-    set_geoip_db_build_epoch, set_geoip_db_loaded, status_group, GatewayMetrics, GenAiUsageSource,
+    set_geoip_db_build_epoch, set_geoip_db_loaded, status_group, DownstreamConnectionRejectReason, GatewayMetrics,
+    GenAiUsageSource,
 };
 pub use test_metrics::{TestData, TestType};

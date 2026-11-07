@@ -196,6 +196,7 @@ fn test_pinned_endpoint() -> PinnedServiceEndpoint {
 
 fn make_test_session(proxy: &EdgionUdpProxy, last_activity: Instant) -> Arc<ClientSession> {
     Arc::new(ClientSession {
+        _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
         upstream_socket: proxy.socket.clone(),
         upstream_addr: "127.0.0.1:8080".parse().unwrap(),
@@ -373,6 +374,7 @@ async fn test_serve_exits_on_cancel() {
     proxy.client_sessions.insert(
         peer,
         Arc::new(ClientSession {
+            _route_slot: proxy.route_sessions.acquire().0,
             _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
             upstream_socket: proxy.socket.clone(),
             upstream_addr: "192.0.2.2:8080".parse().unwrap(),
@@ -479,6 +481,7 @@ async fn test_cleanup_expired_sessions() {
     let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let expired_time = Instant::now() - Duration::from_secs(120);
     let session = Arc::new(ClientSession {
+        _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy
             .session_permits
             .clone()
@@ -502,11 +505,15 @@ async fn test_cleanup_expired_sessions() {
     proxy.client_sessions.insert(direct_peer_addr, session);
     assert_eq!(proxy.session_count(), 1);
 
+    assert_eq!(proxy.route_sessions.active(), 1);
+
     // Keep the pinned endpoint published so only idleness can retire the session.
     proxy
         .cleanup_sessions(test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.1"])))
         .await;
     assert_eq!(proxy.session_count(), 0);
+    // The map held the only session handle, so retirement releases its slot.
+    assert_eq!(proxy.route_sessions.active(), 0);
 }
 
 #[tokio::test]
@@ -528,6 +535,7 @@ async fn test_cleanup_keeps_active_sessions() {
     // Insert an active session (recent last_activity)
     let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let session = Arc::new(ClientSession {
+        _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy
             .session_permits
             .clone()
@@ -555,6 +563,34 @@ async fn test_cleanup_keeps_active_sessions() {
         .cleanup_sessions(test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.1"])))
         .await;
     assert_eq!(proxy.session_count(), 1);
+    assert_eq!(proxy.route_sessions.active(), 1);
+}
+
+#[tokio::test]
+async fn existing_session_lookup_releases_the_new_route_slot() {
+    let proxy = make_test_proxy(19992).await;
+    let peer: SocketAddr = "192.0.2.7:12345".parse().unwrap();
+    proxy
+        .client_sessions
+        .insert(peer, make_test_session(&proxy, Instant::now()));
+    assert_eq!(proxy.route_sessions.active(), 1);
+
+    let (slot, ordinal) = proxy.route_sessions.acquire();
+    assert_eq!(ordinal, 2);
+    let mut children = JoinSet::new();
+    let session = proxy
+        .get_or_create_session(
+            peer,
+            "127.0.0.1:8080".parse().unwrap(),
+            test_pinned_endpoint(),
+            slot,
+            &mut children,
+        )
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&session, &proxy.client_sessions.get(&peer).unwrap()));
+    // The existing session keeps its own slot; the caller's slot is released.
+    assert_eq!(proxy.route_sessions.active(), 1);
 }
 
 #[tokio::test]

@@ -15,10 +15,10 @@ fn peer_ip_canonicalization_preserves_native_addresses_and_folds_mapped_ipv4() {
 
 #[tokio::test]
 async fn unavailable_policy_denies_even_without_peer_or_attachment() {
-    assert!(!accept_connection_view(ConnectionView::Unavailable, None, 18092).await);
+    assert!(!accept_connection_view(ConnectionView::Unavailable, None, 18092, 1).await);
     let peer = "10.0.0.1:54321".parse().unwrap();
-    assert!(!accept_connection_view(ConnectionView::Unavailable, Some(&peer), 18092).await);
-    assert!(accept_connection_view(ConnectionView::Empty, Some(&peer), 18092).await);
+    assert!(!accept_connection_view(ConnectionView::Unavailable, Some(&peer), 18092, 1).await);
+    assert!(accept_connection_view(ConnectionView::Empty, Some(&peer), 18092, 1).await);
 }
 
 #[tokio::test]
@@ -35,10 +35,10 @@ async fn pinned_connection_views_preserve_port_budgets_and_release() {
     let view = generation.compile(&policy, stages);
     let weak = Arc::downgrade(&view);
     let peer = "10.0.0.1:54321".parse().unwrap();
-    assert!(accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18092).await);
-    assert!(!accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18092).await);
-    assert!(accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18093).await);
-    assert!(!accept_connection_view(ConnectionView::Unavailable, Some(&peer), 18092).await);
+    assert!(accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18092, 1).await);
+    assert!(!accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18092, 1).await);
+    assert!(accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18093, 1).await);
+    assert!(!accept_connection_view(ConnectionView::Unavailable, Some(&peer), 18092, 1).await);
     drop(view);
     assert!(weak.upgrade().is_none());
 }
@@ -230,13 +230,13 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
     let key = input.listeners[0].key.clone();
     let peer = "10.0.0.1:54321".parse().unwrap();
     publisher.replace_gateways(HashMap::from([("default/dynamic".into(), input.clone())]));
-    assert!(accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
+    assert!(accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094, 1).await);
     input.connection_key = Some("default/dynamic-policy".into());
     publisher.update_gateways(
         HashMap::from([("default/dynamic".into(), input.clone())]),
         &HashSet::new(),
     );
-    assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
+    assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094, 1).await);
     let list=serde_json::from_value(serde_json::json!({"metadata":{"name":"dynamic-bridge-blocklist","namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"blocked","cidrs":["10.0.0.0/8"]}]}}}})).unwrap();
     crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store()
         .insert_raw_for_test("default/dynamic-bridge-blocklist", Arc::new(list));
@@ -244,10 +244,10 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
             "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: dynamic-policy, namespace: default}\nspec:\n  plugins:\n    - type: IpRestriction\n      config:\n        denyRefs: [{name: dynamic-bridge-blocklist}]"
         ).unwrap());
     publisher.replace_stream_plugins(HashMap::from([("default/dynamic-policy".into(), source)]));
-    assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
+    assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094, 1).await);
     input.connection_key = None;
     publisher.update_gateways(HashMap::from([("default/dynamic".into(), input)]), &HashSet::new());
-    assert!(accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
+    assert!(accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094, 1).await);
     assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
 }
 
@@ -260,4 +260,28 @@ fn resolve_route_scope(
     kind: &str,
 ) -> Option<Arc<PluginScope>> {
     resolve_route_owner_scope(publication, listener, parents, hostname, namespace, kind).map(|(_, scope)| scope)
+}
+
+#[tokio::test]
+async fn listener_ordinal_reaches_connection_limit() {
+    let source = Arc::new(yaml_serde::from_str(
+            "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: bridge-conn-limit, namespace: default}\nspec:\n  plugins:\n    - type: ConnectionLimit\n      config:\n        maxConnections: 2\n"
+        ).unwrap());
+    let mut generation = StreamPluginGeneration::new(source);
+    let policy = PluginPolicyConfig::default().compile().unwrap();
+    let view = generation.compile(
+        &policy,
+        StreamStages {
+            connection: true,
+            tls_route: false,
+        },
+    );
+    let peer = "10.0.0.1:54321".parse().unwrap();
+    for (ordinal, admitted) in [(1, true), (2, true), (3, false), (100, false)] {
+        assert_eq!(
+            accept_connection_view(ConnectionView::Ready(Arc::clone(&view)), Some(&peer), 18095, ordinal).await,
+            admitted,
+            "ordinal {ordinal}"
+        );
+    }
 }

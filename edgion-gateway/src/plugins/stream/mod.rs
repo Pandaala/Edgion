@@ -8,6 +8,7 @@
 //! forwarding the end-to-end handshake.
 
 pub mod connection_filter_bridge;
+pub mod connection_limit;
 pub mod connection_rate_limit;
 pub mod geoip_location;
 pub mod global_connection_ip_restriction;
@@ -19,6 +20,7 @@ mod stream_plugin_trait;
 pub mod tls_route;
 
 pub use connection_filter_bridge::StreamPluginConnectionFilter;
+pub use connection_limit::ConnectionLimitPlugin;
 pub use connection_rate_limit::ConnectionRateLimitPlugin;
 pub use geoip_location::GeoIpLocationStreamPlugin;
 pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionPlugin;

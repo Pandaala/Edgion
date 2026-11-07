@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 // Submodules
 pub mod connection_ip_restriction_rules;
+pub mod connection_limit_config;
 pub mod connection_rate_limit_config;
 pub mod global_connection_ip_restriction;
 pub mod stream_plugins;
@@ -21,6 +22,7 @@ pub mod tls_route_plugins;
 // Re-exports from edgion_plugins
 pub use crate::resources::edgion_plugins::PluginEntry;
 pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
+pub use connection_limit_config::{ConnectionLimitConfig, MAX_CONNECTION_LIMIT};
 pub use connection_rate_limit_config::{
     ConnectionRateLimitConfig, PerListenerLimit, PerSourceIpLimit, MAX_REDIS_ACCEPT_TIMEOUT_MS,
 };

@@ -1,4 +1,5 @@
 pub mod base;
+pub mod downstream_connections;
 pub mod downstream_h2;
 mod error_response;
 pub mod listener_builder;

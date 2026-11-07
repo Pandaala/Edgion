@@ -52,6 +52,7 @@ EdgionBackend retains its separate withdrawal policy.
 |--------|------|---------|--------|----------|----------|-------------|-------|
 | edgion_ctx_created_total | Counter | gateway | none | self | fixed | Total request contexts created (requests received) | - |
 | edgion_ctx_active | Gauge | gateway | none | self | fixed | Currently active in-flight request contexts | - |
+| edgion_downstream_connections_active | Gauge | gateway | none | self | fixed | Currently open downstream sockets admitted by a Pingora listener (HTTP/HTTPS/TCP/TLS; UDP excluded), from successful listener admission until the l4 stream drops. Sockets still in listener admission count toward `server.max_downstream_connections` but not here, so this gauge can read slightly below the cap while global rejections increase | - |
 | edgion_access_log_dropped_total | Counter | gateway | none | self | fixed | Dropped HTTP access-log entries (backpressure/failure on the log-shipping path) | - |
 | edgion_ssl_log_dropped_total | Counter | gateway | none | self | fixed | Dropped SSL/TLS-termination log entries | - |
 | edgion_tcp_log_dropped_total | Counter | gateway | none | self | fixed | Dropped TCP stream access-log entries | - |
@@ -149,6 +150,7 @@ EdgionBackend retains its separate withdrawal policy.
 | edgion_geoip_denied_total | Counter | gateway | layer (stage1/tcp), reason (deny_country/allow_miss/db_unavailable/lookup_failed/ref_unavailable) | business | fixed | L4 connections denied by a geo rule. Never carries a client address; HTTP denials are deliberately absent here since they already appear in the access log | - |
 | edgion_connection_rate_limit_rejected_total | Counter | gateway | dimension (listener/source_ip), stage (local/redis) | business | fixed | Connections rejected by the `ConnectionRateLimit` stream plugin | - |
 | edgion_connection_rate_limit_redis_failure_total | Counter | gateway | dimension (listener/source_ip), cause (unavailable/runtime) | business | fixed | Redis failure encountered by the `ConnectionRateLimit` stream plugin, fired regardless of the resulting Allow/Deny outcome so fail-open stays observable | - |
+| edgion_downstream_connections_rejected_total | Counter | gateway | reason (global/listener/route) | business | fixed | Connections closed by a connection cap (UDP: each denied new-session admission attempt, i.e. datagram): `global` = `server.max_downstream_connections`, `listener` = Gateway-attached `ConnectionLimit`, `route` = TCPRoute/UDPRoute-attached `ConnectionLimit` | - |
 | edgion_circuit_breaker_ejections_total | Counter | gateway | service, class (gateway/application/local_origin) | business | dynamic | Circuit-breaker ejection events, split by which failure class tripped (upstream 5xx vs. local connect/proxy failure) | - |
 | edgion_circuit_breaker_ejected_endpoints | Gauge | gateway | service | business | dynamic | Currently ejected endpoint count per service | - |
 | edgion_circuit_breaker_rejections_total | Counter | gateway | service | business | dynamic | Requests blocked by an already-ejected backend | - |

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
 
 use super::*;
 use edgion_resources::resources::gateway::GatewaySpec;
@@ -311,30 +310,41 @@ fn impossible_ready_and_invalid_transport_policy_abort_startup() {
         .contains("InvalidTransportPolicy"));
 }
 
-#[derive(Debug)]
-struct CountingFilter(Arc<AtomicUsize>);
-
-#[async_trait]
-impl ConnectionFilter for CountingFilter {
-    async fn should_accept(&self, _addr: Option<&std::net::SocketAddr>) -> bool {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        true
-    }
-}
-
 #[tokio::test]
-async fn fatal_guard_runs_before_optional_stream_filter() {
+async fn fatal_guard_runs_before_connection_accounting_and_stream_filter() {
+    use crate::plugins::stream::StreamPluginConnectionFilter;
+    use crate::runtime::server::downstream_connections::{ConnectionCounter, ListenerAdmissionFilter};
+    use pingora_core::listeners::ConnectionAdmission;
+
     let runtime = Arc::new(ProxyProtocolPolicyRuntime::new());
     let disabled = gateway("a", 18085, ResolvedInboundProxyProtocol::Disabled);
     runtime.observe_snapshot([&disabled]);
     runtime.preflight_and_freeze([&disabled]).unwrap();
     let required = gateway("a", 18085, ready(CanonicalProxyProtocolTrustPolicy::Required {}));
     runtime.observe_snapshot([&required]);
+    assert!(runtime.is_fatal());
 
-    let calls = Arc::new(AtomicUsize::new(0));
-    let filter = GuardFirstConnectionFilter::new(runtime, Some(Arc::new(CountingFilter(calls.clone()))));
-    assert!(!filter.should_accept(Some(&"127.0.0.1:1".parse().unwrap())).await);
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    let global = Arc::new(ConnectionCounter::unlimited());
+    let listener = Arc::new(ConnectionCounter::unlimited());
+    let filter = ListenerAdmissionFilter::new(
+        runtime,
+        Arc::clone(&global),
+        Arc::clone(&listener),
+        StreamPluginConnectionFilter::new(ListenerKey::new("0.0.0.0:18085".parse().unwrap(), "TCP"), 18085),
+    );
+    // An accepting chain isolates the guard: a tripped policy must reject
+    // without counting the socket or running the chain.
+    let ran = std::sync::atomic::AtomicBool::new(false);
+    let admission = filter
+        .admit_with(|_| {
+            ran.store(true, std::sync::atomic::Ordering::Relaxed);
+            async { true }
+        })
+        .await;
+    assert!(matches!(admission, ConnectionAdmission::Reject));
+    assert!(!ran.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(global.active(), 0);
+    assert_eq!(listener.active(), 0);
 }
 
 #[test]

@@ -75,8 +75,8 @@ It never runs `spec.plugins` as a fallback.
 - Explicit `tlsRoutePlugins: []`, or Stage-2 entries all disabled or Bypass, means no route-stage
   policy. Both fields absent/empty also allow. A Stage-2 Block entry denies when enabled.
 - A referenced resource that is missing still rejects the connection.
-- Move TLSRoute IP restrictions from `plugins` to `tlsRoutePlugins`. For GeoIP or
-  ConnectionRateLimit, attach `plugins` to the Gateway listener; they are not Stage-2 plugins.
+- Move TLSRoute IP restrictions from `plugins` to `tlsRoutePlugins`. For GeoIP,
+  ConnectionRateLimit or ConnectionLimit, attach `plugins` to the Gateway listener; they are not Stage-2 plugins.
   A shared resource may declare both fields, each consumed only by its own attachment stage.
 - Configuration updates affect new connections; established connections are not re-authorized.
 - TLS access-log diagnostics report `tls route plugin allowed` / `tls route plugin denied`,

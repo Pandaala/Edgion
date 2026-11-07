@@ -522,6 +522,39 @@ spec:
 }
 
 #[test]
+fn preparse_validates_enabled_connection_limit_only() {
+    let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: t
+  namespace: default
+spec:
+  plugins:
+    - type: ConnectionLimit
+      config:
+        maxConnections: 0
+    - type: ConnectionLimit
+      config:
+        maxConnections: 100
+    - type: ConnectionLimit
+      enable: false
+      config:
+        maxConnections: 0
+"#;
+    let mut esp: EdgionStreamPlugins = yaml_serde::from_str(yaml).unwrap();
+    let handler = EdgionStreamPluginsHandler::new();
+    let errors = handler.preparse(&mut esp, &make_ctx());
+    assert_eq!(
+        errors.len(),
+        1,
+        "only the enabled invalid entry is reported; got: {errors:?}"
+    );
+    assert!(errors[0].contains("plugins[0] (ConnectionLimit)"), "got: {}", errors[0]);
+    assert!(errors[0].contains("maxConnections"), "got: {}", errors[0]);
+}
+
+#[test]
 fn preparse_is_quiet_on_clean_config() {
     let handler = EdgionStreamPluginsHandler::new();
     let mut esp = clean_esp();

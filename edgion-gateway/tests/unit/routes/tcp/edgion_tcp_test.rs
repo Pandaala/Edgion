@@ -162,7 +162,7 @@ async fn fail_close_when_store_key_missing_in_tcp() {
     // Must reject (fail-close) with the bounded reason.
     let key = "default/__tcp_fail_close_missing__";
 
-    let result = check_stream_plugins(Some(key), None, "127.0.0.1", 9000).await;
+    let result = check_stream_plugins(Some(key), None, "127.0.0.1", 9000, 1).await;
     assert_eq!(
         result,
         StreamPluginCheck::Deny("stream plugin resource not found"),
@@ -174,7 +174,7 @@ async fn fail_close_when_store_key_missing_in_tcp() {
 async fn fail_close_when_tcp_direct_peer_ip_unparseable() {
     // Rule references an ESP but DirectPeerIp is not a valid IP literal
     // (e.g. peer addr extraction returned "unknown"). Must reject.
-    let result = check_stream_plugins(Some("default/something"), None, "unknown", 9000).await;
+    let result = check_stream_plugins(Some("default/something"), None, "unknown", 9000, 1).await;
     assert_eq!(
         result,
         StreamPluginCheck::Deny("direct peer IP unparseable"),
@@ -185,7 +185,7 @@ async fn fail_close_when_tcp_direct_peer_ip_unparseable() {
 #[tokio::test]
 async fn pass_through_when_store_key_none() {
     // No ESP attached at all — section 3 is a no-op. Must allow.
-    let result = check_stream_plugins(None, None, "127.0.0.1", 9000).await;
+    let result = check_stream_plugins(None, None, "127.0.0.1", 9000, 1).await;
     assert_eq!(
         result,
         StreamPluginCheck::Allow,
@@ -207,13 +207,13 @@ async fn invalid_actual_stream_owner_stays_configured_and_denies_at_admission() 
     let key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route));
     assert_eq!(key.as_deref(), Some(""));
     assert!(matches!(
-        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000).await,
+        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000, 1).await,
         StreamPluginCheck::Deny(_)
     ));
     route.metadata.annotations = None;
     let key = resolve_stream_plugin_store_key(StreamPluginAttachment::Tcp(&route));
     assert!(matches!(
-        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000).await,
+        check_stream_plugins(key.as_deref(), None, "127.0.0.1", 9000, 1).await,
         StreamPluginCheck::Allow
     ));
     assert!(TcpRouteUnit::from_route(Arc::new(route)).is_err());
@@ -271,4 +271,34 @@ async fn policy_ancestor_refusal_preserves_selected_weight_and_skips_resolution(
     assert!(result.is_ok());
     assert_eq!(calls.get(), 1);
     store.replace_all(std::collections::HashMap::new());
+}
+
+#[tokio::test]
+async fn route_ordinal_reaches_connection_limit() {
+    use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
+    use edgion_resources::resources::plugin_policy::PluginPolicyConfig;
+
+    let source = Arc::new(
+        yaml_serde::from_str(
+            "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: tcp-conn-limit, namespace: default}\nspec:\n  plugins:\n    - type: ConnectionLimit\n      config:\n        maxConnections: 2\n",
+        )
+        .unwrap(),
+    );
+    let mut generation = StreamPluginGeneration::new(source);
+    let view = generation.compile(
+        &PluginPolicyConfig::default().compile().unwrap(),
+        StreamStages {
+            connection: true,
+            tls_route: false,
+        },
+    );
+    let key = Some("default/tcp-conn-limit");
+    assert_eq!(
+        check_stream_plugins(key, Some(&*view), "127.0.0.1", 9000, 2).await,
+        StreamPluginCheck::Allow
+    );
+    assert_eq!(
+        check_stream_plugins(key, Some(&*view), "127.0.0.1", 9000, 3).await,
+        StreamPluginCheck::Deny("stream plugin policy denied")
+    );
 }

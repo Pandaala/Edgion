@@ -53,6 +53,7 @@ Stage-1-only resource fails closed. See the [TLSRoute stage contract](../../dev-
 | `IpRestriction` | IpList references | Ordered allow/deny references to central named IpList groups. |
 | `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Named reference-only `profiles` in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
 | `ConnectionRateLimit` | `config` object | Local per-listener protection with optional Redis shared limits. Gateway attachments run before TLS; UDPRoute attachments apply to new-session admission. See the [ConnectionRateLimit section](#connectionratelimit-connection-and-udp-session-rate-limiting) below. |
+| `ConnectionLimit` | `config` object | Caps **concurrent** connections (UDP: sessions) in the attachment scope. Gateway attachments close over-cap sockets before PROXY parsing and TLS. See the [ConnectionLimit section](#connectionlimit-concurrent-connection-cap) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
 a `type`, and a `config` object.
@@ -506,6 +507,86 @@ spec:
         - name: app-service
           port: 8080
 ```
+
+## ConnectionLimit: concurrent connection cap
+
+`ConnectionRateLimit` bounds how fast new connections arrive; `ConnectionLimit`
+bounds how many are open **at the same time**. Long-lived connections (idle
+keep-alive, HTTP/2, WebSocket, SSE, slow clients) are what exhaust file
+descriptors and memory, and only a concurrency cap bounds them.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: conn-limit
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionLimit
+      config:
+        maxConnections: 10000   # 1..=10000000
+```
+
+The cap is off unless the plugin is attached. What it counts depends on where
+it is attached:
+
+| Attachment | Counts | When an over-cap connection is closed |
+|---|---|---|
+| Gateway annotation | Live sockets on **each** physical listener of that Gateway (the value is per listener, not per Gateway). UDP listeners do not run Gateway attachments. | At accept, before PROXY protocol parsing and the TLS handshake. |
+| TCPRoute annotation | Connections in that TCP listener's route stage, held for the whole relay. | After route matching, before the backend is dialed. |
+| UDPRoute annotation | Sessions of that UDP listener, held until the session is retired. | When a new source address would create a session. |
+
+The same resource may be attached to a Gateway and to a TCPRoute: each layer
+counts independently. Each count belongs to the listener, which is created once
+at startup, so a config change neither resets nor double-counts it, and lowering
+`maxConnections` never closes existing connections; it only rejects new ones
+until the count drops below the cap.
+
+Counts are not shared across attachments:
+
+- The route-stage count belongs to the **listener**, not to one route. It
+  includes every connection in that listener's route stage, including relays
+  still open from a route that served the listener before a config change. A
+  new route with a lower cap rejects new connections until those relays end.
+- A TCPRoute or UDPRoute attached to several listeners is capped separately on
+  each listener.
+- One `EdgionStreamPlugins` resource referenced by several Gateways or routes
+  gives each attachment its own count; the resource holds no shared state.
+
+Notes:
+
+- The cap counts all clients together; it is not a per-client limit. One source
+  can fill it and deny everyone else. A per-client concurrency limit does not
+  exist yet; `ConnectionRateLimit` provides per-source rate budgets.
+- Put `ConnectionLimit` **first** in `plugins`, so an over-cap connection is
+  rejected before costlier entries (for example a Redis-backed
+  `ConnectionRateLimit`) run. Placed after `ConnectionRateLimit`, over-cap
+  reconnects first spend rate tokens (including per-source budgets) and wait for
+  a Redis round trip before being denied; on a Gateway attachment that wait
+  happens in the listener's serial accept loop and delays later connections. A
+  connection waiting in an earlier entry is already counted.
+- The cap counts downstream sockets. One HTTP/2 connection can carry many
+  streams and upstream connections; memory-based protection is separate.
+- L4 load balancer or kubelet TCP probes aimed at a capped listener fail while
+  it is at the cap. Admin, probe and metrics ports are not counted.
+- A UDP session releases its slot up to about one second after it is retired
+  (the upstream receiver notices retirement on its next poll).
+- UDP source addresses can be spoofed: one datagram per spoofed source creates a
+  session that holds a slot until the session times out (60 s). A UDPRoute
+  `ConnectionLimit` can therefore be filled by a few spoofed datagrams, denying
+  new legitimate clients. It bounds resource use; it does not defend against
+  spoofed-source floods.
+- `pluginPolicy` applies as usual: `Block` of `stream/ConnectionLimit` fails the
+  attachment closed, `Bypass` removes the cap.
+- Rejections are counted in
+  `edgion_downstream_connections_rejected_total{reason="listener"|"route"}`
+  (for UDP, each denied new-session admission attempt, i.e. each datagram);
+  TCP/UDP access logs show the generic `stream plugin policy denied`.
+
+For a process-wide cap across all listeners, set
+[`server.max_downstream_connections`](../../ops-guide/configuration/gateway-config.md)
+in the gateway configuration.
 
 ## Troubleshooting
 

@@ -1,0 +1,15 @@
+# Gateway with a listener-level ConnectionLimit (maxConnections: 2).
+# TCP listener on port 31268.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: stream-plugins-conn-limit-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "conn-limit-two"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31268

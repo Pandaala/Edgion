@@ -65,7 +65,7 @@ Terminate 和 Passthrough 模式下，TLSRoute 都只执行 `spec.tlsRoutePlugin
 - 未声明 `tlsRoutePlugins` 或将其设为 null，同时 `plugins` 非空时，拒绝连接。即使 Stage-1 条目全部禁用或 Bypass 也如此：这是阶段绑定错误。
 - 显式 `tlsRoutePlugins: []`、Stage-2 条目全部禁用或 Bypass，表示不执行路由阶段策略；两个字段都缺失或为空也允许连接。启用的 Stage-2 Block 条目仍然拒绝连接。
 - 引用的资源不存在时仍然拒绝连接。
-- TLSRoute 的 IP 限制应从 `plugins` 移至 `tlsRoutePlugins`。GeoIP、ConnectionRateLimit 应通过 Gateway 监听器绑定 `plugins`，它们不属于 Stage-2。共享资源可以同时声明两个字段，各绑定阶段只执行自己的字段。
+- TLSRoute 的 IP 限制应从 `plugins` 移至 `tlsRoutePlugins`。GeoIP、ConnectionRateLimit、ConnectionLimit 应通过 Gateway 监听器绑定 `plugins`，它们不属于 Stage-2。共享资源可以同时声明两个字段，各绑定阶段只执行自己的字段。
 - 热更新影响新连接，不会重新校验已建立的连接。
 - TLS 访问日志记录 `tls route plugin allowed` / `tls route plugin denied`，或资源缺失、阶段绑定错误；连接路径不产生 `tracing` 或 `(compat)` 事件。
 

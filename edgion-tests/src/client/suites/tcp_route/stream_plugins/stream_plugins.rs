@@ -15,14 +15,89 @@
 // - 31274 (tcp): allow-localhost filter (guards real client IP extraction)
 // - 31275 (tcp_filtered): deny-all filter
 // - 31273 (tcp_fail_close): TCPRoute references missing ESP (fail-close contract)
+// - 31279 (tcp_conn_limit): TCPRoute-level ConnectionLimit (maxConnections: 2)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::edgion_backend::gateway_admin;
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub struct TcpStreamPluginsTestSuite;
+
+/// Echo one probe over `stream`; `true` only when the backend echoed data.
+async fn echoes(stream: &mut TcpStream) -> bool {
+    if stream.write_all(b"cap-probe").await.is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 64];
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await,
+        Ok(Ok(n)) if n > 0
+    )
+}
+
+/// Verify a `ConnectionLimit { maxConnections: max }` attachment on `addr`:
+/// `max` concurrent connections are proxied, the next one is closed without
+/// application data while they stay open, and a new connection is admitted
+/// again after one of them closes (the slot is released).
+pub(crate) async fn verify_concurrent_connection_cap(addr: &str, max: usize) -> Result<String, String> {
+    let connect = || async {
+        tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr))
+            .await
+            .map_err(|_| "connect timed out".to_string())?
+            .map_err(|e| format!("connect failed: {e}"))
+    };
+
+    let mut held = Vec::with_capacity(max);
+    for index in 1..=max {
+        let mut stream = connect().await?;
+        if !echoes(&mut stream).await {
+            return Err(format!("connection {index}/{max} under the cap was not proxied"));
+        }
+        held.push(stream);
+    }
+
+    // Over the cap: the gateway closes the socket without proxying. A stalled
+    // (neither echoed nor closed) connection is a failure, not a rejection.
+    // A refused or reset connect is also a rejection; a connect timeout is a
+    // stall and fails the check.
+    match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
+        Err(_) => return Err(format!("connection {} above the cap of {max} timed out", max + 1)),
+        Ok(Err(e)) if matches!(e.kind(), ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset) => {}
+        Ok(Err(e)) => return Err(format!("connection {} above the cap failed: {e}", max + 1)),
+        Ok(Ok(mut over)) => {
+            let _ = over.write_all(b"cap-probe").await;
+            let mut buf = [0u8; 64];
+            match tokio::time::timeout(Duration::from_secs(3), over.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) => {}
+                Ok(Ok(_)) => return Err(format!("connection {} above the cap of {max} was proxied", max + 1)),
+                Err(_) => return Err(format!("connection {} above the cap of {max} was not closed", max + 1)),
+            }
+        }
+    }
+
+    // Release one slot; the relay ends once the gateway observes the close.
+    drop(held.remove(0));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(mut stream) = connect().await {
+            if echoes(&mut stream).await {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("no connection was admitted after a slot was released".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    drop(held);
+    Ok(format!(
+        "{max} concurrent connections proxied, connection {} closed, slot reused after release",
+        max + 1
+    ))
+}
 
 impl TcpStreamPluginsTestSuite {
     /// Validate the Gateway's pool before testing healthy-Redis admission.
@@ -477,6 +552,37 @@ impl TcpStreamPluginsTestSuite {
             },
         )
     }
+    /// Test: ConnectionLimit attached to a TCPRoute caps concurrent connections
+    /// in that listener's route stage (maxConnections: 2, port 31279).
+    fn test_conn_limit_route() -> TestCase {
+        TestCase::new(
+            "tcp_stream_plugin_conn_limit_route",
+            "ConnectionLimit (TCPRoute): at most 2 concurrent connections, slot released on close",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let port = match crate::port_config::PortConfig::load() {
+                        Ok(cfg) => cfg
+                            .get_ports("TCPRoute/StreamPlugins")
+                            .ok()
+                            .and_then(|ports| ports.tcp_conn_limit),
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("ports.json: {e}")),
+                    };
+                    let Some(port) = port else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "ports.json TCPRoute/StreamPlugins.tcp_conn_limit is not set".to_string(),
+                        );
+                    };
+                    let addr = format!("{}:{}", ctx.target_host, port);
+                    match verify_concurrent_connection_cap(&addr, 2).await {
+                        Ok(message) => TestResult::passed_with_message(start.elapsed(), message),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for TcpStreamPluginsTestSuite {
@@ -493,6 +599,7 @@ impl TestSuite for TcpStreamPluginsTestSuite {
             Self::test_missing_esp_fail_close(),
             Self::test_conn_rate_limit_local(),
             Self::test_conn_rate_limit_redis(),
+            Self::test_conn_limit_route(),
         ]
     }
 }

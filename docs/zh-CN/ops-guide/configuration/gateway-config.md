@@ -268,6 +268,7 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 | `downstream_h2_stream_window_size` | `Integer` | `65535` | 每条 HTTP/2 流的接收窗口，单位字节；范围 `65535`–`16777216` |
 | `downstream_h2_connection_window_size` | `Integer` | `65535` | 每个 HTTP/2 连接的接收窗口，单位字节；范围 `65535`–`16777216` |
 | `downstream_h2_max_concurrent_streams` | `Integer` | `100` | 每个 HTTP/2 连接允许的客户端并发流数；范围 `1`–`1024` |
+| `max_downstream_connections` | `Integer` | 不限制 | 进程级下游并发连接上限，覆盖所有 HTTP/HTTPS/TCP/TLS 监听器（不含 UDP）；`≥ 1`。超限连接在 accept 时、PROXY 解析和 TLS 握手之前关闭 |
 | `downstream_tls_offload_threadpools` | `Integer` | 关闭 | 每个终止 TLS 的监听器使用的专用握手线程池数，范围 `1`–`4`；必须同时设置另一字段 |
 | `downstream_tls_offload_thread_per_pool` | `Integer` | 关闭 | 每个握手线程池的线程数，范围 `1`–`4`；必须同时设置另一字段 |
 | `work_stealing` | `Boolean` | `true` | 启用 Tokio 任务窃取，提高 CPU 利用率 |
@@ -299,6 +300,14 @@ CLI 参数 `--downstream-h2-stream-window-size`、`--downstream-h2-connection-wi
 不会热更新已有连接。这些字段不会开启被禁用的 HTTP/2，不改变上游连接窗口，也不
 改变 HTTP/1 行为。高延迟链路上的上传或客户端发送的 gRPC 消息可能受益于较大的
 接收窗口，但应先测量实际资源消耗和吞吐；它们不会直接扩大客户端的下载接收窗口。
+
+`max_downstream_connections` 约束整个进程，不依赖任何 Gateway 或路由配置，它限制的是下游 TCP 类 socket，也就是与上游连接、配置同步和日志共享的文件描述符中最大的消耗者；一个 HTTP/2 socket 仍可能带出最多 `downstream_h2_max_concurrent_streams` 个上游连接。UDP 监听器不在覆盖范围内（每个新的 UDP 来源还会绑定一个上游 socket）。取值应低于进程 `NOFILE` 上限，并为上游 socket 留出余量（常见起点约为其一半）。
+
+socket 从 accept 开始计数，直到关闭为止，包括仍处于监听器准入中（例如正在等待依赖 Redis 的 stream plugin）、TLS 握手中（最长 60 秒）以及空闲的 keep-alive 或 TCP 转发期间。`edgion_downstream_connections_active` 统计的是已完成监听器准入的 socket，因此在 `edgion_downstream_connections_rejected_total{reason="global"}` 增长时，它可能略低于上限。超限连接不返回响应直接关闭。
+
+该上限由所有监听器共享：一个客户端在某个监听器上占住大量空闲 socket，就可能让其他所有监听器都达到上限。请配合低于进程上限的单监听器 [`ConnectionLimit`](../../user-guide/tcp-route/stream-plugins.md#connectionlimit-并发连接上限) 来隔离监听器，并设置握手与空闲超时。Admin、探活和 metrics 端口不计入，达到上限时仍可访问。CLI 参数 `--max-downstream-connections` 覆盖 YAML 字段；`0` 会被拒绝。
+
+该上限作用于每个 Gateway 进程（每个 pod），而不是整个集群。滚动重启期间，新旧 pod 各自最多接纳到上限。
 
 TLS 握手卸载仅用于 HTTPS 和终止 TLS 的监听器。每个实际监听器拥有独立线程池，
 `监听器数 × 线程池数 × 每池线程数` 不得超过 64；无效或只设置一个字段会使启动失败。

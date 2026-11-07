@@ -74,15 +74,19 @@ pub struct StreamContext {
     pub listener_port: u16,
     /// Explicit execution layer used by bounded per-layer metrics.
     pub layer: StreamLayer,
+    /// Admission ordinal in the current attachment scope: live connections
+    /// (UDP: sessions) counted by the scope owner, including this one.
+    pub active_connections: u64,
 }
 
 impl StreamContext {
     /// Create a new stream context for an explicit execution layer.
-    pub fn new(direct_peer_ip: IpAddr, listener_port: u16, layer: StreamLayer) -> Self {
+    pub fn new(direct_peer_ip: IpAddr, listener_port: u16, layer: StreamLayer, active_connections: u64) -> Self {
         Self {
             direct_peer_ip,
             listener_port,
             layer,
+            active_connections,
         }
     }
 }

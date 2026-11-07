@@ -307,6 +307,10 @@ spec:
     port: 31198
     targetPort: 31198
     protocol: TCP
+  - name: p31268
+    port: 31268
+    targetPort: 31268
+    protocol: TCP
   - name: p31269
     port: 31269
     targetPort: 31269
@@ -322,6 +326,10 @@ spec:
   - name: p31278
     port: 31278
     targetPort: 31278
+    protocol: TCP
+  - name: p31279
+    port: 31279
+    targetPort: 31279
     protocol: TCP
   - name: p31280
     port: 31280

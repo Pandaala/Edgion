@@ -37,7 +37,7 @@ fn rule(source: GeoRuleSource, key: GeoRuleKey, values: &[&str]) -> GeoRule {
 }
 
 fn stream_ctx(ip: &str) -> StreamContext {
-    StreamContext::new(ip.parse().unwrap(), 8080, StreamLayer::Stage1)
+    StreamContext::new(ip.parse().unwrap(), 8080, StreamLayer::Stage1, 1)
 }
 
 /// A rule-less L4 config never reaches `on_connection` — it fails at

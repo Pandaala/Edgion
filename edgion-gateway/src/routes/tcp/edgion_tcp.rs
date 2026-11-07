@@ -24,6 +24,7 @@ use crate::routes::common::{
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::route_unit::TcpRouteUnit;
 use crate::routes::tcp::TcpPortRouteManager;
+use crate::runtime::server::downstream_connections::ConnectionCounter;
 use edgion_resources::ListenerKey;
 
 /// TCP connection context
@@ -103,6 +104,9 @@ pub struct EdgionTcpProxy {
     pub tcp_route_manager: Arc<TcpPortRouteManager>,
     pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub connector: TransportConnector,
+    /// Live connections that reached this listener's route stage. Owned by the
+    /// listener's single proxy instance, so it survives config reloads.
+    pub route_connections: Arc<ConnectionCounter>,
 }
 
 #[async_trait]
@@ -182,11 +186,15 @@ impl EdgionTcpProxy {
         // Admission pins only the selected executable view across the await.
         drop(scope);
         drop(publication);
+        // Held until this function returns, i.e. for the whole relay; every
+        // early return releases it.
+        let (_route_slot, route_ordinal) = self.route_connections.acquire();
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
             unit.stream_plugin_store_key(),
             resource.as_deref(),
             &ctx.direct_peer_ip,
             self.listener_port,
+            route_ordinal,
         )
         .await
         {
@@ -354,6 +362,7 @@ pub(crate) async fn check_stream_plugins(
     resource: Option<&CompiledStreamPlugins>,
     direct_peer_ip: &str,
     listener_port: u16,
+    route_ordinal: u64,
 ) -> StreamPluginCheck {
     let Some(_) = store_key else {
         return StreamPluginCheck::Allow;
@@ -376,7 +385,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Allow;
     }
 
-    let stream_ctx = StreamContext::new(direct_peer_ip, listener_port, StreamLayer::Tcp);
+    let stream_ctx = StreamContext::new(direct_peer_ip, listener_port, StreamLayer::Tcp, route_ordinal);
     match runtime.run(&stream_ctx).await {
         StreamPluginResult::Allow => StreamPluginCheck::Allow,
         StreamPluginResult::Deny(_) => StreamPluginCheck::Deny("stream plugin policy denied"),

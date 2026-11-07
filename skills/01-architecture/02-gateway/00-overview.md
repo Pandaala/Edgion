@@ -224,7 +224,7 @@ Key components:
 
 ### ConnectionFilter (TCP layer)
 
-`StreamPluginConnectionFilter` implements Pingora's `ConnectionFilter` trait, filtering raw TCP connections before inbound PROXY parsing, TLS handshake, and HTTP parsing. The process-fatal PROXY-policy guard runs first. For each admission, the bridge captures one immutable `PluginPublication` snapshot and obtains the physical listener's `ConnectionView`. Publication has already compared the effective views of every serving Gateway: `Unavailable` fails closed, while `Ready` pins one `CompiledStreamPlugins` generation for the admission. The pre-PROXY physical peer remains `DirectPeerIp`; IPv4-mapped IPv6 is folded to canonical IPv4 before constructing `StreamContext`.
+`ListenerAdmissionFilter` (`runtime/server/downstream_connections.rs`) implements the fork's `ConnectionFilter::admit`, admitting raw TCP connections before inbound PROXY parsing, TLS handshake, and HTTP parsing. The process-fatal PROXY-policy guard runs first; the socket is then counted against the optional process cap and its listener, and `StreamPluginConnectionFilter::accept` runs the Stage-1 chain with the listener ordinal. For each admission, the bridge captures one immutable `PluginPublication` snapshot and obtains the physical listener's `ConnectionView`. Publication has already compared the effective views of every serving Gateway: `Unavailable` fails closed, while `Ready` pins one `CompiledStreamPlugins` generation for the admission. The pre-PROXY physical peer remains `DirectPeerIp`; IPv4-mapped IPv6 is folded to canonical IPv4 before constructing `StreamContext`.
 
 ### ProxyHttp (HTTP/gRPC layer)
 

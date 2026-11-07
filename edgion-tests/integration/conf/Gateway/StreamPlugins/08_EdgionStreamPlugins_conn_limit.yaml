@@ -1,0 +1,13 @@
+# EdgionStreamPlugins: ConnectionLimit caps concurrent connections at 2.
+# Attached to a Gateway, it closes the third concurrent socket at accept (before
+# PROXY parsing / TLS) and admits again once a connection closes.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: conn-limit-two
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionLimit
+      config:
+        maxConnections: 2

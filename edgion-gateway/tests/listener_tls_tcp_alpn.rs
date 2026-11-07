@@ -211,10 +211,7 @@ fn tls_to_tcp_builder_does_not_advertise_http_alpn() {
     let filter =
         edgion_gateway::plugins::stream::StreamPluginConnectionFilter::new(listener_key.clone(), address.port());
     assert!(
-        runtime.block_on(pingora_core::listeners::ConnectionFilter::should_accept(
-            &filter,
-            Some(&address)
-        )),
+        runtime.block_on(filter.accept(Some(&address), 1)),
         "canonical publication must admit the owned listener"
     );
     assert!(
@@ -241,6 +238,9 @@ fn tls_to_tcp_builder_does_not_advertise_http_alpn() {
         server_conf: Arc::clone(&server.configuration),
         downstream_h2_policy: DownstreamH2Policy::try_from(&edgion_gateway::cli::config::ServerConfig::default())
             .unwrap(),
+        downstream_connections: Arc::new(
+            edgion_gateway::runtime::server::downstream_connections::ConnectionCounter::unlimited(),
+        ),
         enable_http2: true, // HTTP frontend policy must not affect this transport.
         gateway_annotations: HashMap::new(),
         proxy_protocol_policy: PreparedProxyProtocolPolicy::Disabled,

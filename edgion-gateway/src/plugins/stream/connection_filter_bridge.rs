@@ -1,7 +1,8 @@
-//! Bridge between Edgion's StreamPlugin system and Pingora's ConnectionFilter trait.
+//! Bridge between Edgion's StreamPlugin system and Pingora listener admission.
 //!
-//! This module provides `StreamPluginConnectionFilter`, which implements Pingora's
-//! `ConnectionFilter` trait by delegating to the existing `StreamPluginRuntime`.
+//! This module provides `StreamPluginConnectionFilter`, which runs the
+//! listener's `StreamPluginRuntime`. The listener's `ListenerAdmissionFilter`
+//! (Pingora's `ConnectionFilter`) calls it after counting the connection.
 //!
 //! This allows reusing `EdgionStreamPlugins` resources (e.g., IP restriction) as
 //! early TCP-level connection filters after accept, but before inbound PROXY
@@ -19,8 +20,6 @@
 //! The bare resource name is resolved in the Gateway's own namespace; cross-
 //! namespace attachment is not supported.
 
-use async_trait::async_trait;
-use pingora_core::listeners::ConnectionFilter;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -50,7 +49,8 @@ pub(crate) fn resolve_route_owner_scope(
 }
 
 /// Dynamic listener admission. Every call pins the latest common connection
-/// view for all serving Gateways on this physical listener.
+/// view for all serving Gateways on this physical listener. Invoked by the
+/// listener's `ListenerAdmissionFilter` after the connection is counted.
 #[derive(Debug)]
 pub struct StreamPluginConnectionFilter {
     listener_key: ListenerKey,
@@ -64,15 +64,14 @@ impl StreamPluginConnectionFilter {
             listener_port,
         }
     }
-}
 
-#[async_trait]
-impl ConnectionFilter for StreamPluginConnectionFilter {
-    async fn should_accept(&self, addr: Option<&SocketAddr>) -> bool {
+    /// Run the listener's effective Stage-1 chain. `ordinal` is this socket's
+    /// position in the listener's live-connection count (including itself).
+    pub async fn accept(&self, addr: Option<&SocketAddr>, ordinal: u64) -> bool {
         let publication = global_publisher().snapshot();
         let view = publication.connection(&self.listener_key);
         drop(publication);
-        accept_connection_view(view, addr, self.listener_port).await
+        accept_connection_view(view, addr, self.listener_port, ordinal).await
     }
 }
 
@@ -80,7 +79,7 @@ fn canonical_peer_ip(addr: &SocketAddr) -> IpAddr {
     addr.ip().to_canonical()
 }
 
-async fn accept_connection_view(view: ConnectionView, addr: Option<&SocketAddr>, port: u16) -> bool {
+async fn accept_connection_view(view: ConnectionView, addr: Option<&SocketAddr>, port: u16, ordinal: u64) -> bool {
     let resource = match view {
         ConnectionView::Empty => return true,
         ConnectionView::Unavailable => return false,
@@ -95,7 +94,7 @@ async fn accept_connection_view(view: ConnectionView, addr: Option<&SocketAddr>,
         // availability gate. Ordinary TCP endpoints provide an inet peer.
         return true;
     };
-    let ctx = StreamContext::new(canonical_peer_ip(addr), port, StreamLayer::Stage1);
+    let ctx = StreamContext::new(canonical_peer_ip(addr), port, StreamLayer::Stage1, ordinal);
     matches!(runtime.run(&ctx).await, StreamPluginResult::Allow)
 }
 

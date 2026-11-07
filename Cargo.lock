@@ -5,9 +5,8 @@ version = 4
 [[package]]
 name = "TinyUFO"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "crossbeam-queue",
  "crossbeam-skiplist",
  "flurry",
@@ -61,6 +60,17 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+]
+
+[[package]]
+name = "ahash"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
+dependencies = [
+ "getrandom 0.2.17",
+ "once_cell",
+ "version_check",
 ]
 
 [[package]]
@@ -196,7 +206,7 @@ dependencies = [
  "lazy_static",
  "murmur3",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "typed-arena",
  "uuid",
 ]
@@ -1440,9 +1450,9 @@ checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
  "hashbrown 0.14.5",
- "lock_api 0.4.14",
+ "lock_api",
  "once_cell",
- "parking_lot_core 0.9.12",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -1454,9 +1464,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api 0.4.14",
+ "lock_api",
  "once_cell",
- "parking_lot_core 0.9.12",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -1670,7 +1680,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "edgion-algo"
 version = "0.1.0"
 dependencies = [
- "parking_lot 0.12.5",
+ "parking_lot",
  "regex-automata",
  "rpds",
  "smallvec",
@@ -1691,7 +1701,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mimalloc",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.9.5",
  "rcgen",
  "reqwest",
@@ -1735,7 +1745,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
- "parking_lot 0.12.5",
+ "parking_lot",
  "prost",
  "quanta",
  "rand 0.9.5",
@@ -1793,7 +1803,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "mimalloc",
  "notify",
- "parking_lot 0.12.5",
+ "parking_lot",
  "prost",
  "rand 0.9.5",
  "rcgen",
@@ -1895,7 +1905,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "pingora-core",
  "pingora-http",
@@ -1970,7 +1980,7 @@ dependencies = [
  "jsonwebtoken",
  "k8s-openapi",
  "kube",
- "parking_lot 0.12.5",
+ "parking_lot",
  "prost",
  "prost-reflect",
  "prost-types",
@@ -2017,7 +2027,7 @@ dependencies = [
  "instant-acme",
  "jsonwebtoken",
  "k8s-openapi",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "pingora-core",
  "pingora-http",
@@ -2324,9 +2334,9 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf5efcf77a4da27927d3ab0509dec5b0954bb3bc59da5a1de9e52642ebd4cdf9"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "num_cpus",
- "parking_lot 0.12.5",
+ "parking_lot",
  "seize",
 ]
 
@@ -2672,6 +2682,9 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+dependencies = [
+ "ahash 0.7.8",
+]
 
 [[package]]
 name = "hashbrown"
@@ -2705,8 +2718,6 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash 0.2.0",
  "serde",
  "serde_core",
@@ -2796,7 +2807,7 @@ dependencies = [
  "moka",
  "ndk-context",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.10.3",
  "resolv-conf",
  "smallvec",
@@ -3397,7 +3408,7 @@ version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba783d17473c27cfd4d1d72785dc1c26d5faba8072f50fec4ebea179bec8f33d"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "bytecount",
  "data-encoding",
  "email_address",
@@ -3557,7 +3568,7 @@ version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb064ef71c7bea55e934a443960da9e9ec31fbb2ba63e47e4aeca32603d5cc7"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "async-broadcast",
  "async-stream",
  "backon",
@@ -3568,7 +3579,7 @@ dependencies = [
  "json-patch",
  "k8s-openapi",
  "kube-client",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project",
  "serde",
  "serde_json",
@@ -3700,15 +3711,6 @@ name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
-dependencies = [
- "scopeguard",
-]
-
-[[package]]
-name = "lock_api"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
 dependencies = [
  "scopeguard",
 ]
@@ -3951,7 +3953,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "equivalent",
- "parking_lot 0.12.5",
+ "parking_lot",
  "portable-atomic",
  "smallvec",
  "tagptr",
@@ -4386,18 +4388,8 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api 0.4.14",
- "parking_lot_core 0.9.12",
-]
-
-[[package]]
-name = "parking_lot"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
-dependencies = [
- "lock_api 0.5.0",
- "parking_lot_core 0.10.0",
+ "lock_api",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -4408,19 +4400,7 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.5.18",
- "smallvec",
- "windows-link 0.2.1",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
-dependencies = [
- "libc",
- "redox_syscall 0.9.5",
+ "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -4597,7 +4577,6 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pingora-boringssl"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4610,9 +4589,8 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "arrayvec",
  "async-trait",
  "blake2",
@@ -4626,7 +4604,7 @@ dependencies = [
  "log",
  "lru",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pingora-core",
  "pingora-error",
  "pingora-header-serde",
@@ -4645,9 +4623,8 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "async-trait",
  "brotli",
  "bstr",
@@ -4670,7 +4647,7 @@ dependencies = [
  "once_cell",
  "openssl-probe 0.1.6",
  "ouroboros",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "pingora-boringssl",
  "pingora-error",
@@ -4700,12 +4677,10 @@ dependencies = [
 [[package]]
 name = "pingora-error"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 
 [[package]]
 name = "pingora-header-serde"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "bytes",
  "http",
@@ -4720,7 +4695,6 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "bytes",
  "http",
@@ -4730,7 +4704,6 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "crc32fast",
 ]
@@ -4738,15 +4711,13 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
 ]
 
 [[package]]
 name = "pingora-load-balancing"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4767,15 +4738,14 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "arrayvec",
  "async-channel",
  "flurry",
- "hashbrown 0.17.1",
+ "hashbrown 0.12.3",
  "log",
- "parking_lot 0.13.0",
+ "parking_lot",
  "rand 0.8.8",
  "tokio",
 ]
@@ -4783,14 +4753,13 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "crossbeam-queue",
  "dashmap 5.5.3",
  "futures",
  "log",
  "lru",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pingora-timeout",
  "tokio",
 ]
@@ -4798,7 +4767,6 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4821,7 +4789,6 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "log",
  "once_cell",
@@ -4834,7 +4801,6 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "log",
  "no_debug",
@@ -4850,10 +4816,9 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.9.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1#e5f4287be713d01ffd444544251bf75c9d00062a"
 dependencies = [
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project-lite",
  "thread_local",
  "tokio",
@@ -5391,15 +5356,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_syscall"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
-dependencies = [
- "bitflags 2.13.2",
-]
-
-[[package]]
 name = "ref-cast"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5425,11 +5381,11 @@ version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef39a30a317e883d1ef4c43aa849f90f480d90bb24904fd38266e61d6be58f2"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "fluent-uri",
  "getrandom 0.3.4",
  "hashbrown 0.16.1",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "serde_json",
 ]
@@ -5609,7 +5565,7 @@ dependencies = [
  "crc32c",
  "futures",
  "integer-encoding",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.8.8",
  "rsasl",
  "rustls",
@@ -5932,7 +5888,7 @@ version = "0.0.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bd22781911de0ca6debda95f073c8f18bec65d1a94f1fa9573f3102e514cea4"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "annotate-snippets",
  "base64 0.22.1",
  "encoding_rs_io",
@@ -6593,7 +6549,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

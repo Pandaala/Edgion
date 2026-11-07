@@ -145,6 +145,11 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     errors.push(format!("plugins[{idx}] (ConnectionRateLimit): {e}"));
                 }
             }
+            if let EdgionStreamPlugin::ConnectionLimit(cfg) = &entry.plugin {
+                if let Some(e) = cfg.validation_error() {
+                    errors.push(format!("plugins[{idx}] (ConnectionLimit): {e}"));
+                }
+            }
             // Validate GlobalConnectionIpRestriction policy (profiles + active profile).
             if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
                 if let Some(e) = gcir.validation_error() {
