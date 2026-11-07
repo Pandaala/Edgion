@@ -87,10 +87,7 @@ fn context_metadata_describes_current_request_after_rewrite_or_without_rewrite()
 async fn forward_body_reads_current_committed_body_before_outbound_gate() {
     let mut fa = make_forward_auth(ForwardAuthDecision::default());
     fa.forward_body = true;
-    fa.client
-        .health
-        .healthy
-        .store(false, std::sync::atomic::Ordering::Relaxed);
+    fa.client.health.force_unhealthy_for_test();
     let mut session = make_request_session();
     session
         .expect_read_request_body()
@@ -362,11 +359,9 @@ async fn body_predicate_denial_overrides_status_to_403() {
 
 #[tokio::test]
 async fn transport_fail_records_fail_close_before_response_write() {
-    use std::sync::atomic::Ordering;
-
     let fa = {
         let client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
-        client.health.healthy.store(false, Ordering::Relaxed);
+        client.health.force_unhealthy_for_test();
 
         ForwardAuth {
             client: Arc::new(client),

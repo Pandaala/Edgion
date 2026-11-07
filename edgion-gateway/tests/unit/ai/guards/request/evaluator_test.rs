@@ -252,8 +252,7 @@ fn replacement_order_preserves_keys_text_and_budget_precedence() {
 fn permit_test_evaluator(permits: usize) -> CompiledEvaluator {
     let mut client = ManagedOutboundClient::test_with_static_target("http://localhost:1");
     client.timeout = std::time::Duration::from_millis(10);
-    client.health.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
-    client.passive_health_check = None;
+    client.health.force_unhealthy_for_test();
     CompiledEvaluator {
         client: Arc::new(client),
         permits: Arc::new(Semaphore::new(permits)),

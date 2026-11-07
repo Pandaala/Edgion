@@ -192,7 +192,7 @@ Re-open this decision only if:
   `region_route_handlers.rs` (`patch_edgion_config_data_failover`),
   `namespaced_handlers.rs` (`update_namespaced` EdgionConfigData branch).
 - Sibling concurrency TOCTOU fixes: `backends/set-service-config-toctou-race.md`,
-  `backends/warm-cell-toctou-stale-overwrite.md`, `concurrency/halfopen-probe-toctou-cas.md`.
+  `backends/warm-cell-toctou-stale-overwrite.md`, `concurrency/superseded/halfopen-probe-toctou-cas.md` (historical).
 
 ## Resolution references
 

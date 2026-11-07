@@ -1,0 +1,77 @@
+# ForwardAuth per-endpoint health: one live and one dead endpoint.
+#
+# The EndpointSlice publishes the live auth server (127.0.0.1:30040) and an
+# unreachable TEST-NET-1 address (192.0.2.1:30040). The first call that lands on
+# the dead endpoint times out or fails to connect; its retry must move to the
+# live endpoint, and passive health (unhealthyThreshold: 1) must eject only the
+# dead endpoint. Every request through the route therefore returns 200.
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-svc-dead
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: auth-svc-dead-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: auth-svc-dead
+addressType: IPv4
+ports:
+  - name: http
+    port: 30040
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+  - addresses:
+      - "192.0.2.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-dead-endpoint
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc-dead
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 1000
+        retry:
+          maxRetries: 1
+          retryDelayMs: 10
+          retryOnTimeout: true
+          retryOnConnectError: true
+        healthCheck:
+          passive:
+            unhealthyThreshold: 1
+            ejectionTime: 60s
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+          clientHeaders:
+            - WWW-Authenticate

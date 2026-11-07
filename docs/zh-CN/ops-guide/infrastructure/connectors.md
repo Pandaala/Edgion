@@ -901,19 +901,25 @@ Webhook 连接器（以及共用同一个 `ExternalHttpConnection` 的 ForwardAu
 
 支持主动探测、被动监控或两者结合（推荐）。
 
+健康状态**按目的地**跟踪：`Service` / `ServiceEndpointSlice` 目标的每个就绪端点各算一个目的地，URL 或 `ServiceClusterIp` 目标只有一个目的地。故障端点会被跳过，其余端点继续服务；重试会换到另一个可用端点。没有任何可用目的地时，调用立即以不健康失败。
+
+- **被动检查**：目的地连续失败 `unhealthyThreshold` 次后被摘除。列出的失败状态码、传输错误以及超时（`countTimeout` 为 true 时）共用同一个计数器，一次成功即清零。超过 `maxResponseBytes` 的响应不计入目的地的失败。摘除一定会结束：经过 `ejectionTime × 摘除次数`（上限为 `maxEjectionTime`）后，放行一个半开请求探测该目的地；成功则恢复，失败则以更长时间再次摘除。同一时间最多摘除池中 `maxEjectionPercent` 的目的地，但至少允许摘除一个。
+- **主动检查**：每个周期探测所有目的地。连续 `unhealthyThreshold` 次探测失败的目的地会被跳过，直到连续 `healthyThreshold` 次成功。主动探测成功也会解除被动摘除。主动与被动是相互独立的信号，因此如果探测路径正常而真实调用失败，主动检查可能反复解除被动摘除。
+- **上游 authority**：如果 `Service` 目标的 EdgionBackendTrafficPolicy 设置了 `upstreamAuthority`，调用通过客户端连接池拨号，无法按调用选择端点。这类调用共用一个池级健康状态，摘除同样有时限；主动探测使用策略中的 `healthCheckHost`。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `healthCheck.active.path` | String | none | 主动健康检查路径，附加到基础 URI。示例：`/healthz`。 |
 | `healthCheck.active.intervalSec` | Integer | `10` | 探测间隔（秒）。 |
 | `healthCheck.active.timeoutMs` | Integer | `2000` | 探测超时（毫秒）。 |
 | `healthCheck.active.healthyThreshold` | Integer | `1` | 标记为健康所需的连续成功次数。 |
-| `healthCheck.active.unhealthyThreshold` | Integer | `3` | 标记为不健康所需的连续失败次数（仅在被动检查禁用时使用）。 |
-| `healthCheck.passive.unhealthyThreshold` | Integer | `3` | 标记为不健康所需的连续失败次数。 |
+| `healthCheck.active.unhealthyThreshold` | Integer | `3` | 将目的地标记为不健康所需的连续探测失败次数。 |
+| `healthCheck.passive.unhealthyThreshold` | Integer | `3` | 摘除目的地所需的连续失败次数，至少为 1。 |
 | `healthCheck.passive.failureStatusCodes` | Array\<Integer\> | `[500, 502, 503, 504]` | 视为失败的 HTTP 状态码。 |
-| `healthCheck.passive.countTimeout` | Boolean | `true` | 将超时计为失败。 |
-| `healthCheck.passive.backoff.initialSec` | Integer | `5` | 初始退避时间（秒，仅在主动检查禁用时生效）。 |
-| `healthCheck.passive.backoff.multiplier` | Number | `2.0` | 退避乘数。 |
-| `healthCheck.passive.backoff.maxSec` | Integer | `60` | 最大退避时间（秒）。 |
+| `healthCheck.passive.countTimeout` | Boolean | `true` | 将超时计为失败。连接错误及其他传输错误始终计入。 |
+| `healthCheck.passive.ejectionTime` | Duration | `5s` | 基础摘除时间（GEP-2257，至少 `1s`），乘以该目的地的摘除次数。 |
+| `healthCheck.passive.maxEjectionTime` | Duration | `60s`，若 `ejectionTime` 更大则取其值 | 摘除时间的上限。小于 `ejectionTime` 时会被提高到 `ejectionTime`。 |
+| `healthCheck.passive.maxEjectionPercent` | Integer | `50` | 同一时间最多摘除的目的地百分比（0-100）。`0` 表示不设上限。 |
 
 ### 示例
 
@@ -1164,6 +1170,11 @@ spec:
         timeoutMs: 2000
         healthyThreshold: 1
         unhealthyThreshold: 3
+      passive:
+        unhealthyThreshold: 3
+        ejectionTime: 5s
+        maxEjectionTime: 60s
+        maxEjectionPercent: 50
 ```
 
 ### 从旧 schema 迁移

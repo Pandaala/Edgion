@@ -363,6 +363,9 @@ spec:
         unhealthyThreshold: 3
         failureStatusCodes: [500, 502, 503, 504]
         countTimeout: true
+        ejectionTime: 5s         # base ejection, x ejection count; always time-bounded
+        maxEjectionTime: 60s
+        maxEjectionPercent: 50   # health is per destination (each Service endpoint)
 ```
 
 **Schema reference:**

@@ -148,7 +148,14 @@ fn dial_url_returns_no_endpoint_for_empty_service() {
             &edgion_resources::resources::common::outbound_request::OutboundRequestSpec::default(),
         )
         .unwrap(),
-        health: HealthState::new(),
+        health: crate::plugins::http::common::outbound::health::OutboundHealth::new(
+            crate::plugins::http::common::outbound::health::HealthTarget::Service {
+                service_key: "nonexistent-ns/nonexistent-svc".to_string(),
+                port: Some(8080),
+                scheme: "http",
+            },
+            None,
+        ),
         rate: None,
         success: None,
         max_response_bytes: 1024,
@@ -156,7 +163,6 @@ fn dial_url_returns_no_endpoint_for_empty_service() {
         timeout_template: None,
         retry: None,
         egress_policy: None,
-        passive_health_check: None,
         health_task: None,
         resolved_secrets: None,
     };
@@ -311,63 +317,6 @@ fn active_health_url_applies_target_specific_literal_policy() {
     .is_err());
 }
 
-fn active_health_thresholds() -> ActiveHealthCheck {
-    ActiveHealthCheck {
-        path: Some("/healthz".to_string()),
-        interval_sec: 10,
-        timeout_ms: 2_000,
-        healthy_threshold: 2,
-        unhealthy_threshold: 2,
-    }
-}
-
-#[test]
-fn active_only_health_opens_and_recovers_at_thresholds() {
-    let health = HealthState::new();
-    let active = active_health_thresholds();
-    let mut failures = 0;
-    let mut successes = 0;
-
-    record_active_health_result(&health, &active, false, &mut failures, &mut successes, false);
-    assert!(health.healthy.load(Ordering::Relaxed));
-    record_active_health_result(&health, &active, false, &mut failures, &mut successes, false);
-    assert!(!health.healthy.load(Ordering::Relaxed));
-
-    record_active_health_result(&health, &active, false, &mut failures, &mut successes, true);
-    assert!(!health.healthy.load(Ordering::Relaxed));
-    record_active_health_result(&health, &active, false, &mut failures, &mut successes, true);
-    assert!(health.healthy.load(Ordering::Relaxed));
-}
-
-#[test]
-fn combined_health_passive_opens_and_active_only_recovers() {
-    let health = HealthState::new();
-    let active = active_health_thresholds();
-    let mut failures = 0;
-    let mut successes = 0;
-
-    record_active_health_result(&health, &active, true, &mut failures, &mut successes, false);
-    record_active_health_result(&health, &active, true, &mut failures, &mut successes, false);
-    assert!(
-        health.healthy.load(Ordering::Relaxed),
-        "active failure must not open a passive-owned circuit"
-    );
-
-    health.healthy.store(false, Ordering::Relaxed);
-    health.passive_failures.store(7, Ordering::Relaxed);
-    health.last_halfopen.store(41, Ordering::Relaxed);
-    health.backoff_sec.store(13, Ordering::Relaxed);
-    record_active_health_result(&health, &active, true, &mut failures, &mut successes, true);
-    record_active_health_result(&health, &active, true, &mut failures, &mut successes, true);
-
-    assert!(health.healthy.load(Ordering::Relaxed));
-    assert_eq!(health.passive_failures.load(Ordering::Relaxed), 7);
-    assert_eq!(health.last_halfopen.load(Ordering::Relaxed), 41);
-    assert_eq!(health.backoff_sec.load(Ordering::Relaxed), 13);
-}
-
-/// A URL target with no TLS block must still get a dedicated client — otherwise
-/// it would fall back to the shared global client, which carries no EgressResolver.
 #[test]
 fn url_target_without_tls_gets_a_dedicated_client() {
     let conn = ExternalHttpConnection {

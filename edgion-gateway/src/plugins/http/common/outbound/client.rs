@@ -10,13 +10,12 @@
 //!   before returning a base URL for the caller to use.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_resources::resources::common::external_http::{
-    validate_active_health_path, ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, TargetKind,
-    WebhookRetry, WebhookTarget,
+    validate_active_health_path, ActiveHealthCheck, ExternalHttpConnection, TargetKind, WebhookRetry, WebhookTarget,
 };
 use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
 use edgion_resources::resources::common::request_template::CompiledTemplate;
@@ -40,6 +39,7 @@ use edgion_resources::resources::refs::link_sys_fields::BoundLinkSysConfig;
 
 use super::call::replace_url_host;
 use super::egress::{default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver};
+use super::health::{HealthTarget, OutboundHealth};
 use super::pinned_resolver::AnchorPinnedResolver;
 use super::request::CompiledRequest;
 use super::target::ResolvedTarget;
@@ -47,38 +47,6 @@ use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_
 
 // Re-export SlidingWindowCounter from the webhook runtime for outbound rate limiting.
 use crate::link_sys::providers::webhook::runtime::SlidingWindowCounter;
-
-// ============================================================
-// HealthState
-// ============================================================
-
-/// Shared health state for a managed outbound connection.
-///
-/// Owned by both [`ManagedOutboundClient`] and the spawned active-health task so
-/// that either side can read and update the current health status without holding
-/// a lock.
-pub struct HealthState {
-    /// Current health status: `true` = healthy (default on construction).
-    pub healthy: AtomicBool,
-    /// Consecutive passive-failure counter for the passive-health gate.
-    pub passive_failures: AtomicU32,
-    /// Process-monotonic passive-recovery gate baseline, set when the circuit
-    /// opens and advanced when a half-open probe is admitted.
-    pub last_halfopen: AtomicU64,
-    /// Current backoff interval in seconds (passive-only recovery).
-    pub backoff_sec: AtomicU64,
-}
-
-impl HealthState {
-    pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self {
-            healthy: AtomicBool::new(true),
-            passive_failures: AtomicU32::new(0),
-            last_halfopen: AtomicU64::new(0),
-            backoff_sec: AtomicU64::new(0),
-        })
-    }
-}
 
 // ============================================================
 // ManagedOutboundDialError
@@ -118,8 +86,8 @@ pub struct ManagedOutboundClient {
     pub resolved_target: ResolvedTarget,
     /// Pre-compiled outbound request spec.
     pub compiled_request: CompiledRequest,
-    /// Shared health state (used by the active-health task and the dial path).
-    pub health: Arc<HealthState>,
+    /// Per-destination health shared by the call path and the active-health task.
+    pub health: Arc<OutboundHealth>,
     /// Optional sliding-window rate counter for outbound call rate limiting.
     pub rate: Option<SlidingWindowCounter>,
     /// Success criteria (status codes + optional JSON-Pointer body predicates);
@@ -139,8 +107,6 @@ pub struct ManagedOutboundClient {
     /// Egress policy for URL targets. `None` for Service targets, whose addresses
     /// are guarded by `validate_endpoint_backend_addr`'s backend policy instead.
     pub egress_policy: Option<EgressPolicy>,
-    /// Passive health-check configuration. `None` = no passive monitoring.
-    pub passive_health_check: Option<PassiveHealthCheck>,
     /// Handle for the active-health background task. Aborted on Drop.
     pub health_task: Option<tokio::task::JoinHandle<()>>,
     /// Controller-resolved secret values for `${secretRef:...}` templates.
@@ -415,8 +381,9 @@ impl ManagedOutboundClient {
             .transpose()
             .map_err(|e| format!("failed to compile timeoutMsTemplate for '{}': {}", ref_label, e))?;
 
-        // ── 7. Health state ────────────────────────────────────────────────
-        let health = HealthState::new();
+        // ── 7. Health state (per destination) ──────────────────────────────
+        let passive_health_check = conn.health_check.as_ref().and_then(|hc| hc.passive.as_ref());
+        let health = OutboundHealth::new(health_target(&resolved_target), passive_health_check);
 
         // ── 8. Rate counter ────────────────────────────────────────────────
         let rate = conn
@@ -424,31 +391,17 @@ impl ManagedOutboundClient {
             .as_ref()
             .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
-        let passive_health_check = conn.health_check.as_ref().and_then(|hc| hc.passive.as_ref()).cloned();
-
         // ── 9. Spawn active-health task ────────────────────────────────────
+        // The task owns a fresh target (the round-robin cursor is not Clone)
+        // for upstream-authority probes; endpoint probes read `health`.
         let health_task = if let Some(active) = conn.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
             let active_clone = active.clone();
             let health_clone = Arc::clone(&health);
             let client_clone = Arc::clone(&http_client);
-            let has_passive_health = passive_health_check.is_some();
-            // Build a standalone target for the health task. We re-use the same
-            // resolved_target kind but construct a fresh one for the task so that
-            // we can move it without cloning the AtomicUsize cursor (which is not
-            // Clone). In practice the health task always uses pick_url() which
-            // re-reads the global EndpointSlice store each tick.
             let task_target = build_resolved_target_in_namespace(&conn.target, tls_active, owner_namespace)
                 .unwrap_or(ResolvedTarget::Static(String::new()));
             Some(tokio::spawn(async move {
-                run_active_health_check(
-                    task_target,
-                    active_clone,
-                    health_clone,
-                    client_clone,
-                    egress_policy,
-                    has_passive_health,
-                )
-                .await;
+                run_active_health_check(task_target, active_clone, health_clone, client_clone, egress_policy).await;
             }))
         } else {
             None
@@ -474,7 +427,6 @@ impl ManagedOutboundClient {
             timeout_template,
             retry,
             egress_policy,
-            passive_health_check,
             health_task,
             resolved_secrets: secrets.cloned(),
         })
@@ -502,6 +454,11 @@ impl ManagedOutboundClient {
         validate_literal_dial_url(&url, self.egress_policy)?;
 
         Ok(url)
+    }
+
+    /// Apply the IP-literal SSRF guard to one static destination URL.
+    pub(crate) fn check_dial_url(&self, url: &str) -> Result<(), ManagedOutboundDialError> {
+        validate_literal_dial_url(url, self.egress_policy)
     }
 
     /// The `service_key` when this client's target is a Service anchor, else
@@ -570,7 +527,7 @@ impl ManagedOutboundClient {
             resolved_target: ResolvedTarget::Static(url.to_string()),
             compiled_request: CompiledRequest::from_spec(&OutboundRequestSpec::default())
                 .expect("default spec must compile"),
-            health: HealthState::new(),
+            health: OutboundHealth::new(HealthTarget::Static(url.to_string()), None),
             rate: None,
             success: None,
             max_response_bytes: 1024,
@@ -578,7 +535,6 @@ impl ManagedOutboundClient {
             timeout_template: None,
             retry: None,
             egress_policy: None,
-            passive_health_check: None,
             health_task: None,
             resolved_secrets: None,
         }
@@ -627,6 +583,23 @@ fn build_resolved_target_in_namespace(
                 ServiceBackendKind::ServiceExternalName => Err("ServiceExternalName is not supported".to_string()),
             }
         }
+    }
+}
+
+/// Destination source for per-destination health, derived from the resolved target.
+fn health_target(target: &ResolvedTarget) -> HealthTarget {
+    match target {
+        ResolvedTarget::Static(url) => HealthTarget::Static(url.clone()),
+        ResolvedTarget::Service {
+            service_key,
+            port,
+            scheme,
+            ..
+        } => HealthTarget::Service {
+            service_key: service_key.clone(),
+            port: *port,
+            scheme,
+        },
     }
 }
 
@@ -761,19 +734,26 @@ fn prepare_active_health_url(
 // Active health check task
 // ============================================================
 
+/// Maximum concurrent endpoint probes in one active-health tick.
+const ACTIVE_PROBE_CONCURRENCY: usize = 16;
+
 /// Standalone active health check loop for [`ManagedOutboundClient`].
 ///
-/// Periodically probes `target.pick_url()/active.path` and updates
-/// `health.healthy`. Long-running; exits only when the task is aborted (via
-/// `Drop` on the owner).
+/// Each tick probes every current destination and records the verdict on that
+/// destination. A Service anchor carrying an `upstreamAuthority` policy dials
+/// through the pinned resolver instead, so its tick probes once and records on
+/// the pool-level destination. Long-running; exits only when the task is
+/// aborted (via `Drop` on the owner). Probes run inside this task, so aborting
+/// it cancels them too.
 async fn run_active_health_check(
     target: ResolvedTarget,
     active: ActiveHealthCheck,
-    health: Arc<HealthState>,
+    health: Arc<OutboundHealth>,
     client: Arc<reqwest::Client>,
     egress_policy: Option<EgressPolicy>,
-    has_passive_health: bool,
 ) {
+    use futures::StreamExt;
+
     let interval = Duration::from_secs(active.interval_sec.max(1));
     let timeout = Duration::from_millis(active.timeout_ms.max(100));
 
@@ -784,70 +764,72 @@ async fn run_active_health_check(
         ResolvedTarget::Static(_) => None,
     };
 
-    let mut consecutive_failures: u32 = 0;
-    let mut consecutive_successes: u32 = 0;
-
     loop {
         tokio::time::sleep(interval).await;
 
-        let success = match target.pick_url() {
-            Some(base) => {
-                // A Service anchor carrying an `upstreamAuthority` policy
-                // dispatches by Host/SNI. The active probe has no request to
-                // render a label from, so it uses the static healthCheckHost.
-                // The lookup is refreshed every tick so policy hot reload takes
-                // effect without respawning this task.
-                let base = resolve_probe_base(base.into_owned(), service_key.as_deref());
-                match prepare_active_health_url(&base, active.path.as_deref(), egress_policy) {
-                    Ok(check_url) => client
-                        .get(check_url)
-                        .timeout(timeout)
-                        .send()
-                        .await
-                        .is_ok_and(|response| response.status().is_success()),
-                    Err(_) => false,
+        // The policy lookup is refreshed every tick so hot reload takes effect
+        // without respawning this task.
+        if service_key.as_deref().is_some_and(has_upstream_authority) {
+            let success = match target.pick_url() {
+                Some(base) => {
+                    // The active probe has no request to render a label from,
+                    // so it uses the static healthCheckHost.
+                    let base = resolve_probe_base(base.into_owned(), service_key.as_deref());
+                    probe_once(&client, &base, active.path.as_deref(), egress_policy, timeout).await
                 }
-            }
-            None => false,
-        };
+                None => false,
+            };
+            health.record_active(health.pool(), &active, success);
+            continue;
+        }
 
-        record_active_health_result(
-            &health,
-            &active,
-            has_passive_health,
-            &mut consecutive_failures,
-            &mut consecutive_successes,
-            success,
-        );
+        let dests = health.probe_targets();
+        futures::stream::iter(dests)
+            .map(|dest| {
+                let client = &client;
+                let path = active.path.as_deref();
+                async move {
+                    let success = probe_once(client, dest.url(), path, egress_policy, timeout).await;
+                    (dest, success)
+                }
+            })
+            .buffer_unordered(ACTIVE_PROBE_CONCURRENCY)
+            .for_each(|(dest, success)| {
+                health.record_active(&dest, &active, success);
+                std::future::ready(())
+            })
+            .await;
     }
 }
 
-/// Update the active-health counters and the shared health flag for one tick.
-///
-/// Passive monitoring exclusively owns circuit opening when it is configured.
-/// Active success may recover either mode, but it must not reset passive
-/// counters or the monotonic half-open/backoff state.
-fn record_active_health_result(
-    health: &HealthState,
-    active: &ActiveHealthCheck,
-    has_passive_health: bool,
-    consecutive_failures: &mut u32,
-    consecutive_successes: &mut u32,
-    success: bool,
-) {
-    if success {
-        *consecutive_failures = 0;
-        *consecutive_successes = (*consecutive_successes).saturating_add(1);
-        if *consecutive_successes >= active.healthy_threshold {
-            health.healthy.store(true, Ordering::Relaxed);
-        }
-    } else {
-        *consecutive_successes = 0;
-        *consecutive_failures = (*consecutive_failures).saturating_add(1);
-        if !has_passive_health && *consecutive_failures >= active.unhealthy_threshold {
-            health.healthy.store(false, Ordering::Relaxed);
-        }
+/// Send one active-health GET and report whether it returned 2xx.
+async fn probe_once(
+    client: &reqwest::Client,
+    base: &str,
+    path: Option<&str>,
+    egress_policy: Option<EgressPolicy>,
+    timeout: Duration,
+) -> bool {
+    match prepare_active_health_url(base, path, egress_policy) {
+        Ok(check_url) => client
+            .get(check_url)
+            .timeout(timeout)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success()),
+        Err(_) => false,
     }
+}
+
+/// Whether a Service anchor currently carries an `upstreamAuthority` policy.
+/// Mirrors the per-call lookup in `outbound_call`.
+pub(crate) fn has_upstream_authority(service_key: &str) -> bool {
+    let target =
+        crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(service_key);
+    get_backend_traffic_policy_store()
+        .snapshot()
+        .get_effective(&target)
+        .is_some_and(|policy| policy.upstream_authority.is_some())
 }
 
 /// Resolve the effective probe base URL for one active-health tick.

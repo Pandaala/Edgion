@@ -1009,19 +1009,46 @@ shared outbound client's `rateLimit` configuration.
 
 Supports active probing, passive monitoring, or both (recommended).
 
+Health is tracked **per destination**: each ready endpoint of a `Service` /
+`ServiceEndpointSlice` target, or the single destination of a URL or
+`ServiceClusterIp` target. A failing endpoint is skipped while the other
+endpoints keep serving, and a retry moves to another usable endpoint. When no
+destination is usable, the call fails fast as unhealthy.
+
+- **Passive** ejects a destination after `unhealthyThreshold` consecutive
+  failures. Listed failure statuses, transport errors and (when `countTimeout`
+  is true) timeouts all advance the same counter; a success resets it. A response
+  above `maxResponseBytes` is not counted against the destination. Ejection
+  always ends: after `ejectionTime × ejection count` (capped by
+  `maxEjectionTime`) one half-open request probes the destination; success
+  restores it, failure ejects it again for longer. At most `maxEjectionPercent`
+  of a pool is ejected at once, but at least one destination may always be
+  ejected.
+- **Active** probes every destination each interval. A destination with
+  `unhealthyThreshold` consecutive probe failures is skipped until it reaches
+  `healthyThreshold` consecutive successes. Active success also lifts a passive
+  ejection. Active and passive are independent signals, so an active check
+  whose path is healthy while real calls fail can repeatedly lift a passive
+  ejection.
+- **Upstream authority**: a `Service` target whose EdgionBackendTrafficPolicy
+  sets `upstreamAuthority` dials through the client's connection pool, so its
+  endpoint cannot be chosen per call. Such calls share one pool-level health
+  state with the same bounded ejection; active probes use the policy's
+  `healthCheckHost`.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `healthCheck.active.path` | String | none | Active health-check path, appended to the base URI. Example: `/healthz`. |
 | `healthCheck.active.intervalSec` | Integer | `10` | Probe interval in seconds. |
 | `healthCheck.active.timeoutMs` | Integer | `2000` | Probe timeout in milliseconds. |
 | `healthCheck.active.healthyThreshold` | Integer | `1` | Consecutive successes to mark healthy. |
-| `healthCheck.active.unhealthyThreshold` | Integer | `3` | Consecutive failures to mark unhealthy (used only when passive is disabled). |
-| `healthCheck.passive.unhealthyThreshold` | Integer | `3` | Consecutive failures to mark unhealthy. |
+| `healthCheck.active.unhealthyThreshold` | Integer | `3` | Consecutive probe failures to mark a destination unhealthy. |
+| `healthCheck.passive.unhealthyThreshold` | Integer | `3` | Consecutive failures that eject a destination. Must be at least 1. |
 | `healthCheck.passive.failureStatusCodes` | Array\<Integer\> | `[500, 502, 503, 504]` | HTTP status codes counted as failures. |
-| `healthCheck.passive.countTimeout` | Boolean | `true` | Count timeouts as failures. |
-| `healthCheck.passive.backoff.initialSec` | Integer | `5` | Initial backoff in seconds (effective only when active is disabled). |
-| `healthCheck.passive.backoff.multiplier` | Number | `2.0` | Backoff multiplier. |
-| `healthCheck.passive.backoff.maxSec` | Integer | `60` | Maximum backoff in seconds. |
+| `healthCheck.passive.countTimeout` | Boolean | `true` | Count timeouts as failures. Connect and other transport errors always count. |
+| `healthCheck.passive.ejectionTime` | Duration | `5s` | Base ejection time (GEP-2257, at least `1s`), multiplied by the destination's ejection count. |
+| `healthCheck.passive.maxEjectionTime` | Duration | `60s` or `ejectionTime` if larger | Upper bound of the scaled ejection time. A smaller value is raised to `ejectionTime`. |
+| `healthCheck.passive.maxEjectionPercent` | Integer | `50` | Maximum percent (0-100) of a target's destinations ejected at once. `0` disables the cap. |
 
 ### Examples
 
@@ -1272,6 +1299,11 @@ spec:
         timeoutMs: 2000
         healthyThreshold: 1
         unhealthyThreshold: 3
+      passive:
+        unhealthyThreshold: 3
+        ejectionTime: 5s
+        maxEjectionTime: 60s
+        maxEjectionPercent: 50
 ```
 
 ### Migration from the old schema

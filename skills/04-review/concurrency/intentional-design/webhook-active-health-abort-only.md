@@ -16,6 +16,16 @@ Kept for historical design-rationale context. The current owner is
 `ManagedOutboundClient::stop_health_check`; the unified runtime table invokes
 retirement on replacement/removal even if a caller retains the managed client.
 The abort-only principle remains applicable, not the old manager layout below.
+**Current evidence (2026-11-07, gw-plug3-01)**: the task is
+`outbound/client.rs::run_active_health_check`. Each tick it reads
+`OutboundHealth::probe_targets()` and probes every destination through a
+`buffer_unordered` stream polled inside the task itself (no detached spawn), then
+calls the synchronous `OutboundHealth::record_active`. Per-destination counters
+and flags are atomics on `DestHealth`; no lock is held across an await, so
+aborting the task drops all in-flight probe futures. The `runtime.healthy` /
+`passive_failures` / `backoff_sec` atomics and stack-local counters cited in
+rationales 2 and 3 below no longer exist; the reasoning still holds for the
+current shape.
 
 ## Conclusion
 
@@ -95,6 +105,8 @@ Re-open this decision only if:
   bounded-drain treatment as the ES `bulk_task`.
 - A future change makes the per-probe synchronous section long-running (CPU-bound) such that `abort()`
   could be meaningfully deferred between await points.
+- Probes move to detached tasks (for example `tokio::spawn` per endpoint) that an abort of the
+  parent would not cancel.
 
 ## Reference Cases
 

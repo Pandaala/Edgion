@@ -276,7 +276,7 @@ async fn timeout_returns_timeout_error() {
 #[tokio::test]
 async fn unhealthy_gate_returns_unhealthy_error() {
     let client = make_client();
-    client.health.healthy.store(false, Ordering::Relaxed);
+    client.health.force_unhealthy_for_test();
     let transport = FakeTransport::new([]);
     assert!(matches!(
         call(&client, &MockPluginSession::new(), &transport, 4096).await,
@@ -865,6 +865,184 @@ async fn retry_on_connect_error_uses_bounded_backoff() {
     assert_eq!(transport.count(), 3);
 }
 
+fn pool_client(
+    endpoints: &[std::net::SocketAddr],
+    passive: Option<&edgion_resources::resources::common::external_http::PassiveHealthCheck>,
+) -> ManagedOutboundClient {
+    let mut client = make_client();
+    client.health =
+        crate::plugins::http::common::outbound::health::OutboundHealth::with_endpoints_for_test(endpoints, passive);
+    client
+}
+
+fn endpoint(last: u8) -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([10, 0, 0, last], 8080))
+}
+
+fn passive_threshold_one() -> edgion_resources::resources::common::external_http::PassiveHealthCheck {
+    let mut passive: edgion_resources::resources::common::external_http::PassiveHealthCheck =
+        serde_json::from_str("{}").unwrap();
+    passive.unhealthy_threshold = 1;
+    passive.max_ejection_percent = 0;
+    passive
+}
+
+#[tokio::test]
+async fn retry_moves_to_another_pool_endpoint() {
+    let mut client = pool_client(&[endpoint(1), endpoint(2)], None);
+    let mut retry = tests_retry(0);
+    retry.max_retries = 1;
+    retry.retry_on_status = vec![503];
+    client.retry = Some(retry);
+    let transport = FakeTransport::new([
+        FakeResponse::new(503, Bytes::new()).into(),
+        FakeResponse::new(200, Bytes::new()).into(),
+    ]);
+    let response = call(&client, &session("GET", "/retry"), &transport, 4096)
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    let requests = transport.requests.lock();
+    let first = requests[0].url.clone();
+    let second = requests[1].url.clone();
+    assert_ne!(
+        first.host_str(),
+        second.host_str(),
+        "the retry must use the other endpoint"
+    );
+    assert_eq!(first.path(), second.path());
+    assert_eq!(second.port(), Some(8080));
+}
+
+#[tokio::test]
+async fn failing_pool_endpoint_is_ejected_while_the_pool_keeps_serving() {
+    let client = pool_client(&[endpoint(1), endpoint(2)], Some(&passive_threshold_one()));
+    let transport = FakeTransport::new([
+        FakeResponse::new(503, Bytes::new()).into(),
+        FakeResponse::new(200, Bytes::new()).into(),
+        FakeResponse::new(200, Bytes::new()).into(),
+    ]);
+    assert_eq!(
+        call(&client, &session("GET", "/a"), &transport, 4096)
+            .await
+            .unwrap()
+            .status,
+        503
+    );
+    assert_eq!(
+        call(&client, &session("GET", "/b"), &transport, 4096)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(
+        call(&client, &session("GET", "/c"), &transport, 4096)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let requests = transport.requests.lock();
+    assert_eq!(requests[1].url.host_str(), requests[2].url.host_str());
+    assert_ne!(requests[0].url.host_str(), requests[1].url.host_str());
+}
+
+#[tokio::test]
+async fn count_timeout_false_keeps_timed_out_destination_usable() {
+    for (count_timeout, expect_unhealthy) in [(true, true), (false, false)] {
+        let mut passive = passive_threshold_one();
+        passive.count_timeout = count_timeout;
+        let client = pool_client(&[endpoint(1)], Some(&passive));
+        let transport = FakeTransport::new([
+            FakeStep::error(FakeError::Timeout),
+            FakeResponse::new(200, Bytes::new()).into(),
+        ]);
+        assert!(matches!(
+            call(&client, &session("GET", "/t"), &transport, 4096).await,
+            Err(OutboundCallError::Timeout)
+        ));
+        let second = call(&client, &session("GET", "/t"), &transport, 4096).await;
+        assert_eq!(matches!(second, Err(OutboundCallError::Unhealthy)), expect_unhealthy);
+    }
+}
+
+#[tokio::test]
+async fn retry_is_not_sent_to_a_destination_the_previous_attempt_ejected() {
+    let mut client = pool_client(&[endpoint(1)], Some(&passive_threshold_one()));
+    let mut retry = tests_retry(0);
+    retry.max_retries = 2;
+    client.retry = Some(retry);
+    let transport = FakeTransport::new([
+        FakeStep::error(FakeError::Connect),
+        FakeResponse::new(200, Bytes::new()).into(),
+    ]);
+    assert!(matches!(
+        call(&client, &session("GET", "/r"), &transport, 4096).await,
+        Err(OutboundCallError::Unhealthy)
+    ));
+    assert_eq!(transport.count(), 1, "the ejected endpoint must not receive the retry");
+
+    // Without passive ejection the retry still reuses the only endpoint.
+    let mut client = pool_client(&[endpoint(1)], None);
+    let mut retry = tests_retry(0);
+    retry.max_retries = 1;
+    client.retry = Some(retry);
+    let transport = FakeTransport::new([
+        FakeStep::error(FakeError::Connect),
+        FakeResponse::new(200, Bytes::new()).into(),
+    ]);
+    assert_eq!(
+        call(&client, &session("GET", "/r"), &transport, 4096)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(transport.count(), 2);
+}
+
+#[tokio::test]
+async fn body_read_timeout_honors_count_timeout() {
+    for (count_timeout, expect_unhealthy) in [(true, true), (false, false)] {
+        let mut passive = passive_threshold_one();
+        passive.count_timeout = count_timeout;
+        let client = pool_client(&[endpoint(1)], Some(&passive));
+        let transport = FakeTransport::new([
+            FakeResponse::new(200, Bytes::new())
+                .streamed(vec![Err(FakeError::Timeout)])
+                .into(),
+            FakeResponse::new(200, Bytes::new()).into(),
+        ]);
+        assert!(matches!(
+            call(&client, &session("GET", "/b"), &transport, 4096).await,
+            Err(OutboundCallError::Connect)
+        ));
+        let second = call(&client, &session("GET", "/b"), &transport, 4096).await;
+        assert_eq!(matches!(second, Err(OutboundCallError::Unhealthy)), expect_unhealthy);
+    }
+}
+
+#[tokio::test]
+async fn response_size_limit_does_not_eject_the_destination() {
+    let client = pool_client(&[endpoint(1)], Some(&passive_threshold_one()));
+    let transport = FakeTransport::new([
+        FakeResponse::new(200, Bytes::from_static(b"too large body")).into(),
+        FakeResponse::new(200, Bytes::new()).into(),
+    ]);
+    assert!(matches!(
+        call(&client, &session("GET", "/big"), &transport, 4).await,
+        Err(OutboundCallError::ResponseTooLarge)
+    ));
+    assert_eq!(
+        call(&client, &session("GET", "/big"), &transport, 4)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+}
+
 #[tokio::test]
 async fn transport_errors_keep_public_classification() {
     for (error, expected) in [
@@ -1075,6 +1253,15 @@ async fn trusted_calls_read_current_endpoint_policy_and_context_for_every_exchan
         scheme: "http",
         cursor: AtomicUsize::new(0),
     };
+    // Health is derived from the same target in production builds.
+    client.health = crate::plugins::http::common::outbound::health::OutboundHealth::new(
+        crate::plugins::http::common::outbound::health::HealthTarget::Service {
+            service_key: format!("{NS}/{SERVICE}"),
+            port: Some(8080),
+            scheme: "http",
+        },
+        None,
+    );
     let spec: OutboundRequestSpec = serde_json::from_value(serde_json::json!({
         "path": {"template": "/decision/${ctx:tenant}"}, "method": {"template": "POST"}
     }))

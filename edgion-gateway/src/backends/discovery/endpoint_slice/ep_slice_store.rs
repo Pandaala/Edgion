@@ -7,7 +7,9 @@ use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::sync::{Arc, LazyLock};
 
-use crate::backends::discovery::{get_service_discovery_coordinator, ServiceDiscoveryCoordinator, ServiceSectionKey};
+use crate::backends::discovery::{
+    get_service_discovery_coordinator, ResolvedServiceSection, ServiceDiscoveryCoordinator, ServiceSectionKey,
+};
 use crate::lb::LbBackend;
 
 static ROUNDROBIN_STORE: LazyLock<EpSliceStore<RoundRobin>> =
@@ -53,26 +55,27 @@ where
     /// retains the serving port compiled from the matching EndpointSlice
     /// section. Invalid or unavailable sections fail closed.
     pub fn ready_endpoints_for_port(&self, service_key: &str, service_port: Option<i32>) -> Vec<SocketAddr> {
-        let Some(service_port) = service_port
-            .and_then(|port| u16::try_from(port).ok())
-            .and_then(NonZeroU16::new)
-        else {
+        let Some(section) = self.ready_section_for_port(service_key, service_port) else {
             return Vec::new();
         };
-        let generation = self.coordinator.load_generation();
-        let Some(service) = generation.available(service_key) else {
-            return Vec::new();
-        };
-        let Ok(section) = service.resolve_section(&ServiceSectionKey::Number(service_port)) else {
-            return Vec::new();
-        };
+        ready_section_sockets(&section)
+    }
 
-        section
-            .ready_slots
-            .iter()
-            .map(|slot| slot.backend.addr.as_inet().copied())
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_default()
+    /// Return the resolved section behind [`Self::ready_endpoints_for_port`].
+    ///
+    /// The `Arc` identity lets a caller cache data derived from the section and
+    /// rebuild it only when a new section is published.
+    pub fn ready_section_for_port(
+        &self,
+        service_key: &str,
+        service_port: Option<i32>,
+    ) -> Option<Arc<ResolvedServiceSection>> {
+        let service_port = service_port
+            .and_then(|port| u16::try_from(port).ok())
+            .and_then(NonZeroU16::new)?;
+        let generation = self.coordinator.load_generation();
+        let service = generation.available(service_key)?;
+        service.resolve_section(&ServiceSectionKey::Number(service_port)).ok()
     }
 
     pub fn get_backends_for_service(&self, service_key: &str) -> Arc<[Arc<LbBackend>]> {
@@ -186,6 +189,17 @@ where
 
 #[cfg(test)]
 include!("../../../../tests/support/backends/discovery/endpoint_slice/ep_slice_store_test/186_function_item.rs");
+
+/// Ready sockets of one resolved section. Fails closed (empty) if any slot is
+/// not an Inet address, matching the historical facade.
+pub fn ready_section_sockets(section: &ResolvedServiceSection) -> Vec<SocketAddr> {
+    section
+        .ready_slots
+        .iter()
+        .map(|slot| slot.backend.addr.as_inet().copied())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/backends/discovery/endpoint_slice/ep_slice_store_test/inventory_tests.rs"]

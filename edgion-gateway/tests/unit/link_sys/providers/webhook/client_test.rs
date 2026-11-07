@@ -301,7 +301,7 @@ fn captured_actual_snapshot_survives_global_publication() {
 fn managed_client_preserves_identity() {
     let owner = prepare(config()).unwrap();
     assert!(Arc::ptr_eq(&owner.managed_client(), &owner.managed_client()));
-    assert!(owner.managed_client().health.healthy.load(Ordering::Relaxed));
+    assert!(owner.managed_client().health.all_usable_for_test());
 }
 
 #[test]
@@ -371,8 +371,7 @@ fn invalid_request_template_is_rejected_before_publication() {
 #[test]
 fn replacement_has_fresh_health_and_carries_resolved_secrets() {
     let first = prepare(config()).unwrap();
-    first.client.health.healthy.store(false, Ordering::Relaxed);
-    first.client.health.passive_failures.store(5, Ordering::Relaxed);
+    first.client.health.force_unhealthy_for_test();
     let mut cfg = config();
     cfg.request = OutboundRequestSpec {
         method: Some(MethodSpec {
@@ -388,8 +387,7 @@ fn replacement_has_fresh_health_and_carries_resolved_secrets() {
     );
     let second = prepare(cfg).unwrap();
     assert!(!Arc::ptr_eq(&first.client, &second.client));
-    assert!(second.client.health.healthy.load(Ordering::Relaxed));
-    assert_eq!(second.client.health.passive_failures.load(Ordering::Relaxed), 0);
+    assert!(second.client.health.all_usable_for_test());
     assert_eq!(
         second.client.resolved_secrets.as_ref().unwrap().0["ns/token:value"],
         "test-token"
@@ -459,8 +457,7 @@ async fn endpoint_churn_preserves_health_state() {
     // Record the Arc identity and degrade the client health.
     let client = owner.managed_client();
     let ptr_before = Arc::as_ptr(&client);
-    client.health.healthy.store(false, Ordering::Relaxed);
-    client.health.passive_failures.store(3, Ordering::Relaxed);
+    client.health.force_unhealthy_for_test();
 
     // Simulate endpoint churn by updating the EpSliceStore directly.
     let store = get_roundrobin_store();
@@ -502,13 +499,8 @@ async fn endpoint_churn_preserves_health_state() {
         "endpoint churn must not replace the client Arc"
     );
     assert!(
-        !client_after.health.healthy.load(Ordering::Relaxed),
-        "healthy must remain false after endpoint churn"
-    );
-    assert_eq!(
-        client_after.health.passive_failures.load(Ordering::Relaxed),
-        3,
-        "passive_failures must remain 3 after endpoint churn"
+        !client_after.health.all_usable_for_test(),
+        "health state must survive endpoint churn"
     );
 
     // Cleanup.
@@ -537,7 +529,7 @@ async fn retirement_and_drop_stop_probes_even_with_retained_call_handles() {
         })
         .await
         .expect("retirement must abort the probe despite a retained call handle");
-        assert!(managed.health.healthy.load(Ordering::Relaxed));
+        assert!(managed.health.all_usable_for_test());
         // Keep the client alive until after observing the abort, so its own
         // Drop cannot be the mechanism making this assertion pass.
         drop(managed);

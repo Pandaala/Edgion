@@ -850,9 +850,8 @@ async fn permit_closed_preserves_the_decision_error() {
 
 #[tokio::test]
 async fn permit_is_returned_after_health_gate_rejection() {
-    let mut client = guardrail_client("http://localhost:1");
-    client.health.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
-    client.passive_health_check = None;
+    let client = guardrail_client("http://localhost:1");
+    client.health.force_unhealthy_for_test();
     let mut processor = processor(false);
     processor.client = Arc::new(client);
     processor.window.retain(semantic_record("unhealthy")).unwrap();

@@ -154,7 +154,8 @@ fn outbound_call_error_debug_and_display_are_static_and_detail_free() {
 use std::time::Duration;
 
 use crate::plugins::http::common::http_client::get_http_client_arc;
-use crate::plugins::http::common::outbound::client::{HealthState, ManagedOutboundClient};
+use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
+use crate::plugins::http::common::outbound::health::{HealthTarget, OutboundHealth};
 use crate::plugins::http::common::outbound::request::CompiledRequest;
 use crate::plugins::http::common::outbound::target::ResolvedTarget;
 use crate::plugins::runtime::traits::session::MockPluginSession;
@@ -175,7 +176,7 @@ fn make_client(url: &str) -> ManagedOutboundClient {
         resolved_target: ResolvedTarget::Static(url.to_string()),
         compiled_request: CompiledRequest::from_spec(&OutboundRequestSpec::default())
             .expect("default spec must compile"),
-        health: HealthState::new(),
+        health: OutboundHealth::new(HealthTarget::Static(url.to_string()), None),
         rate: None,
         success: None,
         max_response_bytes: 64 * 1024,
@@ -183,7 +184,6 @@ fn make_client(url: &str) -> ManagedOutboundClient {
         timeout_template: None,
         retry: None,
         egress_policy: None,
-        passive_health_check: None,
         health_task: None,
         resolved_secrets: None,
     }
@@ -243,16 +243,6 @@ fn retry_attempt_preserves_request_fields_through_final_transfer() {
         assert!(request.headers()[http::header::AUTHORIZATION].is_sensitive());
         assert_eq!(request.body().unwrap().as_bytes(), Some(b"replayable body".as_slice()));
     }
-}
-
-#[test]
-fn halfopen_window_due_preserves_zero_interval_and_saturates_boundaries() {
-    assert!(halfopen_window_due(4, 5, 0));
-    assert!(!halfopen_window_due(4, 5, 1));
-    assert!(!halfopen_window_due(9, 5, 5));
-    assert!(halfopen_window_due(10, 5, 5));
-    assert!(!halfopen_window_due(u64::MAX - 1, u64::MAX - 2, 10));
-    assert!(halfopen_window_due(u64::MAX, u64::MAX - 2, 10));
 }
 
 // ── TDD tests ─────────────────────────────────────────────────────────────

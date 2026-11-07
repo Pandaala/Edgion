@@ -52,6 +52,7 @@ const REQUIRED_ORIGIN_HOST: &str = "forward-auth-required.example.com";
 const CUSTOM_204_HOST: &str = "forward-auth-204.example.com";
 const STRICT_204_HOST: &str = "forward-auth-strict-204.example.com";
 const LB_HOST: &str = "forward-auth-lb.example.com";
+const DEAD_ENDPOINT_HOST: &str = "forward-auth-dead-endpoint.example.com";
 const DENY_MULTIVALUE_HOST: &str = "forward-auth-deny-multivalue.example.com";
 
 /// authFailureDelayMs configured in 03_EdgionPlugins_forward-auth-delay.yaml
@@ -1589,6 +1590,70 @@ impl ForwardAuthTestSuite {
             },
         )
     }
+
+    /// Test: one dead endpoint in the auth Service pool.
+    ///
+    /// Config: 22_EdgionPlugins_forward-auth-dead-endpoint.yaml publishes the
+    /// live auth server and an unreachable TEST-NET-1 address. A call that lands
+    /// on the dead endpoint must retry on the live one, and passive health must
+    /// eject only the dead endpoint, so every request returns 200.
+    fn test_dead_endpoint_is_ejected_and_retried_elsewhere() -> TestCase {
+        TestCase::new(
+            "dead_endpoint_is_ejected_and_retried_elsewhere",
+            "ForwardAuth: one dead pool endpoint — 6/6 requests return 200 (retry moves, endpoint ejected)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("{}/headers", ctx.http_url());
+                    const REQUESTS: u8 = 6;
+
+                    let mut failures = Vec::new();
+                    for i in 0..REQUESTS {
+                        match client
+                            .get(&url)
+                            .header("host", DEAD_ENDPOINT_HOST)
+                            .header("Authorization", "Bearer valid-token")
+                            .send()
+                            .await
+                        {
+                            Err(e) => failures.push(format!("req {}: send error: {}", i, e)),
+                            Ok(resp) => {
+                                let status = resp.status().as_u16();
+                                let body = resp.text().await.unwrap_or_default();
+                                let body_lower = body.to_lowercase();
+                                if status != 200 || !body_lower.contains("user-123") {
+                                    failures.push(format!(
+                                        "req {}: expected 200 with X-User-ID, got {}. body={}",
+                                        i,
+                                        status,
+                                        &body[..body.len().min(200)]
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    if failures.is_empty() {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("ForwardAuth dead endpoint: {REQUESTS}/{REQUESTS} requests returned 200"),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "ForwardAuth dead endpoint: {}/{} failures: {}",
+                                failures.len(),
+                                REQUESTS,
+                                failures.join("; ")
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for ForwardAuthTestSuite {
@@ -1635,6 +1700,8 @@ impl TestSuite for ForwardAuthTestSuite {
             Self::test_success_excludes_200_treats_as_failure(),
             // LB round-robin smoke test (multi-endpoint EndpointSlice)
             Self::test_backendref_lb_round_robin(),
+            // Per-endpoint health: a dead endpoint does not fail the route
+            Self::test_dead_endpoint_is_ejected_and_retried_elsewhere(),
         ]
     }
 }

@@ -16,8 +16,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::duration::parse_duration;
 use crate::resources::common::ServiceBackendKind;
 use crate::resources::common::TlsConfig;
+use crate::resources::outlier_detection::OutlierDetectionResolved;
 
 // ============================================================
 // ResolvedSecrets
@@ -306,6 +308,11 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
             return Some(format!("healthCheck.active.path: {e}"));
         }
     }
+    if let Some(passive) = conn.health_check.as_ref().and_then(|health| health.passive.as_ref()) {
+        if let Some(e) = passive.validate() {
+            return Some(format!("healthCheck.passive.{e}"));
+        }
+    }
     if let Some(retry) = conn.retry.as_ref() {
         if let Some(e) = validate_retry(retry) {
             return Some(e);
@@ -535,19 +542,25 @@ pub struct ActiveHealthCheck {
     #[serde(default = "default_healthy_threshold")]
     pub healthy_threshold: u32,
 
-    /// Consecutive failures before marking unhealthy.
-    /// Only used when passive is NOT enabled.
+    /// Consecutive probe failures before marking a destination unhealthy.
+    /// Active and passive health are independent signals.
     /// Default: 3
     #[serde(default = "default_active_unhealthy_threshold")]
     pub unhealthy_threshold: u32,
 }
 
 /// Passive health check: monitors real webhook call results.
+///
+/// Health is tracked per destination: each ready endpoint of a Service-pool
+/// target, or the single destination of a URL / ClusterIP target. A failing
+/// destination is ejected for a bounded time and then admits one half-open
+/// probe; ejection never latches until a configuration change.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PassiveHealthCheck {
-    /// Consecutive failures to mark unhealthy.
-    /// Default: 3
+    /// Consecutive failures on one destination before it is ejected.
+    /// Every failure kind (listed status, transport error, counted timeout)
+    /// advances the same counter. Must be >= 1. Default: 3
     #[serde(default = "default_passive_unhealthy_threshold")]
     pub unhealthy_threshold: u32,
 
@@ -556,36 +569,82 @@ pub struct PassiveHealthCheck {
     #[serde(default = "default_failure_status_codes")]
     pub failure_status_codes: Vec<u16>,
 
-    /// Whether to count request timeout as a failure.
+    /// Whether a request timeout counts as a failure. Connect and other
+    /// transport errors always count.
     /// Default: true
     #[serde(default = "default_true")]
     pub count_timeout: bool,
 
-    /// Backoff half-open configuration for recovery (passive-only).
-    /// Only effective when active health check is NOT enabled.
-    #[serde(default)]
-    pub backoff: Option<PassiveBackoff>,
+    /// Base ejection duration (GEP-2257, at least 1s), multiplied by the
+    /// destination's ejection count. Default: "5s"
+    #[serde(default = "default_passive_ejection_time")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub ejection_time: String,
+
+    /// Upper bound on the scaled ejection duration (GEP-2257).
+    /// Default: max("60s", ejectionTime); a smaller value is clamped up to ejectionTime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub max_ejection_time: Option<String>,
+
+    /// Maximum percent of a target's destinations that passive health may eject
+    /// at once (0-100; 0 disables the cap). At least one destination may always
+    /// be ejected, so a single-destination target is still protected.
+    /// Default: 50
+    #[serde(default = "default_passive_max_ejection_percent")]
+    pub max_ejection_percent: u32,
 }
 
-/// Backoff strategy for passive-only recovery (half-open circuit breaker).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PassiveBackoff {
-    /// Initial wait time in seconds before the first half-open probe.
-    /// Default: 5
-    #[serde(default = "default_initial_backoff")]
-    pub initial_sec: u64,
+impl PassiveHealthCheck {
+    /// Validate operator-facing fields. Durations are checked before
+    /// [`Self::resolve`] because resolution falls back to defaults.
+    pub fn validate(&self) -> Option<String> {
+        if self.unhealthy_threshold == 0 {
+            return Some("unhealthyThreshold must be >= 1".to_string());
+        }
+        match parse_duration(&self.ejection_time) {
+            Ok(d) if d.as_secs() >= 1 => {}
+            _ => return Some("ejectionTime must be a valid duration of at least 1s".to_string()),
+        }
+        if let Some(max) = &self.max_ejection_time {
+            if parse_duration(max).is_err() {
+                return Some("maxEjectionTime must be a valid GEP-2257 duration".to_string());
+            }
+        }
+        if self.max_ejection_percent > 100 {
+            return Some("maxEjectionPercent must be 0-100".to_string());
+        }
+        None
+    }
 
-    /// Multiplier for exponential backoff after each failed half-open probe.
-    /// Default: 2.0
-    #[serde(default = "default_backoff_multiplier")]
-    pub multiplier: f64,
-
-    /// Maximum backoff interval in seconds.
-    /// Default: 60
-    #[serde(default = "default_max_backoff")]
-    pub max_sec: u64,
+    /// Map onto the canonical passive-ejection configuration. Every failure
+    /// kind shares one consecutive threshold so mixed failures still eject.
+    pub fn resolve(&self) -> OutlierDetectionResolved {
+        let ejection_seconds = parse_duration(&self.ejection_time)
+            .map(|d| d.as_secs())
+            .unwrap_or(DEFAULT_PASSIVE_EJECTION_SECS)
+            .max(1);
+        let max_ejection_seconds = self
+            .max_ejection_time
+            .as_deref()
+            .and_then(|s| parse_duration(s).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or_else(|| ejection_seconds.max(DEFAULT_PASSIVE_MAX_EJECTION_SECS))
+            .max(ejection_seconds);
+        let threshold = self.unhealthy_threshold.max(1);
+        OutlierDetectionResolved {
+            consecutive_errors: threshold,
+            consecutive_gateway_errors: threshold,
+            consecutive_local_origin_failures: threshold,
+            ejection_seconds,
+            max_ejection_seconds,
+            max_ejection_percent: self.max_ejection_percent.min(100),
+        }
+    }
 }
+
+const DEFAULT_PASSIVE_EJECTION_SECS: u64 = 5;
+const DEFAULT_PASSIVE_MAX_EJECTION_SECS: u64 = 60;
 
 // ============================================================
 // ExternalHttpConnection
@@ -738,14 +797,11 @@ fn default_passive_unhealthy_threshold() -> u32 {
 fn default_failure_status_codes() -> Vec<u16> {
     vec![500, 502, 503, 504]
 }
-fn default_initial_backoff() -> u64 {
-    5
+fn default_passive_ejection_time() -> String {
+    "5s".to_string()
 }
-fn default_backoff_multiplier() -> f64 {
-    2.0
-}
-fn default_max_backoff() -> u64 {
-    60
+fn default_passive_max_ejection_percent() -> u32 {
+    50
 }
 pub fn default_status_on_error() -> u16 {
     503

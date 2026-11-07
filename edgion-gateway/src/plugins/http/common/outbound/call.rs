@@ -7,9 +7,7 @@
 //! left to the caller.
 
 use std::borrow::Cow;
-use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
@@ -21,7 +19,8 @@ use edgion_resources::resources::common::success::SuccessOutcome;
 use crate::backends::policy::backend_traffic::authority::render_authority_in;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 
-use super::client::{HealthState, ManagedOutboundClient};
+use super::client::ManagedOutboundClient;
+use super::health::{AttemptOutcome, Pick, PickError};
 use super::request::{sync_outbound_body_framing, OutboundRequestDiagnostics};
 use crate::link_sys::template::TemplateContext;
 use crate::plugins::runtime::PluginSession;
@@ -123,8 +122,11 @@ fn finalize_request(
 ///
 /// ## Behavior
 ///
-/// 1. **Health gate** — if `client.health.healthy` is `false` and no half-open
-///    probe is permitted, returns `Err(Unhealthy)` immediately.
+/// 1. **Health gate** — selects one usable destination (a ready endpoint of a
+///    Service pool, or the single static destination). Ejected or actively
+///    unhealthy destinations are skipped; an ejected one whose window expired
+///    admits one half-open probe. With no usable destination the call returns
+///    `Err(Unhealthy)` immediately.
 /// 2. **Rate gate** — if a rate counter is configured and the quota is
 ///    exhausted, returns `Err(RateLimited)` immediately.
 /// 3. **Request build** — calls `client.compiled_request.build_request` with
@@ -135,8 +137,10 @@ fn finalize_request(
 ///    Retries are triggered by `retry.retry_on_status` (for HTTP responses) and
 ///    `retry.retry_on_timeout` / `retry.retry_on_connect_error` (for transport
 ///    errors).
-/// 5. **Passive health** — on every completed HTTP response (success or not),
-///    updates `client.health` based on `client.passive_health_check.failure_status_codes`.
+/// 5. **Passive health** — every attempt records its outcome on its own
+///    destination: listed failure statuses and transport errors (and timeouts
+///    when `countTimeout` is set) count as failures. A retry moves to another
+///    usable endpoint of a Service pool when one exists.
 /// 6. **Response size cap** — enforces `min(global_max_bytes, client.max_response_bytes)`.
 ///    A `Content-Length` pre-check stops before reading, and the streaming
 ///    accumulator stops mid-body. Logical body length stays within the cap;
@@ -230,7 +234,7 @@ impl OutboundTransportError for reqwest::Error {
 }
 
 trait OutboundHttpResponse {
-    type BodyError;
+    type BodyError: OutboundTransportError;
 
     fn status(&self) -> u16;
     fn headers(&self) -> &reqwest::header::HeaderMap;
@@ -293,32 +297,15 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
     diagnostics: &mut OutboundRequestDiagnostics,
     transport: &T,
 ) -> Result<OutboundResponse, OutboundCallError> {
-    // ── 1. Health gate ────────────────────────────────────────────────────────
-    if !client.health.healthy.load(Ordering::Relaxed) && !should_halfopen_probe(client) {
-        return Err(OutboundCallError::Unhealthy);
-    }
-
-    // ── 2. Rate gate ──────────────────────────────────────────────────────────
-    if let Some(ref counter) = client.rate {
-        if !counter.try_acquire() {
-            return Err(OutboundCallError::RateLimited);
-        }
-    }
-
-    // ── 3. Resolve base URL (with SSRF guard) and build the outbound request ─
-    //    The request is built once, cloned while retries remain, then moved
-    //    into the final permitted attempt.
-    let base = client.dial_url().map_err(|_| OutboundCallError::Connect)?;
-
-    // Dynamic upstream authority: for a Service anchor carrying an
-    // `upstreamAuthority` policy, swap the IP-based host for the composed
-    // authority. Resolution of that authority is pinned to the same Service's
-    // ready endpoints by `AnchorPinnedResolver` (installed in
-    // the actual-owner managed client builder), so the dial destination is
-    // unchanged — only Host/SNI move. This is never a fallback path: a
-    // rejected authority aborts the call rather than silently dialing the
-    // static/IP-based base URL.
-    let base = match client.authority_service_key().and_then(|key| {
+    // ── 1. Upstream authority ────────────────────────────────────────────────
+    // For a Service anchor carrying an `upstreamAuthority` policy, the IP-based
+    // host is swapped for the composed authority. Resolution of that authority
+    // is pinned to the same Service's ready endpoints by `AnchorPinnedResolver`
+    // (installed in the actual-owner managed client builder), so the dial
+    // destination stays inside the Service — only Host/SNI move. This is never a
+    // fallback path: a rejected authority aborts the call rather than silently
+    // dialing the static/IP-based base URL.
+    let authority = match client.authority_service_key().and_then(|key| {
         let target = crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(key);
         get_backend_traffic_policy_store()
             .snapshot()
@@ -330,16 +317,53 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     .map(|compiled| render_authority_in(compiled, context))
             })
     }) {
-        Some(Ok(authority)) => {
-            let rewritten = Cow::Owned(replace_url_host(&base, &authority));
-            drop(base);
-            rewritten
-        }
+        Some(Ok(authority)) => Some(authority),
         Some(Err(e)) => {
             crate::observe::metrics::record_authority_rejected(e.reason());
             return Err(OutboundCallError::AuthorityRejected);
         }
-        None => base,
+        None => None,
+    };
+
+    // ── 2. Destination health gate ────────────────────────────────────────────
+    // An authority call dials through the pinned resolver and the client pool,
+    // so it cannot choose an endpoint; it is gated by the pool-level destination.
+    // Every other call selects one usable destination.
+    let pick = if authority.is_some() {
+        client.health.pick_pool()
+    } else {
+        client.health.pick(&[])
+    }
+    .map_err(|error| match error {
+        PickError::NoEndpoint => OutboundCallError::Connect,
+        PickError::Unhealthy => OutboundCallError::Unhealthy,
+    })?;
+
+    // ── 3. Rate gate ──────────────────────────────────────────────────────────
+    if let Some(ref counter) = client.rate {
+        if !counter.try_acquire() {
+            return Err(OutboundCallError::RateLimited);
+        }
+    }
+
+    // ── 4. Resolve base URL (with SSRF guard) and build the outbound request ─
+    //    The request is built once, cloned while retries remain, then moved
+    //    into the final permitted attempt. A retry may retarget the clone to
+    //    another endpoint.
+    let base: Cow<'_, str> = match &authority {
+        Some(authority) => {
+            let base = client.dial_url().map_err(|_| OutboundCallError::Connect)?;
+            Cow::Owned(replace_url_host(&base, authority))
+        }
+        None => {
+            let url = pick.dest().url();
+            // Service endpoints were classified when the destination was built;
+            // a static URL keeps its literal-address guard at dial time.
+            if pick.dest().addr().is_none() {
+                client.check_dial_url(url).map_err(|_| OutboundCallError::Connect)?;
+            }
+            Cow::Borrowed(url)
+        }
     };
 
     // Resolved once per call, not per retry attempt: the timeout template reads
@@ -371,7 +395,15 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
 
     drop(base);
 
-    // ── 4. Execute with retry ─────────────────────────────────────────────────
+    // Retries move to another endpoint when the destination is one endpoint of
+    // a Service pool (Envoy `previous_hosts`). Static and authority calls keep
+    // their single destination.
+    let template_addr = pick.dest().addr();
+    let retarget = authority.is_none() && template_addr.is_some();
+    let mut tried: smallvec::SmallVec<[std::net::SocketAddr; 4]> = smallvec::SmallVec::new();
+    let mut current = Some(pick);
+
+    // ── 5. Execute with retry ─────────────────────────────────────────────────
     let max_attempts = 1 + client.retry.as_ref().map_or(0, |r| r.max_retries);
     let max_bytes = client.max_response_bytes.min(global_max_bytes);
 
@@ -389,11 +421,32 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     .unwrap_or_else(|| compute_retry_delay_ms(attempt, retry));
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
+            let mut next = None;
+            if retarget {
+                if let Some(addr) = current.as_ref().and_then(|pick| pick.dest().addr()) {
+                    tried.push(addr);
+                }
+                next = client.health.pick(&tried).ok();
+            }
+            // Without another usable endpoint the retry stays on the previous
+            // destination, but only if it is still admitted: a destination the
+            // previous attempt ejected is not retried.
+            let Some(next) = next.or_else(|| current.as_ref().and_then(Pick::readmit)) else {
+                return Err(OutboundCallError::Unhealthy);
+            };
+            current = Some(next);
         }
 
-        let Some(req) = request_for_attempt(&mut template_req, max_attempts - attempt) else {
+        let Some(mut req) = request_for_attempt(&mut template_req, max_attempts - attempt) else {
             return Err(OutboundCallError::Connect);
         };
+        if retarget {
+            if let Some(addr) = current.as_ref().and_then(|pick| pick.dest().addr()) {
+                if Some(addr) != template_addr {
+                    retarget_request(&mut req, addr);
+                }
+            }
+        }
 
         let exec = tokio::time::timeout(effective_timeout, transport.execute(req)).await;
 
@@ -406,8 +459,8 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                 // constructed directly in tests.
                 let retry_on_timeout = client.retry.as_ref().and_then(|r| r.retry_on_timeout).unwrap_or(false);
                 let should_retry = client.retry.is_some() && retry_on_timeout;
+                record_attempt(client, &mut current, timeout_outcome(client));
                 if !should_retry || attempt + 1 >= max_attempts {
-                    record_passive_result(&client.health, &client.passive_health_check, false);
                     return Err(OutboundCallError::Timeout);
                 }
             }
@@ -421,8 +474,13 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                 let should_retry = client.retry.as_ref().is_some_and(|r| {
                     (retry_on_timeout && e.is_timeout()) || (r.retry_on_connect_error && e.is_connect())
                 });
+                let outcome = if e.is_timeout() {
+                    timeout_outcome(client)
+                } else {
+                    AttemptOutcome::Failure
+                };
+                record_attempt(client, &mut current, outcome);
                 if !should_retry || attempt + 1 >= max_attempts {
-                    record_passive_result(&client.health, &client.passive_health_check, false);
                     let err = if e.is_timeout() {
                         OutboundCallError::Timeout
                     } else {
@@ -471,7 +529,9 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                 // ResponseTooLarge (`max_response_bytes` commonly defaults far below a
                 // typical error page, e.g. 1024 bytes).
                 if status_retry && attempt + 1 < max_attempts {
-                    // A retried attempt is NOT terminal: do not record passive health here.
+                    // Every attempt is a fact about its destination, so a
+                    // retried attempt also feeds passive health.
+                    record_attempt(client, &mut current, status_outcome(client, status));
                     continue;
                 }
 
@@ -481,24 +541,30 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                 // return to the caller.
                 if let Some(cl) = resp.content_length() {
                     if cl > max_bytes as u64 {
-                        // A response that cannot be read within the size cap is a
-                        // genuine call failure from the caller's perspective, even
-                        // though the status itself might otherwise have counted as a
-                        // passive-health success — recording a FAILURE here is
-                        // deliberate, not an oversight.
-                        record_passive_result(&client.health, &client.passive_health_check, false);
+                        // The size cap is a local limit, not evidence that the
+                        // destination is unhealthy: ejecting endpoints for it
+                        // would remove healthy pods and still fail the call.
+                        record_attempt(client, &mut current, AttemptOutcome::Ignore);
                         return Err(OutboundCallError::ResponseTooLarge);
                     }
                 }
                 let resp_headers = std::mem::take(resp.headers_mut());
-                let Ok((body, truncated)) = stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await else {
-                    record_passive_result(&client.health, &client.passive_health_check, false);
-                    return Err(OutboundCallError::Connect);
+                let (body, truncated) = match stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await {
+                    Ok(read) => read,
+                    Err(e) => {
+                        // The request deadline also covers the body read.
+                        let outcome = if e.is_timeout() {
+                            timeout_outcome(client)
+                        } else {
+                            AttemptOutcome::Failure
+                        };
+                        record_attempt(client, &mut current, outcome);
+                        return Err(OutboundCallError::Connect);
+                    }
                 };
                 if truncated {
-                    // Same deliberate FAILURE-recording rationale as the content-length
-                    // pre-check above: the call could not be completed within the cap.
-                    record_passive_result(&client.health, &client.passive_health_check, false);
+                    // Same local-limit rationale as the content-length pre-check above.
+                    record_attempt(client, &mut current, AttemptOutcome::Ignore);
                     return Err(OutboundCallError::ResponseTooLarge);
                 }
                 let completed = OutboundResponse {
@@ -518,7 +584,8 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     && outcome == SuccessOutcome::BodyFail;
 
                 if body_retry && attempt + 1 < max_attempts {
-                    // A retried attempt is NOT terminal: do not record passive health here.
+                    // Passive health keys off status only.
+                    record_attempt(client, &mut current, status_outcome(client, status));
                     continue;
                 }
 
@@ -530,12 +597,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                 }
 
                 // Terminal response: passive health keys off status only.
-                let is_passive_fail = client
-                    .passive_health_check
-                    .as_ref()
-                    .map(|p| p.failure_status_codes.contains(&status))
-                    .unwrap_or(false);
-                record_passive_result(&client.health, &client.passive_health_check, !is_passive_fail);
+                record_attempt(client, &mut current, status_outcome(client, status));
 
                 return Ok(completed);
             }
@@ -551,7 +613,6 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
     // loop always returns internally, and this is data-plane code where a future
     // change that broke the invariant should degrade to a safe error response
     // instead of panicking a worker.
-    record_passive_result(&client.health, &client.passive_health_check, false);
     Err(OutboundCallError::Exhausted)
 }
 
@@ -665,88 +726,42 @@ fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap, now: std::time::Sy
 #[cfg(test)]
 include!("../../../../../tests/support/plugins/http/common/outbound/call_test/618_function_item.rs");
 
-/// Record a passive health result for the given `HealthState`.
-///
-/// Success resets the passive circuit. Enough consecutive failures open it and,
-/// when backoff is configured, establish the recovery-window baseline.
-fn record_passive_result(
-    health: &HealthState,
-    passive: &Option<edgion_resources::resources::common::external_http::PassiveHealthCheck>,
-    success: bool,
-) {
-    let Some(cfg) = passive.as_ref() else {
-        return;
-    };
+/// Record one attempt's passive outcome and keep its destination (without a
+/// probe lease) as the default destination of the next attempt.
+fn record_attempt(client: &ManagedOutboundClient, current: &mut Option<Pick>, outcome: AttemptOutcome) {
+    if let Some(pick) = current.take() {
+        let next = pick.without_probe();
+        client.health.record(pick, outcome);
+        *current = Some(next);
+    }
+}
 
-    if success {
-        health.passive_failures.store(0, Ordering::Relaxed);
-        health.healthy.store(true, Ordering::Relaxed);
-        health.backoff_sec.store(0, Ordering::Relaxed);
+/// Passive outcome of a timeout, honoring `countTimeout`.
+fn timeout_outcome(client: &ManagedOutboundClient) -> AttemptOutcome {
+    if client.health.count_timeout() {
+        AttemptOutcome::Failure
     } else {
-        let failures = health.passive_failures.fetch_add(1, Ordering::Relaxed) + 1;
-        if failures >= cfg.unhealthy_threshold && health.healthy.load(Ordering::Relaxed) {
-            health.healthy.store(false, Ordering::Relaxed);
-            if let Some(ref backoff) = cfg.backoff {
-                health.backoff_sec.store(backoff.initial_sec, Ordering::Relaxed);
-                health.last_halfopen.store(process_elapsed_secs(), Ordering::Relaxed);
-            }
-        }
+        AttemptOutcome::Ignore
     }
 }
 
-/// Check if a half-open probe should be admitted for passive-only recovery.
-///
-/// Once the current backoff interval elapses, a one-shot CAS admits at most one
-/// caller and advances the recovery-window baseline.
-fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
-    if client.health.healthy.load(Ordering::Relaxed) {
-        return false;
+/// Passive outcome of a completed response: status only.
+fn status_outcome(client: &ManagedOutboundClient, status: u16) -> AttemptOutcome {
+    if client.health.is_failure_status(status) {
+        AttemptOutcome::Failure
+    } else {
+        AttemptOutcome::Success
     }
-    // If an active health task is running it handles recovery; no half-open needed.
-    if client.health_task.is_some() {
-        return false;
-    }
-    let Some(passive) = client.passive_health_check.as_ref() else {
-        return false;
-    };
-    let Some(backoff) = &passive.backoff else {
-        return false;
-    };
-
-    let now = process_elapsed_secs();
-    let last = client.health.last_halfopen.load(Ordering::Acquire);
-    let interval = client.health.backoff_sec.load(Ordering::Relaxed);
-
-    if halfopen_window_due(now, last, interval)
-        && client
-            .health
-            .last_halfopen
-            .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-    {
-        let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
-        client
-            .health
-            .backoff_sec
-            .store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
-        return true;
-    }
-    false
 }
 
-/// Whether the passive-only half-open window is ready for one probe.
-fn halfopen_window_due(now: u64, last: u64, interval: u64) -> bool {
-    interval == 0 || now >= last.saturating_add(interval)
-}
-
-// An elapsed value of zero is a valid timestamp, not a sentinel. Disabled
-// backoff is represented by `backoff_sec == 0` in `halfopen_window_due`.
-static PROCESS_MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
-
-/// Return seconds elapsed from this process's monotonic origin.
-fn process_elapsed_secs() -> u64 {
-    let origin = PROCESS_MONOTONIC_ORIGIN.get_or_init(Instant::now);
-    Instant::now().saturating_duration_since(*origin).as_secs()
+/// Point a cloned attempt at another endpoint of the same Service pool.
+/// The URL keeps its scheme, path and query; `Host` follows the URL.
+fn retarget_request(req: &mut reqwest::Request, addr: std::net::SocketAddr) {
+    let url = req.url_mut();
+    // Both setters only fail for cannot-be-a-base URLs, which an HTTP(S)
+    // endpoint URL never is.
+    let _ = url.set_ip_host(addr.ip());
+    let _ = url.set_port(Some(addr.port()));
 }
 
 #[cfg(test)]

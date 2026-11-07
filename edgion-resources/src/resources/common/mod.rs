@@ -23,9 +23,8 @@ pub use controller_status::{
 };
 pub use dns_lookup_family::DnsLookupFamily;
 pub use external_http::{
-    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
-    PassiveHealthCheck, ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry,
-    WebhookServiceRef, WebhookTarget,
+    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck,
+    ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookServiceRef, WebhookTarget,
 };
 pub use log_labels::resolve_log_labels;
 pub use outbound_request::{

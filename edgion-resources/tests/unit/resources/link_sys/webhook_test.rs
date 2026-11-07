@@ -426,20 +426,65 @@ fn service_target_ignores_unrecognized_fields() {
 }
 
 #[test]
-fn test_passive_backoff_defaults() {
+fn test_passive_ejection_defaults() {
     let yaml = r#"
 unhealthyThreshold: 5
-countTimeout: true
-backoff:
-  initialSec: 5
+countTimeout: false
 "#;
     let passive: PassiveHealthCheck = yaml_serde::from_str(yaml).unwrap();
     assert_eq!(passive.unhealthy_threshold, 5);
-    assert!(passive.count_timeout);
-    let backoff = passive.backoff.unwrap();
-    assert_eq!(backoff.initial_sec, 5);
-    assert!((backoff.multiplier - 2.0).abs() < f64::EPSILON);
-    assert_eq!(backoff.max_sec, 60);
+    assert!(!passive.count_timeout);
+    assert_eq!(passive.ejection_time, "5s");
+    assert_eq!(passive.max_ejection_time, None);
+    assert_eq!(passive.max_ejection_percent, 50);
+    assert_eq!(passive.validate(), None);
+
+    // Every failure kind shares one threshold, and ejection is always bounded.
+    let resolved = passive.resolve();
+    assert_eq!(resolved.consecutive_errors, 5);
+    assert_eq!(resolved.consecutive_gateway_errors, 5);
+    assert_eq!(resolved.consecutive_local_origin_failures, 5);
+    assert_eq!(resolved.ejection_seconds, 5);
+    assert_eq!(resolved.max_ejection_seconds, 60);
+    assert_eq!(resolved.max_ejection_percent, 50);
+}
+
+#[test]
+fn test_passive_ejection_explicit_and_clamped() {
+    let yaml = r#"
+ejectionTime: 2m
+maxEjectionTime: 30s
+maxEjectionPercent: 0
+"#;
+    let passive: PassiveHealthCheck = yaml_serde::from_str(yaml).unwrap();
+    assert_eq!(passive.validate(), None);
+    let resolved = passive.resolve();
+    assert_eq!(resolved.ejection_seconds, 120);
+    // A cap below the base is clamped up, never rejected.
+    assert_eq!(resolved.max_ejection_seconds, 120);
+    assert_eq!(resolved.max_ejection_percent, 0);
+}
+
+#[test]
+fn test_passive_ejection_validation_rejects_bad_values() {
+    let parse = |yaml: &str| -> PassiveHealthCheck { yaml_serde::from_str(yaml).unwrap() };
+    assert!(parse("unhealthyThreshold: 0")
+        .validate()
+        .unwrap()
+        .contains("unhealthyThreshold"));
+    assert!(parse("ejectionTime: 500ms")
+        .validate()
+        .unwrap()
+        .contains("ejectionTime"));
+    assert!(parse("ejectionTime: soon").validate().unwrap().contains("ejectionTime"));
+    assert!(parse("maxEjectionTime: later")
+        .validate()
+        .unwrap()
+        .contains("maxEjectionTime"));
+    assert!(parse("maxEjectionPercent: 101")
+        .validate()
+        .unwrap()
+        .contains("maxEjectionPercent"));
 }
 
 // ============================================================
