@@ -49,6 +49,26 @@ const CHAR_SINGLE: u8 = b'\'';
 const CHAR_DOUBLE: u8 = b'"';
 const CHAR_TICK: u8 = b'`';
 
+// Word and variable delimiter sets (C strlencspn character sets). The two sets
+// are deliberately distinct: NUL, brackets, braces and 0xA0 end words only, and
+// backtick ends variables only.
+const WORD_DELIMITERS: &[u8] = b" []{}<>:\\?=@!#~+-*/&|^%(),';\t\n\x0B\x0C\r\"\xA0\x00";
+// C: " <>:\\?=@!#~+-*/&|^%(),';\t\n\v\f\r'`\""
+const VAR_DELIMITERS: &[u8] = b" <>:\\?=@!#~+-*/&|^%(),;'\t\n\x0B\x0C\r'`\"";
+
+const fn byte_set(delims: &[u8]) -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < delims.len() {
+        table[delims[i] as usize] = true;
+        i += 1;
+    }
+    table
+}
+
+static WORD_DELIMITER_SET: [bool; 256] = byte_set(WORD_DELIMITERS);
+static VAR_DELIMITER_SET: [bool; 256] = byte_set(VAR_DELIMITERS);
+
 // SQL injection limits
 const LIBINJECTION_SQLI_TOKEN_SIZE: usize = 32;
 
@@ -915,10 +935,9 @@ impl<'a> SqliTokenizer<'a> {
         let slen = self.input.len();
 
         // Find word boundary - matches C version's strlencspn character set
-        let word_chars = b" []{}<>:\\?=@!#~+-*/&|^%(),';	\n\x0B\x0C\r\"\xA0\x00";
         let mut end_pos = pos;
 
-        while end_pos < slen && !word_chars.contains(&self.input[end_pos]) {
+        while end_pos < slen && !WORD_DELIMITER_SET[usize::from(self.input[end_pos])] {
             end_pos += 1;
         }
 
@@ -1017,11 +1036,9 @@ impl<'a> SqliTokenizer<'a> {
         }
 
         // Regular variable name - must exactly match C implementation
-        // C: " <>:\\?=@!#~+-*/&|^%(),';\t\n\v\f\r'`\""
-        let var_chars = b" <>:\\?=@!#~+-*/&|^%(),;'\t\n\x0B\x0C\r'`\"";
         let mut end_pos = new_pos;
 
-        while end_pos < slen && !var_chars.contains(&self.input[end_pos]) {
+        while end_pos < slen && !VAR_DELIMITER_SET[usize::from(self.input[end_pos])] {
             end_pos += 1;
         }
 

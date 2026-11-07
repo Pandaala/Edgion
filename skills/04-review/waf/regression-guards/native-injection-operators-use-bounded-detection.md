@@ -33,6 +33,9 @@ and the local benchmark are described in `edgion-waf/INJECTION.md`.
 SQL word delimiter lookups inspect only the token's truncated prefix;
 inspecting every prefix of an unbounded dotted word would make request work
 quadratic despite the linear charge.
+`parse_word` and `parse_var` classify bytes through two distinct static
+256-entry delimiter tables derived from the pinned delimiter literals, and a
+unit test asserts membership equal to those literals for all 256 byte values.
 
 The HTML tokenizer represents EOF separately from every input byte, including
 `0xFF`, when skipping whitespace before attributes and values. SQL Q-string

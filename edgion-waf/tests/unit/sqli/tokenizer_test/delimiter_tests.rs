@@ -407,3 +407,24 @@ fn high_byte_qstring_closes_only_on_utf8_encoded_delimiter() {
         assert_eq!(tokenizer.pos, nq_close.len() - 2);
     }
 }
+
+#[test]
+fn delimiter_tables_match_original_literals_for_every_byte() {
+    // Copied verbatim from the pre-change parse_word / parse_var literals.
+    let word: &[u8] = b" []{}<>:\\?=@!#~+-*/&|^%(),';\t\n\x0B\x0C\r\"\xA0\x00";
+    let var: &[u8] = b" <>:\\?=@!#~+-*/&|^%(),;'\t\n\x0B\x0C\r'`\"";
+    for b in 0u8..=255 {
+        assert_eq!(
+            WORD_DELIMITER_SET[usize::from(b)],
+            word.contains(&b),
+            "word byte {b:#04x}"
+        );
+        assert_eq!(VAR_DELIMITER_SET[usize::from(b)], var.contains(&b), "var byte {b:#04x}");
+    }
+    // The two sets are deliberately distinct.
+    for b in [0x00u8, b'[', b']', b'{', b'}', 0xA0] {
+        assert!(WORD_DELIMITER_SET[usize::from(b)] && !VAR_DELIMITER_SET[usize::from(b)]);
+    }
+    assert!(VAR_DELIMITER_SET[usize::from(b'`')] && !WORD_DELIMITER_SET[usize::from(b'`')]);
+    assert!(!WORD_DELIMITER_SET[usize::from(b'.')] && !VAR_DELIMITER_SET[usize::from(b'.')]);
+}
