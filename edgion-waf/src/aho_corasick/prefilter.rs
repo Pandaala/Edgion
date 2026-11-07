@@ -199,9 +199,9 @@ fn find_any_byte(haystack: &[u8], needles: &[u8], ascii_case_insensitive: bool) 
         return Some(relative + 1);
     }
     let remainder = &haystack[prefix_len..];
-    let mut chunks = remainder.chunks_exact(size_of::<u64>());
-    for (chunk_index, chunk) in chunks.by_ref().enumerate() {
-        let word = u64::from_ne_bytes(chunk.try_into().expect("chunks_exact fixes the word length"));
+    let (chunks, tail) = remainder.as_chunks::<{ size_of::<u64>() }>();
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let word = u64::from_ne_bytes(*chunk);
         let possible = needles
             .iter()
             .copied()
@@ -215,10 +215,8 @@ fn find_any_byte(haystack: &[u8], needles: &[u8], ascii_case_insensitive: bool) 
             return Some(prefix_len + chunk_index * size_of::<u64>() + relative);
         }
     }
-    let remainder_start = haystack.len() - chunks.remainder().len();
-    chunks
-        .remainder()
-        .iter()
+    let remainder_start = haystack.len() - tail.len();
+    tail.iter()
         .copied()
         .position(|byte| needles.contains(&byte))
         .map(|relative| remainder_start + relative)

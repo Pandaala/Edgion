@@ -1665,7 +1665,7 @@ fn substring_search_matches_window_oracle_for_binary_and_repetitive_inputs() {
         haystack[size - 1] = b'b';
         for needle_size in [0, 1, 2, 31, 64, 65, 256, 1025] {
             let mut needle = vec![b'a'; needle_size];
-            for last in [b'a', b'b', b'c'] {
+            for last in *b"abc" {
                 if let Some(byte) = needle.last_mut() {
                     *byte = last;
                 }

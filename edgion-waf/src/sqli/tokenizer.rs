@@ -501,7 +501,7 @@ impl<'a> SqliTokenizer<'a> {
 
         // First check for 3-character operator <=> (special case in C)
         if pos + 2 < slen && self.input[pos] == b'<' && self.input[pos + 1] == b'=' && self.input[pos + 2] == b'>' {
-            let op = [b'<', b'=', b'>'];
+            let op = *b"<=>";
             self.current.assign(TYPE_OPERATOR, pos, 3, &op);
             return pos + 3;
         }

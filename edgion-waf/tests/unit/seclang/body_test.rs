@@ -196,7 +196,7 @@ fn multipart_boundary_search_preserves_candidate_order_and_overlap() {
     let searcher = MultipartBoundarySearcher::Overlapping(prefix);
     assert_eq!(find_multipart_boundary(input, delimiter, &searcher, 0), Some(7));
 
-    let alphabet = [b'-', b'\r', b'\n', b'a', b'b', b'x'];
+    let alphabet = *b"-\r\nabx";
     let mut state = 1_u32;
     for _ in 0..256 {
         let mut next = || {

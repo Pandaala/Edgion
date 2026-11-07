@@ -139,7 +139,7 @@ fn packed_candidate_comparison_preserves_byte_and_range_semantics() {
                     haystack[5 + position] = byte;
                     let expected = haystack[5..].iter().zip(&pattern).all(|(&actual, &source)| {
                         if folded {
-                            actual.to_ascii_lowercase() == source.to_ascii_lowercase()
+                            actual.eq_ignore_ascii_case(&source)
                         } else {
                             actual == source
                         }

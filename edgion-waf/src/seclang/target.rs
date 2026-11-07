@@ -552,7 +552,7 @@ fn locate_atom(
     let selector_start = colon_offset + 1;
     let (style, slash_start, body_start) = if bytes.get(selector_start) == Some(&b'/') {
         (RegexStyle::Bare, selector_start, selector_start + 1)
-    } else if bytes.get(selector_start..selector_start + 2) == Some(&[b'\'', b'/'][..]) {
+    } else if bytes.get(selector_start..selector_start + 2) == Some(&b"'/"[..]) {
         (RegexStyle::SingleQuoted, selector_start + 1, selector_start + 2)
     } else {
         return Ok(LocatedAtom {
