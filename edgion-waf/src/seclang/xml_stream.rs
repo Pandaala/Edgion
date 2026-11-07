@@ -111,6 +111,9 @@ struct Frame {
     name: Span,
     mark: usize,
     bindings: usize,
+    /// Offset in `content` of this element's first significant byte; `None`
+    /// while its content is empty or only literal whitespace.
+    first: Option<usize>,
 }
 #[derive(Clone, Copy)]
 struct Binding {
@@ -168,6 +171,13 @@ pub struct XmlStream {
     failure: Option<XmlStreamError>,
     complete: bool,
     token: SmallVec<[u8; 1024]>,
+    /// Character data of every open element in document order. Each element
+    /// publishes `content[first..]` (minus pending whitespace) at its close.
+    content: SmallVec<[u8; 1024]>,
+    /// Trailing literal whitespace in `content`, not yet charged as decoded.
+    content_trailing: usize,
+    /// Innermost open frames without significant content yet.
+    unresolved: usize,
     name: SmallVec<[u8; 256]>,
     arena: SmallVec<[u8; 256]>,
     frames: Vec<Frame>,
@@ -185,7 +195,6 @@ pub struct XmlStream {
     raw_token: usize,
     tag_work: usize,
     tag_trailing: usize,
-    trailing: usize,
     brackets: u8,
     entity: Entity,
     entity_return: State,
@@ -206,6 +215,9 @@ impl XmlStream {
             failure: None,
             complete: false,
             token: SmallVec::new(),
+            content: SmallVec::new(),
+            content_trailing: 0,
+            unresolved: 0,
             name: SmallVec::new(),
             arena: SmallVec::new(),
             frames: Vec::new(),
@@ -223,7 +235,6 @@ impl XmlStream {
             raw_token: 0,
             tag_work: 0,
             tag_trailing: 0,
-            trailing: 0,
             brackets: 0,
             entity: Entity::Initial,
             entity_return: State::Text,
@@ -250,7 +261,7 @@ impl XmlStream {
         }
         let result = match input {
             XmlStreamInput::Abandoned => Err(XmlStreamError::Abandoned),
-            XmlStreamInput::Complete => self.finish(sink),
+            XmlStreamInput::Complete => self.finish(),
             XmlStreamInput::Data(data) => self.data(data, sink),
         };
         if let Err(error) = result {
@@ -296,7 +307,10 @@ impl XmlStream {
         add(
             add(
                 add(
-                    add(heap_capacity(&self.token), heap_capacity(&self.name))?,
+                    add(
+                        add(heap_capacity(&self.token), heap_capacity(&self.content))?,
+                        heap_capacity(&self.name),
+                    )?,
                     heap_capacity(&self.arena),
                 )?,
                 self.held_heap,
@@ -386,6 +400,70 @@ impl XmlStream {
         )?;
         self.token.push(byte);
         self.refresh()
+    }
+    fn content_push(&mut self, bytes: &[u8]) -> Result<(), XmlStreamError> {
+        if bytes.len() <= self.content.capacity() - self.content.len() {
+            self.work(bytes.len())?;
+            self.content.extend_from_slice(bytes);
+            return Ok(());
+        }
+        let heap = self.heap()?;
+        Self::reserve_bytes(
+            &mut self.content,
+            bytes.len(),
+            heap,
+            self.limits.max_retained_bytes,
+            &mut self.usage,
+            self.limits.max_work,
+        )?;
+        self.content.extend_from_slice(bytes);
+        self.refresh()
+    }
+    /// Literal XML whitespace. It is outer (trimmed) for the innermost
+    /// elements without significant content, so it stays pending and is
+    /// charged only when a later significant byte makes it interior. With no
+    /// significant content in any open element it can never be published.
+    fn content_space(&mut self, bytes: &[u8]) -> Result<(), XmlStreamError> {
+        if bytes.is_empty() || self.unresolved == self.frames.len() {
+            return Ok(());
+        }
+        self.content_push(bytes)?;
+        self.content_trailing = add(self.content_trailing, bytes.len())?;
+        Ok(())
+    }
+    /// Significant character data: non-whitespace text, decoded references
+    /// and CDATA (an empty CDATA section still marks its element as having
+    /// content). Comments and PIs never reach the content.
+    fn content_significant(&mut self, bytes: &[u8]) -> Result<(), XmlStreamError> {
+        self.decoded(add(self.content_trailing, bytes.len())?)?;
+        if self.frames.is_empty() {
+            return Err(XmlStreamError::Syntax);
+        }
+        self.content_trailing = 0;
+        if self.unresolved != 0 {
+            self.work(self.unresolved)?;
+            let first = Some(self.content.len());
+            let open = self.frames.len();
+            for frame in &mut self.frames[open - self.unresolved..] {
+                frame.first = first;
+            }
+            self.unresolved = 0;
+        }
+        self.content_push(bytes)
+    }
+    /// Literal text between markup: only its outer literal whitespace is
+    /// subject to element-edge trimming.
+    fn content_text(&mut self, text: &[u8]) -> Result<(), XmlStreamError> {
+        let Some(start) = text.iter().position(|byte| !xml_ws(*byte)) else {
+            return self.content_space(text);
+        };
+        let end = text
+            .iter()
+            .rposition(|byte| !xml_ws(*byte))
+            .map_or(start, |end| end + 1);
+        self.content_space(&text[..start])?;
+        self.content_significant(&text[start..end])?;
+        self.content_space(&text[end..])
     }
     fn name_byte(&mut self, byte: u8) -> Result<(), XmlStreamError> {
         self.limit(
@@ -561,8 +639,7 @@ impl XmlStream {
                     if self.utf8_expected != 0 {
                         return Err(XmlStreamError::Character);
                     }
-                    self.decoded(end - cursor)?;
-                    self.emit(&data[cursor..end], None, sink)?;
+                    self.content_significant(&data[cursor..end])?;
                     self.state = State::Text;
                     self.raw_token = 0;
                     cursor = end + 3;
@@ -576,7 +653,8 @@ impl XmlStream {
                     State::Value(q) => Some(q),
                     _ => None,
                 };
-                if self.state == State::Text || quote.is_some() {
+                // Pending `]` bytes must reach the slow path's `]]>` check.
+                if (self.state == State::Text && self.brackets == 0) || quote.is_some() {
                     let start = cursor;
                     let mut end = cursor;
                     while end < data.len() {
@@ -610,17 +688,11 @@ impl XmlStream {
                         }
                         if quote.is_none() {
                             self.work(mul(end - start, 2)?)?;
-                        }
-                        let value = if quote.is_some() {
-                            &data[start..end]
+                            self.content_text(&data[start..end])?;
                         } else {
-                            trim_xml(&data[start..end])
-                        };
-                        self.decoded(value.len())?;
-                        if quote.is_some() || !value.is_empty() {
-                            self.emit(value, quote.is_some().then_some(self.attribute), sink)?;
-                        }
-                        if quote.is_some() {
+                            let value = &data[start..end];
+                            self.decoded(value.len())?;
+                            self.emit(value, Some(self.attribute), sink)?;
                             self.attribute_done(value)?;
                             self.state = State::AfterValue;
                         }
@@ -701,27 +773,6 @@ impl XmlStream {
         self.prepare_emit(value.len(), name)?;
         sink.value(name.map(|name| self.span(name)), value)
             .map_err(|_| XmlStreamError::SinkRejected)
-    }
-    fn emit_token(
-        &mut self,
-        text: bool,
-        name: Option<Span>,
-        sink: &mut impl XmlStreamSink,
-    ) -> Result<(), XmlStreamError> {
-        if text {
-            self.token.truncate(self.token.len() - self.trailing);
-        }
-        let result = if !text || !self.token.is_empty() {
-            self.prepare_emit(self.token.len(), name).and_then(|()| {
-                sink.value(name.map(|name| self.span(name)), &self.token)
-                    .map_err(|_| XmlStreamError::SinkRejected)
-            })
-        } else {
-            Ok(())
-        };
-        self.token.clear();
-        self.trailing = 0;
-        result
     }
     fn start_element(&mut self) -> Result<(), XmlStreamError> {
         self.element = self.save_name()?;
@@ -986,7 +1037,9 @@ impl XmlStream {
                 name: self.element,
                 mark: self.tag_mark,
                 bindings: self.binding_mark,
+                first: None,
             });
+            self.unresolved = add(self.unresolved, 1)?;
         }
         self.attrs.clear();
         self.summary.traversal_work = add(self.summary.traversal_work, self.tag_work - self.tag_trailing)?;
@@ -994,7 +1047,7 @@ impl XmlStream {
         self.raw_token = 0;
         self.refresh()
     }
-    fn close_end(&mut self) -> Result<(), XmlStreamError> {
+    fn close_end(&mut self, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
         self.work(mul(self.name.len(), 4)?)?;
         validate_qname(&self.name)?;
         let frame = *self.frames.last().ok_or(XmlStreamError::Syntax)?;
@@ -1002,8 +1055,24 @@ impl XmlStream {
         if self.name.as_slice() != self.span(frame.name) {
             return Err(XmlStreamError::Syntax);
         }
+        // The element's value is its whole character content, descendants
+        // included, with comments and PIs removed and outer literal
+        // whitespace trimmed (libxml2 xmlNodeGetContent as used by `XML:/*`).
+        match frame.first {
+            Some(first) => {
+                let end = self.content.len() - self.content_trailing;
+                self.prepare_emit(end - first, None)?;
+                sink.value(None, &self.content[first..end])
+                    .map_err(|_| XmlStreamError::SinkRejected)?;
+            }
+            None => self.unresolved -= 1,
+        }
         self.name.clear();
         self.frames.pop();
+        if self.frames.is_empty() {
+            self.content.clear();
+            self.content_trailing = 0;
+        }
         self.arena.truncate(frame.mark);
         self.bindings.truncate(frame.bindings);
         self.event()?;
@@ -1030,18 +1099,15 @@ impl XmlStream {
             };
             let mut bytes = [0; 4];
             let bytes = value.encode_utf8(&mut bytes).as_bytes();
-            self.decoded(add(
-                bytes.len(),
-                if self.entity_return == State::Text {
-                    self.trailing
-                } else {
-                    0
-                },
-            )?)?;
-            for &byte in bytes {
-                self.token_byte(byte)?;
+            // A reference is significant text, including a whitespace character.
+            if self.entity_return == State::Text {
+                self.content_significant(bytes)?;
+            } else {
+                self.decoded(bytes.len())?;
+                for &byte in bytes {
+                    self.token_byte(byte)?;
+                }
             }
-            self.trailing = 0;
             self.state = self.entity_return;
             return Ok(());
         }
@@ -1105,7 +1171,6 @@ impl XmlStream {
             }
             State::Text => {
                 if byte == b'<' {
-                    self.emit_token(true, None, sink)?;
                     self.begin_markup();
                 } else if byte == b'&' {
                     if self.frames.is_empty() {
@@ -1128,12 +1193,10 @@ impl XmlStream {
                             return Err(XmlStreamError::Syntax);
                         }
                         self.brackets = if byte == b']' { (self.brackets + 1).min(2) } else { 0 };
-                        if !xml_ws(byte) || !self.token.is_empty() {
-                            if !xml_ws(byte) {
-                                self.decoded(add(self.trailing, 1)?)?;
-                            }
-                            self.token_byte(byte)?;
-                            self.trailing = if xml_ws(byte) { add(self.trailing, 1)? } else { 0 };
+                        if xml_ws(byte) {
+                            self.content_space(&[byte])?;
+                        } else {
+                            self.content_significant(&[byte])?;
                         }
                     }
                 }
@@ -1252,7 +1315,7 @@ impl XmlStream {
             }
             State::EndName => {
                 if byte == b'>' {
-                    self.close_end()?;
+                    self.close_end(sink)?;
                 } else if xml_ws(byte) {
                     self.state = State::EndSpace;
                 } else {
@@ -1261,7 +1324,7 @@ impl XmlStream {
             }
             State::EndSpace => {
                 if byte == b'>' {
-                    self.close_end()?;
+                    self.close_end(sink)?;
                 } else if !xml_ws(byte) {
                     return Err(XmlStreamError::Syntax);
                 }
@@ -1283,8 +1346,8 @@ impl XmlStream {
                         return Err(XmlStreamError::Syntax);
                     }
                     self.name.clear();
-                    self.token.clear();
                     self.state = State::Cdata(0);
+                    self.content_significant(&[])?;
                 } else if !b"--".starts_with(&self.name) && !b"[CDATA[".starts_with(&self.name) {
                     return Err(XmlStreamError::Syntax);
                 }
@@ -1303,21 +1366,16 @@ impl XmlStream {
             }
             State::Cdata(brackets) => {
                 if brackets == 2 && byte == b'>' {
-                    self.emit_token(false, None, sink)?;
                     self.state = State::Text;
                     self.raw_token = 0;
                 } else if byte == b']' {
                     if brackets == 2 {
-                        self.decoded(1)?;
-                        self.token_byte(b']')?;
+                        self.content_significant(b"]")?;
                     }
                     self.state = State::Cdata((brackets + 1).min(2));
                 } else {
-                    self.decoded(add(usize::from(brackets), 1)?)?;
-                    for _ in 0..brackets {
-                        self.token_byte(b']')?;
-                    }
-                    self.token_byte(byte)?;
+                    let pending = [b']', b']', byte];
+                    self.content_significant(&pending[2 - usize::from(brackets)..])?;
                     self.state = State::Cdata(0);
                 }
             }
@@ -1372,14 +1430,13 @@ impl XmlStream {
         }
         Ok(())
     }
-    fn finish(&mut self, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
+    fn finish(&mut self) -> Result<(), XmlStreamError> {
         if self.utf8_expected != 0 {
             return Err(XmlStreamError::Character);
         }
         if self.state != State::Text || !self.frames.is_empty() || self.roots != 1 {
             return Err(XmlStreamError::Incomplete);
         }
-        self.emit_token(true, None, sink)?;
         self.complete = true;
         Ok(())
     }

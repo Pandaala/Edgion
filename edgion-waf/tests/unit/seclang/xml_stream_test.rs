@@ -30,9 +30,9 @@ fn all_splits_preserve_normalized_projection_and_namespace_order() {
         vec![
             (Some(b"p:a".to_vec()), b"x>y".to_vec()),
             (Some(b"xmlns:p".to_vec()), b"urn:p".to_vec()),
-            (None, b"A&B".to_vec()),
-            (None, b" raw\n".to_vec()),
-            (None, b"tail".to_vec())
+            // One element value: text, CDATA and later text concatenated,
+            // comment and PI removed, outer literal whitespace trimmed.
+            (None, b"A&B \n raw\ntail".to_vec())
         ]
     );
 }
@@ -43,6 +43,7 @@ fn strict_invalid_documents_are_sticky() {
         b"<r a=x/>",
         b"<r/ >",
         b"<r>]]></r>",
+        b"<r>x]]>y</r>",
         b"<r><!-- a--b --></r>",
         b"<r>&#0;</r>",
         b"<r>&#xD800;</r>",
@@ -66,16 +67,21 @@ fn strict_invalid_documents_are_sticky() {
     }
 }
 #[test]
-fn borrowing_and_reusable_token_capacity() {
+fn attribute_borrowing_and_reusable_content_capacity() {
     struct Borrowed {
         source: usize,
         end: usize,
         values: usize,
     }
     impl XmlStreamSink for Borrowed {
-        fn value(&mut self, _: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
+        fn value(&mut self, name: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
+            // Attribute values stay borrowed; element text is published from
+            // the content buffer at the element's close.
             let pointer = value.as_ptr() as usize;
-            assert!(pointer >= self.source && pointer + value.len() <= self.end);
+            assert_eq!(
+                pointer >= self.source && pointer + value.len() <= self.end,
+                name.is_some()
+            );
             self.values += 1;
             Ok(())
         }
@@ -94,11 +100,18 @@ fn borrowing_and_reusable_token_capacity() {
     let mut sink = Sink::default();
     stream.feed(XmlStreamInput::Data(b"<r>"), &mut sink).unwrap();
     stream.feed(XmlStreamInput::Data(&vec![b'x'; 4096]), &mut sink).unwrap();
-    let capacity = stream.token.capacity();
+    assert!(stream.content.spilled());
+    assert_eq!(stream.token.capacity(), 1024);
     stream.feed(XmlStreamInput::Data(b"<i/>small<i/>"), &mut sink).unwrap();
-    assert_eq!(stream.token.capacity(), capacity);
     stream.feed(XmlStreamInput::Data(b"</r>"), &mut sink).unwrap();
+    // The root close releases the content but keeps its capacity.
+    let capacity = stream.content.capacity();
+    assert!(stream.content.is_empty());
+    assert!(capacity >= 4096 + 5);
     stream.feed(XmlStreamInput::Complete, &mut sink).unwrap();
+    assert_eq!(stream.content.capacity(), capacity);
+    assert_eq!(sink.0.len(), 1);
+    assert_eq!(sink.0[0].1.len(), 4096 + 5);
 }
 #[test]
 fn references_whitespace_and_empty_cdata() {
@@ -107,8 +120,9 @@ fn references_whitespace_and_empty_cdata() {
         result.0 .0,
         vec![
             (Some(b"a".to_vec()), b" \t ".to_vec()),
-            (None, b"  x  ".to_vec()),
-            (None, b"".to_vec())
+            // Only the leading literal space is outer; the space before the
+            // (empty) CDATA section is interior.
+            (None, b"  x   ".to_vec())
         ]
     );
 }
@@ -170,7 +184,7 @@ fn parser_caps_charge_unselected_content_and_structural_events() {
     }
 }
 #[test]
-fn tag_only_identity_is_reclaimed_and_cdata_empty_values_are_borrowed() {
+fn tag_only_identity_is_reclaimed_and_attribute_values_are_borrowed() {
     let mut stream = XmlStream::new(XmlStreamLimits::default());
     let mut sink = Sink::default();
     stream
@@ -188,11 +202,7 @@ fn tag_only_identity_is_reclaimed_and_cdata_empty_values_are_borrowed() {
     stream.feed(XmlStreamInput::Data(b"</r>"), &mut sink).unwrap();
     stream.feed(XmlStreamInput::Complete, &mut sink).unwrap();
     assert_eq!(stream.usage().structure_bytes, 0);
-    for input in [
-        b"<r><![CDATA[plain]]></r>".as_slice(),
-        b"<r><![CDATA[]]></r>",
-        b"<r a=''/>",
-    ] {
+    for input in [b"<r a='plain'/>".as_slice(), b"<r a=''/>"] {
         struct Borrow<'a>(&'a [u8]);
         impl XmlStreamSink for Borrow<'_> {
             fn value(&mut self, _: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
@@ -205,6 +215,13 @@ fn tag_only_identity_is_reclaimed_and_cdata_empty_values_are_borrowed() {
         let mut sink = Borrow(input);
         parser.feed(XmlStreamInput::Data(input), &mut sink).unwrap();
         parser.feed(XmlStreamInput::Complete, &mut sink).unwrap();
+    }
+    // CDATA values are copied into element content, including the empty one.
+    for (input, value) in [
+        (b"<r><![CDATA[plain]]></r>".as_slice(), b"plain".as_slice()),
+        (b"<r><![CDATA[]]></r>", b""),
+    ] {
+        assert_eq!(parse(input, input.len()).unwrap().0 .0, [(None, value.to_vec())]);
     }
     assert!(parse(b"\xEF\xBB\xBF <?xml version='1.0'?><r/>", 999).is_err());
     assert!(parse(b"<r>]]&gt;</r>", 1).is_ok());
@@ -490,7 +507,7 @@ fn growth_copy_work_is_admitted_before_allocation_and_usage_tracks_real_capacity
     parser.feed(XmlStreamInput::Data(b"<r>"), &mut sink).unwrap();
     parser.feed(XmlStreamInput::Data(&vec![b'x'; 1024]), &mut sink).unwrap();
     let heap = parser.heap().unwrap();
-    let capacity = parser.token.capacity();
+    let capacity = parser.content.capacity();
     parser.limits.max_work = parser.usage().work + 1;
     assert!(matches!(
         parser.feed(XmlStreamInput::Data(b"x"), &mut sink),
@@ -499,8 +516,8 @@ fn growth_copy_work_is_admitted_before_allocation_and_usage_tracks_real_capacity
             ..
         })
     ));
-    assert_eq!(parser.token.capacity(), capacity);
-    assert!(!parser.token.spilled());
+    assert_eq!(parser.content.capacity(), capacity);
+    assert!(!parser.content.spilled());
     assert_eq!(parser.usage().retained_bytes, heap);
     assert_eq!(parser.heap().unwrap(), heap);
     {
@@ -530,6 +547,7 @@ fn growth_copy_work_is_admitted_before_allocation_and_usage_tracks_real_capacity
             name: Span::default(),
             mark: 0,
             bindings: 0,
+            first: None,
         },
     );
     let heap = frames.capacity() * size_of::<Frame>();
@@ -563,7 +581,7 @@ fn growth_copy_work_is_admitted_before_allocation_and_usage_tracks_real_capacity
     let mut parser = XmlStream::new(XmlStreamLimits::default());
     parser.feed(XmlStreamInput::Data(b"<r>"), &mut sink).unwrap();
     parser.feed(XmlStreamInput::Data(&vec![b'x'; 1025]), &mut sink).unwrap();
-    assert!(parser.token.spilled());
+    assert!(parser.content.spilled());
     assert_eq!(
         parser.feed(XmlStreamInput::Data(b"</r>"), &mut Reject),
         Err(XmlStreamError::SinkRejected)
@@ -790,112 +808,6 @@ fn qname_delimiters_preserve_first_split_and_validation_error_order() {
 }
 
 #[test]
-fn token_emission_borrow_preserves_original_counters_and_cleanup() {
-    fn original_emit(
-        stream: &mut XmlStream,
-        value: &[u8],
-        sink: &mut impl XmlStreamSink,
-    ) -> Result<(), XmlStreamError> {
-        if stream.frames.is_empty() {
-            return Err(XmlStreamError::Syntax);
-        }
-        stream.event()?;
-        stream.summary.value_count = add(stream.summary.value_count, 1)?;
-        stream.summary.decoded_bytes = add(stream.summary.decoded_bytes, add(0, value.len())?)?;
-        // The original name=None update leaves max_name_bytes unchanged.
-        stream.work(value.len())?;
-        sink.value(None, value).map_err(|_| XmlStreamError::SinkRejected)
-    }
-    fn original_token(stream: &mut XmlStream, text: bool, sink: &mut impl XmlStreamSink) -> Result<(), XmlStreamError> {
-        if text {
-            stream.token.truncate(stream.token.len() - stream.trailing);
-        }
-        stream.held_heap = add(stream.held_heap, heap_capacity(&stream.token))?;
-        let mut token = std::mem::take(&mut stream.token);
-        let result = if !text || !token.is_empty() {
-            original_emit(stream, &token, sink)
-        } else {
-            Ok(())
-        };
-        token.clear();
-        stream.held_heap -= heap_capacity(&token);
-        stream.token = token;
-        stream.trailing = 0;
-        result
-    }
-    #[derive(Default)]
-    struct RecordingSink {
-        reject: bool,
-        values: Vec<Vec<u8>>,
-    }
-    impl XmlStreamSink for RecordingSink {
-        fn value(&mut self, name: Option<&[u8]>, value: &[u8]) -> Result<(), XmlStreamSinkError> {
-            assert!(name.is_none());
-            self.values.push(value.to_vec());
-            if self.reject {
-                Err(XmlStreamSinkError)
-            } else {
-                Ok(())
-            }
-        }
-    }
-    for len in [0_usize, 1, 1024, 1025, 2048] {
-        for text in [false, true] {
-            for inside in [false, true] {
-                for reject in [false, true] {
-                    for (events, work) in [(0, usize::MAX), (1, len.saturating_sub(1)), (1, len), (1, usize::MAX)] {
-                        let make = || {
-                            let mut stream = XmlStream::new(XmlStreamLimits {
-                                max_events: events,
-                                max_work: work,
-                                ..XmlStreamLimits::default()
-                            });
-                            if inside {
-                                stream.frames.push(Frame {
-                                    name: Span { start: 0, len: 0 },
-                                    mark: 0,
-                                    bindings: 0,
-                                });
-                            }
-                            stream.token.extend(std::iter::repeat_n(b'x', len));
-                            if text {
-                                stream.token.extend_from_slice(b"  ");
-                                stream.trailing = 2;
-                            }
-                            stream.refresh().unwrap();
-                            stream
-                        };
-                        let mut expected = make();
-                        let mut actual = make();
-                        let mut old_sink = RecordingSink {
-                            reject,
-                            ..RecordingSink::default()
-                        };
-                        let mut new_sink = RecordingSink {
-                            reject,
-                            ..RecordingSink::default()
-                        };
-                        let before_capacity = actual.token.capacity();
-                        assert_eq!(
-                            actual.emit_token(text, None, &mut new_sink),
-                            original_token(&mut expected, text, &mut old_sink)
-                        );
-                        assert_eq!(new_sink.values, old_sink.values);
-                        assert_eq!(actual.usage(), expected.usage());
-                        assert_eq!(actual.summary(), expected.summary());
-                        assert!(actual.token.is_empty());
-                        assert_eq!(actual.token.capacity(), before_capacity);
-                        assert_eq!(actual.token.capacity(), expected.token.capacity());
-                        assert_eq!(actual.held_heap, 0);
-                        assert_eq!(actual.trailing, 0);
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn declaration_scan_preserves_whitespace_quotes_and_attribute_order() {
     fn original(bytes: &[u8]) -> Result<(), XmlStreamError> {
         let mut rest = bytes;
@@ -982,5 +894,71 @@ fn declaration_scan_preserves_whitespace_quotes_and_attribute_order() {
                 }
             }
         }
+    }
+}
+fn text_values(input: &[u8]) -> Vec<Vec<u8>> {
+    let expected = parse(input, input.len()).unwrap();
+    for chunk in 1..input.len() {
+        let result = parse(input, chunk).unwrap();
+        assert_eq!(result.0 .0, expected.0 .0, "chunk {chunk}");
+        assert_eq!(result.2, expected.2, "chunk {chunk}");
+    }
+    expected
+        .0
+         .0
+        .into_iter()
+        .filter(|(name, _)| name.is_none())
+        .map(|(_, value)| value)
+        .collect()
+}
+#[test]
+fn element_text_concatenates_across_comments_cdata_and_pis_at_every_split() {
+    for (input, expected) in [
+        (
+            b"<id>1 UNION SEL<!---->ECT password FROM users</id>".as_slice(),
+            &[b"1 UNION SELECT password FROM users".as_slice()][..],
+        ),
+        (
+            b"<q>&lt;scr<![CDATA[ipt>alert(1)</scr]]>ipt&gt;</q>",
+            &[b"<script>alert(1)</script>".as_slice()],
+        ),
+        (b"<a>SEL<?pi data?>ECT</a>", &[b"SELECT".as_slice()]),
+        // Interior literal whitespace around removed markup is kept.
+        (b"<a>SELECT <!-- c --> password</a>", &[b"SELECT  password".as_slice()]),
+        // CDATA at both ends is untrimmed; outer literal text is trimmed.
+        (b"<a><![CDATA[ x]]> mid <![CDATA[y ]]></a>", &[b" x mid y ".as_slice()]),
+        (b"<a>\n x <![CDATA[]]></a>", &[b"x ".as_slice()]),
+    ] {
+        assert_eq!(text_values(input), expected, "{:?}", String::from_utf8_lossy(input));
+    }
+}
+#[test]
+fn element_text_is_deep_content_published_per_element_at_close() {
+    for (input, expected) in [
+        (b"<a>x<b>y</b>z</a>".as_slice(), &[b"y".as_slice(), b"xyz"][..]),
+        (
+            b"<r><s><id>1 UNION SEL<!---->ECT</id></s><n>2</n></r>",
+            &[
+                b"1 UNION SELECT".as_slice(),
+                b"1 UNION SELECT",
+                b"2",
+                b"1 UNION SELECT2",
+            ],
+        ),
+        (b"<a>x<b> y </b>z</a>", &[b"y".as_slice(), b"x y z"]),
+        (b"<a><b/>x<c/></a>", &[b"x".as_slice()]),
+    ] {
+        assert_eq!(text_values(input), expected, "{:?}", String::from_utf8_lossy(input));
+    }
+}
+#[test]
+fn whitespace_only_text_publishes_nothing_for_any_element() {
+    for (input, expected) in [
+        (b"<r>  </r>".as_slice(), &[][..]),
+        (b"<r>\n  <a> </a>\n  <b>v</b>\n</r>", &[b"v".as_slice(), b"v"]),
+        (b"<r> <!-- c --> <?pi x?> </r>", &[]),
+        (b"<r><a/>\n<b></b></r>", &[]),
+    ] {
+        assert_eq!(text_values(input), expected, "{:?}", String::from_utf8_lossy(input));
     }
 }

@@ -84,7 +84,8 @@ fn all_two_part_sources_have_owned_capture_chain_and_count_outcomes() {
 fn all_values_boundary_includes_three_metadata_entries_even_without_demands() {
     let g = compile("SecAction \"id:1,phase:2,pass\"");
     for values in [DEFAULT_MAX_BODY_ENTRIES - 3, DEFAULT_MAX_BODY_ENTRIES - 2] {
-        let bytes = Bytes::from(format!("<r>{}</r>", "<![CDATA[]]>".repeat(values)));
+        // Each child element publishes one value and the root one more.
+        let bytes = Bytes::from(format!("<r>{}</r>", "<i>x</i>".repeat(values - 1)));
         let mut transaction = tx(&g);
         let result = transaction.publish_request_body(RequestBody::new(bytes, BodyProcessorSelection::Xml));
         if values == DEFAULT_MAX_BODY_ENTRIES - 3 {
@@ -120,4 +121,46 @@ fn malformed_hits_and_source_parity_never_publish_phase_two_effects() {
         ))
         .is_err());
     assert_eq!(transaction.tx_value(b"hit"), None);
+}
+#[test]
+fn comment_cdata_and_pi_split_payloads_are_inspected_whole_at_every_cut() {
+    let g = compile(concat!(
+        "SecRule XML:/* \"@rx (?i)union\\s+select\" \"id:1,phase:2,pass,setvar:tx.sqli=%{MATCHED_VAR}\"\n",
+        "SecRule XML:/* \"@contains <script>\" \"id:2,phase:2,pass\"\n",
+    ));
+    for (xml, ids) in [
+        (
+            b"<id>1 UNION SEL<!---->ECT password FROM users</id>".as_slice(),
+            &[1][..],
+        ),
+        (b"<q>&lt;scr<![CDATA[ipt>alert(1)</scr]]>ipt&gt;</q>", &[2]),
+        (b"<r><id>1 UNION SEL<?pi x?>ECT</id></r>", &[1]),
+    ] {
+        let mut owned = tx(&g);
+        owned
+            .publish_request_body(RequestBody::new(
+                Bytes::copy_from_slice(xml),
+                BodyProcessorSelection::Auto,
+            ))
+            .unwrap();
+        let expected = owned.execute_request_body().unwrap();
+        let found = expected
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>();
+        assert_eq!(found, ids, "{:?}", String::from_utf8_lossy(xml));
+        for cut in 0..=xml.len() {
+            let mut scoped = tx(&g);
+            let mut session = scoped
+                .start_xml_inspection(XmlInspectionLimits::default(), None)
+                .unwrap();
+            session.feed(&xml[..cut]).unwrap();
+            session.feed(&xml[cut..]).unwrap();
+            session.complete(xml.len()).unwrap();
+            session.finish(None).unwrap();
+            assert_eq!(scoped.execute_request_body().unwrap(), expected, "cut {cut}");
+            assert_eq!(scoped.tx_value(b"sqli"), owned.tx_value(b"sqli"));
+        }
+    }
 }

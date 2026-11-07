@@ -1,5 +1,6 @@
 # waf3-03: XML text values are split at every comment, CDATA and PI boundary, so `SEL<!---->ECT` style payload splitting evades `XML:/*` rules
 
+- **Status**: implemented in the T14 D-3 decision commit (`feat(waf)!: concatenate XML character data across comments, PIs and CDATA`, deep element content), awaiting user keep/revert
 - **Category**: design-error
 - **Severity**: P2
 - **Scope**: local

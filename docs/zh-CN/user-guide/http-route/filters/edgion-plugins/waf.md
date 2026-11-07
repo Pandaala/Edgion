@@ -464,15 +464,19 @@ spec:
       name: application-waf-policy
 ```
 
-在引用的 rule bundle 中，`XML` 选择文本及属性值，`XML:/*` 选择文本和 CDATA，
+在引用的 rule bundle 中，`XML` 选择元素文本及属性值，`XML:/*` 选择元素文本，
 `XML://@*` 选择属性。例如：
 
 ```apache
 SecRule XML:/*|XML://@* "@contains forbidden" "id:100001,phase:2,deny,status:403"
 ```
 
-这些选择器按引擎的值投影工作，不支持任意 XPath。普通文本在 markup 之间分别产生候选，
-去除外围的字面 XML 空白；CDATA 独立产生候选且不裁剪。属性按原文的限定名称匹配，
+这些选择器按引擎的值投影工作，不支持任意 XPath。每个含字符内容的元素在关闭时产生一个值：
+其完整文本内容，按文档顺序包含后代元素文本、CDATA 段和解码后的引用（即 ModSecurity
+`XML:/*` 检查的 libxml2 节点内容）。注释和处理指令不贡献内容，也不会切分值，因此
+`SEL<!---->ECT` 按 `SELECT` 检查。内容外围的字面 XML 空白被去除，CDATA 和字符引用产生的
+空白保留；内容为空或仅含字面空白的元素不产生值。嵌套在多层元素中的文本会被每个外层元素
+各检查一次。属性按原文的限定名称匹配，
 包括 namespace 声明。命中名称是 `XML` 或 `XML:<attribute>`。注释、PI 和元素名不是值。
 XML 不增加 ARGS 条目，combined-size 元数据只计算 query 参数。
 

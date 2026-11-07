@@ -586,16 +586,23 @@ spec:
       name: application-waf-policy
 ```
 
-In the referenced rule bundle, `XML` selects emitted text and attribute values,
-`XML:/*` selects text/CDATA, and `XML://@*` selects attributes. For example:
+In the referenced rule bundle, `XML` selects element text and attribute values,
+`XML:/*` selects element text, and `XML://@*` selects attributes. For example:
 
 ```apache
 SecRule XML:/*|XML://@* "@contains forbidden" "id:100001,phase:2,deny,status:403"
 ```
 
-These selectors use the engine's value projection, not arbitrary XPath. Normal
-text is emitted separately between markup and trims outer literal XML whitespace;
-CDATA is separate and untrimmed. Attributes use their lexical qualified names,
+These selectors use the engine's value projection, not arbitrary XPath. Each
+element with character content publishes one value when it closes: its whole
+textual content, including descendant element text, CDATA sections and decoded
+references in document order (the libxml2 node content that ModSecurity's
+`XML:/*` inspects). Comments and processing instructions contribute nothing and
+do not split the value, so `SEL<!---->ECT` is inspected as `SELECT`. Outer
+literal XML whitespace of that content is trimmed; CDATA and character-reference
+whitespace is kept. Elements whose content is empty or only literal whitespace
+publish nothing. Text nested inside several elements is inspected once per
+enclosing element. Attributes use their lexical qualified names,
 including namespace declarations. Matched names are `XML` or `XML:<attribute>`.
 Comments, processing instructions and element names are not values. XML does not
 add ARGS entries; combined-size metadata includes query arguments only.
