@@ -35,117 +35,73 @@ fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
 pub(crate) use semantic::validate_executable_profile;
 pub use tag_selection::{
     rule_unit_tags, PreparedWafRuleSelection, WafRuleIdRange, WafRuleSelection, WafRuleSelectionExpr,
-    WafSelectionAtomRef, WafSelectionError, WafSelectionStats, WafSelectionSummary, MAX_POLICY_SELECTION_BYTES,
+    WafSelectionSummary, MAX_POLICY_SELECTION_BYTES,
 };
-pub use xml_stream::{
-    XmlSemanticSummary, XmlStream, XmlStreamError, XmlStreamInput, XmlStreamLimit, XmlStreamLimits, XmlStreamSink,
-    XmlStreamSinkError, XmlStreamUsage,
-};
+pub(crate) use xml_stream::{XmlSemanticSummary, XmlStreamInput, XmlStreamSink, XmlStreamSinkError, XmlStreamUsage};
+pub use xml_stream::{XmlStream, XmlStreamError, XmlStreamLimit, XmlStreamLimits};
 
-pub use json_checker::{
-    JsonChecker, JsonCheckerError, JsonCheckerSink, JsonCheckerSinkError, JsonScalarKind, JsonSemanticSummary,
-    JsonStructureLimit, JsonStructureLimits, JsonStructureUsage,
-};
+pub use json_checker::{JsonChecker, JsonCheckerError, JsonStructureLimit, JsonStructureLimits};
+pub(crate) use json_checker::{JsonCheckerSink, JsonCheckerSinkError, JsonScalarKind, JsonSemanticSummary};
 
-pub use json_number::JsonNumber;
+pub(crate) use json_number::JsonNumber;
 
+pub(crate) use json_stream::JsonStream;
 pub use json_stream::{
-    JsonDiscardedStringSummary, JsonStream, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits,
+    JsonDiscardedStringSummary, JsonStreamError, JsonStreamInput, JsonStreamLimit, JsonStreamLimits,
     JsonStreamSelective, JsonStreamSelectiveLimits, JsonStreamSelectiveSink, JsonStreamSinkError, JsonStreamToken,
     JsonStreamUsage,
 };
 
-pub use directive::{
-    parse_directives, Directive, DirectiveArity, DirectiveDocument, DirectiveField, DirectiveKind, DirectiveLimits,
-    DirectiveParseError, DirectiveView, MarkerText, QuoteRequirement, DEFAULT_MAX_DIRECTIVES,
-    DEFAULT_MAX_DIRECTIVE_OWNED_BYTES, DEFAULT_MAX_UPDATE_SELECTORS,
-};
+pub use directive::{parse_directives, Directive, DirectiveKind, DirectiveLimits, DirectiveParseError};
+pub(crate) use directive::{DirectiveDocument, DirectiveView};
 
-pub use action::{
-    ActionEntry, ActionEntryKind, ActionListKind, ActionListView, ActionSyntaxError, ActionSyntaxLimits, ActionText,
-    ActionValue, ActionValueSpelling, EmptyActionKind,
-};
-pub use body::{
-    BodyError, BodyLimits, BodyProcessorSelection, JsonPublicationSummary, RequestBody, XmlPublicationSummary,
-    DEFAULT_MAX_BODY_DECODED_BYTES, DEFAULT_MAX_BODY_DEPTH, DEFAULT_MAX_BODY_ENTRIES, DEFAULT_MAX_BODY_NAME_BYTES,
-    DEFAULT_MAX_BODY_WORK_BYTES, DEFAULT_MAX_MULTIPART_HEADERS, DEFAULT_MAX_MULTIPART_PARTS,
-    DEFAULT_MAX_REQUEST_BODY_BYTES,
-};
+pub use action::ActionSyntaxError;
+#[cfg(test)]
+pub(crate) use action::ActionValueSpelling;
+pub(crate) use action::{ActionEntryKind, ActionText};
+pub use body::{BodyError, BodyLimits, BodyProcessorSelection, RequestBody, DEFAULT_MAX_BODY_ENTRIES};
+pub(crate) use body::{JsonPublicationSummary, XmlPublicationSummary};
+pub(crate) use compiler::{compile_validated, CompilerInvariant, CompilerLimits};
 pub use compiler::{
-    compile_validated, CompiledGeneration, CompiledRuleMemberView, CompiledRuleUnitView, CompiledScheduleEntryKind,
-    CompiledScheduleEntryView, CompiledTargetPlanView, CompiledTargetRecordView, CompiledTargetSelectorKind,
-    CompilerError, CompilerInvariant, CompilerLimits, EvaluationMode, Intervention, JsonInspectionLimits,
-    JsonInspectionSession, JsonInspectionUnsupported, JsonInspectionUnsupportedReason, JsonInspectionUsage,
-    JsonResultLimit, JsonResultLimits, PhaseOutcome, PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink,
-    PhraseAssetSinkError, PhraseAssetSource, PhraseMatcherErrorKind, RequestBodyExecutionClass,
-    RequestBodyExecutionSummary, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
-    ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
-    RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession, XmlInspectionUnsupported,
-    XmlInspectionUnsupportedReason, XmlInspectionUsage, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES,
-    DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES, DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES,
-    DEFAULT_MAX_RUNTIME_FINDINGS, DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES,
-    DEFAULT_MAX_RUNTIME_INPUT_BYTES, DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES,
-    DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES,
-    DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
-    DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
-    DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
-    DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,
-    DEFAULT_MAX_RUNTIME_TX_BYTES, DEFAULT_MAX_RUNTIME_TX_VARIABLES, DEFAULT_MAX_RUNTIME_VALUE_BYTES,
-    DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
+    CompiledGeneration, CompiledScheduleEntryKind, CompilerError, EvaluationMode, JsonInspectionLimits,
+    JsonInspectionSession, JsonInspectionUnsupported, JsonInspectionUsage, JsonResultLimit, JsonResultLimits,
+    PhaseOutcome, PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink, PhraseAssetSource,
+    RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader, ResponseWindow,
+    RuleCheckPolicy, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction, XmlInspectionLimits,
+    XmlInspectionSession, XmlInspectionUnsupported, XmlInspectionUsage, DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+    MAX_REQUEST_BODY_PREFIX_BYTES,
 };
+#[cfg(test)]
+pub(crate) use compiler::{XmlInspectionUnsupportedReason, DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES};
 pub use include::{
     compile_executable_profile_with_includes, compile_rule_bundles, compile_rule_bundles_with_external_budget,
-    compile_rule_bundles_with_selection, compile_with_includes, inspect_compatibility, CompatibilityError,
-    CompatibilityFinding, CompatibilityLimits, CompatibilityReport, CompatibilityRuleSummary, CompiledBundle,
-    FrontendError, FrontendLimits, IncludeError, IncludeFailure, IncludeKind, IncludeLimits, IncludeMetrics,
-    IncludeRequest, IncludeSink, IncludeSinkError, IncludeSource, RuleBundleError, RuleBundleMember, RuleBundleSource,
-    WafRuleMetadataBudget, WafRuleSelectionObserver, WafRuleSelectionPreview, WafSelectionCompileError,
-    DEFAULT_MAX_COMPATIBILITY_FINDINGS, DEFAULT_MAX_COMPATIBILITY_RULE_SUMMARIES, DEFAULT_MAX_EXPANDED_SOURCE_BYTES,
-    DEFAULT_MAX_INCLUDE_DEPTH, DEFAULT_MAX_INCLUDE_IDENTITY_BYTES, DEFAULT_MAX_INCLUDE_IDENTITY_COMPARISON_BYTES,
-    DEFAULT_MAX_INCLUDE_SOURCES, DEFAULT_MAX_INCLUDE_SOURCE_BYTES,
+    compile_rule_bundles_with_selection, compile_with_includes, inspect_compatibility, CompatibilityLimits,
+    CompatibilityReport, FrontendError, FrontendLimits, IncludeError, IncludeFailure, IncludeRequest, IncludeSink,
+    IncludeSource, RuleBundleMember, RuleBundleSource, WafRuleMetadataBudget, WafRuleSelectionObserver,
+    WafRuleSelectionPreview, WafSelectionCompileError,
 };
-pub use operator::{
-    DecodedBytes, DecodedChunks, DecodedTextView, OperatorNameView, OperatorSpelling, OperatorSyntaxError,
-    OperatorSyntaxLimits, OperatorView,
-};
+pub use operator::OperatorSyntaxError;
+pub(crate) use operator::{DecodedTextView, OperatorNameView, OperatorView};
 pub use semantic::{
-    analyze_one_semantic_draft, analyze_semantic_draft, validate_semantic_draft, ActionEnvelopeKind, ActionKind,
-    ActionOperandView, ActiveRuleUnitIter, AppliedAffectedUnitIter, AppliedRuleRemovalView, AppliedTargetUpdateView,
-    AssetErrorKind, AuditEngineMode, ByteSetView, CapabilityRecord, ChainMemberIter, ChainMemberView, ChainView,
-    CollectionKind, CompileRequirement, CtlErrorKind, CtlTargetView, CtlView, DefaultDisruptive, DefaultsContextError,
-    DirectiveLocation, DisruptiveKind, EffectiveTransformationIter, ExternalAssetIter, ExternalAssetView,
-    ExternalAssetsView, FinalPhaseState, FinalRuleRole, FinalRuleView, FoldActionPresence, FoldLimits,
-    FoldRequiredKind, FoldSingletonKind, GraphLimits, InitColCollection, InitColErrorKind, InitColView,
-    IntegerOperandErrorKind, IpNetworkIter, IpNetworkView, IpNetworksView, LocalActionValue, LocalRuleEnvelope,
-    LocalRuleFoldView, MacroErrorKind, MacroExpansionView, MacroSource, MarkerView, OnOff, OperandLimits,
-    OperandTemplateView, OperandTextView, OperatorKind, OperatorOperandContract, OperatorOperandView, Phase,
-    PhaseDefaults, PhraseIter, PhraseListView, PhraseView, ProvisionalRuleRole, RequestBodyProcessor,
-    RequirementRecord, ResolvedDisruptive, ResolvedRuleStateView, ResolvedSkipAfterView, ScalarKind,
-    SemanticActionIter, SemanticActionView, SemanticDirectiveView, SemanticDraft, SemanticError, SemanticLimits,
-    SemanticLocation, SemanticNodeKind, SemanticOperatorView, SemanticTarget, SemanticText, SemanticValidationContext,
-    SemanticValidationError, SetVarErrorKind, SetVarOperation, SetVarView, Severity, TemplateSegmentKind,
-    TemplateSegmentView, TemplateSliceSegmentIter, TemplateSliceSegmentView, TemplateSliceView, TransformationKind,
-    UnavailableCapability, ValidatedMarkerView, ValidatedRequirementView, ValidatedRuleNodeIter, ValidatedRuleNodeView,
-    ValidatedRuleUnitView, ValidatedSemanticDocument, ValidationLimits, ValueContract,
-    DEFAULT_MAX_EFFECTIVE_TRANSFORMATIONS, DEFAULT_MAX_FOLDED_RULES, DEFAULT_MAX_SEMANTIC_DIRECTIVES,
-    DEFAULT_MAX_SEMANTIC_DOCUMENTS, DEFAULT_MAX_SEMANTIC_NODES, DEFAULT_MAX_SEMANTIC_OWNED_BYTES,
-    DEFAULT_MAX_SEMANTIC_RETAINED_BYTES, DEFAULT_MAX_SEMANTIC_RULES, MARKER_WORK_ENTRY_CHARGE,
+    analyze_one_semantic_draft, validate_semantic_draft, ActionEnvelopeKind, ActionKind, ActionOperandView,
+    CollectionKind, CtlView, DirectiveLocation, FoldRequiredKind, MacroExpansionView, OperandTemplateView,
+    OperatorOperandView, Phase, PhaseDefaults, SemanticError, SemanticLimits, SemanticLocation,
+    SemanticValidationContext, SemanticValidationError, Severity, TemplateSegmentKind, TemplateSliceView,
+    TransformationKind, UnavailableCapability, ValidatedSemanticDocument, ValidationLimits,
 };
-pub use source::{
-    scan_source, LogicalLine, ProvenanceSegment, SourceDocument, SourceError, SourceLimits, SourcePosition, SourceSpan,
+pub(crate) use semantic::{
+    CompileRequirement, ExternalAssetView, FinalRuleRole, LocalActionValue, MacroSource, OnOff, OperatorKind,
+    RequestBodyProcessor, ResolvedDisruptive, SemanticActionView, SemanticDraft, SemanticNodeKind,
+    SemanticOperatorView, SetVarOperation, ValidatedRuleNodeView, ValidatedRuleUnitView,
 };
-pub use syntax::{
-    parse_syntax, SyntaxDirectiveView, SyntaxDocument, SyntaxError, SyntaxInvariantKind, SyntaxIter, SyntaxLimits,
-    DEFAULT_MAX_SYNTAX_RETAINED_BYTES,
-};
-pub use target::{
-    DirectiveTargetView, IdSelector, IdSelectorKind, ModifierErrorKind, RegexStyle, SelectorKind, SyntaxText,
-    TargetAtom, TargetModifier, TargetSyntaxError, TargetSyntaxLimits,
-};
-pub use tokenizer::{
-    tokenize_document, QuoteStyle, Token, TokenizeError, TokenizedDocument, TokenizedLine, TokenizerLimits,
-    DEFAULT_MAX_TOKENIZER_OWNED_BYTES, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TOKENS_PER_LINE, DEFAULT_MAX_TOKEN_BYTES,
-};
+pub use source::{scan_source, SourceError, SourceLimits, SourcePosition};
+pub(crate) use source::{LogicalLine, SourceDocument, SourceSpan};
+pub use syntax::{parse_syntax, SyntaxError, SyntaxLimits};
+pub(crate) use syntax::{SyntaxDirectiveView, SyntaxDocument};
+pub(crate) use target::{DirectiveTargetView, IdSelector, IdSelectorKind, RegexStyle, SyntaxText};
+pub use target::{SelectorKind, TargetModifier, TargetSyntaxError};
+pub use tokenizer::{tokenize_document, TokenizeError, TokenizerLimits};
+pub(crate) use tokenizer::{QuoteStyle, Token, TokenizedDocument};
 
 #[cfg(test)]
 #[path = "../../tests/unit/seclang/mod_test/measurements.rs"]

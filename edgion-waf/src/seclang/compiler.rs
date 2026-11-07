@@ -24,7 +24,9 @@ pub(super) enum InspectionDomain {
 }
 #[path = "xml_inspection_plan.rs"]
 mod xml_inspection_plan;
-pub use xml_inspection_plan::{XmlInspectionUnsupported, XmlInspectionUnsupportedReason};
+pub use xml_inspection_plan::XmlInspectionUnsupported;
+#[cfg(test)]
+pub(crate) use xml_inspection_plan::XmlInspectionUnsupportedReason;
 #[path = "capture_hit_plan.rs"]
 mod capture_hit_plan;
 #[path = "expensive_checks.rs"]
@@ -33,27 +35,21 @@ mod expensive_checks;
 mod inspection_activation;
 #[path = "json_inspection_plan.rs"]
 mod json_inspection_plan;
-pub use json_inspection_plan::{JsonInspectionUnsupported, JsonInspectionUnsupportedReason};
+pub use json_inspection_plan::JsonInspectionUnsupported;
 
 #[path = "transaction.rs"]
 mod transaction;
 
 pub use transaction::{
-    EvaluationMode, Intervention, JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit,
+    EvaluationMode, JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit,
     JsonResultLimits, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
-    ResponseHeader, ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits,
-    RuntimeMatcherError, RuntimeTransformError, Transaction, XmlInspectionLimits, XmlInspectionSession,
-    XmlInspectionUsage, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
-    DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
-    DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES,
-    DEFAULT_MAX_RUNTIME_MATCHER_SCRATCH_BYTES, DEFAULT_MAX_RUNTIME_OPERATOR_EVALUATIONS,
-    DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES, DEFAULT_MAX_RUNTIME_QUERY_ARGUMENTS, DEFAULT_MAX_RUNTIME_RESPONSE_HEADERS,
-    DEFAULT_MAX_RUNTIME_RESPONSE_HEADER_BYTES, DEFAULT_MAX_RUNTIME_RESPONSE_WINDOW_BYTES,
-    DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
-    DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,
-    DEFAULT_MAX_RUNTIME_TX_BYTES, DEFAULT_MAX_RUNTIME_TX_VARIABLES, DEFAULT_MAX_RUNTIME_VALUE_BYTES,
-    DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
+    ResponseHeader, ResponseWindow, RuleCheckPolicy, RuleEngineMode, RuntimeError, RuntimeLimits, Transaction,
+    XmlInspectionLimits, XmlInspectionSession, XmlInspectionUsage, DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+    MAX_REQUEST_BODY_PREFIX_BYTES,
 };
+
+#[cfg(test)]
+pub(crate) use transaction::DEFAULT_MAX_RUNTIME_OPERATOR_WORK_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompilerLimits {
