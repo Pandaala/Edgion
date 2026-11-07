@@ -320,13 +320,13 @@ SCOPED_EXCEPTIONS = {
         "test-only CRD path fallback inside parse_resource_content_offline",
     ("edgion-waf", Path("seclang/compiler/mod.rs"), re.compile(r"if COMPILER_ALLOCATION_FAILURE\.with\b")):
         "allocation failure injection inside reserve_exact",
-    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"if VALIDATION_ALLOCATION_FAILURE\.with\b")):
+    ("edgion-waf", Path("seclang/semantic/validate.rs"), re.compile(r"if VALIDATION_ALLOCATION_FAILURE\.with\b")):
         "allocation failure injection inside reserve_exact",
-    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"inspected_folds:\s*usize\b")):
+    ("edgion-waf", Path("seclang/semantic/fold.rs"), re.compile(r"(?:pub\(super\) )?inspected_folds:\s*usize\b")):
         "test-only chain projection counter field",
-    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"inspected_folds:\s*0\b")):
+    ("edgion-waf", Path("seclang/semantic/fold.rs"), re.compile(r"inspected_folds:\s*0\b")):
         "test-only chain projection counter initializer",
-    ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"\{\s*projection\.inspected_folds \+= 1;")):
+    ("edgion-waf", Path("seclang/semantic/fold.rs"), re.compile(r"\{\s*projection\.inspected_folds \+= 1;")):
         "test-only chain projection counter update",
 }
 
