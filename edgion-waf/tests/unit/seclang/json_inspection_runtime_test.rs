@@ -1280,8 +1280,8 @@ fn named_macro_first_canonical_collision_and_query_priority_are_preserved() {
     for uri in [b"/".as_slice(), b"/?json.a.b=query"] {
         compare(
             source,
-            br#"{"a.b":"literal","a":{"b":"overwritten"},"a":{"b":"nested"},"empty":""}"#,
-            b"json.a.b=nested&json.a.b=literal&json.empty=",
+            br#"{"a.b":"literal","a":{"b":"first"},"a":{"b":"nested"},"empty":""}"#,
+            b"json.a.b=first&json.a.b=nested&json.a.b=literal&json.empty=",
             uri,
             RuntimeLimits::default(),
         );
@@ -1799,11 +1799,13 @@ fn named_demands_are_phase_scoped_and_missing_differs_from_empty() {
 }
 
 #[test]
-fn overwritten_semantic_errors_disappear_but_syntax_and_physical_errors_do_not() {
+fn duplicate_semantic_errors_are_kept_and_syntax_and_physical_errors_still_fail() {
+    // Every duplicate occurrence is published, so the earlier oversized value
+    // fails exactly like the equivalent form body with both values.
     compare(
         "SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n",
         br#"{"a":"too-long","a":"hit"}"#,
-        b"json.a=hit",
+        b"json.a=too-long&json.a=hit",
         b"/",
         RuntimeLimits {
             max_transformation_output_bytes: 3,
@@ -2402,14 +2404,14 @@ fn json_inspection_measurements() {
             deferred_bytes: 0,
         },
         Fixture {
-            name: "duplicate_last_miss",
+            name: "duplicate_all_kept",
             input: Bytes::from(format!(
                 "{{{},\"same\":\"miss\"}}",
                 (0..256).map(|_| "\"same\":\"hit\"").collect::<Vec<_>>().join(",")
             )),
             rules: "SecRule ARGS \"@pm hit\" \"id:1,phase:2,pass\"".into(),
-            fields: 1,
-            no_payload: true,
+            fields: 257,
+            no_payload: false,
             depth: 64,
             deferred_bytes: 0,
         },
@@ -2523,8 +2525,10 @@ fn json_inspection_measurements() {
             }
             "plain_long" => assert_eq!(counts.get(E::TokenCopyBytes), 0),
             "escaped_long" => assert_eq!(counts.get(E::TokenCopyBytes), 64 << 10),
-            "duplicate_last_miss" => {
-                assert_eq!(usage.live_candidates, 1);
+            "duplicate_all_kept" => {
+                // Every occurrence stays a candidate and keeps its hit.
+                assert_eq!(usage.live_candidates, 257);
+                assert_eq!(usage.matched_bytes, 256 * 3);
                 assert_eq!(counts.get(E::MatchedCopyBytes), 256 * 3);
             }
             "many_capture_hits" => {
@@ -3677,8 +3681,9 @@ fn activation_preserves_named_deferred_macros_counts_and_raw_visibility() {
     let mut fast = activation_transaction(&g, input, false, 1);
     let mut oracle = activation_transaction(&g, input, true, input.len());
     assert_activation_parity(&mut fast, &mut oracle);
-    assert_eq!(fast.tx_value(b"dynamic"), Some(b"attack".as_slice()));
-    assert_eq!(fast.tx_value(b"count"), Some(b"3".as_slice()));
+    // `%{ARGS.json.a}` resolves to the first occurrence; both count.
+    assert_eq!(fast.tx_value(b"dynamic"), Some(b"wrong".as_slice()));
+    assert_eq!(fast.tx_value(b"count"), Some(b"4".as_slice()));
     assert_eq!(fast.tx_value(b"raw"), Some(b"hit".as_slice()));
 }
 

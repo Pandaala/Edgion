@@ -31,9 +31,19 @@ Implementation ownership is split deliberately:
   capacity. Complete-source adapters may use bounded initial capacity hints.
   Node hints are disabled unless a conservative retained-capacity bound fits;
   actual copy work remains subject to the strict cap.
-  Duplicate identity is decoded key within one object instance. Replacement
-  discards the preceding subtree's summary and provisional results; dotted
-  external-name collisions remain separate candidates.
+  Duplicate identity is decoded key within one object instance. Every
+  occurrence of a duplicate key is kept: the reducer reuses the key's AVL node
+  and `finish` joins each completed value's summary and receipt after the
+  earlier ones, so occurrences publish in document order under their key while
+  object members keep canonical key order. Each occurrence is its own
+  `ARGS`/`ARGS_NAMES` candidate with its own predicate facts, captures and
+  counts (`&ARGS`, `ARGS_COMBINED_SIZE`, entry limits), as in ModSecurity's
+  argument multimap; earlier provisional results are never discarded, and the
+  checker no longer calls the sink's `discard`. A named macro such as
+  `%{ARGS.json.k}` resolves to the first occurrence. More occurrences reach the
+  existing entry, selection and result-store limits exactly as more distinct
+  keys would. Dotted external-name collisions remain separate candidates
+  (finding `waf3-02`, decision commit D-2).
 - json_inspection_plan.rs precompiles selectors, shared transformation profiles
   and exact named demands under compiler budgets.
 - json_inspection_collector.rs and json_inspection.rs retain sparse predicate
@@ -64,7 +74,8 @@ The Gateway latches them and continues only bounded canonical capture so transpo
 and original complete-source prelude failures retain their priority at EOF. Speculative
 operator errors surface only when canonical selection and scheduling reach them.
 Later transformation validation may override an earlier provisional predicate
-hit. Duplicate replacement never erases syntax failure or spent physical work.
+hit. A later duplicate never erases an earlier occurrence's facts, a syntax
+failure or spent physical work.
 Final logical publication limits have explicit priority rather than an all-node
 event tape preserving the deleted DOM's competing-error order.
 
@@ -137,7 +148,7 @@ cannot be hidden by a successful contiguous take. Live capture continues feeding
 real chunks into the same stateful inspection session. Failed or abandoned
 inspection cannot publish provisional results.
 
-Logical grammar, duplicate replacement and ordered rule semantics are unchanged.
+Logical grammar, duplicate-occurrence publication and ordered rule semantics are unchanged.
 Physical work and retention charge actual operations, so removing carry copies
 can turn an old physical-budget failure into success without increasing limits.
 Escaped strings, selected captures and deferred values can still allocate; this
@@ -362,7 +373,7 @@ Buffered ASCII batching scans only budget-admitted current spare capacity after
 classifying the existing current byte. Empty-token borrowing and special-byte
 fallback retain their order; preserve sequential counters, spill trajectory and
 competing errors. Duplicate AVL unwind skips unchanged ancestor work, with no
-refund of spent search/discard work or change to logical replacement semantics.
+refund of spent search work or change to duplicate-occurrence semantics.
 
 Capture programs are now interned by exact source under bounded canonical work
 and temporary capacities. Preserve occurrence gates, every reuse requirement and

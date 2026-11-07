@@ -11,7 +11,7 @@ use edgion_waf::seclang::{
 use serde::Deserialize;
 
 const CASES: &str = include_str!("fixtures/crs-structured-v4.25.1/cases.json");
-const CASES_SHA256: &str = "9d46b1c0eb7378a074a19a58ce3c265df08aaf55b6d5cdddc0fba9131a34b42c";
+const CASES_SHA256: &str = "4b94ff2fc6ab2305200894f5bb996b989a3181999183bb5c91d8ac755a0cc12d";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

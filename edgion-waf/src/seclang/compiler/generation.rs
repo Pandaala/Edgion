@@ -989,8 +989,9 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
         }
         if structured_body_target {
             // A structured target alone does not prove incremental equivalence.
-            // JSON duplicate keys replace earlier subtrees, and object traversal
-            // order affects captures and actions. Keep complete publication until
+            // JSON object members publish in canonical key order (duplicate
+            // occurrences grouped under their key), and that traversal order
+            // affects captures and actions. Keep complete publication until
             // a processor-specific execution plan proves these semantics exact.
             class = merge_request_body_class(class, RequestBodyExecutionClass::BoundedSnapshot);
         }

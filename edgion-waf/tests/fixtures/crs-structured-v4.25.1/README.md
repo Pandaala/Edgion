@@ -51,7 +51,7 @@ and reference evaluation. The manifest has 420 fixed cases and 375 JSON escape
 or nested-path variants. JSON coverage classifies all 195 original units:
 
 - 191 original attack rules: positive and clean counterparts.
-- `921170`: nolog/pass name counter, including sibling and duplicate replacement.
+- `921170`: nolog/pass name counter, including sibling and duplicate-key occurrences.
 - `920250`, `944200`: valid-input non-activation and malformed On rejection;
   DetectionOnly records the parse error and preserves the separately asserted
   raw fallback. Literal binary fallback activation is not a structured positive.

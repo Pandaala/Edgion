@@ -127,7 +127,7 @@ fn raw_magic(generation: &CompiledGeneration) -> bool {
 fn language_examples_have_exact_digest_bound_omissions_and_retained_attack_coverage() {
     assert_eq!(
         corpus::sha256(CASES.as_bytes()),
-        "9d46b1c0eb7378a074a19a58ce3c265df08aaf55b6d5cdddc0fba9131a34b42c"
+        "4b94ff2fc6ab2305200894f5bb996b989a3181999183bb5c91d8ac755a0cc12d"
     );
     let cases = serde_json::from_str::<Cases>(CASES).unwrap().cases;
     let package = profile::load().unwrap();

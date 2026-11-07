@@ -3979,12 +3979,13 @@ fn body_macro_cannot_start_raw_stream_and_keeps_complete_body_value() {
 }
 
 #[test]
-fn structured_reference_duplicate_replacement_removes_earlier_hits_before_rules_run() {
+fn structured_reference_duplicate_keys_keep_earlier_hits_for_rules() {
     let generation = generation("SecRule ARGS \"@contains attack\" \"id:1,phase:2,deny,status:403\"\n");
     for (body, blocked) in [
-        (br#"{"key":"attack","key":"safe"}"#.as_slice(), false),
-        (br#"{"key":{"removed":"attack"},"key":{"kept":"safe"}}"#, false),
+        (br#"{"key":"attack","key":"safe"}"#.as_slice(), true),
+        (br#"{"key":{"earlier":"attack"},"key":{"kept":"safe"}}"#, true),
         (br#"{"key":"safe","key":"attack"}"#, true),
+        (br#"{"key":"safe","key":"also-safe"}"#, false),
     ] {
         let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
         transaction.execute_request_headers().unwrap();

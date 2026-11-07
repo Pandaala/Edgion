@@ -117,7 +117,7 @@ fn run(input: &[u8], root: &str, retain: bool) -> (JsonChecker<Receipt>, Sink) {
 }
 
 #[test]
-fn duplicates_collisions_and_canonical_order_at_every_split() {
+fn duplicates_keep_every_occurrence_collisions_and_canonical_order_at_every_split() {
     let input = br#"{"z":0,"a":{"old":["removed"]},"\u0061":{"b":true,"a":null},"a.b":"literal","list":[3,2,1]}"#;
     let (_, baseline) = run(input, "json", true);
     let names: Vec<_> = baseline
@@ -128,6 +128,8 @@ fn duplicates_collisions_and_canonical_order_at_every_split() {
     assert_eq!(
         names,
         [
+            "json.a.old.0",
+            "json.a.old",
             "json.a.a",
             "json.a.b",
             "json.a.b",
@@ -138,9 +140,11 @@ fn duplicates_collisions_and_canonical_order_at_every_split() {
             "json.z"
         ]
     );
-    assert_eq!(baseline.discarded, 2);
-    assert_eq!(baseline.sealed[1].1, b"true");
-    assert_eq!(baseline.sealed[2].1, b"literal");
+    // The decoded duplicate `\u0061` follows the first `a` in document order.
+    assert_eq!(baseline.discarded, 0);
+    assert_eq!(baseline.sealed[0].1, b"removed");
+    assert_eq!(baseline.sealed[3].1, b"true");
+    assert_eq!(baseline.sealed[4].1, b"literal");
     for split in 0..=input.len() {
         let mut checker = checker("json", JsonStructureLimits::default());
         let mut sink = Sink {
@@ -237,9 +241,30 @@ fn summaries_include_empty_visits_and_array_pseudo_values() {
     assert_eq!(summary.argument_count, 1);
     assert_eq!(summary.argument_name_bytes, 9);
     assert_eq!(summary.argument_value_bytes, 1);
-    let (_, replaced) = run(br#"{"long":{"deeper":[1,2]},"long":null}"#, "json", false);
-    let (_, direct) = run(br#"{"long":null}"#, "json", false);
-    assert_eq!(replaced.summary, direct.summary);
+    // Every duplicate occurrence is counted, like distinct members.
+    let (_, duplicate) = run(br#"{"long":{"deeper":[1,2]},"long":null}"#, "json", false);
+    let (_, first) = run(br#"{"long":{"deeper":[1,2]}}"#, "json", false);
+    let (_, second) = run(br#"{"long":null}"#, "json", false);
+    let (duplicate, first, second) = (
+        duplicate.summary.unwrap(),
+        first.summary.unwrap(),
+        second.summary.unwrap(),
+    );
+    assert_eq!(duplicate.argument_count, first.argument_count + second.argument_count);
+    assert_eq!(
+        duplicate.argument_name_bytes,
+        first.argument_name_bytes + second.argument_name_bytes
+    );
+    assert_eq!(
+        duplicate.argument_value_bytes,
+        first.argument_value_bytes + second.argument_value_bytes
+    );
+    assert_eq!(
+        duplicate.body_entry_count,
+        first.body_entry_count + second.body_entry_count
+    );
+    assert_eq!(duplicate.combined_size, first.combined_size + second.combined_size);
+    assert_eq!(duplicate.decoded_bytes, first.decoded_bytes + second.decoded_bytes);
 }
 
 #[test]
@@ -290,7 +315,7 @@ fn sticky_errors_abandon_once_even_after_partial_callback_mutation() {
     for (failure, input) in [
         ("scalar", br#"{"a":1}"#.as_slice()),
         ("concat", br#"{"a":1,"b":2}"#.as_slice()),
-        ("discard", br#"{"a":[1,2],"a":3}"#.as_slice()),
+        ("concat", br#"{"a":[1,2],"a":3}"#.as_slice()),
         ("seal", br#"{"a":1}"#.as_slice()),
     ] {
         let mut checker = checker("json", JsonStructureLimits::default());
@@ -516,22 +541,77 @@ fn custom_root_constructor_enforces_exact_path_and_retained_boundaries() {
     assert_eq!(sink.sealed[0].0, b"header.payload..name");
 }
 
-#[test]
-fn generated_nested_duplicates_match_test_only_dom_order() {
-    fn flatten(value: &serde_json::Value, path: &str, out: &mut Vec<(Vec<u8>, Vec<u8>)>) {
-        match value {
-            serde_json::Value::Object(values) => {
-                for (key, value) in values {
-                    flatten(value, &format!("{path}.{key}"), out);
+/// Test-only DOM that keeps every duplicate object member in document order,
+/// the ModSecurity argument multimap shape the checker publishes.
+enum MultiDom {
+    Scalar(serde_json::Value),
+    Array(Vec<MultiDom>),
+    Object(Vec<(String, MultiDom)>),
+}
+
+impl<'de> serde::Deserialize<'de> for MultiDom {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = MultiDom;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON value")
+            }
+            fn visit_bool<E>(self, value: bool) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(value.into()))
+            }
+            fn visit_i64<E>(self, value: i64) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(value.into()))
+            }
+            fn visit_u64<E>(self, value: u64) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(value.into()))
+            }
+            fn visit_f64<E>(self, value: f64) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(value.into()))
+            }
+            fn visit_str<E>(self, value: &str) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(value.into()))
+            }
+            fn visit_unit<E>(self) -> Result<MultiDom, E> {
+                Ok(MultiDom::Scalar(serde_json::Value::Null))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<MultiDom, A::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element()? {
+                    values.push(value);
+                }
+                Ok(MultiDom::Array(values))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<MultiDom, A::Error> {
+                let mut members = Vec::new();
+                while let Some(member) = map.next_entry()? {
+                    members.push(member);
+                }
+                Ok(MultiDom::Object(members))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl MultiDom {
+    /// Keys in canonical byte order; duplicates keep document order (stable sort).
+    fn flatten(&self, path: &str, out: &mut Vec<(Vec<u8>, Vec<u8>)>) {
+        match self {
+            Self::Object(members) => {
+                let mut members = members.iter().collect::<Vec<_>>();
+                members.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+                for (key, value) in members {
+                    value.flatten(&format!("{path}.{key}"), out);
                 }
             }
-            serde_json::Value::Array(values) => {
+            Self::Array(values) => {
                 for (index, value) in values.iter().enumerate() {
-                    flatten(value, &format!("{path}.{index}"), out);
+                    value.flatten(&format!("{path}.{index}"), out);
                 }
                 out.push((path.as_bytes().to_vec(), values.len().to_string().into_bytes()));
             }
-            value => out.push((
+            Self::Scalar(value) => out.push((
                 path.as_bytes().to_vec(),
                 match value {
                     serde_json::Value::Null => Vec::new(),
@@ -541,13 +621,17 @@ fn generated_nested_duplicates_match_test_only_dom_order() {
             )),
         }
     }
+}
+
+#[test]
+fn generated_nested_duplicates_match_test_only_multimap_dom_order() {
     for seed in 0..48 {
         let input = format!(
             r#"{{"z":{{"old":[1,2,3]}},"a.b":null,"a":{{"b":[true,"é",{seed}]}},"z":{{"b":false,"a":[{{"x":1,"x":2}},[]]}}}}"#
         );
-        let value: serde_json::Value = serde_json::from_str(&input).unwrap();
+        let value: MultiDom = serde_json::from_str(&input).unwrap();
         let mut expected = Vec::new();
-        flatten(&value, "json", &mut expected);
+        value.flatten("json", &mut expected);
         for split in [0, 1, input.len() / 2, input.len() - 1, input.len()] {
             let mut checker = checker("json", JsonStructureLimits::default());
             let mut sink = Sink {
@@ -588,8 +672,15 @@ fn child_scope_rewinds_nodes_without_invalidating_parent_pending_member() {
         .unwrap();
     assert!(checker.reducer.nodes.is_empty());
     assert!(checker.reducer.keys.is_empty());
-    assert_eq!(sink.discarded, 2);
+    assert_eq!(sink.discarded, 0);
     checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
+    // The earlier `parent` members stay ahead of the later scalar.
+    let names = sink.sealed.iter().map(|fact| fact.0.as_slice()).collect::<Vec<_>>();
+    let parents = names.iter().position(|name| name.starts_with(b"json.parent")).unwrap();
+    assert_eq!(
+        &names[parents..],
+        [b"json.parent.a".as_slice(), b"json.parent.b", b"json.parent"]
+    );
     assert_eq!(sink.sealed.last().unwrap().0, b"json.parent");
     assert_eq!(sink.sealed.last().unwrap().1, b"5");
 }
@@ -852,7 +943,12 @@ fn inline_key_and_path_boundaries_preserve_parent_scopes_after_spill() {
         .sealed
         .iter()
         .any(|(name, value, _)| name == b"json.parent" && value == b"2"));
-    assert!(!sink.sealed.iter().any(|(name, _, _)| name.starts_with(b"json.parent.")));
+    // The earlier `parent` occurrence keeps its long-key member.
+    let long_name = format!("json.parent.{long}");
+    assert!(sink
+        .sealed
+        .iter()
+        .any(|(name, value, _)| name == long_name.as_bytes() && value == b"1"));
     assert_eq!(heap_capacity(&checker.reducer.keys), 0);
     assert_eq!(heap_capacity(&checker.reducer.path), 0);
 }
@@ -976,12 +1072,21 @@ fn wide_nonroot_duplicates_preserve_links_heights_scopes_and_sorted_results() {
             assert_avl(&checker, Some(root));
         }
     }
-    assert_eq!(sink.discarded, 2048);
+    assert_eq!(sink.discarded, 0);
     checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
-    let canonical = serde_json::from_str::<serde_json::Value>(&source).unwrap().to_string();
-    let (direct, expected) = run(canonical.as_bytes(), "json", true);
+    let mut oracle = Vec::new();
+    serde_json::from_str::<MultiDom>(&source)
+        .unwrap()
+        .flatten("json", &mut oracle);
+    let sealed = sink
+        .sealed
+        .iter()
+        .map(|(name, value, _)| (name.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(sealed, oracle);
+    assert_eq!(checker.summary().unwrap().argument_count, 256 + 2048);
+    let (_, expected) = run(source.as_bytes(), "json", true);
     assert_eq!(sink.sealed, expected.sealed);
-    assert_eq!(checker.summary(), direct.summary());
     assert_eq!(checker.usage().peak_members, 256);
     assert_eq!(checker.usage().retained_bytes, 0);
     let work = checker.usage().work;
@@ -1021,7 +1126,7 @@ fn wide_nonroot_duplicates_preserve_links_heights_scopes_and_sorted_results() {
 }
 
 #[test]
-fn nonroot_decoded_duplicates_replace_nested_receipts_and_fail_stickily() {
+fn nonroot_decoded_duplicates_keep_nested_receipts_in_order_and_fail_stickily() {
     let prefix = format!(
         "{{{},\"k000\":{{\"old\":[1,2]}},",
         (0..32).map(|i| format!("\"k{i:03}\":0")).collect::<Vec<_>>().join(",")
@@ -1041,9 +1146,24 @@ fn nonroot_decoded_duplicates_replace_nested_receipts_and_fail_stickily() {
             .feed(JsonStreamInput::Data(&source[split..]), &mut sink)
             .unwrap();
         checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
-        assert_eq!(sink.sealed[0].0, b"json.k000.new");
-        assert_eq!(sink.sealed[0].1, b"true");
-        assert_eq!(sink.discarded, 5);
+        let k000 = sink
+            .sealed
+            .iter()
+            .take_while(|fact| fact.0.starts_with(b"json.k000"))
+            .map(|fact| (fact.0.as_slice(), fact.1.as_slice()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            k000,
+            [
+                (b"json.k000".as_slice(), b"0".as_slice()),
+                (b"json.k000.old.0", b"1"),
+                (b"json.k000.old.1", b"2"),
+                (b"json.k000.old", b"2"),
+                (b"json.k000", b""),
+                (b"json.k000.new", b"true"),
+            ]
+        );
+        assert_eq!(sink.discarded, 0);
     }
     for (tail, failure, expected) in [
         (
@@ -1051,7 +1171,8 @@ fn nonroot_decoded_duplicates_replace_nested_receipts_and_fail_stickily() {
             None,
             JsonCheckerError::Lexical(JsonStreamError::Escape),
         ),
-        (replacement.as_slice(), Some("discard"), JsonCheckerError::Sink),
+        // Appending a duplicate occurrence links receipts; a link failure is sticky.
+        (replacement.as_slice(), Some("concat"), JsonCheckerError::Sink),
     ] {
         let mut checker = checker("json", JsonStructureLimits::default());
         let mut sink = Sink {

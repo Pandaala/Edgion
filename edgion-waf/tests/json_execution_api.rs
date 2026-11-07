@@ -297,3 +297,101 @@ fn scoped_detection_only_syntax_stop_keeps_complete_length_and_raw_fallback() {
     assert_eq!(tx.tx_value(b"length"), Some(b"yes".as_slice()));
     assert!(matches!(tx.request_body_error(), Some(BodyError::Malformed { .. })));
 }
+
+fn run_json_chunks<'g>(
+    generation: &'g CompiledGeneration,
+    input: &[u8],
+    chunks: &[usize],
+) -> (Transaction<'g>, PhaseOutcome) {
+    let mut tx = transaction(generation, RuntimeLimits::default());
+    let mut inspection = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+    let mut start = 0;
+    for &end in chunks.iter().chain([input.len()].iter()) {
+        inspection.feed(&input[start..end]).unwrap();
+        start = end;
+    }
+    inspection.complete(input.len()).unwrap();
+    inspection.finish(None).unwrap();
+    let outcome = tx.execute_request_body().unwrap();
+    (tx, outcome)
+}
+
+#[test]
+fn duplicate_json_keys_publish_every_occurrence_at_every_chunk_split() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:'tx.count=0',setvar:'tx.names=0'\"\n",
+        "SecRule ARGS \"@detectSQLi\" \"id:2,phase:2,pass,setvar:'tx.sqli=%{MATCHED_VAR}'\"\n",
+        "SecRule ARGS:json.q \"@rx .\" \"id:3,phase:2,pass,setvar:'tx.value_%{TX.count}=%{MATCHED_VAR}',setvar:'tx.count=+1'\"\n",
+        // The query string contributes `q=miss`, so each count includes it.
+        "SecRule &ARGS \"@eq 3\" \"id:4,phase:2,pass\"\n",
+        "SecRule &ARGS_NAMES \"@eq 3\" \"id:5,phase:2,pass\"\n",
+        "SecRule ARGS_NAMES \"@streq json.q\" \"id:6,phase:2,pass,setvar:'tx.names=+1'\"\n",
+    ));
+    let payload = b"1' UNION SELECT password FROM users--".as_slice();
+    let input = br#"{"q":"1' UNION SELECT password FROM users--","q":"x"}"#;
+    let mut owned = transaction(&generation, RuntimeLimits::default());
+    owned
+        .publish_request_body(RequestBody::new(
+            Bytes::from_static(input),
+            BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+    let expected = owned.execute_request_body().unwrap();
+    let ids = expected
+        .findings()
+        .iter()
+        .map(|finding| finding.rule_id())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [2, 3, 4, 5, 6]);
+    assert_eq!(owned.tx_value(b"sqli"), Some(payload));
+    assert_eq!(owned.tx_value(b"value_0"), Some(payload));
+    assert_eq!(owned.tx_value(b"value_1"), Some(b"x".as_slice()));
+    assert_eq!(owned.tx_value(b"count"), Some(b"2".as_slice()));
+    assert_eq!(owned.tx_value(b"names"), Some(b"2".as_slice()));
+    let splits = (0..=input.len()).map(|split| vec![split]);
+    let single_bytes = std::iter::once((1..input.len()).collect::<Vec<_>>());
+    for chunks in splits.chain(single_bytes) {
+        let (tx, outcome) = run_json_chunks(&generation, input, &chunks);
+        assert_eq!(outcome, expected, "{chunks:?}");
+        for key in [b"sqli".as_slice(), b"value_0", b"value_1", b"count", b"names"] {
+            assert_eq!(tx.tx_value(key), owned.tx_value(key), "{chunks:?}");
+        }
+    }
+}
+
+#[test]
+fn nested_duplicate_objects_keep_every_member_and_arrays_are_unchanged() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:'tx.count=0'\"\n",
+        "SecRule ARGS \"@rx ^[a-z]+$\" \"id:2,phase:2,pass,setvar:'tx.name_%{TX.count}=%{MATCHED_VAR_NAME}',setvar:'tx.value_%{TX.count}=%{MATCHED_VAR}',setvar:'tx.count=+1'\"\n",
+    ));
+    let input = br#"{"o":{"a":"first"},"o":{"a":"second","b":"x"},"arr":["s","t"]}"#;
+    let expected = [
+        ("ARGS:q", "miss"),
+        ("ARGS:json.arr.0", "s"),
+        ("ARGS:json.arr.1", "t"),
+        ("ARGS:json.o.a", "first"),
+        ("ARGS:json.o.a", "second"),
+        ("ARGS:json.o.b", "x"),
+    ];
+    for chunks in [vec![], vec![1], vec![17], vec![30]] {
+        let (tx, _) = run_json_chunks(&generation, input, &chunks);
+        assert_eq!(
+            tx.tx_value(b"count"),
+            Some(expected.len().to_string().as_bytes()),
+            "{chunks:?}"
+        );
+        for (index, (name, value)) in expected.iter().enumerate() {
+            assert_eq!(
+                tx.tx_value(format!("name_{index}").as_bytes()),
+                Some(name.as_bytes()),
+                "{chunks:?}"
+            );
+            assert_eq!(
+                tx.tx_value(format!("value_{index}").as_bytes()),
+                Some(value.as_bytes()),
+                "{chunks:?}"
+            );
+        }
+    }
+}

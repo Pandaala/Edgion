@@ -699,9 +699,9 @@
       "case_names": [
         "933200-positive",
         "933200-clean",
-        "933200-duplicate-last-clean",
+        "933200-duplicate-first-attack",
         "933200-duplicate-last-attack",
-        "933200-duplicate-subtree-last-clean",
+        "933200-duplicate-subtree-first-attack",
         "933200-utf8-key"
       ],
       "rationale": "Derived original attack candidate and explicit clean counterpart."
@@ -10844,32 +10844,29 @@
       "source": {
         "origin": "authored-original-predicate",
         "rule_id": 921170,
-        "rationale": "Duplicate replacement publishes one surviving name in the established JSON projection, so the original counter increments once."
+        "rationale": "Every duplicate occurrence publishes its own name, as in the ModSecurity argument multimap, so the original counter increments once per occurrence."
       },
       "variants": [],
       "expect_tx": {
-        "paramcounter_ARGS_NAMES:json.probe": "1"
+        "paramcounter_ARGS_NAMES:json.probe": "2"
       },
       "absent_tx": []
     },
     {
-      "name": "933200-duplicate-last-clean",
+      "name": "933200-duplicate-first-attack",
       "rule_id": 933200,
       "media": "json",
-      "kind": "clean",
+      "kind": "activation",
       "body": "{\"probe\":\"phar://file\",\"probe\":\"clean\"}",
-      "hit": false,
+      "hit": true,
       "source": {
         "origin": "authored-original-predicate",
         "rule_id": 933200,
-        "rationale": "Only surviving last-value/subtree facts may activate the original PHP-wrapper rule."
+        "rationale": "Every duplicate occurrence is published, so an attack in any occurrence activates the original PHP-wrapper rule."
       },
       "variants": [],
       "expect_tx": {},
-      "absent_tx": [
-        "php_injection_score",
-        "inbound_anomaly_score_pl1"
-      ]
+      "absent_tx": []
     },
     {
       "name": "933200-duplicate-last-attack",
@@ -10881,30 +10878,27 @@
       "source": {
         "origin": "authored-original-predicate",
         "rule_id": 933200,
-        "rationale": "Only surviving last-value/subtree facts may activate the original PHP-wrapper rule."
+        "rationale": "Every duplicate occurrence is published, so an attack in any occurrence activates the original PHP-wrapper rule."
       },
       "variants": [],
       "expect_tx": {},
       "absent_tx": []
     },
     {
-      "name": "933200-duplicate-subtree-last-clean",
+      "name": "933200-duplicate-subtree-first-attack",
       "rule_id": 933200,
       "media": "json",
-      "kind": "clean",
+      "kind": "activation",
       "body": "{\"user\":{\"probe\":\"phar://file\"},\"user\":{\"probe\":\"clean\"}}",
-      "hit": false,
+      "hit": true,
       "source": {
         "origin": "authored-original-predicate",
         "rule_id": 933200,
-        "rationale": "Only surviving last-value/subtree facts may activate the original PHP-wrapper rule."
+        "rationale": "Every duplicate occurrence is published, so an attack in an earlier duplicate subtree activates the original PHP-wrapper rule."
       },
       "variants": [],
       "expect_tx": {},
-      "absent_tx": [
-        "php_injection_score",
-        "inbound_anomaly_score_pl1"
-      ]
+      "absent_tx": []
     },
     {
       "name": "933200-utf8-key",

@@ -256,7 +256,9 @@ fn current_name_selector_cache_resets_per_field_and_preserves_exclusion_replay()
             let mut tx = Transaction::new(&g, request(), runtime).unwrap();
             let mut sink = collector(&g, &mut tx, runtime, mode, ResultLimits::default());
             feed(&mut sink, input, split);
-            assert_eq!(sink.usage().live_outcomes, 3);
+            // The first `probe` occurrence keeps its 904/905/906 outcomes;
+            // 905's exclusion is applied at replay.
+            assert_eq!(sink.usage().live_outcomes, 6);
         }
         assert_eq!(outcomes[0], outcomes[1]);
     }
@@ -304,7 +306,7 @@ fn no_hit_payloads_are_absent_and_summary_only_has_no_candidates() {
 }
 
 #[test]
-fn duplicate_errors_and_payloads_are_replaced_at_every_split() {
+fn duplicate_errors_and_payloads_are_retained_in_order_at_every_split() {
     let generation = compile(r#"SecRule ARGS "@contains hit" "id:1,phase:2,pass""#);
     let runtime = RuntimeLimits {
         max_transformation_output_bytes: 3,
@@ -321,18 +323,27 @@ fn duplicate_errors_and_payloads_are_replaced_at_every_split() {
             ResultLimits::default(),
         );
         feed(&mut sink, input, split);
+        // Both `a` occurrences survive: the earlier transformation error keeps
+        // its profile and the later hit keeps its outcome.
         assert_eq!(sink.usage().live_outcomes, 2);
-        assert_eq!(sink.usage().live_profiles, 0);
+        assert_eq!(sink.usage().live_profiles, 1);
         let (sealed, mut budget) = sink.into_sealed().unwrap();
         let first = sealed.receipt.unwrap().head;
-        assert_eq!(sealed.candidate(&mut budget, first).unwrap().name, b"json.a");
-        assert!(matches!(
+        let second = sealed.candidate(&mut budget, first).unwrap().next.unwrap();
+        let third = sealed.candidate(&mut budget, second).unwrap().next.unwrap();
+        for (id, name) in [(first, b"json.a".as_slice()), (second, b"json.a"), (third, b"json.z")] {
+            assert_eq!(sealed.candidate(&mut budget, id).unwrap().name, name);
+        }
+        assert!(sealed.candidate(&mut budget, third).unwrap().next.is_none());
+        let mut lookup = |id| {
             sealed
-                .lookup_selected(&mut budget, first, 0, &generation, runtime, EvaluationMode::Accelerated)
+                .lookup_selected(&mut budget, id, 0, &generation, runtime, EvaluationMode::Accelerated)
                 .map(|(outcome, _)| outcome)
-                .unwrap(),
-            SelectedOutcome::MatchOrError(_)
-        ));
+                .unwrap()
+        };
+        assert!(matches!(lookup(first), SelectedOutcome::TransformError(_)));
+        assert!(matches!(lookup(second), SelectedOutcome::MatchOrError(_)));
+        assert!(matches!(lookup(third), SelectedOutcome::MatchOrError(_)));
     }
 }
 
@@ -935,7 +946,7 @@ impl JsonCollector<'_, '_> {
 }
 
 #[test]
-fn distinct_matching_groups_copy_stage_payload_once_and_reclaim_duplicates() {
+fn distinct_matching_groups_copy_stage_payload_once_and_retain_duplicates() {
     let mut source = String::new();
     let mut value = String::new();
     for i in 0..32 {
@@ -965,8 +976,9 @@ fn distinct_matching_groups_copy_stage_payload_once_and_reclaim_duplicates() {
         let scope = measurements::start();
         feed(&mut sink, body.as_bytes(), body.len());
         assert_eq!(scope.counts().get(Event::MatchedCopyBytes), value.len());
-        assert_eq!(sink.usage().matched_bytes, if duplicate { 0 } else { value.len() });
-        assert_eq!(sink.usage().live_outcomes, if duplicate { 0 } else { 32 });
+        // A later duplicate no longer reclaims the earlier occurrence's hits.
+        assert_eq!(sink.usage().matched_bytes, value.len());
+        assert_eq!(sink.usage().live_outcomes, 32);
     }
 }
 
@@ -1117,15 +1129,17 @@ fn range_capture_logical_limits_keep_alias_lengths_and_order() {
 }
 
 #[test]
-fn range_capture_cleanup_discards_replaced_and_late_invalidated_hits() {
-    for (source, input) in [
+fn range_capture_cleanup_discards_late_invalidated_hits_and_keeps_duplicates() {
+    for (source, input, retained) in [
         (
             "SecRule ARGS \"@rx (hit)\" \"id:1,phase:2,pass,capture\"",
             br#"{"a":{"b":"hit"},"a":{"b":"miss"}}"#.as_slice(),
+            true,
         ),
         (
             "SecRule ARGS \"@rx (HIT)\" \"id:1,phase:2,pass,capture,multiMatch,t:lowercase,t:hexEncode\"",
             br#"{"a":"HIT"}"#,
+            false,
         ),
     ] {
         let generation = compile(source);
@@ -1149,9 +1163,10 @@ fn range_capture_cleanup_discards_replaced_and_late_invalidated_hits() {
         feed(&mut sink, input, 5);
         assert!(scope.counts().get(Event::MatchedCopyBytes) > 0);
         assert_eq!(scope.counts().get(Event::TemporaryCaptureCopyBytes), 0);
-        assert_eq!(sink.usage().live_captures, 0);
-        assert_eq!(sink.usage().capture_bytes, 0);
-        assert_eq!(sink.usage().matched_bytes, 0);
+        // The earlier duplicate's hit and capture survive the later `a`.
+        assert_eq!(sink.usage().live_captures > 0, retained);
+        assert_eq!(sink.usage().capture_bytes > 0, retained);
+        assert_eq!(sink.usage().matched_bytes > 0, retained);
         assert!(sink.into_sealed().is_ok());
     }
 }

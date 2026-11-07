@@ -1,5 +1,6 @@
 # waf3-02: JSON duplicate keys discard every earlier value before inspection — payload in the first occurrence bypasses all ARGS rules
 
+- **Status**: implemented in the T14 D-2 decision commit (`feat(waf)!: publish every JSON duplicate-key occurrence as an ARGS candidate`), awaiting user keep/revert
 - **Category**: design-error
 - **Severity**: P2 (downgraded from P1 by independent verification)
 - **Scope**: local

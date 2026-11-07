@@ -140,6 +140,8 @@ pub trait JsonCheckerSink {
         right: Option<Self::Receipt>,
     ) -> Result<Option<Self::Receipt>, JsonCheckerSinkError>;
     /// Reclaims owned facts; the sink charges its own bounded walk work.
+    /// The checker publishes every duplicate-key occurrence and does not
+    /// call this; it remains the sink's whole-receipt reclamation hook.
     fn discard(&mut self, receipt: Self::Receipt) -> Result<(), JsonCheckerSinkError>;
     fn seal(
         &mut self,
@@ -172,6 +174,13 @@ impl<R: Copy> Default for Subtree<R> {
             summary: JsonSemanticSummary::default(),
             receipt: None,
         }
+    }
+}
+impl<R: Copy> Subtree<R> {
+    /// A member slot that no value has completed into yet. Every completed
+    /// value has a nonzero depth, so a filled slot is never vacant.
+    fn is_vacant(&self) -> bool {
+        self.receipt.is_none() && self.summary == JsonSemanticSummary::default()
     }
 }
 
@@ -557,7 +566,7 @@ impl<R: Copy> Reducer<R> {
             .ok_or(JsonCheckerError::State)?;
         Ok(result)
     }
-    fn key<S: JsonCheckerSink<Receipt = R>>(&mut self, key: &[u8], sink: &mut S) -> Result<(), JsonCheckerError> {
+    fn key(&mut self, key: &[u8]) -> Result<(), JsonCheckerError> {
         let frame = self.frames.last().copied().ok_or(JsonCheckerError::State)?;
         let Container::Object {
             root,
@@ -568,15 +577,9 @@ impl<R: Copy> Reducer<R> {
         else {
             return Err(JsonCheckerError::State);
         };
-        let (root, id, fresh) = self.insert(root, key)?;
-        if !fresh {
-            let mut node = self.member(id)?;
-            if let Some(receipt) = node.value.receipt {
-                sink.discard(receipt).map_err(|_| JsonCheckerError::Sink)?;
-            }
-            node.value = Subtree::default();
-            self.store(id, node)?;
-        }
+        // A repeated decoded key reuses its member node. Earlier occurrences
+        // stay in the node; `finish` appends the new value after them.
+        let (root, id, _) = self.insert(root, key)?;
         self.frames.last_mut().ok_or(JsonCheckerError::State)?.container = Container::Object {
             root: Some(root),
             pending: Some(id),
@@ -675,7 +678,13 @@ impl<R: Copy> Reducer<R> {
                 node_mark,
             } => {
                 let mut node = self.member(id)?;
-                node.value = value;
+                // Every occurrence of a duplicate key is published in
+                // document order, like ModSecurity's argument multimap.
+                node.value = if node.value.is_vacant() {
+                    value
+                } else {
+                    self.join(node.value, value, sink)?
+                };
                 self.store(id, node)?;
                 self.frames.last_mut().ok_or(JsonCheckerError::State)?.container = Container::Object {
                     root,
@@ -703,7 +712,7 @@ impl<R: Copy> Reducer<R> {
     ) -> Result<(), JsonCheckerError> {
         self.budget.work(1)?;
         match token {
-            JsonStreamToken::Key(key) => self.key(key.as_bytes(), sink),
+            JsonStreamToken::Key(key) => self.key(key.as_bytes()),
             JsonStreamToken::ObjectStart | JsonStreamToken::ArrayStart => {
                 let (restore, accumulated) = self.begin()?;
                 let container = if matches!(token, JsonStreamToken::ObjectStart) {
