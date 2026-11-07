@@ -422,6 +422,8 @@ impl<'generation> Transaction<'generation> {
                         response: self.response.as_ref(),
                         scratch: &mut self.boolean_scratch,
                         json_budget: self.json_budget.as_mut(),
+                        #[cfg(test)]
+                        generic_selection: self.force_generic_selection,
                     },
                     &mut self.ctl_work_bytes,
                     SelectionParams {

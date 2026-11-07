@@ -565,6 +565,9 @@ pub struct Transaction<'generation> {
     evaluation_mode: EvaluationMode,
     #[cfg(test)]
     force_json_cursor: bool,
+    /// Test oracle switch: select TX targets through the generic cursor path.
+    #[cfg(test)]
+    force_generic_selection: bool,
     rule_engine_mode: RuleEngineMode,
     request_body_stream: Option<RequestBodyStreamState>,
     stream_member_matches: Option<Vec<Option<bool>>>,
@@ -764,6 +767,8 @@ impl<'generation> Transaction<'generation> {
             evaluation_mode,
             #[cfg(test)]
             force_json_cursor: false,
+            #[cfg(test)]
+            force_generic_selection: false,
             rule_engine_mode,
             request_body_stream: None,
             stream_member_matches: None,

@@ -128,6 +128,9 @@ pub(super) struct SelectionCtx<'a> {
     pub(super) response: Option<&'a ResponseState>,
     pub(super) scratch: &'a mut [Option<RegexBooleanScratch>],
     pub(super) json_budget: Option<&'a mut InspectionBudget>,
+    /// Test oracle switch: disable the direct TX walk in `next_selected`.
+    #[cfg(test)]
+    pub(super) generic_selection: bool,
 }
 
 pub(super) fn select_values(
@@ -178,12 +181,8 @@ pub(super) fn select_values(
         let mut candidates = CandidateCursor::new(target.collection, include_json && json_count.is_none());
         match target.modifier {
             super::super::TargetModifier::None => {
-                while let Some(candidate) =
-                    candidates.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())?
-                {
-                    if selector_matches(ctx, target.collection, target.selector, candidate)?
-                        && !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)?
-                    {
+                while let Some(candidate) = next_selected(ctx, &mut candidates, target.selector)? {
+                    if !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)? {
                         if selected.len() == limit {
                             return Err(RuntimeError::SelectedValueLimit { limit });
                         }
@@ -207,12 +206,8 @@ pub(super) fn select_values(
             }
             super::super::TargetModifier::Count => {
                 let mut count = json_count.unwrap_or(0);
-                while let Some(candidate) =
-                    candidates.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())?
-                {
-                    if selector_matches(ctx, target.collection, target.selector, candidate)?
-                        && !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)?
-                    {
+                while let Some(candidate) = next_selected(ctx, &mut candidates, target.selector)? {
+                    if !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)? {
                         count = count.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
                     }
                 }
@@ -500,6 +495,79 @@ impl CandidateCursor {
                 Ok(None)
             }
         }
+    }
+}
+
+/// Advance `cursor` to the next candidate that passes `selector`.
+///
+/// `TX:<literal>` and `TX:/regex/` targets walk the TX entries directly instead
+/// of going through the generic cursor and `selector_matches`: CRS evaluates
+/// thousands of them per request, each re-scanning every TX entry. The direct
+/// walk yields the same entries in the same order and performs the same metered
+/// key read, comparison and error checks per entry as the generic path.
+fn next_selected(
+    ctx: &mut SelectionCtx<'_>,
+    cursor: &mut CandidateCursor,
+    selector: super::super::CompiledTargetSelector,
+) -> Result<Option<SelectedValue>, RuntimeError> {
+    let collection = cursor.collection;
+    #[cfg(test)]
+    let direct = !ctx.generic_selection;
+    #[cfg(not(test))]
+    let direct = true;
+    if direct && collection == CollectionKind::Tx {
+        let (generation, request, entries) = (ctx.generation, ctx.request, &ctx.tx.entries);
+        match selector {
+            super::super::CompiledTargetSelector::Literal(expected) => {
+                while let Some(entry) = entries.get(cursor.index) {
+                    let index = cursor.index;
+                    cursor.index += 1;
+                    let expected = generation_bytes(&generation.target_bytes, expected)?;
+                    if entry
+                        .key
+                        .bytes(request, ctx.json_budget.as_deref_mut())?
+                        .eq_ignore_ascii_case(expected)
+                    {
+                        return Ok(Some(tx_candidate(index)));
+                    }
+                }
+                return Ok(None);
+            }
+            super::super::CompiledTargetSelector::Regex { program, .. } => {
+                while let Some(entry) = entries.get(cursor.index) {
+                    let index = cursor.index;
+                    cursor.index += 1;
+                    let name = entry.key.bytes(request, ctx.json_budget.as_deref_mut())?;
+                    let regex = generation
+                        .boolean_regexes
+                        .get(program)
+                        .ok_or(RuntimeError::GenerationInvariant)?;
+                    let slot = ctx.scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+                    if regex
+                        .is_match(name, lazy_boolean_scratch(slot, regex))
+                        .map_err(map_regex_scratch_error)?
+                    {
+                        return Ok(Some(tx_candidate(index)));
+                    }
+                }
+                return Ok(None);
+            }
+            super::super::CompiledTargetSelector::None | super::super::CompiledTargetSelector::Path(_) => {}
+        }
+    }
+    while let Some(candidate) = cursor.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())? {
+        if selector_matches(ctx, collection, selector, candidate)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+fn tx_candidate(index: usize) -> SelectedValue {
+    SelectedValue {
+        collection: CollectionKind::Tx,
+        name: Some(SelectedName::Tx(index)),
+        value: SelectedBytes::Tx(index),
     }
 }
 

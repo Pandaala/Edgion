@@ -6252,3 +6252,94 @@ fn staged_values_are_visible_to_later_chain_members_and_skip_after_commits_once(
     assert_eq!(tx.tx_value(b"after"), Some(b"1".as_slice()));
     assert_tx_accounting(&tx.tx);
 }
+
+/// Run one phase-one ruleset with the direct TX selection walk and with the
+/// generic cursor oracle, returning everything selection can influence.
+type SelectionSnapshot = (PhaseOutcome, Vec<(Vec<u8>, Vec<u8>)>, Vec<Vec<u8>>, usize, usize);
+
+fn selection_snapshot(
+    generation: &CompiledGeneration,
+    headers: &[RequestHeader<'_>],
+    uri: &[u8],
+    generic: bool,
+) -> SelectionSnapshot {
+    let mut transaction = Transaction::new(generation, request(headers, uri), RuntimeLimits::default()).unwrap();
+    transaction.force_generic_selection = generic;
+    let outcome = transaction.execute_request_headers().unwrap();
+    let observed = |value: &MatchValue| value.observed_bytes(&transaction.request).unwrap().to_vec();
+    let entries = transaction
+        .tx
+        .entries
+        .iter()
+        .map(|entry| (observed(&entry.key), observed(&entry.value)))
+        .collect();
+    let matched = transaction
+        .tx
+        .matched_vars
+        .iter()
+        .map(|entry| observed(&entry.key))
+        .collect();
+    (
+        outcome,
+        entries,
+        matched,
+        transaction.ctl_work_bytes,
+        transaction.unit_work_bytes,
+    )
+}
+
+#[test]
+fn direct_tx_selection_matches_the_generic_cursor_order_counts_and_exclusions() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,nolog,setvar:tx.v_a=1,setvar:tx.V_B=2,setvar:tx.other=3,setvar:tx.v_c=4\"\n",
+        "SecRule TX:V_A|TX:v_b|TX:missing|TX:OTHER \"@rx ^\" \"id:2,phase:1,pass,setvar:'tx.lit=%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule TX:/^V_/|!TX:v_c \"@rx ^\" \"id:3,phase:1,pass,setvar:'tx.re=%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule &TX:/^v_/ \"@eq 3\" \"id:4,phase:1,pass\"\n",
+        "SecRule &TX:V_A \"@eq 1\" \"id:5,phase:1,pass\"\n",
+        "SecAction \"id:6,phase:1,pass,ctl:ruleRemoveTargetByTag=sel;TX:v_a\"\n",
+        "SecRule &TX:/^v_/|&TX:v_a \"@eq 0\" \"id:7,phase:1,pass,tag:sel\"\n",
+        "SecRule TX:/^v_/|TX:V_A \"@rx ^\" \"id:8,phase:1,pass,tag:sel,setvar:'tx.ctl=%{MATCHED_VAR_NAME}'\"\n",
+        "SecRule REQUEST_HEADERS:/^x-d/|!REQUEST_HEADERS:X-DZ \"@rx ^\" \"id:9,phase:1,pass\"\n",
+        "SecRule &REQUEST_HEADERS:x-dup \"@eq 2\" \"id:10,phase:1,pass\"\n",
+        "SecRule &ARGS_GET \"@eq 4\" \"id:11,phase:1,pass\"\n",
+        "SecRule TX:/^v_/|TX:OTHER|REQUEST_HEADERS:/^x-d/|ARGS_GET|!ARGS_GET:a \"@rx ^\" \"id:12,phase:1,pass,tag:sel\"\n",
+    ));
+    let headers = [
+        RequestHeader::new(b"X-Dup", b"one"),
+        RequestHeader::new(b"x-dup", b"two"),
+        RequestHeader::new(b"X-Dz", b"three"),
+    ];
+    let uri = b"/search?a=one&a=two&B=x&c=y";
+    let direct = selection_snapshot(&generation, &headers, uri, false);
+    assert_eq!(direct, selection_snapshot(&generation, &headers, uri, true));
+
+    let (outcome, entries, matched, _, _) = direct;
+    assert_eq!(
+        outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    );
+    let value = |key: &[u8]| {
+        entries
+            .iter()
+            .find(|(name, _)| name.as_slice() == key)
+            .map(|(_, value)| value.as_slice())
+    };
+    assert_eq!(value(b"lit"), Some(b"TX:other".as_slice()));
+    assert_eq!(value(b"re"), Some(b"TX:V_B".as_slice()));
+    assert_eq!(value(b"ctl"), Some(b"TX:v_c".as_slice()));
+    assert_eq!(
+        matched,
+        [
+            b"TX:V_B".as_slice(),
+            b"TX:v_c",
+            b"TX:other",
+            b"REQUEST_HEADERS:x-dup",
+            b"ARGS_GET:B",
+            b"ARGS_GET:c",
+        ]
+    );
+}
