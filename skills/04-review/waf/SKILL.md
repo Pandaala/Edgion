@@ -20,6 +20,8 @@ Check the current compiler, transaction, and detector code before applying a pas
 - [Native XML inspection preserves bounded parsing and ordered effects](regression-guards/native-xml-inspection.md)
 - [Multipart boundary discovery stays linear](regression-guards/multipart-boundary-search-bounded.md)
 - [Native injection operators use bounded detection and transaction semantics](regression-guards/native-injection-operators-use-bounded-detection.md)
+- [Marker-free backslash decoders stay borrowed](regression-guards/transform-marker-free-decoder-borrowing.md)
+- [Boolean regex scratch builds its VM cache lazily](regression-guards/regex-boolean-scratch-lazy-vm-cache.md)
 - [Chain ordinary work accumulates across members and branches](regression-guards/chain-ordinary-work-accumulates-per-unit.md)
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
 - [Named WAF profiles publish one validated generation](regression-guards/named-profile-selection-and-bundle-publication.md)
@@ -39,8 +41,11 @@ contiguous-input implementation and its verification limits.
 
 ## Untracked validation and optimization
 
-No WAF tasks are tracked. The following were deliberately dropped, not
-completed: representative Gateway performance measurement, Kubernetes
+The request-path optimizations waf-06 (borrowed marker-free decoders), waf-15
+(lazy boolean-regex VM cache) and waf-21 (static SQLi delimiter tables) were
+completed in the 2026-11-07 optimization pass and are recorded by the guards
+above; no further WAF tasks are tracked. The following were deliberately
+dropped, not completed: representative Gateway performance measurement, Kubernetes
 admission/reload validation (including the audited language-selection
 profiles), and x86-64 hardware verification. Do not cite them as passed; if
 needed, gather fresh evidence via the
