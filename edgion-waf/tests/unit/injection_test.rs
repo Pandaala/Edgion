@@ -47,3 +47,17 @@ fn full_size_and_adversarial_inputs_finish_within_default_work_budget() {
         let _ = detect_xss(&input);
     }
 }
+
+/// F-S4-3: libinjection-go v0.3.2 indexes past the end on these CDATA shapes;
+/// libinjection C and libinjection-go v0.3.3 report neither SQLi nor XSS.
+#[test]
+fn cdata_lone_right_brackets_do_not_panic_and_match_c() {
+    for input in [
+        b"<![CDATA[]]]".as_slice(),
+        b"<![CDATA[]x]]".as_slice(),
+        b"a<![CDATA[]]]".as_slice(),
+    ] {
+        assert!(!detect_xss(input), "{input:?}");
+        assert_eq!(detect_sqli(input), None, "{input:?}");
+    }
+}

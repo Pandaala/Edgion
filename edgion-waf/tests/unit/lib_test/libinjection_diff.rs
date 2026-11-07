@@ -85,6 +85,42 @@ fn compare_generated_corpus() {
     assert!(mismatches.is_empty());
 }
 
+/// Inputs where Edgion intentionally differs from the pinned libinjection-go
+/// v0.3.2 oracle because it follows libinjection C. Each entry is
+/// `(input, edgion_sqli_fingerprint_or_empty, oracle_sqli_fingerprint)`.
+///
+/// F-S4-2: Go `parseStringCore` checks for a backslash escape before the FIRST
+/// occurrence of the remaining suffix (`strings.Index`), so a bare closing quote
+/// at the end of input is misjudged as escaped when an earlier `\'` exists in
+/// the same literal. The literal stays unclosed and Go's 3-token `sos`/`s&s`
+/// whitelist reports SQLi. C scans back from the actual quote position, closes
+/// the literal, and whitelists the shape. Still present in v0.3.3. Go is the
+/// false-positive side; attack-shaped variants agree on both sides.
+const KNOWN_ORACLE_DIVERGENCES: &[(&[u8], &str, &str)] = &[(b"x'||'a\\'b'", "", "s&s"), (b"'^ 'a\\'b'", "", "sos")];
+
+/// Attack-shaped neighbours of the divergence above, where Edgion and the
+/// oracle agree on the SQLi fingerprint.
+const BACKSLASH_QUOTE_AGREEMENT: &[(&[u8], &str)] = &[(b"'a\\'b' or 1=1--", "s&1c"), (b"' or 'a\\'b'='a\\'b", "s&sos")];
+
+#[test]
+fn known_oracle_divergences_follow_libinjection_c() {
+    for &(input, edgion, oracle) in KNOWN_ORACLE_DIVERGENCES {
+        let mut state = sqli::SqliState::new(input, sqli::SqliFlags::FLAG_NONE);
+        let fingerprint = if state.detect() {
+            state.fingerprint_string()
+        } else {
+            String::new()
+        };
+        assert_eq!(fingerprint, edgion, "{input:?} (pinned Go oracle reports {oracle:?})");
+        assert_ne!(edgion, oracle);
+    }
+    for &(input, oracle) in BACKSLASH_QUOTE_AGREEMENT {
+        let mut state = sqli::SqliState::new(input, sqli::SqliFlags::FLAG_NONE);
+        assert!(state.detect(), "{input:?}");
+        assert_eq!(state.fingerprint_string(), oracle, "{input:?}");
+    }
+}
+
 #[test]
 #[ignore = "requires the pinned upstream fixture directory"]
 fn compare_all_upstream_token_fixtures() {

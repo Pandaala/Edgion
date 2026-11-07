@@ -18,9 +18,10 @@ supported.
 
 ## Rationale and evidence
 
-`edgion-waf/src/seclang/semantic.rs` admits the two operator kinds;
-`compiler.rs` creates typed operands; and `transaction.rs` charges work,
-evaluates the detector, and stages captures. `edgion-waf/src/injection.rs`
+The `edgion-waf/src/seclang/semantic/` module admits the two operator kinds;
+`seclang/compiler/operator_plan.rs` creates typed operands; and the
+`seclang/transaction/` module charges work, evaluates the detector, and stages
+captures. `edgion-waf/src/injection.rs`
 enforces a 4 MiB per-value detector cap and a checked linear detector work
 charge accumulated across rule members and phases in one transaction.
 Ordinary operator work accumulates per rule unit across chain members and
@@ -46,6 +47,28 @@ bytes from the match start. The native tokenizer preserves that search and
 cursor behavior. These boundaries prevent malformed byte input
 from hiding subsequent XSS tokens or changing SQLi tokenization relative to
 the pinned Go behavior.
+
+Every comparison of SQL token text against a keyword literal is
+ASCII-case-insensitive, because word merging keeps the input's original case.
+The 3-token keyword whitelist in `SqliState::handle_three_token_whitelist`
+(`edgion-waf/src/sqli/mod.rs`) treats a middle keyword as benign unless its
+first four bytes equal `INTO` ignoring ASCII case, matching C
+`cstrcasecmp("INTO", val, 4)` and Go `toUpperCmp`. A byte-exact prefix test
+whitelisted `x' into outfile '/var/www/s.php`, `1 into outfile 'x'` and other
+lower- or mixed-case MySQL file-write payloads that CRS 942100 must catch
+(finding `waf4-01`).
+
+Where the pinned Go release has a defect, the scanners follow libinjection C,
+and `edgion-waf/INJECTION.md` lists each such difference. The SQL string
+parser decides whether a quote is backslash-escaped by scanning back from that
+quote; Go v0.3.2 and v0.3.3 inspect the first occurrence of the remaining
+suffix instead, so `x'||'a\'b'` is `s&s` in Go and not SQLi here (Go
+false-positive side). The CDATA end search is bounded, so `<![CDATA[]]]` and
+`<![CDATA[]x]]`, which panic Go v0.3.2, return no XSS verdict like C and
+v0.3.3. The number-then-comment whitelist compares the following byte
+unsigned, as Go does (C uses a signed char). Word merging uses the C `< 32`
+joined-length bound; it differs from Go's `<= 32` only for a 32-byte merged
+phrase, which no keyword table entry can produce.
 
 The Gateway's WAF plugin already supplies request targets and transformations;
 the operator does not parse an HTTP request or SQL document independently.
@@ -83,6 +106,18 @@ The later high-byte and cumulative-work corrections have targeted tokenizer,
 public transaction, and multi-rule/phase/chain tests; the historical counts
 above predate those corrections.
 
+The 2026-11-07 parity pass added these regression tests, each checked against
+libinjection-go v0.3.2 and v0.3.3 oracles built from the module cache:
+`sqli::tests::three_token_into_outfile_whitelist_is_case_insensitive` (failed
+before the `waf4-01` fix on `x' into outfile '/var/www/s.php`),
+`sqli::tests::keyword_table_entries_fit_the_merge_buffer`,
+`libinjection_diff::known_oracle_divergences_follow_libinjection_c`,
+`injection::tests::cdata_lone_right_brackets_do_not_panic_and_match_c`, and the
+CDATA rows of `xss::html5::tests::cdata_search_preserves_overlapping_prefixes_and_short_tails`.
+Re-evaluate the divergence list when the source pin moves to a release that
+fixes either Go defect. Any new keyword-literal comparison on token text needs
+a mixed-case vector.
+
 Notice-distribution verification on 2026-10-12 built the runtime and combined
 images using existing Linux binaries and compared their shipped notice bytes.
 Representative Gateway DEB/RPM packages built through the current nFPM manifest
@@ -96,5 +131,10 @@ CI checks actual images before push and extracted Gateway packages before upload
 
 - `waf-sqli-xss-rule-operators`: added native, bounded SQLi and XSS operators
   with strict compilation and Gateway acceptance on 2026-09-24.
+- `waf4-01` (fixed 2026-11-07): the `INTO OUTFILE`/`INTO DUMPFILE` whitelist
+  compared case-sensitively and missed lower- and mixed-case payloads.
+- Parity review findings F-S4-2 to F-S4-5 (2026-11-07): Go backslash-escape and
+  CDATA defects documented as intentional C-following divergences; misleading
+  signed-char comment corrected; keyword length bound guarded by a test.
 - `waf-third-party-license-distribution`: retained upstream attribution is now
   included in the supported packaging paths, with artifact-content checks.

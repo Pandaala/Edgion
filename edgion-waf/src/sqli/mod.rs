@@ -1200,11 +1200,12 @@ impl<'a> SqliState<'a> {
             if token0_end < self.input.len() {
                 let ch = self.input[token0_end];
 
-                // CRITICAL: C uses signed char comparison, so 0xa0 becomes -96
-                // We must cast to i8 to match C behavior exactly
+                // Unsigned byte compare, as in the pinned libinjection-go v0.3.2
+                // (`ch <= 32` on a byte). C compares a signed char, so there a
+                // high byte such as 0xa0 is negative and counts as whitespace;
+                // here it does not, and `1\xa0--` is not SQLi (matches Go).
                 if ch <= 32 {
-                    // Next char was whitespace, e.g. "1234 --"
-                    // This also catches high-byte characters like 0xa0 (-96) that C treats as whitespace
+                    // Next char was whitespace or a control byte, e.g. "1234 --"
                     return true;
                 }
 
@@ -1274,8 +1275,10 @@ impl<'a> SqliState<'a> {
 
         // Check if middle token is a keyword (matching C behavior at libinjection_sqli.c:2201-2209)
         if self.tokens.len() >= 2 && self.tokens[1].token_type == TokenType::Keyword {
-            // If it's not "INTO OUTFILE" or "INTO DUMPFILE" (MySQL), then treat as safe
-            if self.tokens[1].len < 5 || !self.tokens[1].val.starts_with(b"INTO") {
+            // If it's not "INTO OUTFILE" or "INTO DUMPFILE" (MySQL), then treat as safe.
+            // The merged keyword keeps the input's case, so the prefix compare must be
+            // ASCII-case-insensitive like C `cstrcasecmp` / Go `toUpperCmp` (waf4-01).
+            if self.tokens[1].len < 5 || !self.tokens[1].val[..4].eq_ignore_ascii_case(b"INTO") {
                 return false;
             }
         }

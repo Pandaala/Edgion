@@ -34,6 +34,41 @@ LIBINJECTION_GO_FIXTURES=/path/to/libinjection-go/tests \
   cargo test -p edgion-waf --lib compare_upstream_fixtures -- --ignored
 ```
 
+## Known differences from the pinned Go reference
+
+The pinned Go release is the reference for tables and fixtures, but Edgion
+follows libinjection C where v0.3.2 has a defect. These cases are asserted by
+`known_oracle_divergences_follow_libinjection_c` in
+`tests/unit/lib_test/libinjection_diff.rs` and by the injection unit tests:
+
+- **Backslash-escaped quote before a trailing closing quote.** Go
+  `parseStringCore` tests for a backslash escape in front of the first
+  occurrence of the remaining suffix (`strings.Index`), not in front of the
+  quote it just found. When the closing quote is the last input byte and an
+  earlier `\'` exists in the same literal, Go treats the closing quote as
+  escaped, leaves the literal unclosed, and its 3-token `sos`/`s&s` whitelist
+  reports SQLi: `x'||'a\'b'` is `s&s` in Go and not SQLi in Edgion. Edgion,
+  like C `parse_string_core`, scans back from the actual quote. Go is the
+  false-positive side; attack-shaped variants such as `'a\'b' or 1=1--` agree.
+  The defect is still present in v0.3.3.
+- **CDATA with lone right brackets.** Go v0.3.2 `stateCData` checks its bound
+  with a stale position and panics on `<![CDATA[]]]` or `<![CDATA[]x]]`. Edgion
+  returns no XSS verdict, as C and v0.3.3 do.
+
+Two related notes record agreement rather than divergence. After a number token
+followed by a comment, the next byte is compared as an unsigned byte, as in Go;
+C compares a signed char, so a high byte such as `0xA0` counts as whitespace in
+C but not here. Word merging skips a joined length of 32 bytes or more (the C
+bound; Go allows exactly 32); every keyword table entry is shorter than 32
+bytes, which `keyword_table_entries_fit_the_merge_buffer` asserts, so the bound
+difference is unobservable.
+
+The 3-token keyword whitelist compares the `INTO` prefix of `INTO OUTFILE` and
+`INTO DUMPFILE` ASCII-case-insensitively, as both references do (finding
+`waf4-01`); `x' into outfile '/var/www/s.php` is SQLi with fingerprint `sks`.
+
+## Work accounting and benchmark
+
 The operator reserves weighted scan work before each value. SQLi can parse a
 value in up to five dialect/quote contexts; XSS checks five HTML contexts. The
 detector charge is linear in value length and accumulates across rule members

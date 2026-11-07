@@ -100,6 +100,10 @@ fn cdata_search_preserves_overlapping_prefixes_and_short_tails() {
         (b"x]]]>a]]>".as_slice(), 9, None),
         (b"x]]]>a]]>".as_slice(), 10, None),
         (b"\xff\0]]>".as_slice(), 0, Some(2)),
+        // F-S4-3: lone right brackets after a CDATA opener (libinjection-go
+        // v0.3.2 panics here; C and v0.3.3 return no XSS verdict).
+        (b"<![CDATA[]]]".as_slice(), 9, None),
+        (b"<![CDATA[]x]]".as_slice(), 9, None),
     ] {
         let html = Html5State::new(input, Html5Flags::DataState);
         assert_eq!(html.find_cdata_end(start), expected, "{input:?}, start {start}");
