@@ -318,7 +318,7 @@ SCOPED_EXCEPTIONS = {
         "test-only successful cache scan counter update",
     ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), re.compile(r"let crd_dir\b")):
         "test-only CRD path fallback inside parse_resource_content_offline",
-    ("edgion-waf", Path("seclang/compiler.rs"), re.compile(r"if COMPILER_ALLOCATION_FAILURE\.with\b")):
+    ("edgion-waf", Path("seclang/compiler/mod.rs"), re.compile(r"if COMPILER_ALLOCATION_FAILURE\.with\b")):
         "allocation failure injection inside reserve_exact",
     ("edgion-waf", Path("seclang/semantic.rs"), re.compile(r"if VALIDATION_ALLOCATION_FAILURE\.with\b")):
         "allocation failure injection inside reserve_exact",
