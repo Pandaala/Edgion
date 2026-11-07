@@ -275,6 +275,57 @@ async fn incomplete_utf8_is_visible_before_eos_and_invalid_bytes_are_determinist
     assert_eq!(invalid_shared.output_chars(), 3, "invalid bytes count individually");
 }
 
+fn feed_per_byte(counter: &mut Utf8CharCounter, bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(0_u64, |count, &byte| count.saturating_add(counter.feed_byte(byte)))
+}
+
+#[test]
+fn char_counter_ascii_fast_path_matches_per_byte_loop() {
+    let inputs: &[&[u8]] = &[
+        b"",
+        b"plain ascii {\"text\":\"hello\"}",
+        "caf\u{e9} \u{20ac}5 \u{3c0}".as_bytes(),
+        b"a\xe2\x82",
+        b"\xe2\x82A tail",
+        b"\xf0\x9f\x98",
+        b"\xff\xc0ab\xe2Z\x80\x80",
+        b"\xc3",
+        b"x\xc3\xa9y\xe2\x82\xacz",
+    ];
+    for input in inputs {
+        // Every pair of split points yields three chunks, empty ones included.
+        for first in 0..=input.len() {
+            for second in first..=input.len() {
+                let chunks = [&input[..first], &input[first..second], &input[second..]];
+                let mut fast = Utf8CharCounter::default();
+                let mut reference = Utf8CharCounter::default();
+                for chunk in chunks {
+                    assert_eq!(
+                        fast.feed(chunk),
+                        feed_per_byte(&mut reference, chunk),
+                        "input {input:?} split at {first}/{second}, chunk {chunk:?}"
+                    );
+                    assert_eq!(fast.pending_len, reference.pending_len);
+                    assert_eq!(fast.expected_len, reference.expected_len);
+                }
+                assert_eq!(fast.finish(), reference.finish());
+                assert_eq!(fast.finish(), 0, "finish is idempotent");
+            }
+        }
+    }
+}
+
+#[test]
+fn char_counter_pending_prefix_bypasses_ascii_fast_path() {
+    let mut counter = Utf8CharCounter::default();
+    assert_eq!(counter.feed(b"\xf0\x9f\x98"), 1);
+    // Two invalid continuations plus the ASCII byte exceed the chunk length.
+    assert_eq!(counter.feed(b"A"), 3);
+    assert_eq!(counter.feed(b"BC"), 2);
+}
+
 #[test]
 fn output_counter_saturates() {
     let shared = AiUsageShared::default();

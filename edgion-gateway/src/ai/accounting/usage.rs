@@ -696,6 +696,12 @@ struct Utf8CharCounter {
 
 impl Utf8CharCounter {
     fn feed(&mut self, bytes: &[u8]) -> u64 {
+        // With no pending prefix, every ASCII byte is one character and leaves
+        // the state untouched. A pending prefix must take the byte loop: an
+        // ASCII byte there also counts the now-invalid continuation bytes.
+        if self.pending_len == 0 && bytes.is_ascii() {
+            return u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        }
         let mut count = 0_u64;
         for &byte in bytes {
             count = count.saturating_add(self.feed_byte(byte));
