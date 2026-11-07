@@ -685,7 +685,7 @@ fn large_unchanged_lowercase_keeps_input_borrowed() {
 fn html_entity_delimiters_preserve_decoding_and_output_limits() {
     for (input, expected) in [
         (b"&".as_slice(), b"&".as_slice()),
-        (b"&amp", b"&amp"),
+        (b"&amp", b"&"),
         (b"&;", b"&;"),
         (b"&bogus;", b"&bogus;"),
         (b"&bogus&amp;", b"&bogus&"),
@@ -705,6 +705,46 @@ fn html_entity_delimiters_preserve_decoding_and_output_limits() {
             Err(TransformError::OutputLimit { limit })
         );
         assert_eq!(output, expected[..limit]);
+    }
+}
+
+/// waf-03: libmodsecurity v3 `html_entity_decode.cc` makes the terminating `;`
+/// optional for named, decimal and hexadecimal references (consumed when
+/// present), consumes the maximal digit or alphanumeric run, and compares the
+/// whole name case-insensitively (`&ltest;` is not `&lt;`). Edgion keeps UTF-8
+/// output for code points above 0xFF instead of the reference's one-byte cast.
+#[test]
+fn html_entity_references_follow_reference_semicolon_and_case_rules() {
+    for (input, expected) in [
+        (b"javascript&#58alert(1)".as_slice(), b"javascript:alert(1)".as_slice()),
+        (b"&#x3c", b"<"),
+        (b"&#X3Cz", b"<z"),
+        (b"&#58;;", b":;"),
+        (b"&#59;", b";"),
+        (b"&LT;", b"<"),
+        (b"&Lt", b"<"),
+        (b"&lt", b"<"),
+        (b"&amp", b"&"),
+        (b"&AMP;x", b"&x"),
+        (b"&ampx", b"&ampx"),
+        (b"&ltest;", b"&ltest;"),
+        (b"&lt1", b"&lt1"),
+        (b"&QUOT&Gt&NbSp", b"\">\xc2\xa0"),
+        (b"&Colon&TAB;&Sol", b":\t/"),
+        (b"&#xZZ", b"&#xZZ"),
+        (b"&#", b"&#"),
+        (b"&#x", b"&#x"),
+        (b"&#;", b"&#;"),
+        (b"&#x13c;", b"\xc4\xbc"),
+        (b"&#x110000;", b"\xef\xbf\xbd"),
+        (b"&#99999999999;x", b"\xef\xbf\xbdx"),
+        (b"a&lt&gt;b", b"a<>b"),
+    ] {
+        let mut output = Vec::new();
+        html_entity_decode(input, &mut output, usize::MAX).unwrap();
+        assert_eq!(output, expected, "{}", input.escape_ascii());
+        let transformed = transform(TransformationKind::HtmlEntityDecode, input);
+        assert_eq!(transformed, expected, "{}", input.escape_ascii());
     }
 }
 

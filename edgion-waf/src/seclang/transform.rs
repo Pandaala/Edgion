@@ -577,6 +577,13 @@ fn hex_encode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), Tr
     Ok(())
 }
 
+/// Decodes HTML character references with the libmodsecurity v3
+/// `html_entity_decode.cc` reference rules: a decimal (`&#58`), hexadecimal
+/// (`&#x3c`) or named (`&lt`) reference consumes its maximal digit or
+/// alphanumeric run, the terminating `;` is optional and consumed when present,
+/// and the whole name is compared ASCII-case-insensitively. Unlike the
+/// reference, which casts the value to one byte, a code point is emitted as
+/// UTF-8 (U+FFFD when it is not a Unicode scalar value).
 fn html_entity_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Result<(), TransformError> {
     let mut index = 0_usize;
     while index < input.len() {
@@ -585,23 +592,9 @@ fn html_entity_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Resul
             index += 1;
             continue;
         }
-        let candidate = &input[index + 1..];
-        let Some(relative_end) = memchr::memchr2(b';', b'&', candidate) else {
-            push_byte(output, b'&', limit)?;
-            index += 1;
-            continue;
-        };
-        if candidate[relative_end] != b';' {
-            push_byte(output, b'&', limit)?;
-            index += 1;
-            continue;
-        }
-        let end = index + 1 + relative_end;
-        let entity = &input[index + 1..end];
-        let decoded = decode_entity(entity);
-        if let Some(value) = decoded {
+        if let Some((value, consumed)) = decode_entity_reference(&input[index + 1..]) {
             append_codepoint(output, value, limit)?;
-            index = end + 1;
+            index += 1 + consumed;
         } else {
             push_byte(output, b'&', limit)?;
             index += 1;
@@ -610,48 +603,73 @@ fn html_entity_decode(input: &[u8], output: &mut Vec<u8>, limit: usize) -> Resul
     Ok(())
 }
 
-fn decode_entity(entity: &[u8]) -> Option<u32> {
-    if let Some(number) = entity.strip_prefix(b"#x").or_else(|| entity.strip_prefix(b"#X")) {
-        return parse_radix(number, 16);
-    }
-    if let Some(number) = entity.strip_prefix(b"#") {
-        return parse_radix(number, 10);
-    }
-    match entity {
-        b"amp" => Some(u32::from(b'&')),
-        b"apos" => Some(u32::from(b'\'')),
-        b"colon" => Some(u32::from(b':')),
-        b"gt" => Some(u32::from(b'>')),
-        b"lt" => Some(u32::from(b'<')),
-        b"nbsp" => Some(0xa0),
-        b"newline" => Some(u32::from(b'\n')),
-        b"quot" => Some(u32::from(b'"')),
-        b"sol" => Some(u32::from(b'/')),
-        b"tab" => Some(u32::from(b'\t')),
-        _ => None,
-    }
-}
-
-fn parse_radix(value: &[u8], radix: u32) -> Option<u32> {
-    if value.is_empty() {
-        return None;
-    }
-    let significant = value.iter().position(|byte| *byte != b'0').unwrap_or(value.len());
-    let value = &value[significant..];
-    if value.is_empty() {
-        return Some(0);
-    }
-    value.iter().try_fold(0_u32, |result, byte| {
-        let digit = match byte {
-            b'0'..=b'9' => u32::from(*byte - b'0'),
-            b'a'..=b'f' if radix == 16 => u32::from(*byte - b'a' + 10),
-            b'A'..=b'F' if radix == 16 => u32::from(*byte - b'A' + 10),
-            _ => return None,
+/// Returns the referenced code point and the number of bytes consumed after
+/// the `&`, or `None` when the bytes are not a decodable reference.
+fn decode_entity_reference(reference: &[u8]) -> Option<(u32, usize)> {
+    let (value, run_end) = if reference.first() == Some(&b'#') {
+        let (radix, digits_start) = match reference.get(1) {
+            Some(b'x' | b'X') => (16, 2),
+            _ => (10, 1),
         };
-        if digit >= radix {
+        let digits = &reference[digits_start.min(reference.len())..];
+        let digits_len = digits
+            .iter()
+            .take_while(|byte| {
+                if radix == 16 {
+                    byte.is_ascii_hexdigit()
+                } else {
+                    byte.is_ascii_digit()
+                }
+            })
+            .count();
+        if digits_len == 0 {
             return None;
         }
-        result.checked_mul(radix)?.checked_add(digit)
+        (
+            parse_reference_digits(&digits[..digits_len], radix),
+            digits_start + digits_len,
+        )
+    } else {
+        let name_len = reference.iter().take_while(|byte| byte.is_ascii_alphanumeric()).count();
+        (named_entity(&reference[..name_len])?, name_len)
+    };
+    let consumed = if reference.get(run_end) == Some(&b';') {
+        run_end + 1
+    } else {
+        run_end
+    };
+    Some((value, consumed))
+}
+
+/// The libmodsecurity names (`quot amp lt gt nbsp`) plus the HTML5 names Edgion
+/// already decoded; matched against the whole name ignoring ASCII case.
+const NAMED_ENTITIES: &[(&[u8], u32)] = &[
+    (b"amp", b'&' as u32),
+    (b"apos", b'\'' as u32),
+    (b"colon", b':' as u32),
+    (b"gt", b'>' as u32),
+    (b"lt", b'<' as u32),
+    (b"nbsp", 0xa0),
+    (b"newline", b'\n' as u32),
+    (b"quot", b'"' as u32),
+    (b"sol", b'/' as u32),
+    (b"tab", b'\t' as u32),
+];
+
+fn named_entity(name: &[u8]) -> Option<u32> {
+    NAMED_ENTITIES
+        .iter()
+        .find(|(entity, _)| entity.eq_ignore_ascii_case(name))
+        .map(|(_, value)| *value)
+}
+
+/// Parses a non-empty run of digits valid for `radix`. A value that overflows
+/// `u32` saturates, which `append_codepoint` emits as U+FFFD like any other
+/// value outside the Unicode scalar range.
+fn parse_reference_digits(digits: &[u8], radix: u32) -> u32 {
+    digits.iter().fold(0_u32, |result, byte| {
+        let digit = char::from(*byte).to_digit(radix).unwrap_or(0);
+        result.saturating_mul(radix).saturating_add(digit)
     })
 }
 
