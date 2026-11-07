@@ -16,10 +16,12 @@ phase 1. This is a selected SecLang subset, not full CRS compatibility.
 
 ## Rationale and evidence
 
-`semantic.rs` classifies unsupported control variants, while `compiler.rs`
+`seclang/semantic/actions.rs` (`parse_ctl_plan`) classifies unsupported control
+variants, while `seclang/compiler/work.rs`
 converts the selected variants to typed action operands. It resolves target
 selectors before publishing the immutable generation and indexes tagged rule
-units without modifying them at runtime. `transaction.rs` stages controls with
+units without modifying them at runtime. `seclang/transaction/units.rs`
+(`apply_ctl`) stages controls with
 other matched-chain actions, commits them only for a successful chain, and
 applies exclusions to later rule evaluations in the same transaction. The
 request-body processor and raw-body visibility are selected before body

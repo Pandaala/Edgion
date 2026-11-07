@@ -49,8 +49,10 @@ The current source establishes this boundary:
   `RequestHeader`/`ResponseHeader` views over the live maps. The constructor and
   `publish_response_head` consume those views synchronously before the next
   mutable session access.
-- `edgion-waf/src/seclang/transaction.rs` validates the borrowed input, copies
-  request state into its bounded storage, and retains response entries for
+- `edgion-waf/src/seclang/transaction/mod.rs` (construction) and
+  `edgion-waf/src/seclang/transaction/phases.rs` (`publish_response_head`)
+  validate the borrowed input, copy
+  request state into bounded storage, and retain response entries for
   phases 3 through 5. Removing that transaction-owned state would violate its
   lifetime and accounting contract.
 

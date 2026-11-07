@@ -30,7 +30,7 @@ then literal guard, then VM.
 ## Rationale and evidence
 
 Per-transaction scratch slots were already created lazily
-(`lazy_boolean_scratch` / `lazy_group_scratch` in `transaction.rs`); the
+(`lazy_boolean_scratch` / `lazy_group_scratch` in `seclang/transaction/selection.rs`); the
 remaining eager cost was the `vm.create_cache()` inside each slot, which
 regex-automata sizes to the NFA.
 

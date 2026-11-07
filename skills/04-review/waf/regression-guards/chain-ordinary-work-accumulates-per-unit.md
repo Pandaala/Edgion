@@ -8,7 +8,8 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-In `edgion-waf/src/seclang/transaction.rs`, ordinary operator work (original
+In `edgion-waf/src/seclang/transaction/units.rs` (with the field declared in
+`transaction/mod.rs` and `charge_stage` in `transaction/predicate.rs`), ordinary operator work (original
 bytes, transformed bytes and detector bytes charged by
 `OrderedStageAccounting::charge_stage`, plus JSON tail logical work) is
 accumulated in the transaction field `unit_work_bytes` for one rule unit.

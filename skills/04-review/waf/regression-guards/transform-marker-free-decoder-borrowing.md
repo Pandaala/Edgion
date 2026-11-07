@@ -15,7 +15,7 @@ guard, an input with no `\` byte is treated as an identity step, exactly like
 marker-free `RemoveNulls`, `HtmlEntityDecode` and `UrlDecodeUni`. CRS-style XSS
 chains (`urlDecodeUni,htmlEntityDecode,jsDecode,cssDecode`) therefore stay
 `Cow::Borrowed` for ordinary values and become eligible for the existing
-`BorrowedTransformMemo` in `transaction.rs`. No new cache or type was added.
+`BorrowedTransformMemo` in `seclang/transaction/operators.rs`. No new cache or type was added.
 
 ## Rationale and evidence
 
