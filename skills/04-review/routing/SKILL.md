@@ -56,6 +56,7 @@ before applying a decision to current code.
 - [Lowest-latency tests must distinguish the minimum](regression-guards/lowest-latency-tests-must-distinguish-minimum.md)
 - [route-05 — Per-try timeout test coverage gaps — FILLED + ONE ACCEPTED SKIP](regression-guards/per-try-timeout-test-coverage.md)
 - [Radix route candidate precedence is ranked at build time — FIXED](regression-guards/radix-candidate-precedence-rank-precomputed.md)
+- [Listener hostname specificity is precomputed with the listener index — FIXED](regression-guards/listener-specificity-precomputed.md)
 - [HTTP path specificity excludes parameter identifiers and Prefix trailing slashes](regression-guards/radix-path-specificity.md)
 - [route-06 — Retry backoff minimum wait can be skipped under a tight deadline — FIXED](regression-guards/retry-backoff-minimum-wait-conformance.md)
 - [Route retry budget owns the Pingora loop capacity](regression-guards/retry-budget-owns-pingora-loop-capacity.md)

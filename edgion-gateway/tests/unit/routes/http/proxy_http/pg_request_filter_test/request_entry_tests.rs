@@ -20,6 +20,18 @@ use tokio::time::timeout;
 const NAMESPACE: &str = "request-entry-test";
 const OWNER: &str = "request-entry-test/gateway";
 const HTTP_ROUTE: &str = "request-entry-test/http-fallback";
+const SHADOW_GATEWAY: &str = "request-entry-test/shadow-gateway";
+
+/// An optional exact listener for the request Host that is more specific than
+/// the `*.example.com` listener.
+#[derive(Clone, Copy, PartialEq)]
+enum Shadow {
+    None,
+    /// Declared on the request-owning Gateway (per-Gateway SNI scope).
+    SameGateway,
+    /// Declared on another Gateway sharing the listener (cross-Gateway route scope only).
+    OtherGateway,
+}
 
 struct Fixture {
     proxy: EdgionHttpProxy,
@@ -31,18 +43,44 @@ struct Fixture {
 
 impl Fixture {
     fn new(https: bool, http2: bool, global_421: bool, annotation_421: bool, grpc: bool) -> Self {
+        Self::with_shadow(https, http2, global_421, annotation_421, grpc, Shadow::None)
+    }
+
+    fn with_shadow(
+        https: bool,
+        http2: bool,
+        global_421: bool,
+        annotation_421: bool,
+        grpc: bool,
+        shadow: Shadow,
+    ) -> Self {
         let protocol = if https { "HTTPS" } else { "HTTP" };
         let listener_key = ListenerKey::new("0.0.0.0:18479".parse().unwrap(), protocol);
+        let exact_listener = json!({"name":"exact", "port":18479, "protocol":protocol, "hostname":"a.b.example.com"});
+        let mut listeners = vec![
+            json!({"name":"sni", "port":18479, "protocol":protocol, "hostname":"sni.example.net"}),
+            json!({"name":"host", "port":18479, "protocol":protocol, "hostname":"*.example.com"}),
+        ];
+        if shadow == Shadow::SameGateway {
+            listeners.push(exact_listener.clone());
+        }
         let gateway: Gateway = crate::test_current_status::from_value(json!({
             "apiVersion":"gateway.networking.k8s.io/v1", "kind":"Gateway",
             "metadata":{"name":"gateway", "namespace":NAMESPACE,
                 "annotations":{"edgion.io/require-sni-host-match":annotation_421.to_string()}},
-            "spec":{"gatewayClassName":"request-entry-class", "listeners":[
-                {"name":"sni", "port":18479, "protocol":protocol, "hostname":"sni.example.net"},
-                {"name":"host", "port":18479, "protocol":protocol, "hostname":"*.example.com"}
-            ]}
+            "spec":{"gatewayClassName":"request-entry-class", "listeners":listeners}
         }))
         .unwrap();
+        let mut gateways = vec![gateway];
+        if shadow == Shadow::OtherGateway {
+            let other: Gateway = crate::test_current_status::from_value(json!({
+                "apiVersion":"gateway.networking.k8s.io/v1", "kind":"Gateway",
+                "metadata":{"name":"shadow-gateway", "namespace":NAMESPACE},
+                "spec":{"gatewayClassName":"request-entry-class", "listeners":[exact_listener]}
+            }))
+            .unwrap();
+            gateways.push(other);
+        }
         let config: EdgionGatewayConfig = serde_json::from_value(json!({
             "apiVersion":"edgion.io/v1", "kind":"EdgionGatewayConfig",
             "metadata":{"name":"request-entry-config"},
@@ -77,7 +115,13 @@ impl Fixture {
         let publisher = PluginPublisher::new();
         publisher.replace_gateway_classes(HashMap::from([("request-entry-class".into(), Arc::new(class))]));
         publisher.replace_gateway_configs(HashMap::from([("request-entry-config".into(), config.clone())]));
-        publisher.replace_gateways(HashMap::from([(OWNER.into(), GatewayInput::from_gateway(&gateway))]));
+        publisher.replace_gateways(
+            [OWNER, SHADOW_GATEWAY]
+                .into_iter()
+                .zip(&gateways)
+                .map(|(key, gateway)| (key.into(), GatewayInput::from_gateway(gateway)))
+                .collect(),
+        );
         publisher.replace_http_routes(
             HashMap::from([(HTTP_ROUTE.into(), RouteInput::from_http(route.clone()))]),
             HashMap::new(),
@@ -138,7 +182,7 @@ impl Fixture {
         );
         let publication = publisher.snapshot().http_listener(&listener_key);
         let store = ListenerGatewayInfoStore::new();
-        store.rebuild(&[gateway]);
+        store.rebuild(&gateways);
         let index = store.get_index(&listener_key);
         assert!(index.get(OWNER, "host").is_some());
         let index = TestListenerIndexGuard::install(listener_key.clone(), index);
@@ -257,6 +301,43 @@ async fn actual_entry_preserves_421_global_annotation_and_disabled_cases() {
             assert!(ctx.route_unit.is_none(), "421 must precede Route selection");
         } else {
             assert_http_fallback(&session, &ctx);
+        }
+    }
+}
+
+/// A more-specific exact listener rejects with 421 only when it belongs to the
+/// SNI-matched Gateway. On another Gateway it is outside the per-Gateway 421 scope,
+/// but it still shadows the wildcard listener for cross-Gateway route matching.
+#[tokio::test(flavor = "current_thread")]
+async fn actual_entry_421_more_specific_listener_scope() {
+    for shadow in [Shadow::SameGateway, Shadow::OtherGateway] {
+        let fixture = Fixture::with_shadow(true, true, false, true, false, shadow);
+        let (mut session, _client) = session("application/json").await;
+        let mut ctx = fixture.context();
+        ctx.request_info.install_tls_info(
+            None,
+            Some("a.b.example.com".into()),
+            None,
+            Some("host".into()),
+            Some(OWNER.into()),
+        );
+        let same_gateway = shadow == Shadow::SameGateway;
+        // Both cases end the request locally: 421 for the SNI scope, Route-not-found otherwise.
+        assert!(run_entry(&fixture, &mut session, &mut ctx).await);
+        assert_eq!(
+            ctx.diagnostics.contains_error(EdgionErrorCode::SniHostMismatch),
+            same_gateway
+        );
+        let status = session.response_written().unwrap().status.as_u16();
+        if same_gateway {
+            assert_eq!(status, 421);
+        } else {
+            assert_ne!(status, 421);
+            assert!(
+                ctx.route_unit.is_none(),
+                "the other Gateway's exact listener must shadow the wildcard listener's Route"
+            );
+            assert!(ctx.diagnostics.contains_error(EdgionErrorCode::RouteNotFound));
         }
     }
 }

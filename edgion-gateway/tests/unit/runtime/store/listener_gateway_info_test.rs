@@ -502,3 +502,184 @@ fn actual_http_attachment_keys_match_publication_and_pin_old_listener_info() {
         .is_empty());
     assert_eq!(old[0].plugin_store_keys, expected);
 }
+
+/// The pre-index linear scan, kept as the oracle for the specificity summary.
+fn reference_has_more_specific<'a>(
+    hostnames: impl IntoIterator<Item = Option<&'a str>>,
+    request_hostname: &str,
+    current_hostname: Option<&str>,
+) -> bool {
+    if matches!(current_hostname, Some(h) if !h.starts_with("*.")) {
+        return false;
+    }
+    for other_host in hostnames.into_iter().flatten() {
+        if !hostname_matches_listener(request_hostname, other_host) {
+            continue;
+        }
+        match current_hostname {
+            None => return true,
+            Some(current_host) => {
+                if !other_host.starts_with("*.") {
+                    return true;
+                }
+                if other_host != current_host && other_host.len() > current_host.len() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn specificity_entry(gateway: &str, listener: &str, hostname: Option<&str>) -> (String, ListenerEntry) {
+    let info = Arc::new(GatewayInfo::new(
+        Some("default".to_string()),
+        gateway.to_string(),
+        Some(listener.to_string()),
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+    let entry = ListenerEntry {
+        port: 443,
+        info: Arc::clone(&info),
+        gateway_proof: None,
+        hostname: hostname.map(str::to_string),
+        allowed_routes: None,
+    };
+    (info.gateway_key().to_owned(), entry)
+}
+
+#[test]
+fn specificity_summary_matches_the_linear_scan_for_both_query_scopes() {
+    // Enough exact listeners to cross the hash-index threshold, with a mixed-case entry.
+    let many_exact: Vec<String> = (0..20).map(|i| format!("tenant{i}.example.com")).collect();
+    let mut large: Vec<(&str, Option<&str>)> = many_exact.iter().map(|h| ("gw-a", Some(h.as_str()))).collect();
+    large.extend([
+        ("gw-a", None),
+        ("gw-a", Some("Tenant-Upper.Example.com")),
+        ("gw-a", Some("*.example.com")),
+        ("gw-b", Some("CAFÉ.example.com")),
+    ]);
+    let mut inventories: Vec<Vec<(&str, Option<&str>)>> = vec![
+        vec![],
+        vec![("gw-a", None)],
+        vec![("gw-a", None), ("gw-a", Some("api.example.com"))],
+        vec![
+            ("gw-a", None),
+            ("gw-a", Some("*.example.com")),
+            ("gw-a", Some("*.api.example.com")),
+            ("gw-a", Some("v1.api.example.com")),
+        ],
+        // Mixed-case exact and wildcard listener hostnames.
+        vec![("gw-a", Some("API.Example.com")), ("gw-a", Some("*.Example.com"))],
+        // Equal-length distinct wildcards and duplicated identical wildcards.
+        vec![
+            ("gw-a", Some("*.aaa.com")),
+            ("gw-a", Some("*.bbb.com")),
+            ("gw-a", Some("*.aaa.com")),
+        ],
+        // Malformed star patterns never match.
+        vec![("gw-a", Some("*example.com")), ("gw-a", Some("*")), ("gw-a", None)],
+        // Longer wildcard inserted before shorter ones, empty and bare "*." hostnames, non-ASCII.
+        vec![
+            ("gw-a", Some("*.api.example.com")),
+            ("gw-a", Some("*.com")),
+            ("gw-a", Some("*.example.com")),
+            ("gw-a", Some("")),
+            ("gw-a", Some("*.")),
+            ("gw-a", Some("café.example.com")),
+        ],
+        // Cross-Gateway shadowing on one physical key.
+        vec![
+            ("gw-a", None),
+            ("gw-a", Some("*.example.com")),
+            ("gw-b", Some("*.api.example.com")),
+            ("gw-b", Some("shop.example.com")),
+            ("gw-c", Some("other.org")),
+        ],
+    ];
+    inventories.push(large);
+    let requests = [
+        "api.example.com",
+        "API.EXAMPLE.COM",
+        "v1.api.example.com",
+        "a.b.example.com",
+        "x.API.example.com",
+        "shop.example.com",
+        "example.com",
+        "x.aaa.com",
+        "x.bbb.com",
+        "other.org",
+        "unmatched.net",
+        "CAFé.example.com",
+        "café.example.com",
+        "CAFÉ.example.com",
+        "tenant7.example.com",
+        "TENANT19.example.com",
+        "tenant-upper.example.com",
+        "*example.com",
+        "*",
+        "x.",
+        "",
+    ];
+    let currents = [
+        None,
+        Some("*.example.com"),
+        Some("*.api.example.com"),
+        Some("*.Example.com"),
+        Some("*.aaa.com"),
+        Some("*.com"),
+        Some("api.example.com"),
+        Some("*example.com"),
+    ];
+
+    for inventory in &inventories {
+        let entries: Vec<_> = inventory
+            .iter()
+            .enumerate()
+            .map(|(i, (gateway, hostname))| specificity_entry(gateway, &format!("l{i}"), *hostname))
+            .collect();
+        let index = GatewayInfoIndex::from_entries(entries);
+        for request in requests {
+            for current in currents {
+                let all = inventory.iter().map(|(_, hostname)| *hostname);
+                assert_eq!(
+                    index.has_more_specific(request, current),
+                    reference_has_more_specific(all, request, current),
+                    "index scope: inventory={inventory:?} request={request:?} current={current:?}"
+                );
+                for (gateway_key, listeners) in index.iter_gateways() {
+                    let own = inventory
+                        .iter()
+                        .filter(|(gateway, _)| gateway_key == format!("default/{gateway}"))
+                        .map(|(_, hostname)| *hostname);
+                    assert_eq!(
+                        listeners.has_more_specific(request, current),
+                        reference_has_more_specific(own, request, current),
+                        "gateway scope {gateway_key}: inventory={inventory:?} request={request:?} current={current:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_hash_index_is_built_only_above_the_threshold() {
+    let mut summary = HostnameSpecificity::default();
+    for i in 0..EXACT_HASH_THRESHOLD {
+        summary.add(Some(&format!("t{i}.example.com")));
+    }
+    assert!(summary.exact_set.is_none());
+    summary.add(Some("LAST.example.com"));
+    summary.add(Some("after.example.com"));
+    let set = summary.exact_set.as_ref().expect("hash index above the threshold");
+    assert_eq!(set.len(), summary.exact.len());
+    assert!(set.contains("last.example.com") && set.contains("after.example.com"));
+    assert!(summary.has_more_specific("after.example.com", None));
+    assert!(summary.has_more_specific("Last.Example.COM", Some("*.example.com")));
+}

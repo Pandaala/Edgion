@@ -32,7 +32,7 @@ use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use edgion_resources::Gateway;
 use kube::ResourceExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 // ============================================================================
@@ -43,13 +43,24 @@ use std::sync::{Arc, LazyLock};
 /// Built once on Gateway change, used per-request with O(1) lookups.
 pub struct GatewayInfoIndex {
     gateways: HashMap<String, GatewayListeners>,
+    /// Specificity facts for every listener on this physical key (cross-Gateway scope).
+    specificity: HostnameSpecificity,
 }
 
 impl GatewayInfoIndex {
     fn new() -> Self {
         Self {
             gateways: HashMap::new(),
+            specificity: HostnameSpecificity::default(),
         }
+    }
+
+    fn add(&mut self, gateway_key: String, entry: ListenerEntry) {
+        self.specificity.add(entry.hostname.as_deref());
+        self.gateways
+            .entry(gateway_key)
+            .or_insert_with(GatewayListeners::new)
+            .add(entry);
     }
 
     /// Fast path: gateway_key + listener_name → O(1)
@@ -68,13 +79,7 @@ impl GatewayInfoIndex {
     /// Empty-route and policy-unavailable owners still constrain eligibility;
     /// neither permits a Route to escape to a less-specific Listener.
     pub fn has_more_specific(&self, request_hostname: &str, current_hostname: Option<&str>) -> bool {
-        // Exact already has maximum specificity, regardless of serving-set size.
-        if matches!(current_hostname, Some(host) if !host.starts_with("*.")) {
-            return false;
-        }
-        self.gateways
-            .values()
-            .any(|listeners| listeners.has_more_specific(request_hostname, current_hostname))
+        self.specificity.has_more_specific(request_hostname, current_hostname)
     }
 
     #[inline]
@@ -91,11 +96,7 @@ impl GatewayInfoIndex {
     pub(crate) fn from_entries(entries: Vec<(String, ListenerEntry)>) -> Self {
         let mut index = Self::new();
         for (gateway_key, entry) in entries {
-            index
-                .gateways
-                .entry(gateway_key)
-                .or_insert_with(GatewayListeners::new)
-                .add(entry);
+            index.add(gateway_key, entry);
         }
         index
     }
@@ -110,6 +111,8 @@ impl GatewayInfoIndex {
 pub struct GatewayListeners {
     by_name: HashMap<String, ListenerEntry>,
     all: Vec<ListenerEntry>,
+    /// Specificity facts for this Gateway's listeners only (per-Gateway scope).
+    specificity: HostnameSpecificity,
 }
 
 impl GatewayListeners {
@@ -117,6 +120,7 @@ impl GatewayListeners {
         Self {
             by_name: HashMap::new(),
             all: Vec::new(),
+            specificity: HostnameSpecificity::default(),
         }
     }
 
@@ -136,41 +140,91 @@ impl GatewayListeners {
     /// Since `GatewayInfoIndex` is per-port, all entries share the same port
     /// and cross-port checks are unnecessary.
     pub fn has_more_specific(&self, request_hostname: &str, current_hostname: Option<&str>) -> bool {
-        if matches!(current_hostname, Some(h) if !h.starts_with("*.")) {
-            return false;
-        }
-
-        for entry in &self.all {
-            let Some(other_host) = entry.hostname.as_deref() else {
-                continue;
-            };
-
-            if !hostname_matches_listener(request_hostname, other_host) {
-                continue;
-            }
-
-            match current_hostname {
-                None => {
-                    return true;
-                }
-                Some(current_host) => {
-                    if !other_host.starts_with("*.") {
-                        return true;
-                    }
-                    if other_host != current_host && other_host.len() > current_host.len() {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        self.specificity.has_more_specific(request_hostname, current_hostname)
     }
 
     fn add(&mut self, entry: ListenerEntry) {
+        self.specificity.add(entry.hostname.as_deref());
         if let Some(ref name) = entry.info.listener_name {
             self.by_name.insert(name.clone(), entry.clone());
         }
         self.all.push(entry);
+    }
+}
+
+/// Above this many exact listener hostnames, exact lookup switches from a linear
+/// ASCII-case-insensitive scan to a hash set. Below it, hashing the request host
+/// costs more than comparing a few short strings (measured on the routing-02 fix).
+const EXACT_HASH_THRESHOLD: usize = 16;
+
+/// Listener hostname specificity facts, built with the immutable index so the
+/// request path does not rescan the whole listener inventory.
+///
+/// Specificity: exact > wildcard > catch-all (no hostname). Every admitted
+/// listener contributes, including listeners that serve no Route or deny the
+/// Route's namespace/kind, because they still shadow less-specific listeners.
+#[derive(Default)]
+struct HostnameSpecificity {
+    /// Exact listener hostnames, ASCII-lowercased (exact matching is ASCII-case-insensitive).
+    exact: Vec<Box<str>>,
+    /// Hash index over `exact`, present only above `EXACT_HASH_THRESHOLD` entries.
+    exact_set: Option<HashSet<Box<str>>>,
+    /// `*.suffix` listener hostnames, longest first, so the first match is the most specific.
+    wildcards: Vec<Box<str>>,
+}
+
+impl HostnameSpecificity {
+    fn add(&mut self, hostname: Option<&str>) {
+        let Some(hostname) = hostname else {
+            return;
+        };
+        if hostname.starts_with("*.") {
+            let at = self.wildcards.partition_point(|w| w.len() >= hostname.len());
+            self.wildcards.insert(at, hostname.into());
+        } else if !hostname.starts_with('*') {
+            // A '*' pattern without the '*.' form never matches any hostname.
+            let exact: Box<str> = hostname.to_ascii_lowercase().into_boxed_str();
+            if let Some(set) = &mut self.exact_set {
+                set.insert(exact.clone());
+            }
+            self.exact.push(exact);
+            if self.exact_set.is_none() && self.exact.len() > EXACT_HASH_THRESHOLD {
+                self.exact_set = Some(self.exact.iter().cloned().collect());
+            }
+        }
+    }
+
+    fn has_more_specific(&self, request_hostname: &str, current_hostname: Option<&str>) -> bool {
+        // Exact already has maximum specificity, regardless of serving-set size.
+        if matches!(current_hostname, Some(host) if !host.starts_with("*.")) {
+            return false;
+        }
+        let longest_match = self
+            .wildcards
+            .iter()
+            .find(|wildcard| hostname_matches_listener(request_hostname, wildcard));
+        let wildcard_shadows = match (longest_match, current_hostname) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            // A strictly longer wildcard differs from the current one; equal-length
+            // wildcards (including the current listener itself) never shadow.
+            (Some(wildcard), Some(current)) => wildcard.len() > current.len(),
+        };
+        wildcard_shadows || self.matches_exact(request_hostname)
+    }
+
+    fn matches_exact(&self, request_hostname: &str) -> bool {
+        match &self.exact_set {
+            // Request hostnames are normally already lowercase, so this is a single
+            // allocation-free lookup; mixed case falls back to the linear scan.
+            Some(set) if !request_hostname.bytes().any(|byte| byte.is_ascii_uppercase()) => {
+                set.contains(request_hostname)
+            }
+            _ => self
+                .exact
+                .iter()
+                .any(|exact| exact.eq_ignore_ascii_case(request_hostname)),
+        }
     }
 }
 
@@ -351,13 +405,11 @@ impl ListenerGatewayInfoStore {
         for gateway in gateways {
             for (key, entry) in gateway_listener_entries(gateway) {
                 port_map.entry(key.clone()).or_default().push(Arc::clone(&entry.info));
+                let gateway_key = entry.info.gateway_key().to_owned();
                 index_map
                     .entry(key)
                     .or_insert_with(GatewayInfoIndex::new)
-                    .gateways
-                    .entry(entry.info.gateway_key().to_owned())
-                    .or_insert_with(GatewayListeners::new)
-                    .add(entry);
+                    .add(gateway_key, entry);
             }
         }
 
