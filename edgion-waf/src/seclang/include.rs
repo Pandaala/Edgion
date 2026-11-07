@@ -3,8 +3,8 @@ use thiserror::Error;
 use super::{
     analyze_one_semantic_draft, compile_validated, parse_syntax, scan_source, validate_executable_profile,
     validate_semantic_draft, CompiledGeneration, CompilerError, CompilerLimits, FinalRuleRole, PhraseAssetSource,
-    SemanticError, SemanticLimits, SemanticLocation, SemanticValidationContext, SemanticValidationError, SourceError,
-    SourceLimits, SyntaxError, SyntaxLimits, UnavailableCapability, ValidationLimits,
+    SemanticDraft, SemanticError, SemanticLimits, SemanticLocation, SemanticValidationContext, SemanticValidationError,
+    SourceDocument, SourceError, SourceLimits, SyntaxError, SyntaxLimits, UnavailableCapability, ValidationLimits,
 };
 
 use super::{PhraseAssetFailure, PhraseAssetRequest, PhraseAssetSink};
@@ -1033,9 +1033,7 @@ pub fn compile_rule_bundles_with_external_budget(
     }
     let expanded = prepare_rule_bundles(bundles, inline_rules, limits)?;
     let source = scan_source("bundle-root", &expanded.bytes, limits.source)?;
-    let syntax = parse_syntax(&source, limits.syntax)?;
-    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
-    let compatibility = CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility)?;
+    let (draft, compatibility) = frontend_draft(&source, &expanded, limits, None)?;
     let validated = validate_semantic_draft(draft, context, limits.validation)?;
     let mut assets = BundleAssets {
         bundles,
@@ -1060,6 +1058,49 @@ pub fn compile_rule_bundles_with_external_budget(
         generation,
         compatibility,
     })
+}
+
+/// Peak-byte accounting between front-end stages; only the selection path supplies one.
+struct PeakAccount {
+    bytes: usize,
+    limit: usize,
+}
+
+impl PeakAccount {
+    fn error(&self) -> FrontendError {
+        FrontendError::Compiler(CompilerError::PeakByteLimit { limit: self.limit })
+    }
+
+    /// Add retained bytes without checking the limit; overflow is a peak failure.
+    fn charge(&mut self, add: usize) -> Result<(), FrontendError> {
+        self.bytes = self.bytes.checked_add(add).ok_or_else(|| self.error())?;
+        Ok(())
+    }
+
+    /// Fail when the retained bytes plus a transient `extra` exceed the limit.
+    fn check(&self, extra: usize) -> Result<(), FrontendError> {
+        match self.bytes.checked_add(extra) {
+            Some(bytes) if bytes <= self.limit => Ok(()),
+            _ => Err(self.error()),
+        }
+    }
+}
+
+/// Shared front-end stages after `scan_source`: syntax, semantic draft, compatibility report.
+/// Only a caller that supplies `peak` gets the inter-stage check; other paths keep none.
+fn frontend_draft<'s>(
+    source: &'s SourceDocument,
+    expanded: &ExpandedSource,
+    limits: FrontendLimits,
+    peak: Option<&mut PeakAccount>,
+) -> Result<(SemanticDraft<'s>, CompatibilityReport), FrontendError> {
+    let syntax = parse_syntax(source, limits.syntax)?;
+    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
+    if let Some(peak) = peak {
+        peak.check(draft.retained_charged_bytes())?;
+    }
+    let compatibility = CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility)?;
+    Ok((draft, compatibility))
 }
 
 fn expanded_owned_bytes(expanded: &ExpandedSource) -> Result<usize, CompilerError> {
@@ -1164,67 +1205,50 @@ pub fn compile_rule_bundles_with_selection<E>(
     mut observer: Option<&mut dyn WafRuleSelectionObserver>,
 ) -> Result<(CompiledBundle, super::WafSelectionSummary), WafSelectionCompileError<E>> {
     use super::compiler::{compile_validated_with_budget, CanonicalWork};
-    let peak_error = || {
-        FrontendError::Compiler(CompilerError::PeakByteLimit {
-            limit: limits.compiler.max_compilation_peak_bytes,
-        })
+    let mut peak = PeakAccount {
+        bytes: selection_live_bytes,
+        limit: limits.compiler.max_compilation_peak_bytes,
     };
-    let add = |a: usize, b: usize| a.checked_add(b).ok_or_else(peak_error);
-    let check_peak = |value: usize| {
-        if value > limits.compiler.max_compilation_peak_bytes {
-            Err(peak_error())
-        } else {
-            Ok(())
-        }
-    };
-    let mut external_bytes = add(selection_live_bytes, selection.owned_bytes())?;
-    check_peak(external_bytes)?;
+    peak.charge(selection.owned_bytes())?;
+    peak.check(0)?;
     let expanded = prepare_rule_bundles(bundles, inline_rules, limits)?;
-    external_bytes = add(external_bytes, expanded.bytes.capacity())?;
-    external_bytes = add(
-        external_bytes,
+    peak.charge(expanded.bytes.capacity())?;
+    peak.charge(
         expanded
             .provenance
             .capacity()
             .checked_mul(std::mem::size_of::<ExpandedSegment>())
-            .ok_or_else(peak_error)?,
+            .ok_or_else(|| peak.error())?,
     )?;
     for segment in &expanded.provenance {
-        external_bytes = add(external_bytes, segment.identity.capacity())?;
+        peak.charge(segment.identity.capacity())?;
     }
-    check_peak(external_bytes)?;
+    peak.check(0)?;
     let source = scan_source("bundle-root", &expanded.bytes, limits.source).map_err(FrontendError::from)?;
-    check_peak(add(external_bytes, source.charged_bytes())?)?;
-    let syntax = parse_syntax(&source, limits.syntax).map_err(FrontendError::from)?;
-    let draft = analyze_one_semantic_draft(syntax, limits.semantic).map_err(FrontendError::from)?;
-    check_peak(add(external_bytes, draft.retained_charged_bytes())?)?;
-    let compatibility =
-        CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility).map_err(FrontendError::from)?;
-    external_bytes = add(external_bytes, std::mem::size_of::<CompatibilityReport>())?;
-    external_bytes = add(
-        external_bytes,
+    peak.check(source.charged_bytes())?;
+    let (draft, compatibility) = frontend_draft(&source, &expanded, limits, Some(&mut peak))?;
+    peak.charge(std::mem::size_of::<CompatibilityReport>())?;
+    peak.charge(
         compatibility
             .rule_summaries
             .capacity()
             .checked_mul(std::mem::size_of::<CompatibilityRuleSummary>())
-            .ok_or_else(peak_error)?,
+            .ok_or_else(|| peak.error())?,
     )?;
-    external_bytes = add(
-        external_bytes,
+    peak.charge(
         compatibility
             .findings
             .capacity()
             .checked_mul(std::mem::size_of::<CompatibilityFinding>())
-            .ok_or_else(peak_error)?,
+            .ok_or_else(|| peak.error())?,
     )?;
     let validated = validate_semantic_draft(draft, context, limits.validation).map_err(FrontendError::from)?;
     // Precharge mask and evaluation stack before allocating or traversing metadata.
-    external_bytes = add(
-        external_bytes,
+    peak.charge(
         std::mem::size_of::<super::tag_selection::SelectionDecision>() + super::tag_selection::MAX_SELECTION_NODES,
     )?;
-    external_bytes = add(external_bytes, validated.rule_units().len())?;
-    check_peak(add(external_bytes, validated.retained_charged_bytes())?)?;
+    peak.charge(validated.rule_units().len())?;
+    peak.check(validated.retained_charged_bytes())?;
     let mut work = CanonicalWork::default();
     work.charge_records(selection.instruction_count(), limits.compiler)
         .map_err(FrontendError::from)?;
@@ -1255,9 +1279,8 @@ pub fn compile_rule_bundles_with_selection<E>(
     if let Some(observer) = observer.as_mut() {
         observer.compilation_started(true);
     }
-    let baseline =
-        compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, external_bytes, &mut work)
-            .map_err(FrontendError::from)?;
+    let baseline = compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, peak.bytes, &mut work)
+        .map_err(FrontendError::from)?;
     admit(&baseline).map_err(WafSelectionCompileError::Admission)?;
     if let Some(observer) = observer.as_mut() {
         observer.compilation_passed(true);
@@ -1280,13 +1303,12 @@ pub fn compile_rule_bundles_with_selection<E>(
     let syntax = parse_syntax(&source, limits.syntax).map_err(FrontendError::from)?;
     let draft = analyze_one_semantic_draft(syntax, limits.semantic).map_err(FrontendError::from)?;
     let mut validated = validate_semantic_draft(draft, context, limits.validation).map_err(FrontendError::from)?;
-    check_peak(add(
-        external_bytes,
-        add(
-            validated.retained_charged_bytes(),
-            validated.selection_target_scratch_bytes(),
-        )?,
-    )?)?;
+    peak.check(
+        validated
+            .retained_charged_bytes()
+            .checked_add(validated.selection_target_scratch_bytes())
+            .ok_or_else(|| peak.error())?,
+    )?;
     validated
         .apply_selection_mask(&decision.mask, &mut work, limits.compiler)
         .map_err(FrontendError::from)?;
@@ -1294,7 +1316,7 @@ pub fn compile_rule_bundles_with_selection<E>(
         observer.compilation_started(false);
     }
     let mut generation =
-        compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, external_bytes, &mut work)
+        compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, peak.bytes, &mut work)
             .map_err(FrontendError::from)?;
     generation.include_compilation_peak(baseline_peak);
     admit(&generation).map_err(WafSelectionCompileError::Admission)?;
@@ -1432,9 +1454,7 @@ pub fn inspect_compatibility(
 ) -> Result<CompatibilityReport, FrontendError> {
     let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
-    let syntax = parse_syntax(&source, limits.syntax)?;
-    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
-    CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility).map_err(FrontendError::from)
+    Ok(frontend_draft(&source, &expanded, limits, None)?.1)
 }
 
 pub fn compile_with_includes(
@@ -1447,9 +1467,7 @@ pub fn compile_with_includes(
 ) -> Result<CompiledBundle, FrontendError> {
     let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
-    let syntax = parse_syntax(&source, limits.syntax)?;
-    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
-    let compatibility = CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility)?;
+    let (draft, compatibility) = frontend_draft(&source, &expanded, limits, None)?;
     let validated = validate_semantic_draft(draft, context, limits.validation)?;
     let generation = compile_validated(validated, phrase_assets, limits.compiler)?;
     Ok(CompiledBundle {
@@ -1474,9 +1492,7 @@ pub fn compile_executable_profile_with_includes(
 ) -> Result<CompiledBundle, FrontendError> {
     let expanded = expand_includes(root_identity, root, includes, limits.includes, false)?;
     let source = scan_source(root_identity, &expanded.bytes, limits.source)?;
-    let syntax = parse_syntax(&source, limits.syntax)?;
-    let draft = analyze_one_semantic_draft(syntax, limits.semantic)?;
-    let compatibility = CompatibilityReport::from_draft(&draft, expanded.metrics, limits.compatibility)?;
+    let (draft, compatibility) = frontend_draft(&source, &expanded, limits, None)?;
     if compatibility.unattributed_findings() != 0 {
         return Err(CompatibilityError::UnattributedRule.into());
     }

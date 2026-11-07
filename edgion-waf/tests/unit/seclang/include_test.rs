@@ -847,3 +847,70 @@ fn pinned_crs_compatibility_report_matches_the_frozen_inventory() {
     assert_eq!(profile.generation().rule_unit_count(), 559);
     assert_eq!(profile.compatibility(), &report);
 }
+
+const OVERSIZED_INVALID_RULES: &[RuleBundleMember<'static>] = &[RuleBundleMember {
+    path: "main.conf",
+    bytes: b"SecRule REQUEST_URI\n",
+}];
+
+/// A peak limit that admits the pre-scan selection charges but not the scanned source.
+fn peak_limit_below_scanned_source(
+    bundles: &[RuleBundleSource<'_>],
+    selection: &crate::seclang::PreparedWafRuleSelection,
+) -> usize {
+    let limits = FrontendLimits::default();
+    let expanded = prepare_rule_bundles(bundles, "", limits).unwrap();
+    let source = scan_source("bundle-root", &expanded.bytes, limits.source).unwrap();
+    assert!(source.charged_bytes() > 0);
+    selection.owned_bytes() + expanded_owned_bytes(&expanded).unwrap() + source.charged_bytes() - 1
+}
+
+#[test]
+fn selection_path_checks_the_peak_after_scanning_before_syntax() {
+    let bundles = [source_bundle("oversized", &["main.conf"], OVERSIZED_INVALID_RULES, &[])];
+    let selection = serde_json::from_str::<crate::seclang::WafRuleSelection>(r#"{"include":true}"#)
+        .unwrap()
+        .prepare()
+        .unwrap();
+    let tight = peak_limit_below_scanned_source(&bundles, &selection);
+    let run = |peak: usize| {
+        let mut limits = FrontendLimits::default();
+        limits.compiler.max_compilation_peak_bytes = peak;
+        compile_rule_bundles_with_selection(
+            &bundles,
+            "",
+            context(),
+            limits,
+            &selection,
+            0,
+            |_| Ok::<(), ()>(()),
+            None,
+        )
+    };
+    assert!(matches!(
+        run(tight),
+        Err(WafSelectionCompileError::Frontend(FrontendError::Compiler(
+            CompilerError::PeakByteLimit { .. }
+        )))
+    ));
+    // One more byte admits the scanned source, so the syntax error surfaces next.
+    assert!(matches!(
+        run(tight + 1),
+        Err(WafSelectionCompileError::Frontend(FrontendError::Syntax(_)))
+    ));
+}
+
+#[test]
+fn non_selection_path_reports_the_syntax_error_under_the_same_peak_limit() {
+    let bundles = [source_bundle("oversized", &["main.conf"], OVERSIZED_INVALID_RULES, &[])];
+    let selection = serde_json::from_str::<crate::seclang::WafRuleSelection>(r#"{"include":true}"#)
+        .unwrap()
+        .prepare()
+        .unwrap();
+    let mut limits = FrontendLimits::default();
+    limits.compiler.max_compilation_peak_bytes = peak_limit_below_scanned_source(&bundles, &selection);
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), limits),
+        Err(FrontendError::Syntax(_))
+    ));
+}
