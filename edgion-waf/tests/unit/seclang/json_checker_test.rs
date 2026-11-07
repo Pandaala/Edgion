@@ -16,7 +16,6 @@ struct Sink {
     facts: Vec<Option<Fact>>,
     sealed: Vec<(Vec<u8>, Vec<u8>, JsonScalarKind)>,
     summary: Option<JsonSemanticSummary>,
-    discarded: usize,
     abandoned: usize,
     callbacks: usize,
     retain: bool,
@@ -65,18 +64,6 @@ impl JsonCheckerSink for Sink {
             }
             (None, value) | (value, None) => Ok(value),
         }
-    }
-    fn discard(&mut self, receipt: Receipt) -> Result<(), JsonCheckerSinkError> {
-        let mut id = Some(receipt.head);
-        while let Some(current) = id {
-            let fact = self.facts[current].take().expect("receipt must own live facts");
-            id = fact.next;
-            self.discarded += 1;
-            if self.failure == Some("discard") {
-                return Err(JsonCheckerSinkError);
-            }
-        }
-        Ok(())
     }
     fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<(), JsonCheckerSinkError> {
         let mut id = receipt.map(|receipt| receipt.head);
@@ -141,7 +128,6 @@ fn duplicates_keep_every_occurrence_collisions_and_canonical_order_at_every_spli
         ]
     );
     // The decoded duplicate `\u0061` follows the first `a` in document order.
-    assert_eq!(baseline.discarded, 0);
     assert_eq!(baseline.sealed[0].1, b"removed");
     assert_eq!(baseline.sealed[3].1, b"true");
     assert_eq!(baseline.sealed[4].1, b"literal");
@@ -672,7 +658,6 @@ fn child_scope_rewinds_nodes_without_invalidating_parent_pending_member() {
         .unwrap();
     assert!(checker.reducer.nodes.is_empty());
     assert!(checker.reducer.keys.is_empty());
-    assert_eq!(sink.discarded, 0);
     checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
     // The earlier `parent` members stay ahead of the later scalar.
     let names = sink.sealed.iter().map(|fact| fact.0.as_slice()).collect::<Vec<_>>();
@@ -1072,7 +1057,6 @@ fn wide_nonroot_duplicates_preserve_links_heights_scopes_and_sorted_results() {
             assert_avl(&checker, Some(root));
         }
     }
-    assert_eq!(sink.discarded, 0);
     checker.feed(JsonStreamInput::Complete, &mut sink).unwrap();
     let mut oracle = Vec::new();
     serde_json::from_str::<MultiDom>(&source)
@@ -1163,7 +1147,6 @@ fn nonroot_decoded_duplicates_keep_nested_receipts_in_order_and_fail_stickily() 
                 (b"json.k000.new", b"true"),
             ]
         );
-        assert_eq!(sink.discarded, 0);
     }
     for (tail, failure, expected) in [
         (

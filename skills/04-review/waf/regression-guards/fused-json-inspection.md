@@ -38,8 +38,10 @@ Implementation ownership is split deliberately:
   object members keep canonical key order. Each occurrence is its own
   `ARGS`/`ARGS_NAMES` candidate with its own predicate facts, captures and
   counts (`&ARGS`, `ARGS_COMBINED_SIZE`, entry limits), as in ModSecurity's
-  argument multimap; earlier provisional results are never discarded, and the
-  checker no longer calls the sink's `discard`. A named macro such as
+  argument multimap; earlier provisional results are never discarded. The
+  sink has no whole-receipt `discard` hook and `ResultStore` no `discard`
+  reclamation (both removed after D-2); candidate records live until the store
+  is sealed or abandoned. A named macro such as
   `%{ARGS.json.k}` resolves to the first occurrence. More occurrences reach the
   existing entry, selection and result-store limits exactly as more distinct
   keys would. Dotted external-name collisions remain separate candidates

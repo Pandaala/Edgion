@@ -121,34 +121,6 @@ fn summary_no_hit_requires_completed_sole_profile_and_exact_survivor_count() {
 }
 
 #[test]
-fn summary_no_hit_rejects_reclaimed_profile_and_change_slots() {
-    let g = generation();
-    let mut s = store(&g);
-    let old = s.begin_candidate(b"json.a", 4, JsonScalarKind::String, None).unwrap();
-    s.record_changed_step(old, 0, 0, 4).unwrap();
-    s.complete_profile(old, 0).unwrap();
-    let old_receipt = finish(&mut s, old, &[0]);
-    s.discard(old_receipt).unwrap();
-    assert_eq!(s.usage().live_profiles, 0);
-    assert_eq!(s.usage().live_changes, 0);
-    let id = s.begin_candidate(b"json.a", 4, JsonScalarKind::String, None).unwrap();
-    s.complete_profile(id, 0).unwrap();
-    let receipt = finish(&mut s, id, &[0]);
-    s.seal(
-        Some(receipt),
-        JsonSemanticSummary {
-            argument_count: 1,
-            argument_value_bytes: 4,
-            ..JsonSemanticSummary::default()
-        },
-    )
-    .unwrap();
-    let (results, mut budget) = s.into_sealed().unwrap();
-    assert!(!results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 7));
-    budget.work(usize::MAX).unwrap_err();
-    assert!(!results.admits_summary_no_hit(&budget, &g, RuntimeLimits::default(), EvaluationMode::Accelerated, 0));
-}
-#[test]
 fn wide_no_hit_storage_uses_sparse_profile_records() {
     let mut source = String::new();
     for i in 0..97 {
@@ -287,8 +259,7 @@ fn stale_generation_and_unseen_profile_fail_closed() {
     let g = generation();
     let mut s = store(&g);
     let old = s.begin_candidate(b"a", 0, JsonScalarKind::Null, None).unwrap();
-    let receipt = finish(&mut s, old, &[]);
-    s.discard(receipt).unwrap();
+    s.records.candidates.remove(old.0, &mut s.budget).unwrap();
     let new = s.begin_candidate(b"b", 0, JsonScalarKind::Null, None).unwrap();
     assert_eq!(old.0.slot, new.0.slot);
     assert_ne!(old.0.generation, new.0.generation);
@@ -361,7 +332,14 @@ fn record_capacity_named_limits_and_generation_exhaustion_are_bounded() {
         ..id.0
     });
     let receipt = finish(&mut s, exhausted, &[]);
-    assert_eq!(s.discard(receipt), Err(StoreError::Generation));
+    let result = s.active(|store| {
+        store
+            .records
+            .candidates
+            .remove(receipt.head.0, &mut store.budget)
+            .map(drop)
+    });
+    assert_eq!(result, Err(StoreError::Generation));
     assert_eq!(s.usage().retained_bytes, 0);
     let _ = id;
 }
@@ -425,7 +403,7 @@ fn one_sided_concat_validates_foreign_and_stale_receipts_and_sticks() {
         };
         assert!(matches!(result, Err(StoreError::Identity)));
         assert!(matches!(foreign.concat(None, None), Err(StoreError::Identity)));
-        owner.discard(receipt).unwrap();
+        owner.records.candidates.remove(id.0, &mut owner.budget).unwrap();
         assert!(matches!(owner.concat(None, Some(receipt)), Err(StoreError::Identity)));
         assert!(matches!(owner.concat(None, None), Err(StoreError::Identity)));
     }
@@ -489,46 +467,38 @@ fn sharing_generation() -> CompiledGeneration {
 fn shared_stage_payload_bulk_cleanup_is_order_independent() {
     let g = sharing_generation();
     for owner_first in [false, true] {
-        for transform_error in [false, true] {
-            let mut s = store(&g);
-            let id = s.begin_candidate(b"json.x", 7, JsonScalarKind::String, None).unwrap();
-            let first = s.record_match(id, 0, 0, b"blocked").unwrap();
-            let token = s.stage_match_token(first).unwrap();
-            let alias = s.record_shared_match(id, 1, 0, token).unwrap();
-            s.add_capture(first, b"0", b"first").unwrap();
-            s.add_capture_range(first, b"1", 0, 7).unwrap();
-            s.add_capture(alias, b"0", b"second").unwrap();
-            s.add_capture_range(alias, b"1", 2, 3).unwrap();
-            assert_eq!(s.usage().matched_bytes, 7);
-            assert_eq!(s.usage().live_outcomes, 2);
-            if owner_first {
-                let local = LocalOutcomeId::from_full(first, s.records.outcomes.owner).unwrap();
-                s.records.candidates.get_mut(id.0).unwrap().outcomes = Some(local);
-                s.records.outcomes.get_mut(first.0).unwrap().next = Some(alias);
-                s.records.outcomes.get_mut(alias.0).unwrap().next = None;
-            }
-            if transform_error {
-                s.record_transform_error(
-                    id,
-                    0,
-                    CheckpointError {
-                        step: 1,
-                        checkpoint: 2,
-                        error: RuntimeError::SelectedValueLimit { limit: 1 },
-                    },
-                )
-                .unwrap();
-            } else {
-                s.complete_profile(id, 0).unwrap();
-                let receipt = finish(&mut s, id, &[0]);
-                s.discard(receipt).unwrap();
-            }
-            assert_eq!(
-                s.usage().matched_bytes + s.usage().capture_bytes + s.usage().live_outcomes,
-                0
-            );
-            assert_eq!(s.usage().live_captures, 0);
+        let mut s = store(&g);
+        let id = s.begin_candidate(b"json.x", 7, JsonScalarKind::String, None).unwrap();
+        let first = s.record_match(id, 0, 0, b"blocked").unwrap();
+        let token = s.stage_match_token(first).unwrap();
+        let alias = s.record_shared_match(id, 1, 0, token).unwrap();
+        s.add_capture(first, b"0", b"first").unwrap();
+        s.add_capture_range(first, b"1", 0, 7).unwrap();
+        s.add_capture(alias, b"0", b"second").unwrap();
+        s.add_capture_range(alias, b"1", 2, 3).unwrap();
+        assert_eq!(s.usage().matched_bytes, 7);
+        assert_eq!(s.usage().live_outcomes, 2);
+        if owner_first {
+            let local = LocalOutcomeId::from_full(first, s.records.outcomes.owner).unwrap();
+            s.records.candidates.get_mut(id.0).unwrap().outcomes = Some(local);
+            s.records.outcomes.get_mut(first.0).unwrap().next = Some(alias);
+            s.records.outcomes.get_mut(alias.0).unwrap().next = None;
         }
+        s.record_transform_error(
+            id,
+            0,
+            CheckpointError {
+                step: 1,
+                checkpoint: 2,
+                error: RuntimeError::SelectedValueLimit { limit: 1 },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            s.usage().matched_bytes + s.usage().capture_bytes + s.usage().live_outcomes,
+            0
+        );
+        assert_eq!(s.usage().live_captures, 0);
     }
 }
 
@@ -548,9 +518,7 @@ fn shared_stage_token_rejects_cross_scope_and_stale_reuse() {
             1 => s.record_shared_match(id, 2, 0, token),
             2 => s.record_shared_match(id, 1, 1, token),
             3 => {
-                s.complete_profile(id, 0).unwrap();
-                let receipt = finish(&mut s, id, &[0]);
-                s.discard(receipt).unwrap();
+                s.records.candidates.remove(id.0, &mut s.budget).unwrap();
                 let replacement = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
                 s.record_match(replacement, 0, 0, b"abc").unwrap();
                 s.record_shared_match(replacement, 1, 0, token)
@@ -873,24 +841,13 @@ fn sparse_qualified_names_seal_only_surviving_hit_views_and_validate_generation(
     )
     .unwrap();
     let mut s = store(&g);
-    let stale = s
-        .begin_candidate(b"json.replaced", 7, JsonScalarKind::String, None)
-        .unwrap();
-    s.record_match(stale, 0, 0, b"blocked").unwrap();
-    for profile in 0..g.json_inspection.profiles.len() {
-        s.complete_profile(stale, profile).unwrap();
-    }
-    let old = finish(
-        &mut s,
-        stale,
-        &(0..g.json_inspection.profiles.len()).collect::<Vec<_>>(),
-    );
-    s.discard(old).unwrap();
     let id = s
         .begin_candidate(b"json.replaced", 7, JsonScalarKind::String, None)
         .unwrap();
-    assert_eq!(id.0.slot, stale.0.slot);
-    assert_ne!(id.0.generation, stale.0.generation);
+    let stale = CandidateId(RawId {
+        generation: id.0.generation.wrapping_add(1),
+        ..id.0
+    });
     for group in 0..g.json_inspection.groups.len() {
         s.record_match(id, group, 0, b"blocked").unwrap();
     }
@@ -1200,9 +1157,7 @@ fn capture_range_admission_rejects_foreign_stale_and_invalid_ranges() {
             1 => s.add_capture_range(outcome, b"0", 4, 0),
             2 => s.add_capture_range(outcome, b"0", usize::MAX, 1),
             3 => {
-                s.complete_profile(id, 0).unwrap();
-                let receipt = finish(&mut s, id, &[0]);
-                s.discard(receipt).unwrap();
+                s.records.candidates.remove(id.0, &mut s.budget).unwrap();
                 let replacement = s.begin_candidate(b"json.x", 3, JsonScalarKind::String, None).unwrap();
                 s.record_match(replacement, 0, 0, b"abc").unwrap();
                 s.add_capture_range(outcome, b"0", 0, 1)
@@ -1302,58 +1257,6 @@ fn candidate_local_links_preserve_full_identity_domain_and_actual_layout() {
 }
 
 #[test]
-fn candidate_local_links_retain_stale_generations_after_pool_reuse() {
-    let g = generation();
-    let mut s = store(&g);
-    let old = s.begin_candidate(b"json.old", 3, JsonScalarKind::String, None).unwrap();
-    s.record_changed_step(old, 0, 0, 3).unwrap();
-    s.record_match(old, 0, 0, b"old").unwrap();
-    let old_candidate = LocalCandidateId::from_full(old, s.records.candidates.owner).unwrap();
-    let candidate = s.records.candidates.get(old.0).unwrap();
-    let old_profile = candidate.profiles.unwrap();
-    let old_outcome = candidate.outcomes.unwrap();
-    s.complete_profile(old, 0).unwrap();
-    let receipt = finish(&mut s, old, &[0]);
-    s.discard(receipt).unwrap();
-
-    let new = s.begin_candidate(b"json.new", 3, JsonScalarKind::String, None).unwrap();
-    s.record_changed_step(new, 0, 0, 3).unwrap();
-    s.record_match(new, 0, 0, b"new").unwrap();
-    let candidate = s.records.candidates.get(new.0).unwrap();
-    let new_profile = candidate.profiles.unwrap();
-    let new_outcome = candidate.outcomes.unwrap();
-    assert_eq!(old.0.slot, new.0.slot);
-    assert_ne!(old.0.generation, new.0.generation);
-    assert_eq!(old_profile.slot, new_profile.slot);
-    assert_ne!(old_profile.generation, new_profile.generation);
-    assert_eq!(old_outcome.slot, new_outcome.slot);
-    assert_ne!(old_outcome.generation, new_outcome.generation);
-    assert_eq!(old_candidate.full(s.records.candidates.owner), old);
-    assert!(matches!(
-        s.records
-            .candidates
-            .get(old_candidate.full(s.records.candidates.owner).0),
-        Err(StoreError::Identity)
-    ));
-    assert!(matches!(
-        s.records.profiles.get(old_profile.full(s.records.profiles.owner).0),
-        Err(StoreError::Identity)
-    ));
-    assert!(matches!(
-        s.records.outcomes.get(old_outcome.full(s.records.outcomes.owner).0),
-        Err(StoreError::Identity)
-    ));
-    s.complete_profile(new, 0).unwrap();
-    let receipt = finish(&mut s, new, &[0]);
-    s.seal(Some(receipt), JsonSemanticSummary::default()).unwrap();
-    let (sealed, mut budget) = s.into_sealed().unwrap();
-    assert_eq!(sealed.candidate(&mut budget, new).unwrap().name, b"json.new");
-    assert!(matches!(sealed.candidate(&mut budget, old), Err(StoreError::Identity)));
-    assert_eq!(budget.failure(), Some(StoreError::Identity));
-    assert!(matches!(sealed.candidate(&mut budget, new), Err(StoreError::Identity)));
-}
-
-#[test]
 fn candidate_local_heads_keep_profile_and_outcome_parent_checks_sticky() {
     let g = generation();
     for corrupt_profile in [true, false] {
@@ -1401,76 +1304,6 @@ fn candidate_local_heads_keep_profile_and_outcome_parent_checks_sticky() {
             Err(StoreError::Identity)
         ));
     }
-}
-
-#[test]
-fn candidate_local_chain_concat_discard_and_multi_object_reuse_preserve_order() {
-    let g = generation();
-    let mut s = store(&g);
-    let mut discarded = None;
-    let mut old = Vec::new();
-    for name in [b"json.old.a".as_slice(), b"json.old.b", b"json.old.c"] {
-        let id = s.begin_candidate(name, 3, JsonScalarKind::String, None).unwrap();
-        s.record_changed_step(id, 0, 0, 3).unwrap();
-        s.record_match(id, 0, 0, b"old").unwrap();
-        s.complete_profile(id, 0).unwrap();
-        let receipt = finish(&mut s, id, &[0]);
-        discarded = s.concat(discarded, Some(receipt)).unwrap();
-        old.push(id);
-    }
-    s.discard(discarded.unwrap()).unwrap();
-    assert_eq!(
-        (
-            s.usage().live_candidates,
-            s.usage().live_profiles,
-            s.usage().live_outcomes
-        ),
-        (0, 0, 0)
-    );
-    let retained = s.usage().retained_bytes;
-    let names = [b"json.new.a".as_slice(), b"json.new.b", b"json.new.c"];
-    let mut survivors = None;
-    let mut new = Vec::new();
-    for name in names {
-        let id = s.begin_candidate(name, 3, JsonScalarKind::String, None).unwrap();
-        s.record_changed_step(id, 0, 0, 3).unwrap();
-        s.record_match(id, 0, 0, b"new").unwrap();
-        s.complete_profile(id, 0).unwrap();
-        let receipt = finish(&mut s, id, &[0]);
-        survivors = s.concat(survivors, Some(receipt)).unwrap();
-        new.push(id);
-    }
-    assert_eq!(s.usage().retained_bytes, retained);
-    for id in &new {
-        assert!(old
-            .iter()
-            .any(|old| old.0.slot == id.0.slot && old.0.generation != id.0.generation));
-    }
-    s.seal(survivors, JsonSemanticSummary::default()).unwrap();
-    let (sealed, mut budget) = s.into_sealed().unwrap();
-    let mut next = sealed.receipt.map(|receipt| receipt.head);
-    for (index, name) in names.into_iter().enumerate() {
-        assert_eq!(next, Some(new[index]));
-        let candidate = sealed.candidate(&mut budget, next.unwrap()).unwrap();
-        assert_eq!(candidate.name, name);
-        next = candidate.next;
-        assert!(sealed.profile(&mut budget, new[index], 0).unwrap().record.is_some());
-        assert!(matches!(
-            sealed
-                .lookup_selected(
-                    &mut budget,
-                    new[index],
-                    0,
-                    &g,
-                    RuntimeLimits::default(),
-                    EvaluationMode::Accelerated
-                )
-                .map(|(outcome, _)| outcome)
-                .unwrap(),
-            SelectedOutcome::MatchOrError(_)
-        ));
-    }
-    assert_eq!(next, None);
 }
 
 #[test]

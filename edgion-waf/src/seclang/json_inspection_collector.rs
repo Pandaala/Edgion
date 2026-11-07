@@ -527,10 +527,6 @@ impl JsonCheckerSink for JsonCollector<'_, '_> {
         let result = self.state.store.concat(left, right).map_err(Into::into);
         self.sink_result(result)
     }
-    fn discard(&mut self, receipt: Receipt) -> Result<(), JsonCheckerSinkError> {
-        let result = self.state.store.discard(receipt).map_err(Into::into);
-        self.sink_result(result)
-    }
     fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<(), JsonCheckerSinkError> {
         self.state.captures.release();
         let result = (|| {

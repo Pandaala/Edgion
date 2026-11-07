@@ -122,8 +122,8 @@ impl JsonSemanticSummary {
 }
 
 /// Receipts are sink-owned logical handles, never parser slots or borrowed bytes.
-/// A pooled sink must generation-check reused IDs. Successful concat/discard
-/// consumes its inputs. On any callback error, abandon clears all sink state;
+/// A pooled sink must generation-check reused IDs. Successful concat consumes
+/// its inputs. On any callback error, abandon clears all sink state;
 /// no consumed receipt is retried. All callback payload borrows end on return.
 pub trait JsonCheckerSink {
     type Receipt: Copy;
@@ -139,10 +139,6 @@ pub trait JsonCheckerSink {
         left: Option<Self::Receipt>,
         right: Option<Self::Receipt>,
     ) -> Result<Option<Self::Receipt>, JsonCheckerSinkError>;
-    /// Reclaims owned facts; the sink charges its own bounded walk work.
-    /// The checker publishes every duplicate-key occurrence and does not
-    /// call this; it remains the sink's whole-receipt reclamation hook.
-    fn discard(&mut self, receipt: Self::Receipt) -> Result<(), JsonCheckerSinkError>;
     fn seal(
         &mut self,
         receipt: Option<Self::Receipt>,

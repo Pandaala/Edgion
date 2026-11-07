@@ -1399,58 +1399,6 @@ impl<'generation> ResultStore<'generation> {
             (None, None) => Ok(None),
         })
     }
-    pub(super) fn discard(&mut self, receipt: Receipt) -> Result<()> {
-        self.active(|store| {
-            let mut next = Some(receipt.head);
-            while let Some(id) = next {
-                let candidate = store.records.candidates.remove(id.0, &mut store.budget)?;
-                next = candidate.next.map(|id| id.full(store.records.candidates.owner));
-                let mut outcomes = candidate.outcomes.map(|id| id.full(store.records.outcomes.owner));
-                while let Some(outcome) = outcomes {
-                    outcomes = store.records.outcomes.get(outcome.0)?.next;
-                    store.free_outcome(outcome, id)?;
-                }
-                let mut profiles = candidate.profiles.map(|id| id.full(store.records.profiles.owner));
-                while let Some(profile) = profiles {
-                    if store.records.profiles.get(profile.0)?.owner != id {
-                        return Err(StoreError::Identity);
-                    }
-                    let record = store.records.profiles.remove(profile.0, &mut store.budget)?;
-                    profiles = record.next;
-                    let mut changes = record.changes;
-                    while let Some(change) = changes {
-                        if store.records.changes.get(change.0)?.owner != profile {
-                            return Err(StoreError::Identity);
-                        }
-                        changes = store.records.changes.remove(change.0, &mut store.budget)?.next;
-                        store.budget.usage.live_changes = sub(store.budget.usage.live_changes, 1)?;
-                    }
-                    store.budget.usage.live_profiles = sub(store.budget.usage.live_profiles, 1)?;
-                }
-                store.records.bytes.free(candidate.name, &mut store.budget)?;
-                store.records.bytes.free(candidate.states, &mut store.budget)?;
-                store.budget.usage.name_bytes = sub(store.budget.usage.name_bytes, candidate.name.len)?;
-                store.budget.usage.profile_metadata_bytes =
-                    sub(store.budget.usage.profile_metadata_bytes, candidate.states.len)?;
-                if let Some(lease) = candidate.deferred {
-                    store.records.bytes.free(lease, &mut store.budget)?;
-                    store.budget.usage.deferred_bytes = sub(store.budget.usage.deferred_bytes, lease.len)?;
-                    store.budget.usage.deferred_entries = sub(store.budget.usage.deferred_entries, 1)?;
-                }
-                store.budget.usage.live_candidates = sub(store.budget.usage.live_candidates, 1)?;
-                if id == receipt.tail {
-                    if next.is_some() {
-                        return Err(StoreError::Identity);
-                    }
-                    break;
-                }
-                if next.is_none() {
-                    return Err(StoreError::Identity);
-                }
-            }
-            Ok(())
-        })
-    }
     pub(super) fn seal(&mut self, receipt: Option<Receipt>, summary: JsonSemanticSummary) -> Result<()> {
         if self.records.domain != InspectionDomain::Json {
             return Err(StoreError::Identity);

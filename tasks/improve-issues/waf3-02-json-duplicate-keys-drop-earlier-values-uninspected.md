@@ -1,6 +1,6 @@
 # waf3-02: JSON duplicate keys discard every earlier value before inspection — payload in the first occurrence bypasses all ARGS rules
 
-- **Status**: implemented in the T14 D-2 decision commit (`feat(waf)!: publish every JSON duplicate-key occurrence as an ARGS candidate`), awaiting user keep/revert
+- **Status**: implemented in the T14 D-2 decision commit (`feat(waf)!: publish every JSON duplicate-key occurrence as an ARGS candidate`), awaiting user keep/revert. The follow-up `refactor(waf): remove the unused JSON discard hooks` deleted the then-uncalled `JsonCheckerSink::discard`, its collector impl and `ResultStore::discard`; a revert of D-2 must revert that commit too. The evidence below cites the pre-D-2 code.
 - **Category**: design-error
 - **Severity**: P2 (downgraded from P1 by independent verification)
 - **Scope**: local
