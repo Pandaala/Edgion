@@ -103,7 +103,7 @@ mod extra;
         )
         self.write("tests/support/aho_corasick/match_types.rs", "use super::*;\n")
         self.write(
-            "src/seclang/semantic.rs",
+            "src/seclang/semantic/fold.rs",
             "struct Projection { #[cfg(test)] inspected_folds: usize }\n",
         )
         self.assertEqual(layout.check(), [])
