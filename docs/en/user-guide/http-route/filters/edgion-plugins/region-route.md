@@ -114,6 +114,14 @@ hashCalc still use modulo 1000 for table bounds and precomputed hashes.
 Endpoints accept a hostname, IPv4 or bracketed IPv6 with an optional port in
 1–65535. URLs and empty hosts are invalid. Omitted ports default to 443 for TLS
 and 80 otherwise. Endpoint validation does not bypass post-DNS address checks.
+Hostnames resolve through the Gateway's backend DNS answer cache. The resolver
+and address family come from the Gateway's `edgion.io/dns-resolver` /
+`edgion.io/dns-resolver-ref` / `edgion.io/dns-lookup-family` annotations, then the
+EdgionGatewayConfig `dnsResolver` default; the default family is `ipv4Only`, so an
+IPv6-only hostname needs `ipv6Only` or `all`. A failed lookup is cached for 1–10
+seconds. IP literals are used as written.
+The first address that passes the checks, starting from a rotating offset, is
+dialed.
 Remote routing preserves the original Host, SNI, path and body. A target equal
 to the setting's regionName continues through the normal local upstream.
 

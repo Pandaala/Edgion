@@ -534,6 +534,10 @@ spec:
     cacheTtl: 5s
 ```
 
+Each `servers` entry must be an `ip`, `ip:port` or bracketed IPv6 address
+(port 53 by default); any other entry, including a comma-separated list in one
+string, makes the EGC `Accepted=False`.
+
 `lookupFamily` accepts `ipv4Only` (default), `ipv6Only`, or `all`. It may be set
 without `servers` or `linkSysRef`. The existing selected global EGC owner publishes
 this setting live together with its resolver candidate and TTL. Service then
@@ -547,8 +551,11 @@ The DNS default owner is the existing deterministic minimum store-key winner acr
 ## Backend DNS answer caching
 
 Cached ExternalName self-resolution (`gateway` mode and the `controller`-mode
-bridge) and AI provider hostnames share one bounded DNS answer cache in the
-Gateway, sized from the `lru_cache` defaults. Answers are keyed by resolver,
+bridge), AI provider hostnames and external destinations of the RegionRoute and
+DynamicExternalUpstream plugins share one bounded DNS answer cache in the
+Gateway, sized from the `lru_cache` defaults. All of them use this resolver and
+`lookupFamily` default (or the Gateway's override); IP-literal destinations are
+used as written. At most 256 addresses are kept per answer. Answers are keyed by resolver,
 hostname and address family, and every use still applies the upstream address
 safety checks.
 
@@ -560,14 +567,17 @@ safety checks.
   disables caching.
 - For 30 seconds after an answer expires it is still served while one request
   refreshes it. If the resolver is failing, the last good answer keeps being
-  served for as long as it is still requested (as Envoy keeps its last
-  resolution); an answer nobody requests for 30 seconds expires. Refreshes during
-  an outage back off exponentially from 1 to 10 seconds.
+  served while it is still requested (as Envoy keeps its last resolution), but
+  never more than 5 minutes past its freshness; an answer nobody requests for 30
+  seconds expires. Refreshes during an outage back off exponentially from 1 to
+  10 seconds, and a request stops waiting for a system-resolver lookup after 30
+  seconds (the OS lookup itself finishes in the background).
 - An authoritative empty answer (NXDOMAIN, or no records with SOA evidence)
   replaces the answer immediately. The system resolver cannot distinguish
   NXDOMAIN from an outage, and standard DNS treats an empty answer without SOA
   evidence as ambiguous; in those cases a removed name keeps being served until
-  the resolver answers successfully or the name stops being requested.
+  the resolver answers successfully, the name stops being requested, or the
+  5-minute limit is reached.
 - A failed lookup with no answer to fall back on is cached for 1 second,
   doubling per consecutive failure up to 10 seconds, and concurrent lookups of
   the same cold name share a single resolver query.

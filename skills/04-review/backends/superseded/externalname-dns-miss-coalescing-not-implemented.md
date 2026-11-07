@@ -10,11 +10,12 @@ knowledge_type: superseded
 # ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — SUPERSEDED
 
 > **Inactive.** Superseded on 2026-11-06 by finding `common-02`. DNS answers for AI upstreams,
-> cached ExternalName self-resolution and every `EgressResolver` now go through the shared
-> `DnsAnswerCache`, which coalesces same-key cold misses, caches failures for 1 s and serves
-> bounded stale answers. The implementation adopted this page's "Shape To Use If This Is
-> Reopened" (per-key `tokio::sync::Mutex` + cache re-check, no admission budget, short negative
-> entry). Current rule: [DNS answer cache identity and lifecycle](../regression-guards/dns-answer-cache-identity-and-lifecycle.md).
+> cached ExternalName self-resolution and every `EgressResolver` now go through a
+> `DnsAnswerCache` instance, which coalesces same-key cold misses, caches failures with a 1-10 s
+> exponential back-off and serves stale answers (sliding while requested, bounded by a stale
+> limit). Its coalescing uses this page's "Shape To Use If This Is Reopened" (per-key
+> `tokio::sync::Mutex` + cache re-check, no admission budget); the failure back-off and stale
+> serving go beyond that shape, which this page's body had declined. Current rule: [DNS answer cache identity and lifecycle](../regression-guards/dns-answer-cache-identity-and-lifecycle.md).
 > The trigger that reopened it: the AI upstream path resolved on every attempt with no cache at
 > all, which this page's rationale (centered on the ExternalName bridge) did not cover. The text
 > below is historical evidence.

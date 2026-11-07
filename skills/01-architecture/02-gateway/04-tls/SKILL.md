@@ -145,9 +145,10 @@ Responsibilities (this is the only true effective point for `min_tls_version`):
 - Otherwise use the ordinary EdgionTls match first, then the certificate-only Gateway entry as fallback.
 - Resolve selected EdgionTls minimum over the EGC default, then call `ssl.set_min_proto_version(...)` per connection.
   - On failure, fail-closed: `err_log = "minimum TLS version rejected"` + `log_ssl` + return `Err(SelectCertError::ERROR)`.
+- Install the selected policy's session id context (`SSL_set_session_id_context`) so a session never resumes under another selected policy; see the [session resumption isolation guard](../../../04-review/tls/regression-guards/session-resumption-policy-isolation.md).
 - Write the selected EdgionTls, Gateway entry, or exact Gateway/EdgionTls overlay pair plus the resolved SNI into SSL ex_data via `store_ssl_ctx` as a snapshot.
 - Return `Ok(())` only after a usable match is selected and `store_ssl_ctx` succeeds, allowing the handshake to proceed to cert_cb.
-- Return `Err(SelectCertError::ERROR)` after writing the connection audit when any early decision fails: SNI and configured fallback SNI are both absent; the Gateway frontend outcome is `StrictReject`; exact overlay selection finds a client-auth/attachment conflict; applying the selected EdgionTls minimum version fails; snapshot storage fails; or neither matcher supplies a certificate.
+- Return `Err(SelectCertError::ERROR)` after writing the connection audit when any early decision fails: SNI and configured fallback SNI are both absent; the Gateway frontend outcome is `StrictReject`; exact overlay selection finds a client-auth/attachment conflict; applying the selected EdgionTls minimum version fails; installing the session id context fails (`"session context"` / `"session context selection"`); snapshot storage fails; or neither matcher supplies a certificate.
 
 Why `min_tls_version` cannot be set in cert_cb: BoringSSL `handshake_server.cc:710` makes it explicit — the version range is frozen immediately after select_cb; cert_cb (`L759`) is one step too late.
 
@@ -184,8 +185,8 @@ Wrapped in `edgion_common::startup::catch_redacted_panic` so neither a panic nor
 ### Overall priority
 
 ```
-ClientHello → select_cb (SNI resolve + identity selection + effective TLS policy + snapshot)
-            ├─ no SNI / cert not found / min ver fail / store_ssl_ctx fail
+ClientHello → select_cb (SNI resolve + identity selection + effective TLS policy + session id context + snapshot)
+            ├─ no SNI / cert not found / min ver fail / session context fail / store_ssl_ctx fail
             │     → log_ssl once + return Err → BoringSSL abort, cert_cb does not fire
             └─ hit → snapshot stored → return Ok
             → freeze version range

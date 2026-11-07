@@ -130,12 +130,13 @@ fn store_stats_response_serializes() {
         dns_answer_cache: DnsAnswerCacheStoreStats {
             upstream: Default::default(),
             egress: Default::default(),
+            request_egress: Default::default(),
         },
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert!(json.is_object());
     // Residue detection exempts `entries` and requires `in_flight` to reach zero.
-    for instance in ["upstream", "egress"] {
+    for instance in ["upstream", "egress", "request_egress"] {
         assert_eq!(json["dns_answer_cache"][instance]["entries"], 0);
         assert_eq!(json["dns_answer_cache"][instance]["in_flight"], 0);
         assert!(json["dns_answer_cache"][instance]["in_flight_keys"].is_array());

@@ -91,6 +91,10 @@ spec:
 允许空隙，落入空隙的请求正常代理。端点支持主机名、IPv4 或方括号 IPv6，
 可选端口为 1–65535，不接受 URL 或空主机。tls 默认 true；缺省端口为 TLS 的 443
 或非 TLS 的 80。配置校验不绕过 DNS 解析后的地址安全检查。
+主机名通过 Gateway 的后端 DNS 应答缓存解析。解析器和地址族依次取自 Gateway 的
+`edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref` / `edgion.io/dns-lookup-family`
+注解，以及 EdgionGatewayConfig `dnsResolver` 默认值；默认地址族为 `ipv4Only`，只有
+IPv6 记录的主机名需要配置 `ipv6Only` 或 `all`。解析失败会缓存 1–10 秒。IP 字面量按原样使用。从轮转的起始位置开始，连接第一个通过检查的地址。
 
 远程路由保留原始 Host、SNI、路径和请求体。目标等于设置中的 regionName 时，
 使用正常本地上游。failoverTo 必须指向另一行，不允许自引用和循环；执行时只跳一层，

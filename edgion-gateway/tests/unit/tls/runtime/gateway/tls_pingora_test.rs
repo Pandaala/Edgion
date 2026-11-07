@@ -2,6 +2,7 @@ use super::{
     install_compiled_serving_identity, pick_secret_index, select_gateway_edgion_tls_overlay, CompiledEdgionTls, SslCtx,
     TlsCallback,
 };
+use crate::runtime::matching::tls::{der_list_digest, SessionContextId};
 use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
 use edgion_resources::resources::edgion_tls::{
     ClientAuthConfig, ClientAuthMode, EdgionTls, EdgionTlsSpec, ResolvedListenerAttachment,
@@ -193,20 +194,16 @@ fn overlay_fixture(attached_gateway: &str, client_auth: bool) -> (Arc<EdgionTls>
         },
         status: None,
     });
-    let gateway = GatewayTlsEntry {
-        attachment: ResolvedListenerAttachment {
+    let gateway = GatewayTlsEntry::for_test(
+        ResolvedListenerAttachment {
             gateway_namespace: "default".to_string(),
             gateway_name: "winner".to_string(),
             listener_name: "https".to_string(),
             listener_key,
             gateway_proof,
         },
-        gateway_creation_ts: None,
-        certificate_refs: Vec::new(),
-        compiled_serving_certificates: None,
-        compiled_frontend_ca_store: None,
-        frontend_mtls: FrontendMtlsOutcome::StrictEffective,
-    };
+        FrontendMtlsOutcome::StrictEffective,
+    );
     (tls, gateway)
 }
 
@@ -552,6 +549,7 @@ fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
         let private_key = PKey::private_key_from_pem(leaf_key.serialize_pem().as_bytes()).unwrap();
         let compiled = Arc::new(CompiledServingCertificate {
             chain: Arc::from(chain),
+            chain_digest: der_list_digest(chain_der.iter().map(Vec::as_slice)),
             atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&chain_der).unwrap()),
             key_type: private_key.id(),
             private_key,
@@ -567,6 +565,7 @@ fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
     let (new_identity, new_root) = identity("new");
     let invalid_replacement = Arc::new(CompiledServingCertificate {
         chain: old_identity.chain.clone(),
+        chain_digest: old_identity.chain_digest,
         atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&[b"not-der".to_vec()]).unwrap()),
         private_key: old_identity.private_key.clone(),
         key_type: old_identity.key_type,
@@ -1087,6 +1086,7 @@ fn selected_policy_negotiates_native_edgion_and_overlay_with_pinned_generation()
                     } else {
                         FrontendMtlsOutcome::NotConfigured
                     };
+                    gateway.refresh_session_context_for_test(None);
                     let gateway = Arc::new(gateway);
                     if source == "overlay" {
                         identity.tls.spec.warm_listener_attachment_index();
@@ -1194,5 +1194,439 @@ fn selected_policy_negotiates_native_edgion_and_overlay_with_pinned_generation()
                 "{source}: {label}"
             );
         }
+    }
+}
+
+/// Two EdgionTls resources sharing one serving identity on one listener: a
+/// one-way TLS host and a `Mutual` host, plus a client identity issued by the
+/// Mutual host's CA.
+struct ResumptionFixture {
+    public: Arc<CompiledEdgionTls>,
+    admin: Arc<CompiledEdgionTls>,
+    client_cert: boring::x509::X509,
+    client_key: boring::pkey::PKey<boring::pkey::Private>,
+    ca_der: Vec<u8>,
+}
+
+fn resumption_fixture() -> ResumptionFixture {
+    use edgion_resources::constants::secret_keys::tls::CA_CERT;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+    use std::collections::BTreeMap;
+
+    let server_key = KeyPair::generate().unwrap();
+    let chain = serving_chain("resume", &server_key);
+    let base = edgion_tls_identity(chain.chain_pem, server_key.serialize_pem());
+
+    let mut public = (*base).clone();
+    public.metadata.name = Some("public".to_string());
+    public.spec.hosts = vec!["public.example.com".to_string()];
+    public.spec.client_auth = None;
+
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca_params = CertificateParams::default();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "resume-client-ca");
+    let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
+    let ca = ca_params.self_signed(&ca_key).unwrap();
+    let client_key = KeyPair::generate().unwrap();
+    let client = CertificateParams::new(vec!["client.example.com".to_string()])
+        .unwrap()
+        .signed_by(&client_key, &ca_issuer)
+        .unwrap();
+
+    let mut admin = (*base).clone();
+    admin.metadata.name = Some("admin".to_string());
+    admin.spec.hosts = vec!["admin.example.com".to_string()];
+    admin.spec.client_auth = Some(ClientAuthConfig {
+        mode: ClientAuthMode::Mutual,
+        ca_secret_ref: Some(SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "client-ca".to_string(),
+            namespace: None,
+        }),
+        verify_depth: 1,
+        ca_secret: Some(Secret {
+            metadata: ObjectMeta {
+                name: Some("client-ca".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([(
+                CA_CERT.to_string(),
+                ByteString(ca.pem().into_bytes()),
+            )])),
+            ..Default::default()
+        }),
+        allowed_sans: None,
+        allowed_cns: None,
+    });
+
+    let public = compiled(Arc::new(public));
+    let admin = compiled(Arc::new(admin));
+    assert!(public.identity.is_ok() && admin.identity.is_ok());
+    assert!(matches!(admin.client_ca_store, Ok(Some(_))));
+    ResumptionFixture {
+        public,
+        admin,
+        client_cert: boring::x509::X509::from_der(client.der()).unwrap(),
+        client_key: boring::pkey::PKey::private_key_from_der(&client_key.serialize_der()).unwrap(),
+        ca_der: ca.der().to_vec(),
+    }
+}
+
+/// Outcome of one in-memory handshake against the shared server context.
+struct ResumptionOutcome {
+    completed: bool,
+    resumed: bool,
+}
+
+/// Drive one in-memory handshake through the shared server `SslContext`,
+/// with the real certificate callback. `offer` is the session the client tries
+/// to resume, regardless of SNI (an attacker controls its own ClientHello).
+/// Newly issued sessions are pushed into `issued`. With `tickets == false` the
+/// client refuses tickets, so TLS 1.2 resumes through the server session-ID
+/// cache instead.
+#[allow(clippy::too_many_arguments)]
+fn resumption_handshake(
+    runtime: &tokio::runtime::Runtime,
+    server_context: &boring::ssl::SslContext,
+    version: boring::ssl::SslVersion,
+    tickets: bool,
+    sni: &str,
+    offer: Option<&boring::ssl::SslSession>,
+    identity: Option<(&boring::x509::X509, &boring::pkey::PKey<boring::pkey::Private>)>,
+    issued: &Arc<parking_lot::Mutex<Vec<boring::ssl::SslSession>>>,
+) -> ResumptionOutcome {
+    use boring::ssl::{
+        ErrorCode, Ssl, SslContext, SslMethod, SslOptions, SslSessionCacheMode, SslStream, SslVerifyMode,
+    };
+    use foreign_types::ForeignTypeRef;
+    use pingora_core::listeners::TlsAccept;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::io::{self, Read, Write};
+    use std::rc::Rc;
+
+    struct MemoryStream {
+        incoming: Rc<RefCell<VecDeque<u8>>>,
+        outgoing: Rc<RefCell<VecDeque<u8>>>,
+    }
+    impl Read for MemoryStream {
+        fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+            let mut incoming = self.incoming.borrow_mut();
+            if incoming.is_empty() && !target.is_empty() {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let count = target.len().min(incoming.len());
+            for slot in &mut target[..count] {
+                *slot = incoming.pop_front().unwrap();
+            }
+            Ok(count)
+        }
+    }
+    impl Write for MemoryStream {
+        fn write(&mut self, source: &[u8]) -> io::Result<usize> {
+            self.outgoing.borrow_mut().extend(source);
+            Ok(source.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    unsafe extern "C" fn pause_certificate(_: *mut boring_sys::SSL, _: *mut std::ffi::c_void) -> std::ffi::c_int {
+        -1
+    }
+
+    let server_ssl = Ssl::new(server_context).unwrap();
+    unsafe { boring_sys::SSL_set_cert_cb(server_ssl.as_ptr(), Some(pause_certificate), std::ptr::null_mut()) };
+
+    let mut client = SslContext::builder(SslMethod::tls()).unwrap();
+    client.set_min_proto_version(Some(version)).unwrap();
+    client.set_max_proto_version(Some(version)).unwrap();
+    client.set_verify(SslVerifyMode::NONE);
+    client.set_session_cache_mode(SslSessionCacheMode::CLIENT);
+    if !tickets {
+        client.set_options(SslOptions::NO_TICKET);
+    }
+    let sink = issued.clone();
+    client.set_new_session_callback(move |_, session| sink.lock().push(session));
+    if let Some((certificate, key)) = identity {
+        client.set_certificate(certificate).unwrap();
+        client.set_private_key(key).unwrap();
+    }
+    let mut client_ssl = Ssl::new(&client.build()).unwrap();
+    client_ssl.set_hostname(sni).unwrap();
+    if let Some(session) = offer {
+        unsafe { client_ssl.set_session(session).unwrap() };
+    }
+
+    let a = Rc::new(RefCell::new(VecDeque::new()));
+    let b = Rc::new(RefCell::new(VecDeque::new()));
+    let mut server = SslStream::new(
+        server_ssl,
+        MemoryStream {
+            incoming: a.clone(),
+            outgoing: b.clone(),
+        },
+    )
+    .unwrap();
+    let mut client = SslStream::new(
+        client_ssl,
+        MemoryStream {
+            incoming: b,
+            outgoing: a,
+        },
+    )
+    .unwrap();
+    let callback = TlsCallback::new(443);
+    let (mut client_done, mut server_done, mut failed) = (false, false, false);
+    for _ in 0..32 {
+        if !client_done {
+            match client.connect() {
+                Ok(()) => client_done = true,
+                Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                Err(_) => failed = true,
+            }
+        }
+        if !server_done && !failed {
+            match server.accept() {
+                Ok(()) => server_done = true,
+                Err(error) if error.code() == ErrorCode::WANT_READ => {}
+                Err(error) if error.code() == ErrorCode::WANT_X509_LOOKUP => {
+                    runtime.block_on(callback.certificate_callback(server.ssl_mut()));
+                    unsafe { boring_sys::SSL_set_cert_cb(server.ssl().as_ptr(), None, std::ptr::null_mut()) };
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed || (client_done && server_done) {
+            break;
+        }
+    }
+    let completed = !failed && client_done && server_done;
+    let resumed = completed && server.ssl().session_reused();
+    if completed {
+        runtime.block_on(callback.handshake_complete_callback(server.ssl()));
+        // BoringSSL defers TLS 1.3 tickets until the server's first write, so
+        // write one byte and let the client read past the ticket records.
+        server.ssl_write(b"x").unwrap();
+        let mut scratch = [0u8; 1];
+        assert_eq!(client.ssl_read(&mut scratch).unwrap(), 1);
+    }
+    ResumptionOutcome { completed, resumed }
+}
+
+/// Shared server context whose select callback maps SNI to a prepared
+/// selection and then runs the real `apply_selected_downstream_policy`.
+fn isolation_server(selections: Vec<(&'static str, SslCtx)>) -> boring::ssl::SslContext {
+    use crate::tls::downstream_policy::DownstreamTlsPolicy;
+    use boring::ssl::{NameType, SelectCertError, SslContext, SslMethod};
+
+    let policy = Arc::new(DownstreamTlsPolicy::compile(None));
+    let mut server = SslContext::builder(SslMethod::tls()).unwrap();
+    server.set_select_certificate_callback(move |mut hello| {
+        let sni = hello.servername(NameType::HOST_NAME).ok_or(SelectCertError::ERROR)?;
+        let selected = selections
+            .iter()
+            .find(|(host, _)| *host == sni)
+            .map(|(_, selected)| selected.clone())
+            .ok_or(SelectCertError::ERROR)?;
+        if super::apply_selected_downstream_policy(hello.ssl_mut(), &selected, &policy, false).is_err() {
+            return Err(SelectCertError::ERROR);
+        }
+        if !super::ssl_ctx_ex_data::store_ssl_ctx(hello.ssl_mut(), &selected) {
+            return Err(SelectCertError::ERROR);
+        }
+        Ok(())
+    });
+    server.build()
+}
+
+/// For TLS 1.2 tickets, TLS 1.2 session-ID cache and TLS 1.3 PSK: a session
+/// from the one-way `public` host resumes on itself (control), never on the
+/// mTLS `admin` host without a certificate (the full handshake then fails
+/// closed), and a legitimate client still completes in full. The admin session
+/// resumes on its own policy but never on the `public` host, and no attempt
+/// fails because of session context selection or installation.
+fn assert_cross_policy_isolation(
+    runtime: &tokio::runtime::Runtime,
+    label: &str,
+    public: SslCtx,
+    admin: SslCtx,
+    fixture: &ResumptionFixture,
+) {
+    use boring::ssl::SslVersion;
+
+    for (version, tickets) in [
+        (SslVersion::TLS1_2, true),
+        (SslVersion::TLS1_2, false),
+        (SslVersion::TLS1_3, true),
+    ] {
+        let case = format!("{label} {version:?} tickets={tickets}");
+        let entries = crate::observe::logs::ssl_log::tests::capture(|| {
+            let server = isolation_server(vec![
+                ("public.example.com", public.clone()),
+                ("admin.example.com", admin.clone()),
+            ]);
+            let issued = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let run = |sni: &str, offer: Option<&boring::ssl::SslSession>, identity| {
+                resumption_handshake(runtime, &server, version, tickets, sni, offer, identity, &issued)
+            };
+
+            let first = run("public.example.com", None, None);
+            assert!(first.completed && !first.resumed, "{case}: public full handshake");
+            let session = issued.lock().last().cloned().expect("public host must issue a session");
+
+            // Control: the same policy resumes, so the probe is not vacuous.
+            let same = run("public.example.com", Some(&session), None);
+            assert!(same.completed && same.resumed, "{case}: same-policy resumption");
+
+            // Attack: the public session offered under the mTLS host's SNI.
+            let cross = run("admin.example.com", Some(&session), None);
+            assert!(!cross.resumed, "{case}: cross-policy session must not resume");
+            assert!(!cross.completed, "{case}: mTLS host must demand a certificate");
+
+            let identity = Some((&fixture.client_cert, &fixture.client_key));
+            let legit = run("admin.example.com", Some(&session), identity);
+            assert!(legit.completed && !legit.resumed, "{case}: mTLS full handshake");
+            let admin_session = issued.lock().last().cloned().expect("admin host must issue a session");
+
+            // The mTLS policy keeps resumption for its own sessions.
+            let admin_again = run("admin.example.com", Some(&admin_session), identity);
+            assert!(admin_again.completed && admin_again.resumed, "{case}: mTLS resumption");
+
+            // Reverse direction: an mTLS session does not resume on the public host.
+            let reverse = run("public.example.com", Some(&admin_session), None);
+            assert!(reverse.completed && !reverse.resumed, "{case}: reverse cross-policy");
+        });
+        for entry in &entries {
+            let reason = entry.err_log.as_deref();
+            assert!(
+                !matches!(reason, Some("session context" | "session context selection")),
+                "{case}: unexpected session context failure: {reason:?}"
+            );
+        }
+    }
+}
+
+/// gw-infra-01: EdgionTls selections sharing one serving identity must not
+/// share sessions across client-auth policies.
+#[test]
+fn session_resumption_is_isolated_per_selected_policy() {
+    let _guard = HANDSHAKE_TEST_LOCK.lock();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let fixture = resumption_fixture();
+    let select = |identity: &Arc<CompiledEdgionTls>| {
+        let mut selected = SslCtx::new(443);
+        selected.meta.is_mtls = identity.tls.is_mtls_enabled();
+        selected.matched_edgion_tls = Some(identity.clone());
+        selected
+    };
+    assert_cross_policy_isolation(
+        &runtime,
+        "EdgionTls",
+        select(&fixture.public),
+        select(&fixture.admin),
+        &fixture,
+    );
+}
+
+/// gw-infra-01: two Gateway entries with the same attachment and serving
+/// certificate that differ only in the frontend client-auth decision (none vs
+/// strict `frontendValidation`) must not share sessions.
+#[test]
+fn gateway_frontend_validation_sessions_are_isolated() {
+    use pingora_core::tls::x509::store::X509StoreBuilder;
+
+    let _guard = HANDSHAKE_TEST_LOCK.lock();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let fixture = resumption_fixture();
+    let identity = fixture.public.identity.as_ref().unwrap().clone();
+    let gateway = |outcome: FrontendMtlsOutcome| {
+        let (_, mut entry) = overlay_fixture("winner", false);
+        entry.certificate_refs = vec![fixture.public.tls.spec.secret_ref.clone()];
+        entry.compiled_serving_certificates = Some(Arc::from(vec![identity.clone()]));
+        entry.frontend_mtls = outcome;
+        let mut ca_digest = None;
+        if outcome == FrontendMtlsOutcome::StrictEffective {
+            let mut store = X509StoreBuilder::new().unwrap();
+            store
+                .add_cert(boring::x509::X509::from_der(&fixture.ca_der).unwrap())
+                .unwrap();
+            entry.compiled_frontend_ca_store = Some(Arc::new(store.build()));
+            ca_digest = Some(der_list_digest([fixture.ca_der.as_slice()].into_iter()));
+        }
+        entry.refresh_session_context_for_test(ca_digest.as_ref());
+        let mut selected = SslCtx::new(443);
+        selected.matched_gateway_tls = Some(Arc::new(entry));
+        selected
+    };
+    assert_cross_policy_isolation(
+        &runtime,
+        "Gateway",
+        gateway(FrontendMtlsOutcome::NotConfigured),
+        gateway(FrontendMtlsOutcome::StrictEffective),
+        &fixture,
+    );
+}
+
+/// `apply_selected_downstream_policy` installs the id of the branch cert_cb
+/// will apply for each shape select_cb produces, and an overlay pairing is
+/// distinct from both of its parts.
+#[test]
+fn selected_session_context_follows_the_applied_branch() {
+    use crate::tls::downstream_policy::DownstreamTlsPolicy;
+    use boring::ssl::{Ssl, SslContext, SslMethod};
+    use foreign_types::ForeignTypeRef;
+
+    let fixture = resumption_fixture();
+    let (_, mut gateway) = overlay_fixture("winner", false);
+    gateway.frontend_mtls = FrontendMtlsOutcome::InsecureFallback;
+    gateway.refresh_session_context_for_test(None);
+    let gateway = Arc::new(gateway);
+    let edgion_tls = fixture.public.clone();
+    let overlay = SessionContextId::overlay(&gateway.session_context(), &edgion_tls.session_context);
+    assert_ne!(overlay, gateway.session_context());
+    assert_ne!(overlay, edgion_tls.session_context);
+    assert_ne!(gateway.session_context(), edgion_tls.session_context);
+
+    let mut native = SslCtx::new(443);
+    native.matched_gateway_tls = Some(gateway.clone());
+    let mut edgion = SslCtx::new(443);
+    edgion.matched_edgion_tls = Some(edgion_tls.clone());
+    let mut paired = native.clone();
+    paired.gateway_edgion_tls_overlay = Some(edgion_tls.clone());
+    let cases = [
+        (native, gateway.session_context()),
+        (edgion, edgion_tls.session_context),
+        (paired, overlay),
+    ];
+    let policy = DownstreamTlsPolicy::compile(None);
+    let context = SslContext::builder(SslMethod::tls()).unwrap().build();
+    for (selected, expected) in cases {
+        let mut ssl = Ssl::new(&context).unwrap();
+        super::apply_selected_downstream_policy(&mut ssl, &selected, &policy, false).unwrap();
+        let installed = unsafe {
+            let mut length = 0usize;
+            let pointer = boring_sys::SSL_get0_session_id_context(ssl.as_ptr(), &mut length);
+            std::slice::from_raw_parts(pointer, length).to_vec()
+        };
+        assert_eq!(installed, expected.as_bytes());
+    }
+    // Shapes select_cb never produces fail closed.
+    let mut orphan_overlay = SslCtx::new(443);
+    orphan_overlay.gateway_edgion_tls_overlay = Some(edgion_tls.clone());
+    orphan_overlay.matched_edgion_tls = Some(edgion_tls);
+    for selected in [SslCtx::new(443), orphan_overlay] {
+        let mut ssl = Ssl::new(&context).unwrap();
+        assert_eq!(
+            super::apply_selected_downstream_policy(&mut ssl, &selected, &policy, false),
+            Err("session context selection")
+        );
     }
 }

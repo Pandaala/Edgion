@@ -1,6 +1,6 @@
 use crate::observe::logs::ssl_log::log_ssl;
 use crate::observe::logs::LogBuffer;
-use crate::runtime::matching::tls::CompiledServingCertificate;
+use crate::runtime::matching::tls::{CompiledServingCertificate, SessionContextId};
 use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::tls::runtime::backend::set_mtls_verify_callback;
@@ -437,8 +437,9 @@ impl TlsAccept for TlsCallback {
     }
 }
 
-/// Apply the selected identity's overrides against the single captured EGC.
-/// Shared by every selection branch; no later callback may reload policy.
+/// Apply the selected identity's overrides against the single captured EGC,
+/// then bind the selected policy's session id context. Shared by every
+/// selection branch; no later callback may reload policy.
 fn apply_selected_downstream_policy(
     ssl: &mut SslRef,
     selected: &SslCtx,
@@ -454,7 +455,56 @@ fn apply_selected_downstream_policy(
         local.and_then(|entry| entry.tls.spec.min_tls_version),
         local.map(|entry| &entry.operator_cipher),
         enforce_fips,
-    )
+    )?;
+    install_session_context(ssl, &selected_session_context(selected)?)
+}
+
+/// The session id context of the policy cert_cb will apply, chosen from the
+/// same pinned snapshot. For the three shapes select_cb produces (Gateway with
+/// optional overlay, EdgionTls alone, Gateway alone) this is the branch
+/// `certificate_callback` takes; any other shape fails closed.
+fn selected_session_context(selected: &SslCtx) -> std::result::Result<SessionContextId, &'static str> {
+    match (
+        selected.matched_gateway_tls.as_ref(),
+        selected.gateway_edgion_tls_overlay.as_ref(),
+        selected.matched_edgion_tls.as_ref(),
+    ) {
+        (Some(gateway), Some(overlay), None) => Ok(SessionContextId::overlay(
+            &gateway.session_context(),
+            &overlay.session_context,
+        )),
+        (None, None, Some(edgion_tls)) => Ok(edgion_tls.session_context),
+        (Some(gateway), None, None) => Ok(gateway.session_context()),
+        _ => Err("session context selection"),
+    }
+}
+
+/// Scope session resumption to the selected policy. BoringSSL resumes only
+/// sessions whose context equals this one, and a resumed handshake skips
+/// client-certificate verification, so a session from any other policy on
+/// this listener falls back to a full handshake. Runs before the session
+/// lookup (select_cb precedes both the TLS 1.2 and TLS 1.3 resumption checks).
+fn install_session_context(ssl: &mut SslRef, id: &SessionContextId) -> std::result::Result<(), &'static str> {
+    #[cfg(feature = "boringssl")]
+    {
+        let bytes = id.as_bytes();
+        // SAFETY: `ssl` is a live handle borrowed exclusively for the callback;
+        // BoringSSL copies the 32 bytes (within SSL_MAX_SID_CTX_LENGTH).
+        let installed = unsafe { boring_sys::SSL_set_session_id_context(ssl.as_ptr(), bytes.as_ptr(), bytes.len()) };
+        if installed != 1 {
+            // Consume the queue so this failure is not attributed to a later call.
+            let _ = boring::error::ErrorStack::get();
+            return Err("session context");
+        }
+        Ok(())
+    }
+    // The dormant non-BoringSSL backend has no per-SSL context primitive; fail
+    // closed rather than allow unscoped resumption.
+    #[cfg(not(feature = "boringssl"))]
+    {
+        let _ = (ssl, id);
+        Err("session context")
+    }
 }
 
 fn edgion_tls_attaches_to_gateway(candidate: &EdgionTls, gateway: &GatewayTlsEntry) -> bool {

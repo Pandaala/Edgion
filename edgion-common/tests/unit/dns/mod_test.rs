@@ -69,6 +69,32 @@ fn httpdns_loopback_policy_changes_cache_fingerprint() {
     assert_ne!(before, ResolverSpec::HttpDns(prepare(config)).fingerprint());
 }
 
+#[test]
+fn httpdns_owner_identity_separates_identical_configs() {
+    let config: HttpDnsResolverConfig = serde_json::from_value(serde_json::json!({"preset": "aliyun"})).unwrap();
+    let tenant_a = ResolverSpec::HttpDns(prepare(config.clone()))
+        .fingerprint()
+        .into_owned();
+    let mut other = (*owner(config.clone())).clone();
+    other.metadata.namespace = Some("tenant-b".into());
+    let tenant_b = ResolverSpec::HttpDns(HttpDnsCandidate::from_link_sys(Arc::new(other)).unwrap().prepare())
+        .fingerprint()
+        .into_owned();
+    assert_ne!(tenant_a, tenant_b, "identical config text owned by another namespace");
+    assert!(tenant_a.contains(":apps/resolver:"), "{tenant_a}");
+}
+
+#[test]
+fn family_selection_deduplicates_canonical_addresses_in_order() {
+    let policy = crate::dns::DnsQueryPolicy::Family(crate::dns::DnsLookupFamily::All);
+    let ips: Vec<std::net::IpAddr> = ["192.0.2.1", "::ffff:192.0.2.1", "192.0.2.2", "192.0.2.1"]
+        .iter()
+        .map(|ip| ip.parse().unwrap())
+        .collect();
+    let selected: Vec<String> = policy.select(ips).iter().map(ToString::to_string).collect();
+    assert_eq!(selected, vec!["192.0.2.1", "192.0.2.2"]);
+}
+
 #[tokio::test]
 async fn system_spec_resolves_localhost() {
     let addrs = resolve(&ResolverSpec::System, "localhost", crate::dns::DnsQueryPolicy::Native)
@@ -521,23 +547,30 @@ fn fingerprints_borrow_fixed_and_prepared_identity() {
     assert_eq!(value, prepared.address_fingerprint);
     assert_eq!(value.as_ptr(), prepared.address_fingerprint.as_ptr());
 
+    // The identity is the parsed server addresses the resolver queries.
     let cases: &[(&[&str], &str)] = &[
         (&[], "std:"),
-        (&[""], "std:"),
-        (&["", ""], "std:,"),
-        (&["192.0.2.53", "[2001:db8::53]:53"], "std:192.0.2.53,[2001:db8::53]:53"),
+        (&[""], "std:!invalid"),
+        (&["", ""], "std:!invalid"),
+        (
+            &["192.0.2.53", "[2001:db8::53]:53"],
+            "std:192.0.2.53:53,[2001:db8::53]:53",
+        ),
+        (&["192.0.2.53:53"], "std:192.0.2.53:53"),
+        (&["[2001:db8::53]"], "std:[2001:db8::53]:53"),
         (
             &["192.0.2.53:5353", "192.0.2.53:5353"],
             "std:192.0.2.53:5353,192.0.2.53:5353",
         ),
-        (&["", "192.0.2.53", ""], "std:,192.0.2.53,"),
-        (&["first,second", "third"], "std:first,second,third"),
-        (&["first", "second,third"], "std:first,second,third"),
-        (&["é", "π"], "std:é,π"),
+        (&["", "192.0.2.53", ""], "std:192.0.2.53:53"),
+        // One comma-joined entry is not a list: it never resolves and must not
+        // share answers with the two-server list it spells.
+        (&["192.0.2.53,192.0.2.54"], "std:!invalid"),
+        (&["192.0.2.53", "192.0.2.54"], "std:192.0.2.53:53,192.0.2.54:53"),
+        (&["é", "π"], "std:!invalid"),
     ];
     for (servers, literal) in cases {
         let servers: Vec<String> = servers.iter().map(|server| (*server).to_string()).collect();
-        let expected = format!("std:{}", servers.join(","));
         let spec = ResolverSpec::StandardDns(crate::dns::StandardDnsServers::new(servers));
         let fingerprint = spec.fingerprint();
         assert!(
@@ -545,6 +578,5 @@ fn fingerprints_borrow_fixed_and_prepared_identity() {
             "prepared server lists borrow their identity"
         );
         assert_eq!(fingerprint, *literal);
-        assert_eq!(fingerprint, expected);
     }
 }

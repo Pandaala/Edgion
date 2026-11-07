@@ -1465,3 +1465,153 @@ fn shared_policy_rejection_preserves_native_strict_reject_shadow() {
     assert!(matches!(entry.frontend_mtls, FrontendMtlsOutcome::StrictReject { .. }));
     assert_eq!(matcher.stats().eligible_listener_count, 0);
 }
+
+/// gw-infra-01: through the real matcher rebuild, the published session id
+/// context is stable across identical rebuilds and follows the frontend CA set
+/// (including a non-first CA), the listener identity and the outcome.
+#[test]
+fn gateway_session_context_tracks_effective_frontend_policy() {
+    let matcher = GatewayTlsMatcher::new();
+    let (first_ca, second_ca, third_ca) = (valid_ca_pem(), valid_ca_pem(), valid_ca_pem());
+    let session_context = |listener: &str, mode: Option<FrontendValidationMode>, cas: Vec<&Vec<u8>>| {
+        let refs = (0..cas.len()).map(|i| frontend_ref(&format!("ca-{i}"))).collect();
+        let secrets = cas.into_iter().map(|pem| ca_secret(pem)).collect();
+        let tls = with_frontend(make_tls_config("server", None), mode, refs, Some(secrets));
+        matcher.rebuild_from_gateways(&[create_test_gateway(
+            "gw",
+            "default",
+            vec![create_test_listener(listener, Some("ctx.example.com"), Some(tls))],
+        )]);
+        let entry = matcher.match_sni(&test_listener_key(443), "ctx.example.com").unwrap();
+        (entry.frontend_mtls, entry.session_context())
+    };
+
+    let (outcome, base) = session_context("https", None, vec![&first_ca, &second_ca]);
+    assert_eq!(outcome, FrontendMtlsOutcome::StrictEffective);
+    assert_eq!(base, session_context("https", None, vec![&first_ca, &second_ca]).1);
+    assert_ne!(base, session_context("https", None, vec![&first_ca, &third_ca]).1);
+    assert_ne!(base, session_context("https", None, vec![&first_ca]).1);
+    assert_ne!(base, session_context("https-2", None, vec![&first_ca, &second_ca]).1);
+    let (outcome, insecure) = session_context(
+        "https",
+        Some(FrontendValidationMode::AllowInsecureFallback),
+        vec![&first_ca, &second_ca],
+    );
+    assert_eq!(outcome, FrontendMtlsOutcome::InsecureFallback);
+    assert_ne!(base, insecure);
+}
+
+/// gw-infra-01: the matcher rebuild feeds the compiled serving chain into the
+/// Gateway session context, so rotating the server certificate ends resumption
+/// while an identical republish keeps it.
+#[test]
+fn gateway_session_context_follows_compiled_serving_certificate() {
+    let matcher = GatewayTlsMatcher::new();
+    let session_context = |secret: &Secret| {
+        let mut tls = make_tls_config("expected", None);
+        tls.resolved_certificate_refs = Some(vec![ResolvedServingCertificateReference {
+            index: 0,
+            source: ServingCertificateSourceIdentity {
+                group: "".into(),
+                kind: "Secret".into(),
+                namespace: "default".into(),
+                name: "expected".into(),
+            },
+            secret: Some(secret.clone()),
+            error: None,
+        }]);
+        matcher.rebuild_from_gateways(&[create_test_gateway(
+            "gw",
+            "default",
+            vec![create_test_listener("https", Some("server.example.com"), Some(tls))],
+        )]);
+        let entry = matcher
+            .match_sni(&test_listener_key(443), "server.example.com")
+            .unwrap();
+        assert!(entry.compiled_serving_certificates.is_some());
+        entry.session_context()
+    };
+
+    let (current, rotated) = (valid_server_secret(), valid_server_secret());
+    let base = session_context(&current);
+    assert_eq!(base, session_context(&current));
+    assert_ne!(base, session_context(&rotated));
+}
+
+/// gw-infra-01: every input of the Gateway digest flips it on its own.
+#[test]
+fn gateway_session_context_encodes_every_policy_input() {
+    let attachment = ResolvedListenerAttachment {
+        gateway_namespace: "default".to_string(),
+        gateway_name: "gw".to_string(),
+        listener_name: "https".to_string(),
+        listener_key: test_listener_key(443),
+        gateway_proof: GatewayAttachmentProof {
+            instance: "uid".to_string(),
+            generation: 1,
+            epoch: "1".to_string(),
+            attachment_digest: "a".repeat(64),
+        },
+    };
+    let (chain, other_chain, ca, other_ca) = ([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32]);
+    let id = |attachment: &ResolvedListenerAttachment,
+              serving: Option<&[[u8; 32]]>,
+              outcome: FrontendMtlsOutcome,
+              ca: Option<&[u8; 32]>| gateway_session_context(attachment, serving, outcome, ca);
+    let strict = FrontendMtlsOutcome::StrictEffective;
+    let reference = id(&attachment, Some(&[chain]), strict, Some(&ca));
+    assert_eq!(reference, id(&attachment, Some(&[chain]), strict, Some(&ca)));
+
+    let edited = |change: &dyn Fn(&mut ResolvedListenerAttachment)| {
+        let mut attachment = attachment.clone();
+        change(&mut attachment);
+        id(&attachment, Some(&[chain]), strict, Some(&ca))
+    };
+    let reject = FrontendMtlsOutcome::StrictReject { reason: "test" };
+    let flips = [
+        ("namespace", edited(&|a| a.gateway_namespace = "other".to_string())),
+        ("name", edited(&|a| a.gateway_name = "other".to_string())),
+        ("listener", edited(&|a| a.listener_name = "other".to_string())),
+        ("listener key", edited(&|a| a.listener_key = test_listener_key(8443))),
+        ("chain", id(&attachment, Some(&[other_chain]), strict, Some(&ca))),
+        (
+            "extra chain",
+            id(&attachment, Some(&[chain, other_chain]), strict, Some(&ca)),
+        ),
+        ("no chains", id(&attachment, Some(&[]), strict, Some(&ca))),
+        ("chains failed", id(&attachment, None, strict, Some(&ca))),
+        ("ca", id(&attachment, Some(&[chain]), strict, Some(&other_ca))),
+        ("ca failed", id(&attachment, Some(&[chain]), strict, None)),
+        (
+            "not configured",
+            id(&attachment, Some(&[chain]), FrontendMtlsOutcome::NotConfigured, None),
+        ),
+        (
+            "insecure",
+            id(&attachment, Some(&[chain]), FrontendMtlsOutcome::InsecureFallback, None),
+        ),
+        ("reject", id(&attachment, Some(&[chain]), reject, None)),
+    ];
+    for (label, flipped) in flips {
+        assert_ne!(flipped, reference, "{label} must change the session context");
+    }
+    // The fixed verify depth and the reject reason are not policy inputs.
+    assert_eq!(
+        id(&attachment, Some(&[chain]), reject, None),
+        id(
+            &attachment,
+            Some(&[chain]),
+            FrontendMtlsOutcome::StrictReject { reason: "other" },
+            None
+        )
+    );
+}
+
+#[test]
+fn der_list_digest_is_length_and_boundary_sensitive() {
+    let digest = |items: &[&[u8]]| der_list_digest(items.iter().copied());
+    assert_eq!(digest(&[b"ab", b"c"]), digest(&[b"ab", b"c"]));
+    assert_ne!(digest(&[b"ab", b"c"]), digest(&[b"a", b"bc"]));
+    assert_ne!(digest(&[b"ab"]), digest(&[b"ab", b""]));
+    assert_ne!(digest(&[b"a", b"b"]), digest(&[b"b", b"a"]));
+}

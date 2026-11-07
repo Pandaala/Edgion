@@ -17,10 +17,10 @@ fn parse_server(s: &str) -> Option<SocketAddr> {
     Some(SocketAddr::new(ip, 53))
 }
 
-/// Parse `servers` into distinct `SocketAddr`s, dropping any entry that fails
+/// Parse `servers` into `SocketAddr`s in order, dropping any entry that fails
 /// to parse. Pure and side-effect-free so the per-server-port grouping in
 /// [`resolve_standard`] stays unit-testable without spinning up a resolver.
-fn parse_servers(servers: &[String]) -> Vec<SocketAddr> {
+pub(super) fn parse_servers(servers: &[String]) -> Vec<SocketAddr> {
     servers.iter().filter_map(|s| parse_server(s)).collect()
 }
 
@@ -39,11 +39,13 @@ pub async fn resolve_standard(servers: &[String], domain: &str, policy: DnsQuery
 
     let socket_addrs = parse_servers(servers);
     if socket_addrs.is_empty() {
-        return Err(DnsError::Io(format!("no valid DNS servers in {servers:?}")));
+        // All-invalid lists share one cache identity, so the error names none.
+        return Err(DnsError::Io("no valid DNS servers configured".to_string()));
     }
 
     let config = hickory::resolver_config(&socket_addrs);
     let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+        .with_options(hickory::resolver_options())
         .build()
         .map_err(|e| DnsError::Io(e.to_string()))?;
 

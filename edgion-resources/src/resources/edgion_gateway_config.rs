@@ -932,9 +932,30 @@ impl EdgionGatewayConfigSpec {
                 errors
                     .push("dnsResolver: `linkSysRef` and `servers` are mutually exclusive (set only one)".to_string());
             }
+            // The resolver drops entries it cannot parse; reject them at ingest
+            // instead, so a typo (or a comma-joined list in one entry) is
+            // visible rather than silently resolving with fewer servers.
+            for server in dr.servers.iter().flatten() {
+                if !is_dns_server_address(server) {
+                    errors.push(format!(
+                        "dnsResolver.servers: {server:?} is not an `ip`, `ip:port` or `[ipv6]` address"
+                    ));
+                }
+            }
         }
         errors
     }
+}
+
+/// Accepts the server forms the standard-DNS resolver parses: `ip:port`, a
+/// bare `ip` (port 53) and a bracketed IPv6 literal without a port.
+fn is_dns_server_address(server: &str) -> bool {
+    server.parse::<std::net::SocketAddr>().is_ok()
+        || server.parse::<std::net::IpAddr>().is_ok()
+        || server
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+            .is_some_and(|inner| inner.parse::<std::net::Ipv6Addr>().is_ok())
 }
 
 #[cfg(test)]

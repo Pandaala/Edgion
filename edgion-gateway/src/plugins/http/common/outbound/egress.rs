@@ -7,11 +7,12 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use reqwest::dns::{Name, Resolve, Resolving};
 
-use edgion_common::dns::ResolverSpec;
+use edgion_common::dns::{DnsAnswerCache, ResolverSpec};
 use edgion_common::egress::{
     filter_resolved_addrs_with_observer, is_ip_allowed_with_observer, EgressBlockReason,
     EgressResolver as CoreEgressResolver,
@@ -20,6 +21,19 @@ use edgion_common::egress::{
 use crate::observe::metrics::record_egress_blocked;
 
 pub use edgion_common::egress::EgressPolicy;
+
+const REQUEST_EGRESS_CACHE_CAPACITY: usize = 1024;
+const REQUEST_EGRESS_CACHE_SHARDS: usize = 8;
+
+/// Answer cache for egress destinations a request or an upstream can name
+/// (DSL `http.call` URLs and the redirects they follow). Kept apart from the
+/// shared egress cache so such names cannot evict the answers of
+/// operator-configured consumers (OIDC, LDAP, webhooks).
+pub fn request_egress_answer_cache() -> &'static DnsAnswerCache {
+    static CACHE: LazyLock<DnsAnswerCache> =
+        LazyLock::new(|| DnsAnswerCache::new(REQUEST_EGRESS_CACHE_CAPACITY, REQUEST_EGRESS_CACHE_SHARDS));
+    &CACHE
+}
 
 static EGRESS_BLOCK_PRIVATE: AtomicBool = AtomicBool::new(false);
 static EGRESS_DNS_TTL_MS: AtomicU64 = AtomicU64::new(5_000);
@@ -58,6 +72,21 @@ impl EgressResolver {
     pub fn new(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
         Self {
             inner: CoreEgressResolver::new_with_options(spec, policy, ttl, cfg!(test), Some(observe_block)),
+        }
+    }
+
+    /// Construct a resolver for request- or upstream-influenced destination
+    /// names, backed by [`request_egress_answer_cache`].
+    pub fn new_request_influenced(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+        Self {
+            inner: CoreEgressResolver::with_cache(
+                spec,
+                policy,
+                ttl,
+                cfg!(test),
+                Some(observe_block),
+                request_egress_answer_cache(),
+            ),
         }
     }
 

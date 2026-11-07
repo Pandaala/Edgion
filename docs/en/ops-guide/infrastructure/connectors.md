@@ -326,7 +326,8 @@ Results use the system DNS
 mode of Edgion's shared resolver and are kept in the process-wide egress DNS answer cache for
 `outbound_egress_dns_cache_ttl_ms` (5 seconds by default), because the system resolver reports no
 record TTL. An expired answer may still be served for up to 30 seconds while one dial refreshes it;
-while the resolver is failing, the last good answer keeps being served for as long as it is still used.
+while the resolver is failing, the last good answer keeps being served while it is still used, for at
+most 5 minutes past its freshness, so a deleted record stops receiving traffic.
 
 Every resolved address is classified immediately before redis-rs connects. Loopback, link-local, and
 unspecified addresses are always rejected in production. Private and unique-local addresses follow the
@@ -710,7 +711,7 @@ owns the process-wide HTTP/2 response-header limit for Gateway-initiated reqwest
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for guarded outbound targets. A webhook's `target.blockPrivate` may override it; Redis may not. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
-| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | Freshness of guarded outbound DNS answers, including Redis, in the shared egress answer cache when the resolver reports no record TTL (capped at 300 seconds; reported TTLs are honored within 5–300 seconds). Answers are cached raw and classified on every use. `0` disables caching. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | Freshness of guarded outbound DNS answers, including Redis, in the egress answer caches (the shared one, and the separate one used by DSL `http.call`) when the resolver reports no record TTL (capped at 300 seconds; reported TTLs are honored within 5–300 seconds). Answers are cached raw and classified on every use. `0` disables caching. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
 | `outbound_http2_max_header_list_size` (gateway config file) | Integer (bytes) | `16384` | Decoded HTTP/2 response-header-list limit shared by Gateway-initiated reqwest calls. Accepts `16384..=65536` and requires a Gateway restart. It does not affect client-to-Gateway traffic or Pingora route upstreams. |
 
 **Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always

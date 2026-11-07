@@ -89,6 +89,7 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
     Path('routes/http/routes_mgr.rs'): ('get_global_routes',),
     Path('routes/tls/gateway_tls_routes.rs'): ('from_units', 'match_route'),
     Path('routes/udp/edgion_udp.rs'): ('session_count',),
+    Path('runtime/matching/tls.rs'): ('for_test', 'refresh_session_context_for_test'),
     Path('runtime/store/listener_gateway_info.rs'): ('from_entries_for_test',),
     Path('sse/chain.rs'): ('coalesce_count', 'copied_bytes'),
     Path('sse/window.rs'): ('accounting', 'complete'),

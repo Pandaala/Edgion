@@ -296,7 +296,8 @@ Redis 端点由 Gateway 在 redis-rs 建立连接时解析，而不是由 Contro
 Redis 命令执行时解析。配置的 seed、自动重连、Sentinel 发现的主节点、已发布客户端已知的
 Cluster 主节点，以及重定向目标都经过同一拨号时解析器。解析使用 Edgion 共享解析器的系统 DNS 模式。系统解析器不报告记录 TTL，因此结果在进程级出站
 DNS 应答缓存中按 `outbound_egress_dns_cache_ttl_ms` 保持新鲜（默认 5 秒）。过期应答在一次拨号
-负责刷新期间最多仍可使用 30 秒；解析器故障期间，只要该应答仍在使用，就一直沿用上一次成功的结果。
+负责刷新期间最多仍可使用 30 秒；解析器故障期间，只要该应答仍在使用，就沿用上一次成功的结果，
+但最多沿用到新鲜期结束后 5 分钟，因此已删除的记录不会一直接收流量。
 
 redis-rs 建立连接前会立即对每个解析地址分类。生产模式始终拒绝回环、链路本地和未指定地址；
 私有地址与唯一本地地址遵循 Gateway 全局 `outbound_egress_block_private` 配置，Redis 不提供
@@ -628,7 +629,7 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | 受保护出站目标的网关级默认值。Webhook 可用 `target.blockPrivate` 覆盖；Redis 不可覆盖。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
-| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 解析器未报告记录 TTL 时，受保护出站 DNS 应答（包括 Redis）在共享出站应答缓存中的新鲜期（上限 300 秒；已报告的 TTL 在 5–300 秒范围内生效）。缓存保存原始应答，每次使用时重新分类。`0` 关闭缓存。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 解析器未报告记录 TTL 时，受保护出站 DNS 应答（包括 Redis）在出站应答缓存（共享缓存，以及 DSL `http.call` 使用的独立缓存）中的新鲜期（上限 300 秒；已报告的 TTL 在 5–300 秒范围内生效）。缓存保存原始应答，每次使用时重新分类。`0` 关闭缓存。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
 | `outbound_http2_max_header_list_size`（网关配置文件） | Integer（字节） | `16384` | Gateway 主动发起的 reqwest 调用共用的 HTTP/2 解码响应头列表上限。有效范围为 `16384..=65536`，修改后需要重启 Gateway；不影响客户端到 Gateway 的流量或 Pingora 路由 upstream。 |
 
 **优先级：资源字段优先于网关默认值。** webhook 上显式设置的 `target.blockPrivate` 总是覆盖网关本地默认值——希望全局采用更严格策略的集群管理员可以打开 `outbound_egress_block_private`；需要访问内部 `10.x` 制品库的个别 webhook 仍可用 `target.blockPrivate: false` 单独放行，反之亦然。

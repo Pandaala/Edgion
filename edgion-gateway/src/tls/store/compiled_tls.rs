@@ -17,8 +17,11 @@
 
 #[cfg(feature = "boringssl")]
 use crate::runtime::matching::tls::CompiledBoringCertificateChain;
-use crate::runtime::matching::tls::CompiledServingCertificate;
+use crate::runtime::matching::tls::{
+    der_list_digest, CompiledServingCertificate, SessionContextId, SESSION_CONTEXT_KIND_EDGION_TLS,
+};
 use crate::tls::downstream_policy::CipherPolicy;
+use edgion_resources::resources::allowed_san::{AllowedSanMatch, AllowedSanType};
 use edgion_resources::resources::edgion_tls::{ClientAuthMode, EdgionTls};
 use pingora_core::tls::pkey::PKey;
 use pingora_core::tls::x509::store::{X509Store, X509StoreBuilder};
@@ -48,16 +51,30 @@ pub struct CompiledEdgionTls {
     /// Shared cold cipher preparation; absence and explicit backend defaults
     /// remain distinct until the selected identity inherits its EGC policy.
     pub(crate) operator_cipher: CipherPolicy,
+    /// Session id context of this generation's effective policy.
+    pub(crate) session_context: SessionContextId,
 }
 
 impl CompiledEdgionTls {
     /// Compile the handshake-ready state for a resource that will reach the
     /// matcher.
     pub fn compile(tls: Arc<EdgionTls>) -> Self {
+        let identity = compile_identity(&tls);
+        let client_ca = compile_client_ca_store(&tls);
+        let session_context = edgion_tls_session_context(
+            &tls,
+            identity.as_ref().ok().map(|identity| &identity.chain_digest),
+            client_ca
+                .as_ref()
+                .ok()
+                .and_then(|ca| ca.as_ref())
+                .map(|(_, digest)| digest),
+        );
         Self {
-            identity: compile_identity(&tls),
-            client_ca_store: compile_client_ca_store(&tls),
+            identity,
+            client_ca_store: client_ca.map(|ca| ca.map(|(store, _)| store)),
             operator_cipher: CipherPolicy::compile(tls.spec.ciphers.as_deref()),
+            session_context,
             tls,
         }
     }
@@ -66,12 +83,85 @@ impl CompiledEdgionTls {
     /// state it can never use.
     pub fn not_compiled(tls: Arc<EdgionTls>) -> Self {
         Self {
+            session_context: edgion_tls_session_context(&tls, None, None),
             tls,
             identity: Err(NOT_COMPILED),
             client_ca_store: Ok(None),
             operator_cipher: CipherPolicy::Inherit,
         }
     }
+}
+
+/// Derive the session id context from the effective EdgionTls policy.
+///
+/// Contract: every client-authentication and serving-identity input the runtime
+/// applies is encoded; inputs the runtime ignores are not. Protocol version and
+/// cipher are left out because BoringSSL requires both to match on resumption. A missing serving or CA digest means compilation failed,
+/// and the handshake then fails closed in cert_cb, so no session can exist
+/// under that marker. When the EdgionTls is selected on its own, Terminate and
+/// absent client auth behave identically (no CertificateRequest,
+/// `configure_mtls` returns early), as do empty and absent allow-lists (the
+/// verify callback skips empty lists). An overlay rejects any `clientAuth`, so
+/// a Terminate overlay never issues a session to share.
+fn edgion_tls_session_context(
+    tls: &EdgionTls,
+    chain_digest: Option<&[u8; 32]>,
+    ca_digest: Option<&[u8; 32]>,
+) -> SessionContextId {
+    let mut hasher = SessionContextId::hasher(SESSION_CONTEXT_KIND_EDGION_TLS);
+    hasher.opt_str(tls.metadata.namespace.as_deref());
+    hasher.opt_str(tls.metadata.name.as_deref());
+    match chain_digest {
+        Some(digest) => {
+            hasher.tag(1);
+            hasher.bytes(digest);
+        }
+        None => hasher.tag(0),
+    }
+    let client_auth = tls.spec.client_auth.as_ref();
+    match client_auth.map(|client_auth| &client_auth.mode) {
+        None | Some(ClientAuthMode::Terminate) => hasher.tag(0),
+        Some(ClientAuthMode::Mutual) => hasher.tag(1),
+        Some(ClientAuthMode::OptionalMutual) => hasher.tag(2),
+    }
+    let Some(client_auth) = client_auth.filter(|client_auth| client_auth.mode != ClientAuthMode::Terminate) else {
+        return SessionContextId::from_digest(hasher.finish());
+    };
+    hasher.u64(u64::from(client_auth.verify_depth));
+    match ca_digest {
+        Some(digest) => {
+            hasher.tag(1);
+            hasher.bytes(digest);
+        }
+        None => hasher.tag(0),
+    }
+    let sans = client_auth.allowed_sans.as_deref().unwrap_or_default();
+    hasher.u64(sans.len() as u64);
+    for san in sans {
+        hasher.tag(match san.san_type {
+            AllowedSanType::Dns => 0,
+            AllowedSanType::Uri => 1,
+            AllowedSanType::Email => 2,
+            AllowedSanType::Ip => 3,
+            AllowedSanType::OtherName => 4,
+        });
+        hasher.tag(match san.match_kind {
+            AllowedSanMatch::Exact => 0,
+            AllowedSanMatch::Prefix => 1,
+            AllowedSanMatch::Suffix => 2,
+            AllowedSanMatch::Contains => 3,
+            AllowedSanMatch::RegularExpression => 4,
+        });
+        hasher.bytes(san.value.as_bytes());
+        hasher.tag(u8::from(san.ignore_case));
+        hasher.opt_str(san.oid.as_deref());
+    }
+    let cns = client_auth.allowed_cns.as_deref().unwrap_or_default();
+    hasher.u64(cns.len() as u64);
+    for cn in cns {
+        hasher.bytes(cn.as_bytes());
+    }
+    SessionContextId::from_digest(hasher.finish())
 }
 
 /// Compile the complete ordered serving chain and its private key.
@@ -93,6 +183,7 @@ fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, 
     let atomic_chain = Arc::new(
         CompiledBoringCertificateChain::from_der(&strict_chain.certificates_der).ok_or("parse certificate failed")?,
     );
+    let chain_digest = der_list_digest(strict_chain.certificates_der.iter().map(Vec::as_slice));
     let chain = strict_chain
         .certificates_der
         .iter()
@@ -105,6 +196,7 @@ fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, 
 
     Ok(Arc::new(CompiledServingCertificate {
         chain: Arc::from(chain),
+        chain_digest,
         #[cfg(feature = "boringssl")]
         atomic_chain,
         key_type: private_key.id(),
@@ -112,6 +204,9 @@ fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, 
         validity: strict_chain.validity,
     }))
 }
+
+/// A compiled client trust store and the digest of the CA certificates it holds.
+type CompiledClientCa = (Arc<X509Store>, [u8; 32]);
 
 /// Build the mTLS client trust store.
 ///
@@ -122,8 +217,9 @@ fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, 
 /// to the handshake instead of removing the resource from the matcher.
 ///
 /// The error strings are the exact messages `configure_mtls` produced before,
-/// so the `mtls config: …` audit text is unchanged.
-fn compile_client_ca_store(tls: &EdgionTls) -> Result<Option<Arc<X509Store>>, String> {
+/// so the `mtls config: …` audit text is unchanged. The store is returned with
+/// the digest of the CA certificates it holds, for the session id context.
+fn compile_client_ca_store(tls: &EdgionTls) -> Result<Option<CompiledClientCa>, String> {
     let Some(client_auth) = tls.spec.client_auth.as_ref() else {
         return Ok(None);
     };
@@ -147,27 +243,27 @@ fn compile_client_ca_store(tls: &EdgionTls) -> Result<Option<Arc<X509Store>>, St
         .ca_cert_pem()
         .map_err(|e| format!("Failed to get CA cert PEM for mTLS: {}", e))?;
     let mut store_builder = X509StoreBuilder::new().map_err(|e| format!("Failed to create X509 store: {}", e))?;
-    add_ca_bundle_to_store(&mut store_builder, ca_pem.as_bytes())?;
-    Ok(Some(Arc::new(store_builder.build())))
+    let ca_digest = add_ca_bundle_to_store(&mut store_builder, ca_pem.as_bytes())?;
+    Ok(Some((Arc::new(store_builder.build()), ca_digest)))
 }
 
 /// Parse a (possibly multi-block) CA bundle PEM and add every certificate to
-/// the store, returning the number added. RFC 5280 §6.1 path validation needs
+/// the store, returning the digest of the added DERs. RFC 5280 §6.1 path validation needs
 /// the complete intermediate chain up to a trust anchor, so all PEM blocks must
 /// be loaded — `X509::from_pem` reads only the first block. An empty or
 /// unparseable bundle is rejected (fail-closed) so a misconfigured CA secret
 /// cannot silently produce an empty trust store.
-fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -> Result<usize, String> {
+fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -> Result<[u8; 32], String> {
     let bundle = edgion_common::tls_validation::parse_canonical_ca_bundle(ca_pem)
         .map_err(|error| format!("Invalid CA bundle: {error:?}"))?;
-    let count = bundle.certificates_der.len();
+    let digest = der_list_digest(bundle.certificates_der.iter().map(Vec::as_slice));
     for der in bundle.certificates_der {
         let cert = X509::from_der(&der).map_err(|error| format!("Invalid CA DER: {error}"))?;
         store_builder
             .add_cert(cert)
             .map_err(|e| format!("Failed to add CA cert to store: {}", e))?;
     }
-    Ok(count)
+    Ok(digest)
 }
 
 #[cfg(all(test, feature = "boringssl"))]

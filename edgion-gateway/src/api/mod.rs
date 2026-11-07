@@ -2,6 +2,7 @@ use crate::backends::policy::backend_traffic::store::{TargetObservation, OBSERVA
 use crate::backends::policy::backend_traffic::BackendTrafficPolicySnapshot;
 use crate::backends::upstream_dns_cache;
 use crate::conf_sync::ConfigClient;
+use crate::plugins::http::common::outbound::egress::request_egress_answer_cache;
 use crate::runtime::server::proxy_protocol_policy::get_global_proxy_protocol_policy_runtime;
 use axum::{
     extract::{Path, Query, State},
@@ -492,13 +493,15 @@ struct StoreStatsResponse {
 }
 
 /// DNS answer caches. `in_flight` must return to zero once requests settle;
-/// `entries` is capacity-bounded, can outlive the residue poll (330 s
-/// normally, longer while a failing resolver keeps a requested answer) and is
-/// exempt from the zero-after-wipe residue check.
+/// `entries` is capacity-bounded, can outlive the residue poll (an answer is
+/// retained up to its stale limit plus one stale window: at most 630 s) and is
+/// exempt from the zero-after-wipe residue check. The request-influenced
+/// instance reports counts only.
 #[derive(Serialize)]
 struct DnsAnswerCacheStoreStats {
     upstream: DnsAnswerCacheStats,
     egress: DnsAnswerCacheStats,
+    request_egress: DnsAnswerCacheStats,
 }
 
 impl DnsAnswerCacheStoreStats {
@@ -506,6 +509,7 @@ impl DnsAnswerCacheStoreStats {
         Self {
             upstream: upstream_dns_cache().stats(),
             egress: egress_answer_cache().stats(),
+            request_egress: request_egress_answer_cache().stats_counts_only(),
         }
     }
 }

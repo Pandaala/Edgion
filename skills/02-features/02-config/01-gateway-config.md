@@ -248,7 +248,7 @@ behavior and are configured per Gateway process; there is no
 | `require_fips` | `bool` | `false` | Require the FIPS module; `EDGION_REQUIRE_FIPS` can force it on. |
 | `fips_policy` | `auto \| on \| off` | `auto` | Downstream approved cipher/curve policy. Quote YAML `"on"`/`"off"`; booleans are invalid. Resolution: env → CLI → file → auto. |
 | `outbound_egress_block_private` | `bool` | `false` | Reject private outbound URL targets by default; loopback/link-local remain blocked. Env can force it on. |
-| `outbound_egress_dns_cache_ttl_ms` | `u64` | `5000` | Fallback freshness (no record TTL) of answers in the shared egress DNS answer cache; `0` disables caching; env override: `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`. |
+| `outbound_egress_dns_cache_ttl_ms` | `u64` | `5000` | Fallback freshness (no record TTL) of answers in the egress DNS answer caches (the shared instance, and the separate request-influenced instance used by DSL `http.call`); `0` disables caching; env override: `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`. |
 | `outbound_http2_max_header_list_size` | `u32` | `16384` | Process-wide decoded HTTP/2 response-header-list limit for Gateway-initiated reqwest calls. Valid range: `16384..=65536`; changes require a restart. It does not affect Pingora route upstreams. |
 | `wasm_oci_cache_ttl_secs` | `u64` | `86400` (24h) | Idle lifetime of a verified OCI memory-cache entry. Zero is clamped to 1s. |
 | `wasm_oci_cache_purge_interval_secs` | `u64` | `60` | Background memory-cache sweep interval. Zero is clamped to 1s; it does not disable cleanup. |

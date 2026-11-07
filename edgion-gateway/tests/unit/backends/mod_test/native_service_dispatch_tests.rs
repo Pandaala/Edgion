@@ -1269,6 +1269,58 @@ async fn ordinary_selection_borrows_request_inputs_after_sticky_check() {
     }
 }
 
+#[tokio::test]
+async fn cached_external_name_lookups_rotate_and_per_request_lookups_keep_resolver_order() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    publish(
+        &coordinator,
+        service(Some("ExternalName"), Some("spread.test"), Some("gateway"), 80),
+        None,
+    );
+    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let captured = capture(&coordinator, &chosen);
+    let spec = ResolverSpec::System;
+    let answers = ["192.0.2.61", "192.0.2.62", "192.0.2.63"];
+    for cached in [true, false] {
+        let cache = DnsAnswerCache::new(4, 1);
+        let mut first_addresses = std::collections::BTreeSet::new();
+        for _ in 0..12 {
+            let mut ctx = context("default/backend");
+            let peer = build_external_name_peer_with_resolver(
+                &mut ctx,
+                &input(&chosen),
+                &captured,
+                None,
+                ExternalNameResolution {
+                    family: DnsLookupFamily::All,
+                    spec: &spec,
+                    dns_cache: &cache,
+                    cache: cached,
+                    policy: DnsCachePolicy::new(Duration::from_secs(5)),
+                },
+                vec_resolver(|_, _, _policy| {
+                    std::future::ready(Ok(answers.iter().map(|ip| ip.parse().unwrap()).collect()))
+                }),
+            )
+            .await
+            .unwrap();
+            first_addresses.insert(peer._address.as_inet().unwrap().ip().to_string());
+        }
+        if cached {
+            // The process-wide rotation advances on every cached lookup, so the
+            // dialed address spreads over the answer (other tests may advance
+            // it concurrently, which only adds spread).
+            assert!(first_addresses.len() > 1, "cached lookups rotate: {first_addresses:?}");
+        } else {
+            assert_eq!(
+                first_addresses.into_iter().collect::<Vec<_>>(),
+                vec!["192.0.2.61".to_string()],
+                "per-request lookups keep the resolver's order"
+            );
+        }
+    }
+}
+
 #[test]
 fn address_rotation_spreads_the_first_address_and_tolerates_empty_sets() {
     let mut addrs = vec![1, 2, 3];

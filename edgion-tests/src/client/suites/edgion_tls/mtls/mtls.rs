@@ -30,6 +30,7 @@
 use super::super::mtls_failclose::{
     require_client_trust, require_dns_san, TlsProbe, INVALID_CLIENT, MTLS_SERVER, NONMATCHING_CLIENT, VALID_CLIENT,
 };
+use super::resumption::require_cross_sni_resumption_refused;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use rustls::AlertDescription;
@@ -552,6 +553,30 @@ impl MtlsTestSuite {
             },
         )
     }
+
+    fn test_cross_sni_resumption_refused() -> TestCase {
+        TestCase::new(
+            "mtls_cross_sni_resumption_refused",
+            "Session from the terminate host must not resume under the Mutual host's SNI (TLS 1.2 and 1.3)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
+                        if let Err(error) =
+                            require_cross_sni_resumption_refused(&ctx.target_host, ctx.https_port, version).await
+                        {
+                            return TestResult::failed(start.elapsed(), format!("{:?}: {error}", version.version));
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Same-SNI control resumed; cross-SNI offer fell back to a full handshake and was rejected"
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -576,6 +601,8 @@ impl TestSuite for MtlsTestSuite {
             // SAN whitelist validation tests (TLS layer)
             Self::test_san_whitelist_matching(),
             Self::test_san_whitelist_non_matching(),
+            // Session resumption must not cross client-auth policies (gw-infra-01)
+            Self::test_cross_sni_resumption_refused(),
         ]
     }
 }

@@ -174,7 +174,10 @@ The scoped test owner is
 `edgion-tests/src/client/suites/edgion_tls/mtls_failclose/probe.rs`. It uses the
 existing rustls client dependencies, pins the expected serving certificate and
 verifies handshake signatures, disables resumption, and forces TLS 1.2 so the
-client-authentication decision is terminal when connect returns. Ordinary positive
+client-authentication decision is terminal when connect returns. Resumption itself
+is covered separately by `mtls_cross_sni_resumption_refused`
+(`edgion_tls/mtls/mtls.rs`, probe in `edgion_tls/mtls/resumption.rs`), which enables it deliberately; see the
+[session resumption isolation guard](../../tls/regression-guards/session-resumption-policy-isolation.md). Ordinary positive
 HTTP cases keep normal TLS negotiation and complete status assertions. The
 negative cases require exact typed peer alerts plus successful policy-isolation
 controls: valid-client acceptance on the selected target, UnknownIssuer as the

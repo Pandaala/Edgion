@@ -570,3 +570,56 @@ fn dialed_address_record_deduplicates_and_saturates_without_panicking() {
     assert!(dialed.contains(&addr("192.0.2.8", 443)));
     assert!(!dialed.contains(&addr("192.0.2.9", 443)));
 }
+
+#[tokio::test]
+async fn ai_endpoint_resolution_skips_addresses_this_request_dialed() {
+    // Hold the global store lock so no other test swaps the EGC DNS default
+    // (resolver, family, policy) between seeding and resolving.
+    let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
+    let mut ctx = EdgionHttpContext::new();
+    let (spec, family, policy) = crate::backends::compute_routed_external_resolver(&ctx).unwrap();
+    let host = "dialed-skip.ai.test";
+    let answer: Vec<std::net::IpAddr> = ["192.0.2.81", "192.0.2.82", "192.0.2.83"]
+        .iter()
+        .map(|ip| ip.parse().unwrap())
+        .collect();
+    // Seed the upstream cache with a three-address answer for this host.
+    let seeded = answer.clone();
+    crate::backends::upstream_dns_cache()
+        .lookup_with(
+            &spec,
+            host,
+            edgion_common::dns::DnsQueryPolicy::Family(family),
+            &policy,
+            move |_, _, _| std::future::ready(Ok(edgion_common::dns::DnsAnswer::without_ttl(seeded))),
+        )
+        .await
+        .unwrap();
+    ctx.ensure_ai_state().dialed_addrs.record(addr("192.0.2.81", 443));
+    ctx.ensure_ai_state().dialed_addrs.record(addr("192.0.2.82", 443));
+    // Whatever the process-wide rotation offset, the only undialed address wins.
+    for _ in 0..6 {
+        assert_eq!(
+            resolve_ai_endpoint(&ctx, host, 443).await.unwrap(),
+            addr("192.0.2.83", 443)
+        );
+    }
+}
+
+#[test]
+fn ai_address_selection_falls_back_to_rotation_once_the_record_overflows() {
+    let allowed: Vec<std::net::IpAddr> = (1..=9u8)
+        .map(|last| format!("192.0.2.{last}").parse().unwrap())
+        .collect();
+    let mut dialed = DialedAddrs::default();
+    for last in 1..=8u8 {
+        dialed.record(addr(&format!("192.0.2.{last}"), 443));
+    }
+    // Full but not overflowed: the only untried address is still preferred.
+    assert_eq!(select_ai_addr(&allowed, 443, &dialed, 0), Some(addr("192.0.2.9", 443)));
+    // Dialing it overflows the record; it is no longer known to be untried, so
+    // later attempts follow rotation instead of pinning to it.
+    dialed.record(addr("192.0.2.9", 443));
+    assert_eq!(select_ai_addr(&allowed, 443, &dialed, 0), Some(addr("192.0.2.1", 443)));
+    assert_eq!(select_ai_addr(&allowed, 443, &dialed, 4), Some(addr("192.0.2.5", 443)));
+}

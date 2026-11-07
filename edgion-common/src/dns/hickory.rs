@@ -2,7 +2,16 @@
 
 use std::net::SocketAddr;
 
-use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig, ResolverOpts};
+
+/// Resolver options for the per-lookup resolvers built from an explicit server
+/// list. Hickory's own response cache is disabled: each resolver serves a
+/// single lookup, and answers are cached by `DnsAnswerCache`.
+pub(super) fn resolver_options() -> ResolverOpts {
+    let mut options = ResolverOpts::default();
+    options.cache_size = 0;
+    options
+}
 
 /// Build a resolver configuration that queries every server over UDP and TCP
 /// while preserving each server's configured port.

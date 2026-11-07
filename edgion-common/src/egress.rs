@@ -150,8 +150,11 @@ impl EgressResolver {
         Self::with_cache(spec, policy, ttl, allow_loopback, observer, egress_answer_cache())
     }
 
-    /// Construct a resolver backed by an explicit answer cache instance.
-    pub(crate) fn with_cache(
+    /// Construct a resolver backed by an explicit answer cache instance. A
+    /// consumer whose destination names are request- or upstream-influenced
+    /// uses its own instance so those names cannot evict the answers that
+    /// operator-configured consumers share.
+    pub fn with_cache(
         spec: ResolverSpec,
         policy: EgressPolicy,
         ttl: Duration,

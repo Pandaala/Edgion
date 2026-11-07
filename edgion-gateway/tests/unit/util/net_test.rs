@@ -133,44 +133,60 @@ fn test_classify_backend_addr_ipv4_mapped_ipv6() {
 // resolve_domain tests — kept hermetic by using IP literals and localhost only,
 // so they don't depend on a working external resolver.
 
+async fn resolve(domain: &str, port: u16, family: DnsLookupFamily) -> pingora_core::Result<Vec<SocketAddr>> {
+    resolve_domain(
+        domain,
+        port,
+        &ResolverSpec::System,
+        family,
+        &DnsCachePolicy::new(std::time::Duration::from_secs(5)),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn resolve_domain_ipv4_literal() {
-    let addr = resolve_domain("127.0.0.1", 8080).await.expect("ipv4 literal resolves");
-    assert_eq!(addr.ip().to_string(), "127.0.0.1");
-    assert_eq!(addr.port(), 8080);
+    let addrs = resolve("127.0.0.1", 8080, DnsLookupFamily::Ipv4Only)
+        .await
+        .expect("ipv4 literal resolves");
+    assert_eq!(addrs, vec!["127.0.0.1:8080".parse::<SocketAddr>().unwrap()]);
 }
 
 #[tokio::test]
 async fn resolve_domain_ipv6_literal() {
-    // Hardened path: IPv6 literals are short-circuited through IpAddr::from_str and never
-    // handed to lookup_host as an unbracketed "::1:9090" (which is itself a valid IPv6
-    // address and would otherwise rely on resolver last-colon leniency).
-    let addr = resolve_domain("::1", 9090).await.expect("ipv6 literal resolves");
-    assert_eq!(addr.ip().to_string(), "::1");
-    assert_eq!(addr.port(), 9090);
+    // Hardened path: IPv6 literals are short-circuited and never handed to a
+    // resolver as an unbracketed "::1:9090", and a literal keeps its family
+    // even when the configured lookup family is IPv4-only.
+    let addrs = resolve("::1", 9090, DnsLookupFamily::Ipv4Only)
+        .await
+        .expect("ipv6 literal resolves");
+    assert_eq!(addrs, vec!["[::1]:9090".parse::<SocketAddr>().unwrap()]);
 
-    // A multi-group literal is the ambiguous case the short-circuit guards against:
-    // it must resolve to exactly the given address and port, not be re-split on a colon.
-    let addr = resolve_domain("2001:db8::1", 8443)
+    // A multi-group literal must resolve to exactly the given address and port.
+    let addrs = resolve("2001:db8::1", 8443, DnsLookupFamily::Ipv4Only)
         .await
         .expect("multi-group ipv6 literal resolves");
-    assert_eq!(addr.ip().to_string(), "2001:db8::1");
-    assert_eq!(addr.port(), 8443);
+    assert_eq!(addrs, vec!["[2001:db8::1]:8443".parse::<SocketAddr>().unwrap()]);
 
     // Region endpoint parsing retains brackets around IPv6 authorities.
-    // A fully bracketed IP literal must take the same resolver-free path.
-    let addr = resolve_domain("[2001:db8::1]", 9443)
+    let addrs = resolve("[2001:db8::1]", 9443, DnsLookupFamily::Ipv4Only)
         .await
         .expect("bracketed multi-group ipv6 literal resolves");
-    assert_eq!(addr.ip().to_string(), "2001:db8::1");
-    assert_eq!(addr.port(), 9443);
+    assert_eq!(addrs, vec!["[2001:db8::1]:9443".parse::<SocketAddr>().unwrap()]);
 }
 
 #[tokio::test]
 async fn resolve_domain_localhost() {
-    let addr = resolve_domain("localhost", 80).await.expect("localhost resolves");
-    assert!(addr.ip().is_loopback(), "localhost must resolve to a loopback address");
-    assert_eq!(addr.port(), 80);
+    let addrs = resolve("localhost", 80, DnsLookupFamily::Ipv4Only)
+        .await
+        .expect("localhost resolves");
+    assert!(!addrs.is_empty());
+    assert!(
+        addrs
+            .iter()
+            .all(|addr| addr.ip().is_loopback() && addr.is_ipv4() && addr.port() == 80),
+        "{addrs:?}"
+    );
 }
 
 #[tokio::test]
@@ -179,7 +195,9 @@ async fn resolve_domain_invalid_returns_connect_error() {
     // resolver is consulted, so this stays hermetic even on networks where the
     // ISP/DNS hijacks NXDOMAIN responses (RFC 2606 .invalid is unreliable in
     // practice for that reason).
-    let err = resolve_domain("", 80).await.expect_err("must fail for invalid host");
+    let err = resolve("", 80, DnsLookupFamily::Ipv4Only)
+        .await
+        .expect_err("must fail for invalid host");
     assert_eq!(err.etype(), &ErrorType::ConnectError);
 }
 

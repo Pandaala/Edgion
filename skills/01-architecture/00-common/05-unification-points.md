@@ -223,10 +223,13 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   `edgion-controller/src/services/dns_resolver/service.rs`. Answer caching:
   `edgion-common/src/dns/cache.rs` (`DnsAnswerCache`: TTL-honoring, per-key
   single-flight, stale-while-revalidate/stale-on-error, short negative
-  entries). Instances: the egress cache behind every `EgressResolver`, and the
-  Gateway upstream cache (`upstream_dns_cache()` in
-  `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI and cached
-  ExternalName resolution. Callers do not add another DNS cache.
+  entries). Instances: the shared egress cache behind `EgressResolver`s with
+  operator-configured destinations, the Gateway request-influenced egress cache
+  for DSL `http.call` (`request_egress_answer_cache()`), and the Gateway
+  upstream cache (`upstream_dns_cache()` in
+  `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI, cached
+  ExternalName and ExternalJump (RegionRoute, DynamicExternalUpstream)
+  resolution. Callers do not add another DNS cache type.
 - **Rule**: any resolution driven by operator resolver configuration MUST go
   through `ResolverSpec`; do not embed another resolver library or hand-roll
   lookups.

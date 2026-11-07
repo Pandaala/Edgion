@@ -203,6 +203,15 @@ spec:
 | `overrideHost` | String | original request Host | Optional. When omitted, the original request Host is kept. When set, must be nonempty, a valid HTTP header value, and a valid Host authority. |
 | `sni` | String | the `domain` value | Optional. When omitted, TLS uses `domain`. When set, must be nonempty and follow the same character rules as `domain`. Empty SNI is rejected. |
 
+Hostnames resolve through the Gateway's backend DNS answer cache. The resolver
+and address family come from the Gateway's `edgion.io/dns-resolver` /
+`edgion.io/dns-resolver-ref` / `edgion.io/dns-lookup-family` annotations, then the
+EdgionGatewayConfig `dnsResolver` default; the default family is `ipv4Only`, so an
+IPv6-only hostname needs `ipv6Only` or `all`. A failed lookup is cached for 1–10
+seconds. IP literals are used as written.
+The first resolved address that passes the upstream address checks, starting
+from a rotating offset, is dialed.
+
 ### Usage Scenarios
 
 #### Multi-Region Routing

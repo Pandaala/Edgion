@@ -23,7 +23,10 @@ RPC's duration. A **per-key single-flight mutex** is exempt when all of these ho
    I/O itself; the waiting is the intended coalescing, not collateral blocking.
 4. Cancellation is structural: a cancelled holder drops the guard and the next waiter proceeds.
 5. The I/O inside is bounded by its own deadline, and the registry of keys is bounded (or the
-   mutex lives on a per-key owner).
+   mutex lives on a per-key owner). For the DNS cache: hickory's per-query timeouts (Standard
+   DNS), the HTTPDNS connection's request timeout, and a 30 s bound on waiting for the System
+   resolver (`edgion-common/src/dns/system.rs`, added 2026-11-07; `getaddrinfo` has no caller
+   deadline and keeps running on its blocking thread after the wait is abandoned).
 
 Current users: `edgion-common/src/dns/cache.rs` (`DnsAnswerCache` cold misses, via
 `edgion_common::singleflight::FlightRegistry`), the OIDC JWKS provider

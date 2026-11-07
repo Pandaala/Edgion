@@ -171,6 +171,23 @@ fn egc_dns_resolver_servers_roundtrip_and_cache_ttl() {
 }
 
 #[test]
+fn egc_dns_resolver_rejects_unparsable_servers() {
+    let valid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+        "dnsResolver": {"servers": ["1.1.1.1", "8.8.8.8:5353", "[2001:db8::53]", "[2001:db8::53]:5353", "2001:db8::53"]}
+    }))
+    .unwrap();
+    assert!(valid.validate_dns_resolver().is_empty());
+
+    let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+        "dnsResolver": {"servers": ["1.1.1.1", "10.0.0.1,10.0.0.2", "dns.example", ""]}
+    }))
+    .unwrap();
+    let errs = invalid.validate_dns_resolver();
+    assert_eq!(errs.len(), 3, "each unparsable entry is reported: {errs:?}");
+    assert!(errs[0].contains("10.0.0.1,10.0.0.2"));
+}
+
+#[test]
 fn egc_dns_resolver_ref_and_servers_are_mutually_exclusive() {
     let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
         "dnsResolver": {

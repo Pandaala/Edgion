@@ -488,6 +488,10 @@ openssl x509 -in cert.pem -noout -text
 
 **A**: Verify, in order: (1) the client actually sends `--cert`/`--key`; (2) the client certificate is signed by the CA in `caSecretRef` and its `ca.crt` key is present; (3) `verifyDepth` is high enough for the chain; (4) if you set `allowedSans`/`allowedCns`, the client certificate matches the allowlist.
 
+### Q7: Can a TLS session established on one host be resumed on another host of the same listener?
+
+**A**: Only when both hosts select the same effective TLS policy: the same EdgionTls resource or Gateway listener, the same serving certificate, and the same effective client authentication. A session from any other policy — for example a one-way TLS host — is not resumed on an mTLS host; the gateway performs a full handshake and requests the client certificate. Changing the serving certificate, or, for `Mutual`/`OptionalMutual`, the client CA bundle, `mode`, `verifyDepth`, `allowedSans` or `allowedCns`, also ends resumption of earlier sessions; on a Gateway listener with frontend client-certificate validation, changing its CA certificates or validation mode does the same, so the next connection performs one full handshake. Settings that have no runtime effect do not: on a host served by the EdgionTls alone, `Terminate` behaves like no `clientAuth`, and an empty allowlist behaves like an absent one. Resumption does not re-verify the client certificate: within an unchanged policy, an already-authenticated session can resume until it expires even if the client certificate has expired since. Sessions last at most 2 hours for TLS 1.2 and at most 7 days for TLS 1.3 (renewed on each resumption up to that cap), and are not shared across Gateway restarts, replicas or listeners.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

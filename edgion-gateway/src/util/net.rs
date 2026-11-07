@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
+use edgion_common::dns::{DnsCachePolicy, DnsLookupFamily, DnsQueryPolicy, ResolverSpec};
 pub(crate) use edgion_common::egress::{classify_ip, IpClass};
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
@@ -54,30 +55,37 @@ pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendR
     }
 }
 
-/// Resolve domain to SocketAddr using async DNS resolution.
+/// Resolve an external destination domain to the addresses to try, in order.
 ///
-/// Uses tokio's async DNS resolver to avoid blocking the event loop.
-/// Returns the first resolved address.
-pub async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<SocketAddr> {
-    // Short-circuit IP literals: build the SocketAddr directly instead of handing
-    // lookup_host an unbracketed "{ip}:{port}". For an IPv6 literal that string (e.g.
-    // "::1:9090") is itself a valid IPv6 address and only resolves via lookup_host's
-    // last-colon host:port heuristic — fragile and ambiguous. Parsing the literal here
-    // is RFC-correct and also avoids a needless resolver round-trip.
+/// IP literals are returned as-is. Names go through the shared upstream DNS
+/// answer cache with the caller's resolver, address family and cache policy
+/// (the same path as AI provider endpoints), and the cached answer is rotated
+/// by the process-wide offset so traffic spreads over every address.
+pub async fn resolve_domain(
+    domain: &str,
+    port: u16,
+    spec: &ResolverSpec,
+    family: DnsLookupFamily,
+    policy: &DnsCachePolicy,
+) -> pingora_core::Result<Vec<SocketAddr>> {
+    // Short-circuit IP literals: build the SocketAddr directly. A bare IPv6
+    // literal such as "::1" must never be re-split on a colon, and a literal
+    // keeps its own family whatever the configured lookup family is.
     if let Some(ip) = parse_ip_literal(domain) {
-        return Ok(SocketAddr::new(ip, port));
+        return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
-    let mut addrs = tokio::net::lookup_host((domain, port)).await.map_err(|e| {
-        PingoraError::explain(
-            ErrorType::ConnectError,
-            format!("DNS resolution failed for {}: {}", domain, e),
-        )
-    })?;
-
-    addrs
-        .next()
-        .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))
+    let mut ips = crate::backends::upstream_dns_cache()
+        .lookup(spec, domain, DnsQueryPolicy::Family(family), policy)
+        .await
+        .map_err(|e| {
+            PingoraError::explain(
+                ErrorType::ConnectError,
+                format!("DNS resolution failed for {}: {}", domain, e),
+            )
+        })?;
+    crate::backends::rotate_addresses(&mut ips, crate::backends::next_address_rotation());
+    Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
 }
 
 /// Strip the optional `:port` suffix from a Host-header authority, preserving an

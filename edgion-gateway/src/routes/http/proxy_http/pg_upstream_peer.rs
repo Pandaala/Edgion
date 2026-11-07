@@ -1371,8 +1371,10 @@ fn try_direct_endpoint_peer(
 ///
 /// Caller (the dispatch cascade) has already matched `ctx.jump` against
 /// `UpstreamJumpTarget::External` — cold path, not `#[inline]`. Resolves the
-/// domain via async DNS, validates against SSRF defenses, then constructs the
-/// peer (or returns the rejection error).
+/// domain through the shared upstream DNS answer cache with the request's
+/// routed external resolver (as AI endpoints do), dials the first address
+/// that passes the SSRF defenses, then constructs the peer (or returns the
+/// rejection error).
 async fn try_external_jump_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
@@ -1387,7 +1389,13 @@ async fn try_external_jump_peer(
     let use_tls = external.use_tls;
     let sni = &external.sni;
 
-    let addr = resolve_domain(domain, port).await?;
+    let (spec, family, policy) = crate::backends::compute_routed_external_resolver(ctx).map_err(|e| {
+        PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("DNS resolution failed for {}: {}", domain, e),
+        )
+    })?;
+    let addrs = resolve_domain(domain, port, &spec, family, &policy).await?;
 
     // Seed before validation so failure-path record_unsafe_resolved_upstream_attempt
     // has a backend_context to push onto. No K8s resource → rsc/service_key stay None.
@@ -1405,14 +1413,19 @@ async fn try_external_jump_peer(
         });
     }
 
-    if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
-        record_unsafe_resolved_upstream_attempt(ctx, addr, status);
-        ctx.record_error(status);
-        return Err(PingoraError::explain(
-            ErrorType::ConnectError,
-            "external upstream resolved to unsafe address",
-        ));
-    }
+    let addr = match first_safe_resolved_addr(&addrs, ctx.allow_loopback_upstream) {
+        Ok(addr) => addr,
+        Err(rejected) => {
+            if let Some((addr, status)) = rejected {
+                record_unsafe_resolved_upstream_attempt(ctx, addr, status);
+                ctx.record_error(status);
+            }
+            return Err(PingoraError::explain(
+                ErrorType::ConnectError,
+                "external upstream resolved to unsafe address",
+            ));
+        }
+    };
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni.clone()));
     finish_static_peer(edgion_http, ctx, peer)
@@ -1508,6 +1521,23 @@ fn direct_backend_metadata(
         ServiceBackendKind::Service,
         backend.slot(),
     ))
+}
+
+/// First resolved address that passes the SSRF defenses, in the given (rotated)
+/// order. When none does, the last rejected address and its reason (`None`
+/// for an empty list).
+fn first_safe_resolved_addr(
+    addrs: &[std::net::SocketAddr],
+    allow_loopback_upstream: bool,
+) -> Result<std::net::SocketAddr, Option<(std::net::SocketAddr, EdgionErrorCode)>> {
+    let mut rejected = None;
+    for addr in addrs {
+        match validate_resolved_domain_addr(addr, allow_loopback_upstream) {
+            Ok(()) => return Ok(*addr),
+            Err(status) => rejected = Some((*addr, status)),
+        }
+    }
+    Err(rejected)
 }
 
 fn validate_resolved_domain_addr(

@@ -113,8 +113,10 @@ static DSL_HTTP_CLIENT_GUARDED: OnceLock<reqwest::Client> = OnceLock::new();
 static DSL_HTTP_CLIENT_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 static DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// DSL destinations come from scripts fed by request data and from upstream
+/// redirects, so they use the request-influenced answer cache.
 fn dsl_egress_resolver() -> Arc<dyn reqwest::dns::Resolve> {
-    Arc::new(EgressResolver::new(
+    Arc::new(EgressResolver::new_request_influenced(
         ResolverSpec::System,
         EgressPolicy { block_private: true },
         egress_dns_cache_ttl(),

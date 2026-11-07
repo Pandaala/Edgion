@@ -14,15 +14,20 @@
 //! - **Stale** for `stale_ttl` afterwards. Exactly one request (the first to
 //!   claim the entry's refresh flag) refreshes inline; every other request is
 //!   served the stale answer without waiting.
-//! - **DNS failure keeps the last good answer** (Envoy behavior): a transient
-//!   refresh failure keeps serving the stale answer and slides its stale window
-//!   to `now + stale_ttl`, so an answer that is still requested survives a
-//!   resolver outage of any length, while an unused one still expires. Refreshes
-//!   back off exponentially (`negative_ttl` doubling up to `max_negative_ttl`).
-//!   An authoritative empty answer (`NoAddresses`) drops it.
+//! - **DNS failure keeps the last good answer** (Envoy behavior, bounded as in
+//!   RFC 8767 serve-stale): a transient refresh failure keeps serving the stale
+//!   answer and slides its stale window to `now + stale_ttl`, so an answer that
+//!   is still requested survives a resolver outage, while an unused one still
+//!   expires. The answer is never served more than `max_stale` past its
+//!   freshness: a deleted record (which the System resolver reports as a
+//!   transient error) stops being dialed within the record TTL plus `max_stale`.
+//!   Refreshes back off exponentially (`negative_ttl` doubling up to
+//!   `max_negative_ttl`). An authoritative empty answer (`NoAddresses`) drops it.
 //! - **Cold miss**: same-key callers serialize on a per-key flight mutex and
-//!   re-check the cache after acquiring it, so one resolver call serves them all.
-//!   A cancelled leader just releases the mutex; the next waiter takes over.
+//!   re-check the cache after acquiring it, so one resolver call (successful or
+//!   not) serves them all. A cancelled leader just releases the mutex; the next
+//!   waiter takes over. An answer whose refresh is still running after its stale
+//!   window is served to cold callers instead of starting a second resolution.
 //! - **Negative**: a failure with no servable stale answer is cached for the
 //!   current back-off (`negative_ttl` doubling per consecutive failure, up to
 //!   `max_negative_ttl`).
@@ -57,6 +62,12 @@ const NEGATIVE_ANSWER_TTL: Duration = Duration::from_secs(1);
 /// Default ceiling of the exponential failure back-off (10x the base, as
 /// Envoy's `dns_failure_refresh_rate` default).
 const MAX_NEGATIVE_ANSWER_TTL: Duration = Duration::from_secs(10);
+/// Default ceiling on how long past its freshness a last good answer is served
+/// while the resolver keeps failing (the RFC 8767 "maximum stale timer",
+/// shortened from its resolver-oriented 1-3 days because a gateway keeps
+/// dialing the answer: a deleted or reassigned destination must stop receiving
+/// traffic within minutes).
+const MAX_STALE_ANSWER_AGE: Duration = Duration::from_secs(300);
 
 const EGRESS_CACHE_CAPACITY: usize = 4096;
 const EGRESS_CACHE_SHARDS: usize = 16;
@@ -79,6 +90,8 @@ pub struct DnsCachePolicy {
     negative_ttl: Duration,
     /// Ceiling of the failure back-off.
     max_negative_ttl: Duration,
+    /// Ceiling on serving an answer past its freshness while refreshes fail.
+    max_stale: Duration,
 }
 
 impl DnsCachePolicy {
@@ -90,6 +103,7 @@ impl DnsCachePolicy {
             stale_ttl: STALE_ANSWER_WINDOW,
             negative_ttl: NEGATIVE_ANSWER_TTL,
             max_negative_ttl: MAX_NEGATIVE_ANSWER_TTL,
+            max_stale: MAX_STALE_ANSWER_AGE,
         }
     }
 
@@ -111,11 +125,13 @@ impl DnsCachePolicy {
         self.fallback_ttl.is_zero()
     }
 
-    /// LRU retention of an answer: its stale window plus one more window, so a
-    /// refresh that is still running when the window ends finds the entry.
+    /// LRU retention of an answer: until its stale limit plus one more stale
+    /// window. An answer stays servable to cold lookups while its refresh runs,
+    /// up to the stale limit, and a refresh may outlive the 30 s stale window
+    /// (HTTPDNS timeouts plus fallback), so retention must cover the limit.
     /// Servability is decided by the entry's own deadlines, never by retention.
-    fn answer_retention(&self, stale_until: Instant, now: Instant) -> Duration {
-        stale_until
+    fn answer_retention(&self, stale_limit: Instant, now: Instant) -> Duration {
+        stale_limit
             .saturating_duration_since(now)
             .saturating_add(self.stale_ttl)
     }
@@ -132,8 +148,8 @@ impl DnsCachePolicy {
 
 /// Store-stats projection. `in_flight` must return to zero once requests
 /// settle; `entries` is bounded by capacity (a still-requested answer can stay
-/// while its resolver keeps failing). `in_flight_keys` lists at most a bounded
-/// sample of live flight keys.
+/// while its resolver keeps failing, up to its stale limit). `in_flight_keys`
+/// lists at most a bounded sample of live flights as `policy|name`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DnsAnswerCacheStats {
     pub entries: usize,
@@ -177,10 +193,21 @@ struct AnswerEntry {
     addrs: Arc<[IpAddr]>,
     fresh_until: Instant,
     stale_until: Instant,
+    /// Hard end of serving this answer: `fresh_until + max_stale`. Failed
+    /// refreshes slide `stale_until` but never past this point.
+    stale_limit: Instant,
     refresh_blocked_until: Option<Instant>,
     /// Consecutive failed refreshes since this answer was resolved.
     failures: u32,
     refreshing: AtomicBool,
+}
+
+impl AnswerEntry {
+    /// Servable to a cold lookup: inside its stale window, or past it while
+    /// its own claimed refresh is still running (bounded by the stale limit).
+    fn is_servable(&self, now: Instant) -> bool {
+        now < self.stale_until || (now < self.stale_limit && self.refreshing.load(Ordering::Acquire))
+    }
 }
 
 #[derive(Debug)]
@@ -194,28 +221,31 @@ enum Entry {
     },
 }
 
-/// Releases a stale entry's refresh claim if the refresh is cancelled. A
-/// completed refresh always replaces the entry, so its claim stays taken and a
-/// reader still holding the retired entry cannot start a second refresh.
-struct RefreshClaim<'a> {
-    flag: &'a AtomicBool,
+/// A stale entry's refresh claim. A completed refresh always replaces the
+/// entry, so its claim stays taken and a reader still holding the retired entry
+/// cannot start a second refresh. A refresh cancelled by its caller's deadline
+/// (common when the resolver hangs longer than an outbound connect timeout)
+/// counts as a failed refresh: the last good answer is kept, its window slides
+/// and the next refresh backs off, so the last-good guarantee does not depend
+/// on callers outliving the resolver.
+struct RefreshClaim<'a, 'q> {
+    cache: &'a DnsAnswerCache,
+    query: &'a CacheQuery<'q>,
+    entry: &'a Arc<Entry>,
+    policy: &'a DnsCachePolicy,
     armed: bool,
 }
 
-impl<'a> RefreshClaim<'a> {
-    fn new(flag: &'a AtomicBool) -> Self {
-        Self { flag, armed: true }
-    }
-
+impl RefreshClaim<'_, '_> {
     fn disarm(mut self) {
         self.armed = false;
     }
 }
 
-impl Drop for RefreshClaim<'_> {
+impl Drop for RefreshClaim<'_, '_> {
     fn drop(&mut self) {
         if self.armed {
-            self.flag.store(false, Ordering::Release);
+            self.cache.abandon_refresh(self.query, self.entry, self.policy);
         }
     }
 }
@@ -292,13 +322,29 @@ impl DnsAnswerCache {
                 Entry::Answer(answer) if now < answer.fresh_until => return Ok(answer.addrs.to_vec()),
                 Entry::Answer(answer) if now < answer.stale_until => {
                     let blocked = answer.refresh_blocked_until.is_some_and(|until| now < until);
-                    if blocked || answer.refreshing.swap(true, Ordering::AcqRel) {
+                    // Read before claiming so readers of an entry under refresh
+                    // do not each write the shared flag.
+                    if blocked
+                        || answer.refreshing.load(Ordering::Relaxed)
+                        || answer.refreshing.swap(true, Ordering::AcqRel)
+                    {
                         return Ok(answer.addrs.to_vec());
                     }
-                    let claim = RefreshClaim::new(&answer.refreshing);
+                    let claim = RefreshClaim {
+                        cache: self,
+                        query: &query,
+                        entry,
+                        policy,
+                        armed: true,
+                    };
                     let result = resolver(spec, name, query_policy).await;
                     claim.disarm();
                     return self.complete(&query, Some(entry), true, result, policy);
+                }
+                // Past its stale window with a refresh still running: serve it
+                // without touching the flight registry (see the cold re-check).
+                Entry::Answer(answer) if now < answer.stale_limit && answer.refreshing.load(Ordering::Acquire) => {
+                    return Ok(answer.addrs.to_vec())
                 }
                 Entry::Negative { error, until, .. } if now < *until => return Err(error.clone()),
                 _ => {}
@@ -311,7 +357,11 @@ impl DnsAnswerCache {
         let previous = self.entries.get(&query);
         if let Some(entry) = previous.as_ref() {
             match entry.as_ref() {
-                Entry::Answer(answer) if now < answer.stale_until => return Ok(answer.addrs.to_vec()),
+                // Inside the stale window, or with a refresh still in progress
+                // (completed refreshes replace the entry, cancelled ones store
+                // a replacement or clear the flag): the claimed refresh keeps
+                // the answer on failure, so serve it rather than racing it.
+                Entry::Answer(answer) if answer.is_servable(now) => return Ok(answer.addrs.to_vec()),
                 Entry::Negative { error, until, .. } if now < *until => return Err(error.clone()),
                 _ => {}
             }
@@ -336,18 +386,23 @@ impl DnsAnswerCache {
         let error = match result {
             Ok(answer) => {
                 if let Some(fresh_until) = now.checked_add(policy.fresh_for(answer.ttl)) {
-                    let stale_until = fresh_until.checked_add(policy.stale_ttl).unwrap_or(fresh_until);
+                    let stale_limit = fresh_until.checked_add(policy.max_stale).unwrap_or(fresh_until);
+                    let stale_until = fresh_until
+                        .checked_add(policy.stale_ttl)
+                        .unwrap_or(fresh_until)
+                        .min(stale_limit);
                     self.store(
                         query,
                         Entry::Answer(AnswerEntry {
                             addrs: Arc::from(answer.addrs.as_slice()),
                             fresh_until,
                             stale_until,
+                            stale_limit,
                             refresh_blocked_until: None,
                             failures: 0,
                             refreshing: AtomicBool::new(false),
                         }),
-                        policy.answer_retention(stale_until, now),
+                        policy.answer_retention(stale_limit, now),
                     );
                 }
                 return Ok(answer.addrs);
@@ -355,40 +410,31 @@ impl DnsAnswerCache {
             Err(error) => error,
         };
         let mut failures = 1;
-        if let Some(current) = self.entries.get(query) {
+        // An entry evicted while its refresh ran is still the last good answer
+        // this lookup claimed: treat it as current so the failure keeps it.
+        let current = self
+            .entries
+            .get(query)
+            .or_else(|| previous.filter(|_| previous_servable).cloned());
+        if let Some(current) = current {
             match current.as_ref() {
                 Entry::Answer(answer) => {
                     let same = previous.is_some_and(|previous| Arc::ptr_eq(&current, previous));
-                    if now < answer.stale_until || (same && previous_servable) {
-                        if !same {
-                            // A newer answer was written while this lookup ran:
-                            // it wins over this failure and is left untouched.
-                            return Ok(answer.addrs.to_vec());
-                        }
-                        if error != DnsError::NoAddresses {
-                            // Transient failure: keep the last good answer,
-                            // slide its stale window while it is requested and
-                            // back off refreshes. An authoritative empty answer
-                            // falls through and replaces it.
-                            let failures = answer.failures.saturating_add(1);
-                            let stale_until = now
-                                .checked_add(policy.stale_ttl)
-                                .map_or(answer.stale_until, |slid| slid.max(answer.stale_until));
-                            let addrs = answer.addrs.to_vec();
-                            self.store(
-                                query,
-                                Entry::Answer(AnswerEntry {
-                                    addrs: answer.addrs.clone(),
-                                    fresh_until: answer.fresh_until,
-                                    stale_until,
-                                    refresh_blocked_until: now.checked_add(policy.backoff(failures)),
-                                    failures,
-                                    refreshing: AtomicBool::new(false),
-                                }),
-                                policy.answer_retention(stale_until, now),
-                            );
-                            return Ok(addrs);
-                        }
+                    if !same && answer.is_servable(now) {
+                        // A newer answer was written while this lookup ran and
+                        // is still servable (inside its stale window, or under
+                        // its own running refresh): it wins over this failure.
+                        return Ok(answer.addrs.to_vec());
+                    }
+                    if same
+                        && (now < answer.stale_until || previous_servable)
+                        && error != DnsError::NoAddresses
+                        && now < answer.stale_limit
+                    {
+                        // Transient failure: keep the last good answer. An
+                        // authoritative empty answer, or an answer past its
+                        // stale limit, falls through and is replaced.
+                        return Ok(self.keep_after_failure(query, answer, now, policy));
                     }
                     failures = answer.failures.saturating_add(1);
                 }
@@ -415,6 +461,56 @@ impl DnsAnswerCache {
         Err(error)
     }
 
+    /// Keep `answer` after a failed or abandoned refresh: slide its stale
+    /// window (up to its stale limit) while it is requested, count the
+    /// failure and back off the next refresh. Returns the served addresses.
+    fn keep_after_failure(
+        &self,
+        query: &CacheQuery<'_>,
+        answer: &AnswerEntry,
+        now: Instant,
+        policy: &DnsCachePolicy,
+    ) -> Vec<IpAddr> {
+        let failures = answer.failures.saturating_add(1);
+        let stale_until = now
+            .checked_add(policy.stale_ttl)
+            .map_or(answer.stale_until, |slid| slid.max(answer.stale_until))
+            .min(answer.stale_limit);
+        self.store(
+            query,
+            Entry::Answer(AnswerEntry {
+                addrs: answer.addrs.clone(),
+                fresh_until: answer.fresh_until,
+                stale_until,
+                stale_limit: answer.stale_limit,
+                refresh_blocked_until: now.checked_add(policy.backoff(failures)),
+                failures,
+                refreshing: AtomicBool::new(false),
+            }),
+            policy.answer_retention(answer.stale_limit, now),
+        );
+        answer.addrs.to_vec()
+    }
+
+    /// A claimed refresh was cancelled before its resolver returned. Treat it
+    /// as a transient failure of the claimed answer when that answer is still
+    /// current (or was evicted meanwhile) and within its stale limit; otherwise
+    /// only release the claim. Never writes a negative entry: no resolver
+    /// outcome was observed.
+    fn abandon_refresh(&self, query: &CacheQuery<'_>, claimed: &Arc<Entry>, policy: &DnsCachePolicy) {
+        let Entry::Answer(answer) = claimed.as_ref() else {
+            return;
+        };
+        let now = self.now();
+        let current = self.entries.get(query);
+        let still_claimed = current.as_ref().is_none_or(|current| Arc::ptr_eq(current, claimed));
+        if still_claimed && now < answer.stale_limit {
+            self.keep_after_failure(query, answer, now, policy);
+        } else {
+            answer.refreshing.store(false, Ordering::Release);
+        }
+    }
+
     fn store(&self, query: &CacheQuery<'_>, entry: Entry, retain_for: Duration) {
         if retain_for.is_zero() {
             return;
@@ -422,16 +518,37 @@ impl DnsAnswerCache {
         self.entries.insert(query.to_key(), Arc::new(entry), Some(retain_for));
     }
 
+    /// Counts only, for an instance whose names come from requests: listing
+    /// them on an admin endpoint would echo client-supplied data.
+    pub fn stats_counts_only(&self) -> DnsAnswerCacheStats {
+        DnsAnswerCacheStats {
+            entries: self.entries.len(),
+            in_flight: self.flights.len(),
+            in_flight_keys: Vec::new(),
+        }
+    }
+
     pub fn stats(&self) -> DnsAnswerCacheStats {
         DnsAnswerCacheStats {
             entries: self.entries.len(),
             in_flight: self.flights.len(),
-            in_flight_keys: self.flights.keys(MAX_LISTED_FLIGHT_KEYS),
+            // List `policy|name` only: the resolver fingerprint can carry
+            // provider URL configuration and adds nothing to a residue check.
+            in_flight_keys: self
+                .flights
+                .keys(MAX_LISTED_FLIGHT_KEYS)
+                .into_iter()
+                .map(|key| match key.match_indices('|').nth(1) {
+                    Some((end, _)) => key[..end].to_string(),
+                    None => key,
+                })
+                .collect(),
         }
     }
 }
 
-/// Process-wide cache shared by every `EgressResolver` in this process.
+/// Process-wide cache shared by every `EgressResolver` built without an explicit
+/// cache instance (operator-configured egress destinations).
 pub fn egress_answer_cache() -> &'static DnsAnswerCache {
     static CACHE: LazyLock<DnsAnswerCache> =
         LazyLock::new(|| DnsAnswerCache::new(EGRESS_CACHE_CAPACITY, EGRESS_CACHE_SHARDS));

@@ -203,6 +203,12 @@ spec:
 | `overrideHost` | String | 原始请求 Host | 可选。省略时保留原始请求 Host；若设置，必须非空，且为合法 HTTP 头值与 Host authority。 |
 | `sni` | String | `domain` 的值 | 可选。省略时 TLS 使用 `domain`；若设置，必须非空，且与 `domain` 使用相同的字符规则。空 SNI 会被拒绝。 |
 
+主机名通过 Gateway 的后端 DNS 应答缓存解析。解析器和地址族依次取自 Gateway 的
+`edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref` / `edgion.io/dns-lookup-family`
+注解，以及 EdgionGatewayConfig `dnsResolver` 默认值；默认地址族为 `ipv4Only`，只有
+IPv6 记录的主机名需要配置 `ipv6Only` 或 `all`。解析失败会缓存 1–10 秒。IP 字面量按原样使用。从轮转的起始位置开始，
+连接第一个通过上游地址检查的地址。
+
 ### 使用场景
 
 #### 多区域路由

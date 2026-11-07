@@ -26,15 +26,22 @@ pub enum DnsQueryPolicy {
     Family(DnsLookupFamily),
 }
 
+/// Most addresses kept from one answer, for every resolver backend (the
+/// HTTPDNS parser applies the same bound itself). A zone can return thousands
+/// of records over TCP; consumers dial a handful, while every cached answer is
+/// copied per use and retained for minutes.
+pub const MAX_ANSWER_ADDRS: usize = 256;
+
 impl DnsQueryPolicy {
     pub fn select(self, ips: Vec<IpAddr>) -> Vec<IpAddr> {
         if self == Self::Native {
             return ips;
         }
+        let mut seen = std::collections::HashSet::with_capacity(ips.len().min(MAX_ANSWER_ADDRS));
         let mut out = Vec::new();
         for ip in ips {
             let ip = ip.to_canonical();
-            if self.accepts(ip) && !out.contains(&ip) {
+            if self.accepts(ip) && seen.insert(ip) {
                 out.push(ip);
             }
         }
@@ -186,12 +193,17 @@ impl HttpDnsCandidate {
         let config = self.config();
         let fetcher = self.build_fetcher().ok();
         // Readiness is part of the address identity: a fallback-only generation
-        // must never share cached answers with a ready one.
+        // must never share cached answers with a ready one. So is the owning
+        // LinkSys: the redacted config does not show which namespace's CA or
+        // client-certificate Secrets it uses, and two tenants with identical
+        // config text must not share answers, failures or refresh state.
         let address_fingerprint = {
             let _redact = edgion_resources::redact::AdminRedactGuard::new();
             let readiness = if fetcher.is_some() { "ready" } else { "fallback" };
+            let namespace = self.owner.metadata.namespace.as_deref().unwrap_or_default();
+            let name = self.owner.metadata.name.as_deref().unwrap_or_default();
             format!(
-                "httpdns:{readiness}:{}",
+                "httpdns:{readiness}:{namespace}/{name}:{}",
                 serde_json::to_string(config).unwrap_or_default()
             )
         };
@@ -288,8 +300,21 @@ pub struct StandardDnsServers {
 }
 
 impl StandardDnsServers {
+    /// The fingerprint is built from the parsed server addresses the resolver
+    /// actually queries (default port made explicit, unparsable entries
+    /// dropped, order and duplicates kept), so `1.1.1.1` and `1.1.1.1:53`
+    /// share answers and a raw string such as `"a,b"` cannot collide with the
+    /// list `["a", "b"]`. A
+    /// non-empty list without one valid server only ever fails and gets its
+    /// own identity.
     pub fn new(servers: Vec<String>) -> Arc<Self> {
-        let fingerprint = format!("std:{}", servers.join(","));
+        let parsed = standard::parse_servers(&servers);
+        let fingerprint = if parsed.is_empty() && !servers.is_empty() {
+            "std:!invalid".to_string()
+        } else {
+            let addrs: Vec<String> = parsed.iter().map(ToString::to_string).collect();
+            format!("std:{}", addrs.join(","))
+        };
         Arc::new(Self { servers, fingerprint })
     }
 
@@ -355,7 +380,8 @@ impl std::fmt::Display for DnsError {
 }
 impl std::error::Error for DnsError {}
 
-/// Resolve `domain` per `spec`. Returns all resolved addresses.
+/// Resolve `domain` per `spec`. Returns the resolved addresses, at most
+/// [`MAX_ANSWER_ADDRS`].
 pub async fn resolve(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<Vec<IpAddr>, DnsError> {
     resolve_answer(spec, domain, policy).await.map(|answer| answer.addrs)
 }
@@ -364,6 +390,18 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) 
 /// record lifetime when the resolver reports one. Uncached; callers that want
 /// caching go through [`DnsAnswerCache`].
 pub async fn resolve_answer(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<DnsAnswer, DnsError> {
+    resolve_uncapped(spec, domain, policy).await.map(|mut answer| {
+        if answer.addrs.len() > MAX_ANSWER_ADDRS {
+            // Keep a stable subset (round-robin servers reorder large answers),
+            // so published endpoint lists do not churn between resolutions.
+            answer.addrs.sort_unstable();
+            answer.addrs.truncate(MAX_ANSWER_ADDRS);
+        }
+        answer
+    })
+}
+
+async fn resolve_uncapped(spec: &ResolverSpec, domain: &str, policy: DnsQueryPolicy) -> Result<DnsAnswer, DnsError> {
     if policy != DnsQueryPolicy::Native {
         if let Ok(ip) = strip_brackets(domain).parse::<IpAddr>() {
             return require_addresses(policy.select(vec![ip])).map(DnsAnswer::without_ttl);

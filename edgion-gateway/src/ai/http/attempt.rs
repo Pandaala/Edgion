@@ -244,12 +244,14 @@ async fn try_ai_backend_peer(
 
 /// Upstream addresses one AI request has dialed. Pre-connect failures consume
 /// no dispatch, so the number of attempts is not bounded by
-/// `MAX_AI_DISPATCH_ATTEMPTS`; recording saturates and rotation alone spreads
-/// later attempts.
+/// `MAX_AI_DISPATCH_ATTEMPTS`; recording saturates, and once an address could
+/// not be recorded the record no longer says which addresses are untried, so
+/// selection falls back to rotation alone.
 #[derive(Debug, Default)]
 pub(crate) struct DialedAddrs {
     addrs: [Option<SocketAddr>; 8],
     len: usize,
+    overflowed: bool,
 }
 
 impl DialedAddrs {
@@ -260,6 +262,8 @@ impl DialedAddrs {
         if let Some(slot) = self.addrs.get_mut(self.len) {
             *slot = Some(addr);
             self.len += 1;
+        } else {
+            self.overflowed = true;
         }
     }
 
@@ -273,7 +277,7 @@ impl DialedAddrs {
 /// Pick the address for one attempt: starting at `rotation` (spread across
 /// requests, since cached answers keep their order for the record TTL), the
 /// first allowed address this request has not dialed yet; once every address
-/// was dialed, the rotated address.
+/// was dialed, or the dialed record overflowed, the rotated address.
 fn select_ai_addr(allowed: &[IpAddr], port: u16, dialed: &DialedAddrs, rotation: usize) -> Option<SocketAddr> {
     let len = allowed.len();
     if len == 0 {
@@ -281,6 +285,9 @@ fn select_ai_addr(allowed: &[IpAddr], port: u16, dialed: &DialedAddrs, rotation:
     }
     let start = rotation % len;
     let candidate = |offset: usize| SocketAddr::new(allowed[(start + offset) % len], port);
+    if dialed.overflowed {
+        return Some(candidate(0));
+    }
     (0..len)
         .map(candidate)
         .find(|addr| !dialed.contains(addr))

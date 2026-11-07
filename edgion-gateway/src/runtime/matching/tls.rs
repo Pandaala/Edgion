@@ -24,6 +24,7 @@
 use arc_swap::ArcSwapOption;
 use edgion_algo::matcher::rfc6125_hostname::Rfc6125HostnameMatcher;
 use edgion_common::cert_util::LeafValidity;
+use edgion_common::link_sys_core::fingerprint::FingerprintHasher;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
@@ -61,6 +62,157 @@ pub struct GatewayTlsEntry {
     /// generation is published. Reject entries share the same hostname slots,
     /// specificity, and collision precedence as serving entries.
     pub frontend_mtls: FrontendMtlsOutcome,
+    /// Session id context of this entry's effective policy, derived once at
+    /// construction by `gateway_session_context`. Private so it cannot drift
+    /// from the fields it was derived from; read it through `session_context()`.
+    session_context: SessionContextId,
+}
+
+/// Domain separator for downstream TLS session id contexts.
+const SESSION_CONTEXT_DOMAIN: &[u8] = b"edgion.io/downstream-tls-session-context/v1";
+pub(crate) const SESSION_CONTEXT_KIND_EDGION_TLS: u8 = 1;
+const SESSION_CONTEXT_KIND_GATEWAY: u8 = 2;
+
+/// 32-byte TLS session id context identifying one effective downstream TLS
+/// policy (serving identity plus client-authentication requirements).
+///
+/// BoringSSL resumes a session only when the session's context equals the
+/// handshake's, and a resumed handshake neither requests nor re-verifies a
+/// client certificate. Every selected policy therefore installs its own id, so
+/// a session can never cross from one policy into another on a shared
+/// listener. Ids are computed on the cold publication path; the handshake only
+/// copies them. The bytes are a digest of public policy data, not a secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionContextId([u8; 32]);
+
+impl SessionContextId {
+    /// Start a digest for one policy kind under the versioned domain.
+    pub(crate) fn hasher(kind: u8) -> FingerprintHasher {
+        let mut hasher = FingerprintHasher::new();
+        hasher.bytes(SESSION_CONTEXT_DOMAIN);
+        hasher.tag(kind);
+        hasher
+    }
+
+    pub(crate) fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Id for a Gateway frontend-validation decision serving an EdgionTls
+    /// certificate overlay: the first half of each input. Both inputs are full
+    /// domain-separated SHA-256 digests, so the result differs from either part
+    /// and from other pairings with overwhelming probability (2^-128 per pair),
+    /// without hashing on the handshake path.
+    pub(crate) fn overlay(gateway: &Self, edgion_tls: &Self) -> Self {
+        let mut combined = [0u8; 32];
+        combined[..16].copy_from_slice(&gateway.0[..16]);
+        combined[16..].copy_from_slice(&edgion_tls.0[..16]);
+        Self(combined)
+    }
+}
+
+/// SHA-256 over a length-prefixed DER list (a serving chain or a CA set).
+pub(crate) fn der_list_digest<'a>(ders: impl ExactSizeIterator<Item = &'a [u8]>) -> [u8; 32] {
+    let mut hasher = FingerprintHasher::new();
+    hasher.u64(ders.len() as u64);
+    for der in ders {
+        hasher.bytes(der);
+    }
+    hasher.finish()
+}
+
+/// Derive a Gateway listener entry's session id context from its effective
+/// policy: attachment identity, serving chains, and the frontend client-auth
+/// decision with its CA set. The fixed Gateway verify depth is implied by the
+/// outcome. `None` serving chains mean compilation failed and the handshake
+/// fails closed, so no session can exist under that marker. The matcher always
+/// pairs `StrictEffective` with a CA digest (a CA failure compiles to
+/// `StrictReject`); the absent-digest marker only keeps the encoding total.
+fn gateway_session_context(
+    attachment: &ResolvedListenerAttachment,
+    serving_chain_digests: Option<&[[u8; 32]]>,
+    outcome: FrontendMtlsOutcome,
+    frontend_ca_digest: Option<&[u8; 32]>,
+) -> SessionContextId {
+    let mut hasher = SessionContextId::hasher(SESSION_CONTEXT_KIND_GATEWAY);
+    hasher.bytes(attachment.gateway_namespace.as_bytes());
+    hasher.bytes(attachment.gateway_name.as_bytes());
+    hasher.bytes(attachment.listener_name.as_bytes());
+    hasher.bytes(attachment.listener_key.as_ref().as_bytes());
+    match serving_chain_digests {
+        Some(digests) => {
+            hasher.tag(1);
+            hasher.u64(digests.len() as u64);
+            for digest in digests {
+                hasher.bytes(digest);
+            }
+        }
+        None => hasher.tag(0),
+    }
+    match outcome {
+        FrontendMtlsOutcome::NotConfigured => hasher.tag(0),
+        FrontendMtlsOutcome::StrictEffective => {
+            hasher.tag(1);
+            match frontend_ca_digest {
+                Some(digest) => {
+                    hasher.tag(1);
+                    hasher.bytes(digest);
+                }
+                None => hasher.tag(0),
+            }
+        }
+        FrontendMtlsOutcome::InsecureFallback => hasher.tag(2),
+        FrontendMtlsOutcome::StrictReject { .. } => hasher.tag(3),
+    }
+    SessionContextId(hasher.finish())
+}
+
+fn serving_chain_digests(certificates: &Option<Arc<[Arc<CompiledServingCertificate>]>>) -> Option<Vec<[u8; 32]>> {
+    certificates.as_ref().map(|certificates| {
+        certificates
+            .iter()
+            .map(|certificate| certificate.chain_digest)
+            .collect()
+    })
+}
+
+impl GatewayTlsEntry {
+    /// Session id context installed when this entry is the selected policy.
+    pub(crate) fn session_context(&self) -> SessionContextId {
+        self.session_context
+    }
+
+    /// Test fixture: an entry with no serving certificates or CA store whose
+    /// session context is derived exactly as the matcher derives it.
+    #[cfg(test)]
+    pub(crate) fn for_test(attachment: ResolvedListenerAttachment, frontend_mtls: FrontendMtlsOutcome) -> Self {
+        let mut entry = Self {
+            attachment,
+            gateway_creation_ts: None,
+            certificate_refs: Vec::new(),
+            compiled_serving_certificates: None,
+            compiled_frontend_ca_store: None,
+            frontend_mtls,
+            session_context: SessionContextId([0; 32]),
+        };
+        entry.refresh_session_context_for_test(None);
+        entry
+    }
+
+    /// Re-derive the session context after a fixture mutated public fields.
+    #[cfg(test)]
+    pub(crate) fn refresh_session_context_for_test(&mut self, frontend_ca_digest: Option<&[u8; 32]>) {
+        self.session_context = gateway_session_context(
+            &self.attachment,
+            serving_chain_digests(&self.compiled_serving_certificates).as_deref(),
+            self.frontend_mtls,
+            frontend_ca_digest,
+        );
+    }
 }
 
 /// Immutable BoringSSL-ready serving identity compiled while rebuilding the
@@ -68,6 +220,9 @@ pub struct GatewayTlsEntry {
 #[derive(Clone)]
 pub struct CompiledServingCertificate {
     pub chain: Arc<[X509]>,
+    /// SHA-256 over the exact DER chain (leaf first), computed at compile time
+    /// for the downstream session id context.
+    pub chain_digest: [u8; 32],
     #[cfg(feature = "boringssl")]
     pub atomic_chain: Arc<CompiledBoringCertificateChain>,
     pub private_key: PKey<Private>,
@@ -141,6 +296,7 @@ pub enum FrontendMtlsOutcome {
 struct CompiledFrontendMtls {
     outcome: FrontendMtlsOutcome,
     store: Option<Arc<X509Store>>,
+    ca_digest: Option<[u8; 32]>,
 }
 
 fn compile_frontend_mtls(
@@ -164,6 +320,7 @@ fn compile_frontend_mtls(
             CompiledFrontendMtls {
                 outcome: FrontendMtlsOutcome::NotConfigured,
                 store: None,
+                ca_digest: None,
             }
         };
     };
@@ -191,6 +348,7 @@ fn compile_frontend_mtls(
         return CompiledFrontendMtls {
             outcome: FrontendMtlsOutcome::InsecureFallback,
             store: None,
+            ca_digest: None,
         };
     }
     if validation.ca_certificate_refs.is_empty() {
@@ -207,6 +365,9 @@ fn compile_frontend_mtls(
     };
     let mut aggregate_bytes = 0usize;
     let mut unique_certificates = HashSet::new();
+    // Distinct DERs in store-insertion order, hashed once for the session id
+    // context after the loop.
+    let mut installed_certificates = Vec::new();
     for (index, (reference, outcome)) in validation.ca_certificate_refs.iter().zip(resolved).enumerate() {
         if !reference.group.is_empty() {
             return compiled_reject("ca group invalid");
@@ -248,11 +409,13 @@ fn compile_frontend_mtls(
             if store_builder.add_cert(certificate).is_err() {
                 return compiled_reject("ca store invalid");
             }
+            installed_certificates.push(der);
         }
     }
     CompiledFrontendMtls {
         outcome: FrontendMtlsOutcome::StrictEffective,
         store: Some(Arc::new(store_builder.build())),
+        ca_digest: Some(der_list_digest(installed_certificates.iter().map(Vec::as_slice))),
     }
 }
 
@@ -260,6 +423,7 @@ fn compiled_reject(reason: &'static str) -> CompiledFrontendMtls {
     CompiledFrontendMtls {
         outcome: FrontendMtlsOutcome::StrictReject { reason },
         store: None,
+        ca_digest: None,
     }
 }
 
@@ -313,6 +477,7 @@ fn compile_serving_certificates(
         let atomic_chain = Arc::new(CompiledBoringCertificateChain::from_der(
             &strict_chain.certificates_der,
         )?);
+        let chain_digest = der_list_digest(strict_chain.certificates_der.iter().map(Vec::as_slice));
         let chain = strict_chain
             .certificates_der
             .iter()
@@ -324,6 +489,7 @@ fn compile_serving_certificates(
         }
         certificates.push(Arc::new(CompiledServingCertificate {
             chain: Arc::from(chain),
+            chain_digest,
             #[cfg(feature = "boringssl")]
             atomic_chain,
             key_type: private_key.id(),
@@ -617,19 +783,27 @@ impl GatewayTlsMatcher {
                     compiled_serving.is_some(),
                 );
 
+                let attachment = ResolvedListenerAttachment {
+                    gateway_namespace: gateway_namespace.clone(),
+                    gateway_name: gateway_name.clone(),
+                    listener_name: listener.name.clone(),
+                    listener_key: listener_key.clone(),
+                    gateway_proof: gateway_proof.clone(),
+                };
+                let session_context = gateway_session_context(
+                    &attachment,
+                    serving_chain_digests(&compiled_serving).as_deref(),
+                    compiled_frontend.outcome,
+                    compiled_frontend.ca_digest.as_ref(),
+                );
                 let entry = Arc::new(GatewayTlsEntry {
-                    attachment: ResolvedListenerAttachment {
-                        gateway_namespace: gateway_namespace.clone(),
-                        gateway_name: gateway_name.clone(),
-                        listener_name: listener.name.clone(),
-                        listener_key: listener_key.clone(),
-                        gateway_proof: gateway_proof.clone(),
-                    },
+                    attachment,
                     gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
                     certificate_refs: cert_refs,
                     compiled_serving_certificates: compiled_serving,
                     compiled_frontend_ca_store: compiled_frontend.store,
                     frontend_mtls: compiled_frontend.outcome,
+                    session_context,
                 });
 
                 match &listener.hostname {

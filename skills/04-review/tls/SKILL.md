@@ -67,6 +67,7 @@ before applying a decision to current code.
 - [Typed SAN display prefixes are not DNS](regression-guards/typed-san-display-prefix-not-dns.md)
 - [tls-05 — Upstream TLS ALPN for gRPC backends is set by the gRPC peer path, not `create_tls_peer` — FALSE-POSITIVE (primary) + ACCEPTED-TRADEOFF (residual)](regression-guards/upstream-grpc-tls-alpn-set-by-grpc-peer-path.md)
 - [Wildcard Depth: Three Layers, Two Standards](regression-guards/wildcard-depth-gateway-api-vs-rfc6125.md)
+- [gw-infra-01 — Session resumption is isolated per selected downstream TLS policy](regression-guards/session-resumption-policy-isolation.md)
 
 ## Superseded
 

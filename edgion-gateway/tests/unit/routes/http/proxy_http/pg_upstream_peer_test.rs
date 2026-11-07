@@ -2742,3 +2742,22 @@ fn test_metrics_attempt_timing_is_latency_only_and_survives_retries() {
         assert!(ctx.test_hash_key().is_none());
     }
 }
+
+#[test]
+fn external_jump_dials_the_first_safe_resolved_address() {
+    use super::first_safe_resolved_addr;
+    use edgion_resources::EdgionErrorCode;
+    let addr = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+    let mixed = [addr("169.254.169.254:80"), addr("127.0.0.1:80"), addr("192.0.2.9:80")];
+    assert_eq!(first_safe_resolved_addr(&mixed, false), Ok(addr("192.0.2.9:80")));
+    // Loopback is allowed only with the upstream loopback exception.
+    assert_eq!(first_safe_resolved_addr(&mixed[..2], true), Ok(addr("127.0.0.1:80")));
+    assert_eq!(
+        first_safe_resolved_addr(&mixed[..2], false),
+        Err(Some((
+            addr("127.0.0.1:80"),
+            EdgionErrorCode::BackendLocalhostNotAllowed
+        )))
+    );
+    assert_eq!(first_safe_resolved_addr(&[], false), Err(None));
+}
