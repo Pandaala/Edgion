@@ -116,6 +116,47 @@ fn current_bucket_is_excluded_until_next_tick_boundary() {
 }
 
 #[test]
+fn next_second_is_writable_before_its_tick() {
+    let state = AdaptiveTelemetryState::new();
+    state.tick(100);
+    // The ticker phase is arbitrary: second 101 starts before tick(101) runs.
+    state.record_success_ttft(101, 250);
+    state.record_failure(101);
+    state.record_charged_tokens(101, 5);
+    state.tick(101);
+    // tick(101) must keep the pre-rotated slot and still exclude the current second.
+    state.record_success_ttft(101, 250);
+    assert_eq!(state.snapshot(), AdaptiveSnapshot::default());
+
+    state.tick(102);
+    assert_eq!(
+        state.snapshot(),
+        AdaptiveSnapshot {
+            latency_p50_micros: Some(250),
+            latency_samples: 2,
+            latency_failures: 1,
+            charged_tokens_60s: 5,
+            ..AdaptiveSnapshot::default()
+        }
+    );
+}
+
+#[test]
+fn pre_rotation_publishes_the_oldest_usage_second_before_reusing_its_slot() {
+    let state = AdaptiveTelemetryState::new();
+    state.tick(9);
+    state.record_charged_tokens(10, 3);
+    // tick(70) pre-rotates second 71 into the slot that holds second 10.
+    state.tick(70);
+    assert_eq!(state.snapshot().charged_tokens_60s, 3);
+    state.record_charged_tokens(71, 4);
+    state.tick(71);
+    assert_eq!(state.snapshot().charged_tokens_60s, 0);
+    state.tick(72);
+    assert_eq!(state.snapshot().charged_tokens_60s, 4);
+}
+
+#[test]
 fn p50_uses_successes_only_and_failure_charge_still_counts() {
     let state = AdaptiveTelemetryState::new();
     state.tick(10);

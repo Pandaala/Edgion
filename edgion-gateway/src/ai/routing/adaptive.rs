@@ -356,10 +356,15 @@ impl AdaptiveTelemetryState {
             ..AdaptiveSnapshot::default()
         }));
 
-        // Prepare the current in-progress second only after publishing all
-        // complete buckets. Events arriving before this cold tick are dropped,
-        // never written into a stale epoch.
+        // Rotate only after publishing all complete buckets. The ticker is not
+        // aligned to second boundaries, so the next second is prepared ahead:
+        // writes from its start are accepted instead of being dropped until
+        // the tick that observes it. Its slot held `now - 60`, which the window
+        // above has already published and the next tick ages out. `rotate_to`
+        // is a no-op for a slot that is already on the requested second.
         self.buckets.bucket(now_second).rotate_to(now_second);
+        let next_second = now_second.saturating_add(1);
+        self.buckets.bucket(next_second).rotate_to(next_second);
     }
 }
 

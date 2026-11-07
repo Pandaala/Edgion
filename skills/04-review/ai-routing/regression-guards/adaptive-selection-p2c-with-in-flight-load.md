@@ -87,7 +87,8 @@ descriptions are context, not the authority for this rule.
   while the lease releases immediately: one attempt's charge can be invisible for up to one
   second. Accepted as negligible against the 60 s window.
 - Replicas still decide independently; random pairs and local in-flight counts decorrelate them.
-- `gw-ai3-05` (bucket rotation drops samples) affects the same telemetry and is tracked separately.
+- Bucket rotation is pre-rotated so writes are not lost to the ticker phase; see
+  [adaptive buckets pre-rotate the next second](adaptive-buckets-pre-rotate-next-second.md) (`gw-ai3-05`).
 
 ## Verification and re-evaluation
 
