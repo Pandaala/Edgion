@@ -67,3 +67,8 @@ harness = false
 name = "xml_chunks"
 path = "tests/benches/xml_chunks.rs"
 harness = false
+
+[[bench]]
+name = "transaction_crs"
+path = "tests/benches/transaction_crs.rs"
+harness = false
