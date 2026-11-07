@@ -287,6 +287,39 @@ fn multipart_long_near_matches_preserve_fields_and_limits() {
     ));
 }
 
+fn multipart_edge_publication(body: &'static [u8]) -> Result<BodyPublication, BodyError> {
+    oracle_publication(
+        &RequestBody::new(bytes::Bytes::from_static(body), BodyProcessorSelection::Multipart),
+        Some(b"multipart/form-data; boundary=edge"),
+        0,
+        BodyLimits::default(),
+    )
+}
+
+#[test]
+fn multipart_boundary_directly_after_boundary_is_malformed_not_panic() {
+    // F-S5-1: the next delimiter starts right after the previous boundary
+    // line, so stripping its CRLF used to end the part before it started.
+    assert!(matches!(
+        multipart_edge_publication(b"--edge\r\n--edge--"),
+        Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Multipart
+        })
+    ));
+}
+
+#[test]
+fn multipart_zero_length_part_stays_malformed() {
+    // A part with no header block has no CRLFCRLF separator; this pins the
+    // pre-F-S5-1 result so the panic fix does not change it.
+    assert!(matches!(
+        multipart_edge_publication(b"--edge\r\n\r\n--edge--"),
+        Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Multipart
+        })
+    ));
+}
+
 #[test]
 fn multipart_disposition_keeps_semicolons_inside_quoted_parameters() {
     let disposition = b"form-data; name=\"prefix&amp;suffix\"; filename=\"safe.txt\"";

@@ -52,6 +52,20 @@ exercise long near matches, normal fields and files, malformed input, and
 limits. The transaction test checks Phase 2 results in
 both enforcement and detection-only modes.
 
+### Boundary-adjacent delimiter
+
+The CRLF stripped before the next delimiter can be the same CRLF that ended
+the previous boundary line, as in `--edge\r\n--edge--`. Subtracting it then
+put the part end before the part start, and the direct slice panicked on the
+request path (F-S5-1). The parser now treats `next_boundary < part_start` as
+`BodyError::Malformed`, strips the CRLF only when the resulting end is not
+before the start, and takes the part with `input.get(..)`, so a future
+offset error yields `Malformed` rather than a panic. The adjacent case is
+therefore an empty part, which is malformed like any part without a header
+separator. `multipart_boundary_directly_after_boundary_is_malformed_not_panic`
+pins the former panic and `multipart_zero_length_part_stays_malformed` pins
+the unchanged result for `--edge\r\n\r\n--edge--`.
+
 ## Alternatives and limits
 
 Coraza delegates multipart parsing to Go's `mime/multipart.Reader`; replacing

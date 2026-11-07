@@ -620,12 +620,22 @@ fn parse_multipart(input: &[u8], content_type: Option<&[u8]>, builder: &mut Body
                 processor: BodyProcessorSelection::Multipart,
             });
         };
-        let mut part_end = next_boundary;
-        if input.get(part_end.saturating_sub(2)..part_end) == Some(b"\r\n") {
-            part_end -= 2;
+        let malformed = BodyError::Malformed {
+            processor: BodyProcessorSelection::Multipart,
+        };
+        if next_boundary < part_start {
+            return Err(malformed);
         }
+        // The delimiter's leading CRLF belongs to the delimiter, not the part.
+        // It may overlap the previous boundary line's CRLF (F-S5-1), so never
+        // let it move the end before the start.
+        let part_end = next_boundary
+            .checked_sub(2)
+            .filter(|end| *end >= part_start && input.get(*end..next_boundary) == Some(b"\r\n"))
+            .unwrap_or(next_boundary);
         builder.add_multipart_part()?;
-        let content_size = parse_multipart_part(&input[part_start..part_end], builder)?;
+        let part = input.get(part_start..part_end).ok_or(malformed)?;
+        let content_size = parse_multipart_part(part, builder)?;
         combined_size = combined_size.checked_add(content_size).ok_or(BodyError::Arithmetic)?;
         cursor = next_boundary;
     }
