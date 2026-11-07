@@ -221,7 +221,8 @@ async fn fresh_spilled(xml: bool) {
             .unwrap()
             .intervention()
             .map(|intervention| intervention.status()),
-        xml.then_some(403)
+        // JSON publishes the earlier duplicate `a` occurrence too.
+        Some(403)
     );
     let mut reader = ctx.request_body.snapshot_reader(false).unwrap();
     let mut replay = Vec::new();
@@ -238,7 +239,7 @@ async fn cached_contiguous_json_preserves_long_value_and_completion_semantics() 
     for (input, expected_status, malformed) in [
         (format!(r#"{{"a":"{prefix}blocked"}}"#), Some(403), false),
         (format!(r#"{{"a":"{prefix}\u0062locked"}}"#), Some(403), false),
-        (format!(r#"{{"a":"{prefix}blocked","a":"safe"}}"#), None, false),
+        (format!(r#"{{"a":"{prefix}blocked","a":"safe"}}"#), Some(403), false),
         (format!(r#"{{"a":"{prefix}blocked"}} trailing"#), None, true),
         (format!(r#"{{"a":"{prefix}blocked"#), None, true),
     ] {
