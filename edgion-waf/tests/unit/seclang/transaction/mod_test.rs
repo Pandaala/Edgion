@@ -6189,7 +6189,7 @@ fn seeded_staging_transaction<'g>(
     tx
 }
 
-const STAGING_SOURCES: [&str; 4] = [
+const STAGING_SOURCES: [&str; 7] = [
     // Single member: delete-then-set, += / -= over staged values, macros over
     // staged values and captures, new variables and both ctl list kinds.
     concat!(
@@ -6218,6 +6218,48 @@ const STAGING_SOURCES: [&str; 4] = [
         "SecRule &TX:staged \"@eq 1\" \"chain,setvar:tx.mid=%{tx.staged}\"\n",
         "SecRule TX:mid \"@streq never\" \"setvar:tx.seen=1\"\n",
     ),
+    // Repeated sets and deletes of the same keys within one unit and across
+    // its two matches: delete-after-set-after-set of base entries, re-setting a
+    // deleted base key, and set/set/delete/set of a key the unit creates.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)\" \"id:1,phase:1,pass,capture,",
+        "setvar:tx.keep=a,setvar:tx.keep=bb,setvar:'!tx.keep',setvar:tx.fresh=1,setvar:tx.fresh=22,",
+        "setvar:'!tx.fresh',setvar:tx.fresh=333,setvar:'tx.keep=ccc%{tx.1}',setvar:'!tx.count',",
+        "setvar:tx.count=+7,setvar:tx.other=v2,setvar:tx.other=v3,setvar:'!tx.other'\"\n",
+    ),
+    // Self-appending values across matches plus a delete and re-create that
+    // reads the staged value.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx .\" \"id:1,phase:1,pass,",
+        "setvar:'tx.keep=%{tx.keep}%{MATCHED_VAR}',setvar:'!tx.other',setvar:'tx.other=%{tx.keep}'\"\n",
+    ),
+    // A capture-key removal and base replacements first (implicit layout), then
+    // enough ctl steps to build the per-entry marks, then edits tracked through
+    // the marks: a re-replacement, appends and removals of saved and unsaved
+    // base entries.
+    concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx ^(h)\" \"id:1,phase:1,pass,capture,",
+        "setvar:tx.keep=x,setvar:tx.count=+1,ctl:ruleRemoveByTag=many,setvar:tx.count=+1,setvar:tx.fresh=1,",
+        "setvar:tx.keep=y,setvar:'!tx.keep',setvar:tx.fresh=2,setvar:'!tx.other'\"\n",
+        "SecRule REQUEST_HEADERS \"@streq a\" \"id:2,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq b\" \"id:3,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq c\" \"id:4,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq d\" \"id:5,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq e\" \"id:6,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq f\" \"id:7,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq g\" \"id:8,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq h\" \"id:9,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq i\" \"id:10,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq j\" \"id:11,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq k\" \"id:12,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq l\" \"id:13,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq m\" \"id:14,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq n\" \"id:15,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq o\" \"id:16,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq p\" \"id:17,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq q\" \"id:18,phase:1,pass,tag:many\"\n",
+        "SecRule REQUEST_HEADERS \"@streq r\" \"id:19,phase:1,pass,tag:many\"\n",
+    ),
 ];
 
 #[test]
@@ -6243,6 +6285,9 @@ fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit(
             assert_eq!(actual.unit_work_bytes, oracle.unit_work_bytes);
             assert_tx_accounting(&actual.tx);
             assert!(actual.tx_journal.steps.is_empty());
+            assert!(actual.tx_journal.marks.is_empty());
+            assert!(!actual.tx_journal.marks_active);
+            assert!(actual.tx_journal.base_len.is_none());
             if result != Ok(true) {
                 // Rollback restores the base exactly, including cached charges.
                 assert_eq!(after, base, "{source}: {limits:?}");
@@ -6283,6 +6328,15 @@ fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit(
                 })
             ));
         }
+        for max_setvar_actions in 0..32 {
+            outcomes.insert(format!(
+                "{:?}",
+                check(RuntimeLimits {
+                    max_setvar_actions,
+                    ..unlimited
+                })
+            ));
+        }
         for max_retained_bytes in base_retained..base_retained + 1024 {
             outcomes.insert(format!(
                 "{:?}",
@@ -6303,6 +6357,10 @@ fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit(
         );
         assert!(
             outcomes.iter().any(|outcome| outcome.contains("RetainedByteLimit")),
+            "{source}: {outcomes:?}"
+        );
+        assert!(
+            outcomes.iter().any(|outcome| outcome.contains("SetVarActionLimit")),
             "{source}: {outcomes:?}"
         );
     }
@@ -6459,4 +6517,61 @@ fn direct_tx_selection_matches_the_generic_cursor_order_counts_and_exclusions() 
             b"ARGS_GET:c",
         ]
     );
+}
+
+#[test]
+fn unit_journal_keeps_at_most_the_base_value_of_each_entry() {
+    // Review PoC shape: every match appends to the same variable. The former
+    // journal kept every displaced value (2 128 384 bytes for these 64 matches
+    // over a 1 067-byte base TX); only the base original may be retained.
+    let generation = generation(concat!(
+        "SecRule REQUEST_HEADERS:X-Probe \"@rx .\" \"id:1,phase:1,pass,",
+        "setvar:'tx.acc=%{tx.acc}%{MATCHED_VAR}',setvar:'tx.last=%{MATCHED_VAR}'\"\n",
+    ));
+    let value = vec![b'v'; 1024];
+    let headers = (0..64)
+        .map(|_| RequestHeader::new(b"X-Probe", &value))
+        .collect::<Vec<_>>();
+    let base_acc = vec![b'a'; 1000];
+    let make = |limits: RuntimeLimits| {
+        let mut tx = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        tx.tx
+            .set(b"acc".to_vec(), base_acc.clone(), tx.limits, &tx.request, None, None)
+            .unwrap();
+        tx.limits = limits;
+        tx
+    };
+    let mut tx = make(RuntimeLimits::default());
+    let base_tx_bytes = tx.tx.retained_bytes;
+    let scope = measurements::start();
+    assert!(tx.evaluate_unit(0, None).unwrap());
+    let journal_bytes = scope.counts().get(Event::TxJournalPayloadBytes);
+    drop(scope);
+    assert_eq!(tx.tx_value(b"acc").unwrap().len(), 1000 + 64 * 1024);
+    // `tx.last` is created by the unit, so none of its 64 values is saved.
+    assert_eq!(journal_bytes, base_acc.len());
+    assert!(journal_bytes <= base_tx_bytes);
+
+    // A unit that fails mid-way rolls back to the base and stays bounded
+    // while it runs: the journal never exceeds the base TX, which itself is
+    // within max_tx_bytes.
+    let limits = RuntimeLimits {
+        max_tx_bytes: base_tx_bytes + 8 * 1024,
+        ..RuntimeLimits::default()
+    };
+    let mut tx = make(limits);
+    let scope = measurements::start();
+    assert_eq!(
+        tx.evaluate_unit(0, None),
+        Err(RuntimeError::TxByteLimit {
+            limit: limits.max_tx_bytes
+        })
+    );
+    let journal_bytes = scope.counts().get(Event::TxJournalPayloadBytes);
+    drop(scope);
+    assert!(journal_bytes <= base_tx_bytes && base_tx_bytes <= limits.max_tx_bytes);
+    assert_eq!(tx.tx_value(b"acc"), Some(base_acc.as_slice()));
+    assert_eq!(tx.tx_value(b"last"), None);
+    assert_eq!(tx.tx.retained_bytes, base_tx_bytes);
+    assert_tx_accounting(&tx.tx);
 }

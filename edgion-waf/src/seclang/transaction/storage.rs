@@ -624,32 +624,275 @@ pub(super) struct ChainBranch {
     pub(super) setvar_actions: usize,
 }
 
-/// One reversible edit of the TX state staged by the current rule unit.
-/// Displaced values are moved here, never copied.
+/// One reversible edit staged by the current rule unit.
 pub(super) enum TxUndo {
-    /// `entries[index].value` was replaced; holds the displaced value.
-    Replaced { index: usize, value: MatchValue },
-    /// One entry was appended to `entries`.
-    Pushed,
-    /// `entries[index]` was removed; holds the removed entry.
-    Removed { index: usize, entry: TxEntry },
     /// One unit was inserted into `removed_units` at this index.
     InsertedRemovedUnit(usize),
     /// One exclusion was inserted into `target_exclusions` at this index.
     InsertedTargetExclusion(usize),
+    /// The base value of the base entry at index `origin` (at unit start),
+    /// saved on its first replacement. `None` once a removal took it over.
+    SavedValue { origin: u32, value: Option<MatchValue> },
+    /// The base entry at index `origin` was removed; holds its original key
+    /// and value.
+    RemovedEntry { origin: u32, entry: TxEntry },
 }
 
-/// Transaction-owned undo log for the rule unit being staged in place. It is
-/// cleared, never reallocated, between units, so its capacity is reused for
-/// the whole transaction. Only displaced values are retained here, and they
-/// replace the whole-map copy the former per-unit snapshot held.
+/// Marks an entry the current unit appended (it has no base original).
+const UNIT_ENTRY: u32 = u32::MAX;
+/// Marks a base entry whose original has not been saved yet.
+const NOT_SAVED: u32 = u32::MAX;
+/// Steps scanned for a saved original before the mark vector is built.
+const SCAN_LIMIT: usize = 16;
+/// First capacity of the mark vector; it then grows geometrically.
+const MIN_MARKS: usize = 64;
+
+/// Per-entry staging state, parallel to `TxState::entries` once built.
+#[derive(Clone, Copy)]
+pub(super) struct EntryMark {
+    /// Index of the entry in the base `entries` at unit start, or `UNIT_ENTRY`.
+    pub(super) origin: u32,
+    /// Index of its `TxUndo::SavedValue` step, or `NOT_SAVED`.
+    pub(super) saved: u32,
+}
+
+/// Transaction-owned undo state for the rule unit being staged in place.
+///
+/// It saves the original of each base entry at most once per unit; later
+/// edits of the same entry, and every value of an entry the unit itself
+/// appended, are dropped exactly as a plain `set`/`delete` drops them. The
+/// saved payload is therefore bounded by the base TX payload at unit start.
+///
+/// Surviving base entries keep their relative order and precede every entry
+/// the unit appended, so while the unit has recorded fewer than `SCAN_LIMIT`
+/// steps an entry's origin and saved original are derived by scanning the
+/// steps (removed origins included). The per-entry mark vector is built only
+/// when the unit records more steps. Both vectors are cleared, never reallocated, between units.
 #[derive(Default)]
 pub(super) struct TxJournal {
+    pub(super) marks: Vec<EntryMark>,
+    pub(super) marks_active: bool,
+    /// Entry count at the unit's first entry edit; `None` before it.
+    pub(super) base_len: Option<usize>,
     pub(super) steps: Vec<TxUndo>,
 }
 
 impl TxJournal {
-    /// Reserve the slot before the edit so recording can never fail after it.
+    /// Base entries this unit removed so far (implicit layout only).
+    fn removed_entries(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|step| matches!(step, TxUndo::RemovedEntry { .. }))
+            .count()
+    }
+
+    /// Base origin of the surviving base entry at `index` (implicit layout):
+    /// the smallest origin with `index` surviving base entries before it.
+    fn origin_of(&self, index: usize) -> u32 {
+        let mut origin = index;
+        loop {
+            let removed_before = self
+                .steps
+                .iter()
+                .filter(
+                    |step| matches!(step, TxUndo::RemovedEntry { origin: removed, .. } if *removed as usize <= origin),
+                )
+                .count();
+            let next = index + removed_before;
+            if next == origin {
+                return origin as u32;
+            }
+            origin = next;
+        }
+    }
+
+    /// Current index of the surviving base entry `origin` (implicit layout).
+    fn index_of(&self, origin: u32) -> usize {
+        origin as usize
+            - self
+                .steps
+                .iter()
+                .filter(|step| matches!(step, TxUndo::RemovedEntry { origin: removed, .. } if *removed < origin))
+                .count()
+    }
+
+    /// Base origin of `entries[index]` (`UNIT_ENTRY` when the unit appended
+    /// it) and the step holding its saved original, if any.
+    fn lookup(&self, base_len: usize, index: usize) -> (u32, Option<usize>) {
+        if self.marks_active {
+            return self.marks.get(index).map_or((UNIT_ENTRY, None), |mark| {
+                (mark.origin, (mark.saved != NOT_SAVED).then_some(mark.saved as usize))
+            });
+        }
+        // Surviving base entries precede every appended entry.
+        if index >= base_len.saturating_sub(self.removed_entries()) {
+            return (UNIT_ENTRY, None);
+        }
+        let origin = self.origin_of(index);
+        let saved = self
+            .steps
+            .iter()
+            .position(|step| matches!(step, TxUndo::SavedValue { origin: saved, .. } if *saved == origin));
+        (origin, saved)
+    }
+
+    /// Build the marks from the implicit layout.
+    fn activate_marks(&mut self, base_len: usize, entries: usize) -> Result<(), RuntimeError> {
+        self.marks.clear();
+        self.marks
+            .try_reserve(entries.saturating_add(1).max(MIN_MARKS))
+            .map_err(|_| RuntimeError::Allocation)?;
+        let base_live = base_len.saturating_sub(self.removed_entries());
+        for index in 0..entries {
+            let origin = if index < base_live {
+                self.origin_of(index)
+            } else {
+                UNIT_ENTRY
+            };
+            self.marks.push(EntryMark {
+                origin,
+                saved: NOT_SAVED,
+            });
+        }
+        for step_index in 0..self.steps.len() {
+            if let TxUndo::SavedValue { origin, value: Some(_) } = self.steps[step_index] {
+                let index = self.index_of(origin);
+                if let Some(mark) = self.marks.get_mut(index) {
+                    mark.saved = step_index as u32;
+                }
+            }
+        }
+        self.marks_active = true;
+        Ok(())
+    }
+
+    /// Reserve every slot an entry edit may need, before the edit, so
+    /// recording can never fail after it.
+    fn reserve_entry_edit(
+        journal: &mut Option<&mut Self>,
+        entries: usize,
+        index: usize,
+        edit: EntryEdit,
+    ) -> Result<(), RuntimeError> {
+        let Some(journal) = journal else {
+            return Ok(());
+        };
+        let base_len = match journal.base_len {
+            Some(base_len) => base_len,
+            None => {
+                // Origins and step indices stay below the sentinels: entry
+                // counts are bounded by max_tx_variables and by memory long
+                // before u32::MAX.
+                if u32::try_from(entries)
+                    .ok()
+                    .filter(|count| *count != UNIT_ENTRY)
+                    .is_none()
+                {
+                    return Err(RuntimeError::Arithmetic);
+                }
+                journal.base_len = Some(entries);
+                entries
+            }
+        };
+        // Keep inactive lookups bounded: they scan every step.
+        if !journal.marks_active && journal.steps.len() >= SCAN_LIMIT {
+            journal.activate_marks(base_len, entries)?;
+        }
+        match edit {
+            EntryEdit::Replace => {
+                let (origin, saved) = journal.lookup(base_len, index);
+                if origin != UNIT_ENTRY && saved.is_none() {
+                    journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
+                }
+            }
+            EntryEdit::Push => {
+                if journal.marks_active {
+                    journal.marks.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
+                }
+            }
+            EntryEdit::Remove => {
+                if journal.lookup(base_len, index).0 != UNIT_ENTRY {
+                    journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `entries[index]` now holds a staged value; `displaced` is what it held.
+    fn replaced(journal: Option<&mut Self>, index: usize, displaced: MatchValue) {
+        let Some(journal) = journal else {
+            return;
+        };
+        let Some(base_len) = journal.base_len else {
+            return;
+        };
+        let (origin, saved) = journal.lookup(base_len, index);
+        if origin == UNIT_ENTRY || saved.is_some() {
+            return;
+        }
+        #[cfg(test)]
+        measurements::record(Event::TxJournalPayloadBytes, displaced.len());
+        let step = journal.steps.len() as u32;
+        journal.steps.push(TxUndo::SavedValue {
+            origin,
+            value: Some(displaced),
+        });
+        if journal.marks_active {
+            if let Some(mark) = journal.marks.get_mut(index) {
+                mark.saved = step;
+            }
+        }
+    }
+
+    fn pushed(journal: Option<&mut Self>) {
+        if let Some(journal) = journal.filter(|journal| journal.marks_active) {
+            journal.marks.push(EntryMark {
+                origin: UNIT_ENTRY,
+                saved: NOT_SAVED,
+            });
+        }
+    }
+
+    /// `entries[index]` was removed; `entry` is what it held.
+    fn removed(journal: Option<&mut Self>, index: usize, mut entry: TxEntry) {
+        let Some(journal) = journal else {
+            return;
+        };
+        let Some(base_len) = journal.base_len else {
+            return;
+        };
+        let (origin, saved) = if journal.marks_active {
+            if index >= journal.marks.len() {
+                return;
+            }
+            let mark = journal.marks.remove(index);
+            (mark.origin, (mark.saved != NOT_SAVED).then_some(mark.saved as usize))
+        } else {
+            journal.lookup(base_len, index)
+        };
+        if origin == UNIT_ENTRY {
+            return;
+        }
+        // A value saved by an earlier replacement is the original; the staged
+        // value is dropped.
+        let saved = saved
+            .and_then(|step| journal.steps.get_mut(step))
+            .and_then(|step| match step {
+                TxUndo::SavedValue { value, .. } => value.take(),
+                _ => None,
+            });
+        #[cfg(test)]
+        measurements::record(
+            Event::TxJournalPayloadBytes,
+            entry.key.len() + if saved.is_some() { 0 } else { entry.value.len() },
+        );
+        if let Some(original) = saved {
+            entry.value = original;
+        }
+        journal.steps.push(TxUndo::RemovedEntry { origin, entry });
+    }
+
     fn reserve(journal: &mut Option<&mut Self>) -> Result<(), RuntimeError> {
         match journal {
             Some(journal) => journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation),
@@ -663,10 +906,73 @@ impl TxJournal {
         }
     }
 
-    /// Commit: drop the displaced values and keep the capacity.
+    /// Restore the base entries: original values back in place, entries the
+    /// unit appended dropped, removed originals reinserted at their base
+    /// indices in ascending order. Surviving base entries keep their relative
+    /// order (edits never move them), and capacity never shrinks during a unit,
+    /// so nothing allocates.
+    fn rollback_entries(&mut self, entries: &mut Vec<TxEntry>) {
+        let Some(base_len) = self.base_len else {
+            return;
+        };
+        if self.marks_active {
+            for (entry, mark) in entries.iter_mut().zip(&self.marks) {
+                if let Some(TxUndo::SavedValue { value, .. }) = self.steps.get_mut(mark.saved as usize) {
+                    if let Some(original) = value.take() {
+                        entry.value = original;
+                    }
+                }
+            }
+            let marks = &self.marks;
+            let mut position = 0_usize;
+            entries.retain(|_| {
+                let keep = marks.get(position).is_some_and(|mark| mark.origin != UNIT_ENTRY);
+                position += 1;
+                keep
+            });
+        } else {
+            for step_index in 0..self.steps.len() {
+                let TxUndo::SavedValue { origin, .. } = self.steps[step_index] else {
+                    continue;
+                };
+                let index = self.index_of(origin);
+                if let TxUndo::SavedValue { value, .. } = &mut self.steps[step_index] {
+                    if let (Some(entry), Some(original)) = (entries.get_mut(index), value.take()) {
+                        entry.value = original;
+                    }
+                }
+            }
+            entries.truncate(base_len.saturating_sub(self.removed_entries()));
+        }
+        self.steps.sort_unstable_by_key(|step| match step {
+            TxUndo::RemovedEntry { origin, .. } => *origin,
+            _ => UNIT_ENTRY,
+        });
+        for step in self.steps.drain(..) {
+            if let TxUndo::RemovedEntry { origin, entry } = step {
+                let origin = origin as usize;
+                if origin <= entries.len() {
+                    entries.insert(origin, entry);
+                }
+            }
+        }
+    }
+
+    /// Commit: drop the saved originals and keep the capacity.
     pub(super) fn clear(&mut self) {
+        self.marks.clear();
+        self.marks_active = false;
+        self.base_len = None;
         self.steps.clear();
     }
+}
+
+/// The kind of entry edit a journal slot is reserved for.
+#[derive(Clone, Copy)]
+enum EntryEdit {
+    Replace,
+    Push,
+    Remove,
 }
 
 /// Whole fields a rolled-back unit restores, moved out by `TxState::begin_unit`.
@@ -811,9 +1117,9 @@ impl TxState {
             let entry = &self.entries[index];
             let removed = tx_payload_bytes(entry.key.len(), entry.value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, removed, 0)?;
-            TxJournal::reserve(&mut journal)?;
+            TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Remove)?;
             let entry = self.entries.remove(index);
-            TxJournal::record(journal, TxUndo::Removed { index, entry });
+            TxJournal::removed(journal, index, entry);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         }
@@ -834,9 +1140,10 @@ impl TxState {
         if let Some(index) = self.find_entry(key.bytes(request, json_budget.as_deref_mut())?, request, json_budget)? {
             let entry = &mut self.entries[index];
             let total = tx_payload_delta(self.entry_payload_bytes, entry.value.len() as u128, value.len() as u128)?;
-            TxJournal::reserve(&mut journal)?;
-            let value = std::mem::replace(&mut entry.value, value);
-            TxJournal::record(journal, TxUndo::Replaced { index, value });
+            TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Replace)?;
+            let entry = &mut self.entries[index];
+            let displaced = std::mem::replace(&mut entry.value, value);
+            TxJournal::replaced(journal, index, displaced);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         } else {
@@ -848,9 +1155,9 @@ impl TxState {
             self.entries.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
             let payload = tx_payload_bytes(key.len(), value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, 0, payload)?;
-            TxJournal::reserve(&mut journal)?;
+            TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), self.entries.len(), EntryEdit::Push)?;
             self.entries.push(TxEntry { key, value });
-            TxJournal::record(journal, TxUndo::Pushed);
+            TxJournal::pushed(journal);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         }
@@ -927,26 +1234,15 @@ impl TxState {
         checkpoint
     }
 
-    /// Undo every journaled edit in reverse order and restore the checkpoint,
-    /// leaving the state exactly as it was before `begin_unit`. Displaced
-    /// values move back; nothing is copied and no allocation is needed because
-    /// vectors never shrink while a unit is staged.
+    /// Restore the saved entry originals, undo the ctl-list insertions in
+    /// reverse order and restore the checkpoint, leaving the state exactly as
+    /// it was before `begin_unit`. Originals move back; nothing is copied and
+    /// no allocation is needed because vectors never shrink while a unit is
+    /// staged.
     pub(super) fn rollback_unit(&mut self, journal: &mut TxJournal, checkpoint: TxCheckpoint) {
-        while let Some(step) = journal.steps.pop() {
-            match step {
-                TxUndo::Replaced { index, value } => {
-                    if let Some(entry) = self.entries.get_mut(index) {
-                        entry.value = value;
-                    }
-                }
-                TxUndo::Pushed => {
-                    self.entries.pop();
-                }
-                TxUndo::Removed { index, entry } => {
-                    if index <= self.entries.len() {
-                        self.entries.insert(index, entry);
-                    }
-                }
+        // Ctl-list insertions undo in reverse order; entry steps wait.
+        for step in journal.steps.iter().rev() {
+            match *step {
                 TxUndo::InsertedRemovedUnit(index) => {
                     if index < self.removed_units.len() {
                         self.removed_units.remove(index);
@@ -957,8 +1253,11 @@ impl TxState {
                         self.target_exclusions.remove(index);
                     }
                 }
+                TxUndo::SavedValue { .. } | TxUndo::RemovedEntry { .. } => {}
             }
         }
+        journal.rollback_entries(&mut self.entries);
+        journal.clear();
         self.matched_var = checkpoint.matched_var;
         self.matched_var_name = checkpoint.matched_var_name;
         self.matched_vars = checkpoint.matched_vars;

@@ -19,28 +19,42 @@ the former per-unit copy had.
 
 - **Single-member units** edit the staged state directly. `set`, `delete`,
   `add_removed_unit` and `add_target_exclusion` take an optional `TxJournal`
-  and record each vector edit before returning. A replaced value or removed
-  entry moves into the journal; it is not copied. Later actions in the same unit
+  and reserve every journal slot before editing. Entry edits are collapsed per
+  entry. The first replacement of a base entry saves its base value
+  (`TxUndo::SavedValue`). Removing a base entry records `TxUndo::RemovedEntry`
+  with its original key and value; if the value was already replaced, the saved
+  base value is moved in and the staged value is dropped. Every later displaced
+  value, and every value of an entry the unit appended, is dropped exactly as a
+  plain `set`/`delete` drops it. Surviving base entries keep their relative
+  order and precede every appended entry, so while the unit has recorded fewer
+  than `SCAN_LIMIT` (16) steps, an entry's base origin and saved value are
+  derived by scanning the steps, including the removed origins. A per-entry
+  `EntryMark` vector parallel to `entries` (base origin plus saved-step index)
+  is built only when the unit records more steps. Later actions in the same unit
   (`+=`/`-=`, macro expansion, `&TX:` counts, capture replacement) read the
   staged values directly.
 - **Commit** (`admit_unit_commit` passes) publishes the staged state as
   `self.tx` and clears the journal, which keeps its capacity.
 - **No match or any error**, including `TxVariableLimit`, `TxByteLimit`,
   `CtlEntryLimit`, `SetVarActionLimit`, a runtime-action validation failure and
-  the commit `RetainedByteLimit`, runs `rollback_unit`. It undoes the journal in
-  reverse order and restores the checkpoint, including the cached
-  `retained_bytes`. The base is then content-identical and byte-identical
-  (`entries` order, payload counters and observers). Vectors never shrink
-  during a unit, so a rollback does not allocate.
+  the commit `RetainedByteLimit`, runs `rollback_unit`. It writes saved values
+  back in place, drops the entries the unit appended (surviving base entries
+  keep their relative order), reinserts removed originals at their base indices
+  in ascending order, undoes the ctl-list insertions in reverse order and
+  restores the checkpoint, including the cached `retained_bytes`. The base is
+  then content-identical and byte-identical (`entries` order, payload counters
+  and observers). Vectors never shrink during a unit, so a rollback does not
+  allocate.
 - **Chain units** keep the frontier model. The in-place staged state is the
   single seed branch: it is only read and copied (`TxState::try_clone`) into
   children and charged as one `ChainBranch` (`staged_branch_bytes`). It is never
   edited, so its journal stays empty. A winning branch copy replaces the base.
   Branch copies are the only remaining whole-TX copies.
 
-The journal (`Transaction::tx_journal`) is one per-transaction `Vec` that grows
-geometrically and is cleared, never reallocated, between units. It is not a
-pool, thread-local or lock.
+The journal (`Transaction::tx_journal`) is two per-transaction vectors (marks
+and steps) that grow geometrically and are cleared, never reallocated, between
+units. It is not
+a pool, thread-local or lock.
 
 ## Rationale and evidence
 
@@ -59,9 +73,15 @@ Accounting stays identical by construction:
   `size_of::<ChainBranch>()` are unchanged. The journal is a `Transaction`
   field, not a `TxState` field.
 
-The journal itself is not charged. It holds only displaced values and replaces
-the strictly larger copy the former model held. Its length per unit is bounded
-by the setvar, capture and ctl limits.
+The journal itself is not charged. Its bound is structural: it saves at most
+one original per base entry, so its payload never exceeds the base TX payload
+at unit start, which is within `max_tx_bytes`. Its marks, when built, hold
+two `u32` indices per entry, bounded by `max_tx_variables`, and its ctl steps
+hold one index per ctl insertion. An earlier form of this journal kept every displaced value. A
+multi-match unit with a self-appending setvar then retained the sum of all
+intermediate values (2 128 384 bytes for 64 one-KiB matches over a 1 067-byte
+base) before `TxByteLimit` could fire. With per-entry collapsing the same unit
+saves 1 000 bytes.
 
 ## Alternatives and limits
 
@@ -84,8 +104,13 @@ Verified on 2026-11-07 with:
   (`frozen_clone_unit_into`). It checks results, the full TX snapshot,
   `retained_bytes()`, scratch and work counters, and that a rollback restores
   the base exactly. Single-member and chain units are swept across
-  `max_tx_variables`, `max_tx_bytes`, `max_ctl_entries` and
-  `max_retained_bytes` thresholds.
+  `max_tx_variables`, `max_tx_bytes`, `max_ctl_entries`,
+  `max_setvar_actions` and `max_retained_bytes` thresholds. The sources include
+  repeated sets and deletes of one key inside a unit, delete-after-set-after-set
+  of base entries and self-appending matches.
+- `unit_journal_keeps_at_most_the_base_value_of_each_entry` (2026-11-08) checks
+  through the `TxJournalPayloadBytes` hook that the journal stays within the base
+  TX on commit and on a mid-unit `TxByteLimit` rollback.
 - `matched_single_member_units_stage_in_place_without_copying_tx` checks for
   zero `TxStateClones` and that journal capacity is reused.
 - `staged_values_are_visible_to_later_chain_members_and_skip_after_commits_once`

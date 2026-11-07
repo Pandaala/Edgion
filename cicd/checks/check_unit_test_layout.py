@@ -242,6 +242,8 @@ SCOPED_EXCEPTIONS = {
         "test-only skipped static group measurement at the owning operation",
     ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"measurements::record\(Event::TxStateClones\b")):
         "test-only accounting of whole-TX copies (chain frontier branches only)",
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"measurements::record\(\s*Event::TxJournalPayloadBytes\b")):
+        "test-only accounting of base-entry originals saved by the rule-unit journal",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: bool,")):
         "test-only switch for the sequential lexical oracle",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: false,")):
