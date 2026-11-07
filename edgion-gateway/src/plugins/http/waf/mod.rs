@@ -281,7 +281,7 @@ impl WafPlugin {
             RuntimeError::Matcher { .. } => WafErrorCode::Matcher,
             RuntimeError::Transformation { .. } => WafErrorCode::Transformation,
             RuntimeError::Allocation => WafErrorCode::Allocation,
-            RuntimeError::IntegerConversion | RuntimeError::Arithmetic => WafErrorCode::Arithmetic,
+            RuntimeError::Arithmetic => WafErrorCode::Arithmetic,
         }
     }
 

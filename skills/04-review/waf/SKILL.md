@@ -33,6 +33,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 - [Regex scratch builds its VM cache lazily; capture programs decide without capture tracking](regression-guards/regex-boolean-scratch-lazy-vm-cache.md)
 - [Chain ordinary work accumulates across members and branches](regression-guards/chain-ordinary-work-accumulates-per-unit.md)
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
+- [Numeric operators treat a non-numeric operand as zero](regression-guards/numeric-operators-non-numeric-operand-as-zero.md)
 - [Rule units stage TX edits in place with an undo journal](regression-guards/tx-unit-staging-in-place.md)
 - [TX literal and regex targets walk TX entries directly](regression-guards/tx-selection-direct-walk.md)
 - [Named WAF profiles publish one validated generation](regression-guards/named-profile-selection-and-bundle-publication.md)

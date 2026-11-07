@@ -1,5 +1,6 @@
 # waf3-01: Numeric operators and setvar arithmetic abort the whole transaction on client-controlled non-i64 input; one CRS PL1 `Range` header turns every request into a 500
 
+- **Status**: implemented in the T14 D-1 decision commit (`feat(waf)!: treat non-numeric operands as zero in numeric operators and setvar arithmetic`), awaiting user keep/revert
 - **Category**: design-error
 - **Severity**: P1
 - **Scope**: local

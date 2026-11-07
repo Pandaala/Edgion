@@ -329,9 +329,9 @@ pub(super) fn evaluate_operator(
                     template,
                     member_runtime_limit,
                     json_budget,
-                )?)?,
+                )?),
             };
-            let actual = parse_i64(input)?;
+            let actual = parse_i64(input);
             Ok(integer_relation(relation, actual, expected))
         }
         super::super::CompiledOperatorOperand::IpNetworks { start, count } => {
@@ -601,9 +601,41 @@ fn checked_runtime_append(current: usize, added: usize, limit: usize) -> Result<
     Ok(actual)
 }
 
-pub(super) fn parse_i64(value: &[u8]) -> Result<i64, RuntimeError> {
-    let text = std::str::from_utf8(value).map_err(|_| RuntimeError::IntegerConversion)?;
-    text.parse().map_err(|_| RuntimeError::IntegerConversion)
+/// Converts a runtime numeric operand with ModSecurity's `atoi` semantics.
+///
+/// The value is read as an optional `+`/`-` sign followed by the longest
+/// leading run of ASCII decimal digits. A value without such a run is `0`,
+/// bytes after the run are ignored, and a run outside the `i64` range
+/// saturates at `i64::MAX`/`i64::MIN`. Leading whitespace is not skipped. The
+/// conversion is total, so client-controlled operands and TX values can never
+/// abort a transaction; compile-time constants keep their strict grammar.
+pub(super) fn parse_i64(value: &[u8]) -> i64 {
+    let (negative, digits) = match value.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        Some((b'+', rest)) => (false, rest),
+        _ => (false, value),
+    };
+    let mut result = 0_i64;
+    for &byte in digits {
+        if !byte.is_ascii_digit() {
+            break;
+        }
+        let digit = i64::from(byte - b'0');
+        // Accumulate toward the sign so that `i64::MIN` stays representable.
+        let next = result.checked_mul(10).and_then(|scaled| {
+            if negative {
+                scaled.checked_sub(digit)
+            } else {
+                scaled.checked_add(digit)
+            }
+        });
+        match next {
+            Some(next) => result = next,
+            // Further digits cannot leave the saturated value.
+            None => return if negative { i64::MIN } else { i64::MAX },
+        }
+    }
+    result
 }
 
 pub(super) fn parse_usize(value: &[u8]) -> Result<usize, RuntimeError> {

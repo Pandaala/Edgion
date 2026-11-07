@@ -663,11 +663,10 @@ fn build_activation(
                     if candidate.eq_ignore_ascii_case(key) {
                         let value = entry.value.observed_bytes(context.request)?;
                         // Retain the conservative three-pass charge for seed
-                        // validation/parsing. Invalid seeds stay unknown.
+                        // parsing. The runtime conversion is total, so every
+                        // seed decides the gate exactly as the runtime would.
                         store.charge_work(value.len().checked_mul(3).ok_or(StoreError::Arithmetic)?)?;
-                        known = parse_i64(value)
-                            .ok()
-                            .map(|actual| integer_relation(gate.relation, actual, gate.expected) ^ gate.negated);
+                        known = Some(integer_relation(gate.relation, parse_i64(value), gate.expected) ^ gate.negated);
                         break;
                     }
                 }

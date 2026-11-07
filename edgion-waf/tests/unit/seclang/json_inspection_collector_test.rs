@@ -729,8 +729,14 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
 
 #[test]
 fn incomplete_stage_failures_are_semantic_but_work_exhaustion_is_physical() {
-    let generation = compile(r#"SecRule ARGS "@eq 7" "id:1,phase:2,pass""#);
-    let runtime = RuntimeLimits::default();
+    // Numeric conversion is total, so a static numeric operator has no
+    // value-dependent failure; the incomplete stage is a capture that exceeds
+    // the capture byte limit after the operator matched.
+    let generation = compile(r#"SecRule ARGS "@rx (not.*)" "id:1,phase:2,pass,capture""#);
+    let runtime = RuntimeLimits {
+        max_capture_bytes: 2,
+        ..RuntimeLimits::default()
+    };
     let input = br#"{"a":"not-a-number"}"#;
     let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
     let mut sink = collector(
@@ -749,11 +755,13 @@ fn incomplete_stage_failures_are_semantic_but_work_exhaustion_is_physical() {
         .map(|(outcome, _)| outcome)
         .unwrap()
     else {
-        panic!("missing integer error")
+        panic!("missing capture error")
     };
-    assert!(
-        matches!(sealed.outcome(&mut budget, id, outcome).unwrap().result, OutcomeValue::Error(CheckpointError { checkpoint, .. }) if checkpoint == StoredCheckpoint::Operator as usize)
-    );
+    let checkpoint = match sealed.outcome(&mut budget, id, outcome).unwrap().result {
+        OutcomeValue::Error(CheckpointError { checkpoint, .. }) => Some(checkpoint),
+        _ => None,
+    };
+    assert_eq!(checkpoint, Some(StoredCheckpoint::Captures as usize));
     for limit in [work - 1, work, work + 1] {
         let mut tx = Transaction::new(&generation, request(), runtime).unwrap();
         let mut sink = collector(

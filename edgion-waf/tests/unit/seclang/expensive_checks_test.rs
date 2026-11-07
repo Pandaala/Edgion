@@ -479,7 +479,7 @@ fn multipart_policy_preserves_numeric_slots_named_cleanup_and_sentinel_case() {
 }
 
 #[test]
-fn canonical_header_check_survives_and_incidental_hpp_error_is_optional() {
+fn canonical_header_check_survives_and_incidental_hpp_value_counts_as_zero() {
     let g = compile(&format!(
         "SecAction \"id:1,phase:1,pass,setvar:tx.critical_anomaly_score=5,setvar:'tx.restricted_headers_basic=/paramcounter_custom/'\"\n{ALL_ORIGINAL}"
     ));
@@ -495,11 +495,12 @@ fn canonical_header_check_survives_and_incidental_hpp_error_is_optional() {
         );
         tx.publish_request_body(RequestBody::new(bytes::Bytes::new(), BodyProcessorSelection::Auto))
             .unwrap();
-        let outcome = tx.execute_request_body();
-        assert_eq!(outcome.is_err(), enabled);
-        if enabled {
-            assert!(matches!(outcome, Err(crate::seclang::RuntimeError::IntegerConversion)));
-        }
+        // With expensive checks on, 921180's `TX:/paramcounter_.*/ "@gt 1"`
+        // also selects the 920450 header-name TX entry. Its non-numeric value
+        // converts to zero, so the incidental selection neither matches nor
+        // aborts the request-body phase.
+        let body = tx.execute_request_body().unwrap();
+        assert!(body.findings().iter().all(|f| f.rule_id() != 921180));
     }
 }
 

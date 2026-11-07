@@ -109,7 +109,7 @@ fn unsigned_integer_grammar_preserves_boundaries_and_rejects_signs() {
 }
 
 #[test]
-fn signed_integer_grammar_preserves_boundaries_and_rejects_invalid_bytes() {
+fn signed_integer_conversion_reads_the_leading_decimal_prefix_and_saturates() {
     for (input, expected) in [
         ("0", 0),
         ("+0", 0),
@@ -120,46 +120,47 @@ fn signed_integer_grammar_preserves_boundaries_and_rejects_invalid_bytes() {
         ("9223372036854775807", i64::MAX),
         ("+9223372036854775807", i64::MAX),
         ("-9223372036854775808", i64::MIN),
+        ("9223372036854775808", i64::MAX),
+        ("+9223372036854775808", i64::MAX),
+        ("-9223372036854775809", i64::MIN),
+        ("99999999999999999999", i64::MAX),
+        ("-99999999999999999999", i64::MIN),
+        ("99999999999999999999abc", i64::MAX),
+        ("", 0),
+        ("+", 0),
+        ("-", 0),
+        ("++1", 0),
+        ("--1", 0),
+        ("+-1", 0),
+        ("-+1", 0),
+        ("1+", 1),
+        ("1-", 1),
+        (" 1", 0),
+        ("1 ", 1),
+        ("1\n", 1),
+        ("\t1", 0),
+        ("1_0", 1),
+        ("1.0", 1),
+        ("1e2", 1),
+        ("0x10", 0),
+        ("12abc", 12),
+        ("-12abc", -12),
+        ("abc", 0),
+        ("é", 0),
     ] {
-        assert_eq!(parse_i64(input.as_bytes()), Ok(expected), "{input:?}");
+        assert_eq!(parse_i64(input.as_bytes()), expected, "{input:?}");
     }
     let padded = format!("{}1", "0".repeat(128));
-    assert_eq!(parse_i64(padded.as_bytes()), Ok(1));
-    for input in [
-        "",
-        "+",
-        "-",
-        "++1",
-        "--1",
-        "+-1",
-        "-+1",
-        "1+",
-        "1-",
-        " 1",
-        "1 ",
-        "1\n",
-        "\t1",
-        "1_0",
-        "1.0",
-        "1e2",
-        "0x10",
-        "é",
-        "9223372036854775808",
-        "+9223372036854775808",
-        "-9223372036854775809",
-    ] {
-        assert_eq!(
-            parse_i64(input.as_bytes()),
-            Err(RuntimeError::IntegerConversion),
-            "{input:?}"
-        );
-    }
+    assert_eq!(parse_i64(padded.as_bytes()), 1);
+    let saturated = format!("{}x", "9".repeat(4096));
+    assert_eq!(parse_i64(saturated.as_bytes()), i64::MAX);
+    assert_eq!(parse_i64(&[b'1', 0xff, b'2']), 1);
     for byte in u8::MIN..=u8::MAX {
         let input = [b'1', byte, b'2'];
         let expected = if byte.is_ascii_digit() {
-            Ok(102 + i64::from(byte - b'0') * 10)
+            102 + i64::from(byte - b'0') * 10
         } else {
-            Err(RuntimeError::IntegerConversion)
+            1
         };
         assert_eq!(parse_i64(&input), expected, "middle byte {byte}");
     }
@@ -667,7 +668,8 @@ fn no_hit_first_members_borrow_tx_and_restore_prior_observers() {
 #[test]
 fn first_member_errors_restore_tx_before_propagation() {
     let g = generation("SecRule REQUEST_HEADERS:X-Probe \"@eq 1\" \"id:1,phase:1,pass\"\n");
-    let headers = [RequestHeader::new(b"X-Probe", b"not-a-number")];
+    // The member matches; each variant then fails a limit on the match.
+    let headers = [RequestHeader::new(b"X-Probe", b"1")];
     for limited in [false, true] {
         let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
         tx.tx
@@ -686,12 +688,14 @@ fn first_member_errors_restore_tx_before_propagation() {
         let pointer = tx.tx_value(b"saved").unwrap().as_ptr();
         if limited {
             tx.limits.max_retained_bytes = tx.retained_bytes();
+        } else {
+            tx.limits.max_operator_evaluations = 0;
         }
         let scope = measurements::start();
         let result = tx.evaluate_unit(0, None);
         assert!(matches!(
             result,
-            Err(RuntimeError::IntegerConversion | RuntimeError::RetainedByteLimit { .. })
+            Err(RuntimeError::OperatorEvaluationLimit { .. } | RuntimeError::RetainedByteLimit { .. })
         ));
         assert_eq!(scope.counts().get(Event::TxStateClones), 0);
         assert_eq!(tx.tx_value(b"saved").unwrap().as_ptr(), pointer);
@@ -1821,19 +1825,21 @@ fn static_and_dynamic_tx_deletes_preserve_lookup_and_rollback() {
         ("%{TX.missing}", false),
     ] {
         for fail_after_delete in [false, true] {
-            let failure = if fail_after_delete {
-                ",setvar:'tx.invalid=+%{TX.missing}'"
-            } else {
-                ""
-            };
+            // The third setvar of unit 2 exceeds the per-unit action limit
+            // after the delete and the marker were staged.
+            let failure = if fail_after_delete { ",setvar:tx.invalid=1" } else { "" };
             let g = generation(&format!(
                 "SecAction \"id:1,phase:1,pass,setvar:tx.score=kept\"\n\
                  SecAction \"id:2,phase:1,pass,setvar:'!tx.{key}',setvar:tx.marker=hit{failure}\"\n"
             ));
-            let mut tx = Transaction::new(&g, request(&[], b"/?key=SCORE"), RuntimeLimits::default()).unwrap();
+            let limits = RuntimeLimits {
+                max_setvar_actions: 2,
+                ..RuntimeLimits::default()
+            };
+            let mut tx = Transaction::new(&g, request(&[], b"/?key=SCORE"), limits).unwrap();
             let outcome = tx.execute_request_headers();
             if fail_after_delete {
-                assert!(matches!(outcome, Err(RuntimeError::IntegerConversion)));
+                assert!(matches!(outcome, Err(RuntimeError::SetVarActionLimit { limit: 2 })));
                 assert_eq!(tx.tx_value(b"score"), Some(b"kept".as_slice()));
                 assert_eq!(tx.tx_value(b"marker"), None);
                 assert_eq!(tx.tx_value(b"invalid"), None);
@@ -1863,12 +1869,13 @@ fn setvar_constant_and_dynamic_arithmetic_preserve_results_and_rollback() {
         (None, "+", "-9223372036854775808", Some("-9223372036854775808")),
         (Some("-1"), "-", "9223372036854775807", Some("-9223372036854775808")),
         (Some("-1"), "-", "-9223372036854775808", Some("9223372036854775807")),
-        (Some("1"), "+", "9223372036854775807", None),
-        (Some("-1"), "+", "-9223372036854775808", None),
-        (Some("-9223372036854775808"), "-", "1", None),
-        (None, "-", "-9223372036854775808", None),
-        (Some("invalid"), "+", "1", None),
-        (Some(""), "-", "1", None),
+        (Some("1"), "+", "9223372036854775807", Some("9223372036854775807")),
+        (Some("-1"), "+", "-9223372036854775808", Some("-9223372036854775808")),
+        (Some("-9223372036854775808"), "-", "1", Some("-9223372036854775808")),
+        (None, "-", "-9223372036854775808", Some("9223372036854775807")),
+        (Some("invalid"), "+", "1", Some("1")),
+        (Some(""), "-", "1", Some("-1")),
+        (Some("12abc"), "+", "1", Some("13")),
     ];
     for (initial, operation, delta, expected) in cases {
         for dynamic in [false, true] {
@@ -1891,35 +1898,31 @@ fn setvar_constant_and_dynamic_arithmetic_preserve_results_and_rollback() {
             let mut transaction =
                 Transaction::new(&generation, request(&[], uri.as_bytes()), RuntimeLimits::default()).unwrap();
             let result = transaction.execute_request_headers();
-            if let Some(expected) = expected {
-                assert_eq!(result.unwrap().findings().len(), 1, "{source}");
-                assert_eq!(transaction.tx_value(b"score"), Some(expected.as_bytes()), "{source}");
-                assert_eq!(transaction.tx_value(b"marker"), Some(b"hit".as_slice()));
-            } else {
-                assert!(matches!(result, Err(RuntimeError::IntegerConversion)), "{source}");
-                assert_eq!(transaction.tx_value(b"score"), None);
-                assert_eq!(transaction.tx_value(b"marker"), None);
-                assert_eq!(transaction.next_phase(), Some(Phase::RequestHeaders));
-            }
+            assert_eq!(result.unwrap().findings().len(), 1, "{source}");
+            assert_eq!(transaction.tx_value(b"score"), expected.map(str::as_bytes), "{source}");
+            assert_eq!(transaction.tx_value(b"marker"), Some(b"hit".as_slice()));
         }
     }
 }
 
 #[test]
-fn setvar_dynamic_arithmetic_rejects_invalid_delta_without_committing() {
+fn setvar_dynamic_arithmetic_converts_non_numeric_delta_and_commits() {
     let generation =
         generation("SecAction \"id:1,phase:1,pass,setvar:tx.marker=hit,setvar:'tx.score=+%{ARGS.delta}'\"\n");
-    for delta in ["", "invalid", "9223372036854775808", "-9223372036854775809"] {
+    for (delta, expected) in [
+        ("", "0"),
+        ("invalid", "0"),
+        ("3x", "3"),
+        ("9223372036854775808", "9223372036854775807"),
+        ("-9223372036854775809", "-9223372036854775808"),
+    ] {
         let uri = format!("/?delta={delta}");
         let mut transaction =
             Transaction::new(&generation, request(&[], uri.as_bytes()), RuntimeLimits::default()).unwrap();
-        assert!(matches!(
-            transaction.execute_request_headers(),
-            Err(RuntimeError::IntegerConversion)
-        ));
-        assert_eq!(transaction.tx_value(b"score"), None);
-        assert_eq!(transaction.tx_value(b"marker"), None);
-        assert_eq!(transaction.next_phase(), Some(Phase::RequestHeaders));
+        assert_eq!(transaction.execute_request_headers().unwrap().findings().len(), 1);
+        assert_eq!(transaction.tx_value(b"score"), Some(expected.as_bytes()), "{delta:?}");
+        assert_eq!(transaction.tx_value(b"marker"), Some(b"hit".as_slice()));
+        assert_eq!(transaction.next_phase(), Some(Phase::RequestBody));
     }
 }
 
@@ -1933,16 +1936,133 @@ fn failed_chain_and_failed_action_batch_do_not_leak_tx_mutations() {
     assert!(transaction.execute_request_headers().unwrap().findings().is_empty());
     assert_eq!(transaction.tx_value(b"leak"), None);
 
-    let overflow = generation(
+    let batch = generation(
             "SecRule REQUEST_METHOD \"@streq GET\" \"id:23,phase:1,pass,setvar:'tx.score=1',setvar:'tx.score=+9223372036854775807'\"\n",
         );
-    let mut transaction = Transaction::new(&overflow, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    // Arithmetic overflow saturates, so the batch commits.
+    let mut transaction = Transaction::new(&batch, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    assert_eq!(transaction.execute_request_headers().unwrap().findings().len(), 1);
+    assert_eq!(transaction.tx_value(b"score"), Some(b"9223372036854775807".as_slice()));
+    // A batch that fails on its second action leaks none of its first.
+    let limits = RuntimeLimits {
+        max_setvar_actions: 1,
+        ..RuntimeLimits::default()
+    };
+    let mut transaction = Transaction::new(&batch, request(&[], b"/"), limits).unwrap();
     assert!(matches!(
         transaction.execute_request_headers(),
-        Err(RuntimeError::IntegerConversion)
+        Err(RuntimeError::SetVarActionLimit { limit: 1 })
     ));
     assert_eq!(transaction.tx_value(b"score"), None);
     assert_eq!(transaction.next_phase(), Some(Phase::RequestHeaders));
+}
+
+#[test]
+fn numeric_operator_on_unbounded_range_capture_saturates_instead_of_failing() {
+    // The CRS 920190 shape: two unbounded captured digit runs from Range are
+    // compared with `@lt`. A 20-digit capture saturates and never aborts.
+    let g = generation(concat!(
+        "SecRule REQUEST_HEADERS:Range \"@rx (\\d+)-(\\d+)\" \"id:920190,phase:1,pass,capture,chain\"\n",
+        "SecRule TX:2 \"@lt %{tx.1}\" \"\"\n",
+        "SecAction \"id:2,phase:1,pass,setvar:tx.after=reached\"\n",
+    ));
+    for (range, expected) in [
+        ("bytes=99999999999999999999-1", &[920190, 2][..]),
+        ("bytes=1-99999999999999999999", &[2][..]),
+        ("bytes=99999999999999999999-99999999999999999998", &[2][..]),
+    ] {
+        let headers = [RequestHeader::new(b"Range", range.as_bytes())];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = tx.execute_request_headers().unwrap();
+        let ids = outcome
+            .findings()
+            .iter()
+            .map(|finding| finding.rule_id())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected, "{range}");
+        assert_eq!(tx.tx_value(b"after"), Some(b"reached".as_slice()), "{range}");
+        assert_eq!(tx.next_phase(), Some(Phase::RequestBody), "{range}");
+    }
+}
+
+#[test]
+fn numeric_operators_convert_both_operands_by_leading_decimal_prefix() {
+    let max = i64::MAX.to_string();
+    let min = i64::MIN.to_string();
+    for (value, operator, matched) in [
+        ("abc", "@lt 5".to_owned(), true),
+        ("abc", "@eq 0".to_owned(), true),
+        ("12abc", "@eq 12".to_owned(), true),
+        ("12abc", "@ge 13".to_owned(), false),
+        ("-12x", "@eq -12".to_owned(), true),
+        ("+7-", "@eq 7".to_owned(), true),
+        ("-", "@eq 0".to_owned(), true),
+        ("+", "@eq 0".to_owned(), true),
+        ("", "@eq 0".to_owned(), true),
+        (" 7", "@eq 0".to_owned(), true),
+        ("--1", "@eq 0".to_owned(), true),
+        ("1.9", "@eq 1".to_owned(), true),
+        ("0x10", "@eq 0".to_owned(), true),
+        ("99999999999999999999", format!("@eq {max}"), true),
+        ("99999999999999999999abc", format!("@eq {max}"), true),
+        ("-99999999999999999999", format!("@eq {min}"), true),
+        ("99999999999999999999", format!("@gt {}", i64::MAX - 1), true),
+    ] {
+        let source = format!("SecRule REQUEST_HEADERS:X-Probe \"{operator}\" \"id:1,phase:1,pass\"\n");
+        let g = generation(&source);
+        let headers = [RequestHeader::new(b"X-Probe", value.as_bytes())];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = tx.execute_request_headers().unwrap();
+        assert_eq!(outcome.findings().len(), usize::from(matched), "{value:?} {operator}");
+    }
+    // The macro-expanded operand follows the same conversion.
+    let g = generation("SecRule REQUEST_HEADERS:X-Actual \"@eq %{REQUEST_HEADERS.X-Operand}\" \"id:1,phase:1,pass\"\n");
+    for (operand, actual, matched) in [
+        ("abc", "0", true),
+        ("12abc", "12", true),
+        ("-", "0", true),
+        ("99999999999999999999", max.as_str(), true),
+        ("-99999999999999999999", min.as_str(), true),
+        ("12abc", "13", false),
+    ] {
+        let headers = [
+            RequestHeader::new(b"X-Operand", operand.as_bytes()),
+            RequestHeader::new(b"X-Actual", actual.as_bytes()),
+        ];
+        let mut tx = Transaction::new(&g, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        let outcome = tx.execute_request_headers().unwrap();
+        assert_eq!(outcome.findings().len(), usize::from(matched), "{operand:?} {actual:?}");
+    }
+}
+
+#[test]
+fn setvar_arithmetic_treats_non_numeric_values_as_zero_and_saturates() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:'tx.score=%{REQUEST_HEADERS.X-Initial}'\"\n",
+        "SecAction \"id:2,phase:1,pass,setvar:'tx.score=+%{REQUEST_HEADERS.X-Delta}'\"\n",
+        "SecAction \"id:3,phase:1,pass,setvar:'tx.fresh=-%{REQUEST_HEADERS.X-Delta}'\"\n",
+    ));
+    let max = i64::MAX.to_string();
+    let min = i64::MIN.to_string();
+    for (initial, delta, score, fresh) in [
+        ("x", "5", "5", "-5"),
+        ("12abc", "1", "13", "-1"),
+        ("", "-1", "-1", "1"),
+        ("7", "abc", "7", "0"),
+        ("7", "3x", "10", "-3"),
+        ("1", "99999999999999999999", max.as_str(), "-9223372036854775807"),
+        ("-1", "-99999999999999999999", min.as_str(), max.as_str()),
+        ("99999999999999999999", "1", max.as_str(), "-1"),
+    ] {
+        let headers = [
+            RequestHeader::new(b"X-Initial", initial.as_bytes()),
+            RequestHeader::new(b"X-Delta", delta.as_bytes()),
+        ];
+        let mut tx = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        assert_eq!(tx.execute_request_headers().unwrap().findings().len(), 3);
+        assert_eq!(tx.tx_value(b"score"), Some(score.as_bytes()), "{initial:?} {delta:?}");
+        assert_eq!(tx.tx_value(b"fresh"), Some(fresh.as_bytes()), "{initial:?} {delta:?}");
+    }
 }
 
 #[test]
@@ -5002,8 +5122,11 @@ fn final_chain_move_matches_frozen_frontier_order_rollback_and_limits() {
                         .map(|key| key.observed_bytes(&oracle.request).unwrap())
                         .collect::<Vec<_>>()
                 );
-                if result == Ok(true) {
+                if result == Ok(true) && action.contains("winner") {
                     assert_eq!(actual.tx_value(b"winner"), Some(b"b".as_slice()));
+                } else if result == Ok(true) {
+                    // The non-numeric `tx.bad` operand converts to zero.
+                    assert_eq!(actual.tx_value(b"counter"), Some(b"0".as_slice()));
                 } else {
                     assert_eq!(actual.tx_value(b"saved_root"), Some(b"seed".as_slice()));
                 }
@@ -5011,14 +5134,7 @@ fn final_chain_move_matches_frozen_frontier_order_rollback_and_limits() {
             };
             let defaults = RuntimeLimits::default();
             let expected = check(defaults);
-            assert_eq!(
-                expected.is_err(),
-                action.contains("counter") && final_recipe.contains("mid")
-            );
-            assert_eq!(
-                expected == Ok(true),
-                final_recipe.contains("mid") && !action.contains("counter")
-            );
+            assert_eq!(expected, Ok(final_recipe.contains("mid")));
             for bound in 0..=8 {
                 let _ = check(RuntimeLimits {
                     max_operator_evaluations: bound,

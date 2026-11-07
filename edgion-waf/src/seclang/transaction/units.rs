@@ -934,7 +934,7 @@ impl<'generation> Transaction<'generation> {
                         .get(&key, &self.request, self.json_budget.as_mut())?
                         .map(|value| value.bytes(&self.request, self.json_budget.as_mut()))
                         .transpose()?
-                        .map_or(Ok(0_i64), parse_i64)?;
+                        .map_or(0_i64, parse_i64);
                     let delta = if let Some(constant) = setvar.constant {
                         constant
                     } else {
@@ -946,14 +946,15 @@ impl<'generation> Transaction<'generation> {
                             member.runtime_expansion_byte_limit,
                             self.json_budget.as_mut(),
                         )?;
-                        parse_i64(&value)?
+                        parse_i64(&value)
                     };
+                    // ModSecurity-compatible arithmetic: non-numeric values
+                    // count as zero and the result saturates instead of failing.
                     let result = if setvar.operation == super::super::SetVarOperation::Add {
-                        current.checked_add(delta)
+                        current.saturating_add(delta)
                     } else {
-                        current.checked_sub(delta)
-                    }
-                    .ok_or(RuntimeError::IntegerConversion)?;
+                        current.saturating_sub(delta)
+                    };
                     let (digits, start) = signed_decimal_bytes(result);
                     staged.set(
                         key.into_owned(),

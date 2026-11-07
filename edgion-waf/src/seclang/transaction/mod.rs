@@ -397,8 +397,6 @@ pub enum RuntimeError {
     ResponseNotPublished,
     #[error("response observation window has {actual} bytes, exceeding the limit of {limit}")]
     ResponseWindowByteLimit { actual: usize, limit: usize },
-    #[error("runtime integer conversion failed")]
-    IntegerConversion,
     #[error("compiled generation contains an invalid runtime reference")]
     GenerationInvariant,
     #[error("matcher execution failed with bounded category {kind:?}")]

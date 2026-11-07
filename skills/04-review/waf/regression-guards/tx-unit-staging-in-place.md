@@ -26,7 +26,7 @@ the former per-unit copy had.
 - **Commit** (`admit_unit_commit` passes) publishes the staged state as
   `self.tx` and clears the journal, which keeps its capacity.
 - **No match or any error**, including `TxVariableLimit`, `TxByteLimit`,
-  `CtlEntryLimit`, `IntegerConversion`, a runtime-action validation failure and
+  `CtlEntryLimit`, `SetVarActionLimit`, a runtime-action validation failure and
   the commit `RetainedByteLimit`, runs `rollback_unit`. It undoes the journal in
   reverse order and restores the checkpoint, including the cached
   `retained_bytes`. The base is then content-identical and byte-identical

@@ -741,25 +741,16 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
         }
     }
 
-    for (operator, recipe, body, limits, error) in [
-        (
+    {
+        let (operator, recipe, body) = (
             "@contains hit",
             ",t:lowercase",
             br#"{"a":"x","b":"x","c":"x","d":"x","e":"x"}"#.as_slice(),
-            RuntimeLimits {
-                max_transformation_output_bytes: 3,
-                ..RuntimeLimits::default()
-            },
-            None,
-        ),
-        (
-            "@gt 100",
-            "",
-            br#"{"a":0,"b":0,"c":0,"d":0,"e":0}"#.as_slice(),
-            RuntimeLimits::default(),
-            Some(RuntimeError::IntegerConversion),
-        ),
-    ] {
+        );
+        let limits = RuntimeLimits {
+            max_transformation_output_bytes: 3,
+            ..RuntimeLimits::default()
+        };
         let generation = compile(&format!("SecRule ARGS \"{operator}\" \"id:1,phase:2,pass{recipe}\""));
         let mut fast = no_hit_transaction(
             &generation,
@@ -774,11 +765,7 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
         let left = fast.evaluate_member_matches(0, 0, &TxState::default(), false);
         let right = cursor.evaluate_member_matches(0, 0, &TxState::default(), false);
         assert_eq!(left.as_ref().err(), right.as_ref().err());
-        if let Some(error) = error {
-            assert_eq!(left.as_ref().err(), Some(&error));
-        } else {
-            assert!(matches!(left, Err(RuntimeError::Transformation { .. })));
-        }
+        assert!(matches!(left, Err(RuntimeError::Transformation { .. })));
         assert_eq!(fast.json_budget.as_ref().unwrap().usage().work - before, 5);
         assert_eq!(
             fast.json_budget.as_ref().unwrap().usage().work,
@@ -787,6 +774,30 @@ fn query_no_hit_tail_stop_first_and_query_errors_charge_selection_only() {
         assert_eq!(fast.selected_scratch.capacity(), 4);
         assert_eq!(cursor.selected_scratch.capacity(), 8);
         assert_eq!(fast.match_scratch_bytes, 0);
+    }
+}
+
+#[test]
+fn json_and_query_numeric_operands_convert_non_numeric_values_to_zero() {
+    let generation = compile(concat!(
+        "SecRule ARGS:json.page \"@gt 10\" \"id:1,phase:2,pass\"\n",
+        "SecRule ARGS:json.page \"@lt 1\" \"id:2,phase:2,pass\"\n",
+        "SecRule ARGS:json.n \"@eq 12\" \"id:3,phase:2,pass\"\n",
+        "SecRule ARGS \"@gt 100\" \"id:4,phase:2,pass\"\n",
+    ));
+    let json = br#"{"page":"x","n":"12abc","big":"99999999999999999999"}"#;
+    for force_cursor in [false, true] {
+        let mut tx = no_hit_transaction(
+            &generation,
+            json,
+            b"/?q=TOOLONG",
+            RuntimeLimits::default(),
+            ResultLimits::default(),
+            force_cursor,
+        );
+        let outcome = tx.execute_request_body().unwrap();
+        let ids = outcome.findings().iter().map(|f| f.rule_id()).collect::<Vec<_>>();
+        assert_eq!(ids, [2, 3, 4], "cursor {force_cursor}");
     }
 }
 
