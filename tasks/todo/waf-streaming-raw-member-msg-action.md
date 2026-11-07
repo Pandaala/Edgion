@@ -1,6 +1,14 @@
 # Decide whether streaming raw-body WAF members may carry `msg`
 
-Priority: P3   Area: plugin:waf (edgion-waf compiler)
+## Meta
+
+| Key | Value |
+| --- | --- |
+| Created | 2026-11-07 |
+| Status | pending |
+| Type | investigation |
+| Priority | P3 |
+| Issue | N/A |
 
 ## Problem
 `prefix_actions_supported` and `is_streaming_raw_member` in
@@ -16,7 +24,7 @@ path excludes `msg`, but no recorded decision confirms that.
 Decide and record one of:
 - the exclusion is intentional: document the reason on `is_streaming_safe_action`
   and in `skills/04-review/waf/`, keep the code as is; or
-- streaming raw members may carry `msg`: drop the `|| kind == ActionKind::Msg`
+- streaming raw members may carry `msg`: drop the `|| kind == super::ActionKind::Msg`
   special case so both paths use the same list, and add a streaming test whose
   rule has a templated `msg`.
 

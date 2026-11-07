@@ -49,11 +49,11 @@ const CHAR_SINGLE: u8 = b'\'';
 const CHAR_DOUBLE: u8 = b'"';
 const CHAR_TICK: u8 = b'`';
 
-// Word and variable delimiter sets (C strlencspn character sets). The two sets
-// are deliberately distinct: NUL, brackets, braces and 0xA0 end words only, and
-// backtick ends variables only.
+// Word and variable delimiter sets: the C `strlencspn` character sets of
+// libinjection's `parse_word` and `parse_var`. The two sets are deliberately
+// distinct: NUL, brackets, braces and 0xA0 end words only, and backtick ends
+// variables only.
 const WORD_DELIMITERS: &[u8] = b" []{}<>:\\?=@!#~+-*/&|^%(),';\t\n\x0B\x0C\r\"\xA0\x00";
-// C: " <>:\\?=@!#~+-*/&|^%(),';\t\n\v\f\r'`\""
 const VAR_DELIMITERS: &[u8] = b" <>:\\?=@!#~+-*/&|^%(),;'\t\n\x0B\x0C\r'`\"";
 
 const fn byte_set(delims: &[u8]) -> [bool; 256] {
@@ -934,7 +934,7 @@ impl<'a> SqliTokenizer<'a> {
         let pos = self.pos;
         let slen = self.input.len();
 
-        // Find word boundary - matches C version's strlencspn character set
+        // Find word boundary.
         let mut end_pos = pos;
 
         while end_pos < slen && !WORD_DELIMITER_SET[usize::from(self.input[end_pos])] {

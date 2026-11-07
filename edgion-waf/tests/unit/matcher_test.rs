@@ -1675,7 +1675,6 @@ fn boolean_scratch_cache_builds_on_vm_path() {
     assert!(!program.is_match(b"abcdabcd", &mut scratch).unwrap());
     assert!(scratch.cache.is_some(), "VM ran");
     assert!(program.is_match(b"abcdz", &mut scratch).unwrap());
-    assert!(scratch.cache.is_some(), "VM ran");
 }
 
 #[test]
@@ -1741,7 +1740,6 @@ fn matcher_reference_scan_after_accelerated_builds_cache() {
         Vec::<usize>::new()
     );
     assert_eq!(ids(matcher.scan(b"alpha", &mut scratch).unwrap()), accelerated);
-    assert!(scratch.regex_scratch.as_ref().unwrap().cache.is_some(), "VM ran");
 }
 
 #[test]

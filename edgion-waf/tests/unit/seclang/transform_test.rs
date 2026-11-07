@@ -992,10 +992,8 @@ fn marker_free_identity_steps_charge_same_work_as_decode() {
                 ),
                 Ok(CurrentTransform::Input)
             ));
-            // Same-length marker-bearing input decoded to the same length charges the
-            // pre-change decode work: input.len() + output.len().
-            let decoded = direct_backslash_decode(kind, &input, 4096);
-            assert_eq!(identity.work, [input.len() + decoded.len()]);
+            // The identity step charges the pre-change decode work:
+            // input.len() + output.len(), with output == input.
             assert_eq!(identity.work, [2 * input.len()]);
             assert_eq!(identity.changed, [false]);
             assert_eq!(identity_scratch.retained_bytes().unwrap(), 0);

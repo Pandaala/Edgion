@@ -46,10 +46,8 @@ The request-path optimizations formerly tracked as `tasks/todo/waf-06`
 `waf-21` (static SQLi delimiter tables) were completed in the 2026-11-07
 optimization pass and are recorded by the guards above. Open WAF work lives in
 `tasks/improve-issues/waf-*.md` (note the unrelated open item that reuses the
-`waf-06` id) and `tasks/todo/waf-streaming-raw-member-msg-action.md`;
-`tasks/pending/edgion-gateway-quality-campaign/inventory.tsv` still lists the
-three completed items as pending. The following were deliberately dropped, not
-completed: representative Gateway performance measurement, Kubernetes
+`waf-06` id) and `tasks/todo/waf-streaming-raw-member-msg-action.md`. The
+following were deliberately dropped, not completed: representative Gateway performance measurement, Kubernetes
 admission/reload validation (including the audited language-selection
 profiles), and x86-64 hardware verification. Do not cite them as passed; if
 needed, gather fresh evidence via the
