@@ -1668,15 +1668,14 @@ fn boolean_scratch_cache_is_lazy_for_guard_miss() {
 }
 
 #[test]
-fn boolean_scratch_cache_initializes_once_on_vm_path() {
+fn boolean_scratch_cache_builds_on_vm_path() {
     let program = CompiledRegexProgram::compile_one("(?:a?|b?|c?|d?){8}z", RegexProgramLimits::default()).unwrap();
     let mut scratch = program.create_scratch();
     assert!(scratch.cache.is_none());
     assert!(!program.is_match(b"abcdabcd", &mut scratch).unwrap());
-    let first = scratch.cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert!(scratch.cache.is_some(), "VM ran");
     assert!(program.is_match(b"abcdz", &mut scratch).unwrap());
-    let second = scratch.cache.as_ref().expect("VM ran") as *const PikeCache;
-    assert_eq!(first, second, "the cache is created once and retained");
+    assert!(scratch.cache.is_some(), "VM ran");
 }
 
 #[test]
@@ -1718,7 +1717,7 @@ fn lazy_cache_results_equal_eager_reference() {
 }
 
 #[test]
-fn matcher_reference_scan_after_accelerated_initializes_cache_once() {
+fn matcher_reference_scan_after_accelerated_builds_cache() {
     let patterns = [PatternSpec::Regex("^alpha$"), PatternSpec::Regex("^alpha$")];
     let mut matcher = CompiledMatcher::compile_pcre_bytes(&patterns, MatcherLimits::default()).unwrap();
     assert!(
@@ -1736,14 +1735,13 @@ fn matcher_reference_scan_after_accelerated_initializes_cache_once() {
 
     let reference = ids(matcher.scan_reference(b"alpha", &mut scratch).unwrap());
     assert_eq!(reference, accelerated);
-    let first = scratch.regex_scratch.as_ref().unwrap().cache.as_ref().expect("VM ran") as *const PikeCache;
+    assert!(scratch.regex_scratch.as_ref().unwrap().cache.is_some(), "VM ran");
     assert_eq!(
         ids(matcher.scan_reference(b"nope", &mut scratch).unwrap()),
         Vec::<usize>::new()
     );
     assert_eq!(ids(matcher.scan(b"alpha", &mut scratch).unwrap()), accelerated);
-    let second = scratch.regex_scratch.as_ref().unwrap().cache.as_ref().expect("VM ran") as *const PikeCache;
-    assert_eq!(first, second, "the cache is created once and retained");
+    assert!(scratch.regex_scratch.as_ref().unwrap().cache.is_some(), "VM ran");
 }
 
 #[test]

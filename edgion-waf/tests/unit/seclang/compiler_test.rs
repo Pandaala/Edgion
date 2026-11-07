@@ -2016,6 +2016,26 @@ fn body_macros_require_snapshot_even_without_body_targets() {
 }
 
 #[test]
+fn streaming_raw_member_rejects_msg_action() {
+    // `is_streaming_safe_action` deliberately omits `Msg` while the request-prefix
+    // path accepts it; pin the streaming side of that asymmetry.
+    let plain = "SecRule REQUEST_BODY \"@pm x\" \"id:1,phase:2,pass\"\n";
+    let with_msg = "SecRule REQUEST_BODY \"@pm x\" \"id:1,phase:2,pass,msg:'m'\"\n";
+    with_validated(plain, |validated| {
+        let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+        let summary = generation.request_body_execution_summary();
+        assert_eq!(summary.streaming_raw_rule_units(), 1);
+        assert_eq!(summary.bounded_snapshot_rule_units(), 0);
+    });
+    with_validated(with_msg, |validated| {
+        let generation = compile_validated(validated, None, CompilerLimits::default()).unwrap();
+        let summary = generation.request_body_execution_summary();
+        assert_eq!(summary.streaming_raw_rule_units(), 0);
+        assert_eq!(summary.bounded_snapshot_rule_units(), 1);
+    });
+}
+
+#[test]
 fn unavailable_phase_two_targets_dominate_supported_lanes() {
     for target in ["XML:/root", "ARGS|XML:/root", "REQUEST_BODY|XML:/root"] {
         let source = format!("SecRule {target} \"@pm attack\" \"id:1,phase:2,pass\"\n");

@@ -2995,6 +2995,21 @@ fn prefix_completion_preserves_body_absence_and_advances_phase_once() {
 }
 
 #[test]
+fn prefix_member_accepts_msg_action() {
+    // The request-prefix path accepts `Msg` on top of the streaming-safe action
+    // list; state actions such as `setvar` remain rejected.
+    let with_msg =
+        generation("SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,status:403,msg:'m'\"\n");
+    assert_eq!(with_msg.validate_request_body_prefix(), Ok(()));
+    let with_setvar =
+        generation("SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,status:403,setvar:tx.a=1\"\n");
+    assert_eq!(
+        with_setvar.validate_request_body_prefix(),
+        Err("requestBody.inspection prefix does not support control or state actions; select full")
+    );
+}
+
+#[test]
 fn prefix_detection_only_uses_pm_transform_and_short_body_completion() {
     let generation = generation("SecRule REQUEST_BODY \"@pm forbidden blocked\" \"id:1,phase:2,deny,t:lowercase\"\n");
     let mut transaction = Transaction::new_with_policy(

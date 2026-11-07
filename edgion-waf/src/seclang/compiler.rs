@@ -1486,10 +1486,9 @@ pub(super) fn is_streaming_raw_member(generation: &CompiledGeneration, member_in
 }
 
 /// Actions a streaming raw-body member may carry. The request-prefix path
-/// additionally accepts `Msg` (see `prefix_actions_supported`): `Msg`/`LogData`
-/// templates are expanded at finding time (`transaction.rs` `expand_template`)
-/// and a streaming raw member has no retained value for them. Follow-up F-1 in
-/// the 2026-11-07 WAF optimization spec tracks whether to unify.
+/// additionally accepts `Msg` (see `prefix_actions_supported`). The asymmetry
+/// is preserved as found; whether streaming members should also accept `Msg`
+/// is tracked in `tasks/todo/waf-streaming-raw-member-msg-action.md`.
 fn is_streaming_safe_action(kind: super::ActionKind) -> bool {
     matches!(
         kind,

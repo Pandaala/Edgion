@@ -410,7 +410,8 @@ fn high_byte_qstring_closes_only_on_utf8_encoded_delimiter() {
 
 #[test]
 fn delimiter_tables_match_original_literals_for_every_byte() {
-    // Copied verbatim from the pre-change parse_word / parse_var literals.
+    // Byte-for-byte the pre-change parse_word / parse_var literals (the old
+    // parse_word literal spelled the tab as a raw 0x09 byte).
     let word: &[u8] = b" []{}<>:\\?=@!#~+-*/&|^%(),';\t\n\x0B\x0C\r\"\xA0\x00";
     let var: &[u8] = b" <>:\\?=@!#~+-*/&|^%(),;'\t\n\x0B\x0C\r'`\"";
     for b in 0u8..=255 {
