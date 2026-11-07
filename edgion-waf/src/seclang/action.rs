@@ -399,6 +399,8 @@ pub(super) fn parse_action_syntax<'source>(
     Ok(document)
 }
 
+// Independent inputs: one call site; token source mapping, inherited count,
+// limits and the document's three output arenas are threaded by no other function.
 #[allow(clippy::too_many_arguments)]
 fn parse_list<'source>(
     kind: ActionListKind,

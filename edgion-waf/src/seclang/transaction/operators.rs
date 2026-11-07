@@ -233,6 +233,8 @@ pub(super) fn physical_operator_work(
     Ok(work)
 }
 
+// Independent inputs: the matcher operand coordinates (group, range), input,
+// mode and optional stage cache vary per call; tests drive it with bare slots.
 #[expect(
     clippy::too_many_arguments,
     reason = "shared matcher operands and optional stage cache stay explicit"
@@ -295,21 +297,16 @@ pub(super) enum OperatorCapture {
     Phrase(CapturePhraseMatch),
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_operator(
-    generation: &CompiledGeneration,
-    request: &RequestState,
-    tx: &TxState,
-    group_scratch: &mut [Option<MatchScratch>],
-    boolean_scratch: &mut [Option<RegexBooleanScratch>],
-    capture_scratch: &mut [Option<RegexCaptureScratch>],
+    context: &mut SingleInputContext<'_>,
     plan: super::super::CompiledOperatorPlan,
     input: &[u8],
     member_runtime_limit: usize,
     evaluation_mode: EvaluationMode,
-    scan_cache: Option<&mut StageScanCache>,
-    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<(bool, Option<OperatorCapture>), RuntimeError> {
+    let generation = context.generation;
+    let (request, tx) = (context.request, context.tx);
+    let json_budget = context.json_budget.as_deref_mut();
     let mut capture = None;
     let positive = match plan.operand {
         super::super::CompiledOperatorOperand::String { relation, template } => {
@@ -369,7 +366,8 @@ pub(super) fn evaluate_operator(
                     .boolean_regexes
                     .get(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
-                let scratch = boolean_scratch
+                let scratch = context
+                    .boolean_scratch
                     .get_mut(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
                 regex
@@ -383,7 +381,8 @@ pub(super) fn evaluate_operator(
                     .capture_regexes
                     .get(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
-                let scratch = capture_scratch
+                let scratch = context
+                    .capture_scratch
                     .get_mut(program)
                     .ok_or(RuntimeError::GenerationInvariant)?;
                 regex
@@ -397,13 +396,13 @@ pub(super) fn evaluate_operator(
             pattern_count,
         } => evaluate_matcher_operand_cached(
             generation,
-            group_scratch,
+            context.group_scratch,
             group,
             pattern_start,
             pattern_count,
             input,
             evaluation_mode,
-            scan_cache,
+            context.scan_cache.as_deref_mut(),
         ),
         super::super::CompiledOperatorOperand::CapturePhrase(program) => {
             let matcher = generation

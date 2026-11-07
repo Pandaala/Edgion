@@ -194,6 +194,7 @@ impl<'generation> Transaction<'generation> {
                 capture_scratch: &mut self.capture_scratch,
                 scan_cache: None,
                 json_budget: None,
+                transform_memo: None,
             };
             let mut collector = JsonCollector::new(
                 self.generation.clone(),
@@ -261,6 +262,8 @@ impl<'generation> Transaction<'generation> {
             body_error,
         )
     }
+    // Independent inputs: two call sites supply distinct body sizes, accounting,
+    // sealed results, budget and error outcome with no shared bundle.
     #[allow(clippy::too_many_arguments)]
     fn publish_json_inspection(
         &mut self,
@@ -449,6 +452,7 @@ impl JsonInspectionSession<'_, '_> {
             capture_scratch: &mut tx.capture_scratch,
             scan_cache: None,
             json_budget: None,
+            transform_memo: None,
         };
         let mut collector = match self.collector.take() {
             Some(state) => JsonCollector::resume(state, context),
@@ -640,15 +644,13 @@ struct SelectedJsonCandidate {
     collection: CollectionKind,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_json_selected(
     context: &mut SingleInputContext<'_>,
     plan: SingleInputPlan<'_>,
     member: usize,
     id: CandidateId,
     collection: CollectionKind,
-    work: &mut usize,
-    detector_work: &mut usize,
+    accounting: &mut OrderedStageAccounting<'_>,
     matched_count: usize,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     use super::super::json_inspection_plan::JsonMemberMode;
@@ -688,8 +690,7 @@ pub(super) fn evaluate_json_selected(
             context.generation,
             &plan,
             SelectedJsonCandidate { id, group, collection },
-            work,
-            detector_work,
+            accounting,
             matched_count,
         );
     }
@@ -700,14 +701,13 @@ pub(super) fn evaluate_json_selected(
     };
     match mode {
         JsonMemberMode::NameDynamic => {
-            evaluate_single_input(context, plan, name, work, detector_work, matched_count, make_matched)
+            evaluate_single_input(context, plan, name, accounting, matched_count, make_matched)
         }
         JsonMemberMode::NamedDeferred => evaluate_single_input(
             context,
             plan,
             candidate.deferred.ok_or(RuntimeError::JsonInspectionState)?,
-            work,
-            detector_work,
+            accounting,
             matched_count,
             make_matched,
         ),
@@ -724,8 +724,7 @@ pub(super) fn evaluate_json_selected(
                 &plan,
                 &digits[start..],
                 candidate.semantic_len,
-                work,
-                detector_work,
+                accounting,
                 matched_count,
                 make_matched,
             )
@@ -775,15 +774,13 @@ fn validate_length_recipe(
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
 fn replay_static(
     results: &SealedResults<'_>,
     budget: &mut InspectionBudget,
     generation: &CompiledGeneration,
     plan: &SingleInputPlan<'_>,
     selected: SelectedJsonCandidate,
-    work: &mut usize,
-    detector_work: &mut usize,
+    accounting: &mut OrderedStageAccounting<'_>,
     matched_count: usize,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     use super::json_inspection::{OutcomeValue, SelectedOutcome};
@@ -836,13 +833,8 @@ fn replay_static(
     let mut ordinal = 0usize;
     loop {
         let cost = detector_work_for_stage(plan.operator, stage_len)?;
-        OrderedStageAccounting {
-            original_bytes: original_len,
-            limits: plan.limits,
-            work,
-            detector_work_bytes: detector_work,
-        }
-        .charge_stage(stage_len, cost)?;
+        accounting.original_bytes = original_len;
+        accounting.charge_stage(stage_len, cost)?;
         if let Some((id, outcome)) = &stored {
             if outcome.stage == ordinal {
                 match &outcome.result {
@@ -871,7 +863,7 @@ fn replay_static(
                             MatchValue::Json(*value),
                             name,
                             matched_count,
-                            work,
+                            accounting.work,
                             plan.limits,
                         )
                         .map(Some);

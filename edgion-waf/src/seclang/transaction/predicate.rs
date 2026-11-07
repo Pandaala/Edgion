@@ -27,6 +27,8 @@ pub(super) fn tagged_units(
 // Shared by ordinary selected values and the upcoming provisional JSON
 // collector. Context supplies existing programs and scratch, never a second
 // operator implementation. Matched identity construction runs only on a match.
+// It is also the operator context: `evaluate_operator` and capture extraction
+// read the same generation, request/tx state, scratch slices and stage cache.
 pub(super) struct SingleInputContext<'a> {
     pub(super) generation: &'a CompiledGeneration,
     pub(super) request: &'a RequestState<'a>,
@@ -36,6 +38,9 @@ pub(super) struct SingleInputContext<'a> {
     pub(super) capture_scratch: &'a mut [Option<RegexCaptureScratch>],
     pub(super) scan_cache: Option<&'a mut StageScanCache>,
     pub(super) json_budget: Option<&'a mut InspectionBudget>,
+    /// Borrowed-transformation proof for one ordinary request-range input.
+    /// Consumed by the first `evaluate_single_input` call; `None` elsewhere.
+    pub(super) transform_memo: Option<(&'a mut BorrowedTransformMemo, BorrowedTransformKey)>,
 }
 
 pub(super) struct SingleInputPlan<'a> {
@@ -51,40 +56,16 @@ pub(super) fn evaluate_single_input(
     context: &mut SingleInputContext<'_>,
     plan: SingleInputPlan<'_>,
     value: &[u8],
-    work: &mut usize,
-    detector_work_bytes: &mut usize,
+    accounting: &mut OrderedStageAccounting<'_>,
     matched_count: usize,
     make_matched: impl Fn(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
-) -> Result<Option<MemberMatch>, RuntimeError> {
-    evaluate_single_input_with_transform_memo(
-        context,
-        plan,
-        value,
-        work,
-        detector_work_bytes,
-        matched_count,
-        make_matched,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn evaluate_single_input_with_transform_memo(
-    context: &mut SingleInputContext<'_>,
-    plan: SingleInputPlan<'_>,
-    value: &[u8],
-    work: &mut usize,
-    detector_work_bytes: &mut usize,
-    matched_count: usize,
-    make_matched: impl Fn(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
-    transform_memo: Option<(&mut BorrowedTransformMemo, BorrowedTransformKey)>,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
     let transform_limits = TransformLimits {
         max_output_bytes: plan.limits.max_transformation_output_bytes,
         max_work_bytes: plan.limits.max_transformation_work_bytes,
     };
     if !plan.multi_match {
-        let transformed = match transform_memo {
+        let transformed = match context.transform_memo.take() {
             Some((memo, key)) if memo.key == Some(key) => Cow::Borrowed(value),
             Some((memo, key)) => {
                 memo.clear();
@@ -106,8 +87,7 @@ pub(super) fn evaluate_single_input_with_transform_memo(
             &plan,
             &transformed,
             value.len(),
-            work,
-            detector_work_bytes,
+            accounting,
             matched_count,
             &make_matched,
         );
@@ -120,8 +100,7 @@ pub(super) fn evaluate_single_input_with_transform_memo(
             &plan,
             &transformed,
             value.len(),
-            work,
-            detector_work_bytes,
+            accounting,
             matched_count,
             &make_matched,
         )? {
@@ -131,33 +110,25 @@ pub(super) fn evaluate_single_input_with_transform_memo(
     Ok(None)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_transformed_input(
     context: &mut SingleInputContext<'_>,
     plan: &SingleInputPlan<'_>,
     transformed: &[u8],
     original_bytes: usize,
-    work: &mut usize,
-    detector_work_bytes: &mut usize,
+    accounting: &mut OrderedStageAccounting<'_>,
     matched_count: usize,
     make_matched: impl FnOnce(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
-    let mut accounting = OrderedStageAccounting {
-        original_bytes,
-        limits: plan.limits,
-        work,
-        detector_work_bytes,
-    };
-    let captures =
-        inspect_predicate_stage(context, plan, transformed, &mut accounting).map_err(|error| match error {
-            PredicateStageFailure::Semantic { error, .. }
-            | PredicateStageFailure::Physical(error)
-            | PredicateStageFailure::Observer(error) => error,
-        })?;
+    accounting.original_bytes = original_bytes;
+    let captures = inspect_predicate_stage(context, plan, transformed, accounting).map_err(|error| match error {
+        PredicateStageFailure::Semantic { error, .. }
+        | PredicateStageFailure::Physical(error)
+        | PredicateStageFailure::Observer(error) => error,
+    })?;
     captures
         .map(|captures| {
             let (value, name) = make_matched(transformed, context.json_budget.as_deref_mut())?;
-            finish_member_match(captures, value, name, matched_count, work, plan.limits)
+            finish_member_match(captures, value, name, matched_count, accounting.work, plan.limits)
         })
         .transpose()
 }
@@ -238,11 +209,25 @@ type PredicateStageResult<O> = Result<
     PredicateStageFailure<<O as PredicateStageObserver>::Error>,
 >;
 
+/// Per-unit stage accounting shared by every input of one member evaluation.
+/// `original_bytes` describes the current input and is set by each stage
+/// entry point before it charges a stage.
 pub(super) struct OrderedStageAccounting<'a> {
     pub(super) original_bytes: usize,
     pub(super) limits: RuntimeLimits,
     pub(super) work: &'a mut usize,
     pub(super) detector_work_bytes: &'a mut usize,
+}
+
+impl<'a> OrderedStageAccounting<'a> {
+    pub(super) fn new(limits: RuntimeLimits, work: &'a mut usize, detector_work_bytes: &'a mut usize) -> Self {
+        Self {
+            original_bytes: 0,
+            limits,
+            work,
+            detector_work_bytes,
+        }
+    }
 }
 
 impl PredicateStageObserver for OrderedStageAccounting<'_> {
@@ -360,18 +345,11 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
         observer.operator_work(work).map_err(PredicateStageFailure::Observer)?;
     }
     let (positive, capture) = evaluate_operator(
-        context.generation,
-        context.request,
-        context.tx,
-        context.group_scratch,
-        context.boolean_scratch,
-        context.capture_scratch,
+        context,
         detection,
         transformed,
         plan.runtime_expansion_byte_limit,
         plan.evaluation_mode,
-        context.scan_cache.as_deref_mut(),
-        context.json_budget.as_deref_mut(),
     )
     .map_err(|error| PredicateStageFailure::at(PredicateCheckpoint::Operator, error))?;
     if positive == plan.operator.negated {
@@ -382,8 +360,7 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
             .before_captures(transformed.len())
             .map_err(PredicateStageFailure::Observer)?;
         extract_captures_into(
-            context.generation,
-            context.capture_scratch,
+            context,
             plan.operator,
             transformed,
             plan.limits,
@@ -398,10 +375,8 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
     Ok(true)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract_captures_into<O: PredicateStageObserver>(
-    generation: &CompiledGeneration,
-    scratch: &mut [Option<RegexCaptureScratch>],
+    context: &mut SingleInputContext<'_>,
     plan: super::super::CompiledOperatorPlan,
     input: &[u8],
     limits: RuntimeLimits,
@@ -418,7 +393,8 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
         return Ok(());
     }
     let bound = match plan.operand {
-        super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(program)) => generation
+        super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(program)) => context
+            .generation
             .capture_regexes
             .get(program)
             .ok_or(RuntimeError::GenerationInvariant)?
@@ -448,11 +424,15 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
         .map_err(PredicateStageFailure::Observer)?;
     match plan.operand {
         super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(program)) => {
-            let regex = generation
+            let regex = context
+                .generation
                 .capture_regexes
                 .get(program)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            let slot = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let slot = context
+                .capture_scratch
+                .get_mut(program)
+                .ok_or(RuntimeError::GenerationInvariant)?;
             let scratch = lazy_capture_scratch(slot, regex);
             let results = regex.captures(input, scratch).map_err(map_regex_scratch_error)?;
             for index in 0..regex.capture_len() {

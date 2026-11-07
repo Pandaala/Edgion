@@ -292,6 +292,7 @@ impl std::fmt::Debug for RequestHead<'_> {
 }
 
 impl<'input> RequestHead<'input> {
+    // Public constructor consumed outside the crate; the eight slices are independent request fields.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
         request_line: &'input [u8],

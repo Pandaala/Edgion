@@ -3486,6 +3486,7 @@ fn activation_constructor_usage(
         capture_scratch: &mut tx.capture_scratch,
         scan_cache: None,
         json_budget: None,
+        transform_memo: None,
     };
     let mut collector = JsonCollector::new_domain(
         GenerationHandle::Borrowed(g),

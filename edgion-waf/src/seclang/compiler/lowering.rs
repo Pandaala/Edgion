@@ -20,14 +20,14 @@ pub(super) fn map_phrase_matcher_error(error: MatcherCompileError, location: Sem
     CompilerError::PhraseMatcher { location, kind }
 }
 
+/// Reads only the resolved assets, phrase records and phrase bytes of `templates`.
 fn visit_phrase_operand(
     operand: super::super::OperatorOperandView<'_, '_>,
-    assets: &[ResolvedAsset],
-    phrases: &[CompiledPhrase],
-    asset_bytes: &[u8],
+    templates: &AssetTemplateState<'_>,
     asset_cursor: &mut usize,
     mut visit: impl FnMut(&str, usize) -> Result<(), CompilerError>,
 ) -> Result<usize, CompilerError> {
+    let (assets, phrases, asset_bytes) = (&templates.assets, &templates.phrases, &templates.asset_phrase_bytes);
     let mut ordinal = 0_usize;
     match operand {
         super::super::OperatorOperandView::PhraseList(list) => {
@@ -104,9 +104,7 @@ impl GroupPatternPreflight {
                         let mut bytes = 0_usize;
                         visit_phrase_operand(
                             operator.operand(),
-                            &state.asset_templates.assets,
-                            &state.asset_templates.phrases,
-                            &state.asset_templates.asset_phrase_bytes,
+                            &state.asset_templates,
                             &mut asset_cursor,
                             |phrase, _| {
                                 patterns = checked_inc(patterns)?;
@@ -164,6 +162,8 @@ impl GroupPatternPreflight {
     }
 }
 
+// Independent outputs: the pattern arena and three per-group link tables are
+// distinct caller-owned tables; group, kind, source and mapping vary per call.
 #[allow(clippy::too_many_arguments)]
 fn append_candidate_pattern(
     group: usize,
@@ -213,12 +213,9 @@ fn append_candidate_pattern(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compile_phrase_operand_program(
     operand: super::super::OperatorOperandView<'_, '_>,
-    assets: &[ResolvedAsset],
-    phrases: &[CompiledPhrase],
-    asset_bytes: &[u8],
+    templates: &AssetTemplateState<'_>,
     asset_cursor: &mut usize,
     location: SemanticLocation,
     retain: bool,
@@ -227,18 +224,11 @@ fn compile_phrase_operand_program(
     let mut count_cursor = *asset_cursor;
     let mut pattern_count = 0_usize;
     let mut source_bytes = 0_usize;
-    visit_phrase_operand(
-        operand.clone(),
-        assets,
-        phrases,
-        asset_bytes,
-        &mut count_cursor,
-        |phrase, _| {
-            pattern_count = checked_inc(pattern_count)?;
-            source_bytes = checked_add(source_bytes, phrase.len())?;
-            Ok(())
-        },
-    )?;
+    visit_phrase_operand(operand.clone(), templates, &mut count_cursor, |phrase, _| {
+        pattern_count = checked_inc(pattern_count)?;
+        source_bytes = checked_add(source_bytes, phrase.len())?;
+        Ok(())
+    })?;
     work.retain_working_bytes(source_bytes)?;
     work.retain_working_records::<ByteRange>(pattern_count)?;
     work.retain_working_records::<&str>(pattern_count)?;
@@ -250,7 +240,7 @@ fn compile_phrase_operand_program(
             operation: "capture phrase source bytes",
         })?;
     reserve_exact(&mut ranges, pattern_count, "capture phrase ranges")?;
-    visit_phrase_operand(operand, assets, phrases, asset_bytes, asset_cursor, |phrase, _| {
+    visit_phrase_operand(operand, templates, asset_cursor, |phrase, _| {
         let start = owned.len();
         owned.extend_from_slice(phrase.as_bytes());
         ranges.push(ByteRange {
@@ -869,20 +859,16 @@ impl<'source> GroupedMatcherState<'source> {
         )?;
         let mut canonical_work = std::mem::take(&mut state.canonical_work);
         for (ordinal, member_index) in active_member_indices.iter().copied().enumerate() {
-            let target_candidate = candidate_plans[ordinal];
-            let target_hash = hash_target_plan(
-                target_candidate,
-                &candidate_records,
-                &candidate_bytes,
-                &mut canonical_work,
-                limits,
-            )?;
+            let target_candidate = TargetPlanRef {
+                plan: candidate_plans[ordinal],
+                records: &candidate_records,
+                bytes: &candidate_bytes,
+            };
+            let target_hash = hash_target_plan(target_candidate, &mut canonical_work, limits)?;
             let target_plan = insert_target_plan(
                 target_candidate,
                 target_hash,
                 &mut target_slots,
-                &candidate_records,
-                &candidate_bytes,
                 &mut target_records,
                 &mut target_bytes,
                 &mut target_plans,
@@ -972,9 +958,7 @@ impl<'source> GroupedMatcherState<'source> {
                         let pattern_before = candidate_patterns.len();
                         let count = visit_phrase_operand(
                             operator.operand(),
-                            &state.asset_templates.assets,
-                            &state.asset_templates.phrases,
-                            &state.asset_templates.asset_phrase_bytes,
+                            &state.asset_templates,
                             &mut asset_cursor,
                             |phrase, local_ordinal| {
                                 append_candidate_pattern(
@@ -1010,9 +994,7 @@ impl<'source> GroupedMatcherState<'source> {
                     } else {
                         let program = compile_phrase_operand_program(
                             operator.operand(),
-                            &state.asset_templates.assets,
-                            &state.asset_templates.phrases,
-                            &state.asset_templates.asset_phrase_bytes,
+                            &state.asset_templates,
                             &mut asset_cursor,
                             operator.location(),
                             unit.is_active(),

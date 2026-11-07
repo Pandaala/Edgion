@@ -1017,6 +1017,7 @@ impl TransformObserver for ProfileObserver<'_, '_, '_> {
                 capture_scratch: self.context.capture_scratch,
                 scan_cache: Some(self.cache),
                 json_budget: None,
+                transform_memo: None,
             };
             let base = self
                 .fixed_scratch

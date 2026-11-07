@@ -21,6 +21,14 @@ pub(super) struct CandidateTargetPlan {
     pub(super) record_count: usize,
 }
 
+/// One candidate target plan with the record and selector-byte tables it indexes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TargetPlanRef<'a> {
+    pub(super) plan: CandidateTargetPlan,
+    pub(super) records: &'a [CandidateTargetRecord],
+    pub(super) bytes: &'a [u8],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CanonicalSlot {
     pub(super) hash: u64,
@@ -335,12 +343,11 @@ fn regex_style_code(style: RegexStyle) -> u64 {
 }
 
 pub(super) fn hash_target_plan(
-    plan: CandidateTargetPlan,
-    records: &[CandidateTargetRecord],
-    bytes: &[u8],
+    candidate: TargetPlanRef<'_>,
     work: &mut CanonicalWork,
     limits: CompilerLimits,
 ) -> Result<u64, CompilerError> {
+    let TargetPlanRef { plan, records, bytes } = candidate;
     let mut hash = FNV1A_OFFSET_BASIS;
     work.hash_u64(
         &mut hash,
@@ -384,17 +391,19 @@ pub(super) fn hash_target_plan(
     Ok(hash)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn target_plan_equal(
-    candidate: CandidateTargetPlan,
-    candidate_records: &[CandidateTargetRecord],
-    candidate_bytes: &[u8],
+    candidate: TargetPlanRef<'_>,
     canonical: CompiledTargetPlan,
     canonical_records: &[CompiledTargetRecord],
     canonical_bytes: &[u8],
     work: &mut CanonicalWork,
     limits: CompilerLimits,
 ) -> Result<bool, CompilerError> {
+    let TargetPlanRef {
+        plan: candidate,
+        records: candidate_records,
+        bytes: candidate_bytes,
+    } = candidate;
     if candidate.record_count != canonical.record_count {
         return Ok(false);
     }
@@ -453,16 +462,18 @@ fn target_plan_equal(
     Ok(true)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn copy_target_plan(
-    candidate: CandidateTargetPlan,
-    candidate_records: &[CandidateTargetRecord],
-    candidate_bytes: &[u8],
+    candidate: TargetPlanRef<'_>,
     target_records: &mut Vec<CompiledTargetRecord>,
     target_bytes: &mut Vec<u8>,
     target_plans: &mut Vec<CompiledTargetPlan>,
     work: &mut MatcherCompileWork,
 ) -> Result<usize, CompilerError> {
+    let TargetPlanRef {
+        plan: candidate,
+        records: candidate_records,
+        bytes: candidate_bytes,
+    } = candidate;
     let record_start = target_records.len();
     let end = candidate
         .record_start
@@ -554,13 +565,13 @@ fn transformation_plan_equal(
     Ok(true)
 }
 
+// Independent outputs: the three canonical tables are built before their
+// owning GroupedMatcherState exists, beside two separate work accounts.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn insert_target_plan(
-    candidate: CandidateTargetPlan,
+    candidate: TargetPlanRef<'_>,
     hash: u64,
     slots: &mut [CanonicalSlot],
-    candidate_records: &[CandidateTargetRecord],
-    candidate_bytes: &[u8],
     target_records: &mut Vec<CompiledTargetRecord>,
     target_bytes: &mut Vec<u8>,
     target_plans: &mut Vec<CompiledTargetPlan>,
@@ -575,23 +586,13 @@ pub(super) fn insert_target_plan(
         canonical_work.charge_probe(compile_work.limits)?;
         let slot = slots[index];
         if slot.is_empty() {
-            let id = copy_target_plan(
-                candidate,
-                candidate_records,
-                candidate_bytes,
-                target_records,
-                target_bytes,
-                target_plans,
-                compile_work,
-            )?;
+            let id = copy_target_plan(candidate, target_records, target_bytes, target_plans, compile_work)?;
             slots[index] = CanonicalSlot { hash, id };
             return Ok(id);
         }
         if slot.hash == hash
             && target_plan_equal(
                 candidate,
-                candidate_records,
-                candidate_bytes,
                 target_plans[slot.id],
                 target_records,
                 target_bytes,

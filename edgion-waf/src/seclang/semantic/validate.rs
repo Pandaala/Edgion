@@ -11,6 +11,27 @@ struct ExceptionCounters {
     comparison_bytes: usize,
 }
 
+/// Per-node target overlay chains appended by SecRuleUpdateTargetById.
+#[derive(Clone, Copy)]
+struct Overlays<'a> {
+    heads: &'a [usize],
+    entries: &'a [TargetOverlayEntry],
+}
+
+/// Selector deduplication scratch: per-unit generation stamps and the
+/// affected roots collected for the current exception directive.
+struct ExceptionScratch<'a> {
+    seen: &'a mut [u32],
+    affected: &'a mut Vec<usize>,
+}
+
+/// Target-comparison budget: committed counters, this update's delta, limits.
+struct ComparisonBudget<'a> {
+    cumulative: ExceptionCounters,
+    delta: &'a mut ExceptionCounters,
+    limits: ValidationLimits,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExceptionKind {
     Update,
@@ -206,8 +227,10 @@ fn validate_semantic_draft_inner<'source>(
             ids,
             location,
             directive_ordinal,
-            &mut seen,
-            &mut affected,
+            &mut ExceptionScratch {
+                seen: &mut seen,
+                affected: &mut affected,
+            },
             counters,
             limits,
         )?;
@@ -235,8 +258,10 @@ fn validate_semantic_draft_inner<'source>(
                 target_range.clone(),
                 location,
                 &final_counts,
-                &overlay_heads,
-                &overlays,
+                Overlays {
+                    heads: &overlay_heads,
+                    entries: &overlays,
+                },
                 counters,
                 limits,
                 total_final_targets,
@@ -332,8 +357,10 @@ fn validate_semantic_draft_inner<'source>(
         &draft,
         &states,
         &active,
-        &overlay_heads,
-        &overlays,
+        Overlays {
+            heads: &overlay_heads,
+            entries: &overlays,
+        },
         &mut target_seen,
         &mut regex_targets,
     );
@@ -400,7 +427,14 @@ fn validate_semantic_draft_inner<'source>(
     reserve_validation(&mut validated.removals, removal_count, "applied rule removals")?;
     reserve_validation(&mut validated.affected_units, affected_total, "applied exception units")?;
     reserve_validation(&mut validated.requirements, requirement_count, "validated requirements")?;
-    commit_validated_nodes(&mut validated, &states, &overlay_heads, &overlays);
+    commit_validated_nodes(
+        &mut validated,
+        &states,
+        Overlays {
+            heads: &overlay_heads,
+            entries: &overlays,
+        },
+    );
     for (node, rule) in validated.draft.final_rules.iter().copied().enumerate() {
         if matches!(rule.role, FinalRuleRole::ChainChild { .. }) {
             continue;
@@ -421,8 +455,10 @@ fn validate_semantic_draft_inner<'source>(
         &id_index,
         limits,
         &mut active,
-        &mut seen,
-        &mut affected,
+        &mut ExceptionScratch {
+            seen: &mut seen,
+            affected: &mut affected,
+        },
     )?;
     for mut entry in id_index {
         entry.unit = states[entry.unit].unit.expect("ID root maps to a unit");
@@ -763,6 +799,8 @@ fn is_default_requirement(requirement: CompileRequirement) -> bool {
     )
 }
 
+// Independent inputs after folding ExceptionScratch: read-only rule tables,
+// one directive's selectors/location/stamp, and the cumulative budget.
 #[allow(clippy::too_many_arguments)]
 fn resolve_exception_union(
     draft: &SemanticDraft<'_>,
@@ -771,8 +809,7 @@ fn resolve_exception_union(
     selectors: &[IdSelector<'_>],
     directive: DirectiveLocation,
     generation: u32,
-    seen: &mut [u32],
-    affected: &mut Vec<usize>,
+    scratch: &mut ExceptionScratch<'_>,
     cumulative: ExceptionCounters,
     limits: ValidationLimits,
 ) -> Result<ExceptionCounters, SemanticValidationError> {
@@ -848,7 +885,7 @@ fn resolve_exception_union(
                         position,
                     })?;
             let unit = states[entry.unit].unit.expect("indexed root has unit");
-            if seen[unit] != generation {
+            if scratch.seen[unit] != generation {
                 local.distinct =
                     local
                         .distinct
@@ -882,8 +919,8 @@ fn resolve_exception_union(
                             position,
                         })?;
                 check_selector_work(&cumulative, &local, limits, position)?;
-                seen[unit] = generation;
-                affected.push(entry.unit);
+                scratch.seen[unit] = generation;
+                scratch.affected.push(entry.unit);
             }
             check_selector_work(&cumulative, &local, limits, position)?;
         }
@@ -918,6 +955,8 @@ const fn ceil_log2(value: usize) -> usize {
     }
 }
 
+// Independent inputs after folding Overlays: rule tables, the directive's
+// affected roots and target range, per-rule counts, and the running budget.
 #[allow(clippy::too_many_arguments)]
 fn validate_update_candidate(
     draft: &SemanticDraft<'_>,
@@ -926,8 +965,7 @@ fn validate_update_candidate(
     targets: Range<usize>,
     directive: DirectiveLocation,
     final_counts: &[usize],
-    overlay_heads: &[usize],
-    overlays: &[TargetOverlayEntry],
+    overlays: Overlays<'_>,
     cumulative: ExceptionCounters,
     limits: ValidationLimits,
     total_final_targets: usize,
@@ -974,11 +1012,12 @@ fn validate_update_candidate(
                     root,
                     target,
                     targets.start..target_index,
-                    overlay_heads,
                     overlays,
-                    cumulative,
-                    &mut delta,
-                    limits,
+                    &mut ComparisonBudget {
+                        cumulative,
+                        delta: &mut delta,
+                        limits,
+                    },
                 )?
             {
                 return Err(SemanticValidationError::MissingExclusionBase {
@@ -990,34 +1029,30 @@ fn validate_update_candidate(
     Ok(delta)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn has_exclusion_base(
     draft: &SemanticDraft<'_>,
     root: usize,
     candidate: &SemanticTarget<'_>,
     candidate_prefix: Range<usize>,
-    overlay_heads: &[usize],
-    overlays: &[TargetOverlayEntry],
-    cumulative: ExceptionCounters,
-    delta: &mut ExceptionCounters,
-    limits: ValidationLimits,
+    overlays: Overlays<'_>,
+    budget: &mut ComparisonBudget<'_>,
 ) -> Result<bool, SemanticValidationError> {
     let mapping = semantic_mapping_for_rule(draft, draft.final_rules[root]);
     for base in &draft.targets[mapping.target_start..mapping.target_start + mapping.target_count] {
-        if target_base_matches(base, candidate, cumulative, delta, limits)? {
+        if target_base_matches(base, candidate, budget)? {
             return Ok(true);
         }
     }
-    let mut overlay = overlay_heads[root];
+    let mut overlay = overlays.heads[root];
     while overlay != NO_INDEX {
-        let entry = overlays[overlay];
-        if target_base_matches(&draft.targets[entry.target], candidate, cumulative, delta, limits)? {
+        let entry = overlays.entries[overlay];
+        if target_base_matches(&draft.targets[entry.target], candidate, budget)? {
             return Ok(true);
         }
         overlay = entry.next;
     }
     for index in candidate_prefix {
-        if target_base_matches(&draft.targets[index], candidate, cumulative, delta, limits)? {
+        if target_base_matches(&draft.targets[index], candidate, budget)? {
             return Ok(true);
         }
     }
@@ -1027,10 +1062,10 @@ fn has_exclusion_base(
 fn target_base_matches(
     base: &SemanticTarget<'_>,
     candidate: &SemanticTarget<'_>,
-    cumulative: ExceptionCounters,
-    delta: &mut ExceptionCounters,
-    limits: ValidationLimits,
+    budget: &mut ComparisonBudget<'_>,
 ) -> Result<bool, SemanticValidationError> {
+    let (cumulative, limits) = (budget.cumulative, budget.limits);
+    let delta = &mut *budget.delta;
     if base.modifier != TargetModifier::None || base.collection != candidate.collection {
         return Ok(false);
     }
@@ -1096,13 +1131,11 @@ fn target_base_matches(
     Ok(left == right)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn mark_reachable_regex_targets(
     draft: &SemanticDraft<'_>,
     states: &[ResolvedRuleStateRecord],
     active: &[u8],
-    overlay_heads: &[usize],
-    overlays: &[TargetOverlayEntry],
+    overlays: Overlays<'_>,
     seen: &mut [u32],
     candidates: &mut Vec<usize>,
 ) {
@@ -1124,9 +1157,9 @@ fn mark_reachable_regex_targets(
                     candidates.push(target);
                 }
             }
-            let mut overlay = overlay_heads[node];
+            let mut overlay = overlays.heads[node];
             while overlay != NO_INDEX {
-                let entry = overlays[overlay];
+                let entry = overlays.entries[overlay];
                 if seen[entry.target] == 0
                     && matches!(draft.targets[entry.target].selector_kind, SelectorKind::Regex(_))
                 {
@@ -1147,6 +1180,7 @@ fn mark_reachable_regex_targets(
     }
 }
 
+// Independent inputs: seven unrelated record counts priced against one limit.
 #[allow(clippy::too_many_arguments)]
 fn validation_owned_bytes(
     nodes: usize,
@@ -1183,18 +1217,18 @@ fn validation_owned_bytes(
 fn commit_validated_nodes(
     validated: &mut ValidatedSemanticDocument<'_>,
     states: &[ResolvedRuleStateRecord],
-    overlay_heads: &[usize],
-    overlays: &[TargetOverlayEntry],
+    overlays: Overlays<'_>,
 ) {
+    let Overlays { heads, entries } = overlays;
     for node in 0..validated.draft.final_rules.len() {
         let mapping = semantic_mapping_for_rule(&validated.draft, validated.draft.final_rules[node]);
         let target_start = validated.final_targets.len();
         validated
             .final_targets
             .extend(mapping.target_start..mapping.target_start + mapping.target_count);
-        let mut overlay = overlay_heads[node];
+        let mut overlay = heads[node];
         while overlay != NO_INDEX {
-            let entry = overlays[overlay];
+            let entry = entries[overlay];
             validated.final_targets.push(entry.target);
             overlay = entry.next;
         }
@@ -1207,18 +1241,16 @@ fn commit_validated_nodes(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn commit_applied_exceptions(
     validated: &mut ValidatedSemanticDocument<'_>,
     states: &[ResolvedRuleStateRecord],
     id_index: &[RuleIdIndexRecord],
     limits: ValidationLimits,
     active: &mut [u8],
-    seen: &mut [u32],
-    affected: &mut Vec<usize>,
+    scratch: &mut ExceptionScratch<'_>,
 ) -> Result<(), SemanticValidationError> {
     active.fill(1);
-    seen.fill(0);
+    scratch.seen.fill(0);
     let mut generation = 0_u32;
     let mut counters = ExceptionCounters::default();
     for (directive_index, mapping) in validated.draft.directives.iter().enumerate() {
@@ -1235,7 +1267,7 @@ fn commit_applied_exceptions(
             document_index: mapping.document_index,
             directive_index: mapping.directive_index,
         };
-        affected.clear();
+        scratch.affected.clear();
         let local = resolve_exception_union(
             &validated.draft,
             id_index,
@@ -1243,23 +1275,25 @@ fn commit_applied_exceptions(
             ids,
             location,
             generation,
-            seen,
-            affected,
+            scratch,
             counters,
             limits,
         )?;
         match kind {
             ExceptionKind::Update => {
-                debug_assert!(affected
+                debug_assert!(scratch
+                    .affected
                     .iter()
                     .all(|root| active[states[*root].unit.expect("replay root unit")] != 0));
             }
             ExceptionKind::Remove => {
-                affected.retain(|root| active[states[*root].unit.expect("replay root unit")] != 0);
+                scratch
+                    .affected
+                    .retain(|root| active[states[*root].unit.expect("replay root unit")] != 0);
             }
         }
         let affected_start = validated.affected_units.len();
-        for &root in affected.iter() {
+        for &root in scratch.affected.iter() {
             let unit = states[root].unit.expect("replay root unit");
             validated.affected_units.push(unit);
             if kind == ExceptionKind::Remove {
@@ -1269,7 +1303,7 @@ fn commit_applied_exceptions(
         let record = AppliedExceptionRecord {
             directive: directive_index,
             affected_start,
-            affected_count: affected.len(),
+            affected_count: scratch.affected.len(),
         };
         match kind {
             ExceptionKind::Update => validated.updates.push(record),

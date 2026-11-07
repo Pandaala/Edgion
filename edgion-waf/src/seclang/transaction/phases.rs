@@ -251,19 +251,24 @@ impl<'generation> Transaction<'generation> {
                 limit: self.limits.max_operator_work_bytes,
             });
         }
+        let plan = self.generation.operator_plans[id].ok_or(RuntimeError::GenerationInvariant)?;
+        let mut context = SingleInputContext {
+            generation: &self.generation,
+            request: &self.request,
+            tx: &self.tx,
+            group_scratch: &mut self.group_scratch,
+            boolean_scratch: &mut self.boolean_scratch,
+            capture_scratch: &mut self.capture_scratch,
+            scan_cache: None,
+            json_budget: self.json_budget.as_mut(),
+            transform_memo: None,
+        };
         evaluate_operator(
-            &self.generation,
-            &self.request,
-            &self.tx,
-            &mut self.group_scratch,
-            &mut self.boolean_scratch,
-            &mut self.capture_scratch,
-            self.generation.operator_plans[id].ok_or(RuntimeError::GenerationInvariant)?,
+            &mut context,
+            plan,
             &transformed,
             member.runtime_expansion_byte_limit,
             self.evaluation_mode,
-            None,
-            self.json_budget.as_mut(),
         )
         .map(|(matched, _)| matched)
     }

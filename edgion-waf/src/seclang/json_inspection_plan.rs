@@ -721,6 +721,8 @@ impl CompiledJsonPlan {
         .then_some(0)
     }
 
+    // Independent inputs: one call site; member identity, view, multi-match flag,
+    // probe slots and two separate work accounts share no bundle with other code.
     #[allow(clippy::too_many_arguments)]
     fn group(
         &mut self,

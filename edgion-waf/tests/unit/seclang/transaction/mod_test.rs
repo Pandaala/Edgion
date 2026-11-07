@@ -4815,8 +4815,17 @@ fn smaller_capture_reservation_preserves_named_entry_limits_and_large_growth() {
             );
             let mut ranged_builder = CaptureBuilder::default();
             extract_captures_into(
-                &compiled,
-                &mut transaction.capture_scratch,
+                &mut SingleInputContext {
+                    generation: &compiled,
+                    request: &transaction.request,
+                    tx: &transaction.tx,
+                    group_scratch: &mut transaction.group_scratch,
+                    boolean_scratch: &mut transaction.boolean_scratch,
+                    capture_scratch: &mut transaction.capture_scratch,
+                    scan_cache: None,
+                    json_budget: None,
+                    transform_memo: None,
+                },
                 compiled.operator_plans[0].unwrap(),
                 input.as_bytes(),
                 transaction.limits,

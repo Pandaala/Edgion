@@ -1151,6 +1151,7 @@ pub struct WafRuleSelectionPreview<'a> {
 
 /// Compile and admit the complete baseline before removing any executable activity.
 /// The baseline is released before the selected pass. No source text is rewritten.
+// Public API consumed by edgion-resources; sources, limits, selection and callbacks are independent.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_rule_bundles_with_selection<E>(
     bundles: &[RuleBundleSource<'_>],

@@ -396,6 +396,8 @@ impl MatcherCompileWork {
     }
 }
 
+// Independent inputs: the only caller builds MatcherState from these output
+// tables after its loop (which borrows state.validated), so no method fits.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_operator_plan<'view, 'source>(
     operator: super::super::SemanticOperatorView<'view, 'source>,

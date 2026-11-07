@@ -52,6 +52,7 @@ fn collector<'a, 'g>(
             capture_scratch: &mut transaction.capture_scratch,
             scan_cache: None,
             json_budget: None,
+            transform_memo: None,
         },
         runtime,
         mode,
@@ -547,6 +548,7 @@ fn compiled_matcher_cache_constructor_has_exact_physical_admission() {
                     capture_scratch: &mut tx.capture_scratch,
                     scan_cache: None,
                     json_budget: None,
+                    transform_memo: None,
                 },
                 runtime,
                 EvaluationMode::Accelerated,
@@ -686,6 +688,7 @@ fn positive_captures_and_stored_payload_share_the_peak_capacity_budget() {
             capture_scratch: &mut tx.capture_scratch,
             scan_cache: None,
             json_budget: None,
+            transform_memo: None,
         };
         let Ok(mut sink) = JsonCollector::new(
             GenerationHandle::Borrowed(&generation),

@@ -317,11 +317,14 @@ impl<'generation> Transaction<'generation> {
             let mut summary_match_storage = None;
             loop {
                 let selection_result = select_values(
-                    &self.generation,
-                    &self.request,
-                    tx,
-                    self.response.as_ref(),
-                    &mut self.boolean_scratch,
+                    &mut SelectionCtx {
+                        generation: &self.generation,
+                        request: &self.request,
+                        tx,
+                        response: self.response.as_ref(),
+                        scratch: &mut self.boolean_scratch,
+                        json_budget: self.json_budget.as_mut(),
+                    },
                     &mut self.ctl_work_bytes,
                     SelectionParams {
                         unit_id,
@@ -330,7 +333,6 @@ impl<'generation> Transaction<'generation> {
                         work_limit: self.limits.max_operator_work_bytes,
                         include_json: json_tail.is_none(),
                     },
-                    self.json_budget.as_mut(),
                     &mut selected,
                     storage,
                 );
@@ -423,6 +425,7 @@ impl<'generation> Transaction<'generation> {
                     capture_scratch: &mut self.capture_scratch,
                     scan_cache,
                     json_budget: self.json_budget.as_mut(),
+                    transform_memo: None,
                 };
                 let matched = if let SelectedBytes::Json(id)
                 | SelectedBytes::XmlText(id)
@@ -441,8 +444,7 @@ impl<'generation> Transaction<'generation> {
                         member_id,
                         id,
                         selected.collection,
-                        &mut work,
-                        &mut self.detector_work_bytes,
+                        &mut OrderedStageAccounting::new(self.limits, &mut work, &mut self.detector_work_bytes),
                         matches.len(),
                     )
                     .map_err(|error| {
@@ -468,7 +470,8 @@ impl<'generation> Transaction<'generation> {
                             limit: self.limits.max_operator_work_bytes,
                         });
                     }
-                    evaluate_single_input_with_transform_memo(
+                    context.transform_memo = transform_memo;
+                    evaluate_single_input(
                         &mut context,
                         SingleInputPlan {
                             operator,
@@ -479,13 +482,11 @@ impl<'generation> Transaction<'generation> {
                             evaluation_mode: self.evaluation_mode,
                         },
                         value,
-                        &mut work,
-                        &mut self.detector_work_bytes,
+                        &mut OrderedStageAccounting::new(self.limits, &mut work, &mut self.detector_work_bytes),
                         matches.len(),
                         |transformed, budget| {
                             matched_variable(&self.request, tx, self.response.as_ref(), selected, transformed, budget)
                         },
-                        transform_memo,
                     )?
                 };
                 if let Some(matched) = matched {

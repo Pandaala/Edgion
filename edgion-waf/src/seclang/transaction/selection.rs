@@ -118,19 +118,26 @@ pub(super) struct SelectionParams {
     pub(super) include_json: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Read-only selection state plus the selector regex scratch and JSON budget.
+/// Built per call from disjoint borrows: the caller may pass a staged `TxState`
+/// while `boolean_scratch` and `json_budget` are borrowed from the transaction.
+pub(super) struct SelectionCtx<'a> {
+    pub(super) generation: &'a CompiledGeneration,
+    pub(super) request: &'a RequestState<'a>,
+    pub(super) tx: &'a TxState,
+    pub(super) response: Option<&'a ResponseState>,
+    pub(super) scratch: &'a mut [Option<RegexBooleanScratch>],
+    pub(super) json_budget: Option<&'a mut InspectionBudget>,
+}
+
 pub(super) fn select_values(
-    generation: &CompiledGeneration,
-    request: &RequestState,
-    tx: &TxState,
-    response: Option<&ResponseState>,
-    scratch: &mut [Option<RegexBooleanScratch>],
+    ctx: &mut SelectionCtx<'_>,
     ctl_work: &mut usize,
     params: SelectionParams,
-    mut json_budget: Option<&mut InspectionBudget>,
     selected: &mut Vec<SelectedValue>,
     storage: SelectionStorage,
 ) -> Result<(), RuntimeError> {
+    let (generation, request, tx) = (ctx.generation, ctx.request, ctx.tx);
     let SelectionParams {
         unit_id,
         plan_id,
@@ -171,29 +178,12 @@ pub(super) fn select_values(
         let mut candidates = CandidateCursor::new(target.collection, include_json && json_count.is_none());
         match target.modifier {
             super::super::TargetModifier::None => {
-                while let Some(candidate) = candidates.next(request, tx, response, json_budget.as_deref_mut())? {
-                    if selector_matches(
-                        generation,
-                        request,
-                        tx,
-                        response,
-                        scratch,
-                        target.collection,
-                        target.selector,
-                        candidate,
-                        json_budget.as_deref_mut(),
-                    )? && !ctl_excludes_value(
-                        generation,
-                        request,
-                        tx,
-                        response,
-                        scratch,
-                        exclusions,
-                        candidate,
-                        ctl_work,
-                        work_limit,
-                        json_budget.as_deref_mut(),
-                    )? {
+                while let Some(candidate) =
+                    candidates.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())?
+                {
+                    if selector_matches(ctx, target.collection, target.selector, candidate)?
+                        && !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)?
+                    {
                         if selected.len() == limit {
                             return Err(RuntimeError::SelectedValueLimit { limit });
                         }
@@ -207,17 +197,7 @@ pub(super) fn select_values(
                 for read in 0..selected.len() {
                     let candidate = selected[read];
                     let remove = candidate.collection == target.collection
-                        && selector_matches(
-                            generation,
-                            request,
-                            tx,
-                            response,
-                            scratch,
-                            target.collection,
-                            target.selector,
-                            candidate,
-                            json_budget.as_deref_mut(),
-                        )?;
+                        && selector_matches(ctx, target.collection, target.selector, candidate)?;
                     if !remove {
                         selected[write] = candidate;
                         write += 1;
@@ -227,29 +207,12 @@ pub(super) fn select_values(
             }
             super::super::TargetModifier::Count => {
                 let mut count = json_count.unwrap_or(0);
-                while let Some(candidate) = candidates.next(request, tx, response, json_budget.as_deref_mut())? {
-                    if selector_matches(
-                        generation,
-                        request,
-                        tx,
-                        response,
-                        scratch,
-                        target.collection,
-                        target.selector,
-                        candidate,
-                        json_budget.as_deref_mut(),
-                    )? && !ctl_excludes_value(
-                        generation,
-                        request,
-                        tx,
-                        response,
-                        scratch,
-                        exclusions,
-                        candidate,
-                        ctl_work,
-                        work_limit,
-                        json_budget.as_deref_mut(),
-                    )? {
+                while let Some(candidate) =
+                    candidates.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())?
+                {
+                    if selector_matches(ctx, target.collection, target.selector, candidate)?
+                        && !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)?
+                    {
                         count = count.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
                     }
                 }
@@ -272,18 +235,12 @@ pub(super) fn select_values(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn ctl_excludes_value(
-    generation: &CompiledGeneration,
-    request: &RequestState,
-    tx: &TxState,
-    response: Option<&ResponseState>,
-    scratch: &mut [Option<RegexBooleanScratch>],
+    ctx: &mut SelectionCtx<'_>,
     exclusions: &[ActiveTargetExclusion],
     candidate: SelectedValue,
     work: &mut usize,
     limit: usize,
-    mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<bool, RuntimeError> {
     for exclusion in exclusions {
         *work = work.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
@@ -296,24 +253,14 @@ fn ctl_excludes_value(
         *work = work
             .checked_add(
                 candidate
-                    .name_bytes(request, tx, response, json_budget.as_deref_mut())?
+                    .name_bytes(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())?
                     .map_or(1, |name| name.len().saturating_add(1)),
             )
             .ok_or(RuntimeError::Arithmetic)?;
         if *work > limit {
             return Err(RuntimeError::OperatorWorkLimit { limit });
         }
-        if selector_matches(
-            generation,
-            request,
-            tx,
-            response,
-            scratch,
-            exclusion.collection,
-            exclusion.selector,
-            candidate,
-            json_budget.as_deref_mut(),
-        )? {
+        if selector_matches(ctx, exclusion.collection, exclusion.selector, candidate)? {
             return Ok(true);
         }
     }
@@ -556,23 +503,18 @@ impl CandidateCursor {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn selector_matches(
-    generation: &CompiledGeneration,
-    request: &RequestState,
-    tx: &TxState,
-    response: Option<&ResponseState>,
-    scratch: &mut [Option<RegexBooleanScratch>],
+    ctx: &mut SelectionCtx<'_>,
     collection: CollectionKind,
     selector: super::super::CompiledTargetSelector,
     candidate: SelectedValue,
-    json_budget: Option<&mut InspectionBudget>,
 ) -> Result<bool, RuntimeError> {
+    let (generation, request, tx, response) = (ctx.generation, ctx.request, ctx.tx, ctx.response);
     match selector {
         super::super::CompiledTargetSelector::None => Ok(true),
         super::super::CompiledTargetSelector::Literal(expected) => {
             let expected = generation_bytes(&generation.target_bytes, expected)?;
-            let name = candidate.name_bytes(request, tx, response, json_budget)?;
+            let name = candidate.name_bytes(request, tx, response, ctx.json_budget.as_deref_mut())?;
             let Some(name) = name else {
                 return Ok(false);
             };
@@ -621,7 +563,7 @@ fn selector_matches(
             }
         }
         super::super::CompiledTargetSelector::Regex { program, .. } => {
-            let name = candidate.name_bytes(request, tx, response, json_budget)?;
+            let name = candidate.name_bytes(request, tx, response, ctx.json_budget.as_deref_mut())?;
             let Some(name) = name else {
                 return Ok(false);
             };
@@ -629,7 +571,7 @@ fn selector_matches(
                 .boolean_regexes
                 .get(program)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            let slot = scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
+            let slot = ctx.scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
             let scratch = lazy_boolean_scratch(slot, regex);
             regex.is_match(name, scratch).map_err(map_regex_scratch_error)
         }
