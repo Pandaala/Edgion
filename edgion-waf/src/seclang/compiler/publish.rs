@@ -418,6 +418,12 @@ impl CompiledGeneration {
                 )?;
             }
         }
+        // Capture programs decide matches through their capture-free decision
+        // program; hint it last so earlier hints keep their budgets.
+        for program in &mut generation.capture_regexes {
+            let (decision, program_cap) = program.decision_hint_target(limits.regex.max_program_bytes);
+            install_optional_regex_hint(decision, program_cap, &mut work, &mut state.canonical_work)?;
+        }
         generation.compiler_owned_bytes = work.compiler_owned_bytes;
         generation.matcher_charged_bytes = work.matcher_charged_bytes;
         generation.peak_bytes = work.peak_bytes;

@@ -22,7 +22,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 - [Native injection operators use bounded detection and transaction semantics](regression-guards/native-injection-operators-use-bounded-detection.md)
 - [Marker-free backslash decoders stay borrowed](regression-guards/transform-marker-free-decoder-borrowing.md)
 - [htmlEntityDecode follows the libmodsecurity reference boundaries](regression-guards/html-entity-decode-reference-semantics.md)
-- [Boolean regex scratch builds its VM cache lazily](regression-guards/regex-boolean-scratch-lazy-vm-cache.md)
+- [Regex scratch builds its VM cache lazily; capture programs decide without capture tracking](regression-guards/regex-boolean-scratch-lazy-vm-cache.md)
 - [Chain ordinary work accumulates across members and branches](regression-guards/chain-ordinary-work-accumulates-per-unit.md)
 - [Selected WAF control actions are request scoped](regression-guards/request-scoped-control-actions.md)
 - [Named WAF profiles publish one validated generation](regression-guards/named-profile-selection-and-bundle-publication.md)

@@ -18,6 +18,13 @@ impl CompiledMatcher {
     }
 }
 
+impl RegexCaptureScratch {
+    /// (VM cache built, capture slots built).
+    pub(crate) fn test_built(&self) -> (bool, bool) {
+        (self.cache.is_some(), self.captures.is_some())
+    }
+}
+
 impl CompiledRegexProgram {
     pub(crate) fn test_simple_count(&self) -> usize {
         usize::from(matches!(self.execution_hint, RegexExecutionHint::Simple(_)))
@@ -1634,8 +1641,18 @@ fn scratch_upper_bounds_first_use_epsilon_growth_for_boolean_and_capture_program
         .overall()
         .is_none());
     let capture_actual = size_of::<RegexCaptureScratch>()
-        + capture_scratch.cache.memory_usage()
-        + capture_scratch.captures.slots().len() * size_of::<usize>();
+        + capture_scratch
+            .cache
+            .as_ref()
+            .expect("capture search ran")
+            .memory_usage()
+        + capture_scratch
+            .captures
+            .as_ref()
+            .expect("capture search ran")
+            .slots()
+            .len()
+            * size_of::<usize>();
     assert!(capture_actual <= capture_required);
 }
 
@@ -1746,7 +1763,7 @@ fn matcher_reference_scan_after_accelerated_builds_cache() {
 fn capture_metadata_limits_accept_exact_and_reject_first_excess() {
     let source = r"(?P<one>a)(?P<two>b)";
     let baseline = CompiledCaptureRegexProgram::compile_one(source, RegexProgramLimits::default()).unwrap();
-    let exact_program = baseline.core.program_peak_bound;
+    let exact_program = baseline.conservative_program_memory_bound();
     let exact_scratch = baseline.required_scratch_bytes();
     CompiledCaptureRegexProgram::compile_one(
         source,
@@ -2007,4 +2024,195 @@ fn nested_counted_repetition_is_rejected_before_the_nfa_build() {
 fn single_level_counted_repetition_within_the_limit_still_compiles() {
     CompiledRegexProgram::compile_one("(?:ab){1,1000}x[a-z]{0,64}", RegexProgramLimits::default()).unwrap();
     CompiledRegexProgram::compile_one("(?:a{10}){10}", RegexProgramLimits::default()).unwrap();
+}
+
+fn eager_capture_groups(program: &CompiledCaptureRegexProgram, haystack: &[u8]) -> Vec<Option<Range<usize>>> {
+    let mut cache = program.core.vm.create_cache();
+    let mut captures = program.core.vm.create_captures();
+    program.core.vm.captures(&mut cache, haystack, &mut captures);
+    (0..program.capture_len())
+        .map(|index| captures.get_group(index).map(|span| span.start..span.end))
+        .collect()
+}
+
+fn lazy_capture_groups(
+    program: &CompiledCaptureRegexProgram,
+    haystack: &[u8],
+    scratch: &mut RegexCaptureScratch,
+) -> Vec<Option<Range<usize>>> {
+    let results = program.captures(haystack, scratch).unwrap();
+    (0..program.capture_len()).map(|index| results.group(index)).collect()
+}
+
+#[test]
+fn capture_decision_vm_is_capture_free_and_never_larger() {
+    let program =
+        CompiledCaptureRegexProgram::compile_one(r"(?P<word>a(b)?)|(c)(d(e))", RegexProgramLimits::default()).unwrap();
+    let decision = program.decision.core.vm.get_nfa();
+    assert_eq!(decision.group_info().slot_len(), 0, "decision NFA tracks no slots");
+    assert!(decision.states().len() < program.core.vm.get_nfa().states().len());
+    assert!(Arc::ptr_eq(&program.decision.core.token, &program.core.token));
+    assert_eq!(
+        program.memory_usage(),
+        program.engine_memory_usage() + program.capture_metadata_memory_usage()
+    );
+    assert!(program.engine_memory_usage() > program.core.retained_bytes);
+}
+
+#[test]
+fn capture_guard_miss_and_exact_hint_skip_the_vm() {
+    let mut guarded = CompiledCaptureRegexProgram::compile_one(r"alpha([0-9])", RegexProgramLimits::default()).unwrap();
+    assert!(guarded.decision.add_literal_guard(guard_budget()).unwrap().owned > 0);
+    let mut scratch = guarded.create_scratch();
+    assert_eq!(scratch.test_built(), (false, false));
+    let miss = vec![b'z'; 1024];
+    assert!(!guarded.decision.may_match(&miss));
+    assert!(!guarded.is_match(&miss, &mut scratch).unwrap());
+    assert_eq!(
+        scratch.test_built(),
+        (false, false),
+        "guard miss must not build the VM cache"
+    );
+    let mut hit = miss.clone();
+    hit.extend_from_slice(b"alpha7");
+    assert!(guarded.is_match(&hit, &mut scratch).unwrap());
+    assert_eq!(
+        scratch.test_built(),
+        (true, false),
+        "guard hit confirms through the decision VM"
+    );
+    assert_eq!(
+        lazy_capture_groups(&guarded, &hit, &mut scratch),
+        [Some(1024..1030), Some(1029..1030)]
+    );
+
+    let mut exact = CompiledCaptureRegexProgram::compile_one(r"^(abc)$", RegexProgramLimits::default()).unwrap();
+    assert!(exact.decision.lower_simple(guard_budget()).unwrap().1);
+    let mut scratch = exact.create_scratch();
+    assert!(exact.is_match(b"abc", &mut scratch).unwrap());
+    assert!(!exact.is_match(b"xabc", &mut scratch).unwrap());
+    assert!(!exact.is_match(b"", &mut scratch).unwrap());
+    assert_eq!(
+        scratch.test_built(),
+        (false, false),
+        "exact hint must not build the VM cache"
+    );
+    assert_eq!(
+        lazy_capture_groups(&exact, b"abc", &mut scratch),
+        [Some(0..3), Some(0..3)]
+    );
+    assert_eq!(scratch.test_built(), (true, true));
+}
+
+#[test]
+fn capture_decisions_without_capture_search_never_build_capture_slots() {
+    let program =
+        CompiledCaptureRegexProgram::compile_one(r"(?:(a?)|(b?)){4}z", RegexProgramLimits::default()).unwrap();
+    let mut scratch = program.create_scratch();
+    for haystack in [b"abab".as_slice(), b"abz", b"", b"zzzz"] {
+        let mut eager = program.core.vm.create_cache();
+        assert_eq!(
+            program.is_match(haystack, &mut scratch).unwrap(),
+            program.core.vm.is_match(&mut eager, haystack)
+        );
+    }
+    assert_eq!(
+        scratch.test_built(),
+        (true, false),
+        "decision-only use builds the decision cache but never the capture slots"
+    );
+    let foreign = CompiledCaptureRegexProgram::compile_one(r"(a)", RegexProgramLimits::default()).unwrap();
+    let mut foreign_scratch = foreign.create_scratch();
+    assert_eq!(
+        program.is_match(b"z", &mut foreign_scratch),
+        Err(RegexScratchError::ScratchShape)
+    );
+    assert!(program.captures(b"z", &mut foreign_scratch).is_err());
+    assert_eq!(
+        foreign_scratch.test_built(),
+        (false, false),
+        "owner check precedes cache creation"
+    );
+}
+
+#[test]
+fn capture_groups_and_decisions_equal_eager_reference_across_mode_switches() {
+    let fixtures: [(&str, &[&[u8]]); 6] = [
+        (
+            r"(a)(b)(c)(d)(e)(f)(g)(h)(i)",
+            &[b"abcdefghi", b"xxabcdefghiyy", b"abcdefgh"],
+        ),
+        (r"(?P<word>a(b)?)|(c)(d(e))", &[b"ab", b"a", b"cde", b"xcdex", b"q"]),
+        (r"(?i)(select|union)\s+(all)?", &[b"SELECT ", b"union all", b"selec"]),
+        (r"^(\w+)=(.*)$", &[b"key=value", b"=", b"key="]),
+        (r"(?-u:(\xFF+))", &[b"\xff\xff", b"abc"]),
+        (r"()", &[b"", b"\xff"]),
+    ];
+    for (source, haystacks) in fixtures {
+        let program = CompiledCaptureRegexProgram::compile_one(source, RegexProgramLimits::default()).unwrap();
+        let mut scratch = program.create_scratch();
+        // Decide, capture, then decide again on the capture-sized cache.
+        for round in 0..2 {
+            for &short in haystacks {
+                for padding in [0_usize, 1024] {
+                    let mut input = vec![b'q'; padding];
+                    input.extend_from_slice(short);
+                    let mut eager = program.core.vm.create_cache();
+                    let expected = program.core.vm.is_match(&mut eager, &input);
+                    assert_eq!(
+                        program.is_match(&input, &mut scratch).unwrap(),
+                        expected,
+                        "source={source} padding={padding} round={round}"
+                    );
+                    if expected {
+                        assert_eq!(
+                            lazy_capture_groups(&program, &input, &mut scratch),
+                            eager_capture_groups(&program, &input),
+                            "source={source} padding={padding} round={round}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let ten = CompiledCaptureRegexProgram::compile_one(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)", RegexProgramLimits::default())
+        .unwrap();
+    let mut scratch = ten.create_scratch();
+    let groups = lazy_capture_groups(&ten, b"abcdefghi", &mut scratch);
+    assert_eq!(groups.len(), 10, "TX.0..TX.9");
+    assert_eq!(groups[0], Some(0..9));
+    for (index, group) in groups.iter().enumerate().skip(1) {
+        assert_eq!(*group, Some(index - 1..index));
+    }
+}
+
+#[test]
+fn capture_scratch_admission_is_not_larger_than_the_eager_layout() {
+    // The lazy wrapper fits the old eager layout (`Option` uses each member's
+    // niche), so the transaction precharge did not grow.
+    assert!(
+        size_of::<RegexCaptureScratch>()
+            <= size_of::<Arc<CaptureShapeToken>>() + size_of::<PikeCache>() + size_of::<Captures>()
+    );
+    for source in [r"(a)", r"(?:(a?)|(b?)|(c?)|(d?)){8}z", r"(?P<word>a(b)?)|(c)(d(e))"] {
+        let program = CompiledCaptureRegexProgram::compile_one(source, RegexProgramLimits::default()).unwrap();
+        let eager_cache = program.core.vm.create_cache();
+        let eager_slots = program.core.vm.create_captures().slots().len();
+        let states = program.core.vm.get_nfa().states().len();
+        let eager_layout = size_of::<Arc<CaptureShapeToken>>()
+            + size_of::<PikeCache>()
+            + size_of::<Captures>()
+            + eager_cache.memory_usage()
+            + eager_slots * size_of::<usize>()
+            + states * 4 * FOLLOW_EPSILON_UPPER_BYTES;
+        assert!(program.required_scratch_bytes() <= eager_layout, "source={source}");
+        // A decision-sized cache regrows to the capture VM inside its capacity.
+        let mut scratch = program.create_scratch();
+        let _ = program.is_match(b"zzzz", &mut scratch).unwrap();
+        let _ = program.captures(b"zzzz", &mut scratch).unwrap();
+        let actual = size_of::<RegexCaptureScratch>()
+            + scratch.cache.as_ref().unwrap().memory_usage()
+            + scratch.captures.as_ref().unwrap().slots().len() * size_of::<usize>();
+        assert!(actual <= program.required_scratch_bytes(), "source={source}");
+    }
 }

@@ -5180,6 +5180,29 @@ fn matcher_capacity_accounting_checks_slot_multiplication_and_total_overflow() {
 }
 
 #[test]
+fn capture_programs_build_capture_slots_only_when_captures_are_staged() {
+    let g = generation(concat!(
+        "SecRule REQUEST_URI \"@rx (?P<word>hit)\" \"id:911,phase:1,pass,capture\"\n",
+        "SecRule REQUEST_URI \"!@rx (m[a-z]ss)\" \"id:912,phase:1,pass,capture\"\n",
+        "SecRule REQUEST_URI \"@rx (h)(i)(t)\" \"id:913,phase:1,pass\"\n",
+    ));
+    // Without a `capture` action the member compiles to a boolean program.
+    assert_eq!(g.capture_regexes.len(), 2);
+    let mut tx = Transaction::new(&g, request(&[], b"/hit"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert_eq!(tx.tx_value(b"0"), Some(b"hit".as_slice()));
+    assert_eq!(tx.tx_value(b"1"), Some(b"hit".as_slice()));
+    assert_eq!(tx.tx_value(b"word"), Some(b"hit".as_slice()));
+    let built: Vec<_> = tx
+        .capture_scratch
+        .iter()
+        .map(|slot| slot.as_ref().map(RegexCaptureScratch::test_built))
+        .collect();
+    // 911 matched and staged captures; negated 912 ran the decision VM only.
+    assert_eq!(built, [Some((true, true)), Some((true, false))]);
+}
+
+#[test]
 fn lazy_program_slots_initialize_once_and_preserve_generation_wide_admission() {
     let g = generation(concat!(
         "SecRule REQUEST_URI \"@pm hit one\" \"id:901,phase:1,pass\"\n",

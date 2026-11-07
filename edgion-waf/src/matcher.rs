@@ -930,6 +930,36 @@ impl RegexCore {
         unicode: bool,
         match_kind: MatchKind,
     ) -> Result<Self, RegexProgramError> {
+        Self::compile_many_with_decision(
+            sources,
+            limits,
+            captures,
+            peak_budget,
+            case_insensitive,
+            unicode,
+            match_kind,
+            false,
+        )
+        .map(|(core, _)| core)
+    }
+
+    /// Compiles the program and, when `decision` is set, a capture-free
+    /// decision VM from the same HIR. The decision VM never has more NFA
+    /// states than the program VM, so one cache sized for the program VM can
+    /// be reset to serve either; its owner token is shared.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_many_with_decision(
+        sources: &[&str],
+        limits: RegexProgramLimits,
+        captures: WhichCaptures,
+        peak_budget: usize,
+        case_insensitive: bool,
+        unicode: bool,
+        match_kind: MatchKind,
+        decision: bool,
+    ) -> Result<(Self, Option<Self>), RegexProgramError> {
+        // The decision NFA stays alive next to the program NFA.
+        let decision_peak = if decision { limits.max_nfa_bytes } else { 0 };
         let mut bytes = 0_usize;
         for source in sources {
             if source.len() > limits.max_source_bytes {
@@ -1012,6 +1042,8 @@ impl RegexCore {
             // Freeze the input-shaped translation bound before invoking the
             // infallibly allocating upstream translator.
             if regex_peak_for_projection(sources.len(), bytes, hir_peak_ranges, normalization_peak, limits)?
+                .checked_add(decision_peak)
+                .ok_or(RegexProgramError::Arithmetic)?
                 > peak_budget
             {
                 return Err(RegexProgramError::SyntaxPeakLimit);
@@ -1068,27 +1100,64 @@ impl RegexCore {
         if hir_total.ranges > live_class_ranges {
             return Err(RegexProgramError::ProjectionInvariant);
         }
-        let nfa = NFA::compiler()
-            .configure(
-                thompson::Config::new()
-                    .utf8(false)
-                    .which_captures(captures)
-                    .nfa_size_limit(Some(limits.max_nfa_bytes)),
-            )
-            .build_many_from_hir(&hirs)
-            .map_err(|error| {
-                if error.size_limit().is_some() {
-                    RegexProgramError::NfaByteLimit {
-                        limit: limits.max_nfa_bytes,
+        let build_vm = |captures: WhichCaptures| -> Result<PikeVM, RegexProgramError> {
+            let nfa = NFA::compiler()
+                .configure(
+                    thompson::Config::new()
+                        .utf8(false)
+                        .which_captures(captures)
+                        .nfa_size_limit(Some(limits.max_nfa_bytes)),
+                )
+                .build_many_from_hir(&hirs)
+                .map_err(|error| {
+                    if error.size_limit().is_some() {
+                        RegexProgramError::NfaByteLimit {
+                            limit: limits.max_nfa_bytes,
+                        }
+                    } else {
+                        RegexProgramError::Engine
                     }
-                } else {
-                    RegexProgramError::Engine
-                }
-            })?;
-        let vm = PikeVM::builder()
-            .configure(PikeVM::config().match_kind(match_kind))
-            .build_from_nfa(nfa)
-            .map_err(|_| RegexProgramError::Engine)?;
+                })?;
+            PikeVM::builder()
+                .configure(PikeVM::config().match_kind(match_kind))
+                .build_from_nfa(nfa)
+                .map_err(|_| RegexProgramError::Engine)
+        };
+        let vm = build_vm(captures)?;
+        let decision_vm = if decision {
+            let decision_vm = build_vm(WhichCaptures::None)?;
+            if decision_vm.get_nfa().states().len() > vm.get_nfa().states().len()
+                || decision_vm.pattern_len() != vm.pattern_len()
+            {
+                return Err(RegexProgramError::ProjectionInvariant);
+            }
+            Some(decision_vm)
+        } else {
+            None
+        };
+        let decision_retained = decision_vm
+            .as_ref()
+            .map_or(Some(0), |decision| {
+                decision
+                    .get_nfa()
+                    .memory_usage()
+                    .checked_add(4 * size_of::<AtomicUsize>())
+            })
+            .ok_or(RegexProgramError::Arithmetic)?;
+        let decision_bound = if decision {
+            limits
+                .max_nfa_bytes
+                .checked_add(6 * size_of::<AtomicUsize>())
+                .and_then(|value| {
+                    sources
+                        .len()
+                        .checked_mul(size_of::<RegexPatternNameProjection>())
+                        .and_then(|term| value.checked_add(term))
+                })
+                .ok_or(RegexProgramError::Arithmetic)?
+        } else {
+            0
+        };
         let retained_bytes = vm
             .get_nfa()
             .memory_usage()
@@ -1106,9 +1175,12 @@ impl RegexCore {
             })
             .and_then(|value| value.checked_add(size_of::<CaptureShapeToken>()))
             .ok_or(RegexProgramError::Arithmetic)?;
-        if program_peak_bound > limits.max_program_bytes {
+        let combined_bound = program_peak_bound
+            .checked_add(decision_bound)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        if combined_bound > limits.max_program_bytes {
             return Err(RegexProgramError::ProgramByteLimit {
-                actual: program_peak_bound,
+                actual: combined_bound,
                 limit: limits.max_program_bytes,
             });
         }
@@ -1142,15 +1214,29 @@ impl RegexCore {
                 limit: limits.max_scratch_bytes,
             });
         }
-        let peak = regex_peak_for_projection(sources.len(), bytes, hir_peak_ranges, normalization_peak, limits)?;
-        Ok(Self {
+        let peak = regex_peak_for_projection(sources.len(), bytes, hir_peak_ranges, normalization_peak, limits)?
+            .checked_add(decision_peak)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        let token = Arc::new(CaptureShapeToken { discriminator: 1 });
+        let decision = decision_vm.map(|vm| Self {
             vm,
-            token: Arc::new(CaptureShapeToken { discriminator: 1 }),
-            retained_bytes,
-            program_peak_bound,
+            token: Arc::clone(&token),
+            retained_bytes: decision_retained,
+            program_peak_bound: decision_bound,
             peak,
             scratch_upper,
-        })
+        });
+        Ok((
+            Self {
+                vm,
+                token,
+                retained_bytes,
+                program_peak_bound,
+                peak,
+                scratch_upper,
+            },
+            decision,
+        ))
     }
 }
 
@@ -1572,11 +1658,17 @@ impl RegexBooleanScratch {
 }
 
 /// Caller-owned reusable capture state tied to one exact program instance.
+///
+/// Both members are built lazily. The single VM cache is always created from
+/// the capture VM, so its capacity is the admitted envelope, and is reset to
+/// the smaller capture-free decision VM until the first capture search. Once
+/// `captures` exists the cache stays sized for the capture VM, which then also
+/// answers later decisions; no transition reallocates.
 #[derive(Debug)]
 pub struct RegexCaptureScratch {
     token: Arc<CaptureShapeToken>,
-    cache: PikeCache,
-    captures: Captures,
+    cache: Option<PikeCache>,
+    captures: Option<Captures>,
 }
 
 /// Borrowed captured byte ranges. Unmatched optional groups return `None`.
@@ -1611,8 +1703,13 @@ impl RegexCaptureResults<'_, '_, '_> {
 #[derive(Debug)]
 pub struct CompiledCaptureRegexProgram {
     core: RegexCore,
+    /// Capture-free program over the same HIR that decides matches with the
+    /// boolean owner/exact/guard/VM order. It shares `core`'s owner token and
+    /// runs in the capture scratch, so it owns no scratch of its own.
+    decision: CompiledRegexProgram,
     names: Vec<Option<String>>,
     metadata_bytes: usize,
+    /// Excludes `decision`, whose size grows when a hint is installed.
     retained_bytes: usize,
 }
 
@@ -1643,7 +1740,7 @@ impl CompiledCaptureRegexProgram {
         peak_budget: usize,
         unicode: bool,
     ) -> Result<Self, RegexProgramError> {
-        let mut core = RegexCore::compile_many(
+        let (mut core, decision) = RegexCore::compile_many_with_decision(
             &[source],
             limits,
             WhichCaptures::All,
@@ -1651,7 +1748,12 @@ impl CompiledCaptureRegexProgram {
             false,
             unicode,
             MatchKind::LeftmostFirst,
+            true,
         )?;
+        let decision = CompiledRegexProgram {
+            core: decision.ok_or(RegexProgramError::ProjectionInvariant)?,
+            execution_hint: RegexExecutionHint::None,
+        };
         let group_info = core.vm.get_nfa().group_info();
         let group_count = group_info.group_len(regex_automata::PatternID::ZERO);
         if group_count > limits.max_capture_slots {
@@ -1736,16 +1838,22 @@ impl CompiledCaptureRegexProgram {
             .checked_add(auxiliary_peak)
             .and_then(|value| value.checked_add(metadata_bytes))
             .ok_or(RegexProgramError::Arithmetic)?;
-        if physical_bound > limits.max_program_bytes {
+        let combined_bound = physical_bound
+            .checked_add(decision.conservative_program_memory_bound())
+            .ok_or(RegexProgramError::Arithmetic)?;
+        if combined_bound > limits.max_program_bytes {
             return Err(RegexProgramError::ProgramByteLimit {
-                actual: physical_bound,
+                actual: combined_bound,
                 limit: limits.max_program_bytes,
             });
         }
         core.program_peak_bound = core.program_peak_bound.max(physical_bound);
-        let actual = core
+        let own = core
             .retained_bytes
             .checked_add(metadata_bytes)
+            .ok_or(RegexProgramError::Arithmetic)?;
+        let actual = own
+            .checked_add(decision.memory_usage())
             .ok_or(RegexProgramError::Arithmetic)?;
         if actual > limits.max_program_bytes {
             return Err(RegexProgramError::ProgramByteLimit {
@@ -1755,17 +1863,46 @@ impl CompiledCaptureRegexProgram {
         }
         Ok(Self {
             core,
+            decision,
             names,
             metadata_bytes,
-            retained_bytes: actual,
+            retained_bytes: own,
         })
     }
 
+    /// The decision program and the byte cap left for its optional hint once
+    /// the rest of this program is counted.
+    pub(crate) fn decision_hint_target(&mut self, max_program_bytes: usize) -> (&mut CompiledRegexProgram, usize) {
+        let own = self.retained_bytes.max(self.core.program_peak_bound);
+        (&mut self.decision, max_program_bytes.saturating_sub(own))
+    }
+
+    /// Decides a match without capture tracking: owner token, exact hint,
+    /// literal guard, then the capture-free decision VM. After a capture
+    /// search the shared cache is sized for the capture VM, which answers
+    /// instead (identical result, no cache reset).
     pub fn is_match(&self, haystack: &[u8], scratch: &mut RegexCaptureScratch) -> Result<bool, RegexScratchError> {
         if !Arc::ptr_eq(&scratch.token, &self.core.token) {
             return Err(RegexScratchError::ScratchShape);
         }
-        Ok(self.core.vm.is_match(&mut scratch.cache, haystack))
+        if let Some(exact) = self.decision.exact_match(haystack) {
+            return Ok(exact);
+        }
+        if !self.decision.may_match(haystack) {
+            return Ok(false);
+        }
+        let decision_vm = &self.decision.core.vm;
+        Ok(match (&mut scratch.cache, scratch.captures.is_some()) {
+            (Some(cache), true) => self.core.vm.is_match(cache, haystack),
+            (Some(cache), false) => decision_vm.is_match(cache, haystack),
+            (cache @ None, _) => {
+                // `captures` exists only together with a built cache.
+                let mut built = self.core.vm.create_cache();
+                built.reset(decision_vm);
+                debug_assert!(scratch.captures.is_none());
+                decision_vm.is_match(cache.insert(built), haystack)
+            }
+        })
     }
 
     pub fn capture_len(&self) -> usize {
@@ -1776,14 +1913,15 @@ impl CompiledCaptureRegexProgram {
         self.names.get(index).and_then(Option::as_deref)
     }
 
-    /// Creates admitted runtime scratch. Upstream allocation is infallible;
-    /// process OOM may abort here or during the first search.
+    /// Creates admitted runtime scratch without engine allocations; the VM
+    /// cache and capture slots are built on first use. Upstream allocation is
+    /// infallible; process OOM may abort during the first search.
     pub fn create_scratch(&self) -> RegexCaptureScratch {
         debug_assert_eq!(self.core.token.discriminator, 1);
         RegexCaptureScratch {
             token: Arc::clone(&self.core.token),
-            cache: self.core.vm.create_cache(),
-            captures: self.core.vm.create_captures(),
+            cache: None,
+            captures: None,
         }
     }
 
@@ -1795,18 +1933,27 @@ impl CompiledCaptureRegexProgram {
         if !Arc::ptr_eq(&scratch.token, &self.core.token) {
             return Err(RegexScratchError::ScratchShape);
         }
-        self.core
-            .vm
-            .captures(&mut scratch.cache, haystack, &mut scratch.captures);
+        let RegexCaptureScratch { cache, captures, .. } = scratch;
+        let cache = match (cache, captures.is_some()) {
+            // A decision-sized cache regrows inside the capacity it was built with.
+            (Some(cache), false) => {
+                cache.reset(&self.core.vm);
+                cache
+            }
+            (Some(cache), true) => cache,
+            (cache @ None, _) => cache.insert(self.core.vm.create_cache()),
+        };
+        let captures = captures.get_or_insert_with(|| self.core.vm.create_captures());
+        self.core.vm.captures(cache, haystack, captures);
         Ok(RegexCaptureResults {
             program: self,
-            captures: &scratch.captures,
+            captures,
             _haystack: PhantomData,
         })
     }
 
     pub fn engine_memory_usage(&self) -> usize {
-        self.core.retained_bytes
+        self.core.retained_bytes.saturating_add(self.decision.memory_usage())
     }
 
     pub const fn capture_metadata_memory_usage(&self) -> usize {
@@ -1814,11 +1961,13 @@ impl CompiledCaptureRegexProgram {
     }
 
     pub fn memory_usage(&self) -> usize {
-        self.retained_bytes
+        self.retained_bytes.saturating_add(self.decision.memory_usage())
     }
 
     pub const fn conservative_program_memory_bound(&self) -> usize {
-        self.core.program_peak_bound
+        self.core
+            .program_peak_bound
+            .saturating_add(self.decision.conservative_program_memory_bound())
     }
 
     pub const fn required_scratch_bytes(&self) -> usize {
