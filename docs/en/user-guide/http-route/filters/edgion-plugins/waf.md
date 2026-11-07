@@ -545,8 +545,9 @@ and the named-demand index instead consume the retained-byte/work budgets.
 Physical inspection limits are independent of logical WAF and Gateway body
 limits. A physical failure rejects in DetectionOnly too and cannot be retried
 through another parser. Malformed JSON retains the existing DetectionOnly
-metadata behavior. Duplicate keys replace earlier subtrees; malformed syntax and
-physical work already consumed cannot be erased by later duplicate replacement.
+metadata behavior. Every occurrence of a duplicate key is published as its own
+`ARGS`/`ARGS_NAMES` value in document order and counts toward `&ARGS` and the
+entry limits; a named macro such as `%{ARGS.json.key}` reads the first occurrence.
 Full configurations with unsupported broad dynamic JSON value dependencies are
 rejected during validation, including configurations using default JSON limits.
 Use finite named dependencies where later transaction values are required.
