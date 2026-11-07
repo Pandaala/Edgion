@@ -2334,7 +2334,11 @@ fn same_runtimes(prepared: &Option<Arc<[Arc<PluginRuntime>]>>, scope: &PluginSco
     let prepared = prepared.as_deref().expect("prepared slice is present");
     assert_eq!(prepared.len(), keys.len());
     for (runtime, key) in prepared.iter().zip(keys) {
-        assert!(Arc::ptr_eq(runtime, &scope.http(key).unwrap().plugin_runtime), "{key}");
+        match scope.http(key) {
+            Some(compiled) => assert!(Arc::ptr_eq(runtime, &compiled.plugin_runtime), "{key}"),
+            // gw-core-02: a missing target fails closed instead of being dropped.
+            None => assert!(runtime.rejects_invalid_config(), "{key} must fail closed"),
+        }
     }
 }
 
@@ -2351,7 +2355,7 @@ fn prepared_global_slice_matches_reference_order_and_tracks_publication() {
         ("apps/plugins".into(), plugin("dsl", true)),
         ("default/plugins".into(), default_source(false, true, "default")),
     ]));
-    // Missing targets are dropped (current fail-open behavior tracked by gw-core-02);
+    // Missing targets stay in place as fail-closed placeholders (gw-core-02);
     // a reference without a namespace resolves in `default`.
     set_global_refs(
         &publisher,
@@ -2364,7 +2368,13 @@ fn prepared_global_slice_matches_reference_order_and_tracks_publication() {
         ])),
     );
     let first = scope(&publisher, "apps/a");
-    let first_order = ["apps/plugins", "apps/plugins", "default/plugins"];
+    let first_order = [
+        "apps/other",
+        "default/missing",
+        "apps/plugins",
+        "apps/plugins",
+        "default/plugins",
+    ];
     same_runtimes(&first.resolved_globals, &first, &first_order);
 
     // An unchanged republish reuses the scope and therefore the same slice.
@@ -2383,12 +2393,20 @@ fn prepared_global_slice_matches_reference_order_and_tracks_publication() {
     same_runtimes(
         &rebuilt.resolved_globals,
         &rebuilt,
-        &["apps/other", "apps/plugins", "apps/plugins", "default/plugins"],
+        &[
+            "apps/other",
+            "default/missing",
+            "apps/plugins",
+            "apps/plugins",
+            "default/plugins",
+        ],
     );
     same_runtimes(&first.resolved_globals, &first, &first_order);
 
+    // A list whose only target is missing still denies rather than disappearing.
     set_global_refs(&publisher, Some(json!([{"name":"missing"}])));
-    assert!(scope(&publisher, "apps/a").resolved_globals.is_none());
+    let only_missing = scope(&publisher, "apps/a");
+    same_runtimes(&only_missing.resolved_globals, &only_missing, &["default/missing"]);
     set_global_refs(&publisher, None);
     assert!(scope(&publisher, "apps/a").resolved_globals.is_none());
 }
@@ -2407,11 +2425,11 @@ fn prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner() {
         .to_vec();
     publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
     let first = publisher.snapshot().gateway("apps/a").unwrap();
-    // Missing targets are dropped (current fail-open behavior tracked by gw-core-02).
+    // Missing targets stay in place as fail-closed placeholders (gw-core-02).
     same_runtimes(
         &first.resolved_http,
         &first.scope,
-        &["apps/other", "apps/plugins", "apps/plugins"],
+        &["apps/other", "apps/missing", "apps/plugins", "apps/plugins"],
     );
 
     publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
@@ -2429,7 +2447,7 @@ fn prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner() {
     same_runtimes(
         &reordered.resolved_http,
         &reordered.scope,
-        &["apps/plugins", "apps/plugins", "apps/other"],
+        &["apps/plugins", "apps/missing", "apps/plugins", "apps/other"],
     );
 
     input.http_keys = vec!["apps/plugins".into()];
@@ -2440,7 +2458,7 @@ fn prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner() {
     input.http_keys = vec!["apps/missing".into()];
     publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
     let missing = publisher.snapshot().gateway("apps/a").unwrap();
-    assert!(missing.resolved_http.is_none());
+    same_runtimes(&missing.resolved_http, &missing.scope, &["apps/missing"]);
 
     // Same keys, but the missing target arrives: the class scope is rebuilt, so
     // the Gateway owner and its slice are rebuilt too.
@@ -2452,6 +2470,16 @@ fn prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner() {
     let arrived = publisher.snapshot().gateway("apps/a").unwrap();
     assert!(!Arc::ptr_eq(&missing, &arrived));
     same_runtimes(&arrived.resolved_http, &arrived.scope, &["apps/missing"]);
+    assert!(!arrived.resolved_http.as_deref().unwrap()[0].rejects_invalid_config());
+
+    // The target is deleted again: the rebuilt slice must deny, not keep the old runtime.
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("apps/other".into(), named_plugin("other")),
+    ]));
+    let removed = publisher.snapshot().gateway("apps/a").unwrap();
+    assert!(!Arc::ptr_eq(&arrived, &removed));
+    same_runtimes(&removed.resolved_http, &removed.scope, &["apps/missing"]);
 
     input.http_keys.clear();
     publisher.replace_gateways(HashMap::from([("apps/a".into(), input.clone())]));
@@ -2482,6 +2510,6 @@ fn prepared_gateway_slice_keeps_ambiguous_placeholder() {
     publisher.replace_gateways(HashMap::from([("apps/a".into(), input)]));
     let owner = publisher.snapshot().gateway("apps/a").unwrap();
     let prepared = owner.resolved_http.as_deref().expect("collision is kept");
-    assert_eq!(prepared.len(), 1, "ordinary missing drops but collision does not");
-    assert!(prepared[0].rejects_invalid_config());
+    assert_eq!(prepared.len(), 2, "missing and colliding targets are both kept");
+    assert!(prepared.iter().all(|runtime| runtime.rejects_invalid_config()));
 }

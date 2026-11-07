@@ -165,8 +165,9 @@ pub(crate) struct GatewayScope {
     pub gateway_key: String,
     pub scope: Arc<PluginScope>,
     pub http_keys: Vec<String>,
-    /// `http_keys` resolved against `scope` once at publication; `None` when no
-    /// key resolves (no keys, all targets missing, or an unavailable scope).
+    /// `http_keys` resolved against `scope` once at publication; `None` when
+    /// there are no keys or the scope is unavailable; a missing target
+    /// is kept as a fail-closed placeholder.
     pub resolved_http: Option<Arc<[Arc<PluginRuntime>]>>,
 }
 
@@ -180,8 +181,9 @@ pub(crate) struct PluginScope {
     pub available: bool,
     pub config: Option<Arc<EdgionGatewayConfig>>,
     pub global_keys: Vec<String>,
-    /// `global_keys` resolved against `http` once at publication; `None` when no
-    /// key resolves (no keys, all targets missing, or an unavailable scope).
+    /// `global_keys` resolved against `http` once at publication; `None` when
+    /// there are no keys or the scope is unavailable; a missing target
+    /// is kept as a fail-closed placeholder.
     pub resolved_globals: Option<Arc<[Arc<PluginRuntime>]>>,
     pub has_access_log_extern: bool,
     pub(super) http: HashMap<String, Arc<CompiledPlugins>>,
@@ -196,11 +198,24 @@ impl PluginScope {
     }
 
     /// Cold-path resolution of ordered plugin keys for one publication. Keeps
-    /// order, duplicates and ambiguous-reference runtimes; drops keys with no
-    /// target. Dangling keys are not logged by design; see
+    /// order, duplicates and ambiguous-reference runtimes; a key with no target
+    /// becomes a fail-closed missing-reference runtime (500), never a silent
+    /// drop. An unavailable scope prepares nothing because requests answer 503
+    /// before these slices are installed. Dangling keys are not logged by design; see
     /// `skills/04-review/observability/mandatory-design/global-plugins-resolve-no-tracing.md`.
     pub(super) fn resolve_http_runtimes(&self, keys: &[String]) -> Option<Arc<[Arc<PluginRuntime>]>> {
-        let runtimes: Vec<_> = keys.iter().filter_map(|key| self.http_runtime(key)).collect();
+        if !self.available {
+            return None;
+        }
+        let mut missing: Option<Arc<PluginRuntime>> = None;
+        let runtimes: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                self.http_runtime(key).unwrap_or_else(|| {
+                    Arc::clone(missing.get_or_insert_with(|| Arc::new(PluginRuntime::missing_reference())))
+                })
+            })
+            .collect();
         (!runtimes.is_empty()).then(|| Arc::from(runtimes))
     }
 

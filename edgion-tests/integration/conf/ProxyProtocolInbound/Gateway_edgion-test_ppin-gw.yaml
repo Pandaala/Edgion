@@ -18,14 +18,14 @@ spec:
     # Behind the L4 load balancer: every connection must start with a PROXY header.
     - name: pp
       protocol: HTTP
-      port: 58430
+      port: 28430
       allowedRoutes:
         namespaces:
           from: All
     # Control listener: unselected by the annotation, so PROXY protocol is disabled.
     - name: plain
       protocol: HTTP
-      port: 58431
+      port: 28431
       allowedRoutes:
         namespaces:
           from: All

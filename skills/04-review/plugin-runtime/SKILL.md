@@ -43,7 +43,7 @@ before applying a decision to current code.
 
 - [Gateway API request-transform validation and preparation](regression-guards/gateway-api-request-transform-validation-and-preparation.md)
 
-- [GatewayClass-scoped policy and runtime publication](regression-guards/scoped-policy-runtime-publication.md)
+- [GatewayClass-scoped policy and runtime publication; missing Gateway/EGC-global plugin refs fail closed](regression-guards/scoped-policy-runtime-publication.md)
 
 - [AiGuard ordering errors fail closed at publication](regression-guards/ai-guard-ordering-publication.md)
 

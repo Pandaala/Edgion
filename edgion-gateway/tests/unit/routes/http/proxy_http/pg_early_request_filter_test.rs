@@ -405,7 +405,7 @@ fn configure_owners(
 }
 
 #[tokio::test]
-async fn early_global_generation_and_missing_reference_stay_pinned() {
+async fn early_global_generation_and_missing_reference_stay_pinned_and_deny() {
     let store = crate::plugins::http::PluginStore::new();
     store.replace_all(std::collections::HashMap::from([(
         "early-id-test/present".into(),
@@ -426,13 +426,15 @@ async fn early_global_generation_and_missing_reference_stay_pinned() {
     initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
         .await
         .unwrap();
-    assert!(ctx.global_request_ids_initialized && ctx.gateway_request_ids_initialized);
+    // gw-core-02: the missing global target is pinned as a fail-closed
+    // placeholder and denies the request before any plugin request ID runs.
+    assert!(ctx.plugin_terminated());
     assert!(session.req_header().headers.contains_key("x-trace-id"));
-    assert!(session.req_header().headers.contains_key("x-first-id"));
-    assert!(Arc::ptr_eq(
-        &ctx.resolved_global_plugins().unwrap()[0],
-        &first.plugin_runtime
-    ));
+    assert!(!session.req_header().headers.contains_key("x-first-id"));
+    let pinned = ctx.resolved_global_plugins().unwrap();
+    assert_eq!(pinned.len(), 2);
+    assert!(Arc::ptr_eq(&pinned[0], &first.plugin_runtime));
+    assert!(pinned[1].rejects_invalid_config());
     store.replace_all(std::collections::HashMap::from([
         ("early-id-test/present".into(), id_plugin("x-reloaded-id")),
         ("early-id-test/missing".into(), id_plugin("x-was-missing-id")),
@@ -441,11 +443,10 @@ async fn early_global_generation_and_missing_reference_stay_pinned() {
     initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
         .await
         .unwrap();
-    assert_eq!(ctx.resolved_global_plugins().unwrap().len(), 1);
-    assert!(Arc::ptr_eq(
-        &ctx.resolved_global_plugins().unwrap()[0],
-        &first.plugin_runtime
-    ));
+    let repinned = ctx.resolved_global_plugins().unwrap();
+    assert_eq!(repinned.len(), 2);
+    assert!(Arc::ptr_eq(&repinned[0], &first.plugin_runtime));
+    assert!(Arc::ptr_eq(&repinned[1], &pinned[1]));
     assert!(!session.req_header().headers.contains_key("x-reloaded-id"));
     assert!(!session.req_header().headers.contains_key("x-was-missing-id"));
     let mut next = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
@@ -476,8 +477,14 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
     ctx.gateway_info = Some(id_gateway(&keys));
     capture_matched_scope(&mut ctx).unwrap();
     initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
-    let first = ctx.resolved_gateway_plugins().unwrap()[0].clone();
-    assert!(session.req_header().headers.contains_key("x-gateway-first-id"));
+    // gw-core-02: the missing Gateway target is pinned as a fail-closed
+    // placeholder and denies the request.
+    assert!(ctx.plugin_terminated());
+    let pinned = ctx.resolved_gateway_plugins().unwrap();
+    assert_eq!(pinned.len(), 2);
+    assert!(pinned[1].rejects_invalid_config());
+    let first = pinned[0].clone();
+    assert!(!session.req_header().headers.contains_key("x-gateway-first-id"));
     store.replace_all(std::collections::HashMap::from([
         (
             "early-id-test/gateway-present".into(),
@@ -490,8 +497,10 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
     ]));
     configure_owners(&store, &[], true, &keys);
     initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
-    assert_eq!(ctx.resolved_gateway_plugins().unwrap().len(), 1);
-    assert!(Arc::ptr_eq(&ctx.resolved_gateway_plugins().unwrap()[0], &first));
+    let repinned = ctx.resolved_gateway_plugins().unwrap();
+    assert_eq!(repinned.len(), 2);
+    assert!(Arc::ptr_eq(&repinned[0], &first));
+    assert!(Arc::ptr_eq(&repinned[1], &pinned[1]));
     assert!(!session.req_header().headers.contains_key("x-gateway-reloaded-id"));
     assert!(!session.req_header().headers.contains_key("x-gateway-was-missing-id"));
     ctx.gateway_info = Some(Arc::new(crate::runtime::GatewayInfo::new(

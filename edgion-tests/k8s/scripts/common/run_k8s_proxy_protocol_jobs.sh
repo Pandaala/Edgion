@@ -148,6 +148,7 @@ for required_file in \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolInbound/Gateway_edgion-test_ppin-gw.yaml" \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolInbound/HTTPRoute_edgion-test_ppin-route.yaml" \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolInbound/Service_edgion-test_ppin-http.yaml" \
+  "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolChain/EdgionConfigData_edgion-test_chain-realip-proxies.yaml" \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolChain/EdgionGatewayConfig__chain-egc.yaml" \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolChain/Gateway_edgion-test_chain-gw1.yaml" \
   "${PROJECT_ROOT}/edgion-tests/integration/conf/ProxyProtocolChain/Gateway_edgion-test_chain-gw2.yaml" \
@@ -516,6 +517,7 @@ EOF
     done
   else
     for fixture_file in \
+      EdgionConfigData_edgion-test_chain-realip-proxies.yaml \
       EdgionGatewayConfig__chain-egc.yaml \
       Gateway_edgion-test_chain-gw1.yaml Gateway_edgion-test_chain-gw2.yaml \
       HTTPRoute_edgion-test_chain-r1.yaml HTTPRoute_edgion-test_chain-r2.yaml \
@@ -552,10 +554,10 @@ EOF
   if [ "$scenario_id" = proxy_protocol_chain ]; then
     cidr_file="${scenario_dir}/pod-cidrs.txt"
     printf '%s\n' "$POD_CIDRS" > "$cidr_file"
-    fixture_file="${rendered_conf}/EdgionGatewayConfig__chain-egc.yaml"
+    fixture_file="${rendered_conf}/EdgionConfigData_edgion-test_chain-realip-proxies.yaml"
     awk -v cidr_file="$cidr_file" '
-      /- "127\.0\.0\.0\/8"/ {
-        while ((getline cidr < cidr_file) > 0) print "          - \"" cidr "\""
+      /^[[:space:]]*- 127\.0\.0\.0\/8$/ {
+        while ((getline cidr < cidr_file) > 0) print "        - \"" cidr "\""
         close(cidr_file)
         next
       }

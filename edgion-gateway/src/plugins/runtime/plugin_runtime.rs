@@ -619,6 +619,15 @@ impl PluginRuntime {
         runtime
     }
 
+    /// A Gateway-level or EGC-global reference whose target is absent must deny
+    /// instead of silently serving the request without that plugin list.
+    pub(crate) fn missing_reference() -> Self {
+        let mut runtime = Self::default();
+        runtime.invalid_plugins.record_non_retainable("MissingEdgionPlugins");
+        runtime.seal_fail_closed();
+        runtime
+    }
+
     /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
     /// in this runtime had an invalid config (recorded in `invalid_plugins`).
     ///

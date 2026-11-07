@@ -10,7 +10,7 @@ spec:
   listeners:
     - name: trusted
       protocol: HTTP
-      port: 58432
+      port: 28432
       allowedRoutes:
         namespaces:
           from: All

@@ -46,6 +46,13 @@ def main() -> int:
                 if owner != scenario:
                     raise ValueError(f"unexpected port owner: {row}")
                 port = int(raw_port)
+                # Linux defaults to 32768+, macOS to 49152+. A successful probe
+                # cannot reserve a port against subsequent outbound connections.
+                if bind != "docker" and not 1024 <= port < 32768:
+                    raise ValueError(
+                        f"{scenario}/{name} host port {port} must be in 1024..32767 "
+                        "to avoid default ephemeral port ranges"
+                    )
                 if previous := ports.get(port):
                     raise ValueError(
                         f"port {port} is assigned to both {previous[0]}/{previous[1]} "

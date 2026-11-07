@@ -104,7 +104,7 @@ run_inbound() {
   assert_resolved_identity 'HAProxy PPv1' "$body"
 
   code="$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 -w '%{http_code}' \
-    http://edgion-gateway:58430/headers 2>/dev/null)" || curl_rc=$?
+    http://edgion-gateway:28430/headers 2>/dev/null)" || curl_rc=$?
   if [ "$code" = "200" ] || { [ "$curl_rc" -eq 0 ] && [ "$code" != "000" ]; }; then
     fail "plain request to mandatory PROXY listener returned code '${code}' rc ${curl_rc}"
   else
@@ -112,7 +112,7 @@ run_inbound() {
   fi
 
   body="$(curl -fsS --connect-timeout 3 --max-time 10 \
-    http://edgion-gateway:58431/headers 2>/dev/null || true)"
+    http://edgion-gateway:28431/headers 2>/dev/null || true)"
   plain_xff="$(header_value "$body" x-forwarded-for)"
   case "$plain_xff" in
     *"$pod_ip"*) echo 'PASS: per-listener plain override preserved the direct client Pod identity' ;;
@@ -170,7 +170,7 @@ wait_for_http http://edgion-gateway:12161/health 90 \
 if [ "$scenario_id" = proxy_protocol_inbound ]; then
   wait_for_http http://edgion-haproxy:58440/headers 90 \
     || fail 'inbound PROXY listener convergence deadline exceeded'
-  wait_for_http http://edgion-gateway:58431/headers 90 \
+  wait_for_http http://edgion-gateway:28431/headers 90 \
     || fail 'plain listener convergence deadline exceeded'
 else
   wait_for_http http://edgion-haproxy:58540/headers 90 \

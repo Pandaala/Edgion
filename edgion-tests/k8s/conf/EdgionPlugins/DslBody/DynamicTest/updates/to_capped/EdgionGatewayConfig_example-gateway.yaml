@@ -31,8 +31,6 @@ spec:
     namespace: edgion-default
   - name: gp-resp-header-modifier
     namespace: edgion-default
-  - name: ghost
-    namespace: edgion-default
   requestBody:
     enabled: true
     maxBodySize: 16B

@@ -456,6 +456,12 @@ globalPluginsRef:
 ```
 
 Global plugins are applied to all routes and execute before route-level plugins.
+A reference whose `EdgionPlugins` target is missing from the published scope
+fails closed: the Gateway prepares a `MissingEdgionPlugins` reject runtime in its
+place, so requests get `500` before upstream instead of skipping the plugin
+(same for the Gateway `edgion.io/edgion-plugins` annotation; gw-core-02). On a
+single-Gateway listener the gate runs before route matching, so ACME HTTP-01
+challenges on that listener are denied too.
 
 ### spec.accessLogExtern
 

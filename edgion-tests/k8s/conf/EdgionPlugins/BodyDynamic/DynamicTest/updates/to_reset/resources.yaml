@@ -36,8 +36,6 @@ spec:
       namespace: edgion-default
     - name: gp-resp-header-modifier
       namespace: edgion-default
-    - name: ghost
-      namespace: edgion-default
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins

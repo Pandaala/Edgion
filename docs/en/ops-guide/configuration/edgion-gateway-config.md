@@ -354,6 +354,15 @@ globalPluginsRef:
     namespace: "edgion-system" # Defaults to "default"
 ```
 
+A reference whose `EdgionPlugins` resource does not exist fails closed: requests
+that would run the global plugins of this GatewayClass are rejected with `500`
+before reaching the upstream, rather than being served without that plugin. The
+same rule applies to the Gateway `edgion.io/edgion-plugins` annotation, for
+requests on that Gateway. On a listener served by a single Gateway the rejection
+happens before route matching, so it also blocks ACME HTTP-01 challenges on that
+listener. Create the `EdgionPlugins` resource before referencing it, and remove
+the reference before deleting the resource.
+
 ### spec.accessLogExtern
 
 The masking whitelist for [`AccessLogExtern`](../observability/access-log.md#extending-the-log-accesslogextern)-declared
