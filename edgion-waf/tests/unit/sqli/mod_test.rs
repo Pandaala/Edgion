@@ -75,6 +75,30 @@ fn three_token_into_outfile_whitelist_is_case_insensitive() {
         assert!(state.detect(), "{}", input.escape_ascii());
         assert_eq!(state.fingerprint_string(), fingerprint, "{}", input.escape_ascii());
     }
+    // Negative side of the same branch: a blacklisted 3-token fingerprint
+    // whose keyword middle token is shorter than 5 bytes or does not start
+    // with `INTO` is whitelisted, as in libinjection C
+    // (`tokenvec[1].len < 5 || cstrcasecmp("INTO", val, 4)` -> not SQLi).
+    // The fingerprint is checked in the context that produces it, so the
+    // verdict is decided by this branch rather than by the blacklist.
+    let single = SqliFlags::new(SqliFlags::FLAG_QUOTE_SINGLE.0 | SqliFlags::FLAG_SQL_ANSI.0);
+    for (input, flags, fingerprint) in [
+        (b"x' into 'y".as_slice(), single, "sks"),
+        (b"x' INTO 'y".as_slice(), single, "sks"),
+        (b"x' interval 'y".as_slice(), single, "sks"),
+        (b"1 into 'x'".as_slice(), SqliFlags::FLAG_NONE, "1ks"),
+        (b"'a' into user0x1f".as_slice(), SqliFlags::FLAG_NONE, "skn"),
+    ] {
+        let mut context = SqliState::new(input, flags);
+        let candidate = context.get_fingerprint();
+        assert_eq!(context.fingerprint_string(), fingerprint, "{}", input.escape_ascii());
+        assert!(!context.check_is_sqli(&candidate), "{}", input.escape_ascii());
+        assert!(
+            !SqliState::new(input, SqliFlags::FLAG_NONE).detect(),
+            "{}",
+            input.escape_ascii()
+        );
+    }
 }
 
 /// F-S4-5: `merge_words` skips a merge whose joined length is `>= 32`

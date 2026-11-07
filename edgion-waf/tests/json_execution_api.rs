@@ -374,7 +374,10 @@ fn nested_duplicate_objects_keep_every_member_and_arrays_are_unchanged() {
         ("ARGS:json.o.a", "second"),
         ("ARGS:json.o.b", "x"),
     ];
-    for chunks in [vec![], vec![1], vec![17], vec![30]] {
+    // Every two-part split plus single-byte chunks, as for flat duplicates.
+    let splits = (0..=input.len()).map(|split| vec![split]);
+    let single_bytes = std::iter::once((1..input.len()).collect::<Vec<_>>());
+    for chunks in splits.chain(single_bytes) {
         let (tx, _) = run_json_chunks(&generation, input, &chunks);
         assert_eq!(
             tx.tx_value(b"count"),

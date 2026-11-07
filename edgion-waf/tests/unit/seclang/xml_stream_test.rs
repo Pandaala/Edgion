@@ -443,6 +443,96 @@ fn pi_grammar_fixed_markup_and_definitive_decoded_bytes_have_independent_caps() 
     }
 }
 #[test]
+fn concatenated_root_content_crosses_caps_that_no_single_segment_crosses() {
+    fn feed_bytewise(input: &[u8], limits: XmlStreamLimits) -> (Result<(), XmlStreamError>, XmlStreamUsage) {
+        let mut parser = XmlStream::new(limits);
+        let mut sink = Sink::default();
+        let result = input
+            .iter()
+            .try_for_each(|byte| parser.feed(XmlStreamInput::Data(std::slice::from_ref(byte)), &mut sink))
+            .and_then(|()| parser.feed(XmlStreamInput::Complete, &mut sink));
+        (result, parser.usage())
+    }
+    // Each row's longest single text/CDATA segment fits `bytes - 1`; only the
+    // concatenation across a comment or PI (with interior whitespace kept)
+    // reaches `bytes`.
+    for (input, bytes, longest_segment) in [
+        (b"<r>ab<!--c-->cd</r>".as_slice(), 4usize, 2usize),
+        (b"<r>a <!--c--> b</r>", 4, 2),
+        (b"<r><![CDATA[a]]><?p?><![CDATA[b]]></r>", 2, 1),
+        (b"<r>ab<?p x?><![CDATA[cd]]><!--c-->ef</r>", 6, 2),
+    ] {
+        assert!(longest_segment < bytes, "{input:?}");
+        for cap in [bytes, bytes - 1] {
+            let (result, usage) = feed_bytewise(
+                input,
+                XmlStreamLimits {
+                    max_decoded_bytes: cap,
+                    ..Default::default()
+                },
+            );
+            if cap == bytes {
+                assert_eq!(result, Ok(()), "{input:?}");
+                assert_eq!(usage.decoded_bytes, bytes, "{input:?}");
+            } else {
+                assert_eq!(
+                    result,
+                    Err(XmlStreamError::Limit {
+                        kind: XmlStreamLimit::DecodedBytes,
+                        limit: cap
+                    }),
+                    "{input:?}"
+                );
+            }
+        }
+    }
+    // Retained bytes: two CDATA sections around a comment. One section alone
+    // fits the cap; the concatenated root content does not.
+    let section = vec![b'x'; 600];
+    let mut single = b"<r><![CDATA[".to_vec();
+    single.extend_from_slice(&section);
+    single.extend_from_slice(b"]]></r>");
+    let mut split = b"<r><![CDATA[".to_vec();
+    split.extend_from_slice(&section);
+    split.extend_from_slice(b"]]><!--c--><![CDATA[");
+    split.extend_from_slice(&section);
+    split.extend_from_slice(b"]]></r>");
+    // The smallest admitted cap is not the unlimited peak because growth is
+    // clamped to the remaining budget, so search for it.
+    let minimal_cap = |input: &[u8]| {
+        let (result, usage) = feed_bytewise(input, XmlStreamLimits::default());
+        assert_eq!(result, Ok(()));
+        let (mut low, mut high) = (0, usage.peak_retained_bytes);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let limits = XmlStreamLimits {
+                max_retained_bytes: mid,
+                ..Default::default()
+            };
+            if feed_bytewise(input, limits).0.is_ok() {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        low
+    };
+    let cap = minimal_cap(&split) - 1;
+    assert!(minimal_cap(&single) <= cap, "single section must fit {cap}");
+    let limits = XmlStreamLimits {
+        max_retained_bytes: cap,
+        ..Default::default()
+    };
+    assert_eq!(feed_bytewise(&single, limits).0, Ok(()));
+    assert_eq!(
+        feed_bytewise(&split, limits).0,
+        Err(XmlStreamError::Limit {
+            kind: XmlStreamLimit::RetainedBytes,
+            limit: cap
+        })
+    );
+}
+#[test]
 fn every_utf8_partition_cdata_tail_and_terminal_sink_state_are_checked() {
     for input in [
         "<é:r xmlns:é='u' é:ñ='€'>π</é:r>".as_bytes(),

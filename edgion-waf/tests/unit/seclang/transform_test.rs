@@ -694,17 +694,26 @@ fn html_entity_delimiters_preserve_decoding_and_output_limits() {
         (b"&#65;&#x41;&#X41;", b"AAA"),
         (b"&#x;&amp;", b"&#x;&"),
         (b"prefix&unterminated", b"prefix&unterminated"),
+        // References consumed without a terminating `;` (waf-03), alone and
+        // followed by a tail, must keep the partial-output invariant.
+        (b"&#58", b":"),
+        (b"&#58x", b":x"),
+        (b"&lt1", b"&lt1"),
+        (b"&QUOT&Gt", b"\">"),
     ] {
         let mut output = Vec::new();
         html_entity_decode(input, &mut output, expected.len()).unwrap();
         assert_eq!(output, expected);
-        let limit = expected.len() - 1;
-        output.clear();
-        assert_eq!(
-            html_entity_decode(input, &mut output, limit),
-            Err(TransformError::OutputLimit { limit })
-        );
-        assert_eq!(output, expected[..limit]);
+        for limit in 0..expected.len() {
+            output.clear();
+            assert_eq!(
+                html_entity_decode(input, &mut output, limit),
+                Err(TransformError::OutputLimit { limit }),
+                "{}/{limit}",
+                input.escape_ascii()
+            );
+            assert_eq!(output, expected[..limit], "{}/{limit}", input.escape_ascii());
+        }
     }
 }
 

@@ -601,15 +601,21 @@ fn checked_runtime_append(current: usize, added: usize, limit: usize) -> Result<
     Ok(actual)
 }
 
-/// Converts a runtime numeric operand with ModSecurity's `atoi` semantics.
+/// Converts a runtime numeric operand with ModSecurity v3's `atoll` semantics.
 ///
-/// The value is read as an optional `+`/`-` sign followed by the longest
-/// leading run of ASCII decimal digits. A value without such a run is `0`,
-/// bytes after the run are ignored, and a run outside the `i64` range
-/// saturates at `i64::MAX`/`i64::MIN`. Leading whitespace is not skipped. The
-/// conversion is total, so client-controlled operands and TX values can never
-/// abort a transaction; compile-time constants keep their strict grammar.
+/// Leading C-locale ASCII whitespace (space, `\t`, `\n`, `\v`, `\f`, `\r`) is
+/// skipped, then the value is read as an optional `+`/`-` sign followed by the
+/// longest leading run of ASCII decimal digits. A value without such a run is
+/// `0`, bytes after the run are ignored, and a run outside the `i64` range
+/// saturates at `i64::MAX`/`i64::MIN` (glibc `strtoll`). The conversion is
+/// total, so client-controlled operands and TX values can never abort a
+/// transaction; compile-time constants keep their strict grammar.
 pub(super) fn parse_i64(value: &[u8]) -> i64 {
+    let start = value
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .unwrap_or(value.len());
+    let value = &value[start..];
     let (negative, digits) = match value.split_first() {
         Some((b'-', rest)) => (true, rest),
         Some((b'+', rest)) => (false, rest),

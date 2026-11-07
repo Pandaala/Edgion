@@ -623,6 +623,9 @@ fn parse_multipart(input: &[u8], content_type: Option<&[u8]>, builder: &mut Body
         let malformed = BodyError::Malformed {
             processor: BodyProcessorSelection::Multipart,
         };
+        // Defensive only, unreachable by construction: `find_multipart_boundary`
+        // returns offsets at or after its `part_start` cursor. Kept so a future
+        // search change fails closed instead of slicing backwards.
         if next_boundary < part_start {
             return Err(malformed);
         }

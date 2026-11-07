@@ -910,6 +910,15 @@ fn check_capture_hir(
     Ok(())
 }
 
+/// Syntax and output options that select how one regex program is built.
+#[derive(Debug, Clone, Copy)]
+struct RegexSyntax {
+    captures: WhichCaptures,
+    case_insensitive: bool,
+    unicode: bool,
+    match_kind: MatchKind,
+}
+
 #[derive(Debug)]
 struct RegexCore {
     vm: PikeVM,
@@ -924,40 +933,29 @@ impl RegexCore {
     fn compile_many(
         sources: &[&str],
         limits: RegexProgramLimits,
-        captures: WhichCaptures,
         peak_budget: usize,
-        case_insensitive: bool,
-        unicode: bool,
-        match_kind: MatchKind,
+        syntax: RegexSyntax,
     ) -> Result<Self, RegexProgramError> {
-        Self::compile_many_with_decision(
-            sources,
-            limits,
-            captures,
-            peak_budget,
-            case_insensitive,
-            unicode,
-            match_kind,
-            false,
-        )
-        .map(|(core, _)| core)
+        Self::compile_many_with_decision(sources, limits, peak_budget, syntax, false).map(|(core, _)| core)
     }
 
     /// Compiles the program and, when `decision` is set, a capture-free
     /// decision VM from the same HIR. The decision VM never has more NFA
     /// states than the program VM, so one cache sized for the program VM can
     /// be reset to serve either; its owner token is shared.
-    #[allow(clippy::too_many_arguments)]
     fn compile_many_with_decision(
         sources: &[&str],
         limits: RegexProgramLimits,
-        captures: WhichCaptures,
         peak_budget: usize,
-        case_insensitive: bool,
-        unicode: bool,
-        match_kind: MatchKind,
+        syntax: RegexSyntax,
         decision: bool,
     ) -> Result<(Self, Option<Self>), RegexProgramError> {
+        let RegexSyntax {
+            captures,
+            case_insensitive,
+            unicode,
+            match_kind,
+        } = syntax;
         // The decision NFA stays alive next to the program NFA.
         let decision_peak = if decision { limits.max_nfa_bytes } else { 0 };
         let mut bytes = 0_usize;
@@ -1403,11 +1401,13 @@ impl CompiledRegexProgram {
         let core = RegexCore::compile_many(
             &[source],
             limits,
-            WhichCaptures::None,
             peak_budget,
-            false,
-            true,
-            MatchKind::LeftmostFirst,
+            RegexSyntax {
+                captures: WhichCaptures::None,
+                case_insensitive: false,
+                unicode: true,
+                match_kind: MatchKind::LeftmostFirst,
+            },
         )?;
         Self::finish_single(core, limits)
     }
@@ -1420,11 +1420,13 @@ impl CompiledRegexProgram {
         let core = RegexCore::compile_many(
             &[source],
             limits,
-            WhichCaptures::None,
             peak_budget,
-            false,
-            false,
-            MatchKind::LeftmostFirst,
+            RegexSyntax {
+                captures: WhichCaptures::None,
+                case_insensitive: false,
+                unicode: false,
+                match_kind: MatchKind::LeftmostFirst,
+            },
         )?;
         Self::finish_single(core, limits)
     }
@@ -1437,11 +1439,13 @@ impl CompiledRegexProgram {
         let core = RegexCore::compile_many(
             &[source],
             limits,
-            WhichCaptures::None,
             peak_budget,
-            true,
-            false,
-            MatchKind::LeftmostFirst,
+            RegexSyntax {
+                captures: WhichCaptures::None,
+                case_insensitive: true,
+                unicode: false,
+                match_kind: MatchKind::LeftmostFirst,
+            },
         )?;
         Self::finish_single(core, limits)
     }
@@ -1743,11 +1747,13 @@ impl CompiledCaptureRegexProgram {
         let (mut core, decision) = RegexCore::compile_many_with_decision(
             &[source],
             limits,
-            WhichCaptures::All,
             peak_budget,
-            false,
-            unicode,
-            MatchKind::LeftmostFirst,
+            RegexSyntax {
+                captures: WhichCaptures::All,
+                case_insensitive: false,
+                unicode,
+                match_kind: MatchKind::LeftmostFirst,
+            },
             true,
         )?;
         let decision = CompiledRegexProgram {
@@ -3132,11 +3138,13 @@ fn compile_regex(
     let core = RegexCore::compile_many(
         patterns,
         limits.into(),
-        WhichCaptures::None,
         usize::MAX,
-        false,
-        unicode,
-        MatchKind::All,
+        RegexSyntax {
+            captures: WhichCaptures::None,
+            case_insensitive: false,
+            unicode,
+            match_kind: MatchKind::All,
+        },
     )
     .map_err(|error| match error {
         RegexProgramError::ProgramByteLimit { actual, limit } => {

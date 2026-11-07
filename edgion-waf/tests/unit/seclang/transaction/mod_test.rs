@@ -109,7 +109,7 @@ fn unsigned_integer_grammar_preserves_boundaries_and_rejects_signs() {
 }
 
 #[test]
-fn signed_integer_conversion_reads_the_leading_decimal_prefix_and_saturates() {
+fn signed_integer_conversion_skips_leading_whitespace_reads_the_decimal_prefix_and_saturates() {
     for (input, expected) in [
         ("0", 0),
         ("+0", 0),
@@ -135,10 +135,18 @@ fn signed_integer_conversion_reads_the_leading_decimal_prefix_and_saturates() {
         ("-+1", 0),
         ("1+", 1),
         ("1-", 1),
-        (" 1", 0),
+        (" 1", 1),
         ("1 ", 1),
         ("1\n", 1),
-        ("\t1", 0),
+        ("\t1", 1),
+        (" 12", 12),
+        ("\t-3x", -3),
+        (" ", 0),
+        (" \t\n\x0b\x0c\r+7", 7),
+        ("  99999999999999999999", i64::MAX),
+        (" - 1", 0),
+        ("- 1", 0),
+        ("1 2", 1),
         ("1_0", 1),
         ("1.0", 1),
         ("1e2", 1),
@@ -155,6 +163,17 @@ fn signed_integer_conversion_reads_the_leading_decimal_prefix_and_saturates() {
     let saturated = format!("{}x", "9".repeat(4096));
     assert_eq!(parse_i64(saturated.as_bytes()), i64::MAX);
     assert_eq!(parse_i64(&[b'1', 0xff, b'2']), 1);
+    for byte in u8::MIN..=u8::MAX {
+        // Only the six C-locale ASCII whitespace bytes are skipped before the sign.
+        let input = [byte, b'4'];
+        let expected = match byte {
+            b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b'+' => 4,
+            b'-' => -4,
+            b'0'..=b'9' => i64::from(byte - b'0') * 10 + 4,
+            _ => 0,
+        };
+        assert_eq!(parse_i64(&input), expected, "leading byte {byte}");
+    }
     for byte in u8::MIN..=u8::MAX {
         let input = [b'1', byte, b'2'];
         let expected = if byte.is_ascii_digit() {
@@ -1999,7 +2018,9 @@ fn numeric_operators_convert_both_operands_by_leading_decimal_prefix() {
         ("-", "@eq 0".to_owned(), true),
         ("+", "@eq 0".to_owned(), true),
         ("", "@eq 0".to_owned(), true),
-        (" 7", "@eq 0".to_owned(), true),
+        (" 7", "@eq 7".to_owned(), true),
+        ("\t-3x", "@eq -3".to_owned(), true),
+        (" ", "@eq 0".to_owned(), true),
         ("--1", "@eq 0".to_owned(), true),
         ("1.9", "@eq 1".to_owned(), true),
         ("0x10", "@eq 0".to_owned(), true),
@@ -2024,6 +2045,7 @@ fn numeric_operators_convert_both_operands_by_leading_decimal_prefix() {
         ("99999999999999999999", max.as_str(), true),
         ("-99999999999999999999", min.as_str(), true),
         ("12abc", "13", false),
+        (" 12", "12", true),
     ] {
         let headers = [
             RequestHeader::new(b"X-Operand", operand.as_bytes()),
@@ -6363,7 +6385,17 @@ fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit(
             outcomes.iter().any(|outcome| outcome.contains("SetVarActionLimit")),
             "{source}: {outcomes:?}"
         );
+        if source.contains("ctl:") {
+            assert!(
+                outcomes.iter().any(|outcome| outcome.contains("CtlEntryLimit")),
+                "{source}: {outcomes:?}"
+            );
+        }
     }
+    assert!(
+        STAGING_SOURCES.iter().any(|source| source.contains("ctl:")),
+        "the ctl entry sweep needs a source with ctl actions"
+    );
 }
 
 #[test]
