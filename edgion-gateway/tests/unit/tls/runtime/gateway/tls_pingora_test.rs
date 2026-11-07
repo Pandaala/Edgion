@@ -313,7 +313,7 @@ fn published_regex_san_preserves_attachment_and_rejects_dual_client_auth() {
             .allowed_sans
             .as_ref()
             .unwrap()[0];
-        assert!(san.compiled_regex.is_some(), "SAN must compile during {phase}");
+        assert!(san.compiled.is_some(), "SAN must compile during {phase}");
         // Do not manually warm the candidate: publication owns this cache.
         assert!(
             select_gateway_edgion_tls_overlay(Some(published), &gateway).is_err(),

@@ -56,7 +56,7 @@ Both obvious identity keys were checked against current code and do not work:
   `CustomResource, Serialize, Deserialize, JsonSchema` only, and the spec tree
   holds runtime-only cache state with no meaningful equality —
   `resolved_listener_attachment_index: OnceLock<HashSet<..>>` and the compiled
-  regexes inside `client_auth.allowed_sans`.
+  SAN matchers (`AllowedSan::compiled`, which may hold a regex) inside `client_auth.allowed_sans`.
 
 A correct memoization would need a fingerprint over the real compilation inputs
 (`tls.crt` / `tls.key` / `ca.crt` bytes plus `spec.ciphers`), and that

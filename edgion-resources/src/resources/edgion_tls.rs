@@ -147,7 +147,7 @@ fn is_default_verify_depth(depth: &u8) -> bool {
 }
 
 impl ClientAuthConfig {
-    /// Compile RegularExpression SAN allowlist entries. Idempotent for other match kinds.
+    /// Validate and prepare every SAN allowlist entry. Idempotent.
     pub fn compile_allowed_sans(&mut self) -> Result<(), String> {
         if let Some(entries) = &mut self.allowed_sans {
             for (index, entry) in entries.iter_mut().enumerate() {

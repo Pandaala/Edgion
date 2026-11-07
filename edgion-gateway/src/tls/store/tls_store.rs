@@ -94,35 +94,27 @@ fn warn_cert_advisories(key: &str, tls: &EdgionTls) {
     }
 }
 
-/// Compile RegularExpression SAN allowlist entries after conf_sync deserialize.
-/// Handshake matching never compiles a regex. Resources without regex keep the
-/// incoming Arc so TlsStore can preserve shared allocation.
+/// Prepare SAN allowlist matchers after conf_sync deserialize. The handshake
+/// only consumes prepared entries and never validates config or compiles a
+/// regex. Resources without a SAN allowlist keep the incoming Arc so TlsStore
+/// can preserve shared allocation.
 fn compile_allowed_sans_for_runtime(tls: Arc<EdgionTls>) -> Arc<EdgionTls> {
-    use edgion_resources::resources::edgion_tls::AllowedSanMatch;
-
     let needs_compile = tls
         .spec
         .client_auth
         .as_ref()
         .and_then(|auth| auth.allowed_sans.as_ref())
-        .is_some_and(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry.match_kind == AllowedSanMatch::RegularExpression)
-        });
+        .is_some_and(|entries| !entries.is_empty());
     if !needs_compile {
         return tls;
     }
 
     let mut owned = (*tls).clone();
     if let Some(client_auth) = owned.spec.client_auth.as_mut() {
-        if let Err(error) = client_auth.compile_allowed_sans() {
-            tracing::warn!(
-                component = "tls_store",
-                error = %error,
-                "Failed to compile EdgionTls allowedSans regular expressions"
-            );
-        }
+        // A failure leaves the entry unprepared (fail closed). `validate_cert`
+        // applies the same checks and reports the rejection, deduplicated by
+        // last-known-good, so no separate log here.
+        let _ = client_auth.compile_allowed_sans();
     }
     Arc::new(owned)
 }
@@ -238,7 +230,7 @@ impl TlsStore {
         let dimensions_valid = dimensions_are_bounded(&tls);
         warn_cert_advisories(key, &tls);
         let tls = compile_allowed_sans_for_runtime(tls);
-        // Regex compilation clones the spec and resets its derived attachment
+        // SAN preparation clones the spec and resets its derived attachment
         // index. Warm only the final resource that will reach the matcher.
         if dimensions_valid {
             tls.spec.warm_listener_attachment_index();

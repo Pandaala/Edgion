@@ -1,7 +1,19 @@
 use super::*;
 
+use edgion_resources::resources::allowed_san::AllowedSanMatch;
+
+/// Mirror Gateway publication: every entry is prepared before matching.
+fn prepared(mut entry: AllowedSan) -> AllowedSan {
+    entry.compile().expect("test entry must be valid");
+    entry
+}
+
+fn exact(san_type: AllowedSanType, value: &str) -> AllowedSan {
+    prepared(AllowedSan::exact(san_type, value))
+}
+
 fn dns(value: &str) -> AllowedSan {
-    AllowedSan::exact(AllowedSanType::Dns, value)
+    exact(AllowedSanType::Dns, value)
 }
 
 fn compile_regex(san_type: AllowedSanType, pattern: &str) -> AllowedSan {
@@ -70,7 +82,7 @@ fn cross_type_dns_wildcard_does_not_match_uri() {
 
 #[test]
 fn dns_value_that_looks_like_uri_does_not_match_uri_allowlist() {
-    let allowed = [AllowedSan::exact(AllowedSanType::Uri, "https://a.internal.example.com")];
+    let allowed = [exact(AllowedSanType::Uri, "https://a.internal.example.com")];
     assert!(!client_sans_match_allowed(
         &[PresentedSan::dns("https://a.internal.example.com")],
         &allowed
@@ -79,10 +91,7 @@ fn dns_value_that_looks_like_uri_does_not_match_uri_allowlist() {
 
 #[test]
 fn uri_exact_is_case_sensitive() {
-    let allowed = [AllowedSan::exact(
-        AllowedSanType::Uri,
-        "spiffe://cluster.local/ns/foo/sa/bar",
-    )];
+    let allowed = [exact(AllowedSanType::Uri, "spiffe://cluster.local/ns/foo/sa/bar")];
     assert!(client_sans_match_allowed(
         &[PresentedSan::uri("spiffe://cluster.local/ns/foo/sa/bar")],
         &allowed
@@ -97,6 +106,7 @@ fn uri_exact_is_case_sensitive() {
 fn uri_prefix() {
     let mut entry = AllowedSan::exact(AllowedSanType::Uri, "spiffe://cluster.local/");
     entry.match_kind = AllowedSanMatch::Prefix;
+    entry.compile().unwrap();
     assert!(client_sans_match_allowed(
         &[PresentedSan::uri("spiffe://cluster.local/ns/foo/sa/bar")],
         std::slice::from_ref(&entry)
@@ -109,19 +119,21 @@ fn uri_prefix() {
 
 #[test]
 fn email_ignore_case_and_suffix() {
-    let mut exact = AllowedSan::exact(AllowedSanType::Email, "alice@example.com");
+    let mut email = exact(AllowedSanType::Email, "alice@example.com");
     assert!(!client_sans_match_allowed(
         &[PresentedSan::email("Alice@example.com")],
-        std::slice::from_ref(&exact)
+        std::slice::from_ref(&email)
     ));
-    exact.ignore_case = true;
+    email.ignore_case = true;
+    email.compile().unwrap();
     assert!(client_sans_match_allowed(
         &[PresentedSan::email("Alice@example.com")],
-        std::slice::from_ref(&exact)
+        std::slice::from_ref(&email)
     ));
 
     let mut suffix = AllowedSan::exact(AllowedSanType::Email, "@example.com");
     suffix.match_kind = AllowedSanMatch::Suffix;
+    suffix.compile().unwrap();
     assert!(client_sans_match_allowed(
         &[PresentedSan::email("bob@example.com")],
         std::slice::from_ref(&suffix)
@@ -129,10 +141,43 @@ fn email_ignore_case_and_suffix() {
 }
 
 #[test]
+fn non_exact_dns_and_ip_use_plain_string_semantics() {
+    let mut ip_prefix = AllowedSan::exact(AllowedSanType::Ip, "10.0.");
+    ip_prefix.match_kind = AllowedSanMatch::Prefix;
+    let ip_prefix = prepared(ip_prefix);
+    assert!(client_sans_match_allowed(
+        &[PresentedSan::ip("10.0.0.1")],
+        std::slice::from_ref(&ip_prefix)
+    ));
+    assert!(!client_sans_match_allowed(
+        &[PresentedSan::ip("10.1.0.1")],
+        std::slice::from_ref(&ip_prefix)
+    ));
+
+    let mut dns_suffix = AllowedSan::exact(AllowedSanType::Dns, ".example.com");
+    dns_suffix.match_kind = AllowedSanMatch::Suffix;
+    let sensitive = prepared(dns_suffix.clone());
+    assert!(client_sans_match_allowed(
+        &[PresentedSan::dns("a.b.example.com")],
+        std::slice::from_ref(&sensitive)
+    ));
+    assert!(!client_sans_match_allowed(
+        &[PresentedSan::dns("a.EXAMPLE.com")],
+        std::slice::from_ref(&sensitive)
+    ));
+    dns_suffix.ignore_case = true;
+    let insensitive = prepared(dns_suffix);
+    assert!(client_sans_match_allowed(
+        &[PresentedSan::dns("a.EXAMPLE.com")],
+        std::slice::from_ref(&insensitive)
+    ));
+}
+
+#[test]
 fn ip_exact_canonical_and_mapped() {
-    let v6 = [AllowedSan::exact(AllowedSanType::Ip, "2001:0db8::1")];
+    let v6 = [exact(AllowedSanType::Ip, "2001:0db8::1")];
     assert!(client_sans_match_allowed(&[PresentedSan::ip("2001:db8::1")], &v6));
-    let mapped = [AllowedSan::exact(AllowedSanType::Ip, "::ffff:127.0.0.1")];
+    let mapped = [exact(AllowedSanType::Ip, "::ffff:127.0.0.1")];
     assert!(!client_sans_match_allowed(&[PresentedSan::ip("127.0.0.1")], &mapped));
     assert!(!client_sans_match_allowed(
         &[PresentedSan::ip("10.0.0.1")],
@@ -165,10 +210,10 @@ fn regex_match_requires_precompile() {
 
 #[test]
 fn other_name_matches_oid_and_value() {
-    let allowed = [AllowedSan::other_name(
+    let allowed = [prepared(AllowedSan::other_name(
         "1.3.6.1.4.1.311.20.2.3",
         "alice@corp.example.com",
-    )];
+    ))];
     assert!(client_sans_match_allowed(
         &[PresentedSan::other_name(
             "1.3.6.1.4.1.311.20.2.3",
@@ -191,8 +236,59 @@ fn other_name_matches_oid_and_value() {
 
 #[test]
 fn invalid_entry_fails_closed() {
-    let bad = [AllowedSan::exact(AllowedSanType::Ip, "not-an-ip")];
-    assert!(!client_sans_match_allowed(&[PresentedSan::ip("127.0.0.1")], &bad));
+    let mut bad = AllowedSan::exact(AllowedSanType::Ip, "not-an-ip");
+    assert!(bad.compile().is_err());
+    assert!(!client_sans_match_allowed(
+        &[PresentedSan::ip("127.0.0.1")],
+        std::slice::from_ref(&bad)
+    ));
+}
+
+#[test]
+fn invalid_entry_rejects_whole_list_even_when_another_entry_matches() {
+    let mut bad = AllowedSan::exact(AllowedSanType::Dns, "Client.example.com");
+    assert!(bad.compile().is_err());
+    let allowed = [dns("client.example.com"), bad];
+    assert!(!client_sans_match_allowed(
+        &[PresentedSan::dns("client.example.com")],
+        &allowed
+    ));
+}
+
+#[test]
+fn unprepared_entry_of_any_kind_fails_closed() {
+    for entry in [
+        AllowedSan::exact(AllowedSanType::Dns, "client.example.com"),
+        AllowedSan::exact(AllowedSanType::Ip, "127.0.0.1"),
+        AllowedSan::exact(AllowedSanType::Uri, "spiffe://cluster"),
+        AllowedSan::other_name("1.2.3", "alice"),
+    ] {
+        let presented = [
+            PresentedSan::dns("client.example.com"),
+            PresentedSan::ip("127.0.0.1"),
+            PresentedSan::uri("spiffe://cluster"),
+            PresentedSan::other_name("1.2.3", "alice"),
+        ];
+        assert!(!client_sans_match_allowed(&presented, std::slice::from_ref(&entry)));
+        let entry = prepared(entry);
+        assert!(client_sans_match_allowed(&presented, std::slice::from_ref(&entry)));
+    }
+}
+
+#[test]
+fn prepared_operands_are_trimmed() {
+    let allowed = [
+        dns("  client.example.com "),
+        exact(AllowedSanType::Ip, " 10.0.0.1 "),
+        prepared(AllowedSan::other_name(" 1.2.3 ", " alice ")),
+    ];
+    for presented in [
+        PresentedSan::dns("client.example.com"),
+        PresentedSan::ip("10.0.0.1"),
+        PresentedSan::other_name("1.2.3", "alice"),
+    ] {
+        assert!(client_sans_match_allowed(std::slice::from_ref(&presented), &allowed));
+    }
 }
 
 #[test]

@@ -31,7 +31,9 @@ Both callers now pass the flag to the single `compile_bounded_regex` function in
 `RegexBuilder::case_insensitive`. Controller `validate_cert` uses this option
 through `allowed_san_config_error`; Gateway `TlsStore` calls
 `compile_allowed_sans_for_runtime` after deserialize and before publication.
-`compiled_regex` remains excluded from serde and schemars.
+The prepared matcher (`AllowedSan::compiled`, which holds the regex) remains
+excluded from serde and schemars; see
+[allowed SAN publication-prepared matcher](allowed-san-publication-prepared-matcher.md).
 
 The configuration contract is documented in the EdgionTls CRD, the
 [feature schema](../../../02-features/03-resources/09-edgion-tls.md), and the

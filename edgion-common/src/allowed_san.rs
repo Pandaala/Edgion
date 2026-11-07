@@ -1,11 +1,15 @@
-//! Typed mTLS SAN allowlist matching shared by Controller validation and the
-//! Gateway handshake.
+//! Typed mTLS SAN allowlist matching for the Gateway handshake. Controller
+//! admission validates entries with `allowed_san_config_error` instead.
 //!
-//! The handshake path must never compile a regex. `RegularExpression` entries
-//! with `compiled_regex == None` fail closed.
+//! The handshake path only consumes the matcher prepared by
+//! `AllowedSan::compile` at publication: it never validates configuration or
+//! compiles a regex. An entry with `compiled == None` (invalid or never
+//! prepared) fails the whole list closed.
 
 use edgion_algo::matcher::rfc6125_hostname::matches;
-use edgion_resources::resources::allowed_san::{allowed_san_schema_error, AllowedSan, AllowedSanMatch, AllowedSanType};
+use edgion_resources::resources::allowed_san::{
+    AllowedSan, AllowedSanType, CompiledAllowedSan, CompiledSanMatcher, TextSanMatch,
+};
 use std::net::IpAddr;
 
 /// A certificate SAN classified by ASN.1 GeneralName type, not by string prefix.
@@ -66,55 +70,56 @@ pub fn has_typed_san_display_prefix(s: &str) -> bool {
 
 /// True when the certificate SAN list satisfies the typed allowlist.
 ///
-/// An empty allowlist means "no extra SAN constraint". A config-invalid or
-/// uncompiled RegularExpression list rejects every client.
+/// An empty allowlist means "no extra SAN constraint". If any entry is not
+/// prepared (config-invalid, uncompiled regex, or never compiled), the whole
+/// list rejects every client, even when another entry would match.
 pub fn client_sans_match_allowed(cert_sans: &[PresentedSan], allowed: &[AllowedSan]) -> bool {
     if allowed.is_empty() {
         return true;
     }
-    if allowed.iter().any(allowlist_entry_unusable) {
+    if allowed.iter().any(|entry| entry.compiled.is_none()) {
         return false;
     }
-    cert_sans
-        .iter()
-        .any(|cert| allowed.iter().any(|entry| cert_san_matches_entry(cert, entry)))
+    cert_sans.iter().any(|cert| {
+        allowed.iter().any(|entry| {
+            entry
+                .compiled
+                .as_ref()
+                .is_some_and(|compiled| cert_san_matches_entry(cert, entry.san_type, compiled))
+        })
+    })
 }
 
-fn allowlist_entry_unusable(entry: &AllowedSan) -> bool {
-    if allowed_san_schema_error(entry).is_some() {
-        return true;
-    }
-    entry.match_kind == AllowedSanMatch::RegularExpression && entry.compiled_regex.is_none()
-}
-
-fn cert_san_matches_entry(presented: &PresentedSan, entry: &AllowedSan) -> bool {
-    if presented.san_type != entry.san_type {
+fn cert_san_matches_entry(presented: &PresentedSan, san_type: AllowedSanType, compiled: &CompiledAllowedSan) -> bool {
+    if presented.san_type != san_type {
         return false;
     }
-    if entry.san_type == AllowedSanType::OtherName {
-        let Some(entry_oid) = entry.oid.as_deref().map(str::trim) else {
+    if san_type == AllowedSanType::OtherName {
+        let Some(entry_oid) = compiled.oid.as_deref() else {
             return false;
         };
         if presented.oid.as_deref() != Some(entry_oid) {
             return false;
         }
     }
-    match_presented_value(&presented.value, entry)
+    match_presented_value(&presented.value, &compiled.matcher)
 }
 
-fn match_presented_value(presented: &str, entry: &AllowedSan) -> bool {
-    let allowed = entry.value.trim();
-    match (entry.san_type, entry.match_kind) {
-        (AllowedSanType::Dns, AllowedSanMatch::Exact) => dns_exact_rfc6125(presented, allowed),
-        (AllowedSanType::Ip, AllowedSanMatch::Exact) => ip_exact(presented, allowed),
-        (_, AllowedSanMatch::Exact) => string_eq(presented, allowed, entry.ignore_case),
-        (_, AllowedSanMatch::Prefix) => string_prefix(presented, allowed, entry.ignore_case),
-        (_, AllowedSanMatch::Suffix) => string_suffix(presented, allowed, entry.ignore_case),
-        (_, AllowedSanMatch::Contains) => string_contains(presented, allowed, entry.ignore_case),
-        (_, AllowedSanMatch::RegularExpression) => entry
-            .compiled_regex
-            .as_ref()
-            .is_some_and(|regex| regex.is_match(presented)),
+fn match_presented_value(presented: &str, matcher: &CompiledSanMatcher) -> bool {
+    match matcher {
+        CompiledSanMatcher::DnsExact(allowed) => dns_exact_rfc6125(presented, allowed),
+        CompiledSanMatcher::IpExact(allowed) => ip_exact(presented, allowed),
+        CompiledSanMatcher::Text {
+            kind,
+            value,
+            ignore_case,
+        } => match kind {
+            TextSanMatch::Exact => string_eq(presented, value, *ignore_case),
+            TextSanMatch::Prefix => string_prefix(presented, value, *ignore_case),
+            TextSanMatch::Suffix => string_suffix(presented, value, *ignore_case),
+            TextSanMatch::Contains => string_contains(presented, value, *ignore_case),
+        },
+        CompiledSanMatcher::Regex(regex) => regex.is_match(presented),
     }
 }
 
@@ -123,11 +128,8 @@ fn dns_exact_rfc6125(cert_dns: &str, allowed: &str) -> bool {
     matches(allowed, cert_dns) || matches(cert_dns, allowed)
 }
 
-fn ip_exact(cert_ip: &str, allowed: &str) -> bool {
-    match (cert_ip.parse::<IpAddr>(), allowed.parse::<IpAddr>()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
+fn ip_exact(cert_ip: &str, allowed: &IpAddr) -> bool {
+    cert_ip.parse::<IpAddr>().is_ok_and(|presented| presented == *allowed)
 }
 
 fn string_eq(presented: &str, allowed: &str, ignore_case: bool) -> bool {

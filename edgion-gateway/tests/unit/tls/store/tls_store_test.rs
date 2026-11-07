@@ -1029,7 +1029,7 @@ fn regex_ignore_case_reconstructs_after_serde_and_updates_published_generations(
             .as_ref()
             .unwrap();
         assert_eq!(allowed[0].ignore_case, ignore_case);
-        assert!(allowed[0].compiled_regex.is_none());
+        assert!(allowed[0].compiled.is_none());
         assert!(!client_sans_match_allowed(&presented, allowed));
         let data = HashMap::from([("ns/regex".to_string(), Arc::new(decoded))]);
         if index == 0 {
@@ -1049,7 +1049,7 @@ fn regex_ignore_case_reconstructs_after_serde_and_updates_published_generations(
             .allowed_sans
             .as_ref()
             .unwrap();
-        assert!(allowed[0].compiled_regex.is_some());
+        assert!(allowed[0].compiled.is_some());
         assert_eq!(client_sans_match_allowed(&presented, allowed), ignore_case);
         if let Some((old, old_ignore_case)) = previous.take() {
             let old: Arc<CompiledEdgionTls> = old;
@@ -1066,6 +1066,70 @@ fn regex_ignore_case_reconstructs_after_serde_and_updates_published_generations(
         }
         previous = Some((compiled, ignore_case));
     }
+}
+
+#[test]
+fn non_regex_allowed_sans_are_prepared_on_publication_and_kept_by_last_known_good() {
+    use edgion_common::allowed_san::{client_sans_match_allowed, PresentedSan};
+    use edgion_resources::resources::edgion_tls::{AllowedSan, AllowedSanType, ClientAuthConfig, ClientAuthMode};
+
+    fn with_dns_san(value: &str) -> Arc<EdgionTls> {
+        let mut resource = (*make_valid_tls("ns", "dns", &["dns.example.com"])).clone();
+        resource.spec.client_auth = Some(ClientAuthConfig {
+            mode: ClientAuthMode::Terminate,
+            ca_secret_ref: None,
+            verify_depth: 1,
+            ca_secret: None,
+            allowed_sans: Some(vec![AllowedSan::exact(AllowedSanType::Dns, value)]),
+            allowed_cns: None,
+        });
+        // Mirror conf_sync: prepared state never crosses the wire.
+        let wire = serde_json::to_vec(&resource).unwrap();
+        Arc::new(serde_json::from_slice(&wire).unwrap())
+    }
+    fn published_allows(store: &TlsStore, presented: &PresentedSan) -> bool {
+        let snapshot = store.snapshot();
+        let compiled = snapshot.match_sni_candidates(&listener(443), "dns.example.com")[0].clone();
+        let allowed = compiled
+            .tls
+            .spec
+            .client_auth
+            .as_ref()
+            .unwrap()
+            .allowed_sans
+            .as_ref()
+            .unwrap();
+        assert!(allowed.iter().all(|entry| entry.compiled.is_some()));
+        client_sans_match_allowed(std::slice::from_ref(presented), allowed)
+    }
+
+    let store = TlsStore::new();
+    let client = PresentedSan::dns("client.example.com");
+    store.replace_all_tls(HashMap::from([(
+        "ns/dns".to_string(),
+        with_dns_san("client.example.com"),
+    )]));
+    assert!(store.get_validation_status("ns/dns").unwrap().is_valid);
+    assert!(published_allows(&store, &client));
+
+    let other = PresentedSan::dns("other.example.com");
+    store.apply_partial_update(
+        HashMap::new(),
+        HashMap::from([("ns/dns".to_string(), with_dns_san("*.example.com"))]),
+        &HashSet::new(),
+    );
+    assert!(published_allows(&store, &other));
+
+    // An invalid DNS Exact value is rejected at validation. Last-known-good
+    // retains the previous entry (and its valid status), which keeps serving
+    // with its prepared matcher; the rejected generation would deny everyone.
+    store.apply_partial_update(
+        HashMap::new(),
+        HashMap::from([("ns/dns".to_string(), with_dns_san("Client.example.com"))]),
+        &HashSet::new(),
+    );
+    assert!(store.get_validation_status("ns/dns").unwrap().is_valid);
+    assert!(published_allows(&store, &other));
 }
 
 #[test]

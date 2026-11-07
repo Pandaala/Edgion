@@ -3,6 +3,12 @@ use crate::ctx::ClientCertInfo;
 use edgion_common::allowed_san::PresentedSan;
 use edgion_resources::resources::edgion_tls::AllowedSanType;
 
+fn dns_entry(value: &str) -> AllowedSan {
+    let mut entry = AllowedSan::exact(AllowedSanType::Dns, value);
+    entry.compile().expect("test entry must be valid");
+    entry
+}
+
 #[test]
 fn test_matches_pattern_exact() {
     use edgion_algo::matcher::rfc6125_hostname::matches;
@@ -26,25 +32,16 @@ fn test_validate_san_whitelist_empty() {
 #[test]
 fn test_validate_san_whitelist_match() {
     let presented = [PresentedSan::dns("test.example.com"), PresentedSan::dns("other.com")];
-    assert!(validate_san_whitelist(
-        &presented,
-        &[AllowedSan::exact(AllowedSanType::Dns, "test.example.com")]
-    ));
-    assert!(validate_san_whitelist(
-        &presented,
-        &[AllowedSan::exact(AllowedSanType::Dns, "other.com")]
-    ));
-    assert!(validate_san_whitelist(
-        &presented,
-        &[AllowedSan::exact(AllowedSanType::Dns, "*.example.com")]
-    ));
+    assert!(validate_san_whitelist(&presented, &[dns_entry("test.example.com")]));
+    assert!(validate_san_whitelist(&presented, &[dns_entry("other.com")]));
+    assert!(validate_san_whitelist(&presented, &[dns_entry("*.example.com")]));
 }
 
 #[test]
 fn test_validate_san_whitelist_no_match() {
     assert!(!validate_san_whitelist(
         &[PresentedSan::dns("test.example.com")],
-        &[AllowedSan::exact(AllowedSanType::Dns, "other.com")]
+        &[dns_entry("other.com")]
     ));
 }
 

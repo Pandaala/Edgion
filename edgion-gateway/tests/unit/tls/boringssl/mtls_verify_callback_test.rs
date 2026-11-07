@@ -208,6 +208,8 @@ fn allowlist_config(san: Option<&str>, cn: Option<&str>) -> ClientAuthConfig {
     let mut config: ClientAuthConfig = serde_json::from_value(serde_json::json!({})).unwrap();
     config.allowed_sans = san.map(|value| vec![AllowedSan::exact(AllowedSanType::Dns, value)]);
     config.allowed_cns = cn.map(|value| vec![value.to_string()]);
+    // Mirror TlsStore publication, which prepares every entry.
+    config.compile_allowed_sans().expect("test allowlist must be valid");
     config
 }
 
@@ -269,8 +271,21 @@ fn san_failure_preserves_diagnostics_and_precedes_cn_failure() {
             Err(expected.clone())
         );
     }
-    // A URI must not satisfy a DNS allowlist entry with the same text.
-    let config = allowlist_config(Some("spiffe://example/client"), None);
+    use edgion_resources::resources::edgion_tls::{AllowedSan, AllowedSanType};
+    // A DNS SAN must not satisfy a URI allowlist entry with the same text.
+    let mut config = allowlist_config(None, None);
+    config.allowed_sans = Some(vec![AllowedSan::exact(AllowedSanType::Uri, "client.example")]);
+    config.compile_allowed_sans().unwrap();
+    assert_eq!(
+        validate_certificate_whitelist(Some(&cert), &config),
+        Err(expected.clone())
+    );
+    // An entry that fails preparation rejects the whole list, even next to
+    // an entry that would match.
+    let mut invalid = AllowedSan::exact(AllowedSanType::Dns, "spiffe://example/client");
+    assert!(invalid.compile().is_err());
+    let mut config = allowlist_config(Some("client.example"), None);
+    config.allowed_sans.as_mut().unwrap().push(invalid);
     assert_eq!(validate_certificate_whitelist(Some(&cert), &config), Err(expected));
 }
 

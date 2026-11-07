@@ -1,9 +1,9 @@
 //! Typed mTLS SAN allowlist entries for `EdgionTls.spec.clientAuth.allowedSans`.
 //!
-//! Operator-facing schema only. Handshake matching lives in `edgion-common`
-//! so Controller validation and Gateway enforcement share one implementation.
-//! `RegularExpression` is compiled with bounded `RegexBuilder` limits; the
-//! compiled automaton is never serialized.
+//! Operator-facing schema plus the derived matcher prepared at publication.
+//! Handshake matching lives in `edgion-common` and only consumes the prepared
+//! [`CompiledAllowedSan`]. `RegularExpression` is compiled with bounded
+//! `RegexBuilder` limits; prepared state is never serialized.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -66,10 +66,44 @@ pub struct AllowedSan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oid: Option<String>,
 
-    /// Filled at Gateway ingest / test compile. Never part of CRD or conf_sync.
+    /// Prepared matcher filled by [`AllowedSan::compile`] at Gateway publication.
+    /// `Some` only for a schema-valid entry; never part of CRD or conf_sync.
     #[serde(skip)]
     #[schemars(skip)]
-    pub compiled_regex: Option<regex::Regex>,
+    pub compiled: Option<CompiledAllowedSan>,
+}
+
+/// Normalized, validated operands of one allowlist entry.
+#[derive(Debug, Clone)]
+pub struct CompiledAllowedSan {
+    /// Trimmed OID; `Some` exactly when the entry type is `OtherName`.
+    pub oid: Option<String>,
+    pub matcher: CompiledSanMatcher,
+}
+
+/// Value comparison selected by the entry's type and match kind.
+#[derive(Debug, Clone)]
+pub enum CompiledSanMatcher {
+    /// RFC 6125 wildcard matching in both directions; value is trimmed.
+    DnsExact(String),
+    /// Canonical address equality against the parsed allowed address.
+    IpExact(IpAddr),
+    /// String comparison against the trimmed value.
+    Text {
+        kind: TextSanMatch,
+        value: String,
+        ignore_case: bool,
+    },
+    Regex(regex::Regex),
+}
+
+/// String operators for non-DNS/IP Exact entries and every Prefix/Suffix/Contains entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSanMatch {
+    Exact,
+    Prefix,
+    Suffix,
+    Contains,
 }
 
 fn is_default_match(kind: &AllowedSanMatch) -> bool {
@@ -88,7 +122,7 @@ impl AllowedSan {
             value: value.into(),
             ignore_case: false,
             oid: None,
-            compiled_regex: None,
+            compiled: None,
         }
     }
 
@@ -99,15 +133,43 @@ impl AllowedSan {
             value: value.into(),
             ignore_case: false,
             oid: Some(oid.into()),
-            compiled_regex: None,
+            compiled: None,
         }
     }
 
-    /// Compile a `RegularExpression` entry. No-op for other match kinds.
+    /// Validate the entry and prepare its matcher. On error `compiled` stays
+    /// `None`, which makes the whole allowlist reject at handshake time.
     pub fn compile(&mut self) -> Result<(), String> {
-        if self.match_kind == AllowedSanMatch::RegularExpression {
-            self.compiled_regex = Some(compile_bounded_regex(self.value.trim(), self.ignore_case)?);
+        self.compiled = None;
+        if let Some(err) = allowed_san_schema_error(self) {
+            return Err(err);
         }
+        let value = self.value.trim();
+        let text = |kind| CompiledSanMatcher::Text {
+            kind,
+            value: value.to_string(),
+            ignore_case: self.ignore_case,
+        };
+        let matcher = match (self.san_type, self.match_kind) {
+            (AllowedSanType::Dns, AllowedSanMatch::Exact) => CompiledSanMatcher::DnsExact(value.to_string()),
+            (AllowedSanType::Ip, AllowedSanMatch::Exact) => CompiledSanMatcher::IpExact(
+                value
+                    .parse()
+                    .map_err(|_| "IP Exact value must be a parseable IP address".to_string())?,
+            ),
+            (_, AllowedSanMatch::Exact) => text(TextSanMatch::Exact),
+            (_, AllowedSanMatch::Prefix) => text(TextSanMatch::Prefix),
+            (_, AllowedSanMatch::Suffix) => text(TextSanMatch::Suffix),
+            (_, AllowedSanMatch::Contains) => text(TextSanMatch::Contains),
+            (_, AllowedSanMatch::RegularExpression) => {
+                CompiledSanMatcher::Regex(compile_bounded_regex(value, self.ignore_case)?)
+            }
+        };
+        let oid = match self.san_type {
+            AllowedSanType::OtherName => self.oid.as_deref().map(|oid| oid.trim().to_string()),
+            _ => None,
+        };
+        self.compiled = Some(CompiledAllowedSan { oid, matcher });
         Ok(())
     }
 }
@@ -130,7 +192,7 @@ pub fn compile_bounded_regex(pattern: &str, ignore_case: bool) -> Result<regex::
         })
 }
 
-/// Schema checks that do not compile a regex. Safe on the handshake path.
+/// Schema checks that do not compile a regex.
 pub fn allowed_san_schema_error(entry: &AllowedSan) -> Option<String> {
     let value = entry.value.trim();
     if value.is_empty() {
