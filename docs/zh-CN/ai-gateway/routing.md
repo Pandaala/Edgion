@@ -66,9 +66,23 @@ modelRoutes:
 |------|------|
 | `Weighted` | 直接使用 HTTPRoute 后端权重 |
 | `Priority` | 按 HTTPRoute 后端声明顺序执行严格的主备切换 |
-| `LowestLatency` | 选择滚动 p50 首 token 延迟最低者；完全相同时用 Route 权重打破平局 |
-| `LowestUsage` | 选择近期计费 token 用量除以 Route 权重后最低者 |
+| `LowestLatency` | 随机抽取两个候选，保留延迟评分较低者（见下文） |
+| `LowestUsage` | 随机抽取两个候选，保留“近期 + 在途 token 用量 ÷ Route 权重”较低者 |
 | `CostWeighted` | 按 Route 权重和请求估算成本的平方反比选择 |
+
+`LowestLatency` 与 `LowestUsage` 使用 Power-of-Two-Choices：每次选择随机抽取两个不同的可选候选，
+保留评分较低者，避免并发请求全部涌向当前看起来最好的单个后端。两种评分都计入仍在进行中的
+attempt，Route 权重作为容量系数（评分除以权重）：
+
+- `LowestLatency` 在 30 秒滚动窗口内评分为 `p50 首 token 延迟 × (在途 attempt + 1) ×
+  (成功 + 失败 + 1) / (成功 + 1)`。后端失败（与离群检测相同的判定）会抬高评分；响应头之后的
+  流中断不计为失败。存在成熟候选（成功样本不少于 8 个）时，样本较少的候选有 p50 时使用自身 p50；
+  没有样本时，若其没有在途 attempt 且最近 30 秒未向其尝试过请求，则以单个 attempt 探测，
+  否则按最差成熟 p50 的两倍评分。没有成熟候选时忽略 p50，退化为按失败比例加权的最少请求。
+- `LowestUsage` 评分为最近 60 秒的计费 token，加上在途 attempt 的临时
+  `输入 + 输出上限` token（未配置输出上限时仅计输入）。attempt 结算时由真实计费替换临时值。
+
+遥测与在途计数按每个 Gateway 副本上的路由规则、后端和逻辑模型分别维护。
 
 `CostWeighted` 要求每个原本符合条件的候选都有输入/输出价格与输出 token 上限。该上限取自请求的
 `max_completion_tokens` 或旧字段 `max_tokens`，缺失时回退到 `defaults.maxOutputTokens`。缺失值会

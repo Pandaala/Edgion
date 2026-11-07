@@ -744,11 +744,6 @@ impl AiProxy {
             inject_usage_tracking: self.config.inject_usage_tracking,
             input_chars: canonical.input_chars,
             selection: self.config.backend_selection.selection_type,
-            selection_sequence: if self.config.backend_selection.selection_type == AiBackendSelection::LowestLatency {
-                adaptive_store.next_selection_sequence()
-            } else {
-                Default::default()
-            },
             candidates,
             scheduler,
             retry_cap_initialized: false,

@@ -302,7 +302,6 @@ fn ready_context(retries: u8) -> EdgionHttpContext {
         inject_usage_tracking: false,
         input_chars: 19,
         selection: AiBackendSelection::Weighted,
-        selection_sequence: 0,
         candidates: Vec::new(),
         scheduler,
         retry_cap_initialized: true,

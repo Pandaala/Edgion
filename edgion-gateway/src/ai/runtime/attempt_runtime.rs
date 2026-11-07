@@ -15,7 +15,7 @@ use crate::plugins::common::redis_rate_limiter::{
     CredentialReservationOperation, CredentialReservationStatus, RedisRateLimiter,
 };
 
-use crate::ai::routing::adaptive::current_unix_second;
+use crate::ai::routing::adaptive::{current_unix_second, AdaptiveInFlightLease};
 use crate::ai::{
     estimated_cost_usd, AdaptiveTelemetryState, AiCredentialOutlierHandle, AiProviderLabel, AiUsageShared,
     GenAiAttempt, GenAiAttemptFailure, GenAiAttemptUsageSource,
@@ -101,6 +101,8 @@ pub struct AiAttemptRuntime {
     dispatched: bool,
     verdict_recorded: bool,
     _circuit_breaker: Option<crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreakerPermit>,
+    /// Adaptive selection in-flight accounting, released on drop.
+    _adaptive_in_flight: Option<AdaptiveInFlightLease>,
 }
 
 impl AiAttemptRuntime {
@@ -140,6 +142,9 @@ impl AiAttemptRuntime {
             return false;
         }
         self.record_failure(class);
+        if let Some(adaptive) = self.adaptive.as_deref() {
+            adaptive.record_failure(current_unix_second());
+        }
         self.verdict_recorded = true;
         true
     }
@@ -278,6 +283,9 @@ impl AiAttemptRuntimeState {
         if self.active.is_some() || self.accounting_overflow {
             return AiAttemptAdmission::DependencyDenied;
         }
+        if let Some(adaptive) = input.adaptive.as_ref() {
+            adaptive.mark_attempt(current_unix_second());
+        }
         let circuit_breaker = match input.circuit_breaker.take() {
             Some(state) => match state.try_acquire() {
                 Some(permit) => Some(permit),
@@ -306,6 +314,10 @@ impl AiAttemptRuntimeState {
                 Err(()) => return AiAttemptAdmission::DependencyDenied,
             },
         };
+        let adaptive_in_flight = input
+            .adaptive
+            .as_ref()
+            .map(|state| state.begin_attempt(input.estimated_input_tokens.saturating_add(input.max_output_tokens)));
         AiAttemptAdmission::Ready(AiAttemptRuntime {
             reservation,
             outlier,
@@ -322,6 +334,7 @@ impl AiAttemptRuntimeState {
             dispatched: false,
             verdict_recorded: false,
             _circuit_breaker: circuit_breaker,
+            _adaptive_in_flight: adaptive_in_flight,
         })
     }
 

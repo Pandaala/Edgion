@@ -58,7 +58,6 @@ fn candidate_plan() -> ReadyAiAttemptPlan {
         inject_usage_tracking: true,
         input_chars: 19,
         selection: AiBackendSelection::Weighted,
-        selection_sequence: 0,
         candidates: Vec::new(),
         scheduler: candidate_scheduler(),
         retry_cap_initialized: true,
@@ -625,7 +624,7 @@ fn cost_weighted_accepts_max_completion_tokens_only_body_without_service_max() {
             PickerInput {
                 candidates: &candidates,
                 entropy: 0,
-                selection_sequence: 0,
+                now_second: 0,
                 input_tokens: 16,
                 request_max_output_tokens: request_max_tokens(body),
             },

@@ -613,7 +613,6 @@ fn plan_debug_never_renders_canonical_body() {
         inject_usage_tracking: true,
         input_chars: 28,
         selection: AiBackendSelection::Weighted,
-        selection_sequence: 0,
         candidates: Vec::new(),
         scheduler: AttemptScheduler::new(std::iter::empty::<std::iter::Empty<u32>>(), 0).unwrap(),
         retry_cap_initialized: true,

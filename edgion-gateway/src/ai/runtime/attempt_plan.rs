@@ -105,7 +105,6 @@ pub struct ReadyAiAttemptPlan {
     pub inject_usage_tracking: bool,
     pub input_chars: u64,
     pub selection: AiBackendSelection,
-    pub selection_sequence: u8,
     pub candidates: Vec<AiPlanCandidate>,
     pub scheduler: AttemptScheduler,
     pub retry_cap_initialized: bool,

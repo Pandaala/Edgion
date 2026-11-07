@@ -15,7 +15,10 @@ use crate::lb::backend::LbBackend;
 use rand::Rng;
 use std::sync::Arc;
 
-fn skip_excluded_index(raw: usize, excluded: usize) -> usize {
+/// Map `raw` in `0..n - 1` to an index in `0..n` that is never `excluded`.
+/// Shared with the AI adaptive picker so both P2C users sample distinct pairs.
+#[inline]
+pub(crate) fn skip_excluded_index(raw: usize, excluded: usize) -> usize {
     if raw >= excluded {
         raw + 1
     } else {

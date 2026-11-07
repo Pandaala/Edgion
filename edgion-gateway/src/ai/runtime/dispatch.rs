@@ -753,7 +753,7 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             PickerInput {
                 candidates: &route_candidates,
                 entropy,
-                selection_sequence: u64::from(plan.selection_sequence),
+                now_second: crate::ai::routing::adaptive::current_unix_second(),
                 input_tokens: plan.input_chars.saturating_add(3) / 4,
                 request_max_output_tokens: plan.request_max_output_tokens,
             },

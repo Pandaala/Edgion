@@ -110,6 +110,7 @@ fn current_bucket_is_excluded_until_next_tick_boundary() {
             latency_p50_micros: Some(100),
             latency_samples: 1,
             charged_tokens_60s: 7,
+            ..AdaptiveSnapshot::default()
         }
     );
 }
@@ -288,6 +289,7 @@ fn target_cleanup_removes_all_models_and_preserves_other_targets() {
             latency_p50_micros: Some(100),
             latency_samples: 1,
             charged_tokens_60s: 3,
+            ..AdaptiveSnapshot::default()
         }
     );
 
@@ -543,10 +545,44 @@ fn duplicate_route_contributions_survive_until_last_source_is_removed() {
 }
 
 #[test]
-fn selection_sequence_is_bounded_and_explores_every_twentieth_plan() {
-    let store = AdaptiveTelemetryStore::new();
-    let sequence: Vec<_> = (0..21).map(|_| store.next_selection_sequence()).collect();
-    assert_eq!(sequence, (0..20).chain(std::iter::once(0)).collect::<Vec<_>>());
+fn in_flight_leases_are_visible_immediately_and_release_on_drop() {
+    let state = AdaptiveTelemetryState::new();
+    let first = state.begin_attempt(100);
+    // Per-lease provisional tokens are capped so the aggregate cannot wrap.
+    let second = state.begin_attempt(u64::MAX);
+    // Live counters bypass the one-second publication tick.
+    let live = state.snapshot();
+    assert_eq!(live.in_flight, 2);
+    assert_eq!(live.in_flight_tokens, 100 + u64::from(u32::MAX));
+    drop(second);
+    assert_eq!(state.snapshot().in_flight, 1);
+    assert_eq!(state.snapshot().in_flight_tokens, 100);
+    drop(first);
+    let released = state.snapshot();
+    assert_eq!((released.in_flight, released.in_flight_tokens), (0, 0));
+    // Leases do not stamp the probe gate; admission does, before any check.
+    assert_eq!(released.last_attempt_second, 0);
+    state.mark_attempt(7);
+    state.mark_attempt(5);
+    assert_eq!(state.snapshot().last_attempt_second, 7);
+}
+
+#[test]
+fn failure_verdicts_publish_in_the_latency_window_only() {
+    let state = AdaptiveTelemetryState::new();
+    state.tick(10);
+    state.record_failure(10);
+    state.record_failure(10);
+    state.tick(11);
+    let snapshot = state.snapshot();
+    assert_eq!(snapshot.latency_failures, 2);
+    assert_eq!(snapshot.latency_samples, 0);
+    assert_eq!(snapshot.latency_p50_micros, None);
+    // The window is [now - 30, now - 1]: second 10 still counts at tick 40.
+    state.tick(10 + 30);
+    assert_eq!(state.snapshot().latency_failures, 2);
+    state.tick(10 + 31);
+    assert_eq!(state.snapshot().latency_failures, 0);
 }
 
 #[tokio::test]

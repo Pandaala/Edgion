@@ -74,9 +74,29 @@ logical model:
 |------|----------|
 | `Weighted` | Uses HTTPRoute backend weights directly |
 | `Priority` | Uses HTTPRoute backend declaration order as strict primary-to-fallback order |
-| `LowestLatency` | Chooses the lowest rolling p50 time to first token; route weight breaks exact ties |
-| `LowestUsage` | Chooses the lowest recent charged-token usage divided by route weight |
+| `LowestLatency` | Samples two candidates and keeps the lower latency score (see below) |
+| `LowestUsage` | Samples two candidates and keeps the lower recent plus in-flight token usage divided by route weight |
 | `CostWeighted` | Chooses by route weight and inverse-square estimated request cost |
+
+`LowestLatency` and `LowestUsage` use Power-of-Two-Choices: each selection draws two distinct
+eligible candidates at random and keeps the one with the lower score, so concurrent requests do
+not all pile onto the single best-looking backend. Both scores count attempts that are still in
+flight, and route weight acts as capacity (scores are divided by weight):
+
+- `LowestLatency` scores `p50 TTFT × (in-flight attempts + 1) × (successes + failures + 1) /
+  (successes + 1)` over a rolling 30-second window. Backend failures (the same verdicts that feed
+  outlier detection) raise the score; a stream cut after response headers is not counted as one.
+  When at least one candidate is mature (8 or more successful samples), a candidate with fewer
+  samples uses its own p50 when it has one. With no sample it is probed with a single attempt
+  when nothing is in flight to it and no attempt was made to it in the last 30 seconds, and
+  otherwise is scored at twice the worst mature p50. With no mature candidate, p50 is ignored and
+  selection is weighted least-request scaled by the failure ratio.
+- `LowestUsage` scores the charged tokens of the last 60 seconds plus the provisional
+  `input + output bound` tokens of in-flight attempts (input only when no output bound is
+  configured). The real charge replaces the provisional amount when the attempt settles.
+
+Telemetry and in-flight counts are kept per route rule, backend, and logical model on each
+Gateway replica.
 
 `CostWeighted` requires input/output pricing and an output-token bound for every otherwise eligible
 candidate. The bound comes from the request — `max_completion_tokens`, or legacy `max_tokens` —

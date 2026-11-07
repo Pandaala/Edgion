@@ -230,7 +230,6 @@ async fn encoded_reject_stages_json_reply_before_conversion_and_header_plugins()
         inject_usage_tracking: true,
         input_chars: 0,
         selection: AiBackendSelection::Weighted,
-        selection_sequence: 0,
         candidates: vec![],
         scheduler,
         retry_cap_initialized: true,

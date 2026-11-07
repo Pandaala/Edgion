@@ -6,10 +6,21 @@
 
 use edgion_resources::resources::edgion_plugins::AiBackendSelection;
 
+use crate::lb::selection::p2c::skip_excluded_index;
+
 pub const MAX_AI_ROUTE_CANDIDATES: usize = 16;
 const LATENCY_MATURE_SAMPLES: u32 = 8;
-pub(crate) const LATENCY_EXPLORATION_INTERVAL: u8 = 20;
+/// An unknown candidate is probed again only after this long without any
+/// admission; it matches the adaptive latency window.
+const LATENCY_PROBE_INTERVAL_SECONDS: u64 = 30;
+/// A sample-less candidate outside its probe is scored as this many times
+/// the worst mature p50: exploration belongs to the probe, and attempts that
+/// end without a sample or failure verdict must not look optimistic.
+const UNKNOWN_LATENCY_PENALTY: u64 = 2;
 const SCORE_SCALE: u128 = 1_000_000;
+/// P2C draws use entropy bits 80..128: a UUIDv4's fixed version and variant
+/// bits sit below bit 80, and the credential pick consumes the low 64 bits.
+const P2C_ENTROPY_SHIFT: u32 = 80;
 const PRICE_DENOMINATOR: u128 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,12 +41,22 @@ impl CandidateEligibility {
     }
 }
 
-/// Integer values published by the bounded background telemetry aggregator.
+/// Integer values published by the bounded background telemetry aggregator,
+/// plus the live in-flight counters read at selection time.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AdaptiveSnapshot {
     pub latency_p50_micros: Option<u64>,
+    /// Successful TTFT samples in the latency window.
     pub latency_samples: u32,
+    /// Attempts with a backend-failure verdict in the latency window.
+    pub latency_failures: u32,
     pub charged_tokens_60s: u64,
+    /// Admitted attempts that have not finished yet (live).
+    pub in_flight: u32,
+    /// Provisional tokens of in-flight attempts (live).
+    pub in_flight_tokens: u64,
+    /// Unix second of the latest admission attempt, 0 if none (live).
+    pub last_attempt_second: u64,
 }
 
 /// Candidate-local declared model and price data for CostWeighted.
@@ -66,9 +87,8 @@ pub struct PickerInput<'a> {
     /// Caller-supplied request-stable entropy. Selection maps it into the
     /// current bounded aggregate weight without acquiring an RNG lock.
     pub entropy: u128,
-    /// Request-independent sequence published with adaptive state. Every 20th
-    /// LowestLatency selection explores a bootstrap candidate.
-    pub selection_sequence: u64,
+    /// Caller-supplied current Unix second for the LowestLatency idle probe.
+    pub now_second: u64,
     pub input_tokens: u64,
     pub request_max_output_tokens: Option<u64>,
 }
@@ -117,8 +137,8 @@ pub fn pick<'a>(input: PickerInput<'a>, selection: AiBackendSelection) -> Result
     match selection {
         AiBackendSelection::Weighted => pick_weighted(input.candidates, input.entropy, |_| true),
         AiBackendSelection::Priority => pick_priority(input.candidates),
-        AiBackendSelection::LowestLatency => pick_lowest_latency(input),
-        AiBackendSelection::LowestUsage => pick_lowest_usage(input.candidates),
+        AiBackendSelection::LowestLatency => pick_lowest_latency(input.candidates, input.entropy, input.now_second),
+        AiBackendSelection::LowestUsage => pick_lowest_usage(input.candidates, input.entropy),
         AiBackendSelection::CostWeighted => pick_cost_weighted(input),
     }
 }
@@ -182,53 +202,107 @@ fn pick_priority(candidates: &[RouteCandidate]) -> Result<&RouteCandidate, Picke
         .ok_or(PickerError::NoEligibleCandidate)
 }
 
-fn pick_lowest_latency(input: PickerInput<'_>) -> Result<&RouteCandidate, PickerError> {
-    let mature_best = input
-        .candidates
-        .iter()
-        .filter(|candidate| {
-            is_selectable(candidate)
-                && candidate.adaptive.latency_samples >= LATENCY_MATURE_SAMPLES
-                && candidate.adaptive.latency_p50_micros.is_some()
-        })
-        .filter_map(|candidate| candidate.adaptive.latency_p50_micros)
-        .min();
-    let Some(best) = mature_best else {
-        return pick_weighted(input.candidates, input.entropy, |candidate| {
-            candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES
-        });
-    };
-    if input.selection_sequence % u64::from(LATENCY_EXPLORATION_INTERVAL) == u64::from(LATENCY_EXPLORATION_INTERVAL - 1)
-        && input
-            .candidates
-            .iter()
-            .any(|candidate| is_selectable(candidate) && candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES)
-    {
-        return pick_weighted(input.candidates, input.entropy, |candidate| {
-            candidate.adaptive.latency_samples < LATENCY_MATURE_SAMPLES
-        });
+/// Power-of-Two-Choices over the selectable candidates: two distinct
+/// candidates are drawn from request entropy and the lower score wins; a tie
+/// keeps the first draw, which is itself random. Adaptive scores lag behind
+/// completions, so a global argmin would herd every concurrent request onto
+/// one backend; the random pair plus the live in-flight term in each score
+/// spreads load the way the general `Ewma`/`LeastConn` balancer does.
+fn pick_p2c(
+    candidates: &[RouteCandidate],
+    entropy: u128,
+    score: impl Fn(&RouteCandidate) -> Result<u128, PickerError>,
+) -> Result<&RouteCandidate, PickerError> {
+    let mut eligible = [0u8; MAX_AI_ROUTE_CANDIDATES];
+    let mut count = 0usize;
+    for (index, candidate) in candidates.iter().enumerate() {
+        if is_selectable(candidate) {
+            // validate_candidates bounds the slice, so index fits in u8.
+            eligible[count] = index as u8;
+            count += 1;
+        }
     }
-    pick_weighted(input.candidates, input.entropy, |candidate| {
-        candidate.adaptive.latency_samples >= LATENCY_MATURE_SAMPLES
-            && candidate.adaptive.latency_p50_micros == Some(best)
+    match count {
+        0 => Err(PickerError::NoEligibleCandidate),
+        1 => Ok(&candidates[usize::from(eligible[0])]),
+        n => {
+            let draw = entropy >> P2C_ENTROPY_SHIFT;
+            let n_wide = n as u128;
+            let first = (draw % n_wide) as usize;
+            let second = skip_excluded_index(((draw / n_wide) % (n_wide - 1)) as usize, first);
+            let a = &candidates[usize::from(eligible[first])];
+            let b = &candidates[usize::from(eligible[second])];
+            Ok(if score(b)? < score(a)? { b } else { a })
+        }
+    }
+}
+
+/// Lowest-is-better LowestLatency score:
+/// `p50 * (in_flight + 1) * (successes + failures + 1) / ((successes + 1) * weight)`.
+///
+/// The in-flight factor reacts at admission, so a burst or a hanging backend
+/// is pushed away before any completion is published. The success-ratio factor
+/// keeps fast failures from looking like a fast backend. With no mature
+/// candidate every latency term is 1 (immature p50s are ignored) and the
+/// score is weighted least-request scaled by the success ratio.
+///
+/// A candidate without a mature p50 (fewer than 8 successes in the window)
+/// uses its own immature p50 when it has one. With no sample at all it scores
+/// zero (an idle probe) when nothing is in flight and nothing was admitted to
+/// it for the last probe interval, admitted or refused; otherwise the weight divisor would starve
+/// a lower-weight unknown backend at low concurrency. Gating on admission
+/// rather than on outcomes bounds probing to about one attempt per interval
+/// however the probe ends. Outside the probe it is scored pessimistically at
+/// `UNKNOWN_LATENCY_PENALTY` times the worst mature p50.
+fn pick_lowest_latency(
+    candidates: &[RouteCandidate],
+    entropy: u128,
+    now_second: u64,
+) -> Result<&RouteCandidate, PickerError> {
+    let mut mature = candidates
+        .iter()
+        .filter(|candidate| is_selectable(candidate))
+        .filter_map(mature_latency);
+    let worst_mature = mature.next().map(|first| mature.fold(first, u64::max));
+    pick_p2c(candidates, entropy, |candidate| {
+        let adaptive = candidate.adaptive;
+        let latency = match (mature_latency(candidate), adaptive.latency_p50_micros, worst_mature) {
+            (Some(latency), _, _) => latency,
+            (None, Some(own), Some(_)) => own,
+            (None, None, Some(_))
+                if adaptive.in_flight == 0
+                    && (adaptive.last_attempt_second == 0
+                        || now_second.saturating_sub(adaptive.last_attempt_second)
+                            >= LATENCY_PROBE_INTERVAL_SECONDS) =>
+            {
+                return Ok(0)
+            }
+            (None, _, Some(worst)) => worst.saturating_mul(UNKNOWN_LATENCY_PENALTY),
+            (None, _, None) => 1,
+        };
+        let successes = u128::from(adaptive.latency_samples);
+        let attempts = successes + u128::from(adaptive.latency_failures) + 1;
+        let numerator = u128::from(latency)
+            .saturating_mul(u128::from(adaptive.in_flight) + 1)
+            .saturating_mul(attempts)
+            .saturating_mul(SCORE_SCALE);
+        Ok(numerator / ((successes + 1) * candidate.weight as u128))
     })
 }
 
-fn pick_lowest_usage(candidates: &[RouteCandidate]) -> Result<&RouteCandidate, PickerError> {
-    let mut selected: Option<&RouteCandidate> = None;
-    let mut best_score = u128::MAX;
-    for candidate in candidates.iter().filter(|candidate| is_selectable(candidate)) {
-        let score = u128::from(candidate.adaptive.charged_tokens_60s)
-            .checked_mul(SCORE_SCALE)
-            .ok_or(PickerError::ArithmeticOverflow)?
-            / candidate.weight as u128;
-        if score < best_score || (score == best_score && selected.is_none_or(|current| candidate.order < current.order))
-        {
-            best_score = score;
-            selected = Some(candidate);
-        }
-    }
-    selected.ok_or(PickerError::NoEligibleCandidate)
+fn mature_latency(candidate: &RouteCandidate) -> Option<u64> {
+    (candidate.adaptive.latency_samples >= LATENCY_MATURE_SAMPLES)
+        .then_some(candidate.adaptive.latency_p50_micros)
+        .flatten()
+}
+
+/// Lowest-is-better LowestUsage score: recent charged tokens plus the
+/// provisional tokens of in-flight attempts, divided by route weight.
+fn pick_lowest_usage(candidates: &[RouteCandidate], entropy: u128) -> Result<&RouteCandidate, PickerError> {
+    pick_p2c(candidates, entropy, |candidate| {
+        let usage = u128::from(candidate.adaptive.charged_tokens_60s) + u128::from(candidate.adaptive.in_flight_tokens);
+        Ok(usage.checked_mul(SCORE_SCALE).ok_or(PickerError::ArithmeticOverflow)? / candidate.weight as u128)
+    })
 }
 
 fn pick_cost_weighted(input: PickerInput<'_>) -> Result<&RouteCandidate, PickerError> {

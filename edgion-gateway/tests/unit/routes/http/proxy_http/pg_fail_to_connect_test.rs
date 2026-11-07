@@ -76,7 +76,6 @@ fn ctx_with_selected_ai_target() -> EdgionHttpContext {
         inject_usage_tracking: false,
         input_chars: 19,
         selection: AiBackendSelection::Weighted,
-        selection_sequence: 0,
         candidates: Vec::new(),
         scheduler,
         retry_cap_initialized: true,

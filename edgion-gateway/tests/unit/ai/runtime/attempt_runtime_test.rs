@@ -222,6 +222,7 @@ fn attempt(input: u64, output_chars: u64, eos: bool) -> AiAttemptRuntime {
         dispatched: true,
         verdict_recorded: false,
         _circuit_breaker: None,
+        _adaptive_in_flight: None,
     }
 }
 
@@ -371,6 +372,75 @@ async fn failed_attempts_accumulate_input_and_final_eos_adds_output() {
     assert!(state.ever_dispatched());
     assert_eq!(state.attempts().len(), 2);
     assert_eq!(state.charged_request_tokens(), Ok(15));
+}
+
+#[tokio::test]
+async fn adaptive_in_flight_lease_spans_admission_to_every_attempt_end() {
+    use crate::ai::{AdaptiveTelemetryKey, AdaptiveTelemetryStore};
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+
+    let key = AdaptiveTelemetryKey::new(
+        "lease-route".into(),
+        "rule".into(),
+        PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "default".into(),
+            name: "provider".into(),
+        },
+        "logical".into(),
+    )
+    .unwrap();
+    let store = AdaptiveTelemetryStore::new();
+    store.reconcile_keys(&std::collections::HashSet::from([key.clone()]));
+    let adaptive = store.get(&key).unwrap();
+    let second = current_unix_second();
+    adaptive.tick(second);
+
+    // A refused admission takes no lease but still closes the idle probe, so a
+    // candidate that keeps refusing is not re-probed on every selection.
+    let mut refused = admission_input(None, None, OnRedisFailure::Deny);
+    refused.adaptive = Some(Arc::clone(&adaptive));
+    let mut state = AiAttemptRuntimeState::default();
+    assert!(matches!(state.admit(refused).await, AiAttemptAdmission::Skip));
+    let after_refusal = adaptive.snapshot();
+    assert_eq!((after_refusal.in_flight, after_refusal.in_flight_tokens), (0, 0));
+    assert!(after_refusal.last_attempt_second >= second);
+
+    for end in 0..3 {
+        let mut state = AiAttemptRuntimeState::default();
+        let mut input = admission_input(Some(closed_outlier_handle()), None, OnRedisFailure::Deny);
+        input.adaptive = Some(Arc::clone(&adaptive));
+        let AiAttemptAdmission::Ready(mut active) = state.admit(input).await else {
+            panic!("admission must succeed");
+        };
+        // Provisional tokens are the admission input plus output bound.
+        assert_eq!(adaptive.snapshot().in_flight, 1);
+        assert_eq!(adaptive.snapshot().in_flight_tokens, 15);
+        match end {
+            0 => {
+                state.install(active);
+                state.finish_predispatch();
+            }
+            1 => {
+                active.mark_dispatched();
+                // A failing status and the later failure finish record one verdict.
+                active.record_response(500, Some(FailureClass::Application));
+                state.install(active);
+                state.finish_failure(AiAttemptFailure::Known(FailureClass::Application));
+            }
+            _ => drop(active),
+        }
+        let live = adaptive.snapshot();
+        assert_eq!((live.in_flight, live.in_flight_tokens), (0, 0));
+    }
+    assert!(adaptive.snapshot().last_attempt_second >= second);
+    // Only the bucket prepared by the tick above accepts writes; skip the
+    // count if the wall clock crossed a second boundary mid-test.
+    let finished = current_unix_second();
+    if finished == second {
+        adaptive.tick(finished + 1);
+        assert_eq!(adaptive.snapshot().latency_failures, 1);
+    }
 }
 
 #[tokio::test]

@@ -1,10 +1,12 @@
 //! Bounded adaptive-routing telemetry aggregation.
 //!
 //! Attempt completion records into one-second ring buckets. A cold-path tick
-//! publishes immutable integer snapshots; selection reads only the ArcSwap.
+//! publishes immutable integer snapshots. Admitted attempts additionally hold
+//! an RAII in-flight lease, so selection sees concurrent load immediately
+//! instead of waiting for completions to be published.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +21,7 @@ use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
-use super::candidate::{AdaptiveSnapshot, LATENCY_EXPLORATION_INTERVAL};
+use super::candidate::AdaptiveSnapshot;
 const LATENCY_WINDOW_SECONDS: u64 = 30;
 const USAGE_WINDOW_SECONDS: u64 = 60;
 const RING_BUCKETS: usize = USAGE_WINDOW_SECONDS as usize + 1;
@@ -108,6 +110,7 @@ struct SecondBucket {
     active_writers: AtomicU32,
     ttft_histogram: [AtomicU32; TTFT_HISTOGRAM_BUCKETS],
     successful_ttft_count: AtomicU32,
+    failed_attempts: AtomicU32,
     charged_tokens: AtomicU64,
 }
 
@@ -118,6 +121,7 @@ impl SecondBucket {
             active_writers: AtomicU32::new(0),
             ttft_histogram: std::array::from_fn(|_| AtomicU32::new(0)),
             successful_ttft_count: AtomicU32::new(0),
+            failed_attempts: AtomicU32::new(0),
             charged_tokens: AtomicU64::new(0),
         }
     }
@@ -166,6 +170,7 @@ impl SecondBucket {
             count.store(0, Ordering::Relaxed);
         }
         self.successful_ttft_count.store(0, Ordering::Relaxed);
+        self.failed_attempts.store(0, Ordering::Relaxed);
         self.charged_tokens.store(0, Ordering::Relaxed);
         self.second.store(second, Ordering::Release);
     }
@@ -206,6 +211,35 @@ pub struct AdaptiveTelemetryState {
     buckets: Buckets,
     tick_lock: ParkingMutex<()>,
     published: ArcSwap<AdaptiveSnapshot>,
+    /// Admitted attempts that have not finished yet. Maintained only by
+    /// [`AdaptiveInFlightLease`], so every increment has exactly one decrement.
+    in_flight: AtomicU32,
+    /// Provisional `input + output bound` tokens of in-flight attempts. The
+    /// real charge replaces it through the windowed bucket at settlement.
+    in_flight_tokens: AtomicU64,
+    /// Unix second of the latest admission attempt, or 0 if none. Stamped
+    /// before any admission check or await, so the LowestLatency idle probe
+    /// closes even when admission is refused or the attempt later fails.
+    last_attempt_second: AtomicU64,
+}
+
+/// Per-lease cap on provisional tokens. With at most `u32::MAX` concurrent
+/// leases the aggregate stays below `u64::MAX`, so the wrapping add/sub pair
+/// is exact and a reader never observes a wrapped sum.
+const MAX_LEASE_TOKENS: u64 = u32::MAX as u64;
+
+/// RAII in-flight accounting for one admitted attempt. Dropping it, on any
+/// completion, failure, or request-abort path, releases exactly what it added.
+pub struct AdaptiveInFlightLease {
+    state: Arc<AdaptiveTelemetryState>,
+    tokens: u64,
+}
+
+impl Drop for AdaptiveInFlightLease {
+    fn drop(&mut self) {
+        self.state.in_flight.fetch_sub(1, Ordering::Relaxed);
+        self.state.in_flight_tokens.fetch_sub(self.tokens, Ordering::Relaxed);
+    }
 }
 
 impl AdaptiveTelemetryState {
@@ -214,7 +248,39 @@ impl AdaptiveTelemetryState {
             buckets: Buckets::default(),
             tick_lock: ParkingMutex::new(()),
             published: ArcSwap::from_pointee(AdaptiveSnapshot::default()),
+            in_flight: AtomicU32::new(0),
+            in_flight_tokens: AtomicU64::new(0),
+            last_attempt_second: AtomicU64::new(0),
         })
+    }
+
+    /// Mark that an attempt to this candidate entered admission. Called before
+    /// circuit, outlier, and quota checks so a candidate that keeps refusing
+    /// admission is not re-probed on every selection.
+    pub fn mark_attempt(&self, second: u64) {
+        self.last_attempt_second.fetch_max(second, Ordering::Relaxed);
+    }
+
+    /// Account one admitted attempt as in flight until the lease is dropped.
+    pub fn begin_attempt(self: &Arc<Self>, provisional_tokens: u64) -> AdaptiveInFlightLease {
+        let tokens = provisional_tokens.min(MAX_LEASE_TOKENS);
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+        self.in_flight_tokens.fetch_add(tokens, Ordering::Relaxed);
+        AdaptiveInFlightLease {
+            state: Arc::clone(self),
+            tokens,
+        }
+    }
+
+    /// Record one attempt whose backend-health verdict was a failure. It feeds
+    /// the LowestLatency success-ratio penalty; fast failures must not look
+    /// like fast backends.
+    pub fn record_failure(&self, second: u64) {
+        let bucket = self.buckets.bucket(second);
+        if bucket.enter(second) {
+            saturating_add_u32(&bucket.failed_attempts, 1);
+            bucket.leave();
+        }
     }
 
     /// Record a successful final response's TTFT. Failures must not call this.
@@ -237,10 +303,15 @@ impl AdaptiveTelemetryState {
         }
     }
 
-    /// Lock-free request-path snapshot read. No sorting or floating point occurs.
+    /// Lock-free request-path read: the last published windows plus the live
+    /// in-flight counters. No sorting or floating point occurs.
     #[inline]
     pub fn snapshot(&self) -> AdaptiveSnapshot {
-        **self.published.load()
+        let mut snapshot = **self.published.load();
+        snapshot.in_flight = self.in_flight.load(Ordering::Relaxed);
+        snapshot.in_flight_tokens = self.in_flight_tokens.load(Ordering::Relaxed);
+        snapshot.last_attempt_second = self.last_attempt_second.load(Ordering::Relaxed);
+        snapshot
     }
 
     /// Publish windows ending immediately before `now_second`; the current
@@ -251,6 +322,7 @@ impl AdaptiveTelemetryState {
         let usage_start = now_second.saturating_sub(USAGE_WINDOW_SECONDS);
         let mut histogram = [0u64; TTFT_HISTOGRAM_BUCKETS];
         let mut latency_samples = 0u32;
+        let mut latency_failures = 0u32;
         let mut charged_tokens = 0u64;
         for bucket in &self.buckets.ring {
             bucket.freeze_before(now_second);
@@ -269,6 +341,7 @@ impl AdaptiveTelemetryState {
             }
             if second >= latency_start {
                 latency_samples = latency_samples.saturating_add(bucket.successful_ttft_count.load(Ordering::Relaxed));
+                latency_failures = latency_failures.saturating_add(bucket.failed_attempts.load(Ordering::Relaxed));
                 for (aggregate, count) in histogram.iter_mut().zip(&bucket.ttft_histogram) {
                     *aggregate = aggregate.saturating_add(u64::from(count.load(Ordering::Relaxed)));
                 }
@@ -278,7 +351,9 @@ impl AdaptiveTelemetryState {
         self.published.store(Arc::new(AdaptiveSnapshot {
             latency_p50_micros,
             latency_samples,
+            latency_failures,
             charged_tokens_60s: charged_tokens,
+            ..AdaptiveSnapshot::default()
         }));
 
         // Prepare the current in-progress second only after publishing all
@@ -337,7 +412,6 @@ fn histogram_p50(histogram: &[u64; TTFT_HISTOGRAM_BUCKETS]) -> Option<u64> {
 pub struct AdaptiveTelemetryStore {
     states: ArcSwap<HashMap<AdaptiveTelemetryKey, Arc<AdaptiveTelemetryState>>>,
     writer: ParkingMutex<()>,
-    selection_sequence: AtomicU8,
 }
 
 impl Default for AdaptiveTelemetryStore {
@@ -351,7 +425,6 @@ impl AdaptiveTelemetryStore {
         Self {
             states: ArcSwap::from_pointee(HashMap::new()),
             writer: ParkingMutex::new(()),
-            selection_sequence: AtomicU8::new(0),
         }
     }
 
@@ -442,27 +515,6 @@ impl AdaptiveTelemetryStore {
 
     pub fn is_empty(&self) -> bool {
         self.states.load().is_empty()
-    }
-
-    /// Return a request-independent sequence in `[0, 20)`. The bounded CAS
-    /// avoids overflow behavior and lets LowestLatency explore exactly every
-    /// twentieth plan without an RNG or mutex.
-    pub fn next_selection_sequence(&self) -> u8 {
-        let mut current = self.selection_sequence.load(Ordering::Relaxed);
-        loop {
-            let next = if current + 1 == LATENCY_EXPLORATION_INTERVAL {
-                0
-            } else {
-                current + 1
-            };
-            match self
-                .selection_sequence
-                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => return current,
-                Err(actual) => current = actual,
-            }
-        }
     }
 }
 
