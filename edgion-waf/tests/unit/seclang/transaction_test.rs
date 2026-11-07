@@ -5551,6 +5551,35 @@ fn borrowed_transform_memo_publishes_only_successful_ordinary_identity_walks() {
 }
 
 #[test]
+fn borrowed_transform_memo_reuses_marker_free_crs_xss_decoder_chain() {
+    let g = generation(concat!(
+        "SecRule ARGS:q|ARGS_GET:q \"@rx absent[0-9]\" ",
+        "\"id:960,phase:2,pass,t:urlDecodeUni,t:htmlEntityDecode,t:jsDecode,t:cssDecode\"\n",
+    ));
+    for (uri, published) in [(b"/?q=safe".as_slice(), true), (b"/?q=a%5Cb".as_slice(), false)] {
+        let mut results = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let scope = measurements::start();
+            let mut tx = query_alias_transaction(&g, request(&[], uri), RuntimeLimits::default(), mode).unwrap();
+            results.push(tx.execute_request_body().unwrap());
+            // Only a chain that stays borrowed end to end publishes the one-slot
+            // memo key that the alias evaluation of the same value then hits; the
+            // marker-bearing value decodes through owned scratch and never does.
+            assert_eq!(
+                tx.borrowed_transform_memo.key.is_some(),
+                published && mode == EvaluationMode::Accelerated
+            );
+            // Scan reuse across the alias pair is unchanged by the borrowed chain.
+            assert_eq!(
+                scope.counts().get(Event::FullScans),
+                if mode == EvaluationMode::Accelerated { 1 } else { 2 }
+            );
+        }
+        assert_eq!(results[0], results[1]);
+    }
+}
+
+#[test]
 fn borrowed_transform_memo_phase_entry_clears_identity_without_another_operand() {
     let g = generation("SecRule ARGS_GET:q \"@rx absent\" \"id:959,phase:1,pass,t:lowercase\"\n");
     let mut tx = Transaction::new(&g, request(&[], b"/?q=safe"), RuntimeLimits::default()).unwrap();

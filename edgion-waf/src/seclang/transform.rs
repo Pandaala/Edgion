@@ -156,6 +156,9 @@ pub(super) fn walk_transformations<O: TransformObserver>(
                     TransformationKind::RemoveNulls => memchr::memchr(0, current).is_none(),
                     TransformationKind::HtmlEntityDecode => memchr::memchr(b'&', current).is_none(),
                     TransformationKind::UrlDecodeUni => memchr::memchr2(b'%', b'+', current).is_none(),
+                    TransformationKind::CssDecode
+                    | TransformationKind::EscapeSeqDecode
+                    | TransformationKind::JsDecode => memchr::memchr(b'\\', current).is_none(),
                     _ => false,
                 });
         if !identity {

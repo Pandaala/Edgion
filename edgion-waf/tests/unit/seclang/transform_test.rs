@@ -876,3 +876,176 @@ fn octal_escape_decoders_preserve_width_and_partial_output() {
         }
     }
 }
+
+const BACKSLASH_DECODERS: [TransformationKind; 3] = [
+    TransformationKind::CssDecode,
+    TransformationKind::EscapeSeqDecode,
+    TransformationKind::JsDecode,
+];
+
+fn direct_backslash_decode(kind: TransformationKind, input: &[u8], limit: usize) -> Vec<u8> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(projected_output(kind, input.len()).unwrap().min(limit))
+        .unwrap();
+    match kind {
+        TransformationKind::CssDecode => css_decode(input, &mut output, limit),
+        TransformationKind::EscapeSeqDecode => escape_sequence_decode(input, &mut output, limit),
+        TransformationKind::JsDecode => js_decode(input, &mut output, limit),
+        _ => unreachable!("only backslash decoders are compared"),
+    }
+    .unwrap();
+    output
+}
+
+#[test]
+fn marker_free_css_js_escape_decoders_stay_borrowed() {
+    let long = (0..4096)
+        .map(|index| b"abc-xyz 0123&%+"[index % 15])
+        .collect::<Vec<_>>();
+    let exact = vec![b'q'; 2048];
+    for kind in BACKSLASH_DECODERS {
+        for (input, max_output_bytes) in [
+            (b"abc".to_vec(), 4096),
+            (long.clone(), 4096),
+            (exact.clone(), exact.len()),
+        ] {
+            let limits = TransformLimits {
+                max_output_bytes,
+                max_work_bytes: 65536,
+            };
+            let result = apply_transformations_borrowed(&input, &[kind], limits).unwrap();
+            assert!(
+                matches!(result, Cow::Borrowed(_)),
+                "{kind:?} must borrow marker-free input"
+            );
+            assert_eq!(result.as_ptr(), input.as_ptr());
+            assert_eq!(result.as_ref(), input.as_slice());
+            assert_eq!(result.as_ref(), direct_backslash_decode(kind, &input, max_output_bytes));
+        }
+    }
+}
+
+#[test]
+fn marker_bearing_decoders_match_pre_change_bytes_and_work() {
+    for kind in BACKSLASH_DECODERS {
+        for input in [b"a\\".as_slice(), b"\\41", b"x\\u0041y"] {
+            let expected = direct_backslash_decode(kind, input, 4096);
+            let result = apply_transformations_borrowed(input, &[kind], walk_limits()).unwrap();
+            assert!(matches!(result, Cow::Owned(_)), "{kind:?} must decode {input:?}");
+            assert_eq!(result.as_ref(), expected.as_slice());
+            for multi_match in [false, true] {
+                let mut scratch = TransformScratch::default();
+                let mut probe = WalkProbe {
+                    cap: usize::MAX,
+                    ..Default::default()
+                };
+                let location =
+                    walk_transformations(input, &[kind], multi_match, walk_limits(), &mut scratch, &mut probe)
+                        .unwrap_or_else(|_| panic!("expected bounded transformation success"));
+                // multiMatch advances only past changed output; unchanged decoded
+                // bytes leave the walk on its (equal) input.
+                let output = match location {
+                    CurrentTransform::Input if multi_match && expected == input => input,
+                    CurrentTransform::First => &scratch.first[..],
+                    _ => panic!("unexpected location for {kind:?} {input:?}"),
+                };
+                assert_eq!(output, expected.as_slice());
+                assert_eq!(probe.work, [input.len() + expected.len()]);
+                assert_eq!(probe.changed, [expected != input]);
+                // The decode path admits a destination even when the bytes survive.
+                assert!(scratch.retained_bytes().unwrap() > 0);
+            }
+        }
+    }
+    // A trailing lone backslash still takes the decode path: CSS drops it,
+    // JavaScript and escape-sequence decoding keep it.
+    assert_eq!(
+        direct_backslash_decode(TransformationKind::CssDecode, b"a\\", 4096),
+        b"a"
+    );
+    assert_eq!(
+        direct_backslash_decode(TransformationKind::JsDecode, b"a\\", 4096),
+        b"a\\"
+    );
+    assert_eq!(
+        direct_backslash_decode(TransformationKind::EscapeSeqDecode, b"a\\", 4096),
+        b"a\\"
+    );
+}
+
+#[test]
+fn marker_free_identity_steps_charge_same_work_as_decode() {
+    let input = vec![b'z'; 1024];
+    for kind in BACKSLASH_DECODERS {
+        for multi_match in [false, true] {
+            let mut identity_scratch = TransformScratch::default();
+            let mut identity = WalkProbe::default();
+            assert!(matches!(
+                walk_transformations(
+                    &input,
+                    &[kind],
+                    multi_match,
+                    walk_limits(),
+                    &mut identity_scratch,
+                    &mut identity
+                ),
+                Ok(CurrentTransform::Input)
+            ));
+            // Same-length marker-bearing input decoded to the same length charges the
+            // pre-change decode work: input.len() + output.len().
+            let decoded = direct_backslash_decode(kind, &input, 4096);
+            assert_eq!(identity.work, [input.len() + decoded.len()]);
+            assert_eq!(identity.work, [2 * input.len()]);
+            assert_eq!(identity.changed, [false]);
+            assert_eq!(identity_scratch.retained_bytes().unwrap(), 0);
+            assert_eq!(identity.pointers, [input.as_ptr() as usize]);
+            for work in [input.len() * 2 - 1, input.len() * 2] {
+                let mut probe = WalkProbe::default();
+                let result = walk_transformations(
+                    &input,
+                    &[kind],
+                    multi_match,
+                    TransformLimits {
+                        max_output_bytes: input.len(),
+                        max_work_bytes: work,
+                    },
+                    &mut TransformScratch::default(),
+                    &mut probe,
+                );
+                if work == input.len() * 2 {
+                    assert!(matches!(result, Ok(CurrentTransform::Input)));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(TransformWalkError::Transformation(TransformError::WorkLimit { .. }))
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn multi_match_marker_free_decoder_does_not_stage() {
+    let input = b"marker-free <script> value";
+    let mut scratch = TransformScratch::default();
+    let mut probe = WalkProbe::default();
+    assert!(matches!(
+        walk_transformations(
+            input,
+            &[TransformationKind::JsDecode, TransformationKind::CssDecode],
+            true,
+            walk_limits(),
+            &mut scratch,
+            &mut probe
+        ),
+        Ok(CurrentTransform::Input)
+    ));
+    // Exactly the initial stage(0, input): no ordinal advance after identity steps.
+    assert_eq!(probe.stages, [input.to_vec()]);
+    assert_eq!(probe.pointers, [input.as_ptr() as usize]);
+    assert_eq!(probe.changed, [false, false]);
+    assert_eq!(probe.work, [2 * input.len(), 4 * input.len()]);
+    assert_eq!(scratch.retained_bytes().unwrap(), 0);
+}
