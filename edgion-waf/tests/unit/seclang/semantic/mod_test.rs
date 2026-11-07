@@ -4486,3 +4486,47 @@ fn invalid_actions_before_reset_are_still_rejected() {
         assert!(with_fold(&source, |_| ()).is_err(), "{actions}");
     }
 }
+
+fn forward_selector_rule_set(earlier_rules: usize, selectors: usize) -> String {
+    let mut text = String::new();
+    for id in 1..=earlier_rules {
+        text.push_str(&format!("SecRule ARGS \"@eq 1\" \"id:{id},phase:2,pass\"\n"));
+    }
+    let forward = earlier_rules + 1;
+    text.push_str("SecRuleRemoveById");
+    for _ in 0..selectors {
+        text.push_str(&format!(" 1-{forward}"));
+    }
+    text.push('\n');
+    text.push_str(&format!("SecRule ARGS \"@eq 1\" \"id:{forward},phase:2,pass\"\n"));
+    text
+}
+
+#[test]
+fn forward_selector_scan_is_charged_before_iteration() {
+    // Every range covers 1000 earlier rules and one forward rule (the last index
+    // entry). The base lookup work of one range is 2 * ceil_log2(1002) = 20.
+    // With a budget equal to that base work, the first charged index entry must
+    // exceed it; an uncharged pre-scan would instead walk all 1001 entries and
+    // report the forward selector.
+    let text = forward_selector_rule_set(1000, 64);
+    let limits = ValidationLimits {
+        max_selector_work: 20,
+        ..ValidationLimits::default()
+    };
+    let error = with_validated(&text, crs_validation_context(), limits, |_| ()).unwrap_err();
+    assert!(
+        matches!(error, SemanticValidationError::SelectorWorkLimit { limit: 20, .. }),
+        "unexpected {error:?}"
+    );
+}
+
+#[test]
+fn forward_selector_is_still_rejected_under_default_limits() {
+    let text = forward_selector_rule_set(1000, 4);
+    let error = with_validated(&text, crs_validation_context(), ValidationLimits::default(), |_| ()).unwrap_err();
+    assert!(
+        matches!(error, SemanticValidationError::ForwardIdSelector { .. }),
+        "unexpected {error:?}"
+    );
+}

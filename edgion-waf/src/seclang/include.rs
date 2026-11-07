@@ -929,8 +929,70 @@ fn bundle_path(parent: &str, reference: &str) -> Option<String> {
     valid_bundle_path(&result).then_some(result)
 }
 
+/// Byte-comparison budget for bundle path and identity equality checks, charged
+/// against `IncludeLimits::max_identity_comparison_bytes` before each compare.
+/// `str` equality compares lengths first, so only an equal-length pair costs
+/// byte work and is charged its full length.
+struct PathComparisonBudget {
+    used: usize,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl PathComparisonBudget {
+    const fn new(limits: IncludeLimits) -> Self {
+        Self {
+            used: 0,
+            limit: limits.max_identity_comparison_bytes,
+            exceeded: false,
+        }
+    }
+
+    fn error(&self) -> IncludeError {
+        IncludeError::IdentityComparisonLimit { limit: self.limit }
+    }
+
+    fn equal(&mut self, left: &str, right: &str) -> Result<bool, IncludeError> {
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        match self.used.checked_add(left.len()) {
+            Some(used) if used <= self.limit => self.used = used,
+            _ => {
+                self.exceeded = true;
+                return Err(self.error());
+            }
+        }
+        Ok(left == right)
+    }
+
+    /// Charged linear search; `Err` only when the budget is exhausted.
+    fn find<'m, 'a>(
+        &mut self,
+        members: &'m [RuleBundleMember<'a>],
+        path: &str,
+    ) -> Result<Option<&'m RuleBundleMember<'a>>, IncludeError> {
+        for member in members {
+            if self.equal(member.path, path)? {
+                return Ok(Some(member));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Replace a provider-side failure with the budget error once exhausted.
+    fn map_exhausted<E: Into<FrontendError>>(&self, error: E) -> FrontendError {
+        if self.exceeded {
+            self.error().into()
+        } else {
+            error.into()
+        }
+    }
+}
+
 struct BundleIncludes<'a> {
     bundles: &'a [RuleBundleSource<'a>],
+    comparisons: PathComparisonBudget,
 }
 
 impl IncludeSource for BundleIncludes<'_> {
@@ -955,10 +1017,10 @@ impl IncludeSource for BundleIncludes<'_> {
         if !valid_bundle_path(&path) {
             return Err(IncludeFailure::Denied);
         }
-        let member = bundle
-            .rules
-            .iter()
-            .find(|member| member.path == path)
+        let member = self
+            .comparisons
+            .find(bundle.rules, &path)
+            .map_err(|_| IncludeFailure::Other)?
             .ok_or(IncludeFailure::Denied)?;
         let identity = format!("{index}:{path}");
         sink.push_source(&identity, member.bytes)
@@ -969,6 +1031,7 @@ impl IncludeSource for BundleIncludes<'_> {
 struct BundleAssets<'a> {
     bundles: &'a [RuleBundleSource<'a>],
     provenance: &'a [ExpandedSegment],
+    comparisons: PathComparisonBudget,
 }
 
 struct DenyIncludes;
@@ -996,10 +1059,10 @@ impl PhraseAssetSource for BundleAssets<'_> {
         let index = index.parse::<usize>().map_err(|_| PhraseAssetFailure::Denied)?;
         let bundle = self.bundles.get(index).ok_or(PhraseAssetFailure::Denied)?;
         let path = bundle_path(&segment.identity, request.handle()).ok_or(PhraseAssetFailure::Denied)?;
-        let member = bundle
-            .phrase_assets
-            .iter()
-            .find(|member| member.path == path)
+        let member = self
+            .comparisons
+            .find(bundle.phrase_assets, &path)
+            .map_err(|_| PhraseAssetFailure::Other)?
             .ok_or(PhraseAssetFailure::NotFound)?;
         sink.extend_from_slice(member.bytes)
             .map_err(|_| PhraseAssetFailure::Other)
@@ -1038,9 +1101,11 @@ pub fn compile_rule_bundles_with_external_budget(
     let mut assets = BundleAssets {
         bundles,
         provenance: &expanded.provenance,
+        comparisons: PathComparisonBudget::new(limits.includes),
     };
     let generation = if external_live_bytes == 0 {
-        compile_validated(validated, Some(&mut assets), limits.compiler)?
+        compile_validated(validated, Some(&mut assets), limits.compiler)
+            .map_err(|error| assets.comparisons.map_exhausted(error))?
     } else {
         let input_bytes = external_live_bytes
             .checked_add(expanded_owned_bytes(&expanded)?)
@@ -1052,7 +1117,8 @@ pub fn compile_rule_bundles_with_external_budget(
             limits.compiler,
             input_bytes,
             &mut super::compiler::CanonicalWork::default(),
-        )?
+        )
+        .map_err(|error| assets.comparisons.map_exhausted(error))?
     };
     Ok(CompiledBundle {
         generation,
@@ -1275,12 +1341,13 @@ pub fn compile_rule_bundles_with_selection<E>(
     let mut assets = BundleAssets {
         bundles,
         provenance: &expanded.provenance,
+        comparisons: PathComparisonBudget::new(limits.includes),
     };
     if let Some(observer) = observer.as_mut() {
         observer.compilation_started(true);
     }
     let baseline = compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, peak.bytes, &mut work)
-        .map_err(FrontendError::from)?;
+        .map_err(|error| assets.comparisons.map_exhausted(error))?;
     admit(&baseline).map_err(WafSelectionCompileError::Admission)?;
     if let Some(observer) = observer.as_mut() {
         observer.compilation_passed(true);
@@ -1317,7 +1384,7 @@ pub fn compile_rule_bundles_with_selection<E>(
     }
     let mut generation =
         compile_validated_with_budget(validated, Some(&mut assets), limits.compiler, peak.bytes, &mut work)
-            .map_err(FrontendError::from)?;
+            .map_err(|error| assets.comparisons.map_exhausted(error))?;
     generation.include_compilation_peak(baseline_peak);
     admit(&generation).map_err(WafSelectionCompileError::Admission)?;
     if let Some(observer) = observer.as_mut() {
@@ -1340,17 +1407,29 @@ fn prepare_rule_bundles(
     if bundles.len() > limits.includes.max_sources {
         return Err(RuleBundleError::Limit.into());
     }
-    let mut root = String::new();
+    // Count every member before any per-member validation or comparison scan.
     let mut members = 0_usize;
+    for bundle in bundles {
+        members = members
+            .checked_add(bundle.rules.len())
+            .and_then(|count| count.checked_add(bundle.phrase_assets.len()))
+            .ok_or(RuleBundleError::Limit)?;
+        if members > limits.includes.max_sources {
+            return Err(RuleBundleError::Limit.into());
+        }
+    }
+    // Every identity and path equality below is charged before it compares bytes.
+    let mut comparisons = PathComparisonBudget::new(limits.includes);
+    let mut root = String::new();
     let mut source_bytes = 0_usize;
     for (index, bundle) in bundles.iter().enumerate() {
-        if bundle.identity.is_empty()
-            || bundle.identity.len() > limits.includes.max_identity_bytes
-            || bundles[..index]
-                .iter()
-                .any(|previous| previous.identity == bundle.identity)
-        {
+        if bundle.identity.is_empty() || bundle.identity.len() > limits.includes.max_identity_bytes {
             return Err(RuleBundleError::Identity.into());
+        }
+        for previous in &bundles[..index] {
+            if comparisons.equal(previous.identity, bundle.identity)? {
+                return Err(RuleBundleError::Identity.into());
+            }
         }
         if bundle.entrypoints.is_empty() {
             return Err(RuleBundleError::Entrypoints.into());
@@ -1359,10 +1438,12 @@ fn prepare_rule_bundles(
             if !valid_bundle_path(path) {
                 return Err(RuleBundleError::Path.into());
             }
-            if bundle.entrypoints[..entry_index].contains(path) {
-                return Err(RuleBundleError::Entrypoints.into());
+            for previous in &bundle.entrypoints[..entry_index] {
+                if comparisons.equal(previous, path)? {
+                    return Err(RuleBundleError::Entrypoints.into());
+                }
             }
-            if !bundle.rules.iter().any(|member| member.path == *path) {
+            if comparisons.find(bundle.rules, path)?.is_none() {
                 return Err(RuleBundleError::MissingEntrypoint.into());
             }
             root.push_str(&format!("Include {index}:{path}\n"));
@@ -1371,36 +1452,34 @@ fn prepare_rule_bundles(
             if !valid_bundle_path(member.path) {
                 return Err(RuleBundleError::Path.into());
             }
-            if bundle
-                .rules
-                .iter()
-                .chain(bundle.phrase_assets)
-                .take(member_index)
-                .any(|previous| previous.path == member.path)
-            {
-                return Err(RuleBundleError::DuplicateMember.into());
+            for previous in bundle.rules.iter().chain(bundle.phrase_assets).take(member_index) {
+                if comparisons.equal(previous.path, member.path)? {
+                    return Err(RuleBundleError::DuplicateMember.into());
+                }
             }
-            if bundle.rules.iter().any(|rule| rule.path == member.path) {
+            // Members are unique at this point, so a rule member is exactly one
+            // whose position lies in `rules`; no second path scan is needed.
+            if member_index < bundle.rules.len() {
                 if member.bytes.len() > limits.includes.max_source_bytes {
                     return Err(RuleBundleError::Limit.into());
                 }
             } else if member.bytes.len() > limits.compiler.max_asset_bytes {
                 return Err(RuleBundleError::Limit.into());
             }
-            members = members.checked_add(1).ok_or(RuleBundleError::Limit)?;
             source_bytes = source_bytes
                 .checked_add(member.bytes.len())
                 .ok_or(RuleBundleError::Limit)?;
         }
     }
-    if members > limits.includes.max_sources || source_bytes > limits.includes.max_expanded_bytes {
+    if source_bytes > limits.includes.max_expanded_bytes {
         return Err(RuleBundleError::Limit.into());
     }
     if root.len() > limits.includes.max_source_bytes {
         return Err(RuleBundleError::Limit.into());
     }
-    let mut resolver = BundleIncludes { bundles };
-    let mut expanded = expand_includes("bundle-root", root.as_bytes(), &mut resolver, limits.includes, true)?;
+    let mut resolver = BundleIncludes { bundles, comparisons };
+    let mut expanded = expand_includes("bundle-root", root.as_bytes(), &mut resolver, limits.includes, true)
+        .map_err(|error| resolver.comparisons.map_exhausted(error))?;
     if !inline_rules.is_empty() {
         let inline = expand_includes(
             "inline",

@@ -689,7 +689,9 @@ struct HirMetrics {
 
 struct HirMetricsVisitor {
     metrics: HirMetrics,
-    subtree_nodes: Vec<usize>,
+    /// Expanded weight of each finished subtree: its node count, with every
+    /// counted repetition multiplying its child's weight by the unrolled copies.
+    subtree_weights: Vec<usize>,
     markers: Vec<usize>,
 }
 
@@ -697,11 +699,11 @@ impl HirMetricsVisitor {
     fn new(source_units: usize) -> Result<Self, RegexProgramError> {
         let mut visitor = Self {
             metrics: HirMetrics::default(),
-            subtree_nodes: Vec::new(),
+            subtree_weights: Vec::new(),
             markers: Vec::new(),
         };
         visitor
-            .subtree_nodes
+            .subtree_weights
             .try_reserve_exact(source_units)
             .map_err(|_| RegexProgramError::Allocation)?;
         visitor
@@ -711,11 +713,11 @@ impl HirMetricsVisitor {
         Ok(visitor)
     }
 
-    fn push_subtree(&mut self, nodes: usize) -> Result<(), RegexProgramError> {
-        if self.subtree_nodes.len() == self.subtree_nodes.capacity() {
+    fn push_subtree(&mut self, weight: usize) -> Result<(), RegexProgramError> {
+        if self.subtree_weights.len() == self.subtree_weights.capacity() {
             return Err(RegexProgramError::ProjectionInvariant);
         }
-        self.subtree_nodes.push(nodes);
+        self.subtree_weights.push(weight);
         Ok(())
     }
 
@@ -723,7 +725,7 @@ impl HirMetricsVisitor {
         if self.markers.len() == self.markers.capacity() {
             return Err(RegexProgramError::ProjectionInvariant);
         }
-        self.markers.push(self.subtree_nodes.len());
+        self.markers.push(self.subtree_weights.len());
         Ok(())
     }
 }
@@ -733,7 +735,7 @@ impl hir::Visitor for HirMetricsVisitor {
     type Err = RegexProgramError;
 
     fn finish(self) -> Result<Self::Output, Self::Err> {
-        if !self.markers.is_empty() || self.subtree_nodes.len() != 1 {
+        if !self.markers.is_empty() || self.subtree_weights.len() != 1 {
             return Err(RegexProgramError::ProjectionInvariant);
         }
         Ok(self.metrics)
@@ -790,36 +792,49 @@ impl hir::Visitor for HirMetricsVisitor {
         match hir.kind() {
             HirKind::Empty | HirKind::Look(_) | HirKind::Literal(_) | HirKind::Class(_) => self.push_subtree(1)?,
             HirKind::Capture(_) => {
-                let child = self.subtree_nodes.pop().ok_or(RegexProgramError::ProjectionInvariant)?;
-                self.push_subtree(child.checked_add(1).ok_or(RegexProgramError::Arithmetic)?)?;
+                let child = self
+                    .subtree_weights
+                    .pop()
+                    .ok_or(RegexProgramError::ProjectionInvariant)?;
+                self.push_subtree(child.saturating_add(1))?;
             }
             HirKind::Repetition(repetition) => {
-                let child = self.subtree_nodes.pop().ok_or(RegexProgramError::ProjectionInvariant)?;
+                // `child` is the expanded weight of the repeated subtree, so nested
+                // counted repetitions compose multiplicatively, matching the NFA
+                // states they unroll to (F-S1-3). Saturation keeps an overflowing
+                // estimate a repetition-limit rejection instead of an arithmetic one.
+                let child = self
+                    .subtree_weights
+                    .pop()
+                    .ok_or(RegexProgramError::ProjectionInvariant)?;
                 let minimum = usize::try_from(repetition.min)
-                    .ok()
-                    .and_then(|value| value.checked_mul(child))
-                    .ok_or(RegexProgramError::Arithmetic)?;
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(child);
                 let additional = match repetition.max {
                     Some(maximum) => usize::try_from(maximum.saturating_sub(repetition.min))
-                        .ok()
-                        .and_then(|value| value.checked_mul(child))
-                        .ok_or(RegexProgramError::Arithmetic)?,
+                        .unwrap_or(usize::MAX)
+                        .saturating_mul(child),
                     None => child,
                 };
                 self.metrics.repetition_work = self
                     .metrics
                     .repetition_work
-                    .checked_add(minimum)
-                    .and_then(|value| value.checked_add(additional))
-                    .ok_or(RegexProgramError::Arithmetic)?;
-                self.push_subtree(child.checked_add(1).ok_or(RegexProgramError::Arithmetic)?)?;
+                    .saturating_add(minimum.saturating_add(additional));
+                // Unrolled copies: `x{n,m}` compiles to `m` copies, `x{n,}` to
+                // `max(n, 1)` copies plus a loop; a single copy is never discounted.
+                let copies = repetition.max.unwrap_or(repetition.min).max(1);
+                let weight = usize::try_from(copies)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(child)
+                    .saturating_add(1);
+                self.push_subtree(weight)?;
             }
             HirKind::Concat(_) | HirKind::Alternation(_) => {
                 let start = self.markers.pop().ok_or(RegexProgramError::ProjectionInvariant)?;
-                let nodes = self.subtree_nodes[start..].iter().try_fold(1_usize, |total, child| {
-                    total.checked_add(*child).ok_or(RegexProgramError::Arithmetic)
-                })?;
-                self.subtree_nodes.truncate(start);
+                let nodes = self.subtree_weights[start..]
+                    .iter()
+                    .fold(1_usize, |total, child| total.saturating_add(*child));
+                self.subtree_weights.truncate(start);
                 self.push_subtree(nodes)?;
             }
         }
@@ -1029,10 +1044,7 @@ impl RegexCore {
                 .literal_bytes
                 .checked_add(metrics.literal_bytes)
                 .ok_or(RegexProgramError::Arithmetic)?;
-            hir_total.repetition_work = hir_total
-                .repetition_work
-                .checked_add(metrics.repetition_work)
-                .ok_or(RegexProgramError::Arithmetic)?;
+            hir_total.repetition_work = hir_total.repetition_work.saturating_add(metrics.repetition_work);
             hir_total.capture_groups = hir_total
                 .capture_groups
                 .checked_add(metrics.capture_groups)

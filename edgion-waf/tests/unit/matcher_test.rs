@@ -1962,3 +1962,49 @@ fn pattern_range_queries_match_individual_bits_for_all_boundaries() {
         }
     }
 }
+
+fn repetition_work_of(source: &str) -> usize {
+    let ast = ast::parse::ParserBuilder::new()
+        .nest_limit(RegexProgramLimits::default().max_nest_depth)
+        .octal(false)
+        .build()
+        .parse(source)
+        .unwrap();
+    let hir = hir::translate::TranslatorBuilder::new()
+        .utf8(false)
+        .unicode(true)
+        .build()
+        .translate(source, &ast)
+        .unwrap();
+    hir_metrics(&hir, source.len() + 1).unwrap().repetition_work
+}
+
+#[test]
+fn nested_counted_repetition_work_is_multiplicative() {
+    // Flat repetitions keep their previous estimate.
+    assert_eq!(repetition_work_of("a{1000}"), 1000);
+    assert_eq!(repetition_work_of("(?:ab)+"), 2);
+    // Nested counted repetition composes multiplicatively.
+    assert!(repetition_work_of("(?:a{100}){100}") >= 10_000);
+}
+
+#[test]
+fn nested_counted_repetition_is_rejected_before_the_nfa_build() {
+    for source in [
+        "(a{1000}){1000}",
+        "((a{1000}){1000}){1000}",
+        "(?:(?:(?:(?:(?:(?:a{1000}){1000}){1000}){1000}){1000}){1000}){1000}",
+    ] {
+        let error = CompiledRegexProgram::compile_one(source, RegexProgramLimits::default()).unwrap_err();
+        assert!(
+            matches!(error, RegexProgramError::RepetitionWorkLimit { actual, limit } if actual > limit),
+            "{source}: unexpected {error:?}"
+        );
+    }
+}
+
+#[test]
+fn single_level_counted_repetition_within_the_limit_still_compiles() {
+    CompiledRegexProgram::compile_one("(?:ab){1,1000}x[a-z]{0,64}", RegexProgramLimits::default()).unwrap();
+    CompiledRegexProgram::compile_one("(?:a{10}){10}", RegexProgramLimits::default()).unwrap();
+}

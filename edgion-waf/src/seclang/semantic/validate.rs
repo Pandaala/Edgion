@@ -837,12 +837,9 @@ fn resolve_exception_union(
         if start == end {
             return Err(SemanticValidationError::UnresolvedIdSelector { position });
         }
-        for entry in &index[start..end] {
-            let location = draft.folds[draft.final_rules[entry.unit].fold].location;
-            if location >= directive {
-                return Err(SemanticValidationError::ForwardIdSelector { position });
-            }
-        }
+        // Charge the lookup before touching any matched entry. Each entry's unit of
+        // work is charged and checked before its forward-location test, so an
+        // inspected entry is always paid for (F-S1-2).
         local.selector_work =
             local
                 .selector_work
@@ -853,6 +850,19 @@ fn resolve_exception_union(
                 })?;
         check_selector_work(&cumulative, &local, limits, position)?;
         for entry in &index[start..end] {
+            local.selector_work =
+                local
+                    .selector_work
+                    .checked_add(1)
+                    .ok_or(SemanticValidationError::SelectorWorkLimit {
+                        limit: limits.max_selector_work,
+                        position,
+                    })?;
+            check_selector_work(&cumulative, &local, limits, position)?;
+            let location = draft.folds[draft.final_rules[entry.unit].fold].location;
+            if location >= directive {
+                return Err(SemanticValidationError::ForwardIdSelector { position });
+            }
             local.raw = local
                 .raw
                 .checked_add(1)
@@ -876,14 +886,6 @@ fn resolve_exception_union(
                     position,
                 });
             }
-            local.selector_work =
-                local
-                    .selector_work
-                    .checked_add(1)
-                    .ok_or(SemanticValidationError::SelectorWorkLimit {
-                        limit: limits.max_selector_work,
-                        position,
-                    })?;
             let unit = states[entry.unit].unit.expect("indexed root has unit");
             if scratch.seen[unit] != generation {
                 local.distinct =

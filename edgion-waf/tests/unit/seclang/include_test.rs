@@ -914,3 +914,156 @@ fn non_selection_path_reports_the_syntax_error_under_the_same_peak_limit() {
         Err(FrontendError::Syntax(_))
     ));
 }
+
+/// Equal-length bundle paths that share a long prefix: the worst case for a
+/// byte-wise path comparison. Short enough that the `index:path` include
+/// identity stays within the identity byte limit.
+fn long_member_paths(count: usize) -> Vec<String> {
+    let prefix = "a".repeat(DEFAULT_MAX_INCLUDE_IDENTITY_BYTES - 16);
+    (0..count).map(|index| format!("{prefix}{index:06}")).collect()
+}
+
+fn comparison_limits(max_identity_comparison_bytes: usize) -> FrontendLimits {
+    FrontendLimits {
+        includes: IncludeLimits {
+            max_identity_comparison_bytes,
+            ..IncludeLimits::default()
+        },
+        ..FrontendLimits::default()
+    }
+}
+
+#[test]
+fn bundle_member_count_is_checked_before_member_validation() {
+    // The duplicate would be discovered by the member scan; the count guard must
+    // reject the over-cap bundle before that scan runs.
+    let rules = [
+        RuleBundleMember {
+            path: "main.conf",
+            bytes: b"SecAction \"id:1,phase:1,pass\"\n",
+        },
+        RuleBundleMember {
+            path: "other.conf",
+            bytes: b"",
+        },
+        RuleBundleMember {
+            path: "main.conf",
+            bytes: b"",
+        },
+    ];
+    let bundles = [source_bundle("first", &["main.conf"], &rules, &[])];
+    let limits = FrontendLimits {
+        includes: IncludeLimits {
+            max_sources: 2,
+            ..IncludeLimits::default()
+        },
+        ..FrontendLimits::default()
+    };
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), limits),
+        Err(FrontendError::RuleBundle(RuleBundleError::Limit))
+    ));
+}
+
+#[test]
+fn bundle_member_dedupe_comparisons_are_charged() {
+    let paths = long_member_paths(64);
+    let mut rules = vec![RuleBundleMember {
+        path: &paths[0],
+        bytes: b"SecAction \"id:1,phase:1,pass\"\n",
+    }];
+    rules.extend(paths[1..].iter().map(|path| RuleBundleMember { path, bytes: b"" }));
+    let entrypoints = [paths[0].as_str()];
+    let bundles = [source_bundle("first", &entrypoints, &rules, &[])];
+    compile_rule_bundles(&bundles, "", context(), FrontendLimits::default()).unwrap();
+    let limit = 64 * DEFAULT_MAX_INCLUDE_IDENTITY_BYTES;
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), comparison_limits(limit)),
+        Err(FrontendError::Include(IncludeError::IdentityComparisonLimit { limit: reported }))
+            if reported == limit
+    ));
+}
+
+#[test]
+fn bundle_include_lookups_are_charged() {
+    let paths = long_member_paths(4);
+    let include = format!("Include {}\n", paths[3]);
+    let entry = include.repeat(200);
+    let rules = [
+        RuleBundleMember {
+            path: &paths[0],
+            bytes: entry.as_bytes(),
+        },
+        RuleBundleMember {
+            path: &paths[1],
+            bytes: b"",
+        },
+        RuleBundleMember {
+            path: &paths[2],
+            bytes: b"",
+        },
+        RuleBundleMember {
+            path: &paths[3],
+            bytes: b"# empty\n",
+        },
+    ];
+    let entrypoints = [paths[0].as_str()];
+    let bundles = [source_bundle("first", &entrypoints, &rules, &[])];
+    // Dedupe of four members fits; 200 lookups that each compare four
+    // equal-length paths do not.
+    let limit = 1024 * 1024;
+    compile_rule_bundles(&bundles, "", context(), comparison_limits(limit * 4)).unwrap();
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), comparison_limits(limit)),
+        Err(FrontendError::Include(IncludeError::IdentityComparisonLimit { limit: reported }))
+            if reported == limit
+    ));
+}
+
+#[test]
+fn bundle_asset_lookups_are_charged() {
+    let paths = long_member_paths(4);
+    let rule_text = (0..200)
+        .map(|id| {
+            format!(
+                "SecRule REQUEST_URI \"@pmFromFile {}\" \"id:{},phase:1,pass\"\n",
+                paths[3],
+                id + 1
+            )
+        })
+        .collect::<String>();
+    let rules = [RuleBundleMember {
+        path: "main.conf",
+        bytes: rule_text.as_bytes(),
+    }];
+    let assets = paths
+        .iter()
+        .map(|path| RuleBundleMember {
+            path,
+            bytes: b"alpha\n",
+        })
+        .collect::<Vec<_>>();
+    let bundles = [source_bundle("first", &["main.conf"], &rules, &assets)];
+    let limit = 1024 * 1024;
+    compile_rule_bundles(&bundles, "", context(), comparison_limits(limit * 4)).unwrap();
+    assert!(matches!(
+        compile_rule_bundles(&bundles, "", context(), comparison_limits(limit)),
+        Err(FrontendError::Include(IncludeError::IdentityComparisonLimit { limit: reported }))
+            if reported == limit
+    ));
+}
+
+#[test]
+fn bundle_at_member_cap_with_short_paths_compiles_under_default_limits() {
+    let paths = (0..DEFAULT_MAX_INCLUDE_SOURCES)
+        .map(|index| format!("rules/r{index:04}.conf"))
+        .collect::<Vec<_>>();
+    let mut rules = vec![RuleBundleMember {
+        path: &paths[0],
+        bytes: b"SecAction \"id:1,phase:1,pass\"\n",
+    }];
+    rules.extend(paths[1..].iter().map(|path| RuleBundleMember { path, bytes: b"" }));
+    let entrypoints = [paths[0].as_str()];
+    let bundles = [source_bundle("first", &entrypoints, &rules, &[])];
+    compile_rule_bundles(&bundles, "", context(), FrontendLimits::default()).unwrap();
+}
