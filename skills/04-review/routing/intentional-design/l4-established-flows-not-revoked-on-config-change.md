@@ -71,8 +71,9 @@ host-removal closing (Envoy `close_connections_on_host_set_change`) is not
 implemented.
 
 UDP listener throughput (single serve task per listener, inline new-session
-admission) is a separate concern tracked with gw-core3-05, not part of this
-decision.
+admission) is a separate concern tracked with gw-core3-05 in
+[`tasks/todo/gw-core3-05-udp-session-admission-hardening.md`](../../../../tasks/todo/gw-core3-05-udp-session-admission-hardening.md),
+not part of this decision.
 
 ## Verification and re-evaluation
 

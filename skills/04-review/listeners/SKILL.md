@@ -15,6 +15,7 @@ before applying a decision to current code.
 - [Gateway recreation requires a data-plane restart](intentional-design/gateway-recreation-requires-restart.md)
 - [Serial connection admission with optional Redis limits](intentional-design/bounded-serial-connection-admission.md)
 - [Graceful upgrade descriptor error boundary](intentional-design/graceful-upgrade-descriptor-error-boundary.md)
+- [UDP session table does not defend against spoofed sources](intentional-design/udp-session-table-spoofed-source-limit.md)
 
 ## Compatibility constraints
 
