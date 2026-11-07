@@ -17,9 +17,9 @@ mechanism-specific regression guards in `../regression-guards/` record how indiv
 
 | # | Surface | Trust | Entry points | Typical attack |
 |---|---|---|---|---|
-| 1 | Operator rule sets (SecLang source, `ruleSelection`, profiles) | semi-trusted: written by an operator, validated by the Controller | `compile_rule_bundles*`, `inspect_compatibility` (`seclang/include.rs`, `seclang/compiler/`) | compile-time CPU/memory exhaustion, limit-arithmetic overflow, regex blow-up, crafted directive graphs |
+| 1 | Operator rule sets (SecLang source, `ruleSelection`, profiles) | semi-trusted: written by an operator, validated by the Controller | `compile_rule_bundles*`, `inspect_compatibility` (`seclang/include/`, `seclang/compiler/`) | compile-time CPU/memory exhaustion, limit-arithmetic overflow, regex blow-up, crafted directive graphs |
 | 2 | Client requests (head, body, chunks, response head/window) | untrusted | `Transaction::*` (`seclang/transaction/`, `seclang/json_inspection_runtime.rs`, `seclang/xml_inspection_runtime.rs`) | decode-chain bypass, parser differentials, detector evasion, panics, integer overflow, exhaustion within limits |
-| 3 | Phrase assets and includes (bundle members referenced by `@pmFromFile` / `Include`) | semi-trusted, same owner as 1 but resolved through a sink | `IncludeSink`, `BundleIncludes`, `BundleAssets` (`seclang/include.rs`), `PhraseAssetSink` (`seclang/compiler/mod.rs:219`) | include cycles and fan-out, oversized assets, quadratic dedupe |
+| 3 | Phrase assets and includes (bundle members referenced by `@pmFromFile` / `Include`) | semi-trusted, same owner as 1 but resolved through a sink | `IncludeSink`, `BundleIncludes`, `BundleAssets` (`seclang/include/mod.rs`), `PhraseAssetSink` (`seclang/compiler/mod.rs:219`) | include cycles and fan-out, oversized assets, quadratic dedupe |
 | 4 | The gateway contract (how the host drives the engine) | trusted host, but the boundary itself is a contract | `edgion-gateway/src/plugins/http/waf/` | host relying on behavior the crate does not promise |
 
 ## Rationale and evidence
@@ -35,7 +35,7 @@ operator-controlled data is charged before the work it pays for:
 `ValidationLimits` (`seclang/semantic/mod.rs:46,73,88,143,425`), `CompilerLimits`
 (`seclang/compiler/mod.rs:71`), `MatcherLimits` / `RegexProgramLimits` (`matcher.rs:56,113`: nest limit, AST
 and HIR node counts, multiplicative repetition work, `nfa_size_limit`, program peak) and `BuildLimits`
-(`aho_corasick/mod.rs:90`). `FrontendLimits` (`seclang/include.rs:92`) aggregates them for one compile.
+(`aho_corasick/mod.rs:90`). `FrontendLimits` (`seclang/include/mod.rs:97`) aggregates them for one compile.
 Counting and size arithmetic is `checked_*`; the canonical work counter is shared across two-pass
 selection compiles.
 
@@ -54,7 +54,7 @@ read; scratch itself is built lazily inside that bound. Ordinary operator work i
 (`charge_operator_work`, `seclang/transaction/selection.rs:649`); detector and ctl work are
 transaction-wide counters (`detector_work_bytes`, `ctl_work_bytes`, `seclang/transaction/mod.rs:553-558`).
 
-**3. Phrase assets and includes.** `IncludeLimits` (`seclang/include.rs:54`) bounds include depth, source
+**3. Phrase assets and includes.** `IncludeLimits` (`seclang/include/mod.rs:59`) bounds include depth, source
 count, per-source and aggregate bytes, identity-comparison bytes and provenance; cycles are detected by
 stack identity. Bundle member/entrypoint counts are checked before member validation and dedupe comparisons
 are charged (commit `53229a191`, guard

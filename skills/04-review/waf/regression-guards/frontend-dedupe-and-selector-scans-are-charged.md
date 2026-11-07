@@ -12,7 +12,7 @@ Operator-supplied rule sets are a compile-time denial-of-service surface. Three
 front-end scans charge their work before performing it; valid rule sets keep
 their acceptance unchanged.
 
-- **Bundle preparation** (`edgion-waf/src/seclang/include.rs`,
+- **Bundle preparation** (`edgion-waf/src/seclang/include/mod.rs`,
   `prepare_rule_bundles`): the total member count across all bundles is checked
   against `IncludeLimits::max_sources` before any member is validated or
   compared. Every bundle-identity, entrypoint and member-path equality goes
@@ -71,7 +71,7 @@ needed: every supported CRS regex still compiles.
   `bundle_member_dedupe_comparisons_are_charged`,
   `bundle_include_lookups_are_charged`, `bundle_asset_lookups_are_charged`,
   `bundle_at_member_cap_with_short_paths_compiles_under_default_limits`
-  (`tests/unit/seclang/include_test.rs`);
+  (`tests/unit/seclang/include/mod_test.rs`);
   `forward_selector_scan_is_charged_before_iteration`,
   `forward_selector_is_still_rejected_under_default_limits`
   (`tests/unit/seclang/semantic/mod_test.rs`);
