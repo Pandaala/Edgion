@@ -1,3 +1,5 @@
+//! Directive scan into semantic records, operator lookup and scalar action parsers.
+
 use super::*;
 
 pub(super) fn scan_semantics(draft: &mut SemanticDraft<'_>, limits: SemanticLimits) -> Result<(), SemanticError> {

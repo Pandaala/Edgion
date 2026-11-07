@@ -1,3 +1,5 @@
+//! Canonical target and pattern planning, slot layout and regex program interning.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

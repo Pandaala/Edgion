@@ -59,7 +59,7 @@ cannot reuse. This is a request-path cleanup, not a throughput or RSS claim.
 short, 4096-byte and exactly `max_output_bytes` inputs, differential bytes and
 `work` for marker-bearing inputs against the decoder functions, identity work
 and work-limit boundaries, and multiMatch non-staging.
-`edgion-waf/tests/unit/seclang/transaction_test.rs`
+`edgion-waf/tests/unit/seclang/transaction/mod_test.rs`
 (`borrowed_transform_memo_reuses_marker_free_crs_xss_decoder_chain`) asserts the
 CRS-like chain publishes the memo key only for a marker-free value (a memo hit
 versus a republish is not separately observable). Removing the

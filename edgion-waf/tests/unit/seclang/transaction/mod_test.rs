@@ -6306,10 +6306,7 @@ fn in_place_unit_staging_matches_frozen_copy_on_commit_rollback_and_every_limit(
             assert_eq!(actual.ctl_work_bytes, oracle.ctl_work_bytes);
             assert_eq!(actual.unit_work_bytes, oracle.unit_work_bytes);
             assert_tx_accounting(&actual.tx);
-            assert!(actual.tx_journal.steps.is_empty());
-            assert!(actual.tx_journal.marks.is_empty());
-            assert!(!actual.tx_journal.marks_active);
-            assert!(actual.tx_journal.base_len.is_none());
+            assert!(actual.tx_journal.is_reset());
             if result != Ok(true) {
                 // Rollback restores the base exactly, including cached charges.
                 assert_eq!(after, base, "{source}: {limits:?}");
@@ -6420,11 +6417,11 @@ fn matched_single_member_units_stage_in_place_without_copying_tx() {
     assert!(tx.tx.removed_units.contains(&1));
     assert!(tx.tx.target_exclusions.iter().any(|exclusion| exclusion.unit == 2));
     // The journal keeps its capacity for the next unit and holds nothing.
-    assert!(tx.tx_journal.steps.is_empty());
-    let capacity = tx.tx_journal.steps.capacity();
+    assert!(tx.tx_journal.is_reset());
+    let capacity = tx.tx_journal.steps_capacity();
     assert!(capacity > 0);
     assert!(tx.evaluate_unit(0, None).unwrap());
-    assert_eq!(tx.tx_journal.steps.capacity(), capacity);
+    assert_eq!(tx.tx_journal.steps_capacity(), capacity);
     assert_eq!(tx.tx_value(b"count"), Some(b"16".as_slice()));
 }
 

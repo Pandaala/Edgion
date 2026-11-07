@@ -1,3 +1,5 @@
+//! Rule-unit evaluation: in-place TX staging, chain branches, member matching and action/ctl application.
+
 use super::*;
 
 impl<'generation> Transaction<'generation> {
@@ -60,15 +62,10 @@ impl<'generation> Transaction<'generation> {
                 self.capture_keys = capture_keys;
                 Ok(true)
             }
-            Ok(None) => {
+            not_committed => {
                 staged.rollback_unit(&mut journal, checkpoint);
                 self.tx = staged;
-                Ok(false)
-            }
-            Err(error) => {
-                staged.rollback_unit(&mut journal, checkpoint);
-                self.tx = staged;
-                Err(error)
+                not_committed.map(|_| false)
             }
         };
         journal.clear();

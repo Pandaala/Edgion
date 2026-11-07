@@ -1,3 +1,5 @@
+//! Runtime transaction: limits, public request/response views, errors, findings and the `Transaction` owner.
+
 use crate::seclang::decimal_bytes;
 #[cfg(test)]
 use crate::seclang::measurements::{self, Event};

@@ -1,3 +1,5 @@
+//! Compatibility report: unavailable-capability findings and per-rule summaries for a rule set.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

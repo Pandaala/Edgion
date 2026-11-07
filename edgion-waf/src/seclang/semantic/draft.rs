@@ -1,3 +1,5 @@
+//! `SemanticDraft` and `SemanticError`: the mutable analysis state, analysis entry points and preflight.
+
 use super::*;
 
 #[derive(Debug)]

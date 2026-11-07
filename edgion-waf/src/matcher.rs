@@ -917,6 +917,8 @@ struct RegexSyntax {
     case_insensitive: bool,
     unicode: bool,
     match_kind: MatchKind,
+    /// Also build a capture-free decision VM from the same HIR.
+    decision: bool,
 }
 
 #[derive(Debug)]
@@ -936,10 +938,10 @@ impl RegexCore {
         peak_budget: usize,
         syntax: RegexSyntax,
     ) -> Result<Self, RegexProgramError> {
-        Self::compile_many_with_decision(sources, limits, peak_budget, syntax, false).map(|(core, _)| core)
+        Self::compile_many_with_decision(sources, limits, peak_budget, syntax).map(|(core, _)| core)
     }
 
-    /// Compiles the program and, when `decision` is set, a capture-free
+    /// Compiles the program and, when `syntax.decision` is set, a capture-free
     /// decision VM from the same HIR. The decision VM never has more NFA
     /// states than the program VM, so one cache sized for the program VM can
     /// be reset to serve either; its owner token is shared.
@@ -948,13 +950,13 @@ impl RegexCore {
         limits: RegexProgramLimits,
         peak_budget: usize,
         syntax: RegexSyntax,
-        decision: bool,
     ) -> Result<(Self, Option<Self>), RegexProgramError> {
         let RegexSyntax {
             captures,
             case_insensitive,
             unicode,
             match_kind,
+            decision,
         } = syntax;
         // The decision NFA stays alive next to the program NFA.
         let decision_peak = if decision { limits.max_nfa_bytes } else { 0 };
@@ -1407,6 +1409,7 @@ impl CompiledRegexProgram {
                 case_insensitive: false,
                 unicode: true,
                 match_kind: MatchKind::LeftmostFirst,
+                decision: false,
             },
         )?;
         Self::finish_single(core, limits)
@@ -1426,6 +1429,7 @@ impl CompiledRegexProgram {
                 case_insensitive: false,
                 unicode: false,
                 match_kind: MatchKind::LeftmostFirst,
+                decision: false,
             },
         )?;
         Self::finish_single(core, limits)
@@ -1445,6 +1449,7 @@ impl CompiledRegexProgram {
                 case_insensitive: true,
                 unicode: false,
                 match_kind: MatchKind::LeftmostFirst,
+                decision: false,
             },
         )?;
         Self::finish_single(core, limits)
@@ -1753,8 +1758,8 @@ impl CompiledCaptureRegexProgram {
                 case_insensitive: false,
                 unicode,
                 match_kind: MatchKind::LeftmostFirst,
+                decision: true,
             },
-            true,
         )?;
         let decision = CompiledRegexProgram {
             core: decision.ok_or(RegexProgramError::ProjectionInvariant)?,
@@ -3144,6 +3149,7 @@ fn compile_regex(
             case_insensitive: false,
             unicode,
             match_kind: MatchKind::All,
+            decision: false,
         },
     )
     .map_err(|error| match error {

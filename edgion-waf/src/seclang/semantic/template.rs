@@ -1,3 +1,5 @@
+//! Macro templates: macro scanning, template shapes and mapped error positions.
+
 use super::*;
 
 #[derive(Debug, Clone)]

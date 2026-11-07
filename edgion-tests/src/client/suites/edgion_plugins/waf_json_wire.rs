@@ -285,6 +285,56 @@ async fn duplicate_occurrences_across_chunks_are_denied(ctx: &TestContext) -> Re
     no_forward(&probe).await
 }
 
+async fn allowed_body_across_chunks_is_forwarded_byte_exact(ctx: &TestContext) -> Result<(), String> {
+    let recorder = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
+    let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-json-allowed-chunks").await?;
+    let traceparent = crate::access_log_client::traceparent_for_marker(probe.trace_id());
+    let mut connection = RawH1Conn::connect(&ctx.target_host, ctx.http_port).await?;
+    connection
+        .write_head(
+            "POST",
+            "/waf-wire",
+            "waf-transport-h1.example.com",
+            &[
+                ("transfer-encoding", "chunked"),
+                ("content-type", "application/json"),
+                ("x-waf-version", "json-v1"),
+                ("traceparent", &traceparent),
+            ],
+        )
+        .await?;
+    // A benign body split across two chunks is replayed upstream unchanged.
+    let first = br#"{"a":"safe","#;
+    let last = br#""b":"safe"}"#;
+    connection.write_chunk(first).await?;
+    no_forward(&probe).await?;
+    connection.write_chunk(last).await?;
+    no_forward(&probe).await?;
+    connection.finish_chunked().await?;
+    let response = connection.read_response_head(Duration::from_secs(10)).await?;
+    let body = [first.as_slice(), last.as_slice()].concat();
+    let length = body.len().to_string();
+    let digest = format!("{:x}", Sha256::digest(&body));
+    if response.status != 200
+        || response.header("x-up-req-body-len") != Some(length.as_str())
+        || response.header("x-up-req-body-sha256") != Some(digest.as_str())
+    {
+        return Err(format!(
+            "JSON cross-chunk upload did not preserve allowed wire bytes: {response}"
+        ));
+    }
+    let snapshot = probe.snapshot().await?;
+    if snapshot.dropped != 0
+        || snapshot.count_matching(|event| event.is(KIND_REQ_HEADERS)) != 1
+        || snapshot.req_body_total(probe.trace_id()) != body.len()
+    {
+        return Err(format!(
+            "JSON cross-chunk upload expected one unchanged request: {snapshot}"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) -> TestCase {
     TestCase::new(
         match (version, detection, zero_work) {
@@ -419,6 +469,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) ->
                         }
                     }
                     if version == "json-v1" && !detection && !zero_work {
+                        allowed_body_across_chunks_is_forwarded_byte_exact(&ctx).await?;
                         duplicate_occurrences_across_chunks_are_denied(&ctx).await?;
                         PausedJsonUpload::start(&ctx).await?.finish().await?;
                         PausedJsonUpload::start(&ctx).await?.abort().await?;

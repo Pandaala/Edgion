@@ -307,9 +307,10 @@ XSS 检测不会新增捕获，也不会覆盖已有的 `TX.0`。取反匹配不
 ## 数值操作符
 
 `@eq`、`@ge`、`@gt`、`@lt` 以及 `setvar:tx.<name>=+N` / `=-N` 算术，按 ModSecurity v3
-（C `atoll`）的方式转换两侧的运行时值：先跳过开头的 ASCII 空白，再由可选符号和开头连续的
+比较类操作符所用的 C `atoll` 语义转换两侧的运行时值：先跳过开头的 ASCII 空白，再由可选符号和开头连续的
 十进制数字构成数值。数字之后的字节被忽略（`12abc` 为 12）；没有数字的值为 0（`abc`、空值；`setvar`
-算术中不存在的 TX 变量也从 0 开始）；超出有符号 64 位范围的数值饱和为最大值或最小值。因此非数字或超大的请求值
+算术中不存在的 TX 变量也从 0 开始）；超出有符号 64 位范围的数值饱和为最大值或最小值。ModSecurity 的 `@eq` 则经由 32 位 `int`
+转换，超出范围的值变为 0；Edgion 对 `@eq` 同样使用饱和转换。因此非数字或超大的请求值
 不会再导致请求失败；此前版本对这类请求返回 500，`DetectionOnly` 模式下也是如此。规则中直接
 书写的数值常量（如 `@eq abc`）仍会在编译规则集时被拒绝。
 
@@ -430,15 +431,12 @@ record slots, including reusable free slots and spare vector capacity. It does
 not count only matching rules or live matches. Name/value storage, state bitmaps
 and the named-demand index instead consume the retained-byte/work budgets.
 
-Physical inspection limits are independent of logical WAF and Gateway body
-limits. A physical failure rejects in DetectionOnly too and cannot be retried
-through another parser. Malformed JSON retains the existing DetectionOnly
-metadata behavior. Every occurrence of a duplicate key is published as its own
-`ARGS`/`ARGS_NAMES` value in document order and counts toward `&ARGS` and the
-entry limits; a named macro such as `%{ARGS.json.key}` reads the first occurrence.
-Full configurations with unsupported broad dynamic JSON value dependencies are
-rejected during validation, including configurations using default JSON limits.
-Use finite named dependencies where later transaction values are required.
+物理检查限制独立于逻辑 WAF 限制和 Gateway 请求体限制。物理失败在 DetectionOnly 模式下同样拒绝请求，
+且不能换用其他解析器重试。格式错误的 JSON 保持现有的 DetectionOnly 元数据行为。重复键的每一次
+出现都按文档顺序作为独立的 `ARGS`/`ARGS_NAMES` 值发布，并计入 `&ARGS` 和条目数限制；
+`%{ARGS.json.key}` 这类具名宏读取第一次出现的值。
+含有不受支持的宽泛动态 JSON 值依赖的完整配置会在校验阶段被拒绝，使用默认 JSON 限制的配置也不例外。
+需要读取后续事务值时，请使用有限的具名依赖。
 
 Logical publication checks use fixed priority: source/prelude, name length,
 depth, entries, decoded bytes, traversal work, then combined totals. Each limit

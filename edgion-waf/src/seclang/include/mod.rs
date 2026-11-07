@@ -1,3 +1,5 @@
+//! Include expansion with bounded resolution, and the rule-bundle and include-aware compile entry points.
+
 use thiserror::Error;
 
 use super::{

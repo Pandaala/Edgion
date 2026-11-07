@@ -819,6 +819,12 @@ fn frontend_failure(error: &FrontendError) -> WafSupportFailure {
             edgion_waf::seclang::IncludeError::Source { .. }
             | edgion_waf::seclang::IncludeError::EmptyResolution { .. },
         ) => WafSupportFailure::new("missing_asset", "Inline WAF rules cannot load included sources"),
+        FrontendError::Include(edgion_waf::seclang::IncludeError::IdentityComparisonLimit { .. }) => {
+            WafSupportFailure::new(
+                "resource_limit",
+                "Reduce the number of equal-length rule bundle member or include paths, or shorten them",
+            )
+        }
         FrontendError::Include(_) => WafSupportFailure::new("resource_limit", "Reduce or remove include directives"),
         FrontendError::Source(error) => match error {
             SourceError::InvalidUtf8 { position } | SourceError::BareCarriageReturn { position } => WafSupportFailure {

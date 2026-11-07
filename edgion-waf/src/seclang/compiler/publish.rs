@@ -1,3 +1,5 @@
+//! Final publication of a built generation under the compile work budget.
+
 use super::*;
 
 impl CompiledGeneration {

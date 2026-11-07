@@ -74,6 +74,10 @@ back. Neither records a decision about the HTTP status class or about exposing b
   (`json_inspection_runtime.rs` `replay_static`). The shipped CRS PL1 rule 920190 reaches the integer path
   with a single `Range` header; see `waf3-01` for the root cause and fix. Any status-mapping fix here should
   treat these as client errors too, but the semantic fix belongs in `waf3-01`.
+  - Note (2026-11-08): the `IntegerConversion` half is gone. D-1 (`c06504e2a`, `waf3-01`) made `parse_i64`
+    a total `atoll`-style conversion and removed `RuntimeError::IntegerConversion`; the gateway arm is now
+    `RuntimeError::Arithmetic`. `CaptureByteLimit` and the other client-reachable errors above still reach
+    the `_ => 500` arm. The paths cited above predate the `transaction/` directory split.
 
 ## Additional evidence (wave 3)
 - JSON body inspection has its own fixed, client-reachable result limits:

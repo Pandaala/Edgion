@@ -297,6 +297,19 @@ fn support_report_preserves_available_locations_and_resource_categories() {
     )));
     assert_eq!(ctl_target.category, "resource_limit");
     assert_eq!(ctl_target.physical_line, Some(7));
+    let identity_limit = frontend_failure(&FrontendError::Include(
+        edgion_waf::seclang::IncludeError::IdentityComparisonLimit { limit: 1 },
+    ));
+    assert_eq!(identity_limit.category, "resource_limit");
+    assert_eq!(
+        identity_limit.reason,
+        "Reduce the number of equal-length rule bundle member or include paths, or shorten them"
+    );
+    let include_limit = frontend_failure(&FrontendError::Include(edgion_waf::seclang::IncludeError::DepthLimit {
+        actual: 2,
+        limit: 1,
+    }));
+    assert_eq!(include_limit.reason, "Reduce or remove include directives");
 
     let actions = std::iter::repeat_n("t:none", 1_025).collect::<Vec<_>>().join(",");
     let action_limit = WafConfig {

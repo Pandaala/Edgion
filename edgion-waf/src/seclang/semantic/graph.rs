@@ -1,3 +1,5 @@
+//! Rule graph: directive locations, final rule roles, chain and marker records and their views.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,3 +1,5 @@
+//! Semantic validation: rule exceptions, overlays, capability checks and executable-profile validation.
+
 use super::*;
 
 const NO_INDEX: usize = usize::MAX;

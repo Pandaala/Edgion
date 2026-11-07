@@ -1,3 +1,5 @@
+//! Folding of local rule records into final rules: action folding, chain projection and marker resolution.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy)]

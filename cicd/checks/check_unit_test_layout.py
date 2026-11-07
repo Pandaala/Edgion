@@ -244,6 +244,10 @@ SCOPED_EXCEPTIONS = {
         "test-only accounting of whole-TX copies (chain frontier branches only)",
     ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"measurements::record\(\s*Event::TxJournalPayloadBytes\b")):
         "test-only accounting of base-entry originals saved by the rule-unit journal",
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"pub\(super\) fn is_reset\(")):
+        "test-only read of the private rule-unit journal reset invariant",
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"pub\(super\) fn steps_capacity\(")):
+        "test-only read of the private rule-unit journal step capacity",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: bool,")):
         "test-only switch for the sequential lexical oracle",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: false,")):

@@ -1,3 +1,5 @@
+//! Phase entry points: request head/body (snapshot, prefix and streaming), response head/window and logging.
+
 use super::*;
 
 impl<'generation> Transaction<'generation> {

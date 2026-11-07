@@ -51,7 +51,11 @@ text, decoded references and CDATA of every element in document order (libxml2
 one value, matched and scored once. Non-root elements publish no text value
 (finding `waf3-03`, decision commit D-3 and its root-only follow-up). Outer
 literal XML whitespace of the content is trimmed; CDATA and character-reference
-whitespace stay significant. A root without text, including `<r/>`, publishes one
+whitespace stay significant. This trim is the one pinned divergence from
+`xmlNodeGetContent`, which keeps it (`<r>\n  <a>x</a>\n</r>` is `x` here and
+`\n  x\n` in libxml2/ModSecurity). It is safe-direction: trimming cannot hide
+a payload byte, and only whole-value checks such as `@rx ^\s` or `@streq`
+observe it. A root without text, including `<r/>`, publishes one
 empty value, as libxml2 returns an empty string and ModSecurity publishes it, so
 `&XML:/*` is 1 for every accepted document. Comments, PI and element names are
 not values.

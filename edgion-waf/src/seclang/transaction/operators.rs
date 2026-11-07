@@ -1,3 +1,5 @@
+//! Operator evaluation: scan and transform caches, matcher operands, numeric conversion and captures.
+
 use super::*;
 
 /// Valid only during one borrowed operator stage; never keyed by buffer address.

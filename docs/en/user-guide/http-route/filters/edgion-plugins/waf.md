@@ -372,12 +372,15 @@ cannot multiply the work of its later members.
 ## Numeric operators
 
 `@eq`, `@ge`, `@gt` and `@lt`, and `setvar:tx.<name>=+N` / `=-N` arithmetic,
-convert both runtime values the way ModSecurity v3 does (C `atoll`): leading
+convert both runtime values with the C `atoll` semantics ModSecurity v3 uses
+for its ordering operators: leading
 ASCII whitespace is skipped, then an optional sign and the leading run of
 decimal digits form the number. Bytes after the digits are ignored (`12abc` is
 12), a value with no digits is 0 (`abc`, an empty value; `setvar`
 arithmetic also starts a missing TX variable at 0), and a number outside the signed 64-bit range saturates at the
-largest or smallest value. A non-numeric or oversized request value therefore
+largest or smallest value. ModSecurity's `@eq` instead converts through a
+32-bit `int` and turns an out-of-range value into 0; Edgion applies the
+saturating conversion to `@eq` as well. A non-numeric or oversized request value therefore
 never fails the request; earlier releases answered such requests with a 500
 error, in `DetectionOnly` too. Numeric constants written in the rule itself
 (`@eq abc`) are still rejected when the rule set is compiled.

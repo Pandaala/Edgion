@@ -1,3 +1,5 @@
+//! Compile-time work and peak accounting (`KnownPreflight`) and member/action/template compilation (`CompileWork`).
+
 use super::*;
 
 #[derive(Debug, Default)]

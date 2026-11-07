@@ -1,3 +1,5 @@
+//! Compiler from a validated semantic document to an immutable `CompiledGeneration`: limits, errors and entry points.
+
 use std::mem::size_of;
 use std::net::IpAddr;
 

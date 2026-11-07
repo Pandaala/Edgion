@@ -1,3 +1,5 @@
+//! Per-member operator plans, optional regex hints and compile-requirement discharge.
+
 use super::*;
 
 #[derive(Clone, Copy)]

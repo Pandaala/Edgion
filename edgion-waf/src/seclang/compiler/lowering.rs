@@ -1,3 +1,5 @@
+//! Lowering of semantic nodes into matcher groups: phrase operands, pattern preflight and `CompilerBuilder`.
+
 use super::*;
 
 pub(super) fn map_phrase_matcher_error(error: MatcherCompileError, location: SemanticLocation) -> CompilerError {

@@ -1,3 +1,5 @@
+//! Single-input predicate evaluation: transformation stages, checkpoints and per-member match completion.
+
 use super::*;
 
 pub(super) fn charge_ctl_work(work: &mut usize, amount: usize, limit: usize) -> Result<(), RuntimeError> {

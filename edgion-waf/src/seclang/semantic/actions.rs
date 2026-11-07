@@ -1,3 +1,5 @@
+//! Action parsing: setvar, initcol, ctl and other action operand plans.
+
 use super::*;
 
 #[derive(Debug, Clone)]

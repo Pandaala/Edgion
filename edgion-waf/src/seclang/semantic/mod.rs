@@ -1,3 +1,5 @@
+//! Semantic analysis of parsed SecLang: limits, public enums, the analysis context and module mounts.
+
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::iter::FusedIterator;

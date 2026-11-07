@@ -1,3 +1,5 @@
+//! Semantic data model: locations, text and targets, operator/action/template records, views and iterators.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

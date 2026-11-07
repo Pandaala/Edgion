@@ -93,6 +93,11 @@ saves 1 000 bytes.
 - **Not converted to the journal:** chain branches still copy the staged state
   once per first-member match, and `capture_keys` is still copied per matched
   unit. That copy does not allocate when it is empty.
+- **Panic mid-unit (accepted, pre-existing shape):** `evaluate_unit_into`
+  moves the base TX out and leaves a placeholder `TxState` in `self.tx` while
+  the unit runs. A panic in between leaves that placeholder in place, so a
+  `Transaction` must not be reused after a caught panic (perf review P6
+  MINOR-4; the crate catches no panic around unit evaluation).
 
 ## Verification and re-evaluation
 

@@ -1,3 +1,5 @@
+//! Operator operands: strict compile-time integers, asset words, IP networks and dynamic projections.
+
 use super::*;
 
 pub(super) fn strict_i64<I>(bytes: I) -> Result<i64, (IntegerOperandErrorKind, usize)>

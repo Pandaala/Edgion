@@ -1,3 +1,5 @@
+//! Compiled generation records, views and accessors, and request-body execution classification.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,3 +1,5 @@
+//! Target selection: collection and TX value walks, ctl exclusions and lazy matcher scratch.
+
 use super::*;
 
 pub(super) fn matcher_program_scratch_bytes(generation: &CompiledGeneration) -> Result<usize, RuntimeError> {
@@ -517,12 +519,17 @@ fn next_selected(
     let direct = true;
     if direct && collection == CollectionKind::Tx {
         let (generation, request, entries) = (ctx.generation, ctx.request, &ctx.tx.entries);
+        // The selector's generation lookups do not depend on the entry, so they
+        // run once per walk; an exhausted cursor still performs none.
         match selector {
             CompiledTargetSelector::Literal(expected) => {
+                if cursor.index >= entries.len() {
+                    return Ok(None);
+                }
+                let expected = generation_bytes(&generation.target_bytes, expected)?;
                 while let Some(entry) = entries.get(cursor.index) {
                     let index = cursor.index;
                     cursor.index += 1;
-                    let expected = generation_bytes(&generation.target_bytes, expected)?;
                     if entry
                         .key
                         .bytes(request, ctx.json_budget.as_deref_mut())?
@@ -534,15 +541,18 @@ fn next_selected(
                 return Ok(None);
             }
             CompiledTargetSelector::Regex { program, .. } => {
+                if cursor.index >= entries.len() {
+                    return Ok(None);
+                }
+                let regex = generation
+                    .boolean_regexes
+                    .get(program)
+                    .ok_or(RuntimeError::GenerationInvariant)?;
+                let slot = ctx.scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
                 while let Some(entry) = entries.get(cursor.index) {
                     let index = cursor.index;
                     cursor.index += 1;
                     let name = entry.key.bytes(request, ctx.json_budget.as_deref_mut())?;
-                    let regex = generation
-                        .boolean_regexes
-                        .get(program)
-                        .ok_or(RuntimeError::GenerationInvariant)?;
-                    let slot = ctx.scratch.get_mut(program).ok_or(RuntimeError::GenerationInvariant)?;
                     if regex
                         .is_match(name, lazy_boolean_scratch(slot, regex))
                         .map_err(map_regex_scratch_error)?

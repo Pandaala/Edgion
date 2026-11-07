@@ -1,3 +1,5 @@
+//! Request and response state: header/argument/cookie projection, collection indices and limits checks.
+
 use super::*;
 
 pub(super) struct RequestState<'generation> {

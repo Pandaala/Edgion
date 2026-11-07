@@ -53,7 +53,7 @@ fn all_two_part_sources_have_owned_capture_chain_and_count_outcomes() {
     let g=compile(concat!(
         "SecRule XML:/*|XML://@* \"@rx (attack)\" \"id:1,phase:2,pass,capture,t:lowercase,setvar:tx.capture=%{TX.1},setvar:tx.name=%{MATCHED_VAR_NAME},chain\"\n",
         "SecRule TX:capture \"@streq attack\" \"setvar:tx.done=yes\"\n",
-        "SecRule &XML:/* \"@eq 2\" \"id:2,phase:2,pass,setvar:tx.count=yes\"\n"));
+        "SecRule &XML:/* \"@eq 1\" \"id:2,phase:2,pass,setvar:tx.count=yes\"\n"));
     let xml = b"<r mode='&#65;TTACK'>safe<![CDATA[ATTACK]]></r>";
     let mut owned = tx(&g);
     owned
@@ -64,6 +64,8 @@ fn all_two_part_sources_have_owned_capture_chain_and_count_outcomes() {
         .unwrap();
     let expected = owned.execute_request_body().unwrap();
     assert_eq!(owned.tx_value(b"name"), Some(b"XML".as_slice()));
+    // The root text is published exactly once per document.
+    assert_eq!(owned.tx_value(b"count"), Some(b"yes".as_slice()));
     for cut in 0..=xml.len() {
         let mut scoped = tx(&g);
         let mut session = scoped

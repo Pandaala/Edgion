@@ -10,8 +10,9 @@ knowledge_type: regression-guards
 
 `parse_i64` in `edgion-waf/src/seclang/transaction/operators.rs` is the only
 runtime integer conversion. It is total and follows ModSecurity v3, whose
-numeric operators compare `atoll(input) <op> atoll(operand)` (glibc `atoll` is
-`strtoll(s, NULL, 10)`):
+ordering operators compare `atoll(input) <op> atoll(operand)` (glibc `atoll` is
+`strtoll(s, NULL, 10)`); Edgion applies that `atoll` shape uniformly, `@eq`
+included (see the `@eq` divergence below):
 
 - Leading C-locale ASCII whitespace (space, `\t`, `\n`, `\v`, `\f`, `\r`) is
   skipped (`" 12"` is 12, `"\t-3x"` is -3). Other bytes, including non-ASCII
@@ -50,11 +51,20 @@ applied to `setvar` arithmetic on a captured or stored non-numeric value, and
 to CRS 921180's `TX:/paramcounter_.*/ "@gt 1"`, which also selects the
 920450 header-name entries whose values are not numbers.
 
-ModSecurity v3 converts these operands with `atoll` (`src/operators/eq.cc`,
-`ge.cc`, `gt.cc`, `lt.cc`, `le.cc`; checked against the source on 2026-11-08):
-`"abc"` is 0, `"12abc"` is 12, `" 7"` is 7, and an out-of-range run saturates
-through glibc `strtoll`. Its `setvar` arithmetic treats an unconvertible value
-as 0. CRS is written against that behavior.
+ModSecurity v3 converts the operands per operator (checked against the
+`v3/master` source on 2026-11-08):
+
+- `@gt`, `@ge`, `@lt`, `@le` (`src/operators/gt.cc`, `ge.cc`, `lt.cc`,
+  `le.cc`) use `atoll`: `"abc"` is 0, `"12abc"` is 12, `" 7"` is 7, and an
+  out-of-range run saturates through glibc `strtoll`.
+- `@eq` (`src/operators/eq.cc`) converts both sides with `std::stoi` inside its
+  own `try`/`catch`: whitespace skip, sign and decimal prefix match `atoll`,
+  but the range is C `int`, and a value with no digits or outside the `int`
+  range becomes 0 instead of saturating.
+
+Its `setvar` arithmetic treats an unconvertible value as 0. CRS is written
+against that behavior; no CRS rule feeds `@eq` a client-controlled magnitude
+outside the `int` range.
 
 ## Alternatives and limits
 
@@ -62,7 +72,12 @@ Coraza uses Go `strconv.Atoi` and ignores the error. It differs from
 ModSecurity and Edgion on a partial prefix (`"12abc"` is 0 there, 12 here) and
 on leading whitespace (`" 7"` is 0 there, 7 here); it clamps an out-of-range
 run like `strtoll`. The references agree on fully numeric and fully
-non-numeric values. Edgion follows ModSecurity v3 `atoll`. Saturation depends
+non-numeric values. Edgion follows ModSecurity v3 `atoll` for all four
+operators. Pinned divergence: for `@eq` with a value outside the 32-bit `int`
+range, ModSecurity yields 0 (`n=99999999999` matches `@eq 0` there) while
+Edgion compares the saturated `i64` (no match). This is result-visible only and
+cannot hide a payload; one total, saturating conversion shared by every
+operator is the deliberate choice. Saturation depends
 on glibc `strtoll`; a libc without saturation would make the reference result
 implementation-defined, and Edgion pins saturation. Keeping the strict
 conversion as a fatal error was rejected because one client header turns into a
@@ -90,3 +105,6 @@ conversion is added: it must reuse `parse_i64` rather than a strict parse.
   conversion to ModSecurity `atoi` without whitespace skipping. ModSecurity v3
   uses `atoll`, so `parse_i64` now skips leading ASCII whitespace and this page
   states the `atoll` / `strtoll` semantics.
+- P7 review follow-up (2026-11-08): `@eq` is `std::stoi` in ModSecurity v3,
+  not `atoll`; the page now states the per-operator conversion and pins the
+  `@eq` out-of-`int`-range divergence.

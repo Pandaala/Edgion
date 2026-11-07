@@ -1,3 +1,5 @@
+//! Selected and matched values, TX state with its unit journal and accounting, match storage and chain branches.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -670,11 +672,11 @@ pub(super) struct EntryMark {
 /// when the unit records more steps. Both vectors are cleared, never reallocated, between units.
 #[derive(Default)]
 pub(super) struct TxJournal {
-    pub(super) marks: Vec<EntryMark>,
-    pub(super) marks_active: bool,
+    marks: Vec<EntryMark>,
+    marks_active: bool,
     /// Entry count at the unit's first entry edit; `None` before it.
-    pub(super) base_len: Option<usize>,
-    pub(super) steps: Vec<TxUndo>,
+    base_len: Option<usize>,
+    steps: Vec<TxUndo>,
 }
 
 impl TxJournal {
@@ -767,15 +769,17 @@ impl TxJournal {
     }
 
     /// Reserve every slot an entry edit may need, before the edit, so
-    /// recording can never fail after it.
+    /// recording can never fail after it. Returns the edited entry's
+    /// `lookup` for a replacement or removal; nothing touches the journal
+    /// between the reservation and the recording, so it is still exact there.
     fn reserve_entry_edit(
         journal: &mut Option<&mut Self>,
         entries: usize,
         index: usize,
         edit: EntryEdit,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<Option<EntryLookup>, RuntimeError> {
         let Some(journal) = journal else {
-            return Ok(());
+            return Ok(None);
         };
         let base_len = match journal.base_len {
             Some(base_len) => base_len,
@@ -804,30 +808,30 @@ impl TxJournal {
                 if origin != UNIT_ENTRY && saved.is_none() {
                     journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
                 }
+                Ok(Some((origin, saved)))
             }
             EntryEdit::Push => {
                 if journal.marks_active {
                     journal.marks.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
                 }
+                Ok(None)
             }
             EntryEdit::Remove => {
-                if journal.lookup(base_len, index).0 != UNIT_ENTRY {
+                let lookup = journal.lookup(base_len, index);
+                if lookup.0 != UNIT_ENTRY {
                     journal.steps.try_reserve(1).map_err(|_| RuntimeError::Allocation)?;
                 }
+                Ok(Some(lookup))
             }
         }
-        Ok(())
     }
 
     /// `entries[index]` now holds a staged value; `displaced` is what it held.
-    fn replaced(journal: Option<&mut Self>, index: usize, displaced: MatchValue) {
-        let Some(journal) = journal else {
+    /// `lookup` is what `reserve_entry_edit` returned for this edit.
+    fn replaced(journal: Option<&mut Self>, index: usize, displaced: MatchValue, lookup: Option<EntryLookup>) {
+        let (Some(journal), Some((origin, saved))) = (journal, lookup) else {
             return;
         };
-        let Some(base_len) = journal.base_len else {
-            return;
-        };
-        let (origin, saved) = journal.lookup(base_len, index);
         if origin == UNIT_ENTRY || saved.is_some() {
             return;
         }
@@ -854,23 +858,16 @@ impl TxJournal {
         }
     }
 
-    /// `entries[index]` was removed; `entry` is what it held.
-    fn removed(journal: Option<&mut Self>, index: usize, mut entry: TxEntry) {
-        let Some(journal) = journal else {
+    /// `entries[index]` was removed; `entry` is what it held. `lookup` is
+    /// what `reserve_entry_edit` returned for this edit.
+    fn removed(journal: Option<&mut Self>, index: usize, mut entry: TxEntry, lookup: Option<EntryLookup>) {
+        let (Some(journal), Some((origin, saved))) = (journal, lookup) else {
             return;
         };
-        let Some(base_len) = journal.base_len else {
-            return;
-        };
-        let (origin, saved) = if journal.marks_active {
-            if index >= journal.marks.len() {
-                return;
-            }
-            let mark = journal.marks.remove(index);
-            (mark.origin, (mark.saved != NOT_SAVED).then_some(mark.saved as usize))
-        } else {
-            journal.lookup(base_len, index)
-        };
+        // Keep the marks aligned with the entries.
+        if journal.marks_active && index < journal.marks.len() {
+            journal.marks.remove(index);
+        }
         if origin == UNIT_ENTRY {
             return;
         }
@@ -965,7 +962,22 @@ impl TxJournal {
         self.base_len = None;
         self.steps.clear();
     }
+
+    /// Whether the journal holds nothing, as after `clear`.
+    #[cfg(test)]
+    pub(super) fn is_reset(&self) -> bool {
+        self.steps.is_empty() && self.marks.is_empty() && !self.marks_active && self.base_len.is_none()
+    }
+
+    #[cfg(test)]
+    pub(super) fn steps_capacity(&self) -> usize {
+        self.steps.capacity()
+    }
 }
+
+/// Base origin of an edited entry (`UNIT_ENTRY` when the unit appended it)
+/// and the step holding its saved original, if any.
+type EntryLookup = (u32, Option<usize>);
 
 /// The kind of entry edit a journal slot is reserved for.
 #[derive(Clone, Copy)]
@@ -1117,9 +1129,9 @@ impl TxState {
             let entry = &self.entries[index];
             let removed = tx_payload_bytes(entry.key.len(), entry.value.len())?;
             let total = tx_payload_delta(self.entry_payload_bytes, removed, 0)?;
-            TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Remove)?;
+            let lookup = TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Remove)?;
             let entry = self.entries.remove(index);
-            TxJournal::removed(journal, index, entry);
+            TxJournal::removed(journal, index, entry, lookup);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         }
@@ -1140,10 +1152,10 @@ impl TxState {
         if let Some(index) = self.find_entry(key.bytes(request, json_budget.as_deref_mut())?, request, json_budget)? {
             let entry = &mut self.entries[index];
             let total = tx_payload_delta(self.entry_payload_bytes, entry.value.len() as u128, value.len() as u128)?;
-            TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Replace)?;
+            let lookup = TxJournal::reserve_entry_edit(&mut journal, self.entries.len(), index, EntryEdit::Replace)?;
             let entry = &mut self.entries[index];
             let displaced = std::mem::replace(&mut entry.value, value);
-            TxJournal::replaced(journal, index, displaced);
+            TxJournal::replaced(journal, index, displaced, lookup);
             self.entry_payload_bytes = total;
             self.refresh_retained_bytes();
         } else {
