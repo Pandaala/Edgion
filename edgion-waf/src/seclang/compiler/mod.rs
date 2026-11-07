@@ -10,11 +10,11 @@ use crate::matcher::{
 };
 
 use super::{
-    ActionEnvelopeKind, ActionOperandView, CollectionKind, CompileRequirement, CtlView, DirectiveLocation,
-    ExternalAssetView, LocalActionValue, MacroExpansionView, MacroSource, OnOff, OperandTemplateView, Phase,
-    RegexStyle, RequestBodyProcessor, ResolvedDisruptive, SelectorKind, SemanticActionView, SemanticLocation,
-    SemanticNodeKind, SetVarOperation, TargetModifier, TemplateSegmentKind, TemplateSliceView, TransformationKind,
-    ValidatedSemanticDocument,
+    ActionEnvelopeKind, ActionKind, ActionOperandView, CollectionKind, CompileRequirement, CtlView, DirectiveLocation,
+    ExternalAssetView, LocalActionValue, MacroExpansionView, MacroSource, OnOff, OperandTemplateView, OperatorKind,
+    OperatorOperandView, Phase, RegexStyle, RequestBodyProcessor, ResolvedDisruptive, SelectorKind, SemanticActionView,
+    SemanticLocation, SemanticNodeKind, SemanticOperatorView, SetVarOperation, TargetModifier, TemplateSegmentKind,
+    TemplateSliceView, TransformationKind, ValidatedRuleNodeView, ValidatedSemanticDocument,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

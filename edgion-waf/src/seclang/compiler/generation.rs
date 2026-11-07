@@ -215,7 +215,7 @@ pub(super) enum CompiledOperatorOperand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompiledOperatorPlan {
-    pub(super) kind: super::super::OperatorKind,
+    pub(super) kind: OperatorKind,
     pub(super) negated: bool,
     pub(super) operand: CompiledOperatorOperand,
 }
@@ -655,7 +655,7 @@ impl<'generation> CompiledRuleMemberView<'generation> {
         self.generation.transformations.get(plan.transformation_start..end)
     }
 
-    pub fn operator_kind(self) -> Option<super::super::OperatorKind> {
+    pub fn operator_kind(self) -> Option<OperatorKind> {
         self.generation.operator_plans[self.index].map(|plan| plan.kind)
     }
 
@@ -870,7 +870,7 @@ fn prefix_actions_supported(generation: &CompiledGeneration, member: CompiledMem
         .iter()
         .all(|action| match action.kind {
             ActionEnvelopeKind::Transformation => true,
-            ActionEnvelopeKind::Action(kind) => is_streaming_safe_action(kind) || kind == super::super::ActionKind::Msg,
+            ActionEnvelopeKind::Action(kind) => is_streaming_safe_action(kind) || kind == ActionKind::Msg,
         })
 }
 
@@ -907,13 +907,9 @@ fn is_prefix_body_member(generation: &CompiledGeneration, index: usize) -> bool 
     ) {
         return false;
     }
-    if !generation.operator_plans[index].is_some_and(|operator| {
-        !operator.negated
-            && matches!(
-                operator.kind,
-                super::super::OperatorKind::Contains | super::super::OperatorKind::Pm
-            )
-    }) {
+    if !generation.operator_plans[index]
+        .is_some_and(|operator| !operator.negated && matches!(operator.kind, OperatorKind::Contains | OperatorKind::Pm))
+    {
         return false;
     }
     member.transformation_plan.is_none_or(|id| {
@@ -1039,10 +1035,8 @@ pub(super) fn is_streaming_raw_member(generation: &CompiledGeneration, member_in
         .get(member_index)
         .and_then(|plan| *plan)
         .is_some_and(|plan| {
-            matches!(
-                plan.kind,
-                super::super::OperatorKind::Pm | super::super::OperatorKind::PmFromFile
-            ) && matches!(plan.operand, CompiledOperatorOperand::Matcher { .. })
+            matches!(plan.kind, OperatorKind::Pm | OperatorKind::PmFromFile)
+                && matches!(plan.operand, CompiledOperatorOperand::Matcher { .. })
         });
     if !stream_operator {
         return false;
@@ -1081,22 +1075,22 @@ pub(super) fn is_streaming_raw_member(generation: &CompiledGeneration, member_in
 /// additionally accepts `Msg` (see `prefix_actions_supported`). The asymmetry
 /// is preserved as found; whether streaming members should also accept `Msg`
 /// is tracked in `tasks/todo/waf-streaming-raw-member-msg-action.md`.
-fn is_streaming_safe_action(kind: super::super::ActionKind) -> bool {
+fn is_streaming_safe_action(kind: ActionKind) -> bool {
     matches!(
         kind,
-        super::super::ActionKind::AuditLog
-            | super::super::ActionKind::Block
-            | super::super::ActionKind::Deny
-            | super::super::ActionKind::Id
-            | super::super::ActionKind::Log
-            | super::super::ActionKind::NoAuditLog
-            | super::super::ActionKind::NoLog
-            | super::super::ActionKind::Pass
-            | super::super::ActionKind::Phase
-            | super::super::ActionKind::Severity
-            | super::super::ActionKind::Status
-            | super::super::ActionKind::Tag
-            | super::super::ActionKind::Ver
+        ActionKind::AuditLog
+            | ActionKind::Block
+            | ActionKind::Deny
+            | ActionKind::Id
+            | ActionKind::Log
+            | ActionKind::NoAuditLog
+            | ActionKind::NoLog
+            | ActionKind::Pass
+            | ActionKind::Phase
+            | ActionKind::Severity
+            | ActionKind::Status
+            | ActionKind::Tag
+            | ActionKind::Ver
     )
 }
 

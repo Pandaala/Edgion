@@ -80,7 +80,7 @@ impl<'generation> Transaction<'generation> {
     /// unit, journaling each edit, then admit the commit.
     fn stage_single_member_unit(
         &mut self,
-        unit: super::super::CompiledRuleUnit,
+        unit: CompiledRuleUnit,
         staged: &mut TxState,
         journal: &mut TxJournal,
         matches: &mut Vec<MemberMatch>,
@@ -109,7 +109,7 @@ impl<'generation> Transaction<'generation> {
     fn stage_chain_unit(
         &mut self,
         unit_id: usize,
-        unit: super::super::CompiledRuleUnit,
+        unit: CompiledRuleUnit,
         end: usize,
         staged: &TxState,
         matches: &mut Vec<MemberMatch>,
@@ -266,11 +266,7 @@ impl<'generation> Transaction<'generation> {
 
     /// Validate runtime-expanded actions and the retained charge of the state
     /// about to replace the base TX. Nothing is published on error.
-    pub(super) fn admit_unit_commit(
-        &mut self,
-        unit: super::super::CompiledRuleUnit,
-        staged: &TxState,
-    ) -> Result<(), RuntimeError> {
+    pub(super) fn admit_unit_commit(&mut self, unit: CompiledRuleUnit, staged: &TxState) -> Result<(), RuntimeError> {
         self.validate_runtime_actions(unit, staged)?;
         let total_retained = self
             .request
@@ -492,7 +488,7 @@ impl<'generation> Transaction<'generation> {
                     self.generation.transformations.get(plan.transformation_start..end)
                 })
                 .unwrap_or_default();
-            let multi_match = member_has_action(&self.generation, member, super::super::super::ActionKind::MultiMatch)?;
+            let multi_match = member_has_action(&self.generation, member, ActionKind::MultiMatch)?;
             // The checked nonempty slice above authenticates the canonical plan ID.
             let memo_plan_id =
                 if self.evaluation_mode == EvaluationMode::Accelerated && !multi_match && !transformations.is_empty() {
@@ -514,7 +510,7 @@ impl<'generation> Transaction<'generation> {
                     member.transformation_plan,
                     !multi_match
                         && self.evaluation_mode == EvaluationMode::Accelerated
-                        && matches!(operator.operand, super::super::CompiledOperatorOperand::Matcher { .. }),
+                        && matches!(operator.operand, CompiledOperatorOperand::Matcher { .. }),
                 );
                 let mut context = SingleInputContext {
                     generation: &self.generation,
@@ -660,7 +656,7 @@ impl<'generation> Transaction<'generation> {
         else {
             return Ok(None);
         };
-        if let super::super::json_inspection_plan::JsonMemberMode::StaticFact(group) = self
+        if let JsonMemberMode::StaticFact(group) = self
             .generation
             .json_inspection
             .members
@@ -734,11 +730,7 @@ impl<'generation> Transaction<'generation> {
         Ok(Some(tail))
     }
 
-    fn validate_runtime_actions(
-        &mut self,
-        unit: super::super::CompiledRuleUnit,
-        tx: &TxState,
-    ) -> Result<(), RuntimeError> {
+    fn validate_runtime_actions(&mut self, unit: CompiledRuleUnit, tx: &TxState) -> Result<(), RuntimeError> {
         let end = unit
             .member_start
             .checked_add(unit.member_count)
@@ -761,11 +753,9 @@ impl<'generation> Transaction<'generation> {
             {
                 if matches!(
                     action.kind,
-                    super::super::ActionEnvelopeKind::Action(
-                        super::super::super::ActionKind::LogData | super::super::super::ActionKind::Msg
-                    )
+                    ActionEnvelopeKind::Action(ActionKind::LogData | ActionKind::Msg)
                 ) {
-                    let super::super::CompiledActionOperand::Template(template) = action.operand else {
+                    let CompiledActionOperand::Template(template) = action.operand else {
                         return Err(RuntimeError::GenerationInvariant);
                     };
                     let _expanded = expand_template::<false>(
@@ -782,10 +772,7 @@ impl<'generation> Transaction<'generation> {
         Ok(())
     }
 
-    pub(super) fn finding_metadata(
-        &self,
-        unit: super::super::CompiledRuleUnit,
-    ) -> Result<(Option<super::super::super::Severity>, usize), RuntimeError> {
+    pub(super) fn finding_metadata(&self, unit: CompiledRuleUnit) -> Result<(Option<Severity>, usize), RuntimeError> {
         let end = unit
             .member_start
             .checked_add(unit.member_count)
@@ -810,13 +797,12 @@ impl<'generation> Transaction<'generation> {
             {
                 match (action.kind, action.operand) {
                     (
-                        super::super::ActionEnvelopeKind::Action(super::super::super::ActionKind::Severity),
-                        super::super::CompiledActionOperand::Local(super::super::LocalActionValue::Severity(value)),
+                        ActionEnvelopeKind::Action(ActionKind::Severity),
+                        CompiledActionOperand::Local(LocalActionValue::Severity(value)),
                     ) => severity = Some(value),
-                    (
-                        super::super::ActionEnvelopeKind::Action(super::super::super::ActionKind::Tag),
-                        super::super::CompiledActionOperand::Literal(_),
-                    ) => tag_count = tag_count.checked_add(1).ok_or(RuntimeError::Arithmetic)?,
+                    (ActionEnvelopeKind::Action(ActionKind::Tag), CompiledActionOperand::Literal(_)) => {
+                        tag_count = tag_count.checked_add(1).ok_or(RuntimeError::Arithmetic)?
+                    }
                     _ => {}
                 }
             }
@@ -826,11 +812,11 @@ impl<'generation> Transaction<'generation> {
 
     pub(super) fn next_schedule_ordinal(
         &self,
-        unit: super::super::CompiledRuleUnit,
+        unit: CompiledRuleUnit,
         schedule_index: usize,
         current: usize,
     ) -> Result<usize, RuntimeError> {
-        super::super::inspection_activation::successor(
+        inspection_activation::successor(
             &self.generation,
             unit,
             schedule_index,
@@ -867,11 +853,11 @@ impl<'generation> Transaction<'generation> {
                 .actions
                 .get(action_index)
                 .ok_or(RuntimeError::GenerationInvariant)?;
-            if let super::super::CompiledActionOperand::Ctl(ctl) = action.operand {
+            if let CompiledActionOperand::Ctl(ctl) = action.operand {
                 self.apply_ctl(ctl, staged, journal.as_deref_mut())?;
                 continue;
             }
-            let super::super::CompiledActionOperand::SetVar(setvar_id) = action.operand else {
+            let CompiledActionOperand::SetVar(setvar_id) = action.operand else {
                 continue;
             };
             *setvar_actions = (*setvar_actions).checked_add(1).ok_or(RuntimeError::Arithmetic)?;
@@ -888,7 +874,7 @@ impl<'generation> Transaction<'generation> {
             if setvar.collection != CollectionKind::Tx {
                 return Err(RuntimeError::GenerationInvariant);
             }
-            let key = if setvar.operation == super::super::SetVarOperation::Delete {
+            let key = if setvar.operation == SetVarOperation::Delete {
                 template_operand(
                     &self.generation,
                     &self.request,
@@ -908,10 +894,10 @@ impl<'generation> Transaction<'generation> {
                 )?)
             };
             match setvar.operation {
-                super::super::SetVarOperation::Delete => {
+                SetVarOperation::Delete => {
                     staged.delete(&key, &self.request, self.json_budget.as_mut(), journal.as_deref_mut())?
                 }
-                super::super::SetVarOperation::Assign => {
+                SetVarOperation::Assign => {
                     let value = setvar_value(
                         &self.generation,
                         &self.request,
@@ -929,7 +915,7 @@ impl<'generation> Transaction<'generation> {
                         journal.as_deref_mut(),
                     )?;
                 }
-                super::super::SetVarOperation::Add | super::super::SetVarOperation::Subtract => {
+                SetVarOperation::Add | SetVarOperation::Subtract => {
                     let current = staged
                         .get(&key, &self.request, self.json_budget.as_mut())?
                         .map(|value| value.bytes(&self.request, self.json_budget.as_mut()))
@@ -950,7 +936,7 @@ impl<'generation> Transaction<'generation> {
                     };
                     // ModSecurity-compatible arithmetic: non-numeric values
                     // count as zero and the result saturates instead of failing.
-                    let result = if setvar.operation == super::super::SetVarOperation::Add {
+                    let result = if setvar.operation == SetVarOperation::Add {
                         current.saturating_add(delta)
                     } else {
                         current.saturating_sub(delta)
@@ -972,31 +958,27 @@ impl<'generation> Transaction<'generation> {
 
     fn apply_ctl(
         &mut self,
-        ctl: super::super::CompiledCtl,
+        ctl: CompiledCtl,
         staged: &mut TxState,
         mut journal: Option<&mut TxJournal>,
     ) -> Result<(), RuntimeError> {
         charge_ctl_work(&mut self.ctl_work_bytes, 1, self.limits.max_operator_work_bytes)?;
         match ctl {
-            super::super::CompiledCtl::ForceRequestBodyVariable(value) => {
+            CompiledCtl::ForceRequestBodyVariable(value) => {
                 staged.force_request_body_variable = Some(value);
             }
-            super::super::CompiledCtl::RequestBodyProcessor(value) => {
+            CompiledCtl::RequestBodyProcessor(value) => {
                 if self.next_phase() != Some(Phase::RequestHeaders) || self.request.body.is_some() {
                     return Err(RuntimeError::GenerationInvariant);
                 }
                 staged.request_body_processor = Some(match value {
-                    super::super::RequestBodyProcessor::UrlEncoded => {
-                        super::super::super::BodyProcessorSelection::UrlEncoded
-                    }
-                    super::super::RequestBodyProcessor::Multipart => {
-                        super::super::super::BodyProcessorSelection::Multipart
-                    }
-                    super::super::RequestBodyProcessor::Json => super::super::super::BodyProcessorSelection::Json,
-                    super::super::RequestBodyProcessor::Xml => super::super::super::BodyProcessorSelection::Xml,
+                    RequestBodyProcessor::UrlEncoded => BodyProcessorSelection::UrlEncoded,
+                    RequestBodyProcessor::Multipart => BodyProcessorSelection::Multipart,
+                    RequestBodyProcessor::Json => BodyProcessorSelection::Json,
+                    RequestBodyProcessor::Xml => BodyProcessorSelection::Xml,
                 });
             }
-            super::super::CompiledCtl::RuleRemoveByTag(tag) => {
+            CompiledCtl::RuleRemoveByTag(tag) => {
                 for entry in tagged_units(&self.generation, tag)? {
                     charge_ctl_work(
                         &mut self.ctl_work_bytes,
@@ -1006,12 +988,12 @@ impl<'generation> Transaction<'generation> {
                     staged.add_removed_unit(entry.unit, self.limits, journal.as_deref_mut())?;
                 }
             }
-            super::super::CompiledCtl::RuleRemoveTargetByTag {
+            CompiledCtl::RuleRemoveTargetByTag {
                 tag,
                 collection,
                 selector,
             } => {
-                let super::super::CompiledCtlSelector::Resolved(selector) = selector else {
+                let CompiledCtlSelector::Resolved(selector) = selector else {
                     return Err(RuntimeError::GenerationInvariant);
                 };
                 for entry in tagged_units(&self.generation, tag)? {

@@ -309,7 +309,7 @@ impl CompiledGeneration {
                                 matches!(
                                     (action.kind, action.operand),
                                     (
-                                        ActionEnvelopeKind::Action(super::super::ActionKind::Tag),
+                                        ActionEnvelopeKind::Action(ActionKind::Tag),
                                         CompiledActionOperand::Literal(_)
                                     )
                                 )
@@ -326,10 +326,8 @@ impl CompiledGeneration {
         for (unit_id, unit) in units.iter().enumerate() {
             for member in &members[unit.member_start..unit.member_start + unit.member_count] {
                 for action in &actions[member.action_start..member.action_start + member.action_count] {
-                    if let (
-                        ActionEnvelopeKind::Action(super::super::ActionKind::Tag),
-                        CompiledActionOperand::Literal(tag),
-                    ) = (action.kind, action.operand)
+                    if let (ActionEnvelopeKind::Action(ActionKind::Tag), CompiledActionOperand::Literal(tag)) =
+                        (action.kind, action.operand)
                     {
                         tag_rule_refs.push(CompiledTagRuleRef { tag, unit: unit_id });
                     }

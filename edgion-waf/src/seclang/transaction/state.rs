@@ -677,7 +677,7 @@ pub(super) struct RequestHeadProjection {
     pub(super) arena: usize,
     nominal: usize,
     pub(super) query_combined_size: usize,
-    body_processor: super::super::super::BodyProcessorSelection,
+    body_processor: BodyProcessorSelection,
 }
 
 pub(super) fn projected_derived_bytes(
@@ -741,7 +741,7 @@ pub(super) fn projected_derived_bytes(
     })
 }
 
-fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::super::BodyProcessorSelection {
+fn request_body_processor(headers: &[RequestHeader<'_>]) -> BodyProcessorSelection {
     processor_from_content_type(
         headers
             .iter()

@@ -24,7 +24,18 @@ use super::super::body::{
 use super::super::transform::{
     apply_transformations_borrowed, apply_transformations_multimatch, TransformError, TransformLimits,
 };
-use super::{CollectionKind, CompiledGeneration, Phase};
+use super::super::{ActionKind, BodyProcessorSelection, Severity, TransformationKind};
+use super::inspection_activation;
+use super::json_inspection_plan::JsonMemberMode;
+// `CompilerByteRange` is aliased because `storage::ByteRange` (a runtime range) shares the name.
+use super::{
+    is_streaming_raw_member, ActionEnvelopeKind, ByteRange as CompilerByteRange, CollectionKind, CompiledActionOperand,
+    CompiledCtl, CompiledCtlSelector, CompiledGeneration, CompiledIntegerOperand, CompiledIpNetwork,
+    CompiledMemberPlan, CompiledOperatorOperand, CompiledOperatorPlan, CompiledRuleUnit, CompiledScheduleEntry,
+    CompiledSegmentKind, CompiledSetVar, CompiledTagRuleRef, CompiledTargetSelector, LocalActionValue, MacroSource,
+    OnOff, Phase, RegexPlanRef, RequestBodyProcessor, ResolvedDisruptive, SetVarOperation, StringRelation,
+    TargetModifier,
+};
 
 pub use json_inspection::ResultLimits as JsonResultLimits;
 pub use json_inspection_runtime::{JsonInspectionLimits, JsonInspectionSession, JsonInspectionUsage, JsonResultLimit};
@@ -404,9 +415,9 @@ pub enum RuntimeError {
     #[error("transformation execution failed with bounded category {kind:?}")]
     Transformation { kind: RuntimeTransformError },
     #[error("runtime action {kind:?} is not implemented by the current transaction slice")]
-    RuntimeActionUnavailable { kind: super::super::ActionKind },
+    RuntimeActionUnavailable { kind: ActionKind },
     #[error("runtime macro source {kind:?} is not implemented by the current transaction slice")]
-    RuntimeMacroUnavailable { kind: super::MacroSource },
+    RuntimeMacroUnavailable { kind: MacroSource },
     #[error("request header name is invalid at ordinal {ordinal}")]
     InvalidHeaderName { ordinal: usize },
     #[error("request header value is invalid at ordinal {ordinal}")]
@@ -442,7 +453,7 @@ pub struct RuleFinding {
     rule_id: u64,
     log: bool,
     audit_log: bool,
-    severity: Option<super::super::Severity>,
+    severity: Option<Severity>,
     tag_count: usize,
 }
 
@@ -459,7 +470,7 @@ impl RuleFinding {
         self.audit_log
     }
 
-    pub const fn severity(self) -> Option<super::super::Severity> {
+    pub const fn severity(self) -> Option<Severity> {
         self.severity
     }
 

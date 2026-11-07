@@ -38,11 +38,7 @@ where
     }
 }
 
-fn operand_position(
-    operator: super::super::OperatorView<'_, '_>,
-    line: &super::super::LogicalLine,
-    offset: usize,
-) -> SourcePosition {
+fn operand_position(operator: OperatorView<'_, '_>, line: &LogicalLine, offset: usize) -> SourcePosition {
     if offset < operator.argument().decoded_len() {
         operator_mapped_text(operator, line, offset..offset + 1)
             .map_or(operator.argument_span().start, |text| text.span().start)
@@ -306,7 +302,7 @@ impl<'a, 'source> OperatorOperandBuild<'a, 'source> {
 
     fn store_static(
         &mut self,
-        operator: super::super::OperatorView<'_, 'source>,
+        operator: OperatorView<'_, 'source>,
         extra_records: usize,
         network_records: usize,
         requirement_records: usize,
@@ -488,8 +484,8 @@ fn parse_byte_member(bytes: &[u8], range: Range<usize>) -> Result<(u8, u8), usiz
 
 pub(super) fn classify_operator_operand<'source>(
     build: &mut OperatorOperandBuild<'_, 'source>,
-    operator: super::super::OperatorView<'_, 'source>,
-    line: &'source super::super::LogicalLine,
+    operator: OperatorView<'_, 'source>,
+    line: &'source LogicalLine,
     kind: OperatorKind,
     location: SemanticLocation,
     document_index: usize,

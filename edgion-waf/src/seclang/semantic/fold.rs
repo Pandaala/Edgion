@@ -241,7 +241,7 @@ fn adjacency(record: LocalRuleFoldRecord) -> Option<FoldAdjacency> {
 
 fn inspect_fold(
     arena: FoldActionArena<'_, '_>,
-    syntax: super::super::SyntaxDirectiveView<'_, '_>,
+    syntax: SyntaxDirectiveView<'_, '_>,
     mapping: &DirectiveSemanticRecord,
     document_index: usize,
     directive_index: usize,

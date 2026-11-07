@@ -74,10 +74,7 @@ impl<'generation> Transaction<'generation> {
             .ok_or(RuntimeError::GenerationInvariant)
             .and_then(parse_usize)?;
 
-        let raw_policy = self
-            .tx
-            .force_request_body_variable
-            .map(|value| value == super::super::OnOff::On);
+        let raw_policy = self.tx.force_request_body_variable.map(|value| value == OnOff::On);
         let publication = if raw_policy.is_some() {
             build_publication_with_raw_policy(
                 &body,
@@ -322,7 +319,7 @@ impl<'generation> Transaction<'generation> {
                 && !mappings.is_empty()
                 && mappings
                     .iter()
-                    .all(|mapping| super::super::is_streaming_raw_member(&self.generation, mapping.member));
+                    .all(|mapping| is_streaming_raw_member(&self.generation, mapping.member));
             if streaming {
                 let state = group.matcher.create_stream_state().map_err(map_matcher_error)?;
                 retained_bytes = retained_bytes
@@ -337,15 +334,15 @@ impl<'generation> Transaction<'generation> {
         let mut phase_two_units = self.generation.schedules[phase_index(Phase::RequestBody)]
             .iter()
             .filter_map(|entry| match entry {
-                super::super::CompiledScheduleEntry::RuleUnit(unit_index) => Some(*unit_index),
-                super::super::CompiledScheduleEntry::MarkerSentinel(_) => None,
+                CompiledScheduleEntry::RuleUnit(unit_index) => Some(*unit_index),
+                CompiledScheduleEntry::MarkerSentinel(_) => None,
             });
         let early_positive_member = phase_two_units
             .next()
             .and_then(|unit_index| phase_two_units.next().is_none().then_some(unit_index));
         let early_positive_member = early_positive_member.and_then(|unit_index| {
             let unit = self.generation.units.get(unit_index)?;
-            if unit.member_count != 1 || !super::super::is_streaming_raw_member(&self.generation, unit.member_start) {
+            if unit.member_count != 1 || !is_streaming_raw_member(&self.generation, unit.member_start) {
                 return None;
             }
             self.generation
@@ -455,7 +452,7 @@ impl<'generation> Transaction<'generation> {
             .ok_or(RuntimeError::RequestBodyNotPublished)?;
         let mut overrides = vec![None; self.generation.members.len()];
         for (member_index, positive) in stream.member_positive.into_iter().enumerate() {
-            if !super::super::is_streaming_raw_member(&self.generation, member_index) {
+            if !is_streaming_raw_member(&self.generation, member_index) {
                 continue;
             }
             let operator = self
@@ -467,10 +464,7 @@ impl<'generation> Transaction<'generation> {
             overrides[member_index] = Some(positive != operator.negated);
         }
         self.stream_member_matches = Some(overrides);
-        self.publish_request_body(RequestBody::new(
-            bytes::Bytes::new(),
-            super::super::super::BodyProcessorSelection::Raw,
-        ))?;
+        self.publish_request_body(RequestBody::new(bytes::Bytes::new(), BodyProcessorSelection::Raw))?;
         let outcome = self.execute_request_body();
         self.stream_member_matches = None;
         outcome.map(Some)
@@ -584,7 +578,7 @@ impl<'generation> Transaction<'generation> {
         while schedule_ordinal < schedule_len {
             let entry = self.generation.schedules[schedule_index][schedule_ordinal];
             schedule_ordinal = schedule_ordinal.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
-            let super::super::CompiledScheduleEntry::RuleUnit(unit_id) = entry else {
+            let CompiledScheduleEntry::RuleUnit(unit_id) = entry else {
                 continue;
             };
             if self.tx.removed_units.binary_search(&unit_id).is_ok()
@@ -653,9 +647,7 @@ impl<'generation> Transaction<'generation> {
                             .ok_or(RuntimeError::Arithmetic)?;
                     }
                 }
-                if unit.disruptive == super::super::ResolvedDisruptive::Deny
-                    && self.rule_engine_mode == RuleEngineMode::On
-                {
+                if unit.disruptive == ResolvedDisruptive::Deny && self.rule_engine_mode == RuleEngineMode::On {
                     outcome.intervention = Some(Intervention {
                         rule_id: unit.id,
                         status: unit.status.unwrap_or(403),

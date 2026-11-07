@@ -120,7 +120,7 @@ impl SelectedValue {
                 .bytes(request, json_budget),
             SelectedBytes::CtlProcessor => tx
                 .request_body_processor
-                .map(super::super::super::BodyProcessorSelection::as_bytes)
+                .map(BodyProcessorSelection::as_bytes)
                 .ok_or(RuntimeError::GenerationInvariant),
             SelectedBytes::Count { digits, start } => Ok(&digits[usize::from(*start)..]),
         }
@@ -331,8 +331,8 @@ pub(super) struct TxState {
     pub(super) matched_vars_payload_bytes: u128,
     pub(super) removed_units: Vec<usize>,
     pub(super) target_exclusions: Vec<ActiveTargetExclusion>,
-    pub(super) request_body_processor: Option<super::super::super::BodyProcessorSelection>,
-    pub(super) force_request_body_variable: Option<super::super::OnOff>,
+    pub(super) request_body_processor: Option<BodyProcessorSelection>,
+    pub(super) force_request_body_variable: Option<OnOff>,
     pub(super) retained_bytes: usize,
 }
 
@@ -340,7 +340,7 @@ pub(super) struct TxState {
 pub(super) struct ActiveTargetExclusion {
     pub(super) unit: usize,
     pub(super) collection: CollectionKind,
-    pub(super) selector: super::super::CompiledTargetSelector,
+    pub(super) selector: CompiledTargetSelector,
 }
 
 pub(super) struct CaptureEntry<V = MatchValue, K = MatchValue> {
@@ -982,8 +982,8 @@ pub(super) struct TxCheckpoint {
     matched_vars: Vec<TxEntry<MatchValue, MatchValue>>,
     matched_vars_payload_bytes: u128,
     entry_payload_bytes: u128,
-    request_body_processor: Option<super::super::super::BodyProcessorSelection>,
-    force_request_body_variable: Option<super::super::OnOff>,
+    request_body_processor: Option<BodyProcessorSelection>,
+    force_request_body_variable: Option<OnOff>,
     retained_bytes: usize,
 }
 
@@ -1321,7 +1321,7 @@ pub(super) fn setvar_value(
     generation: &CompiledGeneration,
     request: &RequestState,
     tx: &TxState,
-    setvar: super::super::CompiledSetVar,
+    setvar: CompiledSetVar,
     member_limit: usize,
     json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Vec<u8>, RuntimeError> {

@@ -448,7 +448,7 @@ pub enum SemanticError {
         position: SourcePosition,
     },
     #[error("invalid ctl target syntax")]
-    CtlTarget(#[source] super::super::TargetSyntaxError),
+    CtlTarget(#[source] TargetSyntaxError),
     #[error("duplicate local {kind:?} action at {position:?}")]
     FoldDuplicate {
         kind: FoldSingletonKind,

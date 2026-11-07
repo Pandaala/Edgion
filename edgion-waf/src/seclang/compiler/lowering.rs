@@ -22,7 +22,7 @@ pub(super) fn map_phrase_matcher_error(error: MatcherCompileError, location: Sem
 
 /// Reads only the resolved assets, phrase records and phrase bytes of `templates`.
 fn visit_phrase_operand(
-    operand: super::super::OperatorOperandView<'_, '_>,
+    operand: OperatorOperandView<'_, '_>,
     templates: &AssetTemplateState<'_>,
     asset_cursor: &mut usize,
     mut visit: impl FnMut(&str, usize) -> Result<(), CompilerError>,
@@ -30,13 +30,13 @@ fn visit_phrase_operand(
     let (assets, phrases, asset_bytes) = (&templates.assets, &templates.phrases, &templates.asset_phrase_bytes);
     let mut ordinal = 0_usize;
     match operand {
-        super::super::OperatorOperandView::PhraseList(list) => {
+        OperatorOperandView::PhraseList(list) => {
             for phrase in list.phrases() {
                 visit(phrase.text(), ordinal)?;
                 ordinal = checked_inc(ordinal)?;
             }
         }
-        super::super::OperatorOperandView::ExternalAssets(external) => {
+        OperatorOperandView::ExternalAssets(external) => {
             for _ in external.assets() {
                 let asset = assets.get(*asset_cursor).ok_or(CompilerError::PrivateInvariant {
                     kind: CompilerInvariant::InvalidByteRange,
@@ -99,7 +99,7 @@ impl GroupPatternPreflight {
                 };
                 let capture = member.rule().fold().capture_action().is_some();
                 match operator.kind() {
-                    super::super::OperatorKind::Pm | super::super::OperatorKind::PmFromFile => {
+                    OperatorKind::Pm | OperatorKind::PmFromFile => {
                         let mut patterns = 0_usize;
                         let mut bytes = 0_usize;
                         visit_phrase_operand(
@@ -125,8 +125,8 @@ impl GroupPatternPreflight {
                             }
                         }
                     }
-                    super::super::OperatorKind::Rx if unit.is_active() && !capture => {
-                        let super::super::OperatorOperandView::Regex(source) = operator.operand() else {
+                    OperatorKind::Rx if unit.is_active() && !capture => {
+                        let OperatorOperandView::Regex(source) = operator.operand() else {
                             return Err(CompilerError::PrivateInvariant {
                                 kind: CompilerInvariant::UnexpectedActionOperand,
                             });
@@ -214,7 +214,7 @@ fn append_candidate_pattern(
 }
 
 fn compile_phrase_operand_program(
-    operand: super::super::OperatorOperandView<'_, '_>,
+    operand: OperatorOperandView<'_, '_>,
     templates: &AssetTemplateState<'_>,
     asset_cursor: &mut usize,
     location: SemanticLocation,
@@ -346,7 +346,7 @@ impl<'source, 'assets> CompilerBuilder<'source, 'assets> {
             }
             for member in unit.members() {
                 if let Some(operator) = member.operator() {
-                    if let super::super::OperatorOperandView::ExternalAssets(external) = operator.operand() {
+                    if let OperatorOperandView::ExternalAssets(external) = operator.operand() {
                         for asset in external.assets() {
                             work.resolve_asset(operator.location(), asset, &mut assets)?;
                         }
@@ -406,7 +406,7 @@ impl<'source> MatcherState<'source> {
                 let Some(operator) = member.operator() else {
                     continue;
                 };
-                if operator.kind() != super::super::OperatorKind::Rx {
+                if operator.kind() != OperatorKind::Rx {
                     continue;
                 }
                 let capture = member.rule().fold().capture_action().is_some();
@@ -432,7 +432,7 @@ impl<'source> MatcherState<'source> {
             .flat_map(|unit| unit.members())
             .filter_map(|member| member.operator())
             .map(|operator| match operator.operand() {
-                super::super::OperatorOperandView::IpNetworks(networks) => networks.networks().len(),
+                OperatorOperandView::IpNetworks(networks) => networks.networks().len(),
                 _ => 0,
             })
             .try_fold(0_usize, |total, count| total.checked_add(count))
@@ -510,7 +510,7 @@ impl<'source> MatcherState<'source> {
             }
             for member in unit.members() {
                 if let Some(operator) = member.operator() {
-                    if let super::super::OperatorOperandView::Regex(source) = operator.operand() {
+                    if let OperatorOperandView::Regex(source) = operator.operand() {
                         regex_candidates.push(RegexCandidate {
                             source: source.text(),
                             location: operator.location(),
@@ -598,7 +598,7 @@ impl<'source> MatcherState<'source> {
         verify_b_requirements(&state.requirements)?;
         debug_assert!(regex_candidates.iter().all(|candidate| {
             !candidate.source.is_empty()
-                || candidate.location.node_kind() == super::super::SemanticNodeKind::Operator
+                || candidate.location.node_kind() == SemanticNodeKind::Operator
                 || !candidate.capture
                 || candidate.active
         }));
@@ -928,10 +928,7 @@ impl<'source> GroupedMatcherState<'source> {
                     continue;
                 };
                 let capture = member.rule().fold().capture_action().is_some();
-                let is_phrase = matches!(
-                    operator.kind(),
-                    super::super::OperatorKind::Pm | super::super::OperatorKind::PmFromFile
-                );
+                let is_phrase = matches!(operator.kind(), OperatorKind::Pm | OperatorKind::PmFromFile);
                 if is_phrase {
                     if unit.is_active() && !capture {
                         let key = member_group_key(
@@ -1017,8 +1014,8 @@ impl<'source> GroupedMatcherState<'source> {
                         CompileRequirement::PhraseMatcherCompilation,
                         operator.location(),
                     )?;
-                } else if operator.kind() == super::super::OperatorKind::Rx && unit.is_active() && !capture {
-                    let super::super::OperatorOperandView::Regex(source) = operator.operand() else {
+                } else if operator.kind() == OperatorKind::Rx && unit.is_active() && !capture {
+                    let OperatorOperandView::Regex(source) = operator.operand() else {
                         return Err(CompilerError::PrivateInvariant {
                             kind: CompilerInvariant::UnexpectedActionOperand,
                         });

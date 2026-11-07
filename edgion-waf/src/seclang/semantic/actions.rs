@@ -61,7 +61,7 @@ pub(super) struct ActionOperandBuild<'a, 'source> {
     pub(super) limits: SemanticLimits,
 }
 
-fn action_position(operand: SemanticText<'_>, line: &super::super::LogicalLine, offset: usize) -> SourcePosition {
+fn action_position(operand: SemanticText<'_>, line: &LogicalLine, offset: usize) -> SourcePosition {
     if offset < operand.text().len() {
         action_mapped_text(operand, line, offset..offset + 1).map_or(operand.span().start, |text| text.span().start)
     } else {
@@ -95,7 +95,7 @@ where
 
 fn parse_setvar_plan(
     operand: SemanticText<'_>,
-    line: &super::super::LogicalLine,
+    line: &LogicalLine,
 ) -> Result<(SetVarPlan, TemplateShape), SemanticError> {
     let bytes = operand.text().as_bytes();
     let (operation, key_range, value_range) = if bytes.first() == Some(&b'!') {
@@ -213,7 +213,7 @@ fn parse_setvar_plan(
 
 fn parse_initcol_plan(
     operand: SemanticText<'_>,
-    line: &super::super::LogicalLine,
+    line: &LogicalLine,
 ) -> Result<(InitColPlan, TemplateShape), SemanticError> {
     let bytes = operand.text().as_bytes();
     let equals = bytes
@@ -269,7 +269,7 @@ fn parse_on_off(bytes: &[u8]) -> Option<OnOff> {
 
 fn parse_ctl_plan<'source>(
     operand: SemanticText<'source>,
-    line: &'source super::super::LogicalLine,
+    line: &'source LogicalLine,
     line_index: usize,
 ) -> Result<CtlPlan<'source>, SemanticError> {
     let bytes = operand.text().as_bytes();
@@ -380,13 +380,8 @@ fn parse_ctl_plan<'source>(
             }
             let tag = action_mapped_text(operand, line, tag_range)?;
             let target_text = action_mapped_text(operand, line, target_range.clone())?;
-            let target = super::super::target::parse_single_target(
-                target_text.text(),
-                target_text.logical_range().start,
-                line,
-                line_index,
-            )
-            .map_err(SemanticError::CtlTarget)?;
+            let target = parse_single_target(target_text.text(), target_text.logical_range().start, line, line_index)
+                .map_err(SemanticError::CtlTarget)?;
             if CollectionKind::lookup_ascii_insensitive(target.collection().text().as_bytes()).is_none() {
                 return Err(SemanticError::CtlSyntax {
                     kind: CtlErrorKind::Collection,
@@ -406,7 +401,7 @@ fn commit_template_slice<'source>(
     plan: SlicePlan,
     template: usize,
     operand: SemanticText<'source>,
-    line: &'source super::super::LogicalLine,
+    line: &'source LogicalLine,
     templates: &[TemplateRecord<'source>],
     segments: &[TemplateSegmentRecord],
 ) -> TemplateSliceRecord {
@@ -439,7 +434,7 @@ pub(super) fn classify_action_operand<'source>(
     envelope: ActionEnvelopeKind,
     operand: Option<SemanticText<'source>>,
     name: SemanticText<'source>,
-    line: &'source super::super::LogicalLine,
+    line: &'source LogicalLine,
     line_index: usize,
     location: SemanticLocation,
 ) -> Result<usize, SemanticError> {
@@ -796,13 +791,9 @@ pub(super) fn classify_action_operand<'source>(
                     let value = operand.expect("ctl target action has an operand");
                     let target_text = action_mapped_text(value, line, target_range)
                         .expect("ctl target range was mapped before candidate commit");
-                    let target = super::super::target::parse_single_target(
-                        target_text.text(),
-                        target_text.logical_range().start,
-                        line,
-                        line_index,
-                    )
-                    .expect("ctl target grammar was validated before candidate commit");
+                    let target =
+                        parse_single_target(target_text.text(), target_text.logical_range().start, line, line_index)
+                            .expect("ctl target grammar was validated before candidate commit");
                     let collection_spelling = SemanticText::from(target.collection());
                     let collection = CollectionKind::lookup_ascii_insensitive(collection_spelling.text().as_bytes())
                         .expect("ctl target collection was validated before commit");

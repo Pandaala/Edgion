@@ -7,9 +7,12 @@ use std::ops::Range;
 
 use thiserror::Error;
 
+use super::compiler::CanonicalWork;
+use super::target::parse_single_target;
 use super::{
-    ActionEntryKind, ActionText, Directive, DirectiveTargetView, IdSelector, IdSelectorKind, OperatorNameView,
-    SelectorKind, SourcePosition, SourceSpan, SyntaxDocument, SyntaxText, TargetModifier,
+    ActionEntryKind, ActionText, CompilerError, CompilerInvariant, CompilerLimits, DecodedTextView, Directive,
+    DirectiveTargetView, IdSelector, IdSelectorKind, LogicalLine, OperatorNameView, OperatorView, SelectorKind,
+    SourcePosition, SourceSpan, SyntaxDirectiveView, SyntaxDocument, SyntaxText, TargetModifier, TargetSyntaxError,
 };
 
 mod actions;

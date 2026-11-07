@@ -351,7 +351,7 @@ impl<'source> TemplateBuild<'_, 'source> {
 }
 
 fn mapped_text<'source>(
-    line: &'source super::super::LogicalLine,
+    line: &'source LogicalLine,
     logical: Range<usize>,
 ) -> Result<SemanticText<'source>, SemanticError> {
     let text = line
@@ -383,7 +383,7 @@ fn mapped_text<'source>(
 
 pub(super) fn action_mapped_text<'source>(
     operand: SemanticText<'source>,
-    line: &'source super::super::LogicalLine,
+    line: &'source LogicalLine,
     range: Range<usize>,
 ) -> Result<SemanticText<'source>, SemanticError> {
     let logical = operand
@@ -398,8 +398,8 @@ pub(super) fn action_mapped_text<'source>(
 }
 
 pub(super) fn operator_mapped_text<'source>(
-    operator: super::super::OperatorView<'_, 'source>,
-    line: &'source super::super::LogicalLine,
+    operator: OperatorView<'_, 'source>,
+    line: &'source LogicalLine,
     range: Range<usize>,
 ) -> Result<SemanticText<'source>, SemanticError> {
     let logical =
@@ -415,7 +415,7 @@ pub(super) fn operator_mapped_text<'source>(
 pub(super) fn macro_error_position_action(
     error: MacroParseError,
     operand: SemanticText<'_>,
-    line: &super::super::LogicalLine,
+    line: &LogicalLine,
 ) -> SourcePosition {
     if error.offset < operand.text().len() {
         action_mapped_text(operand, line, error.offset..error.offset + 1)
@@ -427,8 +427,8 @@ pub(super) fn macro_error_position_action(
 
 pub(super) fn macro_error_position_operator(
     error: MacroParseError,
-    operator: super::super::OperatorView<'_, '_>,
-    line: &super::super::LogicalLine,
+    operator: OperatorView<'_, '_>,
+    line: &LogicalLine,
 ) -> SourcePosition {
     if error.offset < operator.argument().decoded_len() {
         operator_mapped_text(operator, line, error.offset..error.offset + 1)
@@ -538,8 +538,8 @@ where
 
 pub(super) fn attach_operator_template<'source>(
     build: &mut TemplateBuild<'_, 'source>,
-    operator: super::super::OperatorView<'_, 'source>,
-    line: &'source super::super::LogicalLine,
+    operator: OperatorView<'_, 'source>,
+    line: &'source LogicalLine,
     location: SemanticLocation,
 ) -> Result<usize, SemanticError> {
     let argument = operator.argument();

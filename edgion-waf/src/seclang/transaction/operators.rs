@@ -167,12 +167,12 @@ impl OrdinaryScanCache {
 
 pub(super) fn physical_operator_work(
     context: &SingleInputContext<'_>,
-    plan: super::super::CompiledOperatorPlan,
+    plan: CompiledOperatorPlan,
     len: usize,
 ) -> Result<usize, RuntimeError> {
     let mut work = len.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
     match plan.operand {
-        super::super::CompiledOperatorOperand::Matcher {
+        CompiledOperatorOperand::Matcher {
             group, pattern_count, ..
         } => {
             let cache = context.scan_cache.as_deref().ok_or(RuntimeError::GenerationInvariant)?;
@@ -197,9 +197,9 @@ pub(super) fn physical_operator_work(
                     .ok_or(RuntimeError::Arithmetic)?;
             }
         }
-        super::super::CompiledOperatorOperand::String { template, .. }
-        | super::super::CompiledOperatorOperand::Integer {
-            operand: super::super::CompiledIntegerOperand::Template(template),
+        CompiledOperatorOperand::String { template, .. }
+        | CompiledOperatorOperand::Integer {
+            operand: CompiledIntegerOperand::Template(template),
             ..
         } => {
             let template = context
@@ -211,10 +211,10 @@ pub(super) fn physical_operator_work(
                 .checked_add(template.static_bytes)
                 .and_then(|v| v.checked_add(template.segment_count.checked_mul(2)?))
                 .ok_or(RuntimeError::Arithmetic)?;
-            if let super::super::CompiledOperatorOperand::String { relation, .. } = plan.operand {
+            if let CompiledOperatorOperand::String { relation, .. } = plan.operand {
                 let (haystack, needle) = match relation {
-                    super::super::StringRelation::Contains => (len, template.static_bytes),
-                    super::super::StringRelation::Within => (template.static_bytes, len),
+                    StringRelation::Contains => (len, template.static_bytes),
+                    StringRelation::Within => (template.static_bytes, len),
                     _ => (0, 0),
                 };
                 if needle != 0 && needle <= haystack {
@@ -225,7 +225,7 @@ pub(super) fn physical_operator_work(
                 }
             }
         }
-        super::super::CompiledOperatorOperand::IpNetworks { count, .. } => {
+        CompiledOperatorOperand::IpNetworks { count, .. } => {
             work = work.checked_add(count).ok_or(RuntimeError::Arithmetic)?;
         }
         _ => {}
@@ -299,7 +299,7 @@ pub(super) enum OperatorCapture {
 
 pub(super) fn evaluate_operator(
     context: &mut SingleInputContext<'_>,
-    plan: super::super::CompiledOperatorPlan,
+    plan: CompiledOperatorPlan,
     input: &[u8],
     member_runtime_limit: usize,
     evaluation_mode: EvaluationMode,
@@ -309,20 +309,20 @@ pub(super) fn evaluate_operator(
     let json_budget = context.json_budget.as_deref_mut();
     let mut capture = None;
     let positive = match plan.operand {
-        super::super::CompiledOperatorOperand::String { relation, template } => {
+        CompiledOperatorOperand::String { relation, template } => {
             let operand = template_operand(generation, request, tx, template, member_runtime_limit, json_budget)?;
             Ok(match relation {
-                super::super::StringRelation::BeginsWith => input.starts_with(&operand),
-                super::super::StringRelation::Contains => contains(input, &operand),
-                super::super::StringRelation::EndsWith => input.ends_with(&operand),
-                super::super::StringRelation::Equals => input == operand.as_ref(),
-                super::super::StringRelation::Within => contains(&operand, input),
+                StringRelation::BeginsWith => input.starts_with(&operand),
+                StringRelation::Contains => contains(input, &operand),
+                StringRelation::EndsWith => input.ends_with(&operand),
+                StringRelation::Equals => input == operand.as_ref(),
+                StringRelation::Within => contains(&operand, input),
             })
         }
-        super::super::CompiledOperatorOperand::Integer { relation, operand } => {
+        CompiledOperatorOperand::Integer { relation, operand } => {
             let expected = match operand {
-                super::super::CompiledIntegerOperand::Static(value) => value,
-                super::super::CompiledIntegerOperand::Template(template) => parse_i64(&template_operand(
+                CompiledIntegerOperand::Static(value) => value,
+                CompiledIntegerOperand::Template(template) => parse_i64(&template_operand(
                     generation,
                     request,
                     tx,
@@ -334,7 +334,7 @@ pub(super) fn evaluate_operator(
             let actual = parse_i64(input);
             Ok(integer_relation(relation, actual, expected))
         }
-        super::super::CompiledOperatorOperand::IpNetworks { start, count } => {
+        CompiledOperatorOperand::IpNetworks { start, count } => {
             let Some(address) = std::str::from_utf8(input)
                 .ok()
                 .and_then(|value| value.parse::<std::net::IpAddr>().ok())
@@ -348,20 +348,20 @@ pub(super) fn evaluate_operator(
                 .ok_or(RuntimeError::GenerationInvariant)?;
             Ok(networks.iter().any(|network| ip_matches(address, *network)))
         }
-        super::super::CompiledOperatorOperand::ByteSet { words } => Ok(input.iter().copied().any(|byte| {
+        CompiledOperatorOperand::ByteSet { words } => Ok(input.iter().copied().any(|byte| {
             let index = usize::from(byte);
             words[index / 64] & (1_u64 << (index % 64)) == 0
         })),
-        super::super::CompiledOperatorOperand::ValidateUrlEncoding => Ok(invalid_url_encoding(input)),
-        super::super::CompiledOperatorOperand::ValidateUtf8Encoding => Ok(std::str::from_utf8(input).is_err()),
-        super::super::CompiledOperatorOperand::Unconditional => Ok(true),
-        super::super::CompiledOperatorOperand::DetectSqli { .. } => {
+        CompiledOperatorOperand::ValidateUrlEncoding => Ok(invalid_url_encoding(input)),
+        CompiledOperatorOperand::ValidateUtf8Encoding => Ok(std::str::from_utf8(input).is_err()),
+        CompiledOperatorOperand::Unconditional => Ok(true),
+        CompiledOperatorOperand::DetectSqli { .. } => {
             capture = crate::injection::detect_sqli(input).map(OperatorCapture::Fingerprint);
             Ok(capture.is_some())
         }
-        super::super::CompiledOperatorOperand::DetectXss => Ok(crate::injection::detect_xss(input)),
-        super::super::CompiledOperatorOperand::Regex(reference) => match reference {
-            super::super::RegexPlanRef::Boolean(program) => {
+        CompiledOperatorOperand::DetectXss => Ok(crate::injection::detect_xss(input)),
+        CompiledOperatorOperand::Regex(reference) => match reference {
+            RegexPlanRef::Boolean(program) => {
                 let regex = generation
                     .boolean_regexes
                     .get(program)
@@ -374,7 +374,7 @@ pub(super) fn evaluate_operator(
                     .is_match(input, lazy_boolean_scratch(scratch, regex))
                     .map_err(map_regex_scratch_error)
             }
-            super::super::RegexPlanRef::Capture(program) => {
+            RegexPlanRef::Capture(program) => {
                 #[cfg(test)]
                 measurements::record(Event::CaptureBooleanSearches, 1);
                 let regex = generation
@@ -390,7 +390,7 @@ pub(super) fn evaluate_operator(
                     .map_err(map_regex_scratch_error)
             }
         },
-        super::super::CompiledOperatorOperand::Matcher {
+        CompiledOperatorOperand::Matcher {
             group,
             pattern_start,
             pattern_count,
@@ -404,7 +404,7 @@ pub(super) fn evaluate_operator(
             evaluation_mode,
             context.scan_cache.as_deref_mut(),
         ),
-        super::super::CompiledOperatorOperand::CapturePhrase(program) => {
+        CompiledOperatorOperand::CapturePhrase(program) => {
             let matcher = generation
                 .capture_phrases
                 .get(program)
@@ -439,7 +439,7 @@ pub(super) fn static_template_operand(
         .ok_or(RuntimeError::GenerationInvariant)?;
     if segments
         .iter()
-        .any(|segment| matches!(segment.kind, super::super::CompiledSegmentKind::Macro(_)))
+        .any(|segment| matches!(segment.kind, CompiledSegmentKind::Macro(_)))
     {
         return Ok(None);
     }
@@ -447,7 +447,7 @@ pub(super) fn static_template_operand(
     let mut start = None;
     let mut len = 0usize;
     for segment in segments {
-        let super::super::CompiledSegmentKind::Literal(range) = segment.kind else {
+        let CompiledSegmentKind::Literal(range) = segment.kind else {
             return Err(RuntimeError::GenerationInvariant);
         };
         let bytes = generation_bytes(&generation.bytes, range)?;
@@ -458,7 +458,7 @@ pub(super) fn static_template_operand(
         len = checked_runtime_append(len, bytes.len(), limit)?;
     }
     match start {
-        Some(start) => generation_bytes(&generation.bytes, super::super::ByteRange { start, len }).map(Some),
+        Some(start) => generation_bytes(&generation.bytes, CompilerByteRange { start, len }).map(Some),
         None => Ok(Some(&[])),
     }
 }
@@ -508,8 +508,8 @@ pub(super) fn expand_template<const RETAIN_OUTPUT: bool>(
     let mut expanded_len = 0_usize;
     for segment in segments {
         let value = match segment.kind {
-            super::super::CompiledSegmentKind::Literal(range) => generation_bytes(&generation.bytes, range)?,
-            super::super::CompiledSegmentKind::Macro(macro_id) => {
+            CompiledSegmentKind::Literal(range) => generation_bytes(&generation.bytes, range)?,
+            CompiledSegmentKind::Macro(macro_id) => {
                 let reference = *generation
                     .macros
                     .get(macro_id)
@@ -540,12 +540,12 @@ fn macro_value<'request>(
     macro_id: usize,
     request: &'request RequestState,
     tx: &'request TxState,
-    source: super::super::MacroSource,
+    source: MacroSource,
     key: &[u8],
     mut json_budget: Option<&mut InspectionBudget>,
 ) -> Result<Option<&'request [u8]>, RuntimeError> {
     Ok(match source {
-        super::super::MacroSource::Args => {
+        MacroSource::Args => {
             if let Some(value) = request.first_named(CollectionKind::Args, key, false) {
                 Some(value)
             } else if let Some(results) = request
@@ -568,19 +568,19 @@ fn macro_value<'request>(
                 None
             }
         }
-        super::super::MacroSource::RequestHeaders => request.first_named(CollectionKind::RequestHeaders, key, true),
-        super::super::MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
-        super::super::MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
-        super::super::MacroSource::Tx => tx
+        MacroSource::RequestHeaders => request.first_named(CollectionKind::RequestHeaders, key, true),
+        MacroSource::RemoteAddr => request.first_value(CollectionKind::RemoteAddr),
+        MacroSource::RequestLine => request.first_value(CollectionKind::RequestLine),
+        MacroSource::Tx => tx
             .get(key, request, json_budget.as_deref_mut())?
             .map(|value| value.bytes(request, json_budget))
             .transpose()?,
-        super::super::MacroSource::MatchedVar => tx
+        MacroSource::MatchedVar => tx
             .matched_var
             .as_ref()
             .map(|value| value.bytes(request, json_budget))
             .transpose()?,
-        super::super::MacroSource::MatchedVarName => tx
+        MacroSource::MatchedVarName => tx
             .matched_var_name
             .as_ref()
             .map(|value| value.bytes(request, json_budget))
@@ -588,7 +588,7 @@ fn macro_value<'request>(
     })
 }
 
-pub(super) fn generation_bytes(bytes: &[u8], range: super::super::ByteRange) -> Result<&[u8], RuntimeError> {
+pub(super) fn generation_bytes(bytes: &[u8], range: CompilerByteRange) -> Result<&[u8], RuntimeError> {
     let end = range.start.checked_add(range.len).ok_or(RuntimeError::Arithmetic)?;
     bytes.get(range.start..end).ok_or(RuntimeError::GenerationInvariant)
 }
@@ -657,7 +657,7 @@ pub(super) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     memchr::memmem::find(haystack, needle).is_some()
 }
 
-pub(super) fn ip_matches(address: std::net::IpAddr, network: super::super::CompiledIpNetwork) -> bool {
+pub(super) fn ip_matches(address: std::net::IpAddr, network: CompiledIpNetwork) -> bool {
     match (address, network.address) {
         (std::net::IpAddr::V4(address), std::net::IpAddr::V4(base)) => {
             let prefix = u32::from(network.prefix.min(32));

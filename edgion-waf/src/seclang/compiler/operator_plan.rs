@@ -400,8 +400,8 @@ impl MatcherCompileWork {
 // tables after its loop (which borrows state.validated), so no method fits.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_operator_plan<'view, 'source>(
-    operator: super::super::SemanticOperatorView<'view, 'source>,
-    member: super::super::ValidatedRuleNodeView<'view, 'source>,
+    operator: SemanticOperatorView<'view, 'source>,
+    member: ValidatedRuleNodeView<'view, 'source>,
     operator_template: Option<usize>,
     ip_networks: &mut Vec<CompiledIpNetwork>,
     boolean_regexes: &mut Vec<CompiledRegexProgram>,
@@ -412,8 +412,6 @@ pub(super) fn compile_operator_plan<'view, 'source>(
     work: &mut MatcherCompileWork,
     active: bool,
 ) -> Result<Option<CompiledOperatorPlan>, CompilerError> {
-    use super::super::OperatorKind;
-
     let kind = operator.kind();
     if matches!(kind, OperatorKind::Pm | OperatorKind::PmFromFile) {
         return Ok(None);
@@ -428,7 +426,7 @@ pub(super) fn compile_operator_plan<'view, 'source>(
             | OperatorKind::EndsWith
             | OperatorKind::Streq
             | OperatorKind::Within,
-            super::super::OperatorOperandView::StringTemplate(_),
+            OperatorOperandView::StringTemplate(_),
         ) => {
             let relation = match kind {
                 OperatorKind::BeginsWith => StringRelation::BeginsWith,
@@ -447,7 +445,7 @@ pub(super) fn compile_operator_plan<'view, 'source>(
         }
         (
             OperatorKind::Eq | OperatorKind::Ge | OperatorKind::Gt | OperatorKind::Lt,
-            super::super::OperatorOperandView::IntegerTemplate { constant, .. },
+            OperatorOperandView::IntegerTemplate { constant, .. },
         ) => {
             let relation = match kind {
                 OperatorKind::Eq => IntegerRelation::Equal,
@@ -464,7 +462,7 @@ pub(super) fn compile_operator_plan<'view, 'source>(
             };
             CompiledOperatorOperand::Integer { relation, operand }
         }
-        (OperatorKind::IpMatch, super::super::OperatorOperandView::IpNetworks(networks)) => {
+        (OperatorKind::IpMatch, OperatorOperandView::IpNetworks(networks)) => {
             let start = ip_networks.len();
             if active {
                 for network in networks.networks() {
@@ -479,25 +477,21 @@ pub(super) fn compile_operator_plan<'view, 'source>(
                 count: if active { ip_networks.len() - start } else { 0 },
             }
         }
-        (OperatorKind::ValidateByteRange, super::super::OperatorOperandView::ByteSet(bytes)) => {
+        (OperatorKind::ValidateByteRange, OperatorOperandView::ByteSet(bytes)) => {
             CompiledOperatorOperand::ByteSet { words: bytes.words() }
         }
-        (OperatorKind::ValidateUrlEncoding, super::super::OperatorOperandView::NoArgument) => {
+        (OperatorKind::ValidateUrlEncoding, OperatorOperandView::NoArgument) => {
             CompiledOperatorOperand::ValidateUrlEncoding
         }
-        (OperatorKind::ValidateUtf8Encoding, super::super::OperatorOperandView::NoArgument) => {
+        (OperatorKind::ValidateUtf8Encoding, OperatorOperandView::NoArgument) => {
             CompiledOperatorOperand::ValidateUtf8Encoding
         }
-        (OperatorKind::UnconditionalMatch, super::super::OperatorOperandView::NoArgument) => {
-            CompiledOperatorOperand::Unconditional
-        }
-        (OperatorKind::DetectSqli, super::super::OperatorOperandView::NoArgument) => {
-            CompiledOperatorOperand::DetectSqli {
-                capture: member.rule().fold().capture_action().is_some(),
-            }
-        }
-        (OperatorKind::DetectXss, super::super::OperatorOperandView::NoArgument) => CompiledOperatorOperand::DetectXss,
-        (OperatorKind::Rx, super::super::OperatorOperandView::Regex(regex)) => {
+        (OperatorKind::UnconditionalMatch, OperatorOperandView::NoArgument) => CompiledOperatorOperand::Unconditional,
+        (OperatorKind::DetectSqli, OperatorOperandView::NoArgument) => CompiledOperatorOperand::DetectSqli {
+            capture: member.rule().fold().capture_action().is_some(),
+        },
+        (OperatorKind::DetectXss, OperatorOperandView::NoArgument) => CompiledOperatorOperand::DetectXss,
+        (OperatorKind::Rx, OperatorOperandView::Regex(regex)) => {
             let location = operator.location();
             let capture = member.rule().fold().capture_action().is_some();
             if active && !capture {

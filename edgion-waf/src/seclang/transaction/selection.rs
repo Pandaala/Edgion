@@ -86,8 +86,8 @@ pub(super) fn lazy_capture_scratch<'a>(
 
 pub(super) fn member_has_action(
     generation: &CompiledGeneration,
-    member: super::super::CompiledMemberPlan,
-    expected: super::super::super::ActionKind,
+    member: CompiledMemberPlan,
+    expected: ActionKind,
 ) -> Result<bool, RuntimeError> {
     let end = member
         .action_start
@@ -98,7 +98,7 @@ pub(super) fn member_has_action(
         .get(member.action_start..end)
         .ok_or(RuntimeError::GenerationInvariant)?
         .iter()
-        .any(|action| action.kind == super::super::ActionEnvelopeKind::Action(expected)))
+        .any(|action| action.kind == ActionEnvelopeKind::Action(expected)))
 }
 
 #[derive(Clone, Copy)]
@@ -165,8 +165,8 @@ pub(super) fn select_values(
         exclude_start + tx.target_exclusions[exclude_start..].partition_point(|entry| entry.unit <= unit_id);
     let exclusions = &tx.target_exclusions[exclude_start..exclude_end];
     for target in records {
-        let json_count = if target.modifier == super::super::TargetModifier::Count
-            && target.selector == super::super::CompiledTargetSelector::None
+        let json_count = if target.modifier == TargetModifier::Count
+            && target.selector == CompiledTargetSelector::None
             && exclusions.is_empty()
             && matches!(target.collection, CollectionKind::Args | CollectionKind::ArgsNames)
         {
@@ -180,7 +180,7 @@ pub(super) fn select_values(
         };
         let mut candidates = CandidateCursor::new(target.collection, include_json && json_count.is_none());
         match target.modifier {
-            super::super::TargetModifier::None => {
+            TargetModifier::None => {
                 while let Some(candidate) = next_selected(ctx, &mut candidates, target.selector)? {
                     if !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)? {
                         if selected.len() == limit {
@@ -191,7 +191,7 @@ pub(super) fn select_values(
                     }
                 }
             }
-            super::super::TargetModifier::Exclude => {
+            TargetModifier::Exclude => {
                 let mut write = 0_usize;
                 for read in 0..selected.len() {
                     let candidate = selected[read];
@@ -204,7 +204,7 @@ pub(super) fn select_values(
                 }
                 selected.truncate(write);
             }
-            super::super::TargetModifier::Count => {
+            TargetModifier::Count => {
                 let mut count = json_count.unwrap_or(0);
                 while let Some(candidate) = next_selected(ctx, &mut candidates, target.selector)? {
                     if !ctl_excludes_value(ctx, exclusions, candidate, ctl_work, work_limit)? {
@@ -508,7 +508,7 @@ impl CandidateCursor {
 fn next_selected(
     ctx: &mut SelectionCtx<'_>,
     cursor: &mut CandidateCursor,
-    selector: super::super::CompiledTargetSelector,
+    selector: CompiledTargetSelector,
 ) -> Result<Option<SelectedValue>, RuntimeError> {
     let collection = cursor.collection;
     #[cfg(test)]
@@ -518,7 +518,7 @@ fn next_selected(
     if direct && collection == CollectionKind::Tx {
         let (generation, request, entries) = (ctx.generation, ctx.request, &ctx.tx.entries);
         match selector {
-            super::super::CompiledTargetSelector::Literal(expected) => {
+            CompiledTargetSelector::Literal(expected) => {
                 while let Some(entry) = entries.get(cursor.index) {
                     let index = cursor.index;
                     cursor.index += 1;
@@ -533,7 +533,7 @@ fn next_selected(
                 }
                 return Ok(None);
             }
-            super::super::CompiledTargetSelector::Regex { program, .. } => {
+            CompiledTargetSelector::Regex { program, .. } => {
                 while let Some(entry) = entries.get(cursor.index) {
                     let index = cursor.index;
                     cursor.index += 1;
@@ -552,7 +552,7 @@ fn next_selected(
                 }
                 return Ok(None);
             }
-            super::super::CompiledTargetSelector::None | super::super::CompiledTargetSelector::Path(_) => {}
+            CompiledTargetSelector::None | CompiledTargetSelector::Path(_) => {}
         }
     }
     while let Some(candidate) = cursor.next(ctx.request, ctx.tx, ctx.response, ctx.json_budget.as_deref_mut())? {
@@ -574,13 +574,13 @@ fn tx_candidate(index: usize) -> SelectedValue {
 fn selector_matches(
     ctx: &mut SelectionCtx<'_>,
     collection: CollectionKind,
-    selector: super::super::CompiledTargetSelector,
+    selector: CompiledTargetSelector,
     candidate: SelectedValue,
 ) -> Result<bool, RuntimeError> {
     let (generation, request, tx, response) = (ctx.generation, ctx.request, ctx.tx, ctx.response);
     match selector {
-        super::super::CompiledTargetSelector::None => Ok(true),
-        super::super::CompiledTargetSelector::Literal(expected) => {
+        CompiledTargetSelector::None => Ok(true),
+        CompiledTargetSelector::Literal(expected) => {
             let expected = generation_bytes(&generation.target_bytes, expected)?;
             let name = candidate.name_bytes(request, tx, response, ctx.json_budget.as_deref_mut())?;
             let Some(name) = name else {
@@ -600,7 +600,7 @@ fn selector_matches(
                 },
             )
         }
-        super::super::CompiledTargetSelector::Path(path) => {
+        CompiledTargetSelector::Path(path) => {
             let path = generation_bytes(&generation.target_bytes, path)?;
             if matches!(
                 candidate.value,
@@ -630,7 +630,7 @@ fn selector_matches(
                 _ => Err(RuntimeError::XmlSelectorUnavailable),
             }
         }
-        super::super::CompiledTargetSelector::Regex { program, .. } => {
+        CompiledTargetSelector::Regex { program, .. } => {
             let name = candidate.name_bytes(request, tx, response, ctx.json_budget.as_deref_mut())?;
             let Some(name) = name else {
                 return Ok(false);

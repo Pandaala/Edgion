@@ -518,17 +518,17 @@ impl<'source> ValidatedSemanticDocument<'source> {
     pub(crate) fn apply_selection_mask(
         &mut self,
         mask: &[bool],
-        work: &mut super::super::compiler::CanonicalWork,
-        limits: super::super::CompilerLimits,
-    ) -> Result<(), super::super::CompilerError> {
+        work: &mut CanonicalWork,
+        limits: CompilerLimits,
+    ) -> Result<(), CompilerError> {
         if mask.len() != self.units.len() {
-            return Err(super::super::CompilerError::PrivateInvariant {
-                kind: super::super::CompilerInvariant::InvalidByteRange,
+            return Err(CompilerError::PrivateInvariant {
+                kind: CompilerInvariant::InvalidByteRange,
             });
         }
         let mut seen = Vec::new();
         seen.try_reserve_exact(self.draft.targets.len())
-            .map_err(|_| super::super::CompilerError::Allocation {
+            .map_err(|_| CompilerError::Allocation {
                 operation: "selected target reachability",
             })?;
         seen.resize(self.draft.targets.len(), false);

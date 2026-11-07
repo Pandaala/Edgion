@@ -30,7 +30,7 @@ impl KnownPreflight {
                 }
                 let mut runtime_templates = 0_usize;
                 if let Some(operator) = member.operator() {
-                    if let super::super::OperatorOperandView::ExternalAssets(external) = operator.operand() {
+                    if let OperatorOperandView::ExternalAssets(external) = operator.operand() {
                         result.asset_requests = checked_add(result.asset_requests, external.assets().len())?;
                     }
                     if let Some(template) = operator.template() {
@@ -479,7 +479,7 @@ impl CompileWork {
 
     pub(super) fn compile_member(
         &mut self,
-        member: super::super::ValidatedRuleNodeView<'_, '_>,
+        member: ValidatedRuleNodeView<'_, '_>,
         active: bool,
         compatibility_excluded: bool,
     ) -> Result<(), CompilerError> {

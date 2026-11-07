@@ -210,7 +210,7 @@ pub(super) fn scan_semantics(draft: &mut SemanticDraft<'_>, limits: SemanticLimi
     Ok(())
 }
 
-fn lookup_operator(value: super::super::DecodedTextView<'_, '_>) -> Option<OperatorKind> {
+fn lookup_operator(value: DecodedTextView<'_, '_>) -> Option<OperatorKind> {
     [
         OperatorKind::BeginsWith,
         OperatorKind::Contains,

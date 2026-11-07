@@ -10,8 +10,8 @@ pub(super) fn charge_ctl_work(work: &mut usize, amount: usize, limit: usize) -> 
 
 pub(super) fn tagged_units(
     generation: &CompiledGeneration,
-    tag: super::super::ByteRange,
-) -> Result<&[super::super::CompiledTagRuleRef], RuntimeError> {
+    tag: CompilerByteRange,
+) -> Result<&[CompiledTagRuleRef], RuntimeError> {
     let tag = generation_bytes(&generation.bytes, tag)?;
     let refs = &generation.tag_rule_refs;
     let start = refs.partition_point(|entry| {
@@ -44,8 +44,8 @@ pub(super) struct SingleInputContext<'a> {
 }
 
 pub(super) struct SingleInputPlan<'a> {
-    pub(super) operator: super::super::CompiledOperatorPlan,
-    pub(super) transformations: &'a [super::super::super::TransformationKind],
+    pub(super) operator: CompiledOperatorPlan,
+    pub(super) transformations: &'a [TransformationKind],
     pub(super) multi_match: bool,
     pub(super) runtime_expansion_byte_limit: usize,
     pub(super) limits: RuntimeLimits,
@@ -269,17 +269,10 @@ impl PredicateStageObserver for OrderedStageAccounting<'_> {
     }
 }
 
-pub(super) fn detector_work_for_stage(
-    plan: super::super::CompiledOperatorPlan,
-    len: usize,
-) -> Result<usize, RuntimeError> {
+pub(super) fn detector_work_for_stage(plan: CompiledOperatorPlan, len: usize) -> Result<usize, RuntimeError> {
     match plan.operand {
-        super::super::CompiledOperatorOperand::DetectSqli { .. } => {
-            crate::injection::work_cost(crate::injection::Kind::Sqli, len)
-        }
-        super::super::CompiledOperatorOperand::DetectXss => {
-            crate::injection::work_cost(crate::injection::Kind::Xss, len)
-        }
+        CompiledOperatorOperand::DetectSqli { .. } => crate::injection::work_cost(crate::injection::Kind::Sqli, len),
+        CompiledOperatorOperand::DetectXss => crate::injection::work_cost(crate::injection::Kind::Xss, len),
         _ => Some(0),
     }
     .ok_or(RuntimeError::DetectorInputLimit {
@@ -317,7 +310,7 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
     transformed: &[u8],
     observer: &mut O,
     captures: &mut CaptureBuilder<O::CaptureValue, O::CaptureKey>,
-    hit_matcher: Option<super::super::CompiledOperatorPlan>,
+    hit_matcher: Option<CompiledOperatorPlan>,
 ) -> Result<bool, PredicateStageFailure<O::Error>> {
     if !captures.entries.is_empty() || captures.semantic_bytes != 0 || captures.heap_bytes != 0 {
         return Err(RuntimeError::GenerationInvariant.into());
@@ -325,10 +318,10 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
     if hit_matcher.is_some()
         && (!matches!(
             plan.operator.operand,
-            super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(_))
+            CompiledOperatorOperand::Regex(RegexPlanRef::Capture(_))
         ) || !matches!(
             hit_matcher.map(|p| p.operand),
-            Some(super::super::CompiledOperatorOperand::Matcher { pattern_count: 1, .. })
+            Some(CompiledOperatorOperand::Matcher { pattern_count: 1, .. })
         ))
     {
         return Err(RuntimeError::GenerationInvariant.into());
@@ -377,7 +370,7 @@ pub(super) fn inspect_predicate_stage_with_hit_matcher<O: PredicateStageObserver
 
 pub(super) fn extract_captures_into<O: PredicateStageObserver>(
     context: &mut SingleInputContext<'_>,
-    plan: super::super::CompiledOperatorPlan,
+    plan: CompiledOperatorPlan,
     input: &[u8],
     limits: RuntimeLimits,
     capture: Option<OperatorCapture>,
@@ -386,14 +379,14 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
 ) -> Result<(), PredicateStageFailure<O::Error>> {
     if !matches!(
         plan.operand,
-        super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(_))
-            | super::super::CompiledOperatorOperand::CapturePhrase(_)
-            | super::super::CompiledOperatorOperand::DetectSqli { capture: true }
+        CompiledOperatorOperand::Regex(RegexPlanRef::Capture(_))
+            | CompiledOperatorOperand::CapturePhrase(_)
+            | CompiledOperatorOperand::DetectSqli { capture: true }
     ) {
         return Ok(());
     }
     let bound = match plan.operand {
-        super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(program)) => context
+        CompiledOperatorOperand::Regex(RegexPlanRef::Capture(program)) => context
             .generation
             .capture_regexes
             .get(program)
@@ -423,7 +416,7 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
         .capture_capacity(captures.retained_bytes()?)
         .map_err(PredicateStageFailure::Observer)?;
     match plan.operand {
-        super::super::CompiledOperatorOperand::Regex(super::super::RegexPlanRef::Capture(program)) => {
+        CompiledOperatorOperand::Regex(RegexPlanRef::Capture(program)) => {
             let regex = context
                 .generation
                 .capture_regexes
@@ -473,7 +466,7 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
                 }
             }
         }
-        super::super::CompiledOperatorOperand::CapturePhrase(_) => {
+        CompiledOperatorOperand::CapturePhrase(_) => {
             let Some(OperatorCapture::Phrase(matched)) = capture else {
                 return Err(RuntimeError::GenerationInvariant.into());
             };
@@ -493,7 +486,7 @@ pub(super) fn extract_captures_into<O: PredicateStageObserver>(
                 observer,
             )?;
         }
-        super::super::CompiledOperatorOperand::DetectSqli { capture: true } => {
+        CompiledOperatorOperand::DetectSqli { capture: true } => {
             let Some(OperatorCapture::Fingerprint(fingerprint)) = capture else {
                 return Err(RuntimeError::GenerationInvariant.into());
             };

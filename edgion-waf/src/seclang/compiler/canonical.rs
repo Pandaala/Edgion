@@ -56,7 +56,7 @@ pub(super) struct MemberMatcherBinding {
     pub(super) group: usize,
     pub(super) pattern_start: usize,
     pub(super) pattern_count: usize,
-    pub(super) kind: super::super::OperatorKind,
+    pub(super) kind: OperatorKind,
     pub(super) negated: bool,
 }
 
