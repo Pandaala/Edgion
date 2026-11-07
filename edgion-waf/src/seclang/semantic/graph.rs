@@ -203,32 +203,6 @@ pub(super) struct LocalRuleFoldRecord {
     pub(super) effective_count: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct EffectiveTransformationIter<'view, 'source> {
-    indices: std::slice::Iter<'view, usize>,
-    actions: &'view [SemanticActionRecord<'source>],
-    arena: TemplateArenaView<'view, 'source>,
-}
-
-impl<'view, 'source> Iterator for EffectiveTransformationIter<'view, 'source> {
-    type Item = SemanticActionView<'view, 'source>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let index = *self.indices.next()?;
-        Some(SemanticActionView {
-            record: &self.actions[index],
-            arena: self.arena,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.indices.size_hint()
-    }
-}
-
-impl ExactSizeIterator for EffectiveTransformationIter<'_, '_> {}
-impl FusedIterator for EffectiveTransformationIter<'_, '_> {}
-
 #[derive(Debug, Clone, Copy)]
 pub struct LocalRuleFoldView<'view, 'source> {
     pub(super) index: usize,
@@ -306,14 +280,17 @@ impl<'view, 'source> LocalRuleFoldView<'view, 'source> {
     pub fn reset_action(self) -> Option<SemanticActionView<'view, 'source>> {
         self.action(self.record.reset_action)
     }
-    pub fn effective_transformations(self) -> EffectiveTransformationIter<'view, 'source> {
-        EffectiveTransformationIter {
-            indices: self.effective
-                [self.record.effective_start..self.record.effective_start + self.record.effective_count]
-                .iter(),
-            actions: self.actions,
-            arena: self.arena,
-        }
+    pub fn effective_transformations(
+        self,
+    ) -> impl ExactSizeIterator<Item = SemanticActionView<'view, 'source>> + FusedIterator + 'view {
+        let actions = self.actions;
+        let arena = self.arena;
+        self.effective[self.record.effective_start..self.record.effective_start + self.record.effective_count]
+            .iter()
+            .map(move |&index| SemanticActionView {
+                record: &actions[index],
+                arena,
+            })
     }
     pub fn final_rule(self) -> Option<FinalRuleView<'view, 'source>> {
         let graph = self.graph?;
@@ -409,36 +386,18 @@ impl<'view, 'source> ChainView<'view, 'source> {
     pub fn phase(self) -> FinalPhaseState {
         self.record().phase
     }
-    pub fn members(self) -> ChainMemberIter<'view, 'source> {
+    pub fn members(self) -> impl ExactSizeIterator<Item = ChainMemberView<'view, 'source>> + FusedIterator + 'view {
         let record = self.record();
-        ChainMemberIter {
-            ordinal: 0,
-            indices: self.arena.chain_members[record.member_start..record.member_start + record.member_count].iter(),
-            arena: self.arena,
-        }
+        let arena = self.arena;
+        arena.chain_members[record.member_start..record.member_start + record.member_count]
+            .iter()
+            .enumerate()
+            .map(move |(ordinal, &index)| ChainMemberView {
+                ordinal,
+                rule: arena.rule(index),
+            })
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct ChainMemberIter<'view, 'source> {
-    ordinal: usize,
-    indices: std::slice::Iter<'view, usize>,
-    arena: FinalGraphArenaView<'view, 'source>,
-}
-impl<'view, 'source> Iterator for ChainMemberIter<'view, 'source> {
-    type Item = ChainMemberView<'view, 'source>;
-    fn next(&mut self) -> Option<Self::Item> {
-        let rule = self.arena.rule(*self.indices.next()?);
-        let ordinal = self.ordinal;
-        self.ordinal += 1;
-        Some(ChainMemberView { ordinal, rule })
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.indices.size_hint()
-    }
-}
-impl ExactSizeIterator for ChainMemberIter<'_, '_> {}
-impl FusedIterator for ChainMemberIter<'_, '_> {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChainMemberView<'view, 'source> {
@@ -740,7 +699,9 @@ impl<'view, 'source> ValidatedRuleNodeView<'view, 'source> {
     pub fn actions(self) -> SemanticActionIter<'view, 'source> {
         self.rule().fold().actions()
     }
-    pub fn effective_transformations(self) -> EffectiveTransformationIter<'view, 'source> {
+    pub fn effective_transformations(
+        self,
+    ) -> impl ExactSizeIterator<Item = SemanticActionView<'view, 'source>> + FusedIterator + 'view {
         self.rule().fold().effective_transformations()
     }
     pub fn skip_after_marker(self) -> Option<ValidatedMarkerView<'view, 'source>> {
@@ -797,54 +758,24 @@ impl<'view, 'source> ValidatedRuleUnitView<'view, 'source> {
     pub fn is_compatibility_excluded(self) -> bool {
         self.record().compatibility_excluded
     }
-    pub fn members(self) -> ValidatedRuleNodeIter<'view, 'source> {
+    pub fn members(
+        self,
+    ) -> impl ExactSizeIterator<Item = ValidatedRuleNodeView<'view, 'source>> + FusedIterator + 'view {
+        let owner = self.owner;
         let root = self.record().root;
-        let rule = self.owner.draft.final_rules[root];
-        let indices = match rule.chain {
-            Some(chain) => NodeIndexIter::Slice(
-                self.owner.draft.chain_members[self.owner.draft.chains[chain].member_start
-                    ..self.owner.draft.chains[chain].member_start + self.owner.draft.chains[chain].member_count]
-                    .iter(),
-            ),
-            None => NodeIndexIter::Range(root..root + 1),
+        let rule = owner.draft.final_rules[root];
+        // A chained unit walks its chain-member slice; an unchained unit yields only its root node.
+        let (members, positions): (Option<&'view [usize]>, Range<usize>) = match rule.chain {
+            Some(chain) => {
+                let chain = owner.draft.chains[chain];
+                let members = &owner.draft.chain_members[chain.member_start..chain.member_start + chain.member_count];
+                (Some(members), 0..members.len())
+            }
+            None => (None, root..root + 1),
         };
-        ValidatedRuleNodeIter {
-            owner: self.owner,
-            indices,
-        }
+        positions.map(move |position| owner.node(members.map_or(position, |members| members[position])))
     }
 }
-
-#[derive(Debug, Clone)]
-enum NodeIndexIter<'view> {
-    Slice(std::slice::Iter<'view, usize>),
-    Range(Range<usize>),
-}
-
-#[derive(Debug, Clone)]
-pub struct ValidatedRuleNodeIter<'view, 'source> {
-    owner: &'view ValidatedSemanticDocument<'source>,
-    indices: NodeIndexIter<'view>,
-}
-
-impl<'view, 'source> Iterator for ValidatedRuleNodeIter<'view, 'source> {
-    type Item = ValidatedRuleNodeView<'view, 'source>;
-    fn next(&mut self) -> Option<Self::Item> {
-        let index = match &mut self.indices {
-            NodeIndexIter::Slice(values) => *values.next()?,
-            NodeIndexIter::Range(values) => values.next()?,
-        };
-        Some(self.owner.node(index))
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.indices {
-            NodeIndexIter::Slice(values) => values.size_hint(),
-            NodeIndexIter::Range(values) => values.size_hint(),
-        }
-    }
-}
-impl ExactSizeIterator for ValidatedRuleNodeIter<'_, '_> {}
-impl FusedIterator for ValidatedRuleNodeIter<'_, '_> {}
 
 #[derive(Debug, Clone)]
 pub struct ActiveRuleUnitIter<'view, 'source> {
@@ -900,41 +831,20 @@ macro_rules! applied_view {
                     .directive(self.record().directive)
                     .expect("validated exception directive remains present")
             }
-            pub fn affected_units(self) -> AppliedAffectedUnitIter<'view, 'source> {
+            pub fn affected_units(
+                self,
+            ) -> impl ExactSizeIterator<Item = ValidatedRuleUnitView<'view, 'source>> + FusedIterator + 'view {
                 let record = self.record();
-                AppliedAffectedUnitIter {
-                    owner: self.owner,
-                    indices: self.owner.affected_units
-                        [record.affected_start..record.affected_start + record.affected_count]
-                        .iter(),
-                }
+                let owner = self.owner;
+                owner.affected_units[record.affected_start..record.affected_start + record.affected_count]
+                    .iter()
+                    .map(move |&index| ValidatedRuleUnitView { index, owner })
             }
         }
     };
 }
 applied_view!(AppliedTargetUpdateView, updates);
 applied_view!(AppliedRuleRemovalView, removals);
-
-#[derive(Debug, Clone)]
-pub struct AppliedAffectedUnitIter<'view, 'source> {
-    owner: &'view ValidatedSemanticDocument<'source>,
-    indices: std::slice::Iter<'view, usize>,
-}
-
-impl<'view, 'source> Iterator for AppliedAffectedUnitIter<'view, 'source> {
-    type Item = ValidatedRuleUnitView<'view, 'source>;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(ValidatedRuleUnitView {
-            index: *self.indices.next()?,
-            owner: self.owner,
-        })
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.indices.size_hint()
-    }
-}
-impl ExactSizeIterator for AppliedAffectedUnitIter<'_, '_> {}
-impl FusedIterator for AppliedAffectedUnitIter<'_, '_> {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ValidatedRequirementView<'view, 'source> {

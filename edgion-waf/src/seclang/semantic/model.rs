@@ -372,55 +372,6 @@ impl<'view, 'source> TemplateSliceSegmentView<'view, 'source> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TemplateSliceSegmentIter<'view, 'source> {
-    records: std::slice::Iter<'view, TemplateSegmentRecord>,
-    text: &'view str,
-    expansions: &'view [ExpansionRecord<'source>],
-    slice_start: usize,
-    slice_end: usize,
-    slice_span: SourceSpan,
-}
-
-impl<'view, 'source> Iterator for TemplateSliceSegmentIter<'view, 'source> {
-    type Item = TemplateSliceSegmentView<'view, 'source>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let record = self.records.next()?;
-        let start = record.start.max(self.slice_start);
-        let end = record.end.min(self.slice_end);
-        let kind = match record.kind {
-            TemplateSegmentRecordKind::Literal => TemplateSegmentKind::Literal,
-            TemplateSegmentRecordKind::Expansion(index) => TemplateSegmentKind::Expansion(MacroExpansionView {
-                record: &self.expansions[index],
-            }),
-        };
-        Some(TemplateSliceSegmentView {
-            kind,
-            text: &self.text[start..end],
-            span: SourceSpan {
-                start: if start == self.slice_start {
-                    self.slice_span.start
-                } else {
-                    record.span.start
-                },
-                end: if end == self.slice_end {
-                    self.slice_span.end
-                } else {
-                    record.span.end
-                },
-            },
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.records.size_hint()
-    }
-}
-
-impl ExactSizeIterator for TemplateSliceSegmentIter<'_, '_> {}
-impl FusedIterator for TemplateSliceSegmentIter<'_, '_> {}
-
 #[derive(Debug, Clone, Copy)]
 pub struct TemplateSliceView<'view, 'source> {
     record: TemplateSliceRecord,
@@ -441,17 +392,42 @@ impl<'view, 'source> TemplateSliceView<'view, 'source> {
     pub const fn expansion_count(self) -> usize {
         self.record.expansion_count
     }
-    pub fn segments(self) -> TemplateSliceSegmentIter<'view, 'source> {
-        TemplateSliceSegmentIter {
-            records: self.arena.segments
-                [self.record.segment_start..self.record.segment_start + self.record.segment_count]
-                .iter(),
-            text: self.arena.template(self.record.template).text(),
-            expansions: self.arena.expansions,
-            slice_start: self.record.start,
-            slice_end: self.record.end,
-            slice_span: self.record.span,
-        }
+    pub fn segments(
+        self,
+    ) -> impl ExactSizeIterator<Item = TemplateSliceSegmentView<'view, 'source>> + FusedIterator + 'view {
+        let text = self.arena.template(self.record.template).text();
+        let expansions = self.arena.expansions;
+        let slice_start = self.record.start;
+        let slice_end = self.record.end;
+        let slice_span = self.record.span;
+        self.arena.segments[self.record.segment_start..self.record.segment_start + self.record.segment_count]
+            .iter()
+            .map(move |record| {
+                let start = record.start.max(slice_start);
+                let end = record.end.min(slice_end);
+                let kind = match record.kind {
+                    TemplateSegmentRecordKind::Literal => TemplateSegmentKind::Literal,
+                    TemplateSegmentRecordKind::Expansion(index) => TemplateSegmentKind::Expansion(MacroExpansionView {
+                        record: &expansions[index],
+                    }),
+                };
+                TemplateSliceSegmentView {
+                    kind,
+                    text: &text[start..end],
+                    span: SourceSpan {
+                        start: if start == slice_start {
+                            slice_span.start
+                        } else {
+                            record.span.start
+                        },
+                        end: if end == slice_end {
+                            slice_span.end
+                        } else {
+                            record.span.end
+                        },
+                    },
+                }
+            })
     }
 }
 
@@ -682,27 +658,6 @@ impl<'view> ExternalAssetView<'view> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ExternalAssetIter<'view> {
-    inner: PhraseIter<'view>,
-    document_index: usize,
-}
-
-impl<'view> Iterator for ExternalAssetIter<'view> {
-    type Item = ExternalAssetView<'view>;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|item| ExternalAssetView {
-            document_index: self.document_index,
-            item,
-        })
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-impl ExactSizeIterator for ExternalAssetIter<'_> {}
-impl FusedIterator for ExternalAssetIter<'_> {}
-
 #[derive(Debug, Clone, Copy)]
 pub struct PhraseListView<'view, 'source> {
     text: OperandTextView<'view, 'source>,
@@ -732,14 +687,13 @@ impl<'view, 'source> ExternalAssetsView<'view, 'source> {
     pub const fn text(self) -> OperandTextView<'view, 'source> {
         self.text
     }
-    pub fn assets(self) -> ExternalAssetIter<'view> {
-        ExternalAssetIter {
-            inner: PhraseIter {
-                records: self.records.iter(),
-                text: self.text.text(),
-            },
-            document_index: self.document_index,
+    pub fn assets(self) -> impl ExactSizeIterator<Item = ExternalAssetView<'view>> + FusedIterator + 'view {
+        let document_index = self.document_index;
+        PhraseIter {
+            records: self.records.iter(),
+            text: self.text.text(),
         }
+        .map(move |item| ExternalAssetView { document_index, item })
     }
 }
 
@@ -760,23 +714,6 @@ impl IpNetworkView<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct IpNetworkIter<'view> {
-    records: std::slice::Iter<'view, NetworkRecord>,
-}
-
-impl<'view> Iterator for IpNetworkIter<'view> {
-    type Item = IpNetworkView<'view>;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.records.next().map(|record| IpNetworkView { record })
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.records.size_hint()
-    }
-}
-impl ExactSizeIterator for IpNetworkIter<'_> {}
-impl FusedIterator for IpNetworkIter<'_> {}
-
 #[derive(Debug, Clone, Copy)]
 pub struct IpNetworksView<'view, 'source> {
     text: OperandTextView<'view, 'source>,
@@ -787,10 +724,8 @@ impl<'view, 'source> IpNetworksView<'view, 'source> {
     pub const fn text(self) -> OperandTextView<'view, 'source> {
         self.text
     }
-    pub fn networks(self) -> IpNetworkIter<'view> {
-        IpNetworkIter {
-            records: self.records.iter(),
-        }
+    pub fn networks(self) -> impl ExactSizeIterator<Item = IpNetworkView<'view>> + FusedIterator + 'view {
+        self.records.iter().map(|record| IpNetworkView { record })
     }
 }
 
