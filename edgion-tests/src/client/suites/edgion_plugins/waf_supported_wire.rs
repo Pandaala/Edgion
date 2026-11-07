@@ -23,7 +23,7 @@ fn vectors(strict: bool) -> Vec<Vector> {
  ("xml-attribute","application/xml","<r a='phar://payload'/>","/waf-wire",Some(933200),false),
  ("xml-entity","application/xml","<r>&#112;har://payload</r>","/waf-wire",Some(933200),false),
  ("json-java","application/json",r#"{"probe":"springframework.context.support.FileSystemXmlApplicationContext"}"#,"/waf-wire",strict.then_some(944260),false),
- ("json-duplicate-last-clean","application/json",r#"{"probe":"springframework.context.support.FileSystemXmlApplicationContext","probe":"safe"}"#,"/waf-wire",None,false),
+ ("json-duplicate-first-hit","application/json",r#"{"probe":"springframework.context.support.FileSystemXmlApplicationContext","probe":"safe"}"#,"/waf-wire",strict.then_some(944260),false),
  ("query","application/json","{}","/waf-wire?probe=phar%3A%2F%2Fpayload",Some(933200),false),
  ("form","application/x-www-form-urlencoded","probe=phar%3A%2F%2Fpayload","/waf-wire",Some(933200),false),
  ("multipart","multipart/form-data; boundary=crs-boundary","--crs-boundary\r\nContent-Disposition: form-data; name=\"probe\"\r\n\r\nphar://payload\r\n--crs-boundary--\r\n","/waf-wire",Some(933200),false),

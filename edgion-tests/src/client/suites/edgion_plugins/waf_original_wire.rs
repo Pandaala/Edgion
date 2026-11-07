@@ -68,10 +68,10 @@ fn vectors() -> Vec<Vector> {
             Some(933200),
         ),
         (
-            "json-java-duplicate-last-clean",
+            "json-java-duplicate-first-hit",
             "application/json",
             r#"{"probe":"springframework.context.support.FileSystemXmlApplicationContext","probe":"clean"}"#,
-            None,
+            Some(944260),
         ),
     ]
     .into_iter()

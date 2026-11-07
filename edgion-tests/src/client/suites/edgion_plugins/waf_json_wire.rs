@@ -249,7 +249,7 @@ impl PausedStructuredUpload {
     }
 }
 
-async fn duplicate_replacement_across_chunks(ctx: &TestContext) -> Result<(), String> {
+async fn duplicate_occurrences_across_chunks_are_denied(ctx: &TestContext) -> Result<(), String> {
     let recorder = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
     let probe = TransportProbe::start(&recorder, RECORDER_PORT, "waf-json-duplicate-chunks").await?;
     let traceparent = crate::access_log_client::traceparent_for_marker(probe.trace_id());
@@ -267,6 +267,8 @@ async fn duplicate_replacement_across_chunks(ctx: &TestContext) -> Result<(), St
             ],
         )
         .await?;
+    // Every duplicate-key occurrence is inspected, so the first one denies
+    // even though a later occurrence in another chunk is safe.
     let first = br#"{"a":"blocked","#;
     let last = br#""a":"safe"}"#;
     connection.write_chunk(first).await?;
@@ -275,27 +277,12 @@ async fn duplicate_replacement_across_chunks(ctx: &TestContext) -> Result<(), St
     no_forward(&probe).await?;
     connection.finish_chunked().await?;
     let response = connection.read_response_head(Duration::from_secs(10)).await?;
-    let body = [first.as_slice(), last.as_slice()].concat();
-    let length = body.len().to_string();
-    let digest = format!("{:x}", Sha256::digest(&body));
-    if response.status != 200
-        || response.header("x-up-req-body-len") != Some(length.as_str())
-        || response.header("x-up-req-body-sha256") != Some(digest.as_str())
-    {
+    if response.status != 406 {
         return Err(format!(
-            "JSON cross-chunk replacement did not preserve allowed wire bytes: {response}"
+            "JSON cross-chunk duplicate key expected 406 for its first occurrence, got {response}"
         ));
     }
-    let snapshot = probe.snapshot().await?;
-    if snapshot.dropped != 0
-        || snapshot.count_matching(|event| event.is(KIND_REQ_HEADERS)) != 1
-        || snapshot.req_body_total(probe.trace_id()) != body.len()
-    {
-        return Err(format!(
-            "JSON cross-chunk replacement expected one unchanged request: {snapshot}"
-        ));
-    }
-    Ok(())
+    no_forward(&probe).await
 }
 
 pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) -> TestCase {
@@ -313,7 +300,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) ->
                 let run = async {
                     let marker = if version == "json-v2" { "forbidden" } else { "blocked" };
                     let positive = format!("{{\"a\":\"{marker}\"}}");
-                    let last_miss = format!("{{\"a\":\"{marker}\",\"a\":\"safe\"}}");
+                    let first_hit = format!("{{\"a\":\"{marker}\",\"a\":\"safe\"}}");
                     let last_hit = format!("{{\"a\":\"safe\",\"a\":\"{marker}\"}}");
                     let array = format!("[\"{marker}\"]");
                     let mut large = br#"{"padding":""#.to_vec();
@@ -358,8 +345,8 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) ->
                                 downstream_h2,
                                 version,
                                 "/waf-wire",
-                                last_miss.as_bytes(),
-                                200,
+                                first_hit.as_bytes(),
+                                denied,
                             )
                             .await?;
                             verify(
@@ -432,7 +419,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) ->
                         }
                     }
                     if version == "json-v1" && !detection && !zero_work {
-                        duplicate_replacement_across_chunks(&ctx).await?;
+                        duplicate_occurrences_across_chunks_are_denied(&ctx).await?;
                         PausedJsonUpload::start(&ctx).await?.finish().await?;
                         PausedJsonUpload::start(&ctx).await?.abort().await?;
                         // A cancelled capture must not poison an independent request.
