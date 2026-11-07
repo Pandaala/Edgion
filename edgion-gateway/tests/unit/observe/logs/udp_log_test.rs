@@ -28,6 +28,7 @@ fn udp_status_as_str_matches_log_field() {
         (UdpStatus::UpstreamSocketError, "UpstreamSocketError"),
         (UdpStatus::UpstreamSendError, "UpstreamSendError"),
         (UdpStatus::DownstreamSendError, "DownstreamSendError"),
+        (UdpStatus::UpstreamEndpointRemoved, "UpstreamEndpointRemoved"),
     ];
     for (variant, expected) in cases {
         assert_eq!(variant.as_str(), *expected);

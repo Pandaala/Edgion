@@ -19,8 +19,9 @@ validation, redirect destinations, or access-log redaction.
 
 `runtime/server/listener_builder.rs` selects this handler for non-TLS listeners
 with `edgion.io/http-to-https-redirect: "true"`.
-The pinned Pingora revision `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`
-sets H1 session `keepalive_timeout` in `respect_keepalive`. Ordinary HTTP/1.1
+The pinned Pingora revision `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`
+(re-verified by source inspection on 2026-11-06; originally recorded at
+`518f7274`) sets H1 session `keepalive_timeout` in `respect_keepalive`. Ordinary HTTP/1.1
 requests default to reuse; a client `Connection: close` disables it.
 `prepare_response_header_for_write` generates the response Connection header
 from `will_keepalive`, and the downstream session's `finish`/`reuse` path

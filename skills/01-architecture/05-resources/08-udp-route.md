@@ -64,6 +64,7 @@ UDPRoute's ConfHandler compiles routes into `GlobalUdpRouteManagers`:
 - The session key is the client address; on the first client packet a session is created and bound to a dedicated upstream UDP socket
 - Session limit `MAX_UDP_SESSIONS = 10000`; once exceeded, a new client packet logs `SessionLimitReached` and is dropped
 - `SESSION_TIMEOUT = 60s`, refreshed by traffic in either direction; the cleanup loop runs every 10s, removing expired sessions and writing UDP access logs
+- The same cleanup pass retires active sessions whose pinned endpoint is no longer published by service discovery (terminal status `UpstreamEndpointRemoved`)
 - When the main listener exits, the cleanup loop and all per-session upstream receive tasks are cancelled
 
 Operationally, fd, task, and memory usage must be sized against the expected concurrent client count; sessions are not pure stateless forwarding — backend responses must be associated back to the client through their corresponding upstream socket.

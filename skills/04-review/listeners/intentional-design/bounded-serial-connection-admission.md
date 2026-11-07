@@ -21,8 +21,9 @@ quotas generally belong at request scope rather than connection scope.
 
 ## Rationale and evidence
 
-The inspected Cargo.lock pins Edgion Pingora `edgion_v4` at
-`518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`. Its call chain is
+The inspected Cargo.lock pins Edgion Pingora `edgion_v0.9.1` at
+`e5f4287be713d01ffd444544251bf75c9d00062a` (re-verified by source inspection on
+2026-11-06; originally recorded at `edgion_v4@518f7274`). Its call chain is
 `Service::run_endpoint` -> `TransportStack::accept` ->
 `ListenerEndpoint::accept` -> `ConnectionFilter::should_accept().await`.
 Only after filtering returns does the service spawn the handshake task.

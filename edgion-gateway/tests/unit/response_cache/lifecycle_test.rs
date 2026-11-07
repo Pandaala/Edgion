@@ -311,6 +311,34 @@ async fn terminal_error_discards_private_fill() {
     assert_eq!(store.stats().3, 0);
 }
 
+/// An upstream (for example H2) stream torn down before END_STREAM reaches the
+/// cache either as a terminal error or as a body that never saw EOS. Both
+/// must discard the sealed private fill, even when no error is reported.
+/// No content-length is set, so the downstream chunked terminal succeeds and
+/// only the cache's own completeness guard can refuse publication.
+#[tokio::test]
+async fn truncated_fill_without_eos_never_publishes() {
+    for with_error in [false, true] {
+        let (store, _, state) = fixture(1024);
+        let (mut session, _client) = h1(b"GET /cache HTTP/1.1\r\nHost: example.test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.response_cache = Some(state);
+        let header = response();
+        capture_headers(&mut ctx, &header);
+        seal_headers(&mut ctx, &header);
+        capture_body(&mut ctx, Some(&Bytes::from_static(b"hello")), false);
+        session.write_response_header(Box::new(header), false).await.unwrap();
+        session
+            .write_response_body(Some(Bytes::from_static(b"hello")), false)
+            .await
+            .unwrap();
+        let error = Error::explain(ErrorType::H2Error, "test upstream stream reset");
+        finalize(&mut session, &mut ctx, with_error.then_some(&*error)).await;
+        assert_eq!(store.stats().1, 0, "pending fill released (with_error={with_error})");
+        assert_eq!(store.stats().3, 0, "no entry published (with_error={with_error})");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h2_hit_accepts_clean_eos_for_empty_and_nonempty_payload() {
     use pingora_core::protocols::http::v2::server::{handshake, H2Accept, HttpSession};

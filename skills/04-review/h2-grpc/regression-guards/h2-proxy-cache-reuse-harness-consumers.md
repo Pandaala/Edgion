@@ -20,9 +20,9 @@ abandons on upstream trailers. Still, no manifest declares `pingora-cache` and
 `edgion-gateway/src/` never touches Pingora's HTTP cache (`session.cache`;
 the only `session.cache` hits are the unrelated Wasm OCI fetch cache), so the
 fork harness's Pingora cache-admission contracts still have no subject in
-Edgion and the relocation rejection stands on that narrower ground. Whether
-Edgion's own cache has equivalent H2 truncated/invalid-trailer non-admission
-coverage is outside this page and is not established here. At
+Edgion and the relocation rejection stands on that narrower ground. Edgion's
+own cache's truncated/trailer non-admission evidence lives in
+[bounded response cache capture](../../http-body/regression-guards/bounded-response-cache-capture.md) ("Truncation and trailer non-admission"). At
 `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a` the fork target
 `pingora-proxy/tests/test_h2_upstream_cache_and_reuse.rs` is unchanged from
 `0b0d8bba` and contains 8 `#[tokio::test]` scenarios (the "7 scenarios" count

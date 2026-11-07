@@ -132,6 +132,23 @@ fn private_eos_overflow_cancellation_and_retirement_never_publish() {
     }
 }
 
+/// A sealed fill whose body never saw EOS (for example an upstream stream
+/// reset mid-body) is refused by the `complete` guard alone.
+#[test]
+fn sealed_fill_without_eos_is_refused_at_publication() {
+    let (store, epoch, mut state) = fixture(1024);
+    let header = response();
+    state.capture(&header, Instant::now());
+    state.push(Some(&Bytes::from_static(b"hello")), false);
+    assert!(state.seal_pending_headers(&header));
+    assert!(!state.prepare_publication(Some(&header)));
+    assert_eq!(store.stats().3, 0);
+    drop(state);
+    drop(epoch);
+    let (total, pending, readers, entries, baseline) = store.stats();
+    assert_eq!((total, pending, readers, entries), (baseline, 0, 0, 0));
+}
+
 #[test]
 fn pending_or_control_refusal_allocates_no_unadmitted_owner() {
     let store = Store::new(1, 1024, 128 * 1024, 0);

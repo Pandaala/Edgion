@@ -137,8 +137,9 @@ denial outcomes.
 
 The response's typed h2 receive state must also report completed EOS with no
 pending DATA or trailers. No body is collected or defaulted after a failed read.
-Pinned h2 0.4.19 preserves an already-received EOS across a later send-half reset
-(`ErrorAfterEndStream`); that later event does not invalidate the completed empty
+Locked h2 0.4.20 preserves an already-received EOS across a later send-half reset
+(`ErrorAfterEndStream`; `proto/streams/state.rs` is unchanged from 0.4.19, checked
+by source diff on 2026-11-06); that later event does not invalidate the completed empty
 response. This assertion proves receive completion, not rejection of every event
 after completion or byte-level frame fragmentation. RawH2Conn remains alive
 through observation and its existing Drop aborts its driver on success, failure

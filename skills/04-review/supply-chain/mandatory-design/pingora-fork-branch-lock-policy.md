@@ -91,11 +91,17 @@ re-verified at the current lock. On 2026-11-06 the `skills/04-review` pages that
 and updated (many of them had last been verified at `0b0d8bba`, not at the
 immediate predecessor `1aaa45cc`); pages that still mention `0b0d8bba` or `edgion_0.9.0_v1` do so only as
 explicitly historical evidence. Recorded test results on those pages still belong to
-`0b0d8bba`; residual gaps found by the sweep (h2 0.4.20 watcher audit, Edgion
-response-cache H2 coverage, unpublished fork shutdown tests, a stale fork record, and
-fresh test runs) are tracked in `tasks/todo/pingora-v0.9.1-rebase-evidence-followups.md`.
-Pages outside the `arch-05` set that still describe an older pin (`1aaa45cc`,
-`518f7274`, or `h2` 0.4.19) as current are tracked in the same task. Repeat this sweep
+`0b0d8bba`. The same day's follow-up closed three residual gaps: the h2 0.4.20
+private-fact audit of the end-stream watcher (recorded on
+`h2-grpc/regression-guards/h2-end-stream-wire-observer.md`), Edgion response-cache
+truncation/trailer non-admission evidence (on
+`http-body/regression-guards/bounded-response-cache-capture.md`), and the
+re-verification at `e5f4287` of the pages outside the `arch-05` set that still called
+`1aaa45cc`, `518f7274`, or `h2` 0.4.19 current. Still open, in
+`tasks/todo/pingora-v0.9.1-rebase-evidence-followups.md`: unpublished fork shutdown
+tests, stale fork-side records, and fresh fork-suite runs at `e5f4287`. The Tokio
+exact pin was lifted to a `1.54.1` floor the same day (see
+`supply-chain/compatibility-constraints/pingora-tokio-zero-capacity.md`). Repeat this sweep
 whenever the lockfile moves the fork family: search `skills/04-review` for every fork
 commit and `h2` version other than the current lock (not only the immediate
 predecessor), and keep any remaining mention only as explicitly historical evidence.

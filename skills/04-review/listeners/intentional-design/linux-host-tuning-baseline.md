@@ -23,8 +23,9 @@ port ranges, and buffers were superseded by this scoped decision.
 
 - `edgion-gateway/src/cli/pingora.rs::create_server_conf` resolves local YAML
   worker count, work stealing, and pool size (default 128); changes need restart.
-- The locked Pingora revision `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e` uses
-  `LISTENER_BACKLOG=65535` in `pingora-core/src/listeners/l4.rs`.
+- The locked Pingora revision `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`
+  (re-verified by source inspection on 2026-11-06; originally recorded at
+  `518f7274`) uses `LISTENER_BACKLOG=65535` in `pingora-core/src/listeners/l4.rs`.
 - Its `ConnectorOptions::from_server_conf` scales pool capacity by worker count;
   this is not one global gateway-wide active/idle connection cap.
 - The default tikv-jemalloc build uses the `_rjem_` prefix, hence

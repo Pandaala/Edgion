@@ -49,7 +49,11 @@ Current source inspection uses the Cargo.lock resolution
 `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, `h2 0.4.20`. It was
 re-verified by source inspection at that revision on 2026-11-06 after the fork
 was rebased onto upstream 0.9.1; `pingora-proxy/src/proxy_h2_request_body.rs`
-is unchanged from the earlier `edgion_0.9.0_v1@0b0d8bba` lock.
+is unchanged from the earlier `edgion_0.9.0_v1@0b0d8bba` lock. The h2 0.4.20
+small-DATA-frame budget that upload liveness depends on was audited the same
+day: the fork sets the connection window only at build time, so the effective
+`Auto` budget equals the 0.4.19 value (see
+[h2 0.4.20 private-fact audit](h2-end-stream-wire-observer.md), fact 5).
 Historical run (against `0b0d8bba`, not repeated for `e5f4287`): on
 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2
 -- --nocapture` passed 14 tests, including all five lifecycle wire proofs.

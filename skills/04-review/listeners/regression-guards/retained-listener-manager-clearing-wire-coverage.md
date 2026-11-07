@@ -42,6 +42,19 @@ them so a prior delete does not turn the cleanup into a misleading 404.
 
 Controller requeues and Gateway configuration streams can interleave, so the
 wire scenario cannot force the full stale sweep or partial orphan sweep.
+Each kind arrives on its own stream, so an HTTPRoute delete can be applied
+before its Gateway delete. The partial update then keeps the still-declared
+listener entries, and only the later full listener rebuild retires them. With
+several hundred cached routes that rebuild takes hundreds of milliseconds,
+after publication and routing already report the route gone. The scenario
+therefore checks store stats on every poll of each generation, for both the
+removal (one generation below the initial stats) and the recreation, rather
+than sampling the removal stats once. A 2026-11-06 full run that sampled once
+failed with only the HTTP `listener_count` unchanged; the gateway log showed
+the HTTPRoute delete at `.660`, the Gateway delete at `.669`, and the full HTTP
+rebuild reporting `removed_stale_listeners=3` about 0.6 s later. This was a
+test sampling race, not a registry leak. A real leak still fails at the
+20-second deadline.
 Retained-handle unit tests cover those exact branches. TLS and UDP have no
 separate wire case for this regression: TLS adds independent certificate and
 SNI selection, while an established UDP session keeps its selected upstream;

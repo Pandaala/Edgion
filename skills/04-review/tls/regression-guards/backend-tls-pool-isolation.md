@@ -36,8 +36,10 @@ to publication while preserving those trust and pool contracts.
 - `peer_from_backend_tls_lookup` and direct `create_tls_peer` consumers in
   `backends/mod.rs` and `routes/http/proxy_http/pg_upstream_peer.rs` share this
   construction. SAN hook installation does not replace the profile key.
-- The current Cargo.lock-resolved Pingora revision `1aaa45cc70430bc782990bc20ddee3fef36d6b99`
-  has `HttpPeer::hash` include `group_key`. Its BoringSSL `CertKey::hash` hashes
+- The current Cargo.lock-resolved Pingora revision
+  `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a` (re-verified by source
+  inspection on 2026-11-06; earlier verified at `1aaa45cc`) has `HttpPeer::hash`
+  include `group_key`. Its BoringSSL `CertKey::hash` hashes
   the serial of each certificate, not the complete certificate/key material.
   A changed chain with the same serial sequence therefore needs Edgion's key.
 

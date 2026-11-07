@@ -60,8 +60,15 @@ mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKIL
   canonical UDP access log; both failures drop the datagram without retries or
   raw OS error details. Access-log consumers should recognize the socket category
   separately from capacity exhaustion.
-- Route or backend configuration changes therefore affect an existing client after its pinned session
-  expires (or is otherwise removed), not on the next datagram.
+- Route, ReferenceGrant and stream-plugin changes therefore affect an existing client after its pinned
+  session expires (or is otherwise removed), not on the next datagram.
+- Endpoint removal is the exception. Each session records the Service key and section that supplied
+  its upstream. The 10-second cleanup pass loads one discovery generation and retires sessions whose
+  pinned address that generation proves gone (Service absent or `MissingService`, section
+  `MissingRequestedPort`, or address no longer published in a resolved section), with terminal
+  status `UpstreamEndpointRemoved`. Indeterminate states (`InvalidEpoch`, other invalid sections)
+  keep the session. See
+  [UDP endpoint-removal retirement](../../../04-review/listeners/regression-guards/udp-endpoint-removal-retirement.md).
 
 ## Compiled backend boundary
 

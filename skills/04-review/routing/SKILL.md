@@ -16,6 +16,7 @@ before applying a decision to current code.
 - [route-02 — No per-try timeout field — FIXED-VIA-STANDARD-FIELD](intentional-design/per-try-timeout-via-backend-request.md)
 - [route-03 — client-disconnect abort in the retry loop: log-only by decision](intentional-design/retry-client-disconnect-log-only.md)
 - [Route Architecture Consistency Review](intentional-design/route-architecture-consistency.md)
+- [gw-core-05 — L4 established flows are not revoked by configuration changes](intentional-design/l4-established-flows-not-revoked-on-config-change.md)
 - [A build-time route predicate prefilter is not justified — WONT-FIX](intentional-design/route-predicate-prefilter-not-justified.md)
 - [routing-05 — Multi-pattern RegexSet result allocation is accepted — WONT-FIX](intentional-design/regex-set-pattern-set-allocation-accepted.md)
 - [Session persistence: two-state delegation inheritance + File/Etcd-only strict — DESIGN-TRADEOFF (won't build three-state)](intentional-design/session-persistence-two-state-inheritance-and-k8s-strict-scope.md)

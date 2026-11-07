@@ -41,7 +41,13 @@ current lock `e5f4287` nor the earlier verified revision `0b0d8bba` contains
 `tests::shutdown_wakes_parked_read_requests` (still using the 50 ms sleep) and
 `tests::shutdown_before_read_request_parks_returns_immediately` in
 `pingora-proxy/src/lib.rs`. Treat the following as unpublished local evidence,
-not as regression tests carried by the locked fork. The local
+not as regression tests carried by the locked fork. A 2026-11-07 search of the
+local fork working tree, its reflog and its dangling objects found no copy of
+that file, so the tests are lost. The user decided not to rewrite them: the
+notification implementation is present at `e5f4287`, and the two remaining
+`lib.rs` tests plus the standalone HTTP shutdown scenario below remain the
+current coverage. A fork change to `await_shutdown` or its shard layout should
+add targeted interleaving tests at that time. The lost local
 `pingora-proxy/src/shutdown_tests.rs` covered:
 
 - Real cleanup between an HTTP header read returning Pending and the shutdown

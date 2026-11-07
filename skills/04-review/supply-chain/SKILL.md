@@ -20,7 +20,7 @@ before applying a decision to current code.
 
 ## Compatibility constraints
 
-- [Pingora zero-capacity streams require Tokio before 1.54](compatibility-constraints/pingora-tokio-zero-capacity.md)
+- [Tokio 1.54+ requires the Pingora zero-capacity read-buffer fix](compatibility-constraints/pingora-tokio-zero-capacity.md)
 
 ## Intentional design
 

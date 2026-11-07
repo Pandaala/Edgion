@@ -21,6 +21,9 @@ The `OwnedSemaphorePermit` belongs to `ClientSession` and remains held while a
 sender, receiver, or other owner retains that session. Removal from the map alone
 cannot release a permit while its socket and receiver buffer remain live.
 
+Endpoint-removal retirement reuses `retire_session` without the expiry check;
+see [UDP endpoint-removal retirement](udp-endpoint-removal-retirement.md).
+
 ## Rationale and evidence
 
 Source task `retire-udp-sessions-by-generation` identified a serving-time race:

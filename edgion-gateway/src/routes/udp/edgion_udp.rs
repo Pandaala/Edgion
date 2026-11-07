@@ -12,6 +12,10 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::backends::discovery::{
+    get_service_discovery_coordinator, ServicePublishedState, ServiceSectionInvalid, ServiceSectionKey,
+    ServiceSelectorGeneration, ServiceUnavailableReason,
+};
 use crate::backends::{
     select_service_endpoint, validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError, ServiceDegradePolicy,
 };
@@ -58,6 +62,7 @@ pub enum UdpStatus {
     UpstreamSocketError,
     UpstreamSendError,
     DownstreamSendError,
+    UpstreamEndpointRemoved,
 }
 
 impl UdpStatus {
@@ -76,6 +81,7 @@ impl UdpStatus {
             Self::UpstreamSocketError => "UpstreamSocketError",
             Self::UpstreamSendError => "UpstreamSendError",
             Self::DownstreamSendError => "DownstreamSendError",
+            Self::UpstreamEndpointRemoved => "UpstreamEndpointRemoved",
         }
     }
 }
@@ -116,11 +122,37 @@ fn is_pinned_upstream_source(src: std::net::SocketAddr, pinned: std::net::Socket
     src.ip().to_canonical() == pinned.ip().to_canonical() && src.port() == pinned.port()
 }
 
+/// Service section that supplied a session's pinned upstream endpoint.
+struct PinnedServiceEndpoint {
+    service_key: Box<str>,
+    section: ServiceSectionKey,
+}
+
+/// True only when the published discovery generation proves the pinned endpoint
+/// is gone: the Service is absent, its section port was removed, or the section
+/// no longer publishes the address. Indeterminate states keep the session.
+fn pinned_endpoint_removed(
+    generation: &ServiceSelectorGeneration,
+    pinned: &PinnedServiceEndpoint,
+    upstream_addr: std::net::SocketAddr,
+) -> bool {
+    match generation.service(&pinned.service_key) {
+        None | Some(ServicePublishedState::Unavailable(ServiceUnavailableReason::MissingService)) => true,
+        Some(ServicePublishedState::Unavailable(ServiceUnavailableReason::InvalidEpoch)) => false,
+        Some(ServicePublishedState::Available(service)) => match service.resolve_section(&pinned.section) {
+            Ok(section) => section.slot_for_addr(upstream_addr).is_none(),
+            Err(ServiceSectionInvalid::MissingRequestedPort) => true,
+            Err(_) => false,
+        },
+    }
+}
+
 /// Client session information with statistics
 struct ClientSession {
     _session_permit: OwnedSemaphorePermit,
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
+    pinned_endpoint: PinnedServiceEndpoint,
     lifecycle: Mutex<SessionLifecycle>,
     session_start: Instant,
 }
@@ -267,8 +299,9 @@ impl EdgionUdpProxy {
         // route match, backend selection, round-robin, SSRF validation) is pure
         // redundant work — its result is discarded for existing sessions anyway,
         // since the send always targets the session's stored `upstream_addr`.
-        // Route/backend changes take effect when the session expires
-        // (SESSION_TIMEOUT) and a new one is created. Clone the Arc out so the
+        // Route/policy changes take effect when the session expires
+        // (SESSION_TIMEOUT); removal of the pinned endpoint retires the session
+        // in the cleanup loop. Either way the next packet creates a new one. Clone the Arc out so the
         // DashMap read guard is dropped before the `.await` below.
         if let Some(session) = self.client_sessions.get(&direct_peer_addr).map(|s| s.value().clone()) {
             let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
@@ -357,7 +390,7 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        let upstream_addr =
+        let (pinned_endpoint, upstream_addr) =
             match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
                 select_service_endpoint(
                     target.key(),
@@ -369,11 +402,15 @@ impl EdgionUdpProxy {
                     None,
                 )
             }) {
-                Ok((_, endpoint)) => {
+                Ok((target, endpoint)) => {
                     let PingoraSocketAddr::Inet(addr) = &endpoint.backend.inner().addr else {
                         return;
                     };
-                    *addr
+                    let pinned = PinnedServiceEndpoint {
+                        service_key: target.key().into(),
+                        section: target.section().clone(),
+                    };
+                    (pinned, *addr)
                 }
                 Err(error) => {
                     let status = match error {
@@ -409,7 +446,7 @@ impl EdgionUdpProxy {
         }
 
         let session = match self
-            .get_or_create_session(direct_peer_addr, upstream_addr, children)
+            .get_or_create_session(direct_peer_addr, upstream_addr, pinned_endpoint, children)
             .await
         {
             Ok(session) => session,
@@ -437,6 +474,7 @@ impl EdgionUdpProxy {
         &self,
         direct_peer_addr: std::net::SocketAddr,
         upstream_addr: std::net::SocketAddr,
+        pinned_endpoint: PinnedServiceEndpoint,
         children: &mut JoinSet<()>,
     ) -> Result<Arc<ClientSession>, UdpStatus> {
         if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
@@ -464,6 +502,7 @@ impl EdgionUdpProxy {
             _session_permit: session_permit,
             upstream_socket,
             upstream_addr,
+            pinned_endpoint,
             lifecycle: Mutex::new(SessionLifecycle {
                 last_activity: Instant::now(),
                 retired: false,
@@ -619,7 +658,8 @@ impl EdgionUdpProxy {
         }
     }
 
-    /// Periodically clean up inactive sessions.
+    /// Periodically clean up inactive sessions and sessions whose pinned
+    /// upstream endpoint was removed from service discovery.
     ///
     /// Exits when `cancel_token` is cancelled.
     async fn session_cleanup_loop(&self) {
@@ -635,23 +675,47 @@ impl EdgionUdpProxy {
     }
 
     async fn cleanup_expired_sessions(&self) {
+        self.cleanup_sessions(get_service_discovery_coordinator().load_generation())
+            .await;
+    }
+
+    async fn cleanup_sessions(&self, generation: Arc<ServiceSelectorGeneration>) {
         let now = Instant::now();
-        let mut to_remove = Vec::new();
+        let to_remove = Self::collect_retirement_candidates(&self.client_sessions, &generation, now);
+        drop(generation);
 
-        for entry in self.client_sessions.iter() {
-            let last_activity = entry.value().lifecycle.lock().last_activity;
-            if now.saturating_duration_since(last_activity) > SESSION_TIMEOUT {
-                to_remove.push((*entry.key(), entry.value().clone()));
-            }
-        }
-
-        for (direct_peer_addr, session) in to_remove {
-            if Self::retire_session(&self.client_sessions, direct_peer_addr, &session, Some(now)) {
-                let log_entry = Self::session_log_entry(self.listener_port, direct_peer_addr, &session);
+        for (direct_peer_addr, session, reason) in to_remove {
+            // Idle candidates recheck activity at removal; a removed endpoint retires unconditionally.
+            let expiry_check = matches!(reason, RetireReason::Idle).then_some(now);
+            if Self::retire_session(&self.client_sessions, direct_peer_addr, &session, expiry_check) {
+                let mut log_entry = Self::session_log_entry(self.listener_port, direct_peer_addr, &session);
+                if matches!(reason, RetireReason::EndpointRemoved) {
+                    log_entry.status = Some(UdpStatus::UpstreamEndpointRemoved.as_str());
+                }
                 drop(session);
                 log_udp(&log_entry).await;
             }
         }
+    }
+
+    fn collect_retirement_candidates(
+        client_sessions: &DashMap<std::net::SocketAddr, Arc<ClientSession>>,
+        generation: &ServiceSelectorGeneration,
+        now: Instant,
+    ) -> Vec<(std::net::SocketAddr, Arc<ClientSession>, RetireReason)> {
+        let mut candidates = Vec::new();
+        for entry in client_sessions.iter() {
+            let session = entry.value();
+            let reason = if pinned_endpoint_removed(generation, &session.pinned_endpoint, session.upstream_addr) {
+                RetireReason::EndpointRemoved
+            } else if now.saturating_duration_since(session.lifecycle.lock().last_activity) > SESSION_TIMEOUT {
+                RetireReason::Idle
+            } else {
+                continue;
+            };
+            candidates.push((*entry.key(), session.clone(), reason));
+        }
+        candidates
     }
 
     /// Retire only this generation while holding the map entry and lifecycle lock.
@@ -709,6 +773,12 @@ impl EdgionUdpProxy {
     pub(crate) fn session_count(&self) -> usize {
         self.client_sessions.len()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetireReason {
+    Idle,
+    EndpointRemoved,
 }
 
 // Retain only the selected unit across admission I/O, not the full route table.

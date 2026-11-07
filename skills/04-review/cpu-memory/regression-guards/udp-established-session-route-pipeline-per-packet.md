@@ -62,6 +62,11 @@ read guard is dropped before the `send_to(..).await`, avoiding holding a shard l
 - An established session no longer drops packets if the route table later changes to
   `NoRouteMatched` / `NoBackendSelected`; it stays pinned until expiry. This keeps long-lived
   sessions alive across transient config churn.
+- Exception (gw-core-05): when service discovery no longer publishes the pinned endpoint, the
+  cleanup loop retires the session regardless of activity; see
+  [UDP endpoint-removal retirement](../../listeners/regression-guards/udp-endpoint-removal-retirement.md).
+  The configuration-change semantics are recorded as an accepted choice in
+  [L4 established flows are not revoked](../../routing/intentional-design/l4-established-flows-not-revoked-on-config-change.md).
 
 ## Re-evaluation Triggers
 

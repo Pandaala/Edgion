@@ -227,14 +227,29 @@ async fn assert_traffic(ctx: &ScenarioCtx, generation: Generation) -> Result<()>
     Ok(())
 }
 
-async fn wait_generation(ctx: &ScenarioCtx, generation: Generation, absent: Option<RouteStats>) -> Result<RouteStats> {
+/// Store-stat expectation checked on every poll, so registry retirement that
+/// lags the routing outcome (for example an HTTPRoute delete applied before its
+/// Gateway delete, retired only by the later full listener rebuild) converges
+/// within the deadline instead of being sampled once.
+#[derive(Clone, Copy)]
+enum StatsExpectation {
+    None,
+    /// Current stats must be exactly one generation above this baseline.
+    OneGenerationAbove(RouteStats),
+    /// Current stats must be exactly one generation below this baseline.
+    OneGenerationBelow(RouteStats),
+}
+
+async fn wait_generation(ctx: &ScenarioCtx, generation: Generation, expect: StatsExpectation) -> Result<RouteStats> {
     let deadline = Instant::now() + DEADLINE;
     loop {
         let result: Result<RouteStats> = async {
             assert_publication(ctx, !matches!(generation, Generation::Absent)).await?;
             let current = route_stats(ctx).await?;
-            if let Some(absent) = absent {
-                assert_stats(current, absent, true)?;
+            match expect {
+                StatsExpectation::None => {}
+                StatsExpectation::OneGenerationAbove(baseline) => assert_stats(current, baseline, true)?,
+                StatsExpectation::OneGenerationBelow(baseline) => assert_stats(baseline, current, true)?,
             }
             assert_traffic(ctx, generation).await?;
             Ok(current)
@@ -262,14 +277,19 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         // Full-suite startup preloads initial fixtures. Applying them again also
         // supports a targeted run on the same shared process topology.
         ctx.apply_dir("initial").await?;
-        let initial = wait_generation(&ctx, Generation::Present, None).await?;
+        let initial = wait_generation(&ctx, Generation::Present, StatsExpectation::None).await?;
 
         let result = async {
             remove_routes_and_gateway(&ctx).await?;
-            let absent = wait_generation(&ctx, Generation::Absent, None).await?;
-            assert_stats(initial, absent, true)?;
+            let absent =
+                wait_generation(&ctx, Generation::Absent, StatsExpectation::OneGenerationBelow(initial)).await?;
             ctx.apply_dir("initial").await?;
-            wait_generation(&ctx, Generation::Recreated, Some(absent)).await?;
+            wait_generation(
+                &ctx,
+                Generation::Recreated,
+                StatsExpectation::OneGenerationAbove(absent),
+            )
+            .await?;
             Ok(())
         }
         .await;

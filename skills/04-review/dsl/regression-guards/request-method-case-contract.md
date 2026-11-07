@@ -37,7 +37,8 @@ current implementation behavior.
   use inline (up to 15 bytes) or allocated extensions. `write_checked` validates
   ASCII token bytes without changing case. Empty strings, whitespace, controls,
   `/`, and non-ASCII bytes are rejected.
-- Locked Edgion Pingora commit `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`:
+- Locked Edgion Pingora commit `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`
+  (re-verified by source inspection on 2026-11-06; originally recorded at `518f7274`):
   `pingora-http/src/lib.rs::RequestHeader::set_method` assigns `base.method`.
   `pingora-core/src/protocols/http/v1/client.rs::http_req_header_to_wire`
   writes `method.as_str().as_bytes()` into the request line without conversion.

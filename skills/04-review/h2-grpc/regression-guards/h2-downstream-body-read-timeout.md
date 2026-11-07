@@ -181,8 +181,9 @@ letting a missing policy pass the negative assertion.
 The positive control ends with a bounded healthy-echo recovery probe, so an
 immediate rerun does not inherit its temporary endpoint ejection.
 
-Verified on 2026-09-09 against the current `edgion_v4` lockfile commit
-`518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`:
+Historical run on 2026-09-09 against the then-current `edgion_v4` lockfile
+commit `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e` (not repeated at the current
+`edgion_v0.9.1@e5f4287` lock):
 
 - `run_integration.sh --no-prepare -r HTTPRoute -i Transport` passed on the
   final build: 74 reported cases, zero failures or infrastructure errors

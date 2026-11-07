@@ -122,6 +122,12 @@ spec:
    lifetime: route or backend changes apply only to new sessions. Existing sessions
    keep forwarding to their original upstream until they expire after 60 s of
    inactivity, at which point the next packet re-runs route matching.
+   Exception: when service discovery no longer publishes the pinned endpoint (the
+   endpoint address, the Service port, or the Service itself was removed), the
+   session is retired within about 10 s even if the client is still sending, and
+   its access-log entry carries `status: UpstreamEndpointRemoved`. The next packet
+   creates a new session against a current endpoint. Route, ReferenceGrant and
+   stream-plugin changes still apply only to new sessions.
 4. During Gateway shutdown, UDP continues serving through Pingora's shutdown phase.
    Once Pingora stops, UDP stops receiving and forwarding, then cleans up tasks and
    sessions within the shared five-second auxiliary-service grace window. A timeout

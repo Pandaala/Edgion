@@ -104,11 +104,102 @@ async fn make_test_proxy(port: u16) -> Arc<EdgionUdpProxy> {
     ))
 }
 
+const TEST_SERVICE_KEY: &str = "default/udp-backend";
+const TEST_SERVICE_PORT: u16 = 8080;
+
+fn test_service(ports: &[u16]) -> Arc<k8s_openapi::api::core::v1::Service> {
+    use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
+    use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+    Arc::new(Service {
+        metadata: ObjectMeta {
+            namespace: Some("default".to_owned()),
+            name: Some("udp-backend".to_owned()),
+            uid: Some("udp-backend-uid".to_owned()),
+            ..Default::default()
+        },
+        spec: Some(ServiceSpec {
+            ports: Some(
+                ports
+                    .iter()
+                    .map(|port| ServicePort {
+                        port: i32::from(*port),
+                        target_port: Some(IntOrString::Int(i32::from(*port))),
+                        protocol: Some("UDP".to_owned()),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+}
+
+fn test_slice(addresses: &[&str]) -> Arc<k8s_openapi::api::discovery::v1::EndpointSlice> {
+    use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+    Arc::new(EndpointSlice {
+        metadata: ObjectMeta {
+            namespace: Some("default".to_owned()),
+            name: Some("udp-backend-slice".to_owned()),
+            uid: Some("udp-backend-slice-uid".to_owned()),
+            labels: Some(std::collections::BTreeMap::from([(
+                SERVICE_NAME.to_owned(),
+                "udp-backend".to_owned(),
+            )])),
+            ..Default::default()
+        },
+        address_type: "IPv4".to_owned(),
+        endpoints: addresses
+            .iter()
+            .map(|address| Endpoint {
+                addresses: vec![(*address).to_owned()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect(),
+        ports: Some(vec![EndpointPort {
+            port: Some(i32::from(TEST_SERVICE_PORT)),
+            protocol: Some("UDP".to_owned()),
+            ..Default::default()
+        }]),
+    })
+}
+
+/// Publish the test Service and EndpointSlice into an isolated coordinator.
+fn test_generation(
+    service_ports: Option<&[u16]>,
+    addresses: Option<&[&str]>,
+) -> Arc<crate::backends::discovery::ServiceSelectorGeneration> {
+    let coordinator = crate::backends::discovery::ServiceDiscoveryCoordinator::new();
+    if let Some(ports) = service_ports {
+        coordinator.replace_services(&HashMap::from([(TEST_SERVICE_KEY.to_owned(), test_service(ports))]));
+    }
+    if let Some(addresses) = addresses {
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            "default/udp-backend-slice".to_owned(),
+            test_slice(addresses),
+        )]));
+    }
+    coordinator.load_generation()
+}
+
+fn test_pinned_endpoint() -> PinnedServiceEndpoint {
+    PinnedServiceEndpoint {
+        service_key: TEST_SERVICE_KEY.into(),
+        section: ServiceSectionKey::Number(std::num::NonZeroU16::new(TEST_SERVICE_PORT).unwrap()),
+    }
+}
+
 fn make_test_session(proxy: &EdgionUdpProxy, last_activity: Instant) -> Arc<ClientSession> {
     Arc::new(ClientSession {
         _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
         upstream_socket: proxy.socket.clone(),
         upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+        pinned_endpoint: test_pinned_endpoint(),
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity,
             retired: false,
@@ -285,6 +376,7 @@ async fn test_serve_exits_on_cancel() {
             _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
             upstream_socket: proxy.socket.clone(),
             upstream_addr: "192.0.2.2:8080".parse().unwrap(),
+            pinned_endpoint: test_pinned_endpoint(),
             lifecycle: Mutex::new(SessionLifecycle {
                 last_activity: Instant::now(),
                 retired: false,
@@ -394,6 +486,7 @@ async fn test_cleanup_expired_sessions() {
             .expect("test session permit"),
         upstream_socket,
         upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+        pinned_endpoint: test_pinned_endpoint(),
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity: expired_time,
             retired: false,
@@ -409,7 +502,10 @@ async fn test_cleanup_expired_sessions() {
     proxy.client_sessions.insert(direct_peer_addr, session);
     assert_eq!(proxy.session_count(), 1);
 
-    proxy.cleanup_expired_sessions().await;
+    // Keep the pinned endpoint published so only idleness can retire the session.
+    proxy
+        .cleanup_sessions(test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.1"])))
+        .await;
     assert_eq!(proxy.session_count(), 0);
 }
 
@@ -439,6 +535,7 @@ async fn test_cleanup_keeps_active_sessions() {
             .expect("test session permit"),
         upstream_socket,
         upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+        pinned_endpoint: test_pinned_endpoint(),
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity: Instant::now(),
             retired: false,
@@ -454,7 +551,9 @@ async fn test_cleanup_keeps_active_sessions() {
     proxy.client_sessions.insert(direct_peer_addr, session);
     assert_eq!(proxy.session_count(), 1);
 
-    proxy.cleanup_expired_sessions().await;
+    proxy
+        .cleanup_sessions(test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.1"])))
+        .await;
     assert_eq!(proxy.session_count(), 1);
 }
 
@@ -682,4 +781,105 @@ async fn session_accounting_wraps_and_freezes_after_retirement() {
     assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS);
     assert_eq!((log.packets_sent, log.packets_received), (0, 0));
     assert_eq!((log.bytes_sent, log.bytes_received), (2, 4));
+}
+
+#[test]
+fn pinned_endpoint_removal_requires_published_proof() {
+    let pinned = test_pinned_endpoint();
+    let upstream: SocketAddr = "10.0.0.1:8080".parse().unwrap();
+    let port = [TEST_SERVICE_PORT];
+
+    let live = test_generation(Some(&port), Some(&["10.0.0.1", "10.0.0.2"]));
+    assert!(!pinned_endpoint_removed(&live, &pinned, upstream));
+
+    let rotated = test_generation(Some(&port), Some(&["10.0.0.2"]));
+    assert!(pinned_endpoint_removed(&rotated, &pinned, upstream));
+
+    let port_removed = test_generation(Some(&[9090]), Some(&["10.0.0.1"]));
+    assert!(pinned_endpoint_removed(&port_removed, &pinned, upstream));
+
+    let service_deleted = test_generation(None, Some(&["10.0.0.1"]));
+    assert!(pinned_endpoint_removed(&service_deleted, &pinned, upstream));
+
+    let absent = test_generation(None, None);
+    assert!(pinned_endpoint_removed(&absent, &pinned, upstream));
+}
+
+#[test]
+fn invalid_section_is_indeterminate_and_keeps_session() {
+    use k8s_openapi::api::discovery::v1::EndpointPort;
+    // Two unnamed slice ports make the section ambiguous: it is invalid
+    // without proving the pinned endpoint was removed.
+    let mut slice = (*test_slice(&["10.0.0.1"])).clone();
+    slice.ports.as_mut().unwrap().push(EndpointPort {
+        port: Some(9090),
+        protocol: Some("UDP".to_owned()),
+        ..Default::default()
+    });
+    let coordinator = crate::backends::discovery::ServiceDiscoveryCoordinator::new();
+    coordinator.replace_services(&HashMap::from([(
+        TEST_SERVICE_KEY.to_owned(),
+        test_service(&[TEST_SERVICE_PORT]),
+    )]));
+    coordinator.replace_endpoint_slices(&HashMap::from([(
+        "default/udp-backend-slice".to_owned(),
+        Arc::new(slice),
+    )]));
+    let generation = coordinator.load_generation();
+    let pinned = test_pinned_endpoint();
+
+    let ServicePublishedState::Available(service) = generation.service(TEST_SERVICE_KEY).unwrap() else {
+        panic!("service should be published");
+    };
+    assert!(matches!(
+        service.resolve_section(&pinned.section),
+        Err(ServiceSectionInvalid::AmbiguousEndpointPort)
+    ));
+    assert!(!pinned_endpoint_removed(
+        &generation,
+        &pinned,
+        "10.0.0.1:8080".parse().unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn cleanup_retires_active_session_whose_endpoint_was_removed() {
+    let proxy = make_test_proxy(19987).await;
+    let removed_peer: SocketAddr = "192.0.2.10:12345".parse().unwrap();
+    let removed = make_test_session(&proxy, Instant::now());
+    proxy.client_sessions.insert(removed_peer, removed.clone());
+
+    // The pinned 127.0.0.1:8080 endpoint is gone; another endpoint remains.
+    proxy
+        .cleanup_sessions(test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.2"])))
+        .await;
+
+    assert_eq!(proxy.session_count(), 0);
+    assert!(removed.lifecycle.lock().retired);
+}
+
+#[tokio::test]
+async fn endpoint_removal_candidate_does_not_retire_replacement_generation() {
+    let proxy = make_test_proxy(19986).await;
+    let peer: SocketAddr = "192.0.2.11:12345".parse().unwrap();
+    let old = make_test_session(&proxy, Instant::now());
+    proxy.client_sessions.insert(peer, old.clone());
+    let generation = test_generation(Some(&[TEST_SERVICE_PORT]), Some(&["127.0.0.2"]));
+    let candidates = EdgionUdpProxy::collect_retirement_candidates(&proxy.client_sessions, &generation, Instant::now());
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].2, RetireReason::EndpointRemoved);
+
+    let replacement = make_test_session(&proxy, Instant::now());
+    proxy.client_sessions.insert(peer, replacement.clone());
+    assert!(!EdgionUdpProxy::retire_session(
+        &proxy.client_sessions,
+        peer,
+        &candidates[0].1,
+        None
+    ));
+    assert!(Arc::ptr_eq(
+        proxy.client_sessions.get(&peer).unwrap().value(),
+        &replacement
+    ));
+    assert!(!replacement.lifecycle.lock().retired);
 }

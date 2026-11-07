@@ -36,6 +36,31 @@ and replay Age stay bound to the origin timestamp, never the transport timestamp
 Publish only after actual typed clean terminal state and bounded finish_body.
 H1 proves local flush; H2 proves accepted EOS, not peer receipt.
 
+Truncation and trailer non-admission: the cache sits above Pingora's upstream session and is transport-agnostic, so
+an H2 upstream that resets before END_STREAM reaches it as one of two shapes,
+and both discard the fill (re-verified 2026-11-06 for the `edgion_v0.9.1`
+rebase follow-up, origin `arch-05`):
+
+- a terminal error: `lifecycle::finalize` abandons whenever `error` is set;
+- a body that never saw EOS: `prepare_publication` (and `publish_pending`)
+  refuse a pending fill whose `complete` flag was never set by `push(.., eos)`.
+
+Any upstream trailer, valid or not, abandons the fill: the
+`TerminalBeforeTrailers` body event and
+`dispatch_upstream_response_trailers` with `Some(trailers)` both call
+`abandon`, so trailer validity is never a cache-admission question. Whether an
+H2 RST after a complete body counts as clean is decided by the fork's
+end-stream watcher before Edgion sees the terminal event (see
+[h2 end-stream wire observer](../../h2-grpc/regression-guards/h2-end-stream-wire-observer.md)).
+Evidence: `storage_test.rs` `sealed_fill_without_eos_is_refused_at_publication`
+pins the `complete` guard directly; `lifecycle_test.rs`
+`terminal_error_discards_private_fill` and
+`truncated_fill_without_eos_never_publishes` (sealed, partially written body
+without content-length, so the downstream terminal succeeds and only the
+completeness guard refuses it, with and without an H2 reset error); and
+`response_cache_tests.rs`
+`actual_typed_header_only_terminal_publishes_but_trailer_boundary_discards`.
+
 The index is canonical ShardedLru. Admission precedes owned metadata/header/body
 allocations. Decoded hit headers remain charged until context teardown because
 Session may retain response_written. Bytes::from_owner keeps arena/control leases

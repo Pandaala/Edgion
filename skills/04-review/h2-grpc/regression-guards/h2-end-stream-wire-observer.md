@@ -71,10 +71,46 @@ watch state, not the scanner, and the poison, padding-wait, and GOAWAY-finish
 semantics are unchanged by inspection. h2 0.4.20 additionally rejects a
 nonzero-stream GOAWAY itself (`frame::GoAway::load` returns
 `InvalidStreamId`), so that case's product outcome is now jointly produced by
-h2 and the watcher poison. The watcher's module-level private-fact audit note
-still names h2 0.4.19; no fresh full audit of those private h2 facts against
-0.4.20 is claimed here. Product tests supplement that evidence rather than
+h2 and the watcher poison. Product tests supplement that evidence rather than
 replacing the fork's internal registration/race tests or the retained watcher.
+
+h2 0.4.20 private-fact audit (2026-11-06, source diff of the registry crates
+`h2-0.4.19` against `h2-0.4.20`, read against fork `e5f4287`). The watcher's
+module comment still says "audited against h2 0.4.19"; that fork-side wording
+is a tracked fork follow-up, not an Edgion defect. Each of its five handoff
+facts holds at 0.4.20:
+
+1. `State::recv_reset` / `Cause::ErrorAfterEndStream`: `proto/streams/state.rs`
+   is byte-identical between the two releases.
+2. `Recv::poll_data` popping `pending_recv` before consulting state: unchanged.
+   The 0.4.20 `recv.rs` changes are duplicate-conflicting `content-length`
+   rejection (a stream reset at HEADERS, before any DATA reaches the reader)
+   and push/refusal accounting. `streams.rs` adds a lock-scope change for both
+   `recv_headers` and `recv_data` (`reset_on_recv_stream_err_deferred` takes the
+   send-buffer lock only for a `Reset` error, same outcome). `client.rs` now
+   resets a response without `:status` and reorders its shutdown snapshot, and
+   `framed_read.rs` moves decoder state into a `FrameDecoder` struct; none of
+   these alters the facts below. A new decode-then-drop path, if any, is still
+   caught by the wire/delivered byte-count equality.
+3. Connection errors and `recv_go_away` keep `pending_recv`: those paths are
+   unchanged. The new `GoAway::load` stream-id check produces a connection
+   error that the watcher already poisoned on (`stream_id != 0` in the scanner),
+   so h2 and the watcher now agree instead of the watcher being stricter.
+4. One codec frame applied before polling the next: still true. The new
+   `ReceivedFrame::Refused` branch defers a REFUSED_STREAM until the codec is
+   writable before reading another frame; it is reachable only for a
+   peer-opened stream, and the fork client builds with `enable_push(false)`
+   (`pingora-core/src/connectors/http/v2.rs`), so it does not occur upstream.
+5. Small-DATA-frame budget: `Budget` now stores `spent`/`max` and, in `Auto`
+   mode, follows `set_target_window_size` at runtime. The fork only sets
+   `initial_connection_window_size(conn_window)` at build time, which 0.4.20
+   applies immediately after construction, and never calls
+   `set_target_window_size` later, so the effective budget is
+   `max(conn_window / 2, DEFAULT_DATA_FRAME_BUDGET)` exactly as on 0.4.19. The
+   continuing-upload reset contract therefore keeps the same budget headroom.
+
+Re-audit on any further `h2` bump or if the fork starts adjusting the
+connection window at runtime. No fork or Edgion test was re-run for this audit.
 
 Historical run (against the earlier `edgion_0.9.0_v1@0b0d8bba` lock, not
 repeated for `e5f4287`): on 2026-10-06, `cargo test -p edgion-tests --bin test_server transport::h2

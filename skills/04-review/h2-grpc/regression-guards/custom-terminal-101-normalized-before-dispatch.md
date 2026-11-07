@@ -13,11 +13,14 @@ Fixed in the local Pingora fork: a custom connector may report a completed Upgra
 ## Current source verification
 
 The pending `issue-custom-terminal-101-upgrade-panic` finding is already fixed
-in Edgion's selected dependency: `Cargo.lock` resolves `edgion_v4` to
-`518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`. The sibling checkout at
-`dba39b670b564fdded8af85a1f03f73fd6cb5379` contains identical versions of
-`proxy_custom.rs`, `response_pipeline.rs`, `response_terminal.rs`, the H1
-`server.rs`, and `test_upstream_response_body_sink.rs`.
+in Edgion's selected dependency: `Cargo.lock` resolves `edgion_v0.9.1` to
+`e5f4287be713d01ffd444544251bf75c9d00062a`, re-verified by source inspection on
+2026-11-06. At that revision `proxy_custom.rs` and `response_terminal.rs` are
+byte-identical to `1aaa45cc`; `response_pipeline.rs` changed but still marks the
+terminal state upgraded only after response filtering, and the four terminal-101
+tests below are present. Historical: the original closure inspected `edgion_v4`
+at `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`, with identical files in the
+sibling checkout `dba39b670b564fdded8af85a1f03f73fd6cb5379`.
 
 The current producer `custom_pipe_up_to_down_response` normalizes terminal
 101 to a nonterminal Header followed by Done, then returns without another

@@ -69,9 +69,9 @@ edgion-controller = { path = "edgion-controller" }
 edgion-cli        = { path = "edgion-cli" }
 
 # Async runtime / error handling
-# Pingora's zero-capacity BufStream constructors panic with Tokio >=1.54.
+# Tokio >=1.54 requires the Pingora fork's zero-capacity L4 read-buffer fix (572e044).
 # See skills/04-review/supply-chain/compatibility-constraints/pingora-tokio-zero-capacity.md.
-tokio = { version = "=1.53.3", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
 tokio-rustls = "0.26"

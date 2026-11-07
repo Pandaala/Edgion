@@ -7,7 +7,7 @@ pub use coordinator::{
     get_service_discovery_coordinator, AvailableServiceProjection, LegacyRawProjection, ResolvedBackendSlot,
     ResolvedServiceSection, ServiceDiscoveryCoordinator, ServiceDiscoveryStatsSnapshot, ServicePublishedState,
     ServiceRuntimeCell, ServiceRuntimeSnapshot, ServiceSectionInvalid, ServiceSectionKey, ServiceSectionOutcome,
-    ServiceSelectorGeneration,
+    ServiceSelectorGeneration, ServiceUnavailableReason,
 };
 pub(crate) use coordinator::{HealthPolicyIdentity, OutlierPolicyIdentity};
 pub use dns_cache::{
