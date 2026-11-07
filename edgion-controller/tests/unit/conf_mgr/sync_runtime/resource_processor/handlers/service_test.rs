@@ -205,3 +205,42 @@ async fn dns_raw_owner_default_namespace_retargets_and_cleans_denied_dependencie
         .contains_key(DNS_RESOLVER_REF));
     assert!(runtime.cross_ns_ref_mgr.get_refs("dns").is_empty());
 }
+
+#[tokio::test]
+async fn publication_hooks_maintain_dns_resolver_targets() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let handler = ServiceHandler::new();
+    let mut service: Service = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "app", "name": "external", "uid": "uid"},
+        "spec": {"type": "ExternalName", "externalName": "example.com", "ports": [{"port": 80}]}
+    }))
+    .unwrap();
+
+    handler.after_publish(&service, &ctx).await;
+    let keys = |runtime: &ControllerRuntime| {
+        runtime
+            .dns_resolver_targets
+            .snapshot()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&runtime), vec!["app/external".to_string()]);
+
+    service.spec.as_mut().unwrap().type_ = Some("ClusterIP".into());
+    handler.after_publish(&service, &ctx).await;
+    assert!(
+        keys(&runtime).is_empty(),
+        "an in-place edit off ExternalName releases the target"
+    );
+
+    service.spec.as_mut().unwrap().type_ = Some("ExternalName".into());
+    handler.after_publish(&service, &ctx).await;
+    handler.after_unpublish(&service, &ctx).await;
+    assert!(keys(&runtime).is_empty());
+
+    handler.after_publish(&service, &ctx).await;
+    runtime.reset();
+    assert!(keys(&runtime).is_empty(), "runtime reset clears the targets");
+}

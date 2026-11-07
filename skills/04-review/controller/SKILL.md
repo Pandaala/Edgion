@@ -16,6 +16,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [DNS-owned family slice convergence](regression-guards/dns-owned-family-slice-convergence.md)
+- [DNS resolver work set comes from processed caches](regression-guards/dns-resolver-cache-driven-work-set.md)
 
 - [FS initialization delivery and backpressure](regression-guards/fs-initial-delivery-backpressure.md)
 

@@ -111,10 +111,12 @@ impl ProcessorHandler<Service> for ServiceHandler {
     }
 
     async fn after_publish(&self, svc: &Service, ctx: &HandlerContext) {
+        ctx.runtime().dns_resolver_targets.sync_published(svc);
         self.requeue_dependents(svc, "updated", ctx).await;
     }
 
     async fn after_unpublish(&self, svc: &Service, ctx: &HandlerContext) {
+        ctx.runtime().dns_resolver_targets.remove_published(svc);
         self.requeue_dependents(svc, "deleted", ctx).await;
     }
 }

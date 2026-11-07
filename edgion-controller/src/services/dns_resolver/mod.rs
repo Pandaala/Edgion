@@ -7,5 +7,6 @@
 
 pub mod service;
 pub mod slice_builder;
+pub(crate) mod targets;
 
 pub use service::{start_dns_resolver_service, stop_dns_resolver_service};

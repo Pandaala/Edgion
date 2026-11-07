@@ -656,10 +656,7 @@ async fn acquire_and_publish(
         prepared
             .validate_active_inheritance()
             .map_err(|_| ReconcileFailure::rotation())?;
-        let resolver = match kube_client {
-            Some(client) => crate::services::dns_resolver::service::controller_default_resolver(client).await,
-            None => crate::services::dns_resolver::service::controller_default_resolver_without_kube(),
-        };
+        let resolver = crate::services::dns_resolver::service::controller_default_resolver(runtime);
         let provider = OAuth2Provider::new(&prepared, request_timeout, retry_cap, resolver)
             .map_err(|_| ReconcileFailure::rotation())?;
 

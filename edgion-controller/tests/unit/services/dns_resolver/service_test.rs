@@ -167,20 +167,17 @@ fn empty_kubernetes_list(api_version: &str, kind: &str) -> Response<Body> {
 }
 
 #[tokio::test]
-async fn reconcile_lists_only_configured_namespaces() {
-    let paths = Arc::new(Mutex::new(Vec::new()));
-    let captured = Arc::clone(&paths);
+async fn reconcile_lists_only_owned_slices_from_watch_cache() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
     let service = service_fn(move |request: http::Request<Body>| {
         let captured = Arc::clone(&captured);
         async move {
-            let path = request.uri().path().to_string();
-            captured.lock().push(path.clone());
-            let response = if path.contains("endpointslices") {
-                empty_kubernetes_list("discovery.k8s.io/v1", "EndpointSliceList")
-            } else {
-                empty_kubernetes_list("v1", "ServiceList")
-            };
-            Ok::<_, Infallible>(response)
+            captured.lock().push((
+                request.uri().path().to_string(),
+                request.uri().query().unwrap_or_default().to_string(),
+            ));
+            Ok::<_, Infallible>(empty_kubernetes_list("discovery.k8s.io/v1", "EndpointSliceList"))
         }
     });
 
@@ -190,85 +187,186 @@ async fn reconcile_lists_only_configured_namespaces() {
         &["team-a".into(), "team-b".into()],
         &DnsResolverConfig::default(),
         &mut HashMap::new(),
+        &runtime_with_link_sys([]),
     )
     .await
     .expect("namespace-scoped reconcile must succeed");
 
+    let requests = requests.lock();
     assert_eq!(
-        *paths.lock(),
+        requests.iter().map(|(path, _)| path.as_str()).collect::<Vec<_>>(),
         vec![
             "/apis/discovery.k8s.io/v1/namespaces/team-a/endpointslices",
             "/apis/discovery.k8s.io/v1/namespaces/team-b/endpointslices",
-            "/api/v1/namespaces/team-a/services",
-            "/api/v1/namespaces/team-b/services"
-        ]
+        ],
+        "Services come from the target table, never from an apiserver LIST"
     );
+    assert!(requests
+        .iter()
+        .all(|(_, query)| query.contains("resourceVersion=0") && query.contains("labelSelector=")));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn controller_ticks_reuse_failed_preparation_and_clear_changed_or_removed_services() {
-    let mode = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let observed_mode = mode.clone();
-    let service = service_fn(move |request: http::Request<Body>| {
-        let mode = observed_mode.load(std::sync::atomic::Ordering::Relaxed);
-        async move {
-            let path = request.uri().path();
-            let payload = if path.contains("endpointslices") {
-                json!({"apiVersion": "discovery.k8s.io/v1", "kind": "EndpointSliceList", "metadata": {}, "items": []})
-            } else if path.contains("linksys") {
-                json!({"apiVersion": "edgion.io/v1", "kind": "LinkSys", "metadata": {"namespace": "test", "name": "dns"},
-                    "spec": {"type": "httpdns", "config": {"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}}})
-            } else {
-                let items = if mode == 2 {
-                    vec![]
-                } else {
-                    vec![json!({"apiVersion": "v1", "kind": "Service", "metadata": {
-                        "namespace": "test", "name": "svc", "uid": "service-uid",
-                        "annotations": {"edgion.io/dns-resolution-mode": "controller", "edgion.io/dns-resolver-ref": if mode == 0 { "test/dns" } else { "" }}
-                        }, "spec": {"type": "ExternalName", "externalName": if mode == 0 { "unresolvable.invalid" } else { "1.2.3.4" }, "ports": [{"port": 80}]}})]
-                };
-                json!({"apiVersion": "v1", "kind": "ServiceList", "metadata": {}, "items": items})
-            };
-            Ok::<_, Infallible>(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
-                    .unwrap(),
-            )
-        }
+    let service = service_fn(move |request: http::Request<Body>| async move {
+        let path = request.uri().path();
+        assert!(path.contains("endpointslices"), "unexpected apiserver request: {path}");
+        let payload =
+            json!({"apiVersion": "discovery.k8s.io/v1", "kind": "EndpointSliceList", "metadata": {}, "items": []});
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
     });
     let client = Client::new(service, "test");
+    let config: edgion_resources::resources::link_sys::HttpDnsResolverConfig = serde_json::from_value(
+        json!({"preset": "aliyun", "connection": {"timeoutMs": 0}, "fallback": {"type": "none"}}),
+    )
+    .unwrap();
+    let runtime = runtime_with_link_sys([(*httpdns_owner(config)).clone()]);
+    let target = |mode: usize| -> Service {
+        serde_json::from_value(json!({"apiVersion": "v1", "kind": "Service", "metadata": {
+            "namespace": "test", "name": "svc", "uid": "service-uid",
+            "annotations": {"edgion.io/dns-resolution-mode": "controller", "edgion.io/dns-resolver-ref": if mode == 0 { "test/dns" } else { "" }}
+            }, "spec": {"type": "ExternalName", "externalName": if mode == 0 { "unresolvable.invalid" } else { "1.2.3.4" }, "ports": [{"port": 80}]}}))
+        .unwrap()
+    };
     let config = DnsResolverConfig {
         enabled: true,
         ..Default::default()
     };
     let mut states = HashMap::new();
-    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    runtime.dns_resolver_targets.sync_published(&target(0));
+    reconcile_once(&client, &[], &config, &mut states, &runtime)
+        .await
+        .unwrap();
     let first = states["test/svc"].prepared.as_ref().unwrap().1.clone();
     assert!(!first.is_ready());
     states.get_mut("test/svc").unwrap().applied_fingerprint = Some("last-good".into());
-    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    reconcile_once(&client, &[], &config, &mut states, &runtime)
+        .await
+        .unwrap();
     assert!(Arc::ptr_eq(&first, &states["test/svc"].prepared.as_ref().unwrap().1));
     assert_eq!(states["test/svc"].applied_fingerprint.as_deref(), Some("last-good"));
     // An empty resolver-ref selects System without touching LinkSys; the IP
     // literal takes resolve_system's pure fast path without any OS DNS lookup.
-    mode.store(1, std::sync::atomic::Ordering::Relaxed);
-    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    runtime.dns_resolver_targets.sync_published(&target(1));
+    reconcile_once(&client, &[], &config, &mut states, &runtime)
+        .await
+        .unwrap();
     assert!(states["test/svc"].prepared.is_none());
-    mode.store(2, std::sync::atomic::Ordering::Relaxed);
-    reconcile_once(&client, &[], &config, &mut states).await.unwrap();
+    runtime.dns_resolver_targets.remove_published(&target(1));
+    reconcile_once(&client, &[], &config, &mut states, &runtime)
+        .await
+        .unwrap();
     assert!(
         states.is_empty(),
         "removed Service must release the prepared generation and slice state"
     );
 }
 
-#[test]
-fn kube_less_default_resolver_falls_back_to_system_without_inline_servers() {
+#[tokio::test(flavor = "current_thread")]
+async fn passes_skip_targets_until_due_or_changed() {
+    let client = Client::new(
+        service_fn(|_request: http::Request<Body>| async move {
+            Ok::<_, Infallible>(empty_kubernetes_list("discovery.k8s.io/v1", "EndpointSliceList"))
+        }),
+        "app",
+    );
+    let runtime = runtime_with_link_sys([]);
+    // No ports: preparation returns before any query, but the target is handled.
+    let mut service = dns_service("");
+    service.spec.as_mut().unwrap().ports = None;
+    runtime.dns_resolver_targets.sync_published(&service);
+    let config = DnsResolverConfig::default();
+    let grid = RefreshGrid::new(Duration::from_secs(60));
+    let mut states = HashMap::new();
+    let next = reconcile_with_runtime(&client, &[], &config, grid, &mut states, &runtime)
+        .await
+        .unwrap();
+    let first_due = states["app/source"].next_due.unwrap();
+    assert_eq!(next, first_due);
+    let revision = states["app/source"].target_revision;
+    assert!(revision.is_some());
+
+    // Not due and unchanged: the pass leaves the schedule alone.
+    reconcile_with_runtime(&client, &[], &config, grid, &mut states, &runtime)
+        .await
+        .unwrap();
+    assert_eq!(states["app/source"].next_due, Some(first_due));
+
+    // Identical content does not create a new revision.
+    runtime.dns_resolver_targets.sync_published(&service);
+    reconcile_with_runtime(&client, &[], &config, grid, &mut states, &runtime)
+        .await
+        .unwrap();
+    assert_eq!(states["app/source"].target_revision, revision);
+
+    // A content change is handled immediately.
+    service.metadata.labels = Some([("edit".to_string(), "1".to_string())].into());
+    runtime.dns_resolver_targets.sync_published(&service);
+    reconcile_with_runtime(&client, &[], &config, grid, &mut states, &runtime)
+        .await
+        .unwrap();
+    assert_ne!(states["app/source"].target_revision, revision);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pass_before_service_cache_ready_neither_resolves_nor_collects() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    let client = Client::new(
+        service_fn(move |request: http::Request<Body>| {
+            captured.lock().push(request.method().clone());
+            async move { Ok::<_, Infallible>(empty_kubernetes_list("discovery.k8s.io/v1", "EndpointSliceList")) }
+        }),
+        "app",
+    );
+    // No Service processor is registered (startup or after a runtime reset).
+    let runtime = ControllerRuntime::default();
+    runtime.dns_resolver_targets.sync_published(&dns_service(""));
+    let mut states = HashMap::new();
+    reconcile_with_runtime(
+        &client,
+        &[],
+        &DnsResolverConfig::default(),
+        RefreshGrid::new(Duration::ZERO),
+        &mut states,
+        &runtime,
+    )
+    .await
+    .unwrap();
+    assert!(states.is_empty(), "no target is handled before the cache is ready");
     assert!(
-        matches!(controller_default_resolver_without_kube(), ResolverSpec::System),
-        "without kube, a missing/httpdns default candidate must fail safe to the system resolver"
+        requests.lock().iter().all(|method| method == http::Method::GET),
+        "an unready pass must not PATCH or DELETE"
+    );
+}
+
+#[test]
+fn refresh_grid_aligns_due_instants() {
+    let period = Duration::from_secs(10);
+    let grid = RefreshGrid::new(period);
+    let epoch = grid.epoch;
+    assert_eq!(grid.next_after(epoch), epoch + period);
+    assert_eq!(grid.next_after(epoch + Duration::from_secs(3)), epoch + period);
+    assert_eq!(grid.next_after(epoch + period), epoch + period * 2);
+    assert_eq!(grid.next_after(epoch + Duration::from_secs(27)), epoch + period * 3);
+    let immediate = RefreshGrid::new(Duration::ZERO);
+    assert_eq!(immediate.next_after(epoch), epoch);
+}
+
+#[test]
+fn default_resolver_falls_back_to_system_without_inline_servers() {
+    assert!(
+        matches!(
+            controller_default_resolver(&ControllerRuntime::default()),
+            ResolverSpec::System
+        ),
+        "a missing/httpdns default candidate must fail safe to the system resolver"
     );
 }
 
@@ -544,14 +642,91 @@ fn controller_default_candidate_prefers_ref_then_servers() {
     assert_eq!(controller_default_candidate(&DnsResolverConfig::default()), None);
 }
 
-// Original tests retain their call shape; production always receives its runtime.
+/// One Service through the production prepare → query → publish phases.
+#[allow(clippy::too_many_arguments)]
+async fn resolve_and_apply(
+    client: &Client,
+    svc: &Service,
+    default_candidate: &Option<ResolverCandidate>,
+    default_family: DnsLookupFamily,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
+    runtime: &ControllerRuntime,
+) {
+    let Some(resolution) = prepare_resolution(
+        client,
+        svc,
+        default_candidate,
+        default_family,
+        last_applied,
+        observed,
+        runtime,
+    )
+    .await
+    else {
+        return;
+    };
+    let result = query(&resolution).await;
+    finish_resolution(client, svc, resolution, result, last_applied, observed).await;
+}
+
+/// One pass in which every target is due.
 async fn reconcile_once(
     client: &Client,
     namespaces: &[String],
     config: &DnsResolverConfig,
     states: &mut HashMap<String, ServiceDnsState>,
+    runtime: &ControllerRuntime,
 ) -> Result<()> {
-    super::reconcile_with_runtime(client, namespaces, config, states, &ControllerRuntime::default()).await
+    super::reconcile_with_runtime(
+        client,
+        namespaces,
+        config,
+        RefreshGrid::new(Duration::ZERO),
+        states,
+        runtime,
+    )
+    .await
+    .map(|_| ())
+}
+
+struct LinkSysPassthrough;
+
+#[async_trait::async_trait]
+impl crate::conf_mgr::sync_runtime::resource_processor::ProcessorHandler<LinkSys> for LinkSysPassthrough {}
+
+struct ServicePassthrough;
+
+#[async_trait::async_trait]
+impl crate::conf_mgr::sync_runtime::resource_processor::ProcessorHandler<Service> for ServicePassthrough {}
+
+/// A runtime with a ready Service cache whose processed LinkSys cache holds `owners`.
+fn runtime_with_link_sys(owners: impl IntoIterator<Item = LinkSys>) -> Arc<ControllerRuntime> {
+    use crate::conf_mgr::sync_runtime::resource_processor::ProcessorObj;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let services = Arc::new(crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor::<
+        Service,
+    >::new("Service", 16, Arc::new(ServicePassthrough), runtime.clone()));
+    runtime.processor_registry.register(services.clone());
+    services.set_ready();
+    let processor = Arc::new(crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor::<
+        LinkSys,
+    >::new("LinkSys", 16, Arc::new(LinkSysPassthrough), runtime.clone()));
+    for owner in owners {
+        processor.save(owner, None);
+    }
+    runtime.processor_registry.register(processor);
+    runtime
+}
+
+fn resolver_link_sys() -> LinkSys {
+    serde_json::from_value(json!({"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"resolver","namespace":"dns"},"spec":{"type":"httpdns","config":{"preset":"aliyun","connection":{"timeoutMs":0},"fallback":{"type":"none"}}}})).unwrap()
+}
+
+fn with_external_name(service: &Service, external_name: &str) -> Service {
+    let mut service = service.clone();
+    service.spec.as_mut().unwrap().external_name = Some(external_name.into());
+    service
 }
 
 fn can_skip_apply(
@@ -614,40 +789,28 @@ fn dns_grant(runtime: &ControllerRuntime, kind: &str) {
 }
 
 #[tokio::test]
-async fn raw_dns_producer_gates_tenant_before_get_and_preserves_default_authority() {
-    let source = Arc::new(Mutex::new(dns_service("dns/resolver")));
-    let gets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let captured = source.clone();
-    let count = gets.clone();
+async fn dns_producer_gates_tenant_and_preserves_default_authority() {
     let client = Client::new(
-        service_fn(move |request: http::Request<Body>| {
-            let source = captured.lock().clone();
-            let count = count.clone();
-            async move {
-                let path = request.uri().path();
-                let payload = if path.contains("linksys") {
-                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    json!({"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"resolver","namespace":"dns"},"spec":{"type":"httpdns","config":{"preset":"aliyun","connection":{"timeoutMs":0},"fallback":{"type":"none"}}}})
-                } else if path.contains("endpointslices") {
-                    if request.method() == http::Method::PATCH {
-                        serde_json::from_slice(&request.into_body().collect_bytes().await.unwrap()).unwrap()
-                    } else {
-                        json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSliceList","metadata":{},"items":[]})
-                    }
-                } else {
-                    json!({"apiVersion":"v1","kind":"ServiceList","metadata":{},"items":[source]})
-                };
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .header(http::header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
-                        .unwrap(),
-                )
-            }
+        service_fn(move |request: http::Request<Body>| async move {
+            let path = request.uri().path();
+            assert!(path.contains("endpointslices"), "unexpected apiserver request: {path}");
+            let payload = if request.method() == http::Method::PATCH {
+                serde_json::from_slice(&request.into_body().collect_bytes().await.unwrap()).unwrap()
+            } else {
+                json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSliceList","metadata":{},"items":[]})
+            };
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
         }),
         "app",
     );
-    let runtime = ControllerRuntime::default();
+    let runtime = runtime_with_link_sys([resolver_link_sys()]);
+    let mut source = dns_service("dns/resolver");
+    runtime.dns_resolver_targets.sync_published(&source);
     let mut states = HashMap::new();
     let config = DnsResolverConfig {
         enabled: true,
@@ -658,53 +821,34 @@ async fn raw_dns_producer_gates_tenant_before_get_and_preserves_default_authorit
         if let Some(kind) = kind {
             dns_grant(&runtime, kind);
         }
-        let before = gets.load(std::sync::atomic::Ordering::SeqCst);
-        reconcile_with_runtime(&client, &[], &config, &mut states, &runtime)
+        reconcile_once(&client, &[], &config, &mut states, &runtime)
             .await
             .unwrap();
-        assert_eq!(
-            gets.load(std::sync::atomic::Ordering::SeqCst) - before,
-            usize::from(kind == Some("Service"))
-        );
         assert_eq!(states["app/source"].prepared.is_some(), kind == Some("Service"));
     }
     runtime.ref_grant_store.remove("dns/allow");
-    let config = DnsResolverConfig {
+    let default_config = DnsResolverConfig {
         link_sys_ref: Some("dns/resolver".into()),
-        ..config
+        ..config.clone()
     };
-    let before = gets.load(std::sync::atomic::Ordering::SeqCst);
-    reconcile_with_runtime(&client, &[], &config, &mut states, &runtime)
+    reconcile_once(&client, &[], &default_config, &mut states, &runtime)
         .await
         .unwrap();
-    assert_eq!(
-        gets.load(std::sync::atomic::Ordering::SeqCst),
-        before + 1,
+    assert!(
+        states["app/source"].prepared.is_some(),
         "administrative default independently admits the same key"
     );
-    assert!(states["app/source"].prepared.is_some());
     for reference in ["bare", "/resolver", "dns/", "dns/a/b"] {
         source
-            .lock()
             .metadata
             .annotations
             .as_mut()
             .unwrap()
             .insert("edgion.io/dns-resolver-ref".into(), reference.into());
-        let before = gets.load(std::sync::atomic::Ordering::SeqCst);
-        reconcile_with_runtime(
-            &client,
-            &[],
-            &DnsResolverConfig {
-                enabled: true,
-                ..Default::default()
-            },
-            &mut states,
-            &runtime,
-        )
-        .await
-        .unwrap();
-        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), before);
+        runtime.dns_resolver_targets.sync_published(&source);
+        reconcile_once(&client, &[], &config, &mut states, &runtime)
+            .await
+            .unwrap();
         assert!(states["app/source"].prepared.is_none());
     }
 }
@@ -817,10 +961,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
             let before = requests.lock().len();
             resolve_and_apply(
                 &client,
-                &service,
-                "app",
-                "source",
-                address,
+                &with_external_name(&service, address),
                 &None,
                 DnsLookupFamily::All,
                 &mut states,
@@ -844,10 +985,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
         fail.store(true, std::sync::atomic::Ordering::SeqCst);
         resolve_and_apply(
             &client,
-            &service,
-            "app",
-            "source",
-            address,
+            &with_external_name(&service, address),
             &None,
             DnsLookupFamily::All,
             &mut states,
@@ -859,10 +997,7 @@ async fn actual_slice_apply_repairs_uid_and_each_required_family_and_retries_fai
         fail.store(false, std::sync::atomic::Ordering::SeqCst);
         resolve_and_apply(
             &client,
-            &service,
-            "app",
-            "source",
-            address,
+            &with_external_name(&service, address),
             &None,
             DnsLookupFamily::All,
             &mut states,
@@ -924,10 +1059,10 @@ fn dual_family_skip_requires_both_current_owned_records() {
 }
 
 #[tokio::test]
-async fn producer_validation_off_still_rejects_invalid_identity_before_get() {
+async fn producer_validation_off_still_rejects_invalid_identity_before_lookup() {
     const CHILD: &str = "EDGION_R6A_PRODUCER_VALIDATION_OFF_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","services::dns_resolver::service::tests::producer_validation_off_still_rejects_invalid_identity_before_get","--nocapture"]).env(CHILD,"1").output().unwrap();
+        let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","services::dns_resolver::service::tests::producer_validation_off_still_rejects_invalid_identity_before_lookup","--nocapture"]).env(CHILD,"1").output().unwrap();
         assert!(
             output.status.success(),
             "{} {}",
@@ -940,35 +1075,19 @@ async fn producer_validation_off_still_rejects_invalid_identity_before_get() {
     let mut config = crate::config::EdgionControllerConfig::default();
     config.validation.enable_reference_grant_validation = false;
     crate::config::init_controller_config(config);
-    let gets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let count = gets.clone();
-    let client = Client::new(
-        service_fn(move |request: http::Request<Body>| {
-            let count = count.clone();
-            async move {
-                assert!(request.uri().path().contains("linksys"));
-                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok::<_,Infallible>(Response::builder().status(404).header(http::header::CONTENT_TYPE,"application/json").body(Body::from(serde_json::to_vec(&json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","message":"fixture","code":404})).unwrap())).unwrap())
-            }
-        }),
-        "app",
-    );
-    let runtime = ControllerRuntime::default();
+    let runtime = runtime_with_link_sys([resolver_link_sys()]);
     let mut source = dns_service("dns/resolver");
     let mut state = ServiceDnsState::default();
-    assert!(matches!(
-        effective_spec(
-            &client,
-            service_resolver_candidate(&source, &runtime),
-            &None,
-            &mut state
-        )
-        .await,
-        ResolverSpec::System
-    ));
-    assert_eq!(
-        gets.load(std::sync::atomic::Ordering::SeqCst),
-        1,
+    assert!(
+        matches!(
+            effective_spec(
+                &runtime,
+                service_resolver_candidate(&source, &runtime),
+                &None,
+                &mut state
+            ),
+            ResolverSpec::HttpDns(_)
+        ),
         "valid cross-namespace target reaches lookup without a Grant"
     );
     for case in ["owner", "target"] {
@@ -983,17 +1102,18 @@ async fn producer_validation_off_still_rejects_invalid_identity_before_get() {
                 .unwrap()
                 .insert("edgion.io/dns-resolver-ref".into(), "dns/a/b".into());
         }
-        assert!(matches!(
-            effective_spec(
-                &client,
-                service_resolver_candidate(&source, &runtime),
-                &None,
-                &mut state
-            )
-            .await,
-            ResolverSpec::System
-        ));
-        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            matches!(
+                effective_spec(
+                    &runtime,
+                    service_resolver_candidate(&source, &runtime),
+                    &None,
+                    &mut state
+                ),
+                ResolverSpec::System
+            ),
+            "{case}"
+        );
     }
 }
 
@@ -1547,10 +1667,7 @@ async fn policy_withdrawal_precedes_failed_dns_and_invalid_policy_permits_no_que
         let mut states = HashMap::new();
         resolve_and_apply(
             &client,
-            &service,
-            "app",
-            "source",
-            forbidden_literal,
+            &with_external_name(&service, forbidden_literal),
             &None,
             DnsLookupFamily::All,
             &mut states,
@@ -1604,10 +1721,7 @@ async fn failed_policy_withdrawal_stays_pending_while_allowed_family_is_publishe
     let mut states = HashMap::new();
     resolve_and_apply(
         &client,
-        &service,
-        "app",
-        "source",
-        "192.0.2.2",
+        &with_external_name(&service, "192.0.2.2"),
         &None,
         DnsLookupFamily::Ipv4Only,
         &mut states,
@@ -1623,10 +1737,7 @@ async fn failed_policy_withdrawal_stays_pending_while_allowed_family_is_publishe
     delete_code.store(200, Ordering::SeqCst);
     resolve_and_apply(
         &client,
-        &service,
-        "app",
-        "source",
-        "192.0.2.2",
+        &with_external_name(&service, "192.0.2.2"),
         &None,
         DnsLookupFamily::Ipv4Only,
         &mut states,

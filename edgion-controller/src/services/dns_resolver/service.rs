@@ -1,9 +1,13 @@
 //! Control-plane DNS resolver service.
 //!
 //! A leader-only background loop (started alongside the ACME service, K8s
-//! conf_center mode only) that, on an interval, resolves `mode=controller`
-//! ExternalName Services via their effective resolver and writes a **real**
-//! `EndpointSlice` to the apiserver. That slice flows to the gateway through the
+//! conf_center mode only) that resolves `mode=controller` ExternalName Services
+//! via their effective resolver and writes a **real** `EndpointSlice` to the
+//! apiserver. Its work set is the
+//! [`DnsResolverTargets`](super::targets::DnsResolverTargets) table maintained by
+//! `ServiceHandler` from the processed Service cache, and httpdns owners come
+//! from the processed LinkSys cache, so the loop never lists Services or reads
+//! LinkSys objects from the apiserver. The published slice flows to the gateway through the
 //! existing reflector → conf_sync → EndpointSlice-LB path, giving the
 //! "control-plane resolves centrally, multi-address LB" behavior (Envoy
 //! STRICT_DNS-like).
@@ -17,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::{Service, ServicePort};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
@@ -33,9 +38,7 @@ use edgion_common::dns::{
     resolve, DnsLookupFamily, DnsQueryPolicy, HttpDnsCandidate, PreparedHttpDns, ResolverSpec, StandardDnsServers,
 };
 use edgion_common::time::now_rfc3339;
-use edgion_resources::constants::annotations::edgion::{
-    DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION,
-};
+use edgion_resources::constants::annotations::edgion::{DNS_LOOKUP_FAMILY, DNS_RESOLVER as DNS_RESOLVER_ANNOTATION};
 use edgion_resources::constants::labels::dns::{MANAGED_BY_VALUE, SYNTHETIC};
 use edgion_resources::constants::labels::k8s::{ENDPOINTSLICE_MANAGED_BY, SERVICE_NAME};
 use edgion_resources::resources::link_sys::LinkSys;
@@ -43,17 +46,22 @@ use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 
 use crate::config::{dns_resolver_config, DnsResolverConfig};
 
-use super::slice_builder::{
-    build_endpoint_slices, decide_action, endpoint_ports, managed_by_selector, slice_name, SliceAction, FIELD_MANAGER,
-};
+use super::slice_builder::{build_endpoint_slices, endpoint_ports, managed_by_selector, slice_name, FIELD_MANAGER};
 
 /// Fallback tick interval when the configured `refresh_interval` is unparseable.
 const DEFAULT_REFRESH: Duration = Duration::from_secs(15);
 
-/// Lower bound on the tick interval. A tiny interval would hammer the apiserver
-/// (list-all Services + resolve + patch storm), so anything below this is clamped
-/// up. Also enforced at config load (`DnsResolverConfig::validate`).
+/// Lower bound on the refresh interval and on the spacing between passes. A tiny
+/// interval would turn the loop into a resolve + patch storm, so anything below
+/// this is clamped up. Also enforced at config load (`DnsResolverConfig::validate`).
 const MIN_REFRESH: Duration = Duration::from_secs(1);
+
+/// Upper bound on concurrent DNS queries within one pass.
+const MAX_CONCURRENT_RESOLUTIONS: usize = 8;
+
+/// Per-query deadline, so one unreachable resolver cannot hold a pass open.
+/// Resolver-level timeouts normally fire first.
+const RESOLVE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Handle to the running resolver loop. Stores an `AbortHandle` (not the
 /// `JoinHandle` — the supervision observer owns that, and `JoinHandle` is not
@@ -117,6 +125,10 @@ pub fn stop_dns_resolver_service() {
 struct ServiceDnsState {
     applied_fingerprint: Option<String>,
     prepared: Option<(LinkSysKey, Arc<PreparedHttpDns>)>,
+    /// Target revision handled by the last pass; a different revision is due now.
+    target_revision: Option<u64>,
+    /// Next scheduled refresh.
+    next_due: Option<tokio::time::Instant>,
 }
 
 impl ServiceDnsState {
@@ -138,8 +150,9 @@ impl ServiceDnsState {
     }
 }
 
-/// The loop body. Ticks on `refresh_interval` and reconciles every tick.
+/// The loop body. Wakes when a target is due or the target table changes.
 async fn run(client: Client, watch_namespaces: Vec<String>, runtime: Arc<ControllerRuntime>) {
+    // Controller configuration is loaded once at process startup.
     let config = dns_resolver_config();
     let period = parse_refresh_interval(&config.refresh_interval);
     tracing::info!(
@@ -149,50 +162,123 @@ async fn run(client: Client, watch_namespaces: Vec<String>, runtime: Arc<Control
         "DNS resolver loop running"
     );
 
-    let mut ticker = tokio::time::interval(period);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-    // Per-service fingerprint (sorted IPs + ports) of the last slice content we
-    // applied. Lets a tick skip the SSA write when nothing changed, avoiding
-    // data-plane churn every interval. Empty after a (re)start → the first tick
-    // reconciles everything from scratch.
+    // Per-service publication state. Empty after a (re)start, so the first pass
+    // reconciles every target from scratch.
     let mut last_applied: HashMap<String, ServiceDnsState> = HashMap::new();
+    let grid = RefreshGrid::new(period);
+    let mut next_wake = tokio::time::Instant::now();
+    let mut last_pass: Option<tokio::time::Instant> = None;
 
     loop {
-        ticker.tick().await;
-        // Controller configuration is loaded once at process startup.
-        let config = dns_resolver_config();
-        if let Err(e) = reconcile_with_runtime(&client, &watch_namespaces, &config, &mut last_applied, &runtime).await {
-            tracing::warn!(
-                component = "dns_resolver_service",
-                error = %format!("{e:#}"),
-                "DNS resolver tick failed"
-            );
+        tokio::select! {
+            _ = tokio::time::sleep_until(next_wake) => {}
+            _ = runtime.dns_resolver_targets.changed() => {}
         }
+        // Coalesce bursts of target changes (for example the initial cache load).
+        if let Some(last) = last_pass {
+            tokio::time::sleep_until(last + MIN_REFRESH).await;
+        }
+        let now = tokio::time::Instant::now();
+        last_pass = Some(now);
+
+        // An empty table before the Service cache is ready must not GC slices.
+        if !service_cache_ready(&runtime) {
+            next_wake = grid.next_after(now);
+            continue;
+        }
+        next_wake = match reconcile_with_runtime(&client, &watch_namespaces, &config, grid, &mut last_applied, &runtime)
+            .await
+        {
+            Ok(next) => next,
+            Err(e) => {
+                tracing::warn!(
+                    component = "dns_resolver_service",
+                    error = %format!("{e:#}"),
+                    "DNS resolver pass failed"
+                );
+                grid.next_after(now)
+            }
+        };
     }
 }
 
-/// One reconcile pass over all Services.
+fn service_cache_ready(runtime: &ControllerRuntime) -> bool {
+    runtime
+        .processor_registry
+        .get("Service")
+        .is_some_and(|processor| processor.is_ready())
+}
+
+/// Shared refresh schedule anchored at loop start. Every due instant sits on
+/// this grid, so targets added at different times converge on the same passes
+/// instead of each starting its own phase.
+#[derive(Clone, Copy)]
+struct RefreshGrid {
+    epoch: tokio::time::Instant,
+    period: Duration,
+}
+
+impl RefreshGrid {
+    fn new(period: Duration) -> Self {
+        Self {
+            epoch: tokio::time::Instant::now(),
+            period,
+        }
+    }
+
+    /// First grid instant strictly after `now`; `now` itself for a zero period.
+    fn next_after(&self, now: tokio::time::Instant) -> tokio::time::Instant {
+        if self.period.is_zero() {
+            return now;
+        }
+        let elapsed = now.saturating_duration_since(self.epoch);
+        let ticks = elapsed.as_nanos() / self.period.as_nanos() + 1;
+        let offset = u32::try_from(ticks)
+            .ok()
+            .and_then(|ticks| self.period.checked_mul(ticks))
+            .unwrap_or(self.period);
+        self.epoch + offset
+    }
+}
+
+/// Next refresh for a Service handled now. DNS TTLs are not yet surfaced by
+/// `edgion_common::dns::resolve`, so every Service refreshes on the grid.
+fn next_refresh(now: tokio::time::Instant, grid: RefreshGrid) -> tokio::time::Instant {
+    grid.next_after(now)
+}
+
+/// A due Service whose DNS query may run concurrently with others.
+struct PendingResolution {
+    spec: ResolverSpec,
+    external_name: String,
+    family: DnsLookupFamily,
+    ports: Vec<ServicePort>,
+    policy_cleanup_ok: bool,
+}
+
+/// One reconcile pass over the due targets. Returns the next wake instant.
 ///
-/// Two phases: (1) resolve+apply a slice for every controller-mode ExternalName
-/// Service, recording its key in `desired`; (2) GC every resolver-owned slice
-/// whose Service is not in `desired` (mode switched away, type changed off
-/// ExternalName, disabled, or Service deleted). Phase 2 is what catches a Service
-/// edited off ExternalName — the ownerReference alone only covers actual Service
+/// Three phases: (1) prepare every due target serially (policy withdrawal and
+/// resolver selection, which may write); (2) run the DNS queries concurrently
+/// with bounded fan-out and a per-query deadline; (3) publish each result
+/// serially as it arrives, then GC every resolver-owned slice whose Service is no longer a
+/// target (mode switched away, type changed off ExternalName, disabled, or
+/// Service deleted). The ownerReference alone only covers actual Service
 /// deletion, not an in-place type change.
 ///
 /// The set of resolver-owned slices is listed ONCE up front and reused for both
 /// the GC pass and the `observed` existence check that gates the churn-skip
-/// (`resolve_and_apply`): without the existence check, a slice deleted
+/// (`apply_resolved_slices`): without the existence check, a slice deleted
 /// out-of-band while the resolved IPs are unchanged would never be recreated
-/// (the input fingerprint would still match). Listing first heals it in-tick.
+/// (the input fingerprint would still match).
 async fn reconcile_with_runtime(
     client: &Client,
     watch_namespaces: &[String],
     config: &DnsResolverConfig,
+    grid: RefreshGrid,
     last_applied: &mut HashMap<String, ServiceDnsState>,
     runtime: &ControllerRuntime,
-) -> Result<()> {
+) -> Result<tokio::time::Instant> {
     let owned = list_owned_slices(client, watch_namespaces).await?;
     let observed: HashMap<(&str, &str), &EndpointSlice> = owned
         .iter()
@@ -203,59 +289,84 @@ async fn reconcile_with_runtime(
             ))
         })
         .collect();
-    let services = list_services(client, watch_namespaces).await?;
 
+    let now = tokio::time::Instant::now();
+    // Targets due within this window join the pass instead of waking it again.
+    let horizon = now + MIN_REFRESH;
+    let targets = runtime.dns_resolver_targets.snapshot();
+    // A runtime reset clears processors before the table, so an empty snapshot
+    // taken during leadership loss fails this check and never reaches GC.
+    if !service_cache_ready(runtime) {
+        return Ok(grid.next_after(now));
+    }
+    let desired: HashSet<String> = targets.iter().map(|(key, _)| key.clone()).collect();
     let default_candidate = controller_default_candidate(config);
-    let mut desired: HashSet<String> = HashSet::new();
 
-    for svc in services {
-        let namespace = svc.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
-        let Some(name) = svc.metadata.name.clone() else {
+    let mut pending = Vec::new();
+    for (key, target) in targets {
+        let state = last_applied.entry(key).or_default();
+        let unchanged = state.target_revision == Some(target.revision);
+        if unchanged && state.next_due.is_some_and(|due| due > horizon) {
             continue;
-        };
-
-        let external_name = svc
-            .spec
-            .as_ref()
-            .filter(|s| s.type_.as_deref() == Some("ExternalName"))
-            .and_then(|s| s.external_name.clone());
-        let is_external_name = external_name.is_some();
-
-        let mode_value = svc
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| a.get(DNS_RESOLUTION_MODE))
-            .map(String::as_str);
-
-        // Only `Resolve` produces/keeps a slice; `GarbageCollect`/`Skip` are left
-        // to the owned-slice GC pass below (which also handles deleted Services).
-        if decide_action(config.enabled, is_external_name, mode_value) == SliceAction::Resolve {
-            desired.insert(format!("{namespace}/{name}"));
-            // Safe: `is_external_name` gated the Resolve arm.
-            let external_name = external_name.unwrap_or_default();
-            resolve_and_apply(
-                client,
-                &svc,
-                &namespace,
-                &name,
-                &external_name,
-                &default_candidate,
-                config.lookup_family,
-                last_applied,
-                &observed,
-                runtime,
-            )
-            .await;
+        }
+        state.target_revision = Some(target.revision);
+        // Measured from the horizon: a target pulled forward into this pass must
+        // not come due again at the grid tick the horizon already covered.
+        state.next_due = Some(next_refresh(horizon, grid));
+        let service = target.service;
+        if let Some(resolution) = prepare_resolution(
+            client,
+            &service,
+            &default_candidate,
+            config.lookup_family,
+            last_applied,
+            &observed,
+            runtime,
+        )
+        .await
+        {
+            pending.push((service, resolution));
         }
     }
 
-    gc_orphaned_slices(client, &owned, &desired, last_applied).await;
-    Ok(())
+    // Publish each answer as it arrives so a slow resolver delays only itself.
+    let mut resolved = futures::stream::iter(pending.into_iter().map(|(service, resolution)| async move {
+        let result = query(&resolution).await;
+        (service, resolution, result)
+    }))
+    .buffer_unordered(MAX_CONCURRENT_RESOLUTIONS);
+    while let Some((service, resolution, result)) = resolved.next().await {
+        finish_resolution(client, &service, resolution, result, last_applied, &observed).await;
+    }
+
+    if service_cache_ready(runtime) {
+        gc_orphaned_slices(client, &owned, &desired, last_applied).await;
+    }
+    Ok(last_applied
+        .values()
+        .filter_map(|state| state.next_due)
+        .min()
+        .unwrap_or_else(|| next_refresh(now, grid)))
 }
 
+async fn query(resolution: &PendingResolution) -> Result<Vec<IpAddr>, String> {
+    let lookup = resolve(
+        &resolution.spec,
+        &resolution.external_name,
+        DnsQueryPolicy::Family(resolution.family),
+    );
+    match tokio::time::timeout(RESOLVE_DEADLINE, lookup).await {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err(format!("deadline of {}s exceeded", RESOLVE_DEADLINE.as_secs())),
+    }
+}
+
+/// List resolver-owned slices from the apiserver watch cache (`resourceVersion=0`).
+/// The Controller's EndpointSlice cache is not used: the operator-configured
+/// global label selector applies to it, and resolver-owned slices do not carry
+/// operator labels.
 async fn list_owned_slices(client: &Client, watch_namespaces: &[String]) -> Result<Vec<EndpointSlice>> {
-    let params = ListParams::default().labels(&managed_by_selector());
+    let params = ListParams::default().labels(&managed_by_selector()).match_any();
     if watch_namespaces.is_empty() {
         return Ok(Api::<EndpointSlice>::all(client.clone()).list(&params).await?.items);
     }
@@ -272,41 +383,27 @@ async fn list_owned_slices(client: &Client, watch_namespaces: &[String]) -> Resu
     Ok(items)
 }
 
-async fn list_services(client: &Client, watch_namespaces: &[String]) -> Result<Vec<Service>> {
-    let params = ListParams::default();
-    if watch_namespaces.is_empty() {
-        return Ok(Api::<Service>::all(client.clone()).list(&params).await?.items);
-    }
-
-    let mut items = Vec::new();
-    for namespace in watch_namespaces {
-        items.extend(
-            Api::<Service>::namespaced(client.clone(), namespace)
-                .list(&params)
-                .await?
-                .items,
-        );
-    }
-    Ok(items)
-}
-
-/// Resolve one ExternalName Service and apply its EndpointSlice(s).
+/// Serial preparation: withdraw policy-forbidden families, then select the
+/// resolver. `None` when there is nothing to query.
 ///
 /// On resolution failure only families allowed by the current policy retain
 /// last-good slices. Policy withdrawals run before resolver or DNS I/O.
-#[allow(clippy::too_many_arguments)]
-async fn resolve_and_apply(
+async fn prepare_resolution(
     client: &Client,
     svc: &Service,
-    namespace: &str,
-    name: &str,
-    external_name: &str,
     default_candidate: &Option<ResolverCandidate>,
     default_family: DnsLookupFamily,
     last_applied: &mut HashMap<String, ServiceDnsState>,
     observed: &HashMap<(&str, &str), &EndpointSlice>,
     runtime: &ControllerRuntime,
-) {
+) -> Option<PendingResolution> {
+    let name = svc.metadata.name.as_deref()?;
+    let namespace = svc.metadata.namespace.as_deref().unwrap_or("default");
+    let external_name = svc
+        .spec
+        .as_ref()
+        .filter(|spec| spec.type_.as_deref() == Some("ExternalName"))
+        .and_then(|spec| spec.external_name.clone())?;
     let service_key = format!("{namespace}/{name}");
 
     let family = service_lookup_family(svc, default_family);
@@ -320,7 +417,7 @@ async fn resolve_and_apply(
             last_applied.entry(service_key.clone()).or_default().applied_fingerprint = None;
             tracing::warn!(component = "dns_resolver_service", service = %service_key, error,
                 "Invalid DNS family policy; withdrawing resolver-owned endpoints without querying");
-            return;
+            return None;
         }
     };
 
@@ -333,7 +430,7 @@ async fn resolve_and_apply(
             service = %service_key,
             "ExternalName Service declares no ports; skipping (gateway will self-resolve)"
         );
-        return;
+        return None;
     }
 
     if svc.metadata.uid.is_none() {
@@ -342,21 +439,39 @@ async fn resolve_and_apply(
             service = %service_key,
             "Service missing uid; skipping (cannot set ownerReference)"
         );
-        return;
+        return None;
     }
 
-    let state = last_applied.entry(service_key.clone()).or_default();
+    let state = last_applied.entry(service_key).or_default();
     let candidate = service_resolver_candidate(svc, runtime);
-    let spec = effective_spec(client, candidate, default_candidate, state).await;
+    let spec = effective_spec(runtime, candidate, default_candidate, state);
+    Some(PendingResolution {
+        spec,
+        external_name,
+        family,
+        ports,
+        policy_cleanup_ok,
+    })
+}
 
-    let mut ips = match resolve(&spec, external_name, DnsQueryPolicy::Family(family)).await {
+/// Serial publication of one query result.
+async fn finish_resolution(
+    client: &Client,
+    svc: &Service,
+    resolution: PendingResolution,
+    result: Result<Vec<IpAddr>, String>,
+    last_applied: &mut HashMap<String, ServiceDnsState>,
+    observed: &HashMap<(&str, &str), &EndpointSlice>,
+) {
+    let mut ips = match result {
         Ok(ips) => ips,
-        Err(e) => {
+        Err(error) => {
             tracing::warn!(
                 component = "dns_resolver_service",
-                service = %service_key,
-                external_name = %external_name,
-                error = %e,
+                namespace = svc.metadata.namespace.as_deref().unwrap_or("default"),
+                service = svc.metadata.name.as_deref().unwrap_or(""),
+                external_name = %resolution.external_name,
+                error = %error,
                 "DNS resolution failed; keeping last-good EndpointSlice"
             );
             return;
@@ -365,10 +480,10 @@ async fn resolve_and_apply(
     apply_resolved_slices(
         client,
         svc,
-        &ports,
+        &resolution.ports,
         &mut ips,
-        family,
-        policy_cleanup_ok,
+        resolution.family,
+        resolution.policy_cleanup_ok,
         last_applied,
         observed,
     )
@@ -562,22 +677,17 @@ fn owned_slice_service_key(slice: &EndpointSlice) -> Option<String> {
 
 /// Compute the control-plane effective resolver for a Service: Service
 /// annotation → Controller-YAML default (control-plane precedence — no Gateway /
-/// EGC layers). httpdns refs are resolved against the apiserver LinkSys objects.
-///
-/// NOTE: resolved secret material (mTLS client certs on an httpdns
-/// `connection.tls`) is NOT populated here — this reads the raw LinkSys CR, whose
-/// resolved-secret fields are `#[schemars(skip)]` and filled only on the
-/// conf_sync path. A plain-HTTP(S) httpdns endpoint resolves fine; an mTLS one
-/// degrades to the config's `fallback` (see `edgion_common::dns::resolve`).
-async fn effective_spec(
-    client: &Client,
+/// EGC layers). httpdns refs resolve against the processed LinkSys cache, which
+/// carries the controller-resolved TLS material.
+fn effective_spec(
+    runtime: &ControllerRuntime,
     service_candidate: Option<ResolverCandidate>,
     default_candidate: &Option<ResolverCandidate>,
     state: &mut ServiceDnsState,
 ) -> ResolverSpec {
     let layers = [service_candidate.as_ref(), default_candidate.as_ref()];
     let prepared = match layers.iter().flatten().next() {
-        Some(ResolverCandidate::HttpDnsRef(key)) => match fetch_httpdns_owner(client, key).await {
+        Some(ResolverCandidate::HttpDnsRef(key)) => match processed_httpdns_owner(runtime, key) {
             Some(owner) => state.prepare(key, owner),
             None => {
                 state.prepared = None;
@@ -594,33 +704,22 @@ async fn effective_spec(
 
 /// Resolve the Controller-wide default through the same precedence and
 /// LinkSys lookup used by the ExternalName reconciliation service.
-pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec {
+pub(crate) fn controller_default_resolver(runtime: &ControllerRuntime) -> ResolverSpec {
     let config = dns_resolver_config();
     let default_candidate = controller_default_candidate(&config);
-    effective_spec(client, None, &default_candidate, &mut ServiceDnsState::default()).await
+    effective_spec(runtime, None, &default_candidate, &mut ServiceDnsState::default())
 }
 
-/// Kube-less fallback for persist-off acquisition on FS/etcd.
-///
-/// Reuses the Controller default candidate. An `HttpDnsRef` cannot be fetched
-/// from the apiserver here, so `resolve_effective_spec` fails safe to the
-/// system resolver (same dangling-ref behavior as a missing LinkSys).
-pub(crate) fn controller_default_resolver_without_kube() -> ResolverSpec {
-    let config = dns_resolver_config();
-    let default_candidate = controller_default_candidate(&config);
-    resolve_effective_spec(&[default_candidate.as_ref()], |_| None)
-}
-
-/// Fetch an actual httpdns LinkSys owner from the apiserver. Returns `None`
-/// when the object is missing or is not an httpdns LinkSys (a dangling ref then
-/// fails safe to the system resolver in `resolve_effective_spec`).
-async fn fetch_httpdns_owner(client: &Client, key: &LinkSysKey) -> Option<Arc<LinkSys>> {
-    let api: Api<LinkSys> = Api::namespaced(client.clone(), &key.namespace);
-    match api.get(&key.name).await {
-        Ok(ls) if ls.spec.config.as_http_dns().is_some() => Some(Arc::new(ls)),
-        Ok(_) => None,
-        Err(_) => None,
-    }
+/// Look up a processed httpdns LinkSys owner. Returns `None` when the object is
+/// absent or is not an httpdns LinkSys (a dangling ref then fails safe to the
+/// system resolver in `resolve_effective_spec`).
+fn processed_httpdns_owner(runtime: &ControllerRuntime, key: &LinkSysKey) -> Option<Arc<LinkSys>> {
+    let cached = runtime
+        .processor_registry
+        .get("LinkSys")?
+        .get_cached_any(&format!("{}/{}", key.namespace, key.name))?;
+    let owner = cached.downcast::<LinkSys>().ok()?;
+    owner.spec.config.as_http_dns().is_some().then_some(owner)
 }
 
 /// Build the control-plane default resolver candidate from Controller config.
