@@ -222,17 +222,17 @@ SCOPED_EXCEPTIONS = {
         "associated helper installs the per-handler status-read scheduling barrier",
     ("edgion-controller", Path("conf_mgr/conf_center/etcd/status.rs"), re.compile(r"if let Some\(\(entered, release\)\) = &self\.read_barrier \{")):
         "pause at the real status-read await boundary without replacing the read result",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: bool,")):
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"(?:pub\(super\) )?force_unpruned_inspection: bool,")):
         "test-only switch for the unpruned inspection oracle",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_unpruned_inspection: self\.force_unpruned_inspection,")):
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"force_unpruned_inspection: self\.force_unpruned_inspection,")):
         "test-only oracle switch preserved by canonical TX clone policies",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::GroupScratchInitializations\b")):
+    ("edgion-waf", Path("seclang/transaction/selection.rs"), re.compile(r"measurements::record\(Event::GroupScratchInitializations\b")):
         "test-only matcher cache first-use measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::BooleanScratchInitializations\b")):
+    ("edgion-waf", Path("seclang/transaction/selection.rs"), re.compile(r"measurements::record\(Event::BooleanScratchInitializations\b")):
         "test-only boolean cache first-use measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::CaptureScratchInitializations\b")):
+    ("edgion-waf", Path("seclang/transaction/selection.rs"), re.compile(r"measurements::record\(Event::CaptureScratchInitializations\b")):
         "test-only capture cache first-use measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::CaptureBooleanSearches\b")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"measurements::record\(Event::CaptureBooleanSearches\b")):
         "test-only original capture hit-search count at the owning operation",
     ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::NameSelectorSearches\b")):
         "test-only raw-name selector search count at the owning operation",
@@ -240,7 +240,7 @@ SCOPED_EXCEPTIONS = {
         "test-only branch bypassing optional static activation proof",
     ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"measurements::record\(Event::AvoidedPredicateGroups\b")):
         "test-only skipped static group measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::UnitTxClones\b")):
+    ("edgion-waf", Path("seclang/transaction/storage.rs"), re.compile(r"measurements::record\(Event::UnitTxClones\b")):
         "test-only accounting of new-unit TX clones after first-member matching",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"sequential_ascii: bool,")):
         "test-only switch for the sequential lexical oracle",
@@ -248,13 +248,13 @@ SCOPED_EXCEPTIONS = {
         "test-only sequential lexical oracle initializer",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"if self\.sequential_ascii \{")):
         "test-only branch into the source-relative sequential lexical oracle",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"fn evaluate_member_matches\(")):
+    ("edgion-waf", Path("seclang/transaction/units.rs"), re.compile(r"(?:pub\(super\) )?fn evaluate_member_matches\(")):
         "test-only associated wrapper over the production reusable match buffer",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_json_cursor: bool,")):
+    ("edgion-waf", Path("seclang/transaction/mod.rs"), re.compile(r"force_json_cursor: bool,")):
         "test-only switch for the canonical JSON cursor oracle",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"force_json_cursor: false,")):
+    ("edgion-waf", Path("seclang/transaction/mod.rs"), re.compile(r"force_json_cursor: false,")):
         "test-only canonical JSON cursor oracle initializer",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"if self\.force_json_cursor \{")):
+    ("edgion-waf", Path("seclang/transaction/units.rs"), re.compile(r"if self\.force_json_cursor \{")):
         "test-only branch bypassing optional JSON summary replay",
     ("edgion-waf", Path("seclang/json_stream.rs"), re.compile(r"measurements::record\(Event::Completions\b")):
         "test-only JSON mechanism measurement at the owning operation",
@@ -302,19 +302,19 @@ SCOPED_EXCEPTIONS = {
         "test-only JSON mechanism measurement at the owning operation",
     ("edgion-waf", Path("seclang/json_inspection_runtime.rs"), re.compile(r"measurements::record\(Event::StructureWork\b")):
         "test-only JSON mechanism measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::FullScans\b")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"measurements::record\(Event::FullScans\b")):
         "test-only JSON mechanism measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::RangeQueries\b")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"measurements::record\(Event::RangeQueries\b")):
         "test-only JSON mechanism measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::RangeQueryFailures\b")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"measurements::record\(Event::RangeQueryFailures\b")):
         "test-only JSON mechanism measurement at the owning operation",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"measurements::record\(Event::TemporaryCaptureCopyBytes\b")):
+    ("edgion-waf", Path("seclang/transaction/predicate.rs"), re.compile(r"measurements::record\(Event::TemporaryCaptureCopyBytes\b")):
         "test-only JSON mechanism measurement at the owning operation",
     ("edgion-waf", Path("seclang/json_inspection_collector.rs"), re.compile(r"let dispatch_work_before = self\.store\.usage\(\)\.work;")):
         "test-only snapshot of existing dispatch work accounting",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"scans:\s*usize\b")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"(?:pub\(super\) )?scans:\s*usize\b")):
         "test-only successful cache scan counter field",
-    ("edgion-waf", Path("seclang/transaction.rs"), re.compile(r"\{\s*cache\.scans \+= 1;")):
+    ("edgion-waf", Path("seclang/transaction/operators.rs"), re.compile(r"\{\s*cache\.scans \+= 1;")):
         "test-only successful cache scan counter update",
     ("edgion-controller", Path("conf_mgr/conf_center/common.rs"), re.compile(r"let crd_dir\b")):
         "test-only CRD path fallback inside parse_resource_content_offline",

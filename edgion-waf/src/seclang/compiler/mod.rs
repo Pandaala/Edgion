@@ -53,7 +53,7 @@ use work::*;
 pub(crate) use canonical::CanonicalWork;
 pub use generation::{CompiledGeneration, CompiledScheduleEntryKind};
 
-#[path = "../transaction.rs"]
+#[path = "../transaction/mod.rs"]
 mod transaction;
 
 pub use transaction::{

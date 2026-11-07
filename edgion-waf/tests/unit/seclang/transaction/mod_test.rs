@@ -5785,7 +5785,7 @@ fn unpruned_oracle_survives_both_explicit_clone_policies() {
 
 #[test]
 fn optional_check_policy_survives_unpruned_inspection_and_chain_clones() {
-    let original = include_str!("../../fixtures/expensive-checks-crs-4.25.1.conf");
+    let original = include_str!("../../../fixtures/expensive-checks-crs-4.25.1.conf");
     let g = generation(&format!("{original}SecRule ARGS_NAMES \"@rx .\" \"id:20,phase:2,pass,chain\"\nSecRule ARGS \"@contains attack\" \"setvar:tx.chain=matched\"\n"));
     assert!(g.has_expensive_checks);
     let headers = [RequestHeader::new(b"content-type", b"application/json")];
