@@ -218,6 +218,8 @@ run_helper_case success proxy_protocol_chain 0 \
 grep -q 'app.kubernetes.io/name: edgion-proxy-gateway' \
   "${TEST_ROOT}/success-proxy_protocol_chain/proxy_protocol_chain/conf/Service_edgion-test_chain-hop2.yaml"
 grep -q '"10.244.0.0/16"' \
+  "${TEST_ROOT}/success-proxy_protocol_chain/proxy_protocol_chain/conf/EdgionConfigData_edgion-test_chain-realip-proxies.yaml"
+grep -q 'name: chain-realip-proxies' \
   "${TEST_ROOT}/success-proxy_protocol_chain/proxy_protocol_chain/conf/EdgionGatewayConfig__chain-egc.yaml"
 
 run_helper_case client_failure proxy_protocol_inbound 1 \
@@ -284,11 +286,11 @@ case "$url" in
   http://edgion-haproxy:58540/headers)
     printf '{"headers":{"x-forwarded-for":"%s, 127.0.0.1","x-edgion-remote-ip":"%s"}}' "$identity" "$identity"
     ;;
-  http://edgion-gateway:58430/headers)
+  http://edgion-gateway:28430/headers)
     if [[ "$joined" == *" -w "* ]]; then printf '000'; fi
     exit 52
     ;;
-  http://edgion-gateway:58431/headers)
+  http://edgion-gateway:28431/headers)
     printf '{"headers":{"x-forwarded-for":"%s"}}' "$identity"
     ;;
   *)

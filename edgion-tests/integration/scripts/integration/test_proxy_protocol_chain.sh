@@ -9,7 +9,7 @@
 # nothing about whether the address then reaches a SECOND gateway, which is the
 # deployment this feature was actually asked for.
 #
-#   client 172.29.0.100 → haproxy (send-proxy-v2) → gw1 :58530 → gw2 :58531
+#   client 172.29.0.100 → haproxy (send-proxy-v2) → gw1 :28530 → gw2 :28531
 #                                                                    ↓
 #                                                     test_server :30062 /headers
 #

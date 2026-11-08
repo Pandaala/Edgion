@@ -5,8 +5,7 @@ use clap::Args;
 use edgion_resources::rate_limit_local_config::RateLimitLocalGlobalConfig;
 use edgion_resources::resources::common::parse_byte_size;
 use edgion_resources::resources::edgion_plugins::{
-    validate_tiny_ufo_effective_limits, LruCacheConfig, TinyUfoTtlCacheConfig, MAX_LRU_CACHE_CAPACITY,
-    MAX_LRU_CACHE_SHARDS,
+    validate_tiny_ufo_effective_limits, TinyUfoTtlCacheConfig, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS,
 };
 use edgion_resources::LogConfig;
 use serde::{Deserialize, Serialize};
@@ -1059,8 +1058,8 @@ fn default_lru_cache_capacity() -> usize {
     DEFAULT_LRU_CACHE_CAPACITY
 }
 
-/// Global LRU cache configuration for plugins.
-/// Per-plugin `capacity = 0` falls back to this value.
+/// Process-wide LRU cache defaults for the remaining `ShardedLruCache` users (the OIDC
+/// refresh-result cache and the upstream DNS answer cache).
 ///
 /// ## YAML Configuration Example:
 /// ```yaml
@@ -1071,11 +1070,11 @@ fn default_lru_cache_capacity() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LruCacheGlobalConfig {
-    /// Default LRU capacity for all plugins (default: 1024 entries).
+    /// Default LRU capacity (default: 1024 entries).
     #[serde(default = "default_lru_cache_capacity")]
     pub default_capacity: usize,
 
-    /// Default number of cache shards for all plugins (default: 0 = disabled).
+    /// Default number of cache shards (default: 0 = disabled).
     /// When > 1, the cache is split into N independent LRU shards to reduce
     /// lock contention under high concurrency. Each shard holds
     /// `ceil(capacity / shards)` entries.
@@ -1121,19 +1120,6 @@ pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) -> Result<(),
     let result = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
     debug_assert!(result.is_ok(), "init_lru_cache_global_config called more than once");
     Ok(())
-}
-
-pub fn resolve_lru_cache_limits(config: &LruCacheConfig) -> Result<(usize, usize), String> {
-    config
-        .validation_error()
-        .map_or(Ok(()), |error| Err(error.to_string()))?;
-    let (capacity, shards) = if config.capacity == 0 {
-        (get_default_lru_cache_capacity(), get_default_lru_cache_shards())
-    } else {
-        (config.capacity, config.shards)
-    };
-    validate_effective_lru_cache_limits(capacity, shards)?;
-    Ok((capacity, shards))
 }
 
 /// Get the default LRU cache capacity.

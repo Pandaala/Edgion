@@ -45,7 +45,6 @@ before applying a decision to current code.
 - [Header-only HMAC condition verifier is prebuilt — FIXED (cl-05)](regression-guards/header-hmac-condition-verifier-prebuilt.md)
 - [Local Response Bodies Are Clone-cheap Immutable `Bytes` — FIXED](regression-guards/local-response-body-is-clone-cheap-bytes.md)
 - [LRU Expiration Maintenance Is a Bounded Ordered Index — FIXED](regression-guards/lru-bounded-expiration-index.md)
-- [OIDC Access-Token Cache Stores Expiry Only as TTL — FIXED](regression-guards/oidc-access-token-cache-ttl-only.md)
 - [OIDC callback path is precomputed — FIXED (gw-plugin-oidc-01)](regression-guards/oidc-callback-path-precomputed.md)
 - [Outlier ejection arbitrates only threshold candidates](regression-guards/outlier-ejection-arbitrates-only-threshold-candidates.md)
 - [`RequestMirrorPlugin` `reqwest::Client` Per-Plugin Instance — FIXED (F-017)](regression-guards/request-mirror-reqwest-client-per-plugin-instance.md)
@@ -79,4 +78,5 @@ before applying a decision to current code.
 ## Superseded decisions
 
 - [Historical Wasm OCI disk-purge interval clamp](superseded/wasm-oci-purge-interval-zero-clamp.md)
+- [Historical OIDC access-token cache TTL-only expiry (removed by gw-plugin-03)](superseded/oidc-access-token-cache-ttl-only.md)
 - [`IncludeCondition` / `ExcludeCondition` HashSet/Wildcard Bucket Split (plugins-runtime-F005)](superseded/conditions-hashset-wildcard-bucket-split.md)

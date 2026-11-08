@@ -193,17 +193,17 @@ spec:
       port: 12162
       targetPort: 12162
     - name: pp-inbound
-      port: 58430
-      targetPort: 58430
+      port: 28430
+      targetPort: 28430
     - name: plain
-      port: 58431
-      targetPort: 58431
+      port: 28431
+      targetPort: 28431
     - name: chain-hop1
-      port: 58530
-      targetPort: 58530
+      port: 28530
+      targetPort: 28530
     - name: chain-hop2
-      port: 58531
-      targetPort: 58531
+      port: 28531
+      targetPort: 28531
 ---
 apiVersion: v1
 kind: Service

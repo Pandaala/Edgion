@@ -13,7 +13,7 @@ spec:
   listeners:
     - name: hop1
       protocol: HTTP
-      port: 58530
+      port: 28530
       allowedRoutes:
         namespaces:
           from: All

@@ -52,3 +52,13 @@ and recovery delay. `edgion-tests/tests/redis_migration.rs` covers seed loss,
 MOVED limits, lost replies, Sentinel failover, and cross-slot DEL against
 `docker-compose.topologies.yaml`. Re-evaluate on a redis-rs upgrade or if
 Cluster recovery starts persisting peers across process restart.
+
+The MOVED fixture must move and restore its empty slot using `SETSLOT IMPORTING`
+on the receiving primary before `SETSLOT NODE` there, then update the other
+primaries. This establishes the receiving primary's config epoch before gossip
+can reassert the previous ownership. Directly assigning every primary in the
+unordered `CLUSTER NODES` order can instead produce an intermittent MOVED from
+the intended destination during the fixture's own GET. See Redis's
+[SETSLOT resharding contract](https://redis.io/docs/latest/commands/cluster-setslot/).
+Keep the zero-redirect rejection and successful redirected-write assertions;
+following redirects in the fixture's direct GET would conceal broken setup.

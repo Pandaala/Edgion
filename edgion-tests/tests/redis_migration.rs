@@ -572,26 +572,35 @@ async fn cluster_seed_loss_reestablishes_from_known_primaries() {
 struct SlotRestore {
     slot: u16,
     owner: String,
+    owner_port: u16,
+    destination: String,
     primaries: Vec<u16>,
 }
 
 impl Drop for SlotRestore {
     fn drop(&mut self) {
         let slot = self.slot.to_string();
-        let failed: Vec<u16> = self
-            .primaries
-            .iter()
-            .copied()
+        // Importing makes reassignment advance the owner's config epoch so
+        // gossip cannot undo the restoration with the destination's old map.
+        let importing = fixture_output(
+            self.owner_port,
+            &["CLUSTER", "SETSLOT", &slot, "IMPORTING", &self.destination],
+        );
+        let failed: Vec<u16> = std::iter::once(self.owner_port)
+            .chain(self.primaries.iter().copied().filter(|port| *port != self.owner_port))
             .filter(|port| {
                 !fixture_output(*port, &["CLUSTER", "SETSLOT", &slot, "NODE", &self.owner])
                     .status
                     .success()
             })
             .collect();
-        if failed.is_empty() {
+        if importing.status.success() && failed.is_empty() {
             return;
         }
-        let message = format!("slot {slot} restore failed on primaries {failed:?}");
+        let message = format!(
+            "slot {slot} restore failed on primaries {failed:?}; importing: {}",
+            fixture_text(&importing)
+        );
         if std::thread::panicking() {
             eprintln!("{message}");
         } else {
@@ -633,12 +642,18 @@ async fn cluster_moved_follows_only_the_configured_limit() {
     following.init_for_test().await.unwrap();
     let _restore = SlotRestore {
         slot,
-        owner: owner_id,
+        owner: owner_id.clone(),
+        owner_port,
+        destination: dest_id.clone(),
         primaries: masters.iter().map(|(port, _)| *port).collect(),
     };
     let slot_text = slot.to_string();
+    // IMPORTING followed by NODE on the destination advances its config epoch.
+    // Publish there first, then update peers; otherwise gossip can undo the move.
+    fixture_command(dest_port, &["CLUSTER", "SETSLOT", &slot_text, "IMPORTING", &owner_id]);
+    fixture_command(dest_port, &["CLUSTER", "SETSLOT", &slot_text, "NODE", &dest_id]);
     // SETSLOT NODE targets primaries; replicas reject it and follow by gossip.
-    for (port, _) in &masters {
+    for (port, _) in masters.iter().filter(|(port, _)| *port != dest_port) {
         fixture_command(*port, &["CLUSTER", "SETSLOT", &slot_text, "NODE", &dest_id]);
     }
     let blocked = limited

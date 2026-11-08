@@ -21,16 +21,11 @@ impl RequestFilter for OpenidConnect {
             let id_token_hint = session_cookie.as_mut().and_then(|v| v.id_token.take());
             self.maybe_revoke_tokens_on_logout(session_cookie.as_ref(), plugin_log)
                 .await;
-            if let Some(session_ref) = session_cookie.map(|v| v.session_ref) {
-                self.remove_cached_access_token(&session_ref).await;
-            }
             let logout_redirect_target = self
                 .build_logout_redirect_target(fallback_redirect_target, post_logout_redirect_uri, id_token_hint)
                 .await;
-            let clear_session_cookie = self.build_cookie_header_value(self.session_cookie_name(), "", 0, "/");
-            let clear_state_cookie =
-                self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path());
-            let cookies = [clear_session_cookie, clear_state_cookie];
+            let mut cookies = self.expired_session_cookies();
+            cookies.push(self.build_cookie_header_value(Self::state_cookie_name(), "", 0, self.callback_path()));
             let _ = self
                 .send_redirect_with_cookies(session, &logout_redirect_target, &cookies)
                 .await;
@@ -61,19 +56,17 @@ impl RequestFilter for OpenidConnect {
             }
 
             match self.extract_session_cookie_from_request(session) {
-                Ok(Some((mut session_cookie, raw_session_cookie_value))) => 'session_auth: {
+                Ok(Some((mut session_cookie, session_cookie_value))) => 'session_auth: {
+                    let raw_session_cookie_value = session_cookie_value.raw;
+                    let prior_chunks = session_cookie_value.prior_chunks;
                     // Logout decodes independently; only authentication requires a live session.
                     if session_cookie.remaining_lifetime(self.session_now()).is_err() {
                         break 'session_auth;
                     }
-                    let mut token = self
-                        .resolve_access_token_from_session(&session_cookie)
-                        .await
-                        .unwrap_or_default();
+                    let mut token = session_cookie.access_token.clone();
                     let mut refresh_lock_key = None;
 
-                    let cache_miss_refresh_attempted = token.is_empty() && session_cookie.refresh_token.is_some();
-                    if cache_miss_refresh_attempted {
+                    if self.should_preemptive_refresh(&session_cookie) {
                         match self
                             .try_refresh_session_token_singleflight(
                                 refresh_lock_key
@@ -84,27 +77,13 @@ impl RequestFilter for OpenidConnect {
                         {
                             Ok(()) => {
                                 token = session_cookie.access_token.clone();
-                                self.maybe_set_session_cookie_header(session, &session_cookie).await;
-                                plugin_log.push("token refresh miss");
-                            }
-                            Err(err) => {
-                                plugin_log.push_err(err.response_log_tag_or("token refresh fail"));
-                            }
-                        }
-                    }
-
-                    if !cache_miss_refresh_attempted && self.should_preemptive_refresh(&token, &session_cookie) {
-                        match self
-                            .try_refresh_session_token_singleflight(
-                                refresh_lock_key
-                                    .get_or_insert_with(|| Self::refresh_lock_key(&raw_session_cookie_value)),
-                                &mut session_cookie,
-                            )
-                            .await
-                        {
-                            Ok(()) => {
-                                token = session_cookie.access_token.clone();
-                                self.maybe_set_session_cookie_header(session, &session_cookie).await;
+                                self.maybe_set_session_cookie_header(
+                                    session,
+                                    &session_cookie,
+                                    prior_chunks,
+                                    plugin_log,
+                                )
+                                .await;
                                 plugin_log.push("token refresh preemptive");
                             }
                             Err(err) => {
@@ -113,7 +92,7 @@ impl RequestFilter for OpenidConnect {
                         }
                     }
 
-                    if token.is_empty() {
+                    if token.trim().is_empty() {
                         plugin_log.push_err("session no token");
                     } else {
                         match self.verify_token(session, &token).await {
@@ -160,8 +139,13 @@ impl RequestFilter for OpenidConnect {
                                             let new_token = session_cookie.access_token.as_str();
                                             match self.verify_token(session, new_token).await {
                                                 Ok(claims) => {
-                                                    self.maybe_set_session_cookie_header(session, &session_cookie)
-                                                        .await;
+                                                    self.maybe_set_session_cookie_header(
+                                                        session,
+                                                        &session_cookie,
+                                                        prior_chunks,
+                                                        plugin_log,
+                                                    )
+                                                    .await;
                                                     let userinfo_json =
                                                         self.fetch_userinfo_json(new_token, plugin_log).await;
                                                     if session_cookie.remaining_lifetime(self.session_now()).is_err() {
@@ -240,6 +224,9 @@ impl RequestFilter for OpenidConnect {
                 Err(err) => {
                     if err.http_status() == 502 {
                         return Self::dependency_response();
+                    }
+                    if matches!(err, OidcVerifyError::Auth(AuthFailure::MalformedCookie)) {
+                        plugin_log.push_err("session cookie malformed");
                     }
                 }
             }

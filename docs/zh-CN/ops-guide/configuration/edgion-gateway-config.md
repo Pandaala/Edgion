@@ -288,6 +288,12 @@ globalPluginsRef:
     namespace: "edgion-system" # 默认 "default"
 ```
 
+若引用的 `EdgionPlugins` 资源不存在，将按 fail-closed 处理：本应执行该 GatewayClass
+全局插件的请求在到达上游之前会被拒绝并返回 `500`，而不是在缺少该插件的情况下继续放行。
+Gateway 上的 `edgion.io/edgion-plugins` 注解遵循同样的规则（作用于该 Gateway 的请求）。
+在只由单个 Gateway 使用的 listener 上，拒绝发生在路由匹配之前，因此该 listener 上的
+ACME HTTP-01 校验请求也会被拒绝。请先创建 `EdgionPlugins` 资源再引用它；删除资源前先移除引用。
+
 ### spec.accessLogExtern
 
 [`AccessLogExtern`](../observability/access-log.md#扩展日志accesslogextern) 声明字段的脱敏白名单。平台方所有——是 Cluster 作用域，与 `globalPluginsRef` 同级——因此某个 namespace 下自己的 `EdgionPlugins` 无法为整个集群放宽脱敏。

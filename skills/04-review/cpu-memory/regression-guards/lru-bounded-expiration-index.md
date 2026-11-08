@@ -203,8 +203,8 @@ Re-open this decision only if:
   invalidation and strict replacement to `ShardedLruCache`.
 - `skills/00-design-rules.md` line 163 — the graceful-degrade rule that forbids
   `debug_assert!(false, ...)` here.
-- `skills/04-review/cpu-memory/regression-guards/oidc-access-token-cache-ttl-only.md` — the cache TTL is the
-  single expiry authority for the only production consumer.
+- `skills/04-review/cpu-memory/superseded/oidc-access-token-cache-ttl-only.md` — historical: the cache TTL
+  was the single expiry authority for the former OIDC access-token cache (removed by gw-plugin-03).
 
 ## Resolution references
 

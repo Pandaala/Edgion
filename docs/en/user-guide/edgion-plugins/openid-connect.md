@@ -12,7 +12,9 @@
 - Authorization Code Flow (with optional PKCE)
 - State/Nonce verification
 - Session Cookie management (AES-256-GCM encrypted)
-- In-session access token memory cache (cookie does not persist the access token)
+- Stateless sessions: the encrypted cookie carries the access, refresh and ID tokens, so any
+  Gateway replica or plugin generation can serve a session (no sticky sessions required)
+- Session cookie chunking for large tokens
 - Token refresh with singleflight concurrency control
 - Logout (local cleanup, optional revoke call, optional end_session redirect)
 - Claims mapping to Headers (dot-notation, injection protection, size limits)
@@ -55,17 +57,18 @@
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `sessionSecretRef` | Object | none | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
-| `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name. This cookie and `edgion_oidc_state` are Gateway-owned and are always removed from the request before proxying upstream. Application cookies are left unchanged. |
+| `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name. This cookie, its chunk cookies (`<name>_chunks`, `<name>_0` .. `<name>_15`) and `edgion_oidc_state` are Gateway-owned and are always removed from the request before proxying upstream. Other application cookies are left unchanged. |
 | `sessionLifetime` | Integer | `3600` | Absolute session lifetime in seconds, fixed at login and enforced by the Gateway |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite attribute. Values: `Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly attribute |
 | `sessionCookieSecure` | Boolean | `true` | Cookie Secure attribute (must be `true` when `SameSite=None`) |
-| `maxSessionCookieBytes` | Integer | `3800` | Maximum session cookie size in bytes |
+| `maxSessionCookieBytes` | Integer | `3800` | Maximum size in bytes of one session `Set-Cookie` string (the single cookie or each chunk cookie) |
+| `maxSessionCookieChunks` | Integer | `8` | Maximum number of chunk cookies one session may use (`1`–`16`; `1` disables chunking). `maxSessionCookieBytes` × `maxSessionCookieChunks` must not exceed `32768` |
 | `renewAccessTokenOnExpiry` | Boolean | `true` | Whether to auto-refresh access token on expiry |
-| `accessTokenExpiresLeeway` | Integer | `0` | Access token expiry leeway (seconds) |
+| `accessTokenExpiresLeeway` | Integer | `0` | Seconds before expiry at which the access token is refreshed (at most half its lifetime); also how long a just-expired token may still be served while a refresh is pending |
 
 The Gateway rejects a session at its authenticated deadline, even when a retained
-cookie contains a usable refresh token or its cached access token is still valid.
+cookie contains a usable refresh token or a still-valid access token.
 Token refresh does not extend that deadline; refreshed cookies use only the remaining
 session lifetime as `Max-Age`. Access-token expiration and session expiration are
 independent. A zero or unrepresentable session lifetime cannot establish a session.
@@ -87,6 +90,62 @@ Bearer authentication is independent of the session deadline.
 Cookies issued before server-side deadlines were introduced lack the required
 deadline and require a new login after upgrading. Complete the Gateway rollout
 before relying on server-side enforcement; older binaries do not enforce it.
+
+### Stateless sessions and cookie chunking
+
+The session cookie is the whole session: it holds the access token, the refresh and ID
+tokens (when issued), the refresh horizon and the absolute deadline, sealed with
+AES-256-GCM. The Gateway keeps no per-replica session state, so a request can land on any
+replica, after a restart, or after an EdgionPlugins update, and still authenticate without
+refreshing tokens. Token verification itself is unchanged: a cold replica still fetches
+discovery/JWKS, and introspection results are cached per replica. A `sessionSecretRef`
+change still invalidates sessions.
+
+When the sealed value does not fit in one cookie of `maxSessionCookieBytes`, it is split
+into `<name>_0` .. `<name>_{N-1}` plus a `<name>_chunks` cookie holding `N` (the naming
+used by Envoy's OAuth2 filter). Every write expires the cookies of the other shape, and
+logout expires the single cookie and all chunk slots. A request whose chunk set is
+incomplete or invalid, or that carries both a chunk set and the single cookie, is treated
+as unauthenticated (it never falls back to the other shape). If a session cannot fit in
+`maxSessionCookieChunks` cookies, login fails with `Session cookie exceeds configured size
+limit`; if a refreshed session cannot fit, the Gateway logs `session cookie too large` and
+ends the session (the current request still proceeds) instead of keeping a cookie whose
+refresh token may already be rotated.
+
+Refresh requires `renewAccessTokenOnExpiry: true` and a refresh token. It runs when the
+access token is rejected as expired, when the cookie carries no access token, or once the
+refresh horizon is reached. The horizon is `expires_in` minus the larger of
+`clockSkewSeconds` and `accessTokenExpiresLeeway`, never more than half the token lifetime;
+300 s is assumed when the identity provider omits `expires_in` or reports `0`. Opaque tokens verified by
+introspection rely on the horizon. Concurrent requests on one replica share one refresh;
+separate replicas refreshing the same expired session may each call the token endpoint,
+which identity providers with strict refresh-token reuse detection can treat as reuse.
+
+Operational and security notes:
+
+- Prefer a `__Host-` prefixed `sessionCookieName` (for example `__Host-edgion_oidc_session`,
+  with the default `sessionCookieSecure: true`). The chunk names inherit the prefix, so
+  browsers refuse to let a non-secure origin or a sibling subdomain plant chunk cookies.
+- Logout expires the cookies in the browser only. A copy of the cookie taken before logout
+  carries the refresh token, so with the defaults it keeps authenticating (refreshing as
+  needed) until the absolute session deadline (`sessionLifetime`). Enable
+  `revokeTokensOnLogout` so the refresh token is revoked at logout; with local JWKS
+  verification the current access token still works until it expires, so also use
+  introspection-based verification when revoked tokens must stop working immediately.
+- Cookies issued before stateless sessions carry no access token: they authenticate only
+  through a refresh (refresh token present and `renewAccessTokenOnExpiry: true`); otherwise
+  the user logs in again.
+- The default budget (3800 × 8 bytes) keeps the Cookie header well below the downstream
+  HTTP/2 header-list limit (64 KiB). Front proxies and CDNs may need larger request and
+  response header buffers (for example nginx `large_client_header_buffers` and
+  `proxy_buffer_size`) when tokens are large.
+- Application cookies named `<sessionCookieName>_chunks` or `<sessionCookieName>_0` ..
+  `_15` are treated as Gateway-owned and stripped; choose a `sessionCookieName` that does
+  not collide with them. Renaming `sessionCookieName` orphans existing cookies until they
+  expire; the old names are no longer stripped, so those sealed cookies reach the upstream
+  until then.
+- Lowering `maxSessionCookieBytes` can invalidate existing chunked sessions whose
+  reassembled size exceeds 16 × the new value.
 
 ### Token Verification Parameters
 
@@ -111,28 +170,22 @@ A failed discovery fetch is remembered for 5 seconds so concurrent or immediatel
 
 ### Cache Selection and Limits
 
-Only positive introspection results use TinyUFO/S3-FIFO. Access-token
-indirection retains the LRU cache because logout and refresh require explicit
-invalidation:
+Only positive introspection results use TinyUFO/S3-FIFO:
 
 ```yaml
 introspection:
   tinyUfoTtlCache:
     maxEntries: 2048
     maxLogicalBytes: 8MiB
-accessToken:
-  lruCache:
-    capacity: 2048
-    shards: 8
 ```
 
-The two sections inherit `tiny_ufo_ttl_cache` and `lru_cache` Gateway defaults,
-respectively. Set both TinyUFO override fields together, or omit both to inherit
-the process defaults. For an explicit LRU capacity, `shards: 0` selects one
-shard; a shards-only override is invalid. The TinyUFO byte field is the cache
-instance's total logical record-weight budget, not an exact RSS limit. Discovery
-and JWKS retain their dedicated snapshot providers; the refresh singleflight
-registry is also separate from both caches.
+The section inherits the `tiny_ufo_ttl_cache` Gateway defaults. Set both override
+fields together, or omit both to inherit the process defaults. The byte field is
+the cache instance's total logical record-weight budget, not an exact RSS limit.
+There is no access-token cache: the session cookie carries the access token. The
+short-lived (5 s) refresh-result cache that lets concurrent requests share one
+refresh uses the Gateway `lru_cache` defaults. Discovery and JWKS retain their
+dedicated snapshot providers; the refresh singleflight registry is separate.
 
 ### Header Forwarding Parameters
 
@@ -329,7 +382,8 @@ Every OpenID Connect outbound call — configured discovery and discovered JWKS,
 - Header size limits:
   - `maxHeaderValueBytes` (default `4096`)
   - `maxTotalHeaderBytes` (default `16384`)
-- Session cookie size limit: `maxSessionCookieBytes` (default `3800`)
+- Session cookie size limits: `maxSessionCookieBytes` (default `3800`) per cookie and
+  `maxSessionCookieChunks` (default `8`) cookies per session
 
 ## Common Troubleshooting
 
@@ -338,7 +392,7 @@ Every OpenID Connect outbound call — configured discovery and discovered JWKS,
 - IdP dependency failure
   - Dependency failures that terminate the request return the fixed `502 Bad Gateway`; inspect the access-log operation and static failure category, and the existing outbound TLS SAN mismatch metric for SAN verification failures
 - `Session cookie exceeds configured size limit`
-  - Reduce claims/header pass-through, or reduce the data stored in the session
+  - The sealed session (access, refresh and ID tokens) needs more than `maxSessionCookieChunks` cookies; reduce token size at the identity provider, or raise `maxSessionCookieChunks` within the 32768-byte budget
 
 ## Related Documentation
 
@@ -348,8 +402,8 @@ Every OpenID Connect outbound call — configured discovery and discovered JWKS,
 
 ### Request Cookie cleanup failures
 
-Every path that continues upstream removes the Gateway session and state cookies
-atomically, including unauthenticated Pass. A non-UTF-8 Cookie field makes cleanup
+Every path that continues upstream removes the Gateway session cookie, its chunk
+cookies and the state cookie atomically, including unauthenticated Pass. A non-UTF-8 Cookie field makes cleanup
 fail with HTTP 400; an internal update failure returns HTTP 500. The original
 unsanitized request is not forwarded. Application cookie names and values survive
 successful cleanup, though separators and field grouping may be normalized.

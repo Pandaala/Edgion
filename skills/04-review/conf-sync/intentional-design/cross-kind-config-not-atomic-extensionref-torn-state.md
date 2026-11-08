@@ -49,6 +49,12 @@ bundle is unavailable -> 500; individual plugins inside it are never selectively
 skipped. So the window **fails closed** (transient 500), it does not let a request
 through with security plugins bypassed.
 
+The same fail-closed premise now also holds for the Gateway `edgion.io/edgion-plugins`
+annotation and EGC `globalPluginsRef`: a missing target is prepared as a sealed
+`MissingEdgionPlugins` reject runtime instead of being dropped (gw-core-02; see
+[scoped publication](../../plugin-runtime/regression-guards/scoped-policy-runtime-publication.md)).
+Before that fix, this page's argument did not cover those two attachment points.
+
 **2. No route rebuild is needed — later requests capture the republished Gateway scope**
 
 Each request captures one immutable `GatewayScope` through

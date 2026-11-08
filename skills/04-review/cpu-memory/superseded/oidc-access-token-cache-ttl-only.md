@@ -1,13 +1,21 @@
 ---
 name: oidc-access-token-cache-ttl-only
-description: Use when reviewing OIDC access-token cache expiry storage; records that expiry belongs only to the cache TTL and must not be duplicated in each value.
-status: fixed
+description: Historical OIDC access-token cache expiry rule, superseded by gw-plugin-03 stateless session cookies; not current guidance.
+status: superseded
 finding_id: gw-plugin-oidc-04
 closed: 2026-08-02
-knowledge_type: regression-guards
+knowledge_type: superseded
 ---
 
-# OIDC Access-Token Cache Stores Expiry Only as TTL — FIXED
+# OIDC Access-Token Cache Stores Expiry Only as TTL — superseded
+
+This page is inactive historical evidence. gw-plugin-03 removed the per-instance
+OIDC access-token cache: the sealed session cookie now carries the access token and
+its refresh horizon. See the successor rule
+[OIDC sessions are stateless sealed cookies](../../oidc/regression-guards/stateless-session-cookie.md).
+The sections below describe the removed `AccessTokenCacheEntry` /
+`cache_access_token` implementation, not current behavior or a reason to dismiss a
+new defect. The residual valid lesson is general: one expiry authority per value.
 
 ## Conclusion
 
@@ -32,7 +40,7 @@ The only value consumer, `get_cached_access_token`, returns the token after the 
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if a cache-entry consumer needs the original absolute expiry for behavior that cannot be derived from the cache TTL or session payload.
+(Historical) Re-open this decision only if a cache-entry consumer needs the original absolute expiry for behavior that cannot be derived from the cache TTL or session payload.
 
 ## Reference Cases
 

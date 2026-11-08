@@ -1,0 +1,23 @@
+# Private Gateway for the gw-core-02 fail-closed case. Its Gateway-level
+# edgion.io/edgion-plugins annotation names an EdgionPlugins object that does
+# not exist, so every request through this listener must be denied with 500
+# instead of being served without the Gateway-level plugin list.
+#
+# A dedicated Gateway (own port) keeps the dangling reference away from the
+# shared example-gateway EdgionGatewayConfig and every other suite.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: global-plugins-missing
+  namespace: edgion-default
+  annotations:
+    edgion.io/edgion-plugins: "global-plugins-missing-target"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 32007
+      allowedRoutes:
+        namespaces:
+          from: All

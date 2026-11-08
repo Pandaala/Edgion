@@ -6,7 +6,7 @@ metadata:
 spec:
   ports:
     - name: http
-      port: 58531
-      targetPort: 58531
+      port: 28531
+      targetPort: 28531
       protocol: TCP
   type: ClusterIP

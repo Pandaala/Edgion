@@ -32,7 +32,7 @@
 #        ├─→ haproxy 172.28.0.10:58440  --send-proxy-v2--┐
 #        └─→ haproxy 172.28.0.10:58441  --send-proxy-----┤ (v1)
 #                                                        ↓
-#                                   host.docker.internal:58430  (gateway, PP on)
+#                                   host.docker.internal:28430  (gateway, PP on)
 #                                                        ↓
 #                                          test_server :30061 /headers
 #

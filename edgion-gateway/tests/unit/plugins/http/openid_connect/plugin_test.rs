@@ -116,7 +116,7 @@ fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     }))
     .unwrap();
     let session: OidcSessionCookie = serde_json::from_value(json!({
-        "session_ref": "private-session", "access_token": "private-access", "created_at": 1, "session_expires_at": 3601,
+        "access_token": "private-access", "created_at": 1, "session_expires_at": 3601,
         "id_token": "private-id", "refresh_token": "private-refresh"
     }))
     .unwrap();
@@ -127,16 +127,7 @@ fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     let introspection = IntrospectionCacheEntry {
         claims: Arc::new(json!({"sub": "private-identity"})),
     };
-    let access = super::AccessTokenCacheEntry {
-        token: "private-access".to_string(),
-    };
-    for value in [
-        &state as &dyn std::fmt::Debug,
-        &session,
-        &response,
-        &introspection,
-        &access,
-    ] {
+    for value in [&state as &dyn std::fmt::Debug, &session, &response, &introspection] {
         assert!(!format!("{value:?}").contains("private-"));
         assert!(!format!("{value:#?}").contains("private-"));
         assert!(!format!("{:?}", Some(value)).contains("private-"));
@@ -256,6 +247,35 @@ async fn authenticated_bearer_claim_cleanup_failure_prevents_upstream_continuati
             body: None
         }
     );
+}
+
+/// Logout Set-Cookie lines for the default cookie configuration: the single session
+/// cookie, the chunk count, all 16 chunk slots, then the state cookie.
+pub(super) fn expected_logout_set_cookies() -> Vec<String> {
+    expected_logout_set_cookies_with_state_path("/.edgion/oidc/callback")
+}
+
+pub(super) fn expected_logout_set_cookies_with_state_path(state_path: &str) -> Vec<String> {
+    let mut cookies = vec![
+        expire_line("edgion_oidc_session"),
+        expire_line("edgion_oidc_session_chunks"),
+    ];
+    cookies.extend((0..16).map(|index| expire_line(&format!("edgion_oidc_session_{index}"))));
+    cookies.push(format!(
+        "edgion_oidc_state=; Path={state_path}; SameSite=Lax; Max-Age=0; HttpOnly; Secure"
+    ));
+    cookies
+}
+
+/// Every Gateway-owned cookie name stripped before proxying, in strip order.
+pub(super) fn gateway_owned_cookie_names() -> Vec<String> {
+    let mut names = vec![
+        "edgion_oidc_session".to_string(),
+        "edgion_oidc_state".to_string(),
+        "edgion_oidc_session_chunks".to_string(),
+    ];
+    names.extend((0..16).map(|index| format!("edgion_oidc_session_{index}")));
+    names
 }
 
 /// Shared Cookie header for `get_cookie` and `strip_cookie` on a mock session.
@@ -1344,8 +1364,7 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
 
     let now = OpenidConnect::now_unix_secs();
     let session_cookie_payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
-        access_token: String::new(),
+        access_token: "access-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
         expires_at: Some(now + 60),
@@ -1357,27 +1376,19 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         plugin.session_cipher().expect("prepared session cipher"),
     )
     .expect("encode session cookie");
-    plugin
-        .cache_access_token("session-ref", "access-token", Some(now + 60))
-        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
 
     session.expect_get_path().return_const("/auth/logout".to_string());
-    session.expect_get_cookie().returning(move |name| {
-        if name == "edgion_oidc_session" {
-            Some(encoded_cookie.clone())
-        } else {
-            None
-        }
-    });
-    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
+    let cookie_header = format!("edgion_oidc_session={encoded_cookie}");
+    setup_header_mocks(
+        &mut session,
+        &[("host", "api.example.com"), ("cookie", cookie_header.as_str())],
+    );
     session.expect_downstream_is_tls().returning(|| Some(true));
-    let plugin_at_response = plugin.clone();
     session.expect_write_response_header().returning(move |resp, end| {
         assert!(end);
-        assert!(plugin_at_response.access_token_cache.get("session-ref").is_none());
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
         assert!(location.contains("post_logout_redirect_uri=https%3A%2F%2Fapi.example.com%2Fafter-logout"));
@@ -1388,19 +1399,12 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
             .iter()
             .map(|value| value.to_str().expect("set-cookie must be ASCII"))
             .collect();
-        assert_eq!(
-            cookies,
-            vec![
-                "edgion_oidc_session=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly; Secure",
-                "edgion_oidc_state=; Path=/.edgion/oidc/callback; SameSite=Lax; Max-Age=0; HttpOnly; Secure",
-            ]
-        );
+        assert_eq!(cookies, expected_logout_set_cookies());
         Ok(())
     });
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    assert!(plugin.access_token_cache.get("session-ref").is_none());
     assert_eq!(
         plugin_log_entries(&log),
         vec!["err: revocation credential unavailable", "logout handled"]
@@ -1595,321 +1599,192 @@ fn cookie_nonce_decoding_preserves_length_and_error_boundaries() {
     assert_eq!(decode(&tampered), Err(invalid_signature));
 }
 
-// Independent persistence oracle, extended with the required OIDC-01 session deadline.
+// Independent persistence oracle for the stateless session schema (gw-plugin-03): the
+// access token is persisted, `session_ref` no longer exists, and an empty token is omitted.
 #[derive(serde::Serialize)]
-struct OriginalPersistedCookie {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    session_ref: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+struct ExpectedPersistedCookie {
+    #[serde(skip_serializing_if = "String::is_empty")]
     access_token: String,
     created_at: u64,
     session_expires_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     id_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
 }
 
-fn original_persistence_projection(payload: &OidcSessionCookie, session_ref: &str) -> OriginalPersistedCookie {
-    OriginalPersistedCookie {
-        session_ref: session_ref.to_owned(),
-        access_token: if payload.access_token.trim().is_empty() {
-            payload.access_token.clone()
-        } else {
-            String::new()
-        },
-        created_at: payload.created_at,
-        session_expires_at: payload.session_expires_at,
-        expires_at: payload.expires_at,
-        id_token: payload.id_token.clone(),
-        refresh_token: payload.refresh_token.clone(),
-    }
-}
-
 #[test]
-fn persistence_projection_preserves_exact_json_and_owned_decode() {
-    for session_ref in ["", "generated-reference", "existing-reference", " \t"] {
-        for token in ["access-token", "", " \t"] {
-            for expires_at in [None, Some(42)] {
-                for id_token in [None, Some(""), Some("id-\"\\é")] {
-                    for refresh_token in [None, Some(""), Some("refresh-token")] {
-                        let source = OidcSessionCookie {
-                            session_ref: session_ref.to_owned(),
-                            access_token: token.to_owned(),
-                            created_at: 7,
-                            session_expires_at: 7 + 3600,
-                            expires_at,
-                            id_token: id_token.map(str::to_owned),
-                            refresh_token: refresh_token.map(str::to_owned),
-                        };
-                        let original = original_persistence_projection(&source, session_ref);
-                        let expected = serde_json::to_vec(&original).unwrap();
-                        let borrowed = source.for_persistence(session_ref, !token.trim().is_empty());
-                        assert_eq!(serde_json::to_vec(&borrowed).unwrap(), expected);
-                        let owned: OidcSessionCookie = serde_json::from_slice(&expected).unwrap();
-                        assert_eq!(serde_json::to_vec(&owned).unwrap(), expected);
-                        assert_eq!(owned.session_ref, session_ref);
-                        assert_eq!(owned.access_token, original.access_token);
-                        assert_eq!(owned.id_token.as_deref(), id_token);
-                        assert_eq!(owned.refresh_token.as_deref(), refresh_token);
-                        assert_eq!(owned.created_at, 7);
-                        assert_eq!(owned.session_expires_at, 3607);
-                        assert_eq!(owned.expires_at, expires_at);
-                        assert_eq!(format!("{source:?}"), "OidcSessionCookie { .. }");
-                        assert_eq!(format!("{borrowed:?}"), "OidcSessionCookie { .. }");
-                    }
+fn session_cookie_serializes_exact_json_with_access_token() {
+    for token in ["access-token", "", " \t"] {
+        for expires_at in [None, Some(42)] {
+            for id_token in [None, Some(""), Some("id-\"\\é")] {
+                for refresh_token in [None, Some(""), Some("refresh-token")] {
+                    let source = OidcSessionCookie {
+                        access_token: token.to_owned(),
+                        created_at: 7,
+                        session_expires_at: 7 + 3600,
+                        expires_at,
+                        id_token: id_token.map(str::to_owned),
+                        refresh_token: refresh_token.map(str::to_owned),
+                    };
+                    let expected = serde_json::to_vec(&ExpectedPersistedCookie {
+                        access_token: token.to_owned(),
+                        created_at: 7,
+                        session_expires_at: 3607,
+                        expires_at,
+                        id_token: id_token.map(str::to_owned),
+                        refresh_token: refresh_token.map(str::to_owned),
+                    })
+                    .unwrap();
+                    assert_eq!(serde_json::to_vec(&source).unwrap(), expected);
+                    let decoded: OidcSessionCookie = serde_json::from_slice(&expected).unwrap();
+                    assert_eq!(serde_json::to_vec(&decoded).unwrap(), expected);
+                    assert_eq!(decoded.access_token, token);
+                    assert_eq!(format!("{source:?}"), "OidcSessionCookie { .. }");
                 }
             }
         }
     }
+    assert_eq!(
+        serde_json::to_string(&OidcSessionCookie {
+            access_token: "token".into(),
+            created_at: 7,
+            session_expires_at: 3607,
+            expires_at: Some(42),
+            id_token: None,
+            refresh_token: Some("refresh".into()),
+        })
+        .unwrap(),
+        r#"{"access_token":"token","created_at":7,"session_expires_at":3607,"expires_at":42,"refresh_token":"refresh"}"#
+    );
     let minimal: OidcSessionCookie = serde_json::from_str(r#"{"created_at":7,"session_expires_at":3607}"#).unwrap();
     assert_eq!(
         serde_json::to_string(&minimal).unwrap(),
         r#"{"created_at":7,"session_expires_at":3607}"#
     );
-    assert!(minimal.session_ref.is_empty());
-    assert!(minimal.access_token.is_empty());
-    assert!(minimal.id_token.is_none());
-    let full: OidcSessionCookie = serde_json::from_str(
-        r#"{"session_ref":"ref","access_token":"legacy","created_at":7,"session_expires_at":3607,"expires_at":42,"id_token":"","refresh_token":""}"#,
-    ).unwrap();
-    assert_eq!(full.access_token, "legacy");
+    // Legacy cookies written with the removed `session_ref` still decode; the field is dropped.
+    let legacy: OidcSessionCookie = serde_json::from_str(
+        r#"{"session_ref":"ref","access_token":"legacy","created_at":7,"session_expires_at":3607,"expires_at":42}"#,
+    )
+    .unwrap();
+    assert_eq!(legacy.access_token, "legacy");
     assert_eq!(
-        serde_json::to_string(&full.for_persistence("ref", true)).unwrap(),
-        r#"{"session_ref":"ref","created_at":7,"session_expires_at":3607,"expires_at":42,"id_token":"","refresh_token":""}"#,
+        serde_json::to_string(&legacy).unwrap(),
+        r#"{"access_token":"legacy","created_at":7,"session_expires_at":3607,"expires_at":42}"#
     );
 }
 
-#[test]
-fn persistence_projection_allocation_comparison() {
-    for (case, token, optional_len, generated) in [
-        ("small", "access-token", 32, false),
-        ("empty", "", 0, false),
-        ("whitespace", " \t", 32, false),
-        ("large", "access-token", 2048, false),
-        ("generated", "access-token", 32, true),
-    ] {
-        let source = OidcSessionCookie {
-            session_ref: if generated {
-                String::new()
-            } else {
-                "existing-reference".into()
-            },
-            access_token: token.into(),
-            created_at: 7,
-            session_expires_at: 7 + 3600,
-            expires_at: Some(42),
-            id_token: Some("i".repeat(optional_len)),
-            refresh_token: Some("r".repeat(optional_len)),
-        };
-        let cache_token = !source.access_token.trim().is_empty();
-        let (original, before) = crate::test_allocation_counter::count_allocation_stats(|| {
-            let mut projection = original_persistence_projection(&source, &source.session_ref);
-            if generated {
-                projection.session_ref = "generated-reference".to_owned();
-            }
-            serde_json::to_vec(&projection).unwrap()
-        });
-        let (borrowed, after) = crate::test_allocation_counter::count_allocation_stats(|| {
-            let generated_ref = generated.then(|| "generated-reference".to_owned());
-            let reference = generated_ref.as_deref().unwrap_or(&source.session_ref);
-            serde_json::to_vec(&source.for_persistence(reference, !source.access_token.trim().is_empty())).unwrap()
-        });
-        assert_eq!(original, borrowed);
-        let copied =
-            source.session_ref.len() + if cache_token { 0 } else { source.access_token.len() } + optional_len * 2;
-        // Generated-reference fixture ownership is included; RNG is excluded.
-        // Logical copied bytes and allocator totals are not peak RSS measurements.
-        println!(
-            "cookie-projection {case}: original calls={} requested={} json_capacity={}; borrowed calls={} requested={} json_capacity={}; removed_projection_bytes={copied}",
-            before.calls, before.requested_bytes, original.capacity(),
-            after.calls, after.requested_bytes, borrowed.capacity(),
-        );
-    }
-}
-
-#[tokio::test]
-async fn persistence_caches_before_skipped_publication() {
-    for missing_cipher in [false, true] {
-        let mut config = base_config();
-        if !missing_cipher {
-            config.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".into());
-        }
-        let plugin = OpenidConnect::new(&config, "default".into());
-        let source = OidcSessionCookie {
-            session_ref: " \t".into(),
-            access_token: "exact-access-token".into(),
-            created_at: OpenidConnect::now_unix_secs(),
-            session_expires_at: OpenidConnect::now_unix_secs() + 3600,
-            expires_at: Some(OpenidConnect::now_unix_secs() + 3600),
-            id_token: Some("i".repeat(config.max_session_cookie_bytes as usize + 1)),
-            refresh_token: Some(String::new()),
-        };
-        let before = serde_json::to_vec(&source).unwrap();
-        let mut session = MockPluginSession::new();
-        session.expect_append_response_header().times(0);
-        plugin.maybe_set_session_cookie_header(&mut session, &source).await;
-        assert_eq!(serde_json::to_vec(&source).unwrap(), before);
-        assert_eq!(
-            plugin.get_cached_access_token(" \t").await.as_deref(),
-            Some("exact-access-token")
-        );
-        assert_eq!(plugin.session_cipher().is_none(), missing_cipher);
-    }
-}
-
-#[tokio::test]
-async fn persisted_session_cookie_preserves_fields_and_source() {
-    let mut cfg = base_config();
-    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
-    let plugin = OpenidConnect::new(&cfg, "default".to_string());
-
-    for (index, token) in ["access-token", "", " \t"].into_iter().enumerate() {
-        for generated_ref in [false, true] {
-            let now = OpenidConnect::now_unix_secs();
-            let payload = OidcSessionCookie {
-                session_ref: if generated_ref {
-                    String::new()
-                } else {
-                    format!("session-{index}")
-                },
-                access_token: token.to_string(),
-                created_at: now,
-                session_expires_at: now + 3600,
-                expires_at: Some(now + 60),
-                id_token: Some("id-token".to_string()),
-                refresh_token: Some("refresh-token".to_string()),
-            };
-            let source = serde_json::to_value(&payload).unwrap();
-            let captured = Arc::new(Mutex::new(None::<String>));
-            let output = captured.clone();
-            let mut session = MockPluginSession::new();
-            session
-                .expect_append_response_header()
-                .times(1)
-                .returning(move |name, value| {
-                    assert_eq!(name, "Set-Cookie");
-                    *output.lock() = Some(value.to_string());
-                    Ok(())
-                });
-            plugin.maybe_set_session_cookie_header(&mut session, &payload).await;
-            assert_eq!(serde_json::to_value(&payload).unwrap(), source);
-
-            let header = captured.lock().take().expect("session cookie");
-            let encoded = header
-                .strip_prefix("edgion_oidc_session=")
-                .unwrap()
-                .split(';')
-                .next()
-                .unwrap();
-            let decoded: OidcSessionCookie =
-                OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
-            assert!(!decoded.session_ref.is_empty());
-            if !generated_ref {
-                assert_eq!(decoded.session_ref, payload.session_ref);
-            }
-            let cached = plugin.get_cached_access_token(&decoded.session_ref).await;
-            let mut expected = source;
-            expected["session_ref"] = json!(decoded.session_ref);
-            if token.trim().is_empty() {
-                assert_eq!(cached, None);
-            } else {
-                assert_eq!(cached.as_deref(), Some(token));
-                expected.as_object_mut().unwrap().remove("access_token");
-            }
-            assert_eq!(serde_json::to_value(&decoded).unwrap(), expected);
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it() {
+fn stateless_session_config() -> OpenidConnectConfig {
     let mut cfg = base_config();
     cfg.bearer_only = false;
-    cfg.unauth_action = UnauthAction::Auth;
+    cfg.unauth_action = UnauthAction::Deny;
     cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
-    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    cfg
+}
 
+fn capture_appended_set_cookies(session: &mut MockPluginSession) -> Arc<Mutex<Vec<String>>> {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let output = captured.clone();
+    session.expect_append_response_header().returning(move |name, value| {
+        assert_eq!(name, "Set-Cookie");
+        output.lock().push(value.to_string());
+        Ok(())
+    });
+    captured
+}
+
+fn set_cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('='))
+        .and_then(|rest| rest.split(';').next())
+}
+
+#[tokio::test]
+async fn rewritten_session_cookie_persists_the_access_token() {
+    let plugin = OpenidConnect::new(&stateless_session_config(), "default".to_string());
     let now = OpenidConnect::now_unix_secs();
     let payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "access-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
         expires_at: Some(now + 60),
-        id_token: None,
+        id_token: Some("id-token".to_string()),
         refresh_token: Some("refresh-token".to_string()),
     };
-
-    let captured_cookie = Arc::new(Mutex::new(None::<String>));
-    let captured_cookie_clone = captured_cookie.clone();
-
+    let source = serde_json::to_value(&payload).unwrap();
     let mut session = MockPluginSession::new();
-    session.expect_append_response_header().returning(move |name, value| {
-        if name.eq_ignore_ascii_case("Set-Cookie") {
-            *captured_cookie_clone.lock() = Some(value.to_string());
-        }
-        Ok(())
-    });
+    let captured = capture_appended_set_cookies(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
+    plugin
+        .maybe_set_session_cookie_header(&mut session, &payload, 0, &mut log)
+        .await;
+    assert!(plugin_log_entries(&log).is_empty());
 
-    plugin.maybe_set_session_cookie_header(&mut session, &payload).await;
-
-    let set_cookie = captured_cookie.lock().clone().expect("set-cookie header");
-    let encoded = set_cookie
-        .strip_prefix("edgion_oidc_session=")
-        .and_then(|v| v.split(';').next())
-        .unwrap_or("");
+    let cookies = captured.lock().clone();
+    assert_eq!(cookies.len(), 2, "single cookie plus the chunk-count expiration");
+    assert!(cookies[1].starts_with("edgion_oidc_session_chunks=; "));
+    assert!(cookies[1].contains("Max-Age=0"));
+    let encoded = set_cookie_value(&cookies[0], "edgion_oidc_session").expect("session cookie");
     let decoded: OidcSessionCookie =
-        OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().expect("prepared session cipher"))
-            .expect("decode persisted cookie");
-    assert!(decoded.access_token.is_empty());
-    assert_eq!(decoded.session_ref, "session-ref");
-    assert_eq!(
-        plugin.get_cached_access_token("session-ref").await,
-        Some("access-token".to_string())
-    );
+        OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
+    assert_eq!(decoded.access_token, "access-token");
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), source);
 }
 
 #[tokio::test]
-async fn test_resolve_access_token_from_session_prefers_cache_when_cookie_token_missing() {
-    let cfg = base_config();
+async fn rewrite_overflow_ends_the_session_with_a_static_tag() {
+    let mut cfg = stateless_session_config();
+    cfg.max_session_cookie_bytes = 512;
+    cfg.max_session_cookie_chunks = 2;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let now = OpenidConnect::now_unix_secs();
-
-    plugin
-        .cache_access_token("session-ref", "cached-access-token", Some(now + 60))
-        .await;
-
-    let session_cookie = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
-        access_token: String::new(),
+    let payload = OidcSessionCookie {
+        access_token: "a".repeat(4096),
         created_at: now,
         session_expires_at: now + 3600,
         expires_at: Some(now + 60),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
     };
-    let resolved = plugin.resolve_access_token_from_session(&session_cookie).await;
-    assert_eq!(resolved.as_deref(), Some("cached-access-token"));
+    let mut session = MockPluginSession::new();
+    let captured = capture_appended_set_cookies(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
+    plugin
+        .maybe_set_session_cookie_header(&mut session, &payload, 0, &mut log)
+        .await;
+    assert_eq!(plugin_log_entries(&log), vec!["err: session cookie too large"]);
+    let mut expected = expected_logout_set_cookies();
+    expected.pop();
+    assert_eq!(*captured.lock(), expected);
+
+    // Without a session credential nothing is published and nothing is logged.
+    let mut missing = stateless_session_config();
+    missing.resolved_session_secret = None;
+    let plugin = OpenidConnect::new(&missing, "default".to_string());
+    let mut session = MockPluginSession::new();
+    session.expect_append_response_header().times(0);
+    let mut log = PluginLog::new("OpenidConnect");
+    plugin
+        .maybe_set_session_cookie_header(&mut session, &payload, 0, &mut log)
+        .await;
+    assert!(plugin_log_entries(&log).is_empty());
 }
 
 #[tokio::test]
-async fn test_run_request_uses_cached_session_access_token_when_cookie_token_missing() {
-    let mut cfg = base_config();
-    cfg.bearer_only = false;
-    cfg.unauth_action = UnauthAction::Deny;
+async fn fresh_plugin_instance_authenticates_from_the_cookie_without_refresh() {
+    let mut cfg = stateless_session_config();
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
     cfg.renew_access_token_on_expiry = true;
-    cfg.access_token_expires_leeway = 30;
-    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
-    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
-    let plugin = OpenidConnect::new(&cfg, "default".to_string());
-
-    plugin
+    // Instance A issues the cookie; instance B models another replica or plugin generation.
+    let writer = OpenidConnect::new(&cfg, "default".to_string());
+    let reader = OpenidConnect::new(&cfg, "default".to_string());
+    // No token endpoint: any refresh attempt would fail and change the outcome.
+    reader
         .jwks_provider
         .seed_discovery(DiscoveryDocument {
             issuer: "https://idp.example.com".to_string(),
@@ -1924,68 +1799,48 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         .await;
 
     let now = OpenidConnect::now_unix_secs();
-    let token = "cached-access-token";
-    plugin.cache_access_token("session-ref", token, Some(now + 60)).await;
-    plugin
+    let token = "replica-independent-token";
+    reader
         .cache_introspection_claims(
             token,
-            &Arc::new(json!({
-                "active": true,
-                "iss": "https://idp.example.com",
-                "exp": now + 120
-            })),
+            &Arc::new(json!({"active": true, "iss": "https://idp.example.com", "exp": now + 3600})),
         )
         .await;
-
-    let session_cookie_payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
-        access_token: String::new(),
+    let payload = OidcSessionCookie {
+        access_token: token.to_string(),
         created_at: now,
         session_expires_at: now + 3600,
-        expires_at: Some(now + 60),
+        expires_at: Some(writer.refresh_horizon(now, Some(3600))),
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
     };
-    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
-        &session_cookie_payload,
-        plugin.session_cipher().expect("prepared session cipher"),
-    )
-    .expect("encode session cookie");
-    let lock_key = OpenidConnect::refresh_lock_key(&encoded_cookie);
-    plugin
-        .put_refresh_result(
-            &lock_key,
-            OidcSessionCookie {
-                session_ref: "session-ref".to_string(),
-                access_token: token.to_string(),
-                created_at: now,
-                session_expires_at: now + 3600,
-                expires_at: Some(now + 60),
-                id_token: None,
-                refresh_token: Some("refresh-token".to_string()),
-            },
-        )
+    let mut write_session = MockPluginSession::new();
+    let written = capture_appended_set_cookies(&mut write_session);
+    writer
+        .maybe_set_session_cookie_header(&mut write_session, &payload, 0, &mut PluginLog::new("OpenidConnect"))
         .await;
+    let encoded = set_cookie_value(&written.lock()[0], "edgion_oidc_session")
+        .expect("session cookie")
+        .to_string();
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
-
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     let cookies = install_request_cookies(
         &mut session,
-        &format!("app=keep; edgion_oidc_session={encoded_cookie}; theme=dark"),
+        &format!("app=keep; edgion_oidc_session={encoded}; theme=dark"),
     );
     session.expect_append_response_header().times(0);
 
-    let result = plugin.run_request(&mut session, &mut log).await;
+    let result = reader.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(plugin_log_entries(&log), vec!["session token verified"]);
     assert_eq!(cookies.lock().as_deref(), Some("app=keep; theme=dark"));
 }
 
 #[tokio::test]
-async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
+async fn test_run_request_token_less_cookie_uses_refresh_singleflight_cached_result() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Deny;
@@ -2025,7 +1880,6 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
         .await;
 
     let session_cookie_payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -2043,7 +1897,6 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
         .put_refresh_result(
             &lock_key,
             OidcSessionCookie {
-                session_ref: "session-ref".to_string(),
                 access_token: refreshed_token.to_string(),
                 created_at: now,
                 session_expires_at: now + 3600,
@@ -2060,19 +1913,121 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded_cookie}"));
+    // The refreshed single cookie plus the chunk-count expiration.
     session
         .expect_append_response_header()
         .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
-        .times(1)
+        .times(2)
         .returning(|_, _| Ok(()));
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(
         plugin_log_entries(&log),
-        vec!["token refresh miss", "session token verified"]
+        vec!["token refresh preemptive", "session token verified"]
     );
     assert!(cookies.lock().is_none());
+}
+
+#[tokio::test]
+async fn refresh_from_a_chunked_cookie_expires_the_previous_chunks() {
+    let mut cfg = stateless_session_config();
+    cfg.verification_mode = VerificationMode::IntrospectionOnly;
+    cfg.introspection_cache_ttl = 60;
+    cfg.renew_access_token_on_expiry = true;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+    let now = OpenidConnect::now_unix_secs();
+    plugin
+        .cache_introspection_claims(
+            "refreshed-token",
+            &Arc::new(json!({"active": true, "iss": "https://idp.example.com", "exp": now + 3600})),
+        )
+        .await;
+    let stale = OidcSessionCookie {
+        access_token: "stale-token".into(),
+        created_at: now,
+        session_expires_at: now + 3600,
+        // Refresh horizon reached.
+        expires_at: Some(now),
+        id_token: None,
+        refresh_token: Some("refresh-token".into()),
+    };
+    let sealed = OpenidConnect::encode_signed_cookie_payload(&stale, plugin.session_cipher().unwrap()).unwrap();
+    let mut refreshed = stale.clone();
+    refreshed.access_token = "refreshed-token".into();
+    refreshed.expires_at = Some(now + 3000);
+    plugin
+        .put_refresh_result(&OpenidConnect::refresh_lock_key(&sealed), refreshed)
+        .await;
+    // The browser holds the session as three chunks; the refreshed value fits one cookie.
+    let third = sealed.len() / 3;
+    let header = format!(
+        "edgion_oidc_session_chunks=3; edgion_oidc_session_0={}; edgion_oidc_session_1={}; edgion_oidc_session_2={}",
+        &sealed[..third],
+        &sealed[third..2 * third],
+        &sealed[2 * third..]
+    );
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_string());
+    session.expect_get_query_param().returning(|_| None);
+    install_request_cookies(&mut session, &header);
+    let published = capture_appended_set_cookies(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["token refresh preemptive", "session token verified"]
+    );
+    let published = published.lock().clone();
+    assert!(published[0].starts_with("edgion_oidc_session="));
+    assert_eq!(
+        published[1..],
+        [
+            expire_line("edgion_oidc_session_chunks"),
+            expire_line("edgion_oidc_session_0"),
+            expire_line("edgion_oidc_session_1"),
+            expire_line("edgion_oidc_session_2"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_session_cookies_are_rejected_with_a_static_tag() {
+    let plugin = OpenidConnect::new(&stateless_session_config(), "default".to_string());
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_string());
+    session.expect_get_query_param().returning(|_| None);
+    install_request_cookies(
+        &mut session,
+        "edgion_oidc_session=planted; edgion_oidc_session_chunks=2; edgion_oidc_session_0=a; edgion_oidc_session_1=b",
+    );
+    session.expect_append_response_header().times(0);
+    super::dependency_error_tests::expect_auth_response(&mut session, 401, "Unauthorized - Authentication required");
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["err: session cookie malformed", "no token; deny"]
+    );
 }
 
 #[tokio::test]
@@ -2117,7 +2072,6 @@ async fn test_run_request_expired_refresh_publishes_updated_session_token() {
         )
         .await;
     let mut payload = OidcSessionCookie {
-        session_ref: "expiry-session".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -2140,22 +2094,28 @@ async fn test_run_request_expired_refresh_publishes_updated_session_token() {
         .times(1)
         .returning(|_, _| Ok(()));
     let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded}"));
-    session
-        .expect_append_response_header()
-        .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
-        .times(1)
-        .returning(|_, _| Ok(()));
+    let published = capture_appended_set_cookies(&mut session);
     let mut log = PluginLog::new("OpenidConnect");
     assert_eq!(
         plugin.run_request(&mut session, &mut log).await,
         PluginRunningResult::GoodNext
     );
     assert_eq!(plugin_log_entries(&log), vec!["token refresh on expiry"]);
+    let published = published.lock().clone();
+    assert_eq!(
+        published.len(),
+        2,
+        "refreshed single cookie plus the chunk-count expiration"
+    );
+    let rewritten = set_cookie_value(&published[0], "edgion_oidc_session").expect("rewritten session cookie");
+    let decoded: OidcSessionCookie =
+        OpenidConnect::decode_signed_cookie_payload(rewritten, plugin.session_cipher().unwrap()).unwrap();
+    assert_eq!(decoded.access_token, "new-token");
     assert!(cookies.lock().is_none());
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
+async fn test_run_request_token_less_cookie_waits_only_one_singleflight_timeout() {
     let mut cfg = base_config();
     cfg.timeout = 1;
     cfg.bearer_only = false;
@@ -2166,7 +2126,6 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
 
     let now = OpenidConnect::now_unix_secs();
     let payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -2251,7 +2210,6 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
 
     let now = OpenidConnect::now_unix_secs();
     let payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: String::new(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -2378,7 +2336,6 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
                 Duration::from_secs(60),
             );
             let payload = OidcSessionCookie {
-                session_ref: "dye-session".to_string(),
                 access_token: token,
                 created_at: now,
                 session_expires_at: now + 3600,
@@ -2508,7 +2465,7 @@ fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
         .expect_remove_request_cookies()
         .times(1)
         .returning(move |names| {
-            assert_eq!(names, &["edgion_oidc_session", "edgion_oidc_state"]);
+            assert_eq!(names, gateway_owned_cookie_names().as_slice());
             let mut headers = http::HeaderMap::new();
             headers.append(
                 http::header::COOKIE,
@@ -2732,17 +2689,16 @@ fn test_should_preemptive_refresh() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
     let now = OpenidConnect::now_unix_secs();
+    // `expires_at` is the stored refresh horizon: reached now, so a refresh is due.
     let near_exp = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "a".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
-        expires_at: Some(now + 10),
+        expires_at: Some(now),
         id_token: None,
         refresh_token: Some("r".to_string()),
     };
     let far_exp = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "a".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -2754,6 +2710,11 @@ fn test_should_preemptive_refresh() {
         expires_at: None,
         ..far_exp.clone()
     };
+    // The leeway is folded into the horizon at write time; the check adds nothing.
+    let horizon_ahead_within_leeway = OidcSessionCookie {
+        expires_at: Some(now + 10),
+        ..far_exp.clone()
+    };
     let no_refresh = OidcSessionCookie {
         refresh_token: None,
         ..near_exp.clone()
@@ -2762,17 +2723,204 @@ fn test_should_preemptive_refresh() {
         access_token: String::new(),
         ..far_exp.clone()
     };
-    assert!(plugin.should_preemptive_refresh("resolved-token", &near_exp));
-    assert!(!plugin.should_preemptive_refresh("resolved-token", &far_exp));
-    assert!(!plugin.should_preemptive_refresh("resolved-token", &cookie_token_missing));
-    assert!(!plugin.should_preemptive_refresh("resolved-token", &no_exp));
-    assert!(!plugin.should_preemptive_refresh("resolved-token", &no_refresh));
-    assert!(plugin.should_preemptive_refresh("", &far_exp));
+    let cookie_token_blank = OidcSessionCookie {
+        access_token: " \t".to_string(),
+        ..far_exp.clone()
+    };
+    assert!(plugin.should_preemptive_refresh(&near_exp));
+    assert!(!plugin.should_preemptive_refresh(&far_exp));
+    assert!(plugin.should_preemptive_refresh(&cookie_token_missing));
+    assert!(plugin.should_preemptive_refresh(&cookie_token_blank));
+    assert!(!plugin.should_preemptive_refresh(&no_exp));
+    assert!(!plugin.should_preemptive_refresh(&horizon_ahead_within_leeway));
+    assert!(!plugin.should_preemptive_refresh(&no_refresh));
 
+    // The knob also gates the token-less case (formerly an unconditional cache-miss refresh).
     let mut disabled_cfg = cfg;
     disabled_cfg.renew_access_token_on_expiry = false;
     let disabled = OpenidConnect::new(&disabled_cfg, "default".to_string());
-    assert!(!disabled.should_preemptive_refresh("", &near_exp));
+    assert!(!disabled.should_preemptive_refresh(&near_exp));
+    assert!(!disabled.should_preemptive_refresh(&cookie_token_missing));
+}
+
+#[test]
+fn refresh_horizon_clamps_the_clock_skew_margin() {
+    let mut cfg = base_config();
+    cfg.clock_skew_seconds = 120;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // Long-lived token: the full clock-skew margin applies.
+    assert_eq!(plugin.refresh_horizon(1_000, Some(3600)), 1_000 + 3600 - 120);
+    // Missing expires_in falls back to 300 s.
+    assert_eq!(plugin.refresh_horizon(1_000, None), 1_000 + 300 - 120);
+    // A token shorter than the clock skew keeps half its lifetime instead of refreshing
+    // on every request.
+    assert_eq!(plugin.refresh_horizon(1_000, Some(60)), 1_000 + 30);
+    assert_eq!(plugin.refresh_horizon(1_000, Some(1)), 1_000 + 1);
+    // An IdP-reported zero lifetime uses the fallback instead of refreshing every request.
+    assert_eq!(plugin.refresh_horizon(1_000, Some(0)), 1_000 + 300 - 120);
+    assert_eq!(plugin.refresh_horizon(u64::MAX, Some(10)), u64::MAX);
+    let mut no_skew = base_config();
+    no_skew.clock_skew_seconds = 0;
+    let plugin = OpenidConnect::new(&no_skew, "default".to_string());
+    assert_eq!(plugin.refresh_horizon(1_000, Some(60)), 1_060);
+    // The leeway is the early-refresh margin when larger than the skew, never their sum,
+    // and is clamped to half the lifetime.
+    let mut leeway = base_config();
+    leeway.clock_skew_seconds = 120;
+    leeway.access_token_expires_leeway = 300;
+    let plugin = OpenidConnect::new(&leeway, "default".to_string());
+    assert_eq!(plugin.refresh_horizon(1_000, Some(3600)), 1_000 + 3600 - 300);
+    assert_eq!(plugin.refresh_horizon(1_000, Some(400)), 1_000 + 200);
+    assert_eq!(plugin.refresh_horizon(1_000, None), 1_000 + 150);
+}
+
+fn token_response(value: serde_json::Value) -> super::TokenEndpointResponse {
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn refresh_response_rejects_token_less_documents_and_keeps_the_session() {
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    let original = OidcSessionCookie {
+        access_token: "old-token".into(),
+        created_at: 7,
+        session_expires_at: 7 + 3600,
+        expires_at: Some(42),
+        id_token: Some("old-id".into()),
+        refresh_token: Some("old-refresh".into()),
+    };
+    for token in ["", " \t"] {
+        let mut payload = original.clone();
+        let result = plugin.apply_refresh_response(
+            &mut payload,
+            token_response(json!({"access_token": token, "refresh_token": "rotated", "expires_in": 600})),
+            true,
+            1_000,
+        );
+        assert!(matches!(
+            result,
+            Err(super::OidcVerifyError::Dependency(error))
+                if error.operation == super::OidcOperation::Refresh
+                    && error.failure == super::OidcDependencyFailure::InvalidDocument
+        ));
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+    }
+}
+
+#[test]
+fn refresh_response_persists_token_horizon_and_rotation() {
+    let mut cfg = base_config();
+    cfg.clock_skew_seconds = 120;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let base = OidcSessionCookie {
+        access_token: "old-token".into(),
+        created_at: 7,
+        session_expires_at: 7 + 3600,
+        expires_at: Some(42),
+        id_token: Some("old-id".into()),
+        refresh_token: Some("old-refresh".into()),
+    };
+    let mut payload = base.clone();
+    plugin
+        .apply_refresh_response(
+            &mut payload,
+            token_response(json!({"access_token": "new-token", "id_token": "new-id", "refresh_token": "rotated", "expires_in": 600})),
+            true,
+            1_000,
+        )
+        .unwrap();
+    assert_eq!(payload.access_token, "new-token");
+    assert_eq!(payload.expires_at, Some(1_000 + 600 - 120));
+    assert_eq!(payload.id_token.as_deref(), Some("new-id"));
+    assert_eq!(payload.refresh_token.as_deref(), Some("rotated"));
+    assert_eq!(payload.session_expires_at, base.session_expires_at);
+
+    // Missing expires_in still yields a horizon; absent rotation keeps the refresh token;
+    // the ID token is untouched when it is not persisted.
+    let mut payload = base.clone();
+    plugin
+        .apply_refresh_response(
+            &mut payload,
+            token_response(json!({"access_token": "new-token"})),
+            false,
+            1_000,
+        )
+        .unwrap();
+    assert_eq!(payload.expires_at, Some(1_000 + 300 - 120));
+    assert_eq!(payload.refresh_token.as_deref(), Some("old-refresh"));
+    assert_eq!(payload.id_token.as_deref(), Some("old-id"));
+}
+
+#[test]
+fn callback_session_payload_carries_the_access_token_and_horizon() {
+    let mut cfg = stateless_session_config();
+    cfg.clock_skew_seconds = 120;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let payload = plugin.new_session_payload(
+        token_response(
+            json!({"access_token": "login-token", "id_token": "id", "refresh_token": "r", "expires_in": 3600}),
+        ),
+        1_000,
+        999,
+        999 + 3600,
+        true,
+    );
+    assert_eq!(payload.access_token, "login-token");
+    assert_eq!(payload.expires_at, Some(1_000 + 3600 - 120));
+    assert_eq!(payload.created_at, 999);
+    assert_eq!(payload.session_expires_at, 999 + 3600);
+    assert_eq!(payload.id_token.as_deref(), Some("id"));
+    assert_eq!(payload.refresh_token.as_deref(), Some("r"));
+    // The sealed callback cookie decodes back with the token included.
+    let sealed = OpenidConnect::encode_signed_cookie_payload(&payload, plugin.session_cipher().unwrap()).unwrap();
+    let decoded: OidcSessionCookie =
+        OpenidConnect::decode_signed_cookie_payload(&sealed, plugin.session_cipher().unwrap()).unwrap();
+    assert_eq!(decoded.access_token, "login-token");
+
+    let without_id = plugin.new_session_payload(
+        token_response(json!({"access_token": "login-token", "id_token": "id"})),
+        1_000,
+        999,
+        999 + 3600,
+        false,
+    );
+    assert_eq!(without_id.id_token, None);
+    assert_eq!(without_id.expires_at, Some(1_000 + 300 - 120));
+    let empty_id = plugin.new_session_payload(
+        token_response(json!({"access_token": "login-token", "id_token": ""})),
+        1_000,
+        999,
+        999 + 3600,
+        true,
+    );
+    assert_eq!(empty_id.id_token, None);
+}
+
+#[test]
+fn callback_cookies_expire_stale_chunks_then_the_state_cookie() {
+    let plugin = chunking_plugin(3800, 8);
+    let session = session_with_cookie_header(
+        "edgion_oidc_session_chunks=3; edgion_oidc_session_0=a; edgion_oidc_session_1=b; edgion_oidc_session_2=c",
+    );
+    let cookies = plugin.callback_set_cookies(&session, "sealed.value", 3600).unwrap();
+    assert_eq!(
+        cookies,
+        vec![
+            "edgion_oidc_session=sealed.value; Path=/; SameSite=Lax; Max-Age=3600; HttpOnly; Secure".to_string(),
+            expire_line("edgion_oidc_session_chunks"),
+            expire_line("edgion_oidc_session_0"),
+            expire_line("edgion_oidc_session_1"),
+            expire_line("edgion_oidc_session_2"),
+            "edgion_oidc_state=; Path=/.edgion/oidc/callback; SameSite=Lax; Max-Age=0; HttpOnly; Secure".to_string(),
+        ]
+    );
+    // A session that cannot fit is an error; the callback answers with its fixed 500.
+    let small = chunking_plugin(512, 1);
+    let session = session_with_cookie_header("");
+    assert!(small.callback_set_cookies(&session, &"x".repeat(600), 3600).is_err());
 }
 
 #[test]
@@ -3024,7 +3172,6 @@ async fn test_refresh_singleflight_wait_timeout() {
 
     let now = OpenidConnect::now_unix_secs();
     let mut cookie = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -3052,7 +3199,6 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
         .put_refresh_result(
             lock_key,
             OidcSessionCookie {
-                session_ref: "session-ref".to_string(),
                 access_token: "cached-token".to_string(),
                 created_at: now,
                 session_expires_at: now + 3600,
@@ -3067,7 +3213,6 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
     let _held_guard = flight.lock().lock().await;
 
     let mut cookie = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "old-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -3092,7 +3237,6 @@ async fn test_try_get_recent_refresh_result_returns_none_after_ttl() {
 
     let now = OpenidConnect::now_unix_secs();
     let payload = OidcSessionCookie {
-        session_ref: "session-ref".to_string(),
         access_token: "cached-token".to_string(),
         created_at: now,
         session_expires_at: now + 3600,
@@ -3111,15 +3255,270 @@ async fn test_try_get_recent_refresh_result_returns_none_after_ttl() {
     assert!(plugin.try_get_recent_refresh_result(lock_key).await.is_none());
 }
 
-#[test]
-fn test_session_cookie_size_limit_check() {
+fn chunking_plugin(max_bytes: u64, max_chunks: u32) -> OpenidConnect {
     let mut cfg = base_config();
-    cfg.max_session_cookie_bytes = 32;
-    let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    assert!(plugin.ensure_session_cookie_size_limit("short-cookie").is_ok());
-    assert!(plugin
-        .ensure_session_cookie_size_limit("this-cookie-value-is-definitely-too-long")
+    cfg.max_session_cookie_bytes = max_bytes;
+    cfg.max_session_cookie_chunks = max_chunks;
+    OpenidConnect::new(&cfg, "default".to_string())
+}
+
+fn expire_line(name: &str) -> String {
+    format!("{name}=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly; Secure")
+}
+
+/// Mock session whose request carries exactly `cookie_header`.
+fn session_with_cookie_header(cookie_header: &str) -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    if cookie_header.is_empty() {
+        setup_header_mocks(&mut session, &[]);
+    } else {
+        setup_header_mocks(&mut session, &[("cookie", cookie_header)]);
+    }
+    session
+}
+
+/// Turn written Set-Cookie lines into the Cookie header a browser would send back.
+fn cookie_header_from_set_cookies(cookies: &[String]) -> String {
+    cookies
+        .iter()
+        .filter(|cookie| !cookie.contains("Max-Age=0"))
+        .filter_map(|cookie| cookie.split(';').next())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[test]
+fn session_cookie_fits_in_a_single_cookie_and_expires_stale_chunks() {
+    let plugin = chunking_plugin(3800, 8);
+    let cookies = plugin.build_session_set_cookies("sealed.value", 3600, 3).unwrap();
+    assert_eq!(
+        cookies,
+        vec![
+            "edgion_oidc_session=sealed.value; Path=/; SameSite=Lax; Max-Age=3600; HttpOnly; Secure".to_string(),
+            expire_line("edgion_oidc_session_chunks"),
+            expire_line("edgion_oidc_session_0"),
+            expire_line("edgion_oidc_session_1"),
+            expire_line("edgion_oidc_session_2"),
+        ]
+    );
+    // A request without chunks still expires the count cookie (last writer wins).
+    let cookies = plugin.build_session_set_cookies("sealed.value", 3600, 0).unwrap();
+    assert_eq!(cookies.len(), 2);
+    assert_eq!(cookies[1], expire_line("edgion_oidc_session_chunks"));
+}
+
+#[test]
+fn oversized_session_cookie_is_chunked_within_the_limit_and_round_trips() {
+    let max_bytes = 512;
+    let plugin = chunking_plugin(max_bytes, 8);
+    let sealed: String = (0..2000).map(|index| char::from(b'a' + (index % 26) as u8)).collect();
+    let cookies = plugin.build_session_set_cookies(&sealed, 3600, 0).unwrap();
+    let written: Vec<&String> = cookies.iter().filter(|cookie| !cookie.contains("Max-Age=0")).collect();
+    let chunk_count = written.len() - 1;
+    assert!(chunk_count >= 2);
+    for (index, cookie) in written[..chunk_count].iter().enumerate() {
+        assert!(cookie.starts_with(&format!("edgion_oidc_session_{index}=")));
+        assert!(cookie.len() <= max_bytes as usize, "chunk {index} exceeds the limit");
+    }
+    let count_cookie = written[chunk_count];
+    assert_eq!(
+        *count_cookie,
+        format!("edgion_oidc_session_chunks={chunk_count}; Path=/; SameSite=Lax; Max-Age=3600; HttpOnly; Secure")
+    );
+    assert!(count_cookie.len() <= max_bytes as usize);
+    // The single cookie is always expired by a chunked write.
+    assert_eq!(cookies.last().unwrap(), &expire_line("edgion_oidc_session"));
+
+    let header = cookie_header_from_set_cookies(&cookies);
+    let session = session_with_cookie_header(&header);
+    let value = plugin.read_session_cookie_value(&session).unwrap().unwrap();
+    assert_eq!(value.raw, sealed);
+    assert_eq!(value.prior_chunks, chunk_count);
+}
+
+#[test]
+fn chunked_rewrite_expires_only_stale_higher_indexes() {
+    let plugin = chunking_plugin(512, 8);
+    let sealed = "x".repeat(700);
+    let cookies = plugin.build_session_set_cookies(&sealed, 60, 5).unwrap();
+    let expired: Vec<&String> = cookies.iter().filter(|cookie| cookie.contains("Max-Age=0")).collect();
+    assert_eq!(
+        expired,
+        vec![
+            &expire_line("edgion_oidc_session"),
+            &expire_line("edgion_oidc_session_2"),
+            &expire_line("edgion_oidc_session_3"),
+            &expire_line("edgion_oidc_session_4"),
+        ]
+    );
+}
+
+#[test]
+fn session_cookie_write_limits_fail_closed_without_underflow() {
+    // The chunk overhead alone exceeds the limit: an error, never a wrapped capacity.
+    assert!(chunking_plugin(64, 8)
+        .build_session_set_cookies(&"x".repeat(100), 3600, 0)
         .is_err());
+    assert!(chunking_plugin(1, 8).build_session_set_cookies("xy", 3600, 0).is_err());
+    // Needing more chunks than configured fails; `1` disables chunking.
+    assert!(chunking_plugin(512, 2)
+        .build_session_set_cookies(&"x".repeat(2000), 3600, 0)
+        .is_err());
+    assert!(chunking_plugin(512, 1)
+        .build_session_set_cookies(&"x".repeat(600), 3600, 0)
+        .is_err());
+    assert!(chunking_plugin(512, 1)
+        .build_session_set_cookies("small", 3600, 0)
+        .is_ok());
+}
+
+#[test]
+fn malformed_or_ambiguous_chunk_sets_fail_closed() {
+    let plugin = chunking_plugin(512, 8);
+    let cases = [
+        // Missing chunk 1.
+        "edgion_oidc_session_chunks=2; edgion_oidc_session_0=aa",
+        // Count below two, above the reader cap, or not a number.
+        "edgion_oidc_session_chunks=1; edgion_oidc_session_0=aa",
+        "edgion_oidc_session_chunks=17; edgion_oidc_session_0=aa; edgion_oidc_session_1=bb",
+        "edgion_oidc_session_chunks=x; edgion_oidc_session_0=aa; edgion_oidc_session_1=bb",
+    ];
+    for header in cases {
+        let session = session_with_cookie_header(header);
+        assert!(
+            matches!(
+                plugin.read_session_cookie_value(&session),
+                Err(super::OidcVerifyError::Auth(super::AuthFailure::MalformedCookie))
+            ),
+            "{header}"
+        );
+        // No fallback: a planted count/chunk cookie must not select the single cookie.
+        let with_single = format!("{header}; edgion_oidc_session=single");
+        let session = session_with_cookie_header(&with_single);
+        assert!(
+            matches!(
+                plugin.read_session_cookie_value(&session),
+                Err(super::OidcVerifyError::Auth(super::AuthFailure::MalformedCookie))
+            ),
+            "{with_single}"
+        );
+    }
+    // The reassembled length is capped at 16 x maxSessionCookieBytes.
+    let small = chunking_plugin(1, 8);
+    let session = session_with_cookie_header(
+        "edgion_oidc_session_chunks=2; edgion_oidc_session_0=aaaaaaaaaaaaaaaa; edgion_oidc_session_1=bbbbbbbbbbbbbbbbb",
+    );
+    assert!(matches!(
+        small.read_session_cookie_value(&session),
+        Err(super::OidcVerifyError::Auth(super::AuthFailure::MalformedCookie))
+    ));
+    // Exactly 16 x maxSessionCookieBytes is accepted.
+    let session = session_with_cookie_header(&format!(
+        "edgion_oidc_session_chunks=2; edgion_oidc_session_0={}; edgion_oidc_session_1={}",
+        "a".repeat(8),
+        "b".repeat(8)
+    ));
+    assert_eq!(
+        small.read_session_cookie_value(&session).unwrap().unwrap().raw.len(),
+        16
+    );
+    // The callback still learns the parsed count of a malformed set to expire stale chunks.
+    let session = session_with_cookie_header("edgion_oidc_session_chunks=3; edgion_oidc_session=single");
+    assert_eq!(plugin.prior_session_chunks(&session), 3);
+    let session = session_with_cookie_header("edgion_oidc_session_chunks=99");
+    assert_eq!(plugin.prior_session_chunks(&session), 16);
+    // No session cookies at all is not an error; a lone single cookie is the session.
+    let session = session_with_cookie_header("app=keep");
+    assert!(plugin.read_session_cookie_value(&session).unwrap().is_none());
+    let session = session_with_cookie_header("edgion_oidc_session=single");
+    let value = plugin.read_session_cookie_value(&session).unwrap().unwrap();
+    assert_eq!((value.raw.as_str(), value.prior_chunks), ("single", 0));
+    // A valid chunk set reports its count; alongside a leftover single cookie it fails closed.
+    let session =
+        session_with_cookie_header("edgion_oidc_session_chunks=2; edgion_oidc_session_0=aa; edgion_oidc_session_1=bb");
+    let value = plugin.read_session_cookie_value(&session).unwrap().unwrap();
+    assert_eq!((value.raw.as_str(), value.prior_chunks), ("aabb", 2));
+    let session = session_with_cookie_header(
+        "edgion_oidc_session=single; edgion_oidc_session_chunks=2; edgion_oidc_session_0=aa; edgion_oidc_session_1=bb",
+    );
+    assert!(plugin.read_session_cookie_value(&session).is_err());
+    // Jars that keep expired cookies as empty values must not lock the session out.
+    let session = session_with_cookie_header("edgion_oidc_session=single; edgion_oidc_session_chunks=");
+    assert_eq!(
+        plugin.read_session_cookie_value(&session).unwrap().unwrap().raw,
+        "single"
+    );
+    let session = session_with_cookie_header(
+        "edgion_oidc_session=; edgion_oidc_session_chunks=2; edgion_oidc_session_0=aa; edgion_oidc_session_1=bb",
+    );
+    assert_eq!(plugin.read_session_cookie_value(&session).unwrap().unwrap().raw, "aabb");
+    let session = session_with_cookie_header("edgion_oidc_session=; edgion_oidc_session_chunks=");
+    assert!(plugin.read_session_cookie_value(&session).unwrap().is_none());
+    assert_eq!(plugin.prior_session_chunks(&session), 0);
+}
+
+#[test]
+fn every_written_session_line_fits_the_limit_or_the_write_fails() {
+    // Property over limits and value sizes: a successful write never emits a line above
+    // the limit (this pins the `_chunks` worst-case overhead), and chunking stays within
+    // the configured count, including the equality boundary.
+    for max_bytes in (40..=400).step_by(3) {
+        for len in [1usize, 6, 7, 50, 150, 700] {
+            let plugin = chunking_plugin(max_bytes, 16);
+            let sealed = "s".repeat(len);
+            if let Ok(cookies) = plugin.build_session_set_cookies(&sealed, 3600, 0) {
+                for cookie in cookies.iter().filter(|cookie| !cookie.contains("Max-Age=0")) {
+                    assert!(cookie.len() <= max_bytes as usize, "{max_bytes}/{len}: {cookie}");
+                }
+                let header = cookie_header_from_set_cookies(&cookies);
+                let session = session_with_cookie_header(&header);
+                assert_eq!(plugin.read_session_cookie_value(&session).unwrap().unwrap().raw, sealed);
+            }
+        }
+    }
+    let exact = chunking_plugin(512, 2);
+    let cookies = exact.build_session_set_cookies(&"x".repeat(700), 3600, 0).unwrap();
+    assert!(cookies
+        .iter()
+        .any(|cookie| cookie.starts_with("edgion_oidc_session_chunks=2;")));
+}
+
+#[test]
+fn stale_chunk_expiry_is_clamped_to_the_reader_cap() {
+    let plugin = chunking_plugin(3800, 8);
+    let cookies = plugin.build_session_set_cookies("small", 3600, 99).unwrap();
+    assert_eq!(cookies.len(), 2 + 16);
+    assert_eq!(cookies.last().unwrap(), &expire_line("edgion_oidc_session_15"));
+}
+
+#[test]
+fn chunk_names_follow_the_configured_session_cookie_name() {
+    let mut cfg = base_config();
+    cfg.session_cookie_name = "custom".to_string();
+    cfg.max_session_cookie_bytes = 256;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let cookies = plugin.build_session_set_cookies(&"v".repeat(600), 60, 0).unwrap();
+    assert!(cookies[0].starts_with("custom_0="));
+    assert!(cookies.iter().any(|cookie| cookie.starts_with("custom_chunks=")));
+    let mut session = MockPluginSession::new();
+    let remaining = install_request_cookies(
+        &mut session,
+        "custom_chunks=2; custom_0=a; custom_1=b; edgion_oidc_session_0=app",
+    );
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
+    assert_eq!(remaining.lock().as_deref(), Some("edgion_oidc_session_0=app"));
+}
+
+#[test]
+fn strip_gateway_owned_cookies_removes_every_chunk_name() {
+    let plugin = chunking_plugin(3800, 8);
+    let mut session = MockPluginSession::new();
+    let cookies = install_request_cookies(
+        &mut session,
+        "app=keep; edgion_oidc_session_chunks=2; edgion_oidc_session_0=aa; edgion_oidc_session_15=zz; edgion_oidc_session_1=bb; edgion_oidc_state=s; edgion_oidc_session_16=app",
+    );
+    plugin.strip_gateway_owned_cookies(&mut session).unwrap();
+    assert_eq!(cookies.lock().as_deref(), Some("app=keep; edgion_oidc_session_16=app"));
 }
 
 #[test]
@@ -3514,31 +3913,6 @@ fn test_two_openid_instances_get_distinct_clients() {
     assert!(!std::sync::Arc::ptr_eq(&a.client, &b.client));
     assert!(std::ptr::eq(a.http_client(), a.client.as_ref()));
     assert!(std::ptr::eq(b.http_client(), b.client.as_ref()));
-}
-
-#[tokio::test]
-async fn test_remove_cached_access_token() {
-    let cfg = base_config();
-    let oidc = OpenidConnect::new(&cfg, "default".to_string());
-    let now = OpenidConnect::now_unix_secs();
-
-    oidc.cache_access_token("session-abc", "token-xyz", Some(now + 60))
-        .await;
-    assert_eq!(
-        oidc.get_cached_access_token("session-abc").await,
-        Some("token-xyz".to_string()),
-        "token should be cached before removal"
-    );
-
-    oidc.remove_cached_access_token("session-abc").await;
-    assert_eq!(
-        oidc.get_cached_access_token("session-abc").await,
-        None,
-        "token should be gone after removal"
-    );
-
-    // No-op on empty string
-    oidc.remove_cached_access_token("").await; // should not panic
 }
 
 // ── Group I: load-time path normalization ─────────────────────────────────────
@@ -4666,7 +5040,6 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
                 Duration::from_secs(60),
             );
             let payload = OidcSessionCookie {
-                session_ref: format!("cleanup-{scenario}"),
                 access_token: token.clone(),
                 created_at: now,
                 session_expires_at: now + 3600,
@@ -4713,16 +5086,20 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
                     http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
                 );
             }
+            if !matches!(scenario, "bearer" | "pass") {
+                headers.insert(
+                    http::header::COOKIE,
+                    http::HeaderValue::from_str(&format!("edgion_oidc_session={encoded}")).unwrap(),
+                );
+            }
             session.expect_request_header_map().return_const(headers);
-            let cookie = (!matches!(scenario, "bearer" | "pass")).then_some(encoded);
-            session.expect_get_cookie().returning(move |_| cookie.clone());
             session.expect_set_request_header_value().returning(|_, _| Ok(()));
             session.expect_remove_request_header().returning(|_| Ok(()));
             session.expect_append_response_header().returning(|_, _| Ok(()));
             session.expect_record_outcome().returning(|_, _| {});
             session
                 .expect_remove_request_cookies()
-                .withf(|names| names == ["edgion_oidc_session", "edgion_oidc_state"])
+                .withf(|names| names == gateway_owned_cookie_names().as_slice())
                 .times(1)
                 .returning(move |_| Err(error));
             session.expect_write_response_header().never();

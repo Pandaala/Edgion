@@ -2,13 +2,13 @@
 # Apply order overwrites the base config (same name), so this overlay
 # duplicates the base spec verbatim and only adds globalPluginsRef.
 #
-# Two refs are declared:
-#   - gp-resp-header-modifier  (real, defined in 01_EdgionPlugins_*.yaml)
-#   - ghost / edgion-default   (DANGLING, intentional - Task 14 dangling-ref test)
+# One ref is declared: gp-resp-header-modifier (defined in 01_EdgionPlugins_*.yaml).
+# A request through this gateway should succeed (200) with X-Global-Plugin added.
 #
-# A request through this gateway should still succeed (200), with X-Global-Plugin
-# added by the resp-header-modifier global plugin, and a single tracing::warn!
-# logged for the dangling "ghost" reference.
+# Do not add a dangling reference here: a missing global target fails closed
+# (500) for every Gateway of this class, which is every suite sharing
+# example-gateway. The fail-closed case uses the private Gateway in
+# 04_Gateway_global-plugins-missing.yaml instead.
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
@@ -49,9 +49,4 @@ spec:
 
   globalPluginsRef:
     - name: gp-resp-header-modifier
-      namespace: edgion-default
-    # Dangling reference (intentional): no EdgionPlugins by this name exists.
-    # Verifies the resolver tolerates missing refs (request still 200) and
-    # emits a single tracing::warn! per request rather than failing.
-    - name: ghost
       namespace: edgion-default

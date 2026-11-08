@@ -5,10 +5,11 @@
 //! Run: cargo test -p edgion-gateway --lib dependency_error_integration -- --ignored
 
 use super::dependency_error_tests::{
-    assert_bad_gateway, assert_safe_log, config, discovery, expect_auth_response, request,
+    assert_bad_gateway, assert_safe_log, config, discovery, expect_auth_response, request, request_with_cookie,
 };
 use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use serde_json::json;
 use wiremock::matchers::path;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -210,6 +211,9 @@ async fn userinfo_failure_keeps_authenticated_request_and_claim_header_fallback(
         plugin.cache_introspection_claims("private-access-token", &claims).await;
         let mut session = request(Some("private-access-token"));
         session
+            .expect_remove_request_cookies()
+            .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Removed));
+        session
             .expect_set_request_header_value()
             .times(1)
             .returning(move |name, value| {
@@ -231,7 +235,7 @@ async fn userinfo_failure_keeps_authenticated_request_and_claim_header_fallback(
 
 #[tokio::test]
 #[ignore = "network integration test: explicit local IdP fixture"]
-async fn revocation_failure_still_clears_logout_cookies_and_access_cache() {
+async fn revocation_failure_still_clears_logout_cookies() {
     let server = MockServer::start().await;
     Mock::given(path("/revoke"))
         .respond_with(ResponseTemplate::new(503).set_body_string("private-provider-error"))
@@ -245,21 +249,18 @@ async fn revocation_failure_still_clears_logout_cookies_and_access_cache() {
     let plugin = OpenidConnect::new(&cfg, "default".into());
     plugin.jwks_provider.seed_discovery(discovery(&server.uri())).await;
     let cookie = OidcSessionCookie {
-        session_ref: "private-session-ref".into(),
-        access_token: String::new(),
+        access_token: "private-access-token".into(),
         created_at: OpenidConnect::now_unix_secs(),
         session_expires_at: OpenidConnect::now_unix_secs() + 3600,
         expires_at: None,
         id_token: None,
         refresh_token: Some("private-refresh-token".into()),
     };
-    plugin
-        .cache_access_token(&cookie.session_ref, "private-access-token", None)
-        .await;
     let encoded = OpenidConnect::encode_signed_cookie_payload(&cookie, plugin.session_cipher().unwrap()).unwrap();
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const(cfg.logout_path.clone());
-    session.expect_get_cookie().returning(move |_| Some(encoded.clone()));
+    let cookie_header = format!("edgion_oidc_session={encoded}");
+    setup_header_mocks(&mut session, &[("cookie", cookie_header.as_str())]);
     session.expect_downstream_is_tls().return_const(Some(true));
     session
         .expect_write_response_header()
@@ -269,7 +270,8 @@ async fn revocation_failure_still_clears_logout_cookies_and_access_cache() {
             assert!(end);
             assert_eq!(header.headers["location"], "https://app.example.test/logged-out");
             let cookies: Vec<_> = header.headers.get_all("set-cookie").iter().collect();
-            assert_eq!(cookies.len(), 2);
+            // Single, chunk count, 16 chunk slots and the state cookie.
+            assert_eq!(cookies.len(), 19);
             for cookie in cookies {
                 assert!(cookie.to_str().unwrap().contains("Max-Age=0"));
                 assert!(!cookie.to_str().unwrap().contains("private-"));
@@ -281,7 +283,6 @@ async fn revocation_failure_still_clears_logout_cookies_and_access_cache() {
         plugin.run_request(&mut session, &mut log).await,
         PluginRunningResult::ErrTerminateRequest
     );
-    assert!(plugin.get_cached_access_token("private-session-ref").await.is_none());
     assert_safe_log(&log);
     assert!(serde_json::to_string(&log).unwrap().contains("revocation"));
     server.verify().await;
@@ -310,17 +311,19 @@ async fn failed_preemptive_refresh_does_not_invalidate_existing_valid_token() {
         )
         .await;
     let cookie: OidcSessionCookie = OidcSessionCookie {
-        session_ref: "private-session-ref".into(),
         access_token: "private-access-token".into(),
         created_at: OpenidConnect::now_unix_secs(),
         session_expires_at: OpenidConnect::now_unix_secs() + 3600,
-        expires_at: Some(expiry),
+        // Refresh horizon already reached while the token itself is still valid.
+        expires_at: Some(OpenidConnect::now_unix_secs()),
         id_token: None,
         refresh_token: Some("private-refresh-token".into()),
     };
     let encoded = OpenidConnect::encode_signed_cookie_payload(&cookie, plugin.session_cipher().unwrap()).unwrap();
-    let mut session = request(None);
-    session.expect_get_cookie().returning(move |_| Some(encoded.clone()));
+    let mut session = request_with_cookie(None, Some(&encoded));
+    session
+        .expect_remove_request_cookies()
+        .returning(|_| Ok(crate::request_cookie::CookieEditOutcome::Removed));
     let mut log = PluginLog::new("OpenidConnect");
     assert_eq!(
         plugin.run_request(&mut session, &mut log).await,

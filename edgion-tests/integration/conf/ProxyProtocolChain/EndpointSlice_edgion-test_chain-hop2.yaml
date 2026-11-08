@@ -8,7 +8,7 @@ metadata:
 addressType: IPv4
 ports:
   - name: http
-    port: 58531
+    port: 28531
     protocol: TCP
 endpoints:
   - addresses:

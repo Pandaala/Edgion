@@ -11,9 +11,9 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`edgion_oidc_session` (or `sessionCookieName`) and `edgion_oidc_state` are Gateway credentials. Every request path that continues upstream strips both names through `auth_common::strip_cookies` before proxying. `hideCredentials` remains bearer-`Authorization` only.
+`edgion_oidc_session` (or `sessionCookieName`), its chunk cookies (`<name>_chunks`, `<name>_0` .. `<name>_15`, gw-plugin-03) and `edgion_oidc_state` are Gateway credentials. Every request path that continues upstream strips all of these names through `auth_common::strip_cookies` before proxying. `hideCredentials` remains bearer-`Authorization` only.
 
-Both names are removed in one atomic operation. Successful session verification,
+All names are removed in one atomic operation (one 19-name plan). Successful session verification,
 refresh, leeway fallback, direct token authentication and unauthenticated Pass
 all propagate cleanup failures: opaque non-UTF-8 Cookie fields return 400; internal
 mutation failures return 500. Both use the existing runtime response dispatcher;
@@ -77,6 +77,11 @@ construction contract, not a live IdP round trip or measured performance gain.
 
 ## Callback-local temporary release
 
+> History: the cache-insertion steps below were removed by gw-plugin-03; the callback
+> now seals the access token into the session cookie
+> ([stateless-session-cookie](stateless-session-cookie.md)). The state-cookie and
+> payload release boundaries remain current.
+
 handle_callback releases the raw state-cookie String once decoding returns its
 owned state/error result. The decoded state still survives through redirect
 target selection. Successful access-token verification is required as before,
@@ -130,6 +135,11 @@ whole-authentication throughput, allocator RSS or secret erasure.
 
 
 ## Session persistence projection ownership (oidc-07)
+
+> History (superseded by gw-plugin-03): `for_persistence`, the borrowed `OidcSessionCookie<&str>`
+> projection, `session_ref` and the access-token cache no longer exist. The cookie is serialized
+> directly and carries the access token; the exact-JSON oracle now pins that schema. See
+> [stateless-session-cookie](stateless-session-cookie.md). This section is retained as evidence only.
 
 OidcSessionCookie retains one shared serde schema with a default String text
 parameter. Decoded cookies and refresh-cache entries remain owned. Persistence uses
@@ -185,8 +195,9 @@ does not establish an independent absolute session maximum.
 Expiry uses the existing unauthAction contract (including unauthenticated Pass),
 not a new failure policy. Bearer authentication is independent. The shared cookie
 decoder intentionally does not reject elapsed deadlines: logout still reads an
-expired new-format cookie to clear caches and perform configured revocation and
-IdP logout. Gateway-owned cookie stripping is unchanged. This introduces neither
+expired new-format cookie to perform configured revocation and IdP logout (every
+session cookie is expired unconditionally; the cache it formerly cleared was removed by
+gw-plugin-03). Gateway-owned cookie stripping is unchanged. This introduces neither
 a session store nor live-stream termination, global revocation or forced IdP
 password entry. Strict issue-time checks require synchronized Gateway clocks.
 
@@ -196,7 +207,7 @@ edgion-gateway/src/plugins/http/openid_connect/.
 
 Clock-controlled regressions live in
 edgion-gateway/tests/unit/plugins/http/openid_connect/plugin_test/session_expiry_tests.rs:
-expiry boundaries, overflow, malformed/old cookies, live cache and refresh results,
+expiry boundaries, overflow, malformed/old cookies, live cookie tokens and refresh results,
 refresh wait crossing expiry, post-verification checks, remaining cookie Max-Age,
 generation changes, logout and bearer isolation. The per-instance test clock is
 compiled out of production and has exact source-local entries in the unit-layout

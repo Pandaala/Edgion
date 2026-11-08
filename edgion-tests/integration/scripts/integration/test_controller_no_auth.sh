@@ -36,9 +36,6 @@ isolated_require_ports \
     NOAUTH_ADMIN_PORT NOAUTH_GRPC_PORT NOAUTH_PROBE_PORT NOAUTH_METRICS_PORT \
     ENVAUTH_ADMIN_PORT ENVAUTH_GRPC_PORT ENVAUTH_PROBE_PORT ENVAUTH_METRICS_PORT
 
-# Ports chosen to avoid conflicts with the main integration stack (12101/12151)
-# and the Center no-auth test (58100/58110).
-#
 # /health and /ready are served on the dedicated probe listener (not the admin
 # API), and /metrics on the dedicated metrics listener. We pin both to
 # test-specific ports via --probe-listen / --metrics-listen so they do not fall
@@ -57,16 +54,6 @@ fi
 # =============================================================================
 # Shared helpers
 # =============================================================================
-
-# Port precheck: abort early if the required port is already in use.
-precheck_port() {
-    local port="$1" label="$2"
-    if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-        echo "FAIL: port $port ($label) already in use; stop the conflicting process or rerun later"
-        lsof -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -3
-        return 1
-    fi
-}
 
 # Poll a URL until it returns 200 or the timeout is reached.
 # Also watches the process: if it exits early we abort.
@@ -159,11 +146,6 @@ EOF
 
     # Ensure EDGION_ADMIN_TOKEN is not set so no admin token is registered.
     unset EDGION_ADMIN_TOKEN
-
-    # Port prechecks
-    precheck_port "$NOAUTH_ADMIN_PORT" "controller-noauth admin" || return 1
-    precheck_port "$NOAUTH_GRPC_PORT"  "controller-noauth gRPC"  || return 1
-    precheck_port "$NOAUTH_PROBE_PORT" "controller-noauth probe" || return 1
 
     echo ""
     echo "=== Phase 1: Controller no-auth startup ==="
@@ -279,10 +261,6 @@ EOF
     local ENVAUTH_ADMIN_TOKEN="test-admin-token-edgion-no-auth-integ-xyz"
     export EDGION_ADMIN_TOKEN="$ENVAUTH_ADMIN_TOKEN"
 
-    precheck_port "$ENVAUTH_ADMIN_PORT" "controller-envauth admin" || return 1
-    precheck_port "$ENVAUTH_GRPC_PORT"  "controller-envauth gRPC"  || return 1
-    precheck_port "$ENVAUTH_PROBE_PORT" "controller-envauth probe" || return 1
-
     echo ""
     echo "=== Phase 2: Controller env-var auth startup ==="
 
@@ -346,6 +324,7 @@ EOF
 # Entry point
 # =============================================================================
 main() {
+    python3 "${UTILS_DIR}/check_isolated_ports.py" --scenario controller_auth
     run_phase1
     run_phase2
     echo ""

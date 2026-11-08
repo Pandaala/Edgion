@@ -15,4 +15,4 @@ spec:
             value: /
       backendRefs:
         - name: chain-hop2
-          port: 58531
+          port: 28531

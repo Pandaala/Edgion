@@ -17,7 +17,9 @@ Neither plugin-reference resolution path emits `tracing::warn!` (or any
   (`edgion-gateway/src/plugins/publication/views.rs`) into the prepared
   `PluginScope::resolved_globals` and `GatewayScope::resolved_http` slices.
   The request path (`pg_early_request_filter` / `pg_request_filter`) only
-  clones those slices into `ctx`. Dangling keys are dropped from the slice.
+  clones those slices into `ctx`. A dangling key becomes a fail-closed
+  `MissingEdgionPlugins` placeholder runtime in the slice (gw-core-02); the
+  plugin log, not `tracing`, attributes the resulting 500.
 - **Route ExtensionRefs** are still resolved per request by
   `resolve_route_ext_refs`
   (`edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs`);
@@ -33,7 +35,8 @@ request — log volume scaling with QPS, a violation of
 hot path). Removing the warns also dropped the diagnostic-name parameters that
 existed only to feed them. On 2026-11-06 (early-01) the global/Gateway lists
 moved to publication time; the no-logging decision was kept (decision rules
-below), and the resolution result is unchanged.
+below). On 2026-11-07 (gw-core-02) dangling global/Gateway keys changed from
+being dropped to failing closed; the no-logging decision is unaffected.
 
 Coverage: `prepared_global_slice_matches_reference_order_and_tracks_publication`,
 `prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner` and
@@ -70,9 +73,10 @@ promote it to a proper task rather than re-opening this finding. Controller-side
 status reporting of unresolved references is out of scope for this page (see
 `tasks/improve-issues/ctrl-proc2-02-egc-status-hides-unresolved-references.md`).
 
-This page covers logging only. Whether a missing global/Gateway target should
-fail closed instead of being dropped is a separate open finding:
-`tasks/improve-issues/gw-core-02-missing-gateway-and-global-plugins-fail-open.md`.
+This page covers logging only. The fail-closed semantics of a missing
+global/Gateway target are owned by
+[scoped publication](../../plugin-runtime/regression-guards/scoped-policy-runtime-publication.md)
+(gw-core-02).
 
 ## Background Notes
 
@@ -87,3 +91,4 @@ fail closed instead of being dropped is a separate open finding:
 
 - `gateway-routes-04` — 2026-05-24.
 - `early-01` — 2026-11-06 (global/Gateway lists prepared at publication).
+- `gw-core-02` — 2026-11-07 (dangling global/Gateway keys fail closed; still no logging).

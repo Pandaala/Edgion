@@ -1,6 +1,6 @@
 ---
 name: scoped-policy-runtime-publication
-description: Review GatewayClass policy publication, retained DSL/WAF candidates, shared entry ownership, and captured HTTP/stream admission scopes.
+description: Review GatewayClass policy publication, retained DSL/WAF candidates, shared entry ownership, captured HTTP/stream admission scopes, and fail-closed handling of missing Gateway-level/EGC-global plugin references.
 knowledge_type: regression-guards
 ---
 
@@ -205,7 +205,69 @@ Adaptive delta notifications use semantic target keys; inventories remain raw.
 
 ### Actual HTTP attachment field binding (C1)
 
-HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are removed before canonical PluginTarget classification, and invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. Missing (including previously invalid-target drop) still contributes no executable runtime; this is not universal request denial. Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection. A broader fail-closed attachment policy is separate work, not part of this identity migration.
+HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are removed before canonical PluginTarget classification, and invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. A Missing target contributes no class-scope compiled entry; how a miss is enforced depends on the attachment point (see the gw-core-02 section below). Slots removed as invalid before classification never become keys and are outside that rule; that remaining fail-open is tracked in `tasks/todo/gw-core-02b-malformed-plugin-attachment-refs-fail-open.md`. Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection.
+
+### Missing Gateway-level and EGC-global HTTP targets fail closed (gw-core-02)
+
+Trigger: an EGC `globalPluginsRef` entry or a Gateway `edgion.io/edgion-plugins`
+key names an `EdgionPlugins` that is absent from the published class scope
+(deleted, renamed, mistyped, pruned by GitOps before the referrer, moved between
+namespaces). Before the fix, `PluginScope::resolve_http_runtimes`
+(`edgion-gateway/src/plugins/publication/views.rs`) used `filter_map` and dropped
+the key, so `resolved_globals` / `GatewayScope::resolved_http` silently lost the
+plugin list and requests were proxied without gateway-wide auth/ACL/WAF/rate
+limits. Route ExtensionRefs (500) and stream plugins (Deny) already failed closed.
+
+Correct behavior: on an available scope, `resolve_http_runtimes` keeps every key
+in order and substitutes one shared `PluginRuntime::missing_reference()` per
+publication for each miss. That runtime is sealed through the canonical
+`seal_fail_closed` / `RejectFilter` path (`MissingEdgionPlugins` in the plugin
+log), so the early preflight gate and the request stage both answer 500 before
+upstream. No `tracing` is added (cold publication path; see
+[no-tracing rule](../../observability/mandatory-design/global-plugins-resolve-no-tracing.md)).
+The placeholder is not inserted into `PluginScope::http`, so ExtensionRef
+resolution, `http_log_fields` and AI/GraphQL rule admission keep their own miss
+semantics. An unavailable scope still prepares nothing because requests answer
+503 first. A request keeps the slice it captured; a later publication in which
+the target arrives rebuilds the scope and new requests run the real plugin.
+
+No per-reference opt-out (`optional: true`) was added. This is a decision
+resting on the frozen failure-policy rule in `skills/00-design-rules.md` (no new
+fail-open/fail-close config shape): an optional reference would act as one.
+Revisit only with an explicit product requirement for "apply if present".
+
+Limits: a missing global target denies every request of the class, and on a
+single-Gateway listener the early preflight gate denies before route matching,
+including ACME HTTP-01 challenges on that listener (the same reach as the
+ambiguous/invalid-config gates). On shared listeners the scope is captured only
+after route matching, so unmatched requests still get 404. Malformed reference
+slots remain fail-open (gw-core-02b, tracked above).
+
+Verification: unit tests
+`prepared_global_slice_matches_reference_order_and_tracks_publication`,
+`prepared_gateway_slice_matches_keys_and_reuses_unchanged_owner`,
+`prepared_gateway_slice_keeps_ambiguous_placeholder`
+(`edgion-gateway/tests/unit/plugins/publication/mod_test.rs`) and
+`early_global_generation_and_missing_reference_stay_pinned_and_deny`,
+`deferred_gateway_owner_pins_hits_and_misses_when_first_known`
+(`edgion-gateway/tests/unit/routes/http/proxy_http/pg_early_request_filter_test.rs`).
+Integration: `global_plugins_snapshot_missing_gateway_ref_fails_closed`
+(EdgionPlugins/GlobalPluginsSnapshot, private Gateway on port 32007, local mode
+only): asserts the 500, zero upstream attempts and `MissingEdgionPlugins` in the
+access log. The full local integration run passed on 2026-11-07 (286 suites,
+0 failed). Only the Gateway-annotation path has an integration case; the
+EGC-global path is covered by unit tests only, and the K8s fixtures have no
+equivalent case. A Gateway without listeners also gets a slice (placeholders for
+keys outside the class signature); it serves no traffic, and the slice stays a
+pure function of (scope, keys), so reuse remains correct when listeners appear. The shared `example-gateway` EGC (local overlay,
+`edgion-tests/k8s/conf/base/EdgionGatewayConfig.yaml`, and the BodyDynamic/DslBody
+K8s dynamic-update copies) must never carry a dangling global reference, because
+it would deny every suite on that class; the former intentional `ghost` reference
+was removed from all of them.
+
+Re-evaluate if attachment references gain an explicit optional/required contract,
+or if Controller admission starts withholding Gateways with unresolved plugin refs.
+Related open finding: ctrl-proc2-02 (EGC status hides unresolved references).
 
 ## Actual stream attachment owner boundary (C2)
 

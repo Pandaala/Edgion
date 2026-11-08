@@ -1,5 +1,7 @@
 //! Retained authenticated session deadlines survive OIDC configuration replacement.
 //! Uses the shared introspection fixture, not an authorization-code/token endpoint.
+//! The sealed cookie carries the access token, so every plugin generation serves it
+//! statelessly, including when it arrives as Envoy-style chunk cookies.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
@@ -16,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const HOST: &str = "oidc-session-expiry.example.com";
 const SESSION_SECRET: &str = "oidc-expiry-fixture-secret-32-bytes-long";
 const TOKEN: &str = "oidc-active-token";
+/// Retained `(session cookie fragment, expected to authenticate)` pairs.
 static RETAINED: Mutex<Option<Vec<(String, bool)>>> = Mutex::new(None);
 
 struct RetainedGuard;
@@ -43,7 +46,6 @@ fn encode_cookie(payload: &Value) -> Result<String> {
 fn capture_cookies() -> Result<RetainedGuard> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let base = json!({
-        "session_ref": "oidc-expiry-fixture",
         "access_token": TOKEN,
         "created_at": now - 120,
         "session_expires_at": now + 600,
@@ -59,11 +61,21 @@ fn capture_cookies() -> Result<RetainedGuard> {
         .as_object_mut()
         .context("fixture must be an object")?
         .remove("session_expires_at");
+    let single = |value: String| format!("edgion_oidc_session={value}");
+    let sealed = encode_cookie(&base)?;
+    let (first, second) = sealed.split_at(sealed.len() / 2);
+    let chunked =
+        format!("edgion_oidc_session_chunks=2; edgion_oidc_session_0={first}; edgion_oidc_session_1={second}");
+    // A count that promises a missing chunk, with no single fallback, fails closed.
+    let malformed =
+        format!("edgion_oidc_session_chunks=3; edgion_oidc_session_0={first}; edgion_oidc_session_1={second}");
     *RETAINED.lock() = Some(vec![
-        (encode_cookie(&base)?, true),
-        (encode_cookie(&expired)?, false),
-        (encode_cookie(&future)?, false),
-        (encode_cookie(&missing)?, false),
+        (single(sealed.clone()), true),
+        (single(encode_cookie(&expired)?), false),
+        (single(encode_cookie(&future)?), false),
+        (single(encode_cookie(&missing)?), false),
+        (chunked, true),
+        (malformed, false),
     ]);
     Ok(RetainedGuard)
 }
@@ -99,10 +111,7 @@ impl TestSuite for Phase {
                                 .http_client
                                 .get(format!("{}/headers", ctx.http_url()))
                                 .header("host", HOST)
-                                .header(
-                                    "cookie",
-                                    format!("app=keep; edgion_oidc_session={cookie}; edgion_oidc_state=state"),
-                                )
+                                .header("cookie", format!("app=keep; {cookie}; edgion_oidc_state=state"))
                                 .send()
                                 .await?;
                             let expected = if *allowed { 200 } else { 401 };
@@ -133,7 +142,7 @@ impl TestSuite for Phase {
                             .get(format!("{}/headers", ctx.http_url()))
                             .header("host", HOST)
                             .header("authorization", format!("Bearer {TOKEN}"))
-                            .header("cookie", format!("edgion_oidc_session={}", cookies[1].0))
+                            .header("cookie", cookies[1].0.clone())
                             .send()
                             .await?;
                         anyhow::ensure!(

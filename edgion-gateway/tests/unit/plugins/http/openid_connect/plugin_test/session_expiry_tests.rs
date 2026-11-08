@@ -11,8 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 fn payload() -> OidcSessionCookie {
     OidcSessionCookie {
-        session_ref: "expiry-session".into(),
-        access_token: String::new(),
+        access_token: "live-token".into(),
         created_at: 1000,
         session_expires_at: 1060,
         expires_at: Some(OpenidConnect::now_unix_secs() + 3600),
@@ -46,9 +45,6 @@ async fn plugin(now: u64, action: UnauthAction) -> (OpenidConnect, Arc<AtomicU64
             end_session_endpoint: Some("https://idp.example.com/logout".into()),
             revocation_endpoint: None,
         })
-        .await;
-    plugin
-        .cache_access_token("expiry-session", "live-token", payload().expires_at)
         .await;
     plugin
         .cache_introspection_claims(
@@ -101,13 +97,13 @@ fn absolute_deadline_boundaries_and_checked_creation() {
 }
 
 #[tokio::test]
-async fn expired_cookie_cannot_use_live_cache_or_refresh_result() {
+async fn expired_cookie_cannot_use_live_token_or_refresh_result() {
     for now in [1059, 1060, 1061] {
-        for cache_hit in [false, true] {
+        for token_in_cookie in [false, true] {
             let (plugin, _) = plugin(now, UnauthAction::Deny).await;
-            let value = payload();
-            if !cache_hit {
-                plugin.remove_cached_access_token(&value.session_ref).await;
+            let mut value = payload();
+            if !token_in_cookie {
+                value.access_token.clear();
             }
             let encoded =
                 OpenidConnect::encode_signed_cookie_payload(&value, plugin.session_cipher().unwrap()).unwrap();
@@ -128,9 +124,13 @@ async fn expired_cookie_cannot_use_live_cache_or_refresh_result() {
                     });
                 session
                     .expect_append_response_header()
-                    .times(usize::from(!cache_hit))
+                    // Refreshed single cookie plus the chunk-count expiration.
+                    .times(2 * usize::from(!token_in_cookie))
                     .returning(|_, cookie| {
-                        assert!(cookie.contains("Max-Age=1;"));
+                        assert!(
+                            (cookie.starts_with("edgion_oidc_session=") && cookie.contains("Max-Age=1;"))
+                                || cookie.starts_with("edgion_oidc_session_chunks=; ")
+                        );
                         Ok(())
                     });
             } else {
@@ -179,30 +179,34 @@ async fn malformed_and_future_session_times_fail_closed() {
 #[tokio::test]
 async fn refreshed_cookie_preserves_deadline_and_uses_remaining_max_age() {
     let (plugin, clock) = plugin(1030, UnauthAction::Deny).await;
-    let mut value = payload();
-    value.access_token = "live-token".into();
+    let value = payload();
     let mut session = MockPluginSession::new();
+    // Only the first write publishes: the session cookie and the chunk-count expiration.
     session
         .expect_append_response_header()
-        .times(1)
+        .times(2)
         .returning(|name, header| {
             assert_eq!(name, "Set-Cookie");
-            assert!(header.contains("Max-Age=30;"));
+            assert!(header.contains("Max-Age=30;") || header.starts_with("edgion_oidc_session_chunks=; "));
             Ok(())
         });
-    plugin.maybe_set_session_cookie_header(&mut session, &value).await;
+    let mut log = PluginLog::new("OpenidConnect");
+    plugin
+        .maybe_set_session_cookie_header(&mut session, &value, 0, &mut log)
+        .await;
     assert_eq!(value.session_expires_at, 1060);
     clock.store(1060, Ordering::SeqCst);
-    plugin.remove_cached_access_token(&value.session_ref).await;
-    plugin.maybe_set_session_cookie_header(&mut session, &value).await;
-    assert!(plugin.get_cached_access_token(&value.session_ref).await.is_none());
+    plugin
+        .maybe_set_session_cookie_header(&mut session, &value, 0, &mut log)
+        .await;
+    assert!(plugin_log_entries(&log).is_empty());
 }
 
 #[tokio::test]
 async fn session_expiring_during_refresh_wait_cannot_authenticate() {
     let (plugin, clock) = plugin(1059, UnauthAction::Deny).await;
-    let value = payload();
-    plugin.remove_cached_access_token(&value.session_ref).await;
+    let mut value = payload();
+    value.access_token.clear();
     let encoded = OpenidConnect::encode_signed_cookie_payload(&value, plugin.session_cipher().unwrap()).unwrap();
     let key = OpenidConnect::refresh_lock_key(&encoded);
     let flight = plugin.refresh_singleflight.get_or_create(&key);
@@ -352,7 +356,7 @@ async fn verification_crossing_deadline_does_not_publish_identity() {
 }
 
 #[tokio::test]
-async fn expired_session_logout_keeps_id_hint_and_removes_cached_token() {
+async fn expired_session_logout_keeps_id_hint_and_expires_all_session_cookies() {
     let (plugin, _) = plugin(1060, UnauthAction::Deny).await;
     let encoded = OpenidConnect::encode_signed_cookie_payload(&payload(), plugin.session_cipher().unwrap()).unwrap();
     let mut session = MockPluginSession::new();
@@ -370,9 +374,16 @@ async fn expired_session_logout_keeps_id_hint_and_removes_cached_token() {
                 .to_str()
                 .unwrap()
                 .contains("id_token_hint=id-token-hint"));
-            for cookie in header.headers.get_all("set-cookie") {
-                assert!(cookie.to_str().unwrap().contains("Max-Age=0;"));
-            }
+            let cookies: Vec<String> = header
+                .headers
+                .get_all("set-cookie")
+                .iter()
+                .map(|cookie| cookie.to_str().unwrap().to_string())
+                .collect();
+            assert_eq!(
+                cookies,
+                super::tests::expected_logout_set_cookies_with_state_path("/callback")
+            );
             Ok(())
         });
     assert_eq!(
@@ -381,7 +392,6 @@ async fn expired_session_logout_keeps_id_hint_and_removes_cached_token() {
             .await,
         PluginRunningResult::ErrTerminateRequest
     );
-    assert!(plugin.get_cached_access_token("expiry-session").await.is_none());
 }
 
 #[tokio::test]
@@ -408,7 +418,7 @@ async fn valid_bearer_ignores_expired_session_deadline() {
             Ok(())
         });
     session.expect_remove_request_cookies().times(1).returning(|names| {
-        assert_eq!(names, &["edgion_oidc_session", "edgion_oidc_state"]);
+        assert_eq!(names, super::tests::gateway_owned_cookie_names().as_slice());
         Ok(crate::request_cookie::CookieEditOutcome::Removed)
     });
     assert_eq!(

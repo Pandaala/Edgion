@@ -41,7 +41,11 @@ Standalone scenarios with fixed host ports load them from
 variables with `isolated_require_ports` before starting a process. Register a new
 fixed port there; do not duplicate its numeric value in the scenario script.
 `run_integration.sh` calls `check_isolated_ports.py` before building or starting
-dependencies. The check rejects duplicate assignments and probes each selected
+dependencies. Host assignments stay in `1024..32767`, below the default Linux
+and macOS ephemeral ranges, so outbound connections cannot claim a future test
+listener port under those defaults. Custom OS ephemeral ranges must also exclude
+the registered ports. The check rejects out-of-range host assignments and
+duplicate assignments and probes each selected
 TCP port using its registered bind address and socket reuse policy. This avoids
 flagging unrelated outbound connections that do not block the real listener.
 Docker-only scenarios are probed after Docker
