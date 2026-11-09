@@ -203,6 +203,24 @@ Failure branches (`Deny bad key`, `Deny no key`) and anonymous pass-through (`Al
 ## Behavior Details
 
 - Multiple `keySources` are checked in order; the first non-empty value is used for authentication
+- Every `upstreamHeaderFields` name is removed from the request on both the keyed and the
+  anonymous path before the matched key's values are written, so a name the key has no value for
+  stays absent instead of carrying a client-supplied value. If a header cannot be cleared or
+  written, or a hidden header or query credential cannot be removed, the request is rejected
+  with the normal `401` (after `authFailureDelayMs`); the access log records
+  `identity header rejected` or `credential removal failed` and the diagnostic
+  `AuthHeaderMutationRejected`. A hidden `cookie` credential that cannot be removed keeps the
+  cookie cleanup response instead (`400` for an unsanitizable `Cookie` header, `500` for an
+  internal failure), not the `401`.
+  `AuthHeaderMutationRejected` is an access-log diagnostic (an `error` entry in the
+  `diagnostics` array), not a metric, and one occurrence is not an alert condition by itself:
+  most causes are operator misconfiguration, but a client can trigger it by sending the hidden
+  query-parameter credential to a gRPC-JSON-transcoded route, whose query is sealed. Alert on
+  its rate with log-based alerting.
+  `upstreamHeaderFields` names must be valid header names and cannot be `Host` or a framing/hop-by-hop header (`Content-Length`, `Transfer-Encoding`, `TE`, `Trailer`, `Expect`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`), since every
+  listed name is removed on each request (including for later plugins in the chain, so do not list the
+  header this plugin reads its key from). `anonymous` must be valid header text when it is forwarded as
+  `X-Consumer-Username` (the whitelist entry matches case-insensitively).
 - With `hideCredentials: true`, the source used for authentication is removed from the request before it is forwarded upstream. This covers the `header`, `query`, and `cookie` sources (for `query`, the matched parameter is stripped from the request URI; for `cookie`, the matched cookie is removed from the `Cookie` header). A `ctx` source (including a value written by [WebhookKeyGet](./webhook-key-get.md)) is already server-side and never travels in the forwarded request, so nothing is stripped for it. WebhookKeyGet must run **before** KeyAuth; a reversed `requestPlugins` list is a silent auth bypass.
 - In `anonymous` mode, requests without a key still pass through with `X-Anonymous-Consumer: true`
 - Keys are stored in the `keys.yaml` field of Kubernetes Secrets as a YAML array

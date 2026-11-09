@@ -78,7 +78,7 @@ spec:
 | `minSecretLength` | Integer | `32` | Minimum secret key length |
 | `secretField` | String | `"secret"` | Shared-key field name in each `credentials.yaml` list entry |
 | `usernameField` | String | `"username"` | Username field name in each `credentials.yaml` list entry |
-| `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream |
+| `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream. Names must be valid header names and cannot be `Host` or a framing/hop-by-hop header (`Content-Length`, `Transfer-Encoding`, `TE`, `Trailer`, `Expect`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`) (rejected at admission) |
 
 ### `secretGroups` sub-table (`HmacAuthSecretGroup`)
 
@@ -202,6 +202,7 @@ In theory, an attacker who obtains a valid signature can replay it arbitrarily m
 | Threat path | Defense |
 |---|---|
 | Man-in-the-middle capture | **HTTPS** (TLS prevents signature exposure on the wire) |
+| Forged identity header | Every `upstreamHeaderFields` name is removed on keyed and anonymous requests before the credential's values are written. A header that cannot be cleared or written, or a hidden credential that cannot be removed, rejects the request after `authFailureDelayMs` with the `401` that path uses for a bad credential (`Invalid signature` on a keyed request, `Missing Authorization header` on an anonymous one) and records the diagnostic `AuthHeaderMutationRejected` — an access-log diagnostic (`diagnostics` array), not a metric or an alert condition by itself; alert on its rate with log-based alerting, since the shared code also counts client-triggerable credential-removal failures in other auth plugins. Note: a whitelisted name the credential has no value for is removed, which breaks an upstream that re-verifies a client signature covering it |
 | Signature leaked via logs | Enable `hideCredentials: true`; do not add `Authorization`, `Proxy-Authorization`, or `Signature` to access-log headers |
 | Legitimate client replays maliciously | **Business-layer idempotency keys** (not a gateway concern) |
 | Window configured too wide | Shrink `clockSkew` (e.g., `60`) on high-sensitivity endpoints |

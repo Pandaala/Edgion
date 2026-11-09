@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::http::common::auth_common::{CLAIM_HEADER_MUTATION_FAILED, CREDENTIAL_REMOVAL_FAILED};
 
 #[async_trait]
 impl RequestFilter for OpenidConnect {
@@ -108,15 +109,18 @@ impl RequestFilter for OpenidConnect {
                                         session_cookie.id_token.as_deref(),
                                         userinfo_json.as_deref(),
                                         &claims,
+                                        true,
                                     )
                                     .is_err()
                                 {
-                                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                                    return self
+                                        .deny_header_mutation(session, plugin_log, CLAIM_HEADER_MUTATION_FAILED)
+                                        .await;
                                 }
-                                plugin_log.push("session token verified");
                                 if let Err(error) = self.strip_gateway_owned_cookies(session) {
                                     return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
                                 }
+                                plugin_log.push("session token verified");
                                 return PluginRunningResult::GoodNext;
                             }
                             Err(err) => {
@@ -158,15 +162,22 @@ impl RequestFilter for OpenidConnect {
                                                             session_cookie.id_token.as_deref(),
                                                             userinfo_json.as_deref(),
                                                             &claims,
+                                                            true,
                                                         )
                                                         .is_err()
                                                     {
-                                                        return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                                                        return self
+                                                            .deny_header_mutation(
+                                                                session,
+                                                                plugin_log,
+                                                                CLAIM_HEADER_MUTATION_FAILED,
+                                                            )
+                                                            .await;
                                                     }
-                                                    plugin_log.push("token refresh on expiry");
                                                     if let Err(error) = self.strip_gateway_owned_cookies(session) {
                                                         return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
                                                     }
+                                                    plugin_log.push("token refresh on expiry");
                                                     return PluginRunningResult::GoodNext;
                                                 }
                                                 Err(err) => {
@@ -193,17 +204,24 @@ impl RequestFilter for OpenidConnect {
                                                                 session_cookie.id_token.as_deref(),
                                                                 userinfo_json.as_deref(),
                                                                 &claims,
+                                                                true,
                                                             )
                                                             .is_err()
                                                         {
-                                                            return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                                                            return self
+                                                                .deny_header_mutation(
+                                                                    session,
+                                                                    plugin_log,
+                                                                    CLAIM_HEADER_MUTATION_FAILED,
+                                                                )
+                                                                .await;
+                                                        }
+                                                        if let Err(error) = self.strip_gateway_owned_cookies(session) {
+                                                            return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
                                                         }
                                                         plugin_log.push(
                                                             "token refresh wait timeout; stale token within leeway",
                                                         );
-                                                        if let Err(error) = self.strip_gateway_owned_cookies(session) {
-                                                            return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
-                                                        }
                                                         return PluginRunningResult::GoodNext;
                                                     }
                                                     Ok(_) => {}
@@ -233,25 +251,32 @@ impl RequestFilter for OpenidConnect {
 
             match self.config.unauth_action {
                 UnauthAction::Pass => {
+                    // No identity is published on Pass, so every owned destination
+                    // must be absent rather than carry a client-supplied value. No
+                    // bearer token was verified here, so a configured
+                    // `Authorization` output is owned as well.
                     if crate::plugins::http::common::auth_common::clear_claim_headers(
                         session,
                         &self.claim_header_projection,
                     )
+                    .and_then(|()| self.clear_fixed_outputs(session, true))
                     .is_err()
                     {
-                        return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                        return self
+                            .deny_header_mutation(session, plugin_log, CLAIM_HEADER_MUTATION_FAILED)
+                            .await;
                     }
-                    plugin_log.push("no token; pass");
                     if let Err(error) = self.strip_gateway_owned_cookies(session) {
                         return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
                     }
+                    plugin_log.push("no token; pass");
                     return PluginRunningResult::GoodNext;
                 }
                 UnauthAction::Deny => {
                     plugin_log.push("no token; deny");
                     self.apply_auth_failure_delay().await;
                     let _ = self
-                        .send_unauthorized(session, "Unauthorized - Authentication required")
+                        .send_unauthorized(session, super::callback::AUTHENTICATION_REQUIRED_BODY)
                         .await;
                     return PluginRunningResult::ErrTerminateRequest;
                 }
@@ -288,16 +313,22 @@ impl RequestFilter for OpenidConnect {
             Ok(claims) => {
                 let userinfo_json = self.fetch_userinfo_json(&token, plugin_log).await;
                 if self
-                    .apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims)
+                    .apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims, false)
                     .is_err()
                 {
-                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                    return self
+                        .deny_header_mutation(session, plugin_log, CLAIM_HEADER_MUTATION_FAILED)
+                        .await;
                 }
                 // Skip credential hiding when access_token_in_authorization_header is true:
                 // apply_upstream_headers already wrote a fresh "Bearer <token>" into
                 // Authorization; removing it afterward would erase the intended upstream header.
-                if !self.config.access_token_in_authorization_header {
-                    self.hide_credentials_if_needed(session);
+                if !self.config.access_token_in_authorization_header
+                    && self.hide_credentials_if_needed(session).is_err()
+                {
+                    return self
+                        .deny_header_mutation(session, plugin_log, CREDENTIAL_REMOVAL_FAILED)
+                        .await;
                 }
                 if let Err(error) = self.strip_gateway_owned_cookies(session) {
                     return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);

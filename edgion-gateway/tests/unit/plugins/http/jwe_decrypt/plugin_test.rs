@@ -40,21 +40,165 @@ async fn missing_or_non_json_payload_clears_configured_headers_and_propagates_fa
                         Ok(())
                     }
                 });
-            let mut log = PluginLog::new("JweDecrypt");
-            assert_eq!(
-                plugin.run_request(&mut session, &mut log).await,
-                if removal_fails {
-                    PluginRunningResult::ErrResponse {
-                        status: 500,
-                        body: None,
-                    }
+            // The no-token bypass also owns `forwardHeader`; it is cleared after
+            // the projections (never reached when a projection clear failed).
+            session
+                .expect_remove_request_header()
+                .withf(|name| name == "x-decrypted-auth")
+                .times(usize::from(payload.is_none() && !removal_fails))
+                .returning(|_| Ok(()));
+            if removal_fails {
+                // Same response a bad token gets on that path: decrypt failure with a
+                // token, "token required" on the non-strict no-token bypass.
+                let body: &'static [u8] = if payload.is_some() {
+                    b"401 JWE decryption failed"
                 } else {
-                    PluginRunningResult::GoodNext
-                }
-            );
+                    b"401 JWE token required"
+                };
+                expect_header_deny(&mut session, body);
+            }
+            let mut log = PluginLog::new("JweDecrypt");
+            let result = plugin.run_request(&mut session, &mut log).await;
+            if removal_fails {
+                assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+                assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED), "got: {log:?}");
+                assert!(!log.contains("OK"), "got: {log:?}");
+                assert!(!log.contains("bypass"), "got: {log:?}");
+            } else {
+                assert_eq!(result, PluginRunningResult::GoodNext);
+            }
             assert!(!log.contains("private"));
         }
     }
+}
+
+/// Expect one recorded `AuthHeaderMutationRejected`, then the ordinary 401 response.
+fn expect_header_deny(session: &mut MockPluginSession, body: &'static [u8]) {
+    let mut sequence = Sequence::new();
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .in_sequence(&mut sequence)
+        .return_const(());
+    expect_auth_response(session, &mut sequence, 401, body);
+}
+
+#[tokio::test(start_paused = true)]
+async fn payload_header_mutation_deny_applies_the_failure_delay() {
+    use tokio::time::{advance, Duration, Instant};
+    let mut config = config_with_key(&test_key());
+    config.auth_failure_delay_ms = 100;
+    config.payload_to_headers = Some(HashMap::from([("sub".into(), "X-Sub".into())]));
+    let plugin = JweDecrypt::new(&config, "default".into());
+    let token = format!(
+        "Bearer {}",
+        encrypt_compact_jwe(r#"{"sub":"trusted"}"#, &test_key(), "A256GCM")
+    );
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", token.as_str())]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("injected").into()));
+    expect_header_deny(&mut session, b"401 JWE decryption failed");
+
+    let start = Instant::now();
+    let task = tokio::spawn(async move {
+        let mut log = PluginLog::new("JweDecrypt");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        (result, log)
+    });
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    advance(Duration::from_millis(99)).await;
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    advance(Duration::from_millis(1)).await;
+    let (result, log) = task.await.unwrap();
+    assert_eq!(Instant::now().duration_since(start), Duration::from_millis(100));
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED));
+}
+
+#[tokio::test]
+async fn bypass_removes_forged_forward_header() {
+    let mut config = config_with_key(&test_key());
+    config.strict = false;
+    let plugin = JweDecrypt::new(&config, "default".into());
+    let mut session = MockPluginSession::new();
+    // A client-forged decrypted payload must not reach the upstream.
+    setup_header_mocks(&mut session, &[("x-decrypted-auth", "forged")]);
+    session.expect_set_request_header_value().never();
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-decrypted-auth")
+        .times(1)
+        .returning(|_| Ok(()));
+    session.expect_record_error().never();
+    let mut log = PluginLog::new("JweDecrypt");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "bypass");
+}
+
+#[tokio::test]
+async fn bypass_forward_header_removal_failure_denies_token_required() {
+    let mut config = config_with_key(&test_key());
+    config.strict = false;
+    let plugin = JweDecrypt::new(&config, "default".into());
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-decrypted-auth", "forged")]);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-decrypted-auth")
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("injected").into()));
+    expect_header_deny(&mut session, b"401 JWE token required");
+    let mut log = PluginLog::new("JweDecrypt");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED), "got: {log:?}");
+    assert!(!log.contains("bypass"), "got: {log:?}");
+}
+
+#[tokio::test]
+async fn hidden_credential_removal_failure_denies_with_decrypt_failure() {
+    let mut config = config_with_key(&test_key());
+    config.hide_credentials = true;
+    let plugin = JweDecrypt::new(&config, "default".into());
+    let token = format!(
+        "Bearer {}",
+        encrypt_compact_jwe(r#"{"sub":"alice"}"#, &test_key(), "A256GCM")
+    );
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", token.as_str())]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, _| name == "x-decrypted-auth")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "authorization")
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("injected").into()));
+    expect_header_deny(&mut session, b"401 JWE decryption failed");
+    let mut log = PluginLog::new("JweDecrypt");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains(CREDENTIAL_REMOVAL_FAILED), "got: {log:?}");
+    assert!(!log.contains("OK"), "got: {log:?}");
 }
 
 fn test_key() -> Vec<u8> {

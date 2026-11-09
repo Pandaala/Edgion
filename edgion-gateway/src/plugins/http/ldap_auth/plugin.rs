@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
-    PreparedAuthChallenge,
+    PreparedAuthChallenge, CREDENTIAL_REMOVAL_FAILED, IDENTITY_HEADER_REJECTED,
 };
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
@@ -885,11 +885,29 @@ impl LdapAuth {
         set_sensitive_request_header(session, &self.auth.anonymous_header, "true")
     }
 
-    fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
+    /// Remove the client credentials when `hideCredentials` is on. A credential
+    /// that cannot be removed must deny instead of reaching the upstream.
+    fn hide_credentials_if_needed(
+        &self,
+        session: &mut dyn PluginSession,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
         if self.auth.hide_credentials {
-            let _ = session.remove_request_header("authorization");
-            let _ = session.remove_request_header("proxy-authorization");
+            session.remove_request_header("authorization")?;
+            session.remove_request_header("proxy-authorization")?;
         }
+        Ok(())
+    }
+
+    /// A failed identity-header write or credential removal: the same 401 as a
+    /// bad credential, plus the alertable diagnostic.
+    async fn deny_header(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.unauthorized(session).await
     }
 
     /// Every 401 of this plugin: the failure delay first (one place, so no
@@ -931,10 +949,11 @@ impl RequestFilter for LdapAuth {
             ParseAuthResult::Missing => {
                 if let Some(anon_user) = &self.auth.anonymous {
                     if self.apply_anonymous_headers(session, anon_user).is_err() {
-                        plugin_log.push_err("identity header rejected");
-                        return self.unauthorized(session).await;
+                        return self.deny_header(session, plugin_log, IDENTITY_HEADER_REJECTED).await;
                     }
-                    self.hide_credentials_if_needed(session);
+                    if self.hide_credentials_if_needed(session).is_err() {
+                        return self.deny_header(session, plugin_log, CREDENTIAL_REMOVAL_FAILED).await;
+                    }
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
                 }
@@ -1001,10 +1020,12 @@ impl RequestFilter for LdapAuth {
                 let forwarded = identity.as_deref().unwrap_or(credentials.username());
                 if self.apply_authenticated_headers(session, forwarded).is_err() {
                     drop(credentials);
-                    plugin_log.push_err("identity header rejected");
-                    return self.unauthorized(session).await;
+                    return self.deny_header(session, plugin_log, IDENTITY_HEADER_REJECTED).await;
                 }
-                self.hide_credentials_if_needed(session);
+                if self.hide_credentials_if_needed(session).is_err() {
+                    drop(credentials);
+                    return self.deny_header(session, plugin_log, CREDENTIAL_REMOVAL_FAILED).await;
+                }
                 plugin_log.push_fmt("OK user {}", la![sensitive(credentials.username())]);
                 PluginRunningResult::GoodNext
             }

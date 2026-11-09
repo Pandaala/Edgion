@@ -178,9 +178,9 @@ Discovery/JWKS 继续使用专用 snapshot provider；refresh singleflight regis
 | `maxHeaderValueBytes` | Integer | `4096` | 单个映射 Header 值的最大字节数 |
 | `maxTotalHeaderBytes` | Integer | `16384` | 所有映射 Header 的总最大字节数 |
 
-认证成功后，网关先清除所有 `claimsToHeaders` 配置的目标请求头，再生成上游请求头。声明缺失、为空、类型不支持、不安全或超限时，目标头保持不存在。即使固定令牌输出耗尽总请求头预算，也必须执行清理；清理失败返回 HTTP 500，不转发上游。固定输出头保持原有行为，此规则不扩展到匿名放行、跳过或禁用插件的路径。
+认证成功后，网关先清除所有 `claimsToHeaders` 配置的目标请求头，再生成上游请求头。声明缺失、为空、类型不支持、不安全或超限时，目标头保持不存在。即使固定令牌输出耗尽总请求头预算，也必须执行清理；清理失败返回 `401`（见下文），不转发上游。此规则不扩展到跳过或禁用插件的路径。
 
-`claimsToHeaders` 的目标不能是 `Host`（不区分大小写）；配置校验会拒绝它，因为 HTTP/2 的 `:authority` 可能在协议转换时重新生成该头。请使用 `X-Tenant` 等专用身份头。
+`claimsToHeaders` 的目标不能是 `Host` 或报文分帧/逐跳头（`Content-Length`、`Transfer-Encoding`、`TE`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`Upgrade`）（不区分大小写）；配置校验会拒绝它们：HTTP/2 的 `:authority` 可能在协议转换时重新生成 `Host`，而目标头在每次请求都会被清除，会改变请求的报文分帧。请使用 `X-Tenant` 等专用身份头。
 
 ### 安全参数
 
@@ -208,8 +208,14 @@ Discovery/JWKS 继续使用专用 snapshot provider；refresh singleflight regis
 
 插件执行时，先删除全部配置的投影目标头，再进行有界 claim/载荷投影。
 缺失、空值、不支持类型、非法字符或超限值使目标头保持不存在；
-总预算耗尽后的目标头同样不会残留客户端值。删除或投影写入失败返回固定 500，不转发请求。
-未认证的 `Pass` 放行也会清理配置目标。固定 token/userinfo 输出头保持各自既有行为。
+总预算耗尽后的目标头同样不会残留客户端值。删除或投影写入失败在 `authFailureDelayMs` 之后返回
+`401 Unauthorized - Authentication required`，记录诊断码 `AuthHeaderMutationRejected`，不转发请求。
+未认证的 `Pass` 放行也会清理配置目标。启用的固定输出头（`X-Access-Token`、`X-ID-Token`、`X-Userinfo`，
+以及 session cookie 模式下开启 `accessTokenInAuthorizationHeader` 时的 `Authorization`）在每条放行路径上
+写入前先删除，因此超限的值、或不是合法 HTTP 请求头文本的值（例如含控制字符）会被跳过，该头保持为空，而不是留下客户端自带的副本——
+跳过不算失败，不会拒绝请求；bearer 模式下保留已验证的客户端 `Authorization`。`hideCredentials` 删除失败也同样处理。
+`AuthHeaderMutationRejected` 是访问日志诊断码（`diagnostics` 数组中的 `error` 条目），不是指标，单次出现本身也不是告警条件；
+该码与其他鉴权插件共用，在那些插件中客户端可以触发它（把被隐藏的查询参数凭证发到查询串已封存的 gRPC-JSON 转码路由）。请通过基于日志的告警按其速率告警。
 未配置的头不受影响；插件禁用或条件跳过时不会执行清理，这些路径不保证身份头可信。
 
 ## 安全开关推荐配置

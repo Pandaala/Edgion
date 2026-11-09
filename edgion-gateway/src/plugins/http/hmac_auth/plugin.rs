@@ -6,7 +6,9 @@
 //! - clock skew validation via Date / X-Date
 //! - enforceHeaders validation
 
-use crate::plugins::http::common::auth_common::{prepare_sensitive_headers, set_sensitive_request_header};
+use crate::plugins::http::common::auth_common::{
+    prepare_sensitive_headers, remove_request_headers, set_sensitive_request_header,
+};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -21,20 +23,23 @@ use sha2::Digest;
 use sha2::{Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
+    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge, CREDENTIAL_REMOVAL_FAILED,
+    IDENTITY_HEADER_REJECTED,
 };
 use crate::plugins::runtime::body_gate::{
     body_read_failure_result, over_plugin_limit_len, plugin_limit_bytes, record_body_read_error_status,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, PluginSessionResult, RequestFilter};
 use crate::request_body::BodyReadError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential, HmacMatchConfig,
 };
-#[cfg(test)]
-use edgion_resources::EdgionErrorCode;
+
+/// 401 body for a bad signature, also used when an authenticated request's
+/// identity-header mutation or credential removal fails.
+const INVALID_SIGNATURE_MESSAGE: &str = "Invalid signature";
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;
@@ -60,6 +65,9 @@ pub struct HmacAuth {
     auth_challenge: PreparedAuthChallenge,
     anonymous: Option<String>,
     hide_credentials: bool,
+    /// Whitelisted metadata names (`upstreamHeaderFields`). The plugin owns
+    /// them: every continuation clears them before writing.
+    owned_header_names: Vec<String>,
     verifier: HmacVerifier,
 }
 
@@ -306,8 +314,17 @@ impl HmacAuth {
             auth_challenge: PreparedAuthChallenge::new("hmac", &config.realm),
             anonymous: config.anonymous.clone(),
             hide_credentials: config.hide_credentials,
+            owned_header_names: config.upstream_header_fields.clone(),
             verifier,
         }
+    }
+
+    /// The single delayed-response core: applies the shared failure delay,
+    /// then sends the challenge with `message`.
+    async fn send_delayed(&self, session: &mut dyn PluginSession, status: u16, message: &str) -> PluginRunningResult {
+        apply_auth_failure_delay(self.auth_failure_delay_ms).await;
+        let _ = send_gateway_auth_error_response(session, status, &self.auth_challenge, None, message).await;
+        PluginRunningResult::ErrTerminateRequest
     }
 
     async fn reject(
@@ -319,14 +336,26 @@ impl HmacAuth {
         log_code: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
-        apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-        let _ = send_gateway_auth_error_response(session, status, &self.auth_challenge, None, message).await;
-        PluginRunningResult::ErrTerminateRequest
+        self.send_delayed(session, status, message).await
     }
 
-    fn set_anonymous_headers(&self, session: &mut dyn PluginSession, username: &str) {
-        let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-        let _ = set_sensitive_request_header(session, "X-Consumer-Username", username);
+    /// Deny a request whose identity-header mutation or credential removal
+    /// failed, with the bad-credential response of that path.
+    async fn deny(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+        message: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.send_delayed(session, 401, message).await
+    }
+
+    fn set_anonymous_headers(&self, session: &mut dyn PluginSession, username: &str) -> PluginSessionResult<()> {
+        remove_request_headers(session, &self.owned_header_names)?;
+        set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")?;
+        set_sensitive_request_header(session, "X-Consumer-Username", username)
     }
 
     fn split_auth_params(input: &str) -> impl Iterator<Item = &str> {
@@ -652,19 +681,27 @@ impl HmacAuth {
         Ok(())
     }
 
-    fn set_upstream_headers(&self, session: &mut dyn PluginSession, credential: &PreparedHmacCredential) {
+    /// Clear owned names, then write the credential metadata. The first
+    /// failure stops the projection; the caller denies.
+    fn set_upstream_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        credential: &PreparedHmacCredential,
+    ) -> PluginSessionResult<()> {
+        remove_request_headers(session, &self.owned_header_names)?;
         for (name, value) in &credential.headers {
-            let _ = session.set_request_header_value(name, value.clone());
+            session.set_request_header_value(name, value.clone())?;
         }
+        Ok(())
     }
 
-    fn hide_credentials(&self, session: &mut dyn PluginSession) {
+    fn hide_credentials(&self, session: &mut dyn PluginSession) -> PluginSessionResult<()> {
         if !self.hide_credentials {
-            return;
+            return Ok(());
         }
-        let _ = session.remove_request_header("authorization");
-        let _ = session.remove_request_header("proxy-authorization");
-        let _ = session.remove_request_header("signature");
+        session.remove_request_header("authorization")?;
+        session.remove_request_header("proxy-authorization")?;
+        session.remove_request_header("signature")
     }
 }
 
@@ -696,7 +733,18 @@ impl RequestFilter for HmacAuth {
             }
             HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth) => {
                 if let Some(anonymous) = &self.anonymous {
-                    self.set_anonymous_headers(session, anonymous);
+                    // A failed clear or write must deny: a client-supplied
+                    // identity header would otherwise reach the upstream.
+                    if self.set_anonymous_headers(session, anonymous).is_err() {
+                        return self
+                            .deny(
+                                session,
+                                plugin_log,
+                                IDENTITY_HEADER_REJECTED,
+                                "Missing Authorization header",
+                            )
+                            .await;
+                    }
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
                 }
@@ -712,16 +760,7 @@ impl RequestFilter for HmacAuth {
             }
             HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials) => {
                 plugin_log.push_err("no creds configured");
-                apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-                let _ = send_gateway_auth_error_response(
-                    session,
-                    500,
-                    &self.auth_challenge,
-                    None,
-                    "Internal gateway error",
-                )
-                .await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_delayed(session, 500, "Internal gateway error").await;
             }
             HmacVerifyOutcome::NoMatch(failure) => {
                 let (message, log_code) = match failure {
@@ -739,7 +778,7 @@ impl RequestFilter for HmacAuth {
                             .await;
                     }
                     HmacVerifyFailure::MissingSignedHeader(message) => (message, "Deny missing header"),
-                    HmacVerifyFailure::BadSignature => ("Invalid signature", "Deny bad signature"),
+                    HmacVerifyFailure::BadSignature => (INVALID_SIGNATURE_MESSAGE, "Deny bad signature"),
                     HmacVerifyFailure::DigestNotSigned => {
                         ("Missing required signed header: digest", "Deny digest not signed")
                     }
@@ -757,8 +796,21 @@ impl RequestFilter for HmacAuth {
                 body: None,
             };
         };
-        self.set_upstream_headers(session, credential);
-        self.hide_credentials(session);
+        if self.set_upstream_headers(session, credential).is_err() {
+            return self
+                .deny(session, plugin_log, IDENTITY_HEADER_REJECTED, INVALID_SIGNATURE_MESSAGE)
+                .await;
+        }
+        if self.hide_credentials(session).is_err() {
+            return self
+                .deny(
+                    session,
+                    plugin_log,
+                    CREDENTIAL_REMOVAL_FAILED,
+                    INVALID_SIGNATURE_MESSAGE,
+                )
+                .await;
+        }
 
         plugin_log.push_fmt(
             "OK group={} user {}",

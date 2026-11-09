@@ -17,7 +17,10 @@ rule](../../security/mandatory-design/iron-rules.md) — read it for the shared 
 - `OK group=<g>` — when no username header is configured.
 
 **Failure branches** (must NOT carry `group=`): `Deny bad key`, `Deny no key`,
-`Allow anon`. (`Deny bad key group=partner-a` would let an attacker brute-force
+`Allow anon`, `identity header rejected`, `credential removal failed`. Since
+2026-11-09 the whitelisted headers are cleared and written, and credentials hidden,
+**before** the `OK group=` or `Allow anon` line is pushed, so a request denied by a
+failed header mutation never carries a success line. (`Deny bad key group=partner-a` would let an attacker brute-force
 key prefixes and watch which group surfaces.)
 
 ## Implementation

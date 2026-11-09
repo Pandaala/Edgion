@@ -134,6 +134,15 @@ All authentication failures use one public shape:
 - Body: `401 Unauthorized - Invalid or missing JWT`.
 - Missing token: `WWW-Authenticate: Bearer realm="<realm>"`.
 - Present invalid token: the same realm plus `error="invalid_token"` and generic `error_description="Unauthorized - Invalid or missing JWT"`.
+- Present valid token whose claim projection or credential removal fails (a configuration
+  problem): the same response as an invalid token, after the same failure delay, so a valid token
+  is not revealed; the access log records the diagnostic `AuthHeaderMutationRejected`.
+  Anonymous-path header failures use the missing-token shape. Exception: a `hideCredentials`
+  cookie removal failure keeps the shared cookie cleanup response (`400` for an unsanitizable
+  `Cookie` header, `500` for an internal failure), not the 401.
+- `AuthHeaderMutationRejected` is an access-log diagnostic, not a metric or an alert condition by
+  itself: a client can trigger a query-removal failure by sending the hidden query credential to
+  a gRPC-JSON-transcoded route, whose query is sealed. Alert on its rate with log-based alerting.
 
 Failure PluginLog entries are static classifications. They never contain the token, issuer, group, algorithm, key identifier, key material, or claims.
 

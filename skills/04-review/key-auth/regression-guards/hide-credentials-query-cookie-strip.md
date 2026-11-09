@@ -63,7 +63,16 @@ security feature.
   internal construction/publication failures return a fixed 500. Callers propagate
   these through `ErrResponse`, preventing later plugins and proxying.
 
-**3. There is no `KeyGet::Webhook` arm to strip.**
+**3. A failed removal denies (since 2026-11-09).**
+
+`strip_query_param` returns the removal result. A header or query removal
+failure (for example a credential parameter on a gRPC-JSON-transcoded route,
+whose query is sealed) denies with the invalid-key 401 after the failure delay,
+PluginLog `credential removal failed`, and the diagnostic
+`AuthHeaderMutationRejected`, instead of forwarding the credential. A cookie
+removal failure keeps the 400/500 cookie cleanup response above.
+
+**4. There is no `KeyGet::Webhook` arm to strip.**
 
 The variant is gone. Re-reports that a Webhook `hide_credentials` arm is
 missing are not accepted because the variant does not exist. Webhook-resolved

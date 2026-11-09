@@ -174,6 +174,10 @@ fn diagnostic_codes_serialize_as_stable_strings() {
             "OutboundTlsClientCertInvalid",
         ),
         (EdgionErrorCode::OutboundTlsSanMismatch, "OutboundTlsSanMismatch"),
+        (
+            EdgionErrorCode::AuthHeaderMutationRejected,
+            "AuthHeaderMutationRejected",
+        ),
     ];
 
     for (code, expected) in info_codes {

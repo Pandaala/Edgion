@@ -2,39 +2,71 @@ use super::super::error::read_oidc_json;
 use super::*;
 
 impl OpenidConnect {
+    /// Whether `value` is valid HTTP header text — the same check the write
+    /// performs, so an IdP value with a control byte is skipped (destination
+    /// left absent) instead of failing the write and denying the request.
     pub(super) fn is_header_value_safe(value: &str) -> bool {
-        !value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+        crate::plugins::http::common::auth_common::is_header_text(value)
     }
 
+    /// Write one fixed output within the per-value and aggregate caps.
+    ///
+    /// The destination was removed before this call, so a skipped value (oversized,
+    /// unsafe, or over budget) leaves it absent. A failed write is returned so the
+    /// caller denies instead of forwarding.
     pub(super) fn try_set_header_with_limits(
         &self,
         session: &mut dyn PluginSession,
         header_name: &str,
         header_value: &str,
         total_added_bytes: &mut usize,
-    ) {
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
         let max_value = self.config.max_header_value_bytes as usize;
         let max_total = self.config.max_total_header_bytes as usize;
 
         if header_value.len() > max_value {
-            return;
+            return Ok(());
         }
         if !Self::is_header_value_safe(header_value) {
-            return;
+            return Ok(());
         }
 
         let add = header_name.len() + header_value.len();
         if total_added_bytes.saturating_add(add) > max_total {
-            return;
+            return Ok(());
         }
 
-        if crate::plugins::http::common::auth_common::set_sensitive_request_header(session, header_name, header_value)
-            .is_ok()
-        {
-            *total_added_bytes = total_added_bytes.saturating_add(add);
-        }
+        crate::plugins::http::common::auth_common::set_sensitive_request_header(session, header_name, header_value)?;
+        *total_added_bytes = total_added_bytes.saturating_add(add);
+        Ok(())
     }
 
+    /// Remove every enabled fixed output so a client-supplied copy cannot reach the
+    /// upstream on any continuation. `Authorization` is owned only for a
+    /// session-cookie authentication with `accessTokenInAuthorizationHeader`; in
+    /// bearer mode it carries the verified client token and stays.
+    pub(super) fn clear_fixed_outputs(
+        &self,
+        session: &mut dyn PluginSession,
+        owns_authorization: bool,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
+        if self.config.set_access_token_header {
+            session.remove_request_header("x-access-token")?;
+        }
+        if self.config.set_id_token_header {
+            session.remove_request_header("x-id-token")?;
+        }
+        if self.config.set_userinfo_header {
+            session.remove_request_header("x-userinfo")?;
+        }
+        if owns_authorization && self.config.access_token_in_authorization_header {
+            session.remove_request_header("authorization")?;
+        }
+        Ok(())
+    }
+
+    /// Publish upstream identity headers. `from_session` selects session-cookie mode,
+    /// where `Authorization` is a gateway-owned output and is cleared first.
     pub(super) fn apply_upstream_headers(
         &self,
         session: &mut dyn PluginSession,
@@ -42,29 +74,31 @@ impl OpenidConnect {
         id_token: Option<&str>,
         userinfo_json: Option<&str>,
         claims: &Value,
+        from_session: bool,
     ) -> crate::plugins::runtime::PluginSessionResult<()> {
-        // Clear configured claim destinations before any upstream header write, so a
-        // cleanup failure leaves the request unmodified.
+        // Clear configured claim destinations and fixed outputs before any upstream
+        // header write, so a cleanup failure leaves no gateway-written value.
         crate::plugins::http::common::auth_common::clear_claim_headers(session, &self.claim_header_projection)?;
+        self.clear_fixed_outputs(session, from_session)?;
         let mut total_added: usize = 0;
         let max_total = self.config.max_total_header_bytes as usize;
         let max_value = self.config.max_header_value_bytes as usize;
 
         if self.config.set_access_token_header {
-            self.try_set_header_with_limits(session, "X-Access-Token", access_token, &mut total_added);
+            self.try_set_header_with_limits(session, "X-Access-Token", access_token, &mut total_added)?;
         }
 
         if self.config.set_id_token_header {
             if let Some(id_token) = id_token.filter(|v| !v.trim().is_empty()) {
-                self.try_set_header_with_limits(session, "X-ID-Token", id_token, &mut total_added);
+                self.try_set_header_with_limits(session, "X-ID-Token", id_token, &mut total_added)?;
             }
         }
 
         if self.config.set_userinfo_header {
             if let Some(userinfo) = userinfo_json {
-                self.try_set_header_with_limits(session, "X-Userinfo", userinfo, &mut total_added);
+                self.try_set_header_with_limits(session, "X-Userinfo", userinfo, &mut total_added)?;
             } else if let Ok(userinfo) = serde_json::to_string(claims) {
-                self.try_set_header_with_limits(session, "X-Userinfo", &userinfo, &mut total_added);
+                self.try_set_header_with_limits(session, "X-Userinfo", &userinfo, &mut total_added)?;
             }
         }
 
@@ -81,7 +115,7 @@ impl OpenidConnect {
                 })
         {
             let value = format!("Bearer {}", access_token);
-            self.try_set_header_with_limits(session, "Authorization", &value, &mut total_added);
+            self.try_set_header_with_limits(session, "Authorization", &value, &mut total_added)?;
         }
 
         if self.config.store_claims_in_ctx {

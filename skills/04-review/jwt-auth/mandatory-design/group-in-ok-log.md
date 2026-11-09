@@ -27,7 +27,13 @@ domain, e.g. `https://partner-a.example`.
 - `Deny invalid signature` — real verification failed
 - `Deny exp` / `Deny nbf` / `Deny bad aud` — claim validation failures
 - `Deny exp too far` — maximumExpiration post-check
-- (request_stage) `Anon=<name>` — anonymous bypass (no group concept)
+- (request_stage) `Anon=<name>` — anonymous bypass (no group concept); pushed
+  only after the anonymous identity headers were written
+- `claim header mutation failed` / `credential removal failed` — the claim
+  projection or anonymous headers could not be written, or the hidden credential
+  could not be removed. Since 2026-11-09 the `OK group=` line is pushed only after
+  projection and credential cleanup succeeded, so these denied requests carry no
+  `group=`/`iss=`.
 
 **Why each value is withheld** (jwt-specific): leaking `iss` enumerates configured
 issuers (probe via "unknown iss"); leaking `alg` maps an issuer's algorithm (probe

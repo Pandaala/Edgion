@@ -4,7 +4,8 @@ use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::collections::HashMap;
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge,
+    apply_auth_failure_delay, send_gateway_auth_error_response, PreparedAuthChallenge, CREDENTIAL_REMOVAL_FAILED,
+    IDENTITY_HEADER_REJECTED,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
@@ -193,6 +194,19 @@ impl BasicAuth {
         let _ = self.auth_failed_return(session).await;
         PluginRunningResult::ErrTerminateRequest
     }
+
+    /// A failed identity-header write or credential removal: the same 401 as a
+    /// bad credential, plus the alertable diagnostic (usually operator
+    /// misconfiguration).
+    async fn deny_header(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.deny(session).await
+    }
 }
 
 #[async_trait]
@@ -209,8 +223,7 @@ impl RequestFilter for BasicAuth {
                     // A failed write must deny: a client-supplied identity
                     // header would otherwise reach the upstream.
                     if Self::set_anonymous_headers(session, anonymous).is_err() {
-                        plugin_log.push_err("identity header rejected");
-                        return self.deny(session).await;
+                        return self.deny_header(session, plugin_log, IDENTITY_HEADER_REJECTED).await;
                     }
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
@@ -237,15 +250,15 @@ impl RequestFilter for BasicAuth {
         // shared delay keeps this 401 as slow as a bad-credential 401, so
         // timing does not reveal the password check.
         if self.set_consumer_headers(session, &username).is_err() {
-            plugin_log.push_err("identity header rejected");
-            return self.deny(session).await;
+            return self.deny_header(session, plugin_log, IDENTITY_HEADER_REJECTED).await;
+        }
+
+        // A hidden credential that cannot be removed must not reach the
+        // upstream: deny with the same 401 instead of forwarding it.
+        if self.config.hide_credentials && session.remove_request_header("authorization").is_err() {
+            return self.deny_header(session, plugin_log, CREDENTIAL_REMOVAL_FAILED).await;
         }
         plugin_log.push_fmt("OK group={} user {}", la![group, sensitive(&username)]);
-
-        // Hide credentials if configured
-        if self.config.hide_credentials {
-            let _ = session.remove_request_header("authorization");
-        }
 
         PluginRunningResult::GoodNext
     }

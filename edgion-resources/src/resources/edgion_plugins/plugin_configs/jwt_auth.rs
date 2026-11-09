@@ -268,7 +268,7 @@ impl JwtAuthConfig {
     }
 }
 
-use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use crate::resources::edgion_plugins::auth_realm::{validate_anonymous_header_text, validate_auth_realm};
 use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for JwtAuthConfig {
@@ -324,6 +324,13 @@ impl PluginValidation for JwtAuthConfig {
         }
 
         if let Err(error) = self.compile_claim_header_projection() {
+            return Some(error.to_string());
+        }
+
+        // The anonymous name is written to X-Consumer-Username; a value that is
+        // not header text could never be forwarded and would deny every
+        // credential-less request.
+        if let Err(error) = validate_anonymous_header_text(self.anonymous.as_deref()) {
             return Some(error.to_string());
         }
 

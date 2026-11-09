@@ -35,11 +35,11 @@ fn exhausted_fixed_header_budget_still_clears_all_claim_destinations() {
         .returning(|_, _| Ok(()));
     session
         .expect_remove_request_header()
-        .withf(|name| name == "x-sub")
-        .times(1)
+        .withf(|name| name == "x-sub" || name == "x-access-token")
+        .times(2)
         .returning(|_| Ok(()));
     plugin
-        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub":"trusted"}))
+        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub":"trusted"}), false)
         .unwrap();
 }
 
@@ -65,19 +65,22 @@ async fn unauthenticated_pass_clears_claim_destinations_and_fails_closed_on_muta
                     Ok(())
                 }
             });
+        if fail {
+            expect_header_mutation_denial(&mut session);
+        }
         let mut log = PluginLog::new("OpenidConnect");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,
             if fail {
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None,
-                }
+                PluginRunningResult::ErrTerminateRequest
             } else {
                 PluginRunningResult::GoodNext
             }
         );
         assert!(!log.contains("private"));
+        if fail {
+            assert_eq!(plugin_log_entries(&log), vec!["err: claim header mutation failed"]);
+        }
     }
 }
 
@@ -188,12 +191,18 @@ fn claim_sanitation_precedes_fixed_outputs_even_when_they_exhaust_the_budget() {
                 }
             });
         session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-access-token")
+            .times(if fail { 0 } else { 1 })
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(()));
+        session
             .expect_set_request_header_value()
             .withf(|name, value| name == "X-Access-Token" && value == "a")
             .times(if fail { 0 } else { 1 })
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
-        let result = plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"role":"user"}));
+        let result = plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"role":"user"}), false);
         assert_eq!(result.is_err(), fail);
     }
 }
@@ -238,15 +247,47 @@ async fn authenticated_bearer_claim_cleanup_failure_prevents_upstream_continuati
         .returning(|_| Err("injected removal failure".into()));
     session.expect_set_request_header_value().never();
     session.expect_remove_request_cookies().never();
+    expect_header_mutation_denial(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
     assert_eq!(
-        plugin
-            .run_request(&mut session, &mut PluginLog::new("OpenidConnect"))
-            .await,
-        PluginRunningResult::ErrResponse {
-            status: 500,
-            body: None
-        }
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
     );
+    assert_eq!(plugin_log_entries(&log), vec!["err: claim header mutation failed"]);
+}
+
+/// Expect the fixed OIDC header-mutation denial: error code, then a 401 with the
+/// generic body and Bearer challenge.
+fn expect_header_mutation_denial(session: &mut MockPluginSession) {
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(|response, end| {
+            assert!(!end);
+            assert_eq!(response.status.as_u16(), 401);
+            assert_eq!(
+                response
+                    .headers
+                    .get("WWW-Authenticate")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer realm=\"edgion\"")
+            );
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|body, end| {
+        assert!(end);
+        assert_eq!(
+            body.as_deref(),
+            Some(b"401 Unauthorized - Authentication required".as_slice())
+        );
+        Ok(())
+    });
+    session.expect_shutdown().times(1).return_const(());
 }
 
 /// Logout Set-Cookie lines for the default cookie configuration: the single session
@@ -2089,6 +2130,11 @@ async fn test_run_request_expired_refresh_publishes_updated_session_token() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-access-token")
+        .times(1)
+        .returning(|_| Ok(()));
+    session
         .expect_set_request_header_value()
         .withf(|name, value| name == "X-Access-Token" && value == "new-token" && value.is_sensitive())
         .times(1)
@@ -3710,6 +3756,14 @@ fn test_apply_upstream_headers_sets_id_token_and_userinfo_headers() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
+    // Bearer mode: the fixed outputs are cleared, the verified Authorization is not.
+    for owned in ["x-access-token", "x-id-token", "x-userinfo"] {
+        session
+            .expect_remove_request_header()
+            .withf(move |name| name == owned)
+            .times(1)
+            .returning(|_| Ok(()));
+    }
     session
         .expect_set_request_header_value()
         .withf(|name, value| name == "X-Access-Token" && value == "access-token" && value.is_sensitive())
@@ -3738,6 +3792,7 @@ fn test_apply_upstream_headers_sets_id_token_and_userinfo_headers() {
             Some("id-token"),
             Some("{\"sub\":\"userinfo-user\"}"),
             &json!({"sub": "user-1"}),
+            false,
         )
         .unwrap();
 }
@@ -3750,6 +3805,11 @@ fn test_apply_upstream_headers_skips_oversized_id_token_header() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-id-token")
+        .times(1)
+        .returning(|_| Ok(()));
     session.expect_set_request_header_value().never();
     plugin
         .apply_upstream_headers(
@@ -3758,6 +3818,7 @@ fn test_apply_upstream_headers_skips_oversized_id_token_header() {
             Some("id-token-too-long"),
             None,
             &json!({"sub": "user-1"}),
+            false,
         )
         .unwrap();
 }
@@ -3769,6 +3830,11 @@ fn test_apply_upstream_headers_rejects_unsafe_userinfo_header_value() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-userinfo")
+        .times(1)
+        .returning(|_| Ok(()));
     session.expect_set_request_header_value().never();
     plugin
         .apply_upstream_headers(
@@ -3777,12 +3843,34 @@ fn test_apply_upstream_headers_rejects_unsafe_userinfo_header_value() {
             None,
             Some("{\"sub\":\"user\n1\"}"),
             &json!({"sub": "user-1"}),
+            false,
         )
         .unwrap();
 }
 
 #[test]
-fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_budget() {
+fn control_byte_in_userinfo_is_skipped_not_denied() {
+    // DEL (and other control bytes besides CR/LF/NUL) survive JSON
+    // serialization; the value must be skipped, never fail the write.
+    for value in ["{\"name\":\"a\u{7f}b\"}", "{\"name\":\"a\u{1}b\"}"] {
+        let mut cfg = base_config();
+        cfg.set_userinfo_header = true;
+        let plugin = OpenidConnect::new(&cfg, "default".to_string());
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "x-userinfo")
+            .times(1)
+            .returning(|_| Ok(()));
+        session.expect_set_request_header_value().never();
+        plugin
+            .apply_upstream_headers(&mut session, "access-token", None, Some(value), &json!({}), false)
+            .unwrap();
+    }
+}
+
+#[test]
+fn failed_fixed_write_stops_publication_and_reports_the_error() {
     let mut cfg = base_config();
     cfg.set_access_token_header = true;
     cfg.claims_to_headers = Some(HashMap::from([("sub".to_string(), "X-Sub".to_string())]));
@@ -3801,14 +3889,12 @@ fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_
         .returning(|_, _| Err(std::io::Error::other("injected write failure").into()));
     session
         .expect_set_request_header_value()
-        .withf(|name, value| name == "x-sub" && value == "u" && value.is_sensitive())
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_, _| Ok(()));
+        .withf(|name, _| name == "x-sub")
+        .never();
 
-    plugin
-        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}))
-        .unwrap();
+    assert!(plugin
+        .apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}), false)
+        .is_err());
 }
 
 #[test]
@@ -3851,17 +3937,21 @@ fn authorization_length_limits_preserve_publication_order_and_remaining_budget()
         session
             .expect_set_ctx_var()
             .withf(|name, value| name == "oidc_claims" && value == "{\"sub\":\"u\"}")
-            .times(1)
+            .times(usize::from(!prior_fails))
             .returning(move |_, _| {
                 ctx_events.lock().push("ctx".to_string());
                 Ok(())
             });
-        plugin
-            .apply_upstream_headers(&mut session, token, None, None, &json!({"sub": "u"}))
-            .unwrap();
+        let result = plugin.apply_upstream_headers(&mut session, token, None, None, &json!({"sub": "u"}), false);
+        assert_eq!(result.is_err(), prior_fails);
         let mut expected = Vec::new();
         if prior {
             expected.push(format!("X-Access-Token={token}"));
+        }
+        if prior_fails {
+            // A failed fixed write stops publication; the caller denies.
+            assert_eq!(*events.lock(), expected);
+            continue;
         }
         if auth {
             expected.push(format!("Authorization=Bearer {token}"));
@@ -5113,16 +5203,15 @@ async fn every_upstream_continuation_propagates_cookie_cleanup_failure() {
                 "{scenario}"
             );
             let entries = plugin_log_entries(&log);
-            let expected = match scenario {
-                "session" => Some("session token verified"),
-                "refresh" => Some("token refresh on expiry"),
-                "stale" => Some("token refresh wait timeout; stale token within leeway"),
-                "pass" => Some("no token; pass"),
-                _ => None,
+            // A failed cookie cleanup never continues, so no success line is logged.
+            let success = match scenario {
+                "session" => "session token verified",
+                "refresh" => "token refresh on expiry",
+                "stale" => "token refresh wait timeout; stale token within leeway",
+                "pass" => "no token; pass",
+                _ => "token verified",
             };
-            if let Some(expected) = expected {
-                assert!(entries.iter().any(|entry| entry == expected), "{scenario}");
-            }
+            assert!(!entries.iter().any(|entry| entry == success), "{scenario}: {entries:?}");
         }
     }
 }
@@ -5197,4 +5286,401 @@ async fn allow_expired_keeps_nbf_and_claim_format_checks() {
             );
         }
     }
+}
+
+const FORGED_FIXED_OUTPUTS: [&str; 3] = ["X-Access-Token", "X-ID-Token", "X-Userinfo"];
+
+/// Real Pingora request carrying forged copies of every OIDC fixed output.
+async fn forged_fixed_output_session(authorization: Option<&str>) -> pingora_proxy::Session {
+    let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+    if let Some(authorization) = authorization {
+        session
+            .req_header_mut()
+            .insert_header("authorization", authorization)
+            .unwrap();
+    }
+    for name in FORGED_FIXED_OUTPUTS {
+        session.req_header_mut().append_header(name, "forged").unwrap();
+        session
+            .req_header_mut()
+            .append_header(name.to_ascii_lowercase(), "forged-again")
+            .unwrap();
+    }
+    session.req_header_mut().insert_header("x-unrelated", "keep").unwrap();
+    session
+}
+
+fn fixed_output_values(session: &pingora_proxy::Session, name: &str) -> Vec<String> {
+    session
+        .req_header()
+        .headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.to_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Bearer-mode OIDC plugin authenticating `cached-token` from the introspection cache.
+async fn cached_bearer_plugin(mut cfg: OpenidConnectConfig) -> OpenidConnect {
+    cfg.verification_mode = VerificationMode::IntrospectionOnly;
+    cfg.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".into(),
+            jwks_uri: "https://idp.example.com/jwks".into(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".into()),
+            // No userinfo endpoint: X-Userinfo falls back to the verified claims.
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+    plugin
+        .cache_introspection_claims(
+            "cached-token",
+            &Arc::new(json!({
+                "active":true, "iss":"https://idp.example.com", "exp":OpenidConnect::now_unix_secs()+3600
+            })),
+        )
+        .await;
+    plugin
+}
+
+#[tokio::test]
+async fn unauthenticated_pass_removes_forged_fixed_outputs() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    let mut cfg = base_config();
+    cfg.bearer_only = false;
+    cfg.unauth_action = UnauthAction::Pass;
+    cfg.set_access_token_header = true;
+    cfg.set_id_token_header = true;
+    cfg.set_userinfo_header = true;
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    let mut session = forged_fixed_output_session(None).await;
+    let mut ctx = EdgionHttpContext::default();
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin
+            .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(plugin_log_entries(&log), vec!["no token; pass"]);
+    for name in FORGED_FIXED_OUTPUTS {
+        assert!(fixed_output_values(&session, name).is_empty(), "{name}");
+    }
+    assert_eq!(session.req_header().headers["x-unrelated"], "keep");
+}
+
+#[tokio::test]
+async fn unauthenticated_pass_owns_authorization_only_when_configured() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    for owned in [true, false] {
+        let mut cfg = base_config();
+        cfg.bearer_only = false;
+        cfg.unauth_action = UnauthAction::Pass;
+        cfg.access_token_in_authorization_header = owned;
+        let plugin = OpenidConnect::new(&cfg, "default".into());
+        // A non-bearer value yields no verified token, so the request reaches Pass.
+        let mut session = forged_fixed_output_session(Some("Basic Zm9yZ2Vk")).await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut log = PluginLog::new("OpenidConnect");
+        assert_eq!(
+            plugin
+                .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+                .await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(plugin_log_entries(&log), vec!["no token; pass"]);
+        let authorization = fixed_output_values(&session, "authorization");
+        if owned {
+            assert!(authorization.is_empty(), "owned Authorization must be cleared");
+        } else {
+            assert_eq!(authorization, vec!["Basic Zm9yZ2Vk".to_string()]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn authenticated_bearer_skipped_fixed_outputs_leave_no_forged_value() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    let mut cfg = base_config();
+    cfg.set_access_token_header = true;
+    cfg.set_id_token_header = true;
+    cfg.set_userinfo_header = true;
+    // Admits the 12-byte token, skips the claims JSON fallback for X-Userinfo.
+    cfg.max_header_value_bytes = 32;
+    let plugin = cached_bearer_plugin(cfg).await;
+    let mut session = forged_fixed_output_session(Some("Bearer cached-token")).await;
+    let mut ctx = EdgionHttpContext::default();
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin
+            .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    let access = fixed_output_values(&session, "x-access-token");
+    assert_eq!(access, vec!["cached-token".to_string()]);
+    // No ID token in bearer mode, oversized userinfo: both destinations stay empty.
+    assert!(fixed_output_values(&session, "x-id-token").is_empty());
+    assert!(fixed_output_values(&session, "x-userinfo").is_empty());
+    assert_eq!(session.req_header().headers["x-unrelated"], "keep");
+}
+
+#[tokio::test]
+async fn bearer_mode_keeps_verified_authorization_when_rewrite_is_skipped() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    let mut cfg = base_config();
+    cfg.access_token_in_authorization_header = true;
+    // "Bearer cached-token" (19 bytes) exceeds the value cap, so the rewrite is skipped.
+    cfg.max_header_value_bytes = 15;
+    let plugin = cached_bearer_plugin(cfg).await;
+    let mut session = forged_fixed_output_session(Some("Bearer cached-token")).await;
+    let mut ctx = EdgionHttpContext::default();
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin
+            .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(
+        fixed_output_values(&session, "authorization"),
+        vec!["Bearer cached-token".to_string()]
+    );
+    // Disabled fixed outputs are not owned and stay untouched.
+    assert_eq!(fixed_output_values(&session, "x-userinfo").len(), 2);
+}
+
+#[test]
+fn session_mode_clears_authorization_before_skipping_an_oversized_rewrite() {
+    let mut cfg = base_config();
+    cfg.bearer_only = false;
+    cfg.access_token_in_authorization_header = true;
+    cfg.max_header_value_bytes = 8;
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    for from_session in [false, true] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "authorization")
+            .times(usize::from(from_session))
+            .returning(|_| Ok(()));
+        session.expect_set_request_header_value().never();
+        plugin
+            .apply_upstream_headers(&mut session, "long-access-token", None, None, &json!({}), from_session)
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn hide_credentials_removal_failure_denies_with_static_tag() {
+    let mut cfg = base_config();
+    cfg.hide_credentials = true;
+    let plugin = cached_bearer_plugin(cfg).await;
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_owned());
+    setup_header_mocks(&mut session, &[("authorization", "Bearer cached-token")]);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "authorization")
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("private error").into()));
+    session.expect_remove_request_cookies().never();
+    expect_header_mutation_denial(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(plugin_log_entries(&log), vec!["err: credential removal failed"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn header_mutation_denial_applies_the_failure_delay() {
+    let mut cfg = base_config();
+    cfg.bearer_only = false;
+    cfg.unauth_action = UnauthAction::Pass;
+    cfg.set_userinfo_header = true;
+    cfg.auth_failure_delay_ms = 100;
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/protected".to_string());
+    install_request_cookies(&mut session, "");
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-userinfo")
+        .times(1)
+        .returning(|_| Err("injected removal failure".into()));
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+    let start = tokio::time::Instant::now();
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |response, _| {
+            assert_eq!(
+                tokio::time::Instant::now().duration_since(start),
+                Duration::from_millis(100)
+            );
+            assert_eq!(response.status.as_u16(), 401);
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).return_const(());
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(plugin_log_entries(&log), vec!["err: claim header mutation failed"]);
+}
+
+/// Session-cookie plugin and cookie for `scenario` ("session": a live cached
+/// token; "refresh": an expired token with a prepared refresh result).
+async fn session_mode_plugin_and_cookie(mut cfg: OpenidConnectConfig, scenario: &str) -> (OpenidConnect, String) {
+    cfg.bearer_only = false;
+    cfg.verification_mode = VerificationMode::IntrospectionOnly;
+    cfg.introspection_cache_ttl = 60;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.clock_skew_seconds = 0;
+    cfg.timeout = 1;
+    cfg.token_signing_alg = Some("HS256".into());
+    cfg.allowed_signing_algs = Some(vec!["HS256".into()]);
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".into());
+    cfg.resolved_oidc_client_secret = Some("test-client-secret".into());
+    let plugin = OpenidConnect::new(&cfg, "default".into());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".into(),
+            jwks_uri: "http://169.254.169.254/jwks".into(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("http://169.254.169.254/introspect".into()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+    let now = OpenidConnect::now_unix_secs();
+    let exp = if scenario == "refresh" { now - 120 } else { now + 3600 };
+    let claims = json!({"active":true, "iss":"https://idp.example.com", "exp":exp});
+    let token = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+    )
+    .unwrap();
+    plugin.introspection_cache.insert(
+        OpenidConnect::introspection_cache_key(&token),
+        IntrospectionCacheEntry {
+            claims: Arc::new(claims),
+        },
+        Duration::from_secs(60),
+    );
+    let payload = OidcSessionCookie {
+        access_token: token,
+        created_at: now,
+        session_expires_at: now + 3600,
+        expires_at: Some(now + 3600),
+        id_token: None,
+        refresh_token: Some("refresh-token".into()),
+    };
+    let encoded = OpenidConnect::encode_signed_cookie_payload(&payload, plugin.session_cipher().unwrap()).unwrap();
+    if scenario == "refresh" {
+        plugin
+            .cache_introspection_claims(
+                "replacement-token-with-a-long-value",
+                &Arc::new(json!({"active":true,"iss":"https://idp.example.com","exp":now+3600})),
+            )
+            .await;
+        let mut refreshed = payload.clone();
+        refreshed.access_token = "replacement-token-with-a-long-value".into();
+        plugin
+            .put_refresh_result(&OpenidConnect::refresh_lock_key(&encoded), refreshed)
+            .await;
+    }
+    (plugin, format!("edgion_oidc_session={encoded}"))
+}
+
+/// Session-cookie mode owns `Authorization`: when the access-token rewrite is
+/// skipped (too large), a client-forged non-bearer value must not survive.
+#[tokio::test]
+async fn session_mode_skipped_authorization_rewrite_leaves_no_forged_value() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    for (scenario, success) in [
+        ("session", "session token verified"),
+        ("refresh", "token refresh on expiry"),
+    ] {
+        let mut cfg = base_config();
+        cfg.access_token_in_authorization_header = true;
+        // Every "Bearer <token>" value exceeds this cap, so the rewrite is skipped.
+        cfg.max_header_value_bytes = 15;
+        let (plugin, cookie) = session_mode_plugin_and_cookie(cfg, scenario).await;
+        // A non-bearer Authorization keeps the request on the session-cookie path.
+        let mut session = forged_fixed_output_session(Some("Basic Zm9yZ2VkOmZvcmdlZA==")).await;
+        session.req_header_mut().insert_header("cookie", cookie).unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        let mut log = PluginLog::new("OpenidConnect");
+        assert_eq!(
+            plugin
+                .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+                .await,
+            PluginRunningResult::GoodNext,
+            "{scenario}"
+        );
+        let entries = plugin_log_entries(&log);
+        assert_eq!(
+            entries.last().map(String::as_str),
+            Some(success),
+            "{scenario}: {entries:?}"
+        );
+        assert!(fixed_output_values(&session, "authorization").is_empty(), "{scenario}");
+        // Disabled fixed outputs are not owned and stay untouched.
+        assert_eq!(fixed_output_values(&session, "x-userinfo").len(), 2, "{scenario}");
+        assert_eq!(session.req_header().headers["x-unrelated"], "keep", "{scenario}");
+    }
+}
+
+/// A failed fixed-output write denies with the fixed 401 body, never forwarding.
+#[tokio::test]
+async fn fixed_output_write_failure_denies_with_fixed_body() {
+    let mut cfg = base_config();
+    cfg.set_access_token_header = true;
+    let plugin = cached_bearer_plugin(cfg).await;
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_owned());
+    setup_header_mocks(&mut session, &[("authorization", "Bearer cached-token")]);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-access-token")
+        .times(1)
+        .returning(|_| Ok(()));
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Access-Token" && value == "cached-token")
+        .times(1)
+        .returning(|_, _| Err(std::io::Error::other("private error").into()));
+    session.expect_remove_request_cookies().never();
+    expect_header_mutation_denial(&mut session);
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(plugin_log_entries(&log), vec!["err: claim header mutation failed"]);
 }

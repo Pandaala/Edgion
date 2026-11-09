@@ -1,4 +1,4 @@
-use super::validate_auth_realm;
+use super::{validate_anonymous_header_text, validate_auth_realm, INVALID_ANONYMOUS_HEADER_TEXT};
 use crate::resources::edgion_plugins::{
     BasicAuthConfig, EdgionPlugin, HmacAuthConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, OpenidConnectConfig,
 };
@@ -84,6 +84,21 @@ fn auth_realm_preserves_plugin_specific_empty_value_rules() {
             accepts_empty,
             "{}",
             plugin.type_name()
+        );
+    }
+}
+
+#[test]
+fn anonymous_header_text_accepts_header_values_only() {
+    assert_eq!(validate_anonymous_header_text(None), Ok(()));
+    for valid in ["guest", "", "caf\u{e9}"] {
+        assert_eq!(validate_anonymous_header_text(Some(valid)), Ok(()), "{valid:?}");
+    }
+    for invalid in ["a\u{1}b", "a\u{7f}b", "a\rb", "a\nb", "a\0b"] {
+        assert_eq!(
+            validate_anonymous_header_text(Some(invalid)),
+            Err(INVALID_ANONYMOUS_HEADER_TEXT),
+            "{invalid:?}"
         );
     }
 }

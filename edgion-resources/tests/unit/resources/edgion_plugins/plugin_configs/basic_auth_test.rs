@@ -161,3 +161,23 @@ realm: "Dynamic Partner API"
     assert_eq!(groups[0].name, "partner-a");
     assert_eq!(groups[1].name, "partner-b");
 }
+
+#[test]
+fn test_anonymous_must_be_valid_header_text() {
+    for value in ["anon\r\nX-Injected: 1", "anon\u{1}", "anon\u{7f}"] {
+        let config = BasicAuthConfig {
+            anonymous: Some(value.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.detect_validation_error().as_deref(),
+            Some("anonymous is not valid header text"),
+            "{value:?}"
+        );
+    }
+    let config = BasicAuthConfig {
+        anonymous: Some("guest user".to_string()),
+        ..Default::default()
+    };
+    assert!(config.detect_validation_error().is_none());
+}

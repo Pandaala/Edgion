@@ -70,6 +70,15 @@ fn request_cookie(encoded: &str) -> MockPluginSession {
     session
 }
 
+/// The enabled `X-Access-Token` output is removed once before any write.
+fn expect_access_token_cleared(session: &mut MockPluginSession) {
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-access-token")
+        .times(1)
+        .returning(|_| Ok(()));
+}
+
 fn expect_denied(session: &mut MockPluginSession) {
     super::dependency_error_tests::expect_auth_response(session, 401, "Unauthorized - Authentication required");
 }
@@ -114,6 +123,7 @@ async fn expired_cookie_cannot_use_live_token_or_refresh_result() {
                 .await;
             let mut session = request_cookie(&encoded);
             if now < 1060 {
+                expect_access_token_cleared(&mut session);
                 session
                     .expect_set_request_header_value()
                     .times(1)
@@ -261,6 +271,9 @@ async fn expired_cookie_preserves_pass_and_redirect_contracts() {
     for action in [UnauthAction::Pass, UnauthAction::Auth] {
         let (plugin, _) = plugin(1060, action).await;
         let mut session = request(&plugin, &payload());
+        if action == UnauthAction::Pass {
+            expect_access_token_cleared(&mut session);
+        }
         if action == UnauthAction::Auth {
             session.expect_request_query().return_const(None);
             session
@@ -409,6 +422,7 @@ async fn valid_bearer_ignores_expired_session_deadline() {
         ],
     );
     session.expect_get_cookie().times(0);
+    expect_access_token_cleared(&mut session);
     session
         .expect_set_request_header_value()
         .times(1)

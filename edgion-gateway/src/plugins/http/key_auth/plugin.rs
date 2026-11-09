@@ -3,18 +3,21 @@
 //! Validates requests using API keys from various sources (header, query, cookie, etc.).
 //! Keys and metadata are loaded from Kubernetes Secrets.
 
-use crate::plugins::http::common::auth_common::{prepare_sensitive_headers, set_sensitive_request_header};
+use crate::plugins::http::common::auth_common::{
+    prepare_sensitive_headers, remove_request_headers, set_sensitive_request_header,
+};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, strip_cookie, strip_query_param, PreparedAuthChallenge,
+    apply_auth_failure_delay, cookie_cleanup_failure, send_gateway_auth_error_response, strip_cookie,
+    strip_query_param, PreparedAuthChallenge, CREDENTIAL_REMOVAL_FAILED, IDENTITY_HEADER_REJECTED,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::session_adapter::key_value;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionResult, RequestFilter};
 use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyMetadata};
@@ -46,6 +49,8 @@ impl PreparedKeyMetadata {
     }
 }
 
+use crate::plugins::http::common::auth_common::HideCredentialError;
+
 fn hash_keys(raw: HashMap<String, KeyMetadata>) -> HashMap<[u8; 32], PreparedKeyMetadata> {
     raw.into_iter()
         .map(|(k, v)| (sha256_of(&k), PreparedKeyMetadata::new(v)))
@@ -63,6 +68,10 @@ pub struct KeyAuth {
     anonymous: Option<String>,
     auth_challenge: PreparedAuthChallenge,
     forward_anonymous_username: bool,
+    /// Whitelisted metadata names (`upstreamHeaderFields`). The plugin owns
+    /// them: every continuation clears them before writing, so a client copy
+    /// never survives under a name the consumer lacks.
+    owned_header_names: Vec<String>,
     /// SHA-256(key) → Metadata mapping. Keys are stored as hashes to avoid keeping
     /// plaintext API keys in process memory after initialization.
     keys: HashMap<[u8; 32], PreparedKeyMetadata>,
@@ -73,10 +82,7 @@ impl KeyAuth {
         let mut config = config.clone();
         let _ = config.validate();
         let keys = hash_keys(config.resolved_keys.take().unwrap_or_default());
-        let forward_anonymous_username = config
-            .upstream_header_fields
-            .iter()
-            .any(|field| field == "X-Consumer-Username");
+        let forward_anonymous_username = config.forwards_anonymous_username();
 
         Self {
             key_sources: config.key_sources,
@@ -85,6 +91,7 @@ impl KeyAuth {
             anonymous: config.anonymous,
             auth_challenge: PreparedAuthChallenge::new("ApiKey", &config.realm),
             forward_anonymous_username,
+            owned_header_names: config.upstream_header_fields,
             keys,
         }
     }
@@ -129,12 +136,28 @@ impl KeyAuth {
         self.keys.get(&sha256_of(key))
     }
 
-    /// Set upstream headers from key metadata (whitelist controlled)
-    fn set_upstream_headers(&self, session: &mut dyn PluginSession, metadata: &PreparedKeyMetadata) {
+    /// Set upstream headers from key metadata (whitelist controlled).
+    /// The first failed write stops the projection; the caller denies.
+    fn set_upstream_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        metadata: &PreparedKeyMetadata,
+    ) -> PluginSessionResult<()> {
+        remove_request_headers(session, &self.owned_header_names)?;
         for (name, value) in &metadata.headers {
             // Keep the live setter's replacement and deferred-mutation semantics.
-            let _ = session.set_request_header_value(name, value.clone());
+            session.set_request_header_value(name, value.clone())?;
         }
+        Ok(())
+    }
+
+    /// Clear owned names, then write the anonymous identity headers.
+    fn set_anonymous_headers(&self, session: &mut dyn PluginSession, anon_user: &str) -> PluginSessionResult<()> {
+        remove_request_headers(session, &self.owned_header_names)?;
+        if self.forward_anonymous_username {
+            set_sensitive_request_header(session, "X-Consumer-Username", anon_user)?;
+        }
+        set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")
     }
 
     /// Hide credentials from upstream request based on the key source used
@@ -142,29 +165,47 @@ impl KeyAuth {
         &self,
         session: &mut dyn PluginSession,
         used_source: &KeyGet,
-    ) -> Result<(), crate::request_cookie::CookieEditError> {
+    ) -> Result<(), HideCredentialError> {
         match used_source {
             KeyGet::Header { name } => {
-                let _ = session.remove_request_header(name);
+                session
+                    .remove_request_header(name)
+                    .map_err(|_| HideCredentialError::Removal)?;
             }
             KeyGet::Ctx { name } => {
+                // A ctx variable is never forwarded upstream as a request header.
                 let _ = session.remove_ctx_var(name);
             }
             KeyGet::Query { name } => {
-                strip_query_param(session, name);
+                strip_query_param(session, name).map_err(|_| HideCredentialError::Removal)?;
             }
             KeyGet::Cookie { name } => {
-                strip_cookie(session, name)?;
+                strip_cookie(session, name).map_err(HideCredentialError::Cookie)?;
             }
             _ => {}
         }
         Ok(())
     }
 
-    /// Return 401 Unauthorized response
+    /// The single 401 writer: applies the shared failure delay, then sends
+    /// the challenge with `body`.
     async fn unauthorized(&self, session: &mut dyn PluginSession, body: &'static str) -> PluginRunningResult {
+        apply_auth_failure_delay(self.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(session, 401, &self.auth_challenge, None, body).await;
         PluginRunningResult::ErrTerminateRequest
+    }
+
+    /// Deny a request whose identity-header mutation or credential removal
+    /// failed, with the bad-credential response of that path.
+    async fn deny(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+        body: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.unauthorized(session, body).await
     }
 }
 
@@ -179,26 +220,24 @@ impl RequestFilter for KeyAuth {
         let Some((key, used_source)) = self.extract_key(session) else {
             // No key provided - check anonymous access
             if let Some(ref anon_user) = self.anonymous {
-                plugin_log.push("Allow anon");
-
-                // Set anonymous consumer header if in whitelist
-                if self.forward_anonymous_username {
-                    let _ = set_sensitive_request_header(session, "X-Consumer-Username", anon_user);
+                // A failed clear or write must deny: a client-supplied
+                // identity header would otherwise reach the upstream.
+                if self.set_anonymous_headers(session, anon_user).is_err() {
+                    return self
+                        .deny(session, plugin_log, IDENTITY_HEADER_REJECTED, MISSING_KEY_BODY)
+                        .await;
                 }
-                let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-
+                plugin_log.push("Allow anon");
                 return PluginRunningResult::GoodNext;
             }
 
             plugin_log.push("Deny no key");
-            apply_auth_failure_delay(self.auth_failure_delay_ms).await;
             return self.unauthorized(session, MISSING_KEY_BODY).await;
         };
 
         // 2. Validate key
         let Some(metadata) = self.validate_key(&key) else {
             plugin_log.push("Deny bad key");
-            apply_auth_failure_delay(self.auth_failure_delay_ms).await;
             return self.unauthorized(session, INVALID_KEY_BODY).await;
         };
 
@@ -212,21 +251,32 @@ impl RequestFilter for KeyAuth {
         };
         plugin_log.push(key_source_label);
 
-        // Log OK with group attribution + optional username
+        // 3. Clear owned names, then set upstream headers (from whitelist)
+        if self.set_upstream_headers(session, metadata).is_err() {
+            return self
+                .deny(session, plugin_log, IDENTITY_HEADER_REJECTED, INVALID_KEY_BODY)
+                .await;
+        }
+
+        // 4. Hide credentials if configured
+        if self.hide_credentials {
+            match self.hide_credentials(session, used_source) {
+                Ok(()) => {}
+                Err(HideCredentialError::Removal) => {
+                    return self
+                        .deny(session, plugin_log, CREDENTIAL_REMOVAL_FAILED, INVALID_KEY_BODY)
+                        .await;
+                }
+                Err(HideCredentialError::Cookie(error)) => return cookie_cleanup_failure(error),
+            }
+        }
+
+        // 5. Log OK with group attribution + optional username, only after
+        // every mutation and credential cleanup succeeded.
         if let Some(username) = &metadata.username {
             plugin_log.push_fmt("OK group={} user {}", la![metadata.group.as_ref(), sensitive(username)]);
         } else {
             plugin_log.push_fmt("OK group={}", la![metadata.group.as_ref()]);
-        }
-
-        // 3. Set upstream headers (from whitelist)
-        self.set_upstream_headers(session, metadata);
-
-        // 4. Hide credentials if configured
-        if self.hide_credentials {
-            if let Err(error) = self.hide_credentials(session, used_source) {
-                return crate::plugins::http::common::auth_common::cookie_cleanup_failure(error);
-            }
         }
 
         PluginRunningResult::GoodNext

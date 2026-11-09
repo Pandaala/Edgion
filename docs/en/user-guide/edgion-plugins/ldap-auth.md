@@ -68,7 +68,7 @@ flow in [Search Mode](#search-mode).
 | `groupAttribute` | String | `memberOf` | Attribute on the user entry that lists group DNs; must be maintained by the directory and not writable by users |
 | `nestedGroups` | Boolean | `false` | Match nested groups with the Active Directory in-chain rule `1.2.840.113556.1.4.1941` (not supported by OpenLDAP) |
 | `headerType` | String | `ldap` | Authentication header scheme name |
-| `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
+| `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding. If it cannot be removed, the request is denied with the normal `401` after `authFailureDelayMs` (access log `credential removal failed`, diagnostic `AuthHeaderMutationRejected`) instead of forwarding the credential |
 | `authFailureDelayMs` | Integer | `0` | Delay before returning a credential-related 401 response, in milliseconds |
 | `anonymous` | String | none | Anonymous username; applies only when both credential headers are missing |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [Character rules](../http-route/filters/edgion-plugins/README.md#authentication-realm) |

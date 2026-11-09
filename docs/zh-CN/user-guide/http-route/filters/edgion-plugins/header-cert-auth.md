@@ -127,11 +127,14 @@ requestPlugins:
 插件执行时，会先清理当前启用的输出目标，再写入身份值：
 `skipConsumerLookup: true` 时为 `dnHeader`、`sanHeader` 和 `fingerprintHeader`，
 否则为 `consumerHeader` 和 `fingerprintHeader`。清理会移除同名的所有重复输入。
-输出名称互不相同时，证书没有 SAN 会使 SAN 目标头保持不存在；包含 CR、LF 或 NUL 的 DN/SAN 值会被省略，
-不会保留客户端原值。其他非法请求头值会使写入失败并返回 HTTP 500。
+输出名称互不相同时，证书没有 SAN 会使 SAN 目标头保持不存在；不是合法 HTTP 请求头文本的
+DN/SAN 和指纹值（例如包含控制字符）会被省略，不会保留客户端原值；这样的消费者身份视为无效
+（`allowAnonymous: true` 时走匿名放行）。
 匿名放行也先清理这些目标，再写入匿名消费者标记和身份。
 
-请求头删除或写入失败时返回 HTTP 500，不转发请求，即使配置了 `allowAnonymous: true`。
+请求头删除或写入失败（通常是配置问题，例如网关无法写入的头名）按认证失败处理：在
+`authFailureDelayMs` 之后返回配置的 `errorStatus`，不转发请求，即使配置了 `allowAnonymous: true`。
+访问日志记录 `certificate header mutation failed` 和诊断码 `AuthHeaderMutationRejected`。
 认证失败仍采用原有的拒绝或匿名策略。禁用或条件跳过的插件不执行清理；未启用的输出名
 以及无关请求头不属于保留名称。
 

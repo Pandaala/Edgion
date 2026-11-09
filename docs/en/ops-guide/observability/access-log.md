@@ -357,6 +357,7 @@ aggregate rate. Diagnostic codes have no numeric representation and do not imply
 | `error` | `RouteNotFound` | No matching route for the request |
 | `error` | `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
 | `error` | `BackendRequestTimeoutRetry` | An upstream attempt hit its per-try timeout and was retried |
+| `error` | `AuthHeaderMutationRejected` | An auth plugin denied the request because it could not clear or write an identity header or remove a hidden credential; alert on its rate (see [Alerting](alerting.md#log-based-signals)) |
 | `info` | `AcmeChallengeServed` | The gateway served an ACME HTTP-01 challenge locally |
 
 ## Extending the log: AccessLogExtern

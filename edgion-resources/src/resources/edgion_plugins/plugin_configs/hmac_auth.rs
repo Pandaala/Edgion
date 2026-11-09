@@ -2,7 +2,9 @@
 //!
 //! Supports HTTP Signature style authentication using HMAC algorithms.
 
-use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use crate::resources::edgion_plugins::auth_realm::{
+    validate_anonymous_header_text, validate_auth_realm, validate_owned_header_names,
+};
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
@@ -211,24 +213,13 @@ impl HmacAuthConfig {
         if self.realm.trim().is_empty() {
             return Some("realm cannot be empty".to_string());
         }
-        if self.upstream_header_fields.iter().any(|h| h.trim().is_empty()) {
-            return Some("upstreamHeaderFields contains empty header name".to_string());
+        // Whitelisted metadata names are cleared and written on every continuation.
+        if let Err(error) = validate_owned_header_names("upstreamHeaderFields", &self.upstream_header_fields) {
+            return Some(error);
         }
-        if self
-            .upstream_header_fields
-            .iter()
-            .any(|h| h.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0'))
-        {
-            return Some("upstreamHeaderFields contains invalid control characters".to_string());
-        }
-        if let Some(index) = self
-            .upstream_header_fields
-            .iter()
-            .position(|name| !crate::gwapi_types::is_valid_header_token(name))
-        {
-            return Some(format!(
-                "upstreamHeaderFields[{index}] must be a valid HTTP header name"
-            ));
+        // The anonymous username is always written as X-Consumer-Username.
+        if let Err(error) = validate_anonymous_header_text(self.anonymous.as_deref()) {
+            return Some(error.to_string());
         }
         if self.anonymous.is_none() && !self.match_config.has_credentials_source() {
             return Some("secretGroups (or resolvedCredentials) is required when anonymous is not set".to_string());

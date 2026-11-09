@@ -2126,7 +2126,7 @@ fn authenticated_host_claim_destinations_fail_shared_admission_before_runtime_co
             }),
         ),
     ] {
-        for destination in ["Host", "host", "HOST", "hOsT", "X-Tenant"] {
+        for destination in ["Host", "host", "HOST", "hOsT", "Content-Length", "X-Tenant"] {
             let mut config = config.clone();
             config["claimsToHeaders"] = serde_json::json!({"tenant": destination});
             let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
@@ -2144,7 +2144,7 @@ fn authenticated_host_claim_destinations_fail_shared_admission_before_runtime_co
                 assert_eq!(
                     errors,
                     vec![format!(
-                    "requestPlugins[0] ({kind}): claimsToHeaders cannot target Host; use a dedicated identity header"
+                    "requestPlugins[0] ({kind}): claimsToHeaders cannot target Host or a framing/hop-by-hop header; use a dedicated identity header"
                 )]
                 );
                 assert!(!compiled.is_activatable);

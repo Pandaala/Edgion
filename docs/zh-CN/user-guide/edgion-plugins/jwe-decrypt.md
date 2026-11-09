@@ -103,8 +103,13 @@ spec:
 
 插件执行时，先删除全部配置的投影目标头，再进行有界 claim/载荷投影。
 缺失、空值、不支持类型、非法字符或超限值使目标头保持不存在；
-总预算耗尽后的目标头同样不会残留客户端值。删除或投影写入失败返回固定 500，不转发请求。
-非严格模式无令牌放行、解密结果不是 JSON 时也清理配置目标。`forwardHeader` 保持既有行为。
+总预算耗尽后的目标头同样不会残留客户端值。删除或投影写入失败按解密失败处理：在
+`authFailureDelayMs` 之后返回 `401`（无令牌路径为 `401 JWE token required`），记录诊断码
+`AuthHeaderMutationRejected`，不转发请求。
+非严格模式无令牌放行、解密结果不是 JSON 时也清理配置目标。非严格模式无令牌放行时还会删除 `forwardHeader`，
+因此它不会携带客户端自带的值；把解密结果写入 `forwardHeader` 失败仍返回原有的 `400 Invalid JWE format`。
+开启 `hideCredentials` 后若无法删除令牌头，请求在 `authFailureDelayMs` 之后按解密失败拒绝（访问日志记录
+`credential removal failed`，诊断码 `AuthHeaderMutationRejected`），令牌不会被转发。
 未配置的头不受影响；插件禁用或条件跳过时不会执行清理，这些路径不保证身份头可信。
 
 ## 常见配置场景

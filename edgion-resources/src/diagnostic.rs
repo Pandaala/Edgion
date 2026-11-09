@@ -385,6 +385,15 @@ pub enum EdgionErrorCode {
 
     /// Outbound peer certificate SANs did not match configured subjectAltNames.
     OutboundTlsSanMismatch,
+
+    /// An auth plugin could not write or clear an identity header, or remove a
+    /// hidden credential; the request was denied. Usually operator
+    /// misconfiguration. This is an access-log diagnostic, not a metric, and a
+    /// single occurrence is not an alert condition: a client can trigger it by
+    /// sending a hidden query-parameter credential to a gRPC-JSON-transcoded
+    /// route, whose query is sealed against removal. Alert on its rate through
+    /// log-based alerting.
+    AuthHeaderMutationRejected,
 }
 
 impl EdgionErrorCode {
@@ -465,6 +474,7 @@ impl EdgionErrorCode {
             Self::OutboundTlsCaMissing => "OutboundTlsCaMissing",
             Self::OutboundTlsClientCertInvalid => "OutboundTlsClientCertInvalid",
             Self::OutboundTlsSanMismatch => "OutboundTlsSanMismatch",
+            Self::AuthHeaderMutationRejected => "AuthHeaderMutationRejected",
         }
     }
 }

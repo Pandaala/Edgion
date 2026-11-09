@@ -23,16 +23,39 @@ This correction is local to each executing plugin instance. Separate plugins ret
 last-write-wins behavior. ISSUE-002 additionally clears every configured projection destination
 before bounded projection. Missing, empty, unsupported, unsafe, and oversized values leave no
 header. Cleanup covers the entire plan before aggregate-budget exhaustion can stop projection.
-Actual removal or projection write errors propagate to a fixed 500 response without forwarding.
+Actual removal or projection write errors deny without forwarding. Since 2026-11-09 (user
+decision) the deny is the plugin's authentication failure, not a fixed 500: JwtAuth answers its
+401 (`invalid_token` when a token was verified, bare challenge for anonymous), JweDecrypt the
+decrypt-failure 401 (bypass path: "JWE token required"), OpenID Connect a fixed 401
+"Unauthorized - Authentication required", all after the shared failure delay, with push_err
+`claim header mutation failed` and the access-log diagnostic
+`EdgionErrorCode::AuthHeaderMutationRejected`.
+A fixed undelayed 500 right after a valid token told the client by status and timing that the
+token was valid; misconfiguration stays visible through the diagnostic. It is not a metric and
+one occurrence is not an alert condition: the code is shared with credential-removal failures,
+and a client can trigger one by sending a hidden KeyAuth/JwtAuth query credential to a
+gRPC-JSON-transcoded route, whose query is sealed. Operators alert on its rate through
+log-based alerting; do not re-report the absence of a dedicated metric or per-event alert.
 JWT anonymous allowance, OIDC unauthenticated Pass, and JWE non-strict no-token allowance clear
 the same destinations. Non-JSON JWE plaintext also clears them.
 
 Disabled or condition-skipped plugins remain inert: this is not Envoy's filter-wide
-sanitize-before-bypass contract. No global identity-header family is reserved. OIDC fixed
-outputs and JWE forwardHeader retain their existing separate behavior. JWT anonymous fixed
+sanitize-before-bypass contract. No global identity-header family is reserved. Since
+2026-11-09 the enabled OIDC fixed outputs (`X-Access-Token`, `X-ID-Token`, `X-Userinfo`, and
+`Authorization` in session-cookie mode with `accessTokenInAuthorizationHeader`) are removed on
+every continuation (authenticated and `unauthAction: Pass`) before any write, so a skipped
+oversized value, or one that is not valid HTTP header text (`is_header_value_safe` uses
+`http::HeaderValue::from_str`, so DEL and other control bytes are skipped, not denied), leaves
+the destination absent instead of a forged client copy; in bearer mode the verified client
+`Authorization` stays. JWE forwardHeader keeps its separate write behavior (a write failure is a
+400 "Invalid JWE format": the value is decrypted client data), but the non-strict no-token
+bypass removes `forwardHeader` together with the projection destinations. JWT anonymous fixed
 identity writes now fail closed on mutation error. Token verification/decryption consumes
 borrowed input before projection cleanup, preserving input/output name collisions without
-adding a request-path token copy; hideCredentials retains its existing final removal semantics.
+adding a request-path token copy. hideCredentials removal still runs last, but since
+2026-11-09 a removal failure (header or query) denies with the same plugin response and the
+`credential removal failed` tag instead of forwarding the credential (JwtAuth, OpenID Connect,
+JweDecrypt; cookie removal keeps the shared cookie cleanup response).
 
 Follow-up P1-C1 rejects `Host` destinations, ignoring ASCII case, for JWT/OIDC
 in their shared Resources authenticated projection compiler. Header-map removal does
@@ -41,6 +64,14 @@ HTTP/1 upstream. Host therefore cannot serve as an owned claim destination with 
 missing-claim absence contract. Use a dedicated identity header instead. The generic
 payload compiler and JweDecrypt admission remain unchanged; this is not a general
 protocol-header prohibition or an authority-rewriting feature.
+
+Since 2026-11-09 the same authenticated compiler rejects every name in
+`auth_realm::RESERVED_AUTH_OUTPUT_HEADER_NAMES` (Host plus the framing/hop-by-hop
+names `Content-Length`, `Transfer-Encoding`, `TE`, `Trailer`, `Expect`,
+`Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`). Destinations are
+cleared on every continuation, so a framing name would change how the upstream
+parses the request. KeyAuth/HmacAuth `upstreamHeaderFields` and ForwardAuth
+`decision.upstreamHeaders` share the list through `validate_owned_header_names`.
 
 ## Rationale and evidence
 

@@ -274,7 +274,7 @@ fn upstream_header_names_require_tokens_and_preserve_exact_whitelist() {
         } else {
             assert_eq!(
                 config.detect_validation_error().as_deref(),
-                Some("upstreamHeaderFields[1] must be a valid HTTP header name")
+                Some("upstreamHeaderFields[1] must be a valid HTTP header name of at most 256 bytes")
             );
         }
         assert_eq!(serde_json::to_value(&config).unwrap(), before);
@@ -282,30 +282,89 @@ fn upstream_header_names_require_tokens_and_preserve_exact_whitelist() {
 }
 
 #[test]
-fn upstream_header_names_preserve_empty_control_and_match_error_precedence() {
+fn upstream_header_names_report_first_invalid_entry_before_later_checks() {
     let mut config = HmacAuthConfig {
         upstream_header_fields: vec!["private name".into(), " ".into()],
         ..Default::default()
     };
+    // The first invalid entry is reported, whatever makes it invalid.
     assert_eq!(
         config.detect_validation_error().as_deref(),
-        Some("upstreamHeaderFields contains empty header name")
+        Some("upstreamHeaderFields[0] must be a valid HTTP header name of at most 256 bytes")
     );
-    for control in ["private\rname", "private\nname", "private\0name"] {
-        config.upstream_header_fields[1] = control.into();
+    config.upstream_header_fields[0] = "X-Valid".into();
+    for invalid in [" ", "private\rname", "private\nname", "private\0name"] {
+        config.upstream_header_fields[1] = invalid.into();
         assert_eq!(
             config.detect_validation_error().as_deref(),
-            Some("upstreamHeaderFields contains invalid control characters")
+            Some("upstreamHeaderFields[1] must be a valid HTTP header name of at most 256 bytes")
         );
     }
     config.upstream_header_fields.pop();
+    config.algorithms.clear();
     assert_eq!(
         config.detect_validation_error().as_deref(),
-        Some("upstreamHeaderFields[0] must be a valid HTTP header name")
+        Some("algorithms cannot be empty")
     );
     config.algorithms.clear();
     assert_eq!(
         config.detect_validation_error().as_deref(),
         Some("algorithms cannot be empty")
     );
+}
+
+#[test]
+fn anonymous_must_be_valid_header_text() {
+    for (anonymous, valid) in [
+        ("guest", true),
+        ("", true),
+        ("café", true),
+        ("a\u{1}b", false),
+        ("a\u{7f}b", false),
+        ("a\rb", false),
+    ] {
+        let config = HmacAuthConfig {
+            anonymous: Some(anonymous.into()),
+            ..Default::default()
+        };
+        if valid {
+            assert_eq!(config.detect_validation_error(), None, "{anonymous:?}");
+        } else {
+            assert_eq!(
+                config.detect_validation_error().as_deref(),
+                Some("anonymous is not valid header text")
+            );
+        }
+    }
+}
+
+#[test]
+fn upstream_header_fields_reject_host_ignoring_case() {
+    for name in [
+        "Host",
+        "host",
+        "HOST",
+        "hOsT",
+        "Content-Length",
+        "Transfer-Encoding",
+        "keep-alive",
+        "Expect",
+    ] {
+        let config = HmacAuthConfig {
+            anonymous: Some("guest".into()),
+            upstream_header_fields: vec!["X-Valid".into(), name.into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            config.detect_validation_error().as_deref(),
+            Some("upstreamHeaderFields[1] cannot be Host or a framing/hop-by-hop header; use a dedicated identity header"),
+            "{name:?}"
+        );
+    }
+    let config = HmacAuthConfig {
+        anonymous: Some("guest".into()),
+        upstream_header_fields: vec!["X-Host".into(), "Hosts".into()],
+        ..Default::default()
+    };
+    assert_eq!(config.detect_validation_error(), None);
 }

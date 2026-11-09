@@ -24,6 +24,13 @@ ISSUE-003 likewise clears HeaderCertAuth's active certificate identity destinati
 missing SANs and anonymous continuations cannot retain client input there. See the
 [certificate projection guard](../../header-cert-auth/regression-guards/certificate-identity-header-projection.md).
 D0052 historically fixed ordering and collisions without changing skip-vs-strip behavior.
+Since 2026-11-09 the same ownership rule covers the remaining explicitly configured outputs
+(user decision): KeyAuth and HmacAuth clear every `upstreamHeaderFields` name on keyed and
+anonymous continuations before writing; ForwardAuth clears every `upstreamHeaders` name before
+copying from the authorizer; OpenID Connect clears its enabled fixed outputs. A failed clear or
+write denies with the plugin's authentication failure. Names a plugin does not configure or
+write (for example `X-Consumer-Username` when KeyAuth does not forward it) are still not
+stripped — this decision stands for them.
 
 Fix suggestions of the form "unify identity-header sanitization across every auth plugin",
 "always strip client-supplied `X-Consumer-Username` / `X-Anonymous-Consumer` before auth",

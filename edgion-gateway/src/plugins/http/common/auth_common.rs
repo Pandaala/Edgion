@@ -61,8 +61,66 @@ fn set_sensitive_request_header_value(
 /// those names raw would silently stop hiding a credential sent as
 /// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
 /// each helper matches the extractor it undoes.
-pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
-    let _ = session.remove_request_query_param(name);
+///
+/// Returns the removal result: a hidden credential that could not be removed
+/// must deny the request instead of reaching the upstream.
+pub fn strip_query_param(
+    session: &mut dyn PluginSession,
+    name: &str,
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    session.remove_request_query_param(name).map(|_| ())
+}
+
+/// PluginLog tag for a failed claim/payload projection or fixed identity output
+/// mutation (JwtAuth, OpenID Connect, JweDecrypt).
+pub const CLAIM_HEADER_MUTATION_FAILED: &str = "claim header mutation failed";
+/// PluginLog tag for a failed consumer/anonymous identity header mutation.
+pub const IDENTITY_HEADER_REJECTED: &str = "identity header rejected";
+/// PluginLog tag for a failed HeaderCertAuth identity-header or credential mutation.
+pub const CERTIFICATE_HEADER_MUTATION_FAILED: &str = "certificate header mutation failed";
+/// PluginLog tag for a hidden credential that could not be removed.
+pub const CREDENTIAL_REMOVAL_FAILED: &str = "credential removal failed";
+
+/// Record a failed identity-header write or credential removal: the static
+/// PluginLog tag plus the canonical alertable access-log diagnostic. The caller
+/// then sends its own deny response.
+pub fn note_auth_header_mutation_failure(
+    session: &mut dyn PluginSession,
+    plugin_log: &mut crate::plugins::runtime::PluginLog,
+    tag: &'static str,
+) {
+    plugin_log.push_err(tag);
+    session.record_error(edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected);
+}
+
+/// Why hiding a presented credential failed.
+#[derive(Debug)]
+pub enum HideCredentialError {
+    /// A header or query credential could not be removed.
+    Removal,
+    /// The Cookie edit failed; keeps the canonical cookie-cleanup statuses.
+    Cookie(crate::request_cookie::CookieEditError),
+}
+
+/// Whether `value` is valid HTTP header text under the same rule as
+/// `http::HeaderValue::from_str` (visible ASCII, space, tab, or obs-text;
+/// no other control byte or DEL), without allocating.
+pub fn is_header_text(value: &str) -> bool {
+    value.bytes().all(|b| b == b'\t' || (b >= 0x20 && b != 0x7f))
+}
+
+/// Remove every plugin-owned request header name before this request's writes.
+///
+/// Stops at the first failed removal; the caller must deny, since the remaining
+/// names could still carry a client-supplied value.
+pub fn remove_request_headers<S: AsRef<str>>(
+    session: &mut dyn PluginSession,
+    names: &[S],
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    for name in names {
+        session.remove_request_header(name.as_ref())?;
+    }
+    Ok(())
 }
 
 /// Remove every occurrence of one raw Cookie name from current headers.
@@ -332,17 +390,6 @@ pub fn clear_claim_headers(
         session.remove_request_header(entry.header_name())?;
     }
     Ok(())
-}
-
-/// Fail closed without exposing header names, values, or adapter error details.
-pub fn claim_header_failure(
-    log: &mut crate::plugins::runtime::PluginLog,
-) -> edgion_resources::filters::PluginRunningResult {
-    log.push_err("claim header mutation failed");
-    edgion_resources::filters::PluginRunningResult::ErrResponse {
-        status: 500,
-        body: None,
-    }
 }
 
 /// Replace configured destinations with bounded, trusted claims. Clear all names

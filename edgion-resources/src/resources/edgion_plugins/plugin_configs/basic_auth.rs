@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 crate::redact::impl_redacted_debug!(BasicAuthConfig);
 
 use crate::resources::common::group_name::default_group_name;
-use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use crate::resources::edgion_plugins::auth_realm::{validate_anonymous_header_text, validate_auth_realm};
 use crate::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,11 @@ impl BasicAuthConfig {
         }
         if self.realm.trim().is_empty() {
             return Some("realm cannot be empty".to_string());
+        }
+
+        // The anonymous username is always written as X-Consumer-Username.
+        if let Err(error) = validate_anonymous_header_text(self.anonymous.as_deref()) {
+            return Some(error.to_string());
         }
 
         // Validate secret_groups structure (cross-group username uniqueness

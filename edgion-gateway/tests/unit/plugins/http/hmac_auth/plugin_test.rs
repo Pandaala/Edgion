@@ -2,6 +2,7 @@ use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use bytes::Bytes;
+use edgion_resources::EdgionErrorCode;
 use mockall::Sequence;
 
 #[test]
@@ -443,6 +444,21 @@ fn signed_session(signed_headers: &[&str], digest: Option<&str>, body: &'static 
 }
 
 fn signed_session_without_digest_read(signed_headers: &[&str], digest: Option<&str>) -> MockPluginSession {
+    let mut session = signed_session_base(signed_headers, digest);
+    session.expect_set_request_header_value().returning(|_, value| {
+        assert!(value.is_sensitive());
+        Ok(())
+    });
+    session.expect_remove_request_header().returning(|_| Ok(()));
+    session.expect_write_response_header().returning(|_, _| Ok(()));
+    session.expect_write_response_body().returning(|_, _| Ok(()));
+    session.expect_shutdown().returning(|| {});
+    session
+}
+
+/// A validly signed request with no mutation or response expectations, so a
+/// test can declare strict ones.
+fn signed_session_base(signed_headers: &[&str], digest: Option<&str>) -> MockPluginSession {
     let secret = b"alice-super-secret-key".to_vec();
     let date = rfc2822_now();
     let path = "/v1/items";
@@ -475,14 +491,6 @@ fn signed_session_without_digest_read(signed_headers: &[&str], digest: Option<&s
     session.expect_get_path().return_const(path.to_string());
     session.expect_request_query().return_const(None);
     session.expect_get_method().return_const("POST".to_string());
-    session.expect_set_request_header_value().returning(|_, value| {
-        assert!(value.is_sensitive());
-        Ok(())
-    });
-    session.expect_remove_request_header().returning(|_| Ok(()));
-    session.expect_write_response_header().returning(|_, _| Ok(()));
-    session.expect_write_response_body().returning(|_, _| Ok(()));
-    session.expect_shutdown().returning(|| {});
     session
 }
 
@@ -1108,9 +1116,17 @@ fn prepared_metadata_preserves_source_policy_and_live_setter_operations() {
             })
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_, _| Err("test setter rejection".into()));
+            .returning(|_, _| Ok(()));
     }
-    plugin.set_upstream_headers(&mut session, credential);
+    assert!(plugin.set_upstream_headers(&mut session, credential).is_ok());
+
+    // The first failed write stops the projection; the caller denies.
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Err("test setter rejection".into()));
+    assert!(plugin.set_upstream_headers(&mut session, credential).is_err());
 
     // Empty metadata, as resolved for conditions, needs no header backing storage.
     config
@@ -1179,4 +1195,256 @@ async fn digest_capacity_exhaustion_returns_local_503_instead_of_auth_denial() {
             body: None
         }
     );
+}
+
+// ===== identity-header mutation failures =====
+
+fn owned_header_plugin(hide_credentials: bool, anonymous: Option<&str>, delay_ms: u64) -> HmacAuth {
+    let mut config = HmacAuthConfig {
+        match_config: HmacMatchConfig {
+            clock_skew: 600,
+            ..Default::default()
+        },
+        hide_credentials,
+        anonymous: anonymous.map(str::to_string),
+        auth_failure_delay_ms: delay_ms,
+        upstream_header_fields: vec!["X-Consumer-Username".to_string(), "X-Customer-ID".to_string()],
+        ..Default::default()
+    };
+    // The credential lacks X-Customer-ID: the whitelisted name is still owned.
+    config.resolved_credentials = Some(HashMap::from([(
+        "alice".to_string(),
+        HmacCredential {
+            secret: b"alice-super-secret-key".to_vec(),
+            headers: HashMap::from([("X-Consumer-Username".to_string(), "alice".to_string())]),
+            group: "partners".to_string(),
+        },
+    )]));
+    HmacAuth::new(&config)
+}
+
+fn expect_owned_clears(session: &mut MockPluginSession, sequence: &mut Sequence, names: &'static [&'static str]) {
+    for name in names {
+        session
+            .expect_remove_request_header()
+            .withf(move |candidate| candidate == *name)
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|_| Ok(()));
+    }
+}
+
+fn expect_hmac_401(session: &mut MockPluginSession, body: &'static [u8]) {
+    let mut sequence = Sequence::new();
+    session
+        .expect_write_response_header()
+        .withf(|response, end_of_stream| {
+            !end_of_stream
+                && response.status.as_u16() == 401
+                && response
+                    .headers
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("hmac realm=\"edgion\"")
+        })
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_write_response_body()
+        .withf(move |response_body, end_of_stream| {
+            *end_of_stream && response_body.as_deref() == Some(Bytes::from_static(body).as_ref())
+        })
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_shutdown()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|| {});
+    session
+        .expect_record_error()
+        .withf(|code| *code == EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+}
+
+fn assert_denied_without_success(log: &PluginLog, tag: &str) {
+    let entries = render_log(log);
+    assert!(entries.iter().any(|e| e == &format!("err: {tag}")), "{entries:?}");
+    assert!(!entries.iter().any(|e| e.contains("OK group=")), "{entries:?}");
+    assert!(!entries.iter().any(|e| e.contains("Allow anonymous")), "{entries:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn keyed_identity_header_write_failure_denies_after_delay_without_ok_line() {
+    const DELAY_MS: u64 = 400;
+    let plugin = owned_header_plugin(false, None, DELAY_MS);
+    let started = tokio::time::Instant::now();
+    let mut session = signed_session_base(&["@request-target", "date"], None);
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err("sealed RPC header".into()));
+    expect_hmac_401(&mut session, b"401 Invalid signature");
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+    // Same delay as a bad signature, so timing does not reveal verification.
+    assert!(started.elapsed() >= std::time::Duration::from_millis(DELAY_MS));
+}
+
+#[tokio::test]
+async fn keyed_owned_header_clear_failure_denies() {
+    let plugin = owned_header_plugin(false, None, 0);
+    let mut session = signed_session_base(&["@request-target", "date"], None);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Consumer-Username")
+        .times(1)
+        .returning(|_| Err("sealed RPC header".into()));
+    session.expect_set_request_header_value().never();
+    expect_hmac_401(&mut session, b"401 Invalid signature");
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn hidden_credential_removal_failure_denies() {
+    let plugin = owned_header_plugin(true, None, 0);
+    let mut session = signed_session_base(&["@request-target", "date"], None);
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "authorization")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| Err("sealed RPC header".into()));
+    expect_hmac_401(&mut session, b"401 Invalid signature");
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "credential removal failed");
+}
+
+#[tokio::test]
+async fn keyed_continuation_clears_forged_whitelisted_names_before_writes() {
+    let plugin = owned_header_plugin(true, None, 0);
+    let mut session = signed_session_base(&["@request-target", "date"], None);
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Consumer-Username" && value == "alice" && value.is_sensitive())
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    expect_owned_clears(
+        &mut session,
+        &mut sequence,
+        &["authorization", "proxy-authorization", "signature"],
+    );
+    session.expect_record_error().never();
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert!(log.contains("OK group=partners"));
+}
+
+#[tokio::test]
+async fn anonymous_identity_header_write_failure_denies_with_missing_auth_body() {
+    let plugin = owned_header_plugin(false, Some("guest"), 0);
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[]);
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, _| name == "X-Anonymous-Consumer")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err("sealed RPC header".into()));
+    expect_hmac_401(&mut session, b"401 Missing Authorization header");
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn anonymous_owned_header_clear_failure_denies_with_missing_auth_body() {
+    let plugin = owned_header_plugin(false, Some("guest"), 0);
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[]);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Consumer-Username")
+        .times(1)
+        .returning(|_| Err("sealed RPC header".into()));
+    session.expect_set_request_header_value().never();
+    expect_hmac_401(&mut session, b"401 Missing Authorization header");
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn anonymous_continuation_clears_forged_whitelisted_names_before_writes() {
+    let plugin = owned_header_plugin(false, Some("guest"), 0);
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-customer-id", "forged")]);
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Consumer-Username" && value == "guest")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session.expect_record_error().never();
+    let mut log = PluginLog::new("HmacAuth");
+
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "Allow anonymous");
 }

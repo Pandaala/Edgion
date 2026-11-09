@@ -200,9 +200,9 @@ dedicated snapshot providers; the refresh singleflight registry is separate.
 | `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value in bytes |
 | `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers in bytes |
 
-After successful authentication, all configured `claimsToHeaders` destinations are cleared before upstream headers are produced. A missing, empty, unsupported, unsafe, or oversized claim leaves its destination absent. Cleanup also runs when fixed token outputs exhaust the total header budget; cleanup failure stops forwarding with HTTP 500. Fixed output headers retain their own existing behavior. Anonymous/pass-through and skipped or disabled plugin paths are outside this sanitation contract.
+After successful authentication, all configured `claimsToHeaders` destinations are cleared before upstream headers are produced. A missing, empty, unsupported, unsafe, or oversized claim leaves its destination absent. Cleanup also runs when fixed token outputs exhaust the total header budget; cleanup failure stops forwarding with a `401` (see below). Skipped or disabled plugin paths are outside this sanitation contract.
 
-`claimsToHeaders` cannot target `Host` (case-insensitive). Configuration validation rejects it because HTTP/2 `:authority` can recreate that header during protocol conversion. Use a dedicated identity header such as `X-Tenant`.
+`claimsToHeaders` cannot target `Host` or a framing/hop-by-hop header (`Content-Length`, `Transfer-Encoding`, `TE`, `Trailer`, `Expect`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`) (case-insensitive). Configuration validation rejects them: HTTP/2 `:authority` can recreate `Host` during protocol conversion, and destinations are cleared on every request, which would change request framing. Use a dedicated identity header such as `X-Tenant`.
 
 Claim-header destinations are canonicalized and ordered before request processing. Case variants such as `X-User` and `x-user` therefore conflict within one OpenID Connect plugin configuration and are rejected. Separate plugins retain execution-order, last-write-wins behavior.
 
@@ -235,8 +235,20 @@ invalid JWT retains the original 401 rejection. This limit is not configurable.
 When this plugin executes, all configured projection destinations are removed before
 bounded claim/payload projection. Missing, empty, unsupported, unsafe, or oversized
 values leave their destination absent, including destinations after aggregate-budget
-exhaustion. Removal or projection write failure returns a fixed 500 without forwarding.
-This also applies to unauthenticated `Pass`. Fixed token/userinfo output headers retain their separate behavior.
+exhaustion. Removal or projection write failure is rejected with `401 Unauthorized -
+Authentication required` after `authFailureDelayMs`, records the diagnostic
+`AuthHeaderMutationRejected`, and does not forward the request.
+This also applies to unauthenticated `Pass`. The enabled fixed outputs (`X-Access-Token`,
+`X-ID-Token`, `X-Userinfo`, and `Authorization` in session-cookie mode with
+`accessTokenInAuthorizationHeader`) are removed on every continuation before writing, so an
+oversized value, or one that is not valid HTTP header text (for example a control byte), is
+skipped and leaves the header absent instead of a client-supplied copy — a skipped value is not
+a failure and does not deny; in bearer mode the verified client `Authorization` is kept. A
+`hideCredentials` removal failure is rejected the same way.
+`AuthHeaderMutationRejected` is an access-log diagnostic (an `error` entry in the `diagnostics`
+array), not a metric or an alert condition by itself; the code is shared with other auth plugins,
+where a client can trigger it (a hidden query credential sent to a gRPC-JSON-transcoded route,
+whose query is sealed). Alert on its rate with log-based alerting.
 Unconfigured names are unaffected. Disabled or condition-skipped plugins do not run
 cleanup; these paths provide no authenticated-header guarantee.
 

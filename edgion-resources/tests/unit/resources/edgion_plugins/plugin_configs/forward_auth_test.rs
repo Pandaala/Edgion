@@ -161,3 +161,47 @@ fn forward_auth_rejects_conflicting_body_sources() {
         "request.body must remain valid when forwardBody is false"
     );
 }
+
+/// Upstream header names are owned request outputs and must be valid names.
+#[test]
+fn forward_auth_rejects_invalid_upstream_header_names() {
+    let message = "decision.upstreamHeaders[1] must be a valid HTTP header name of at most 256 bytes";
+    let long = "x".repeat(257);
+    for name in ["", "X User", "X-User:", "X-User\r\nInjected", "X-Usér", long.as_str()] {
+        let mut cfg: ForwardAuthConfig =
+            yaml_serde::from_str("target:\n  name: auth\n  port: 8080\ndecision: {}\n").unwrap();
+        cfg.decision.upstream_headers = vec!["X-User-Id".into(), name.to_string()];
+        assert_eq!(cfg.validation_error().as_deref(), Some(message), "{name:?}");
+    }
+    let mut cfg: ForwardAuthConfig =
+        yaml_serde::from_str("target:\n  name: auth\n  port: 8080\ndecision: {}\n").unwrap();
+    cfg.decision.upstream_headers = vec!["X-User-Id".into(), "authorization".into(), "x".repeat(256)];
+    assert!(cfg.validation_error().is_none());
+}
+
+#[test]
+fn forward_auth_rejects_host_upstream_header_ignoring_case() {
+    for name in [
+        "Host",
+        "host",
+        "HOST",
+        "hOsT",
+        "Content-Length",
+        "Transfer-Encoding",
+        "Trailer",
+        "Proxy-Connection",
+    ] {
+        let mut cfg: ForwardAuthConfig =
+            yaml_serde::from_str("target:\n  name: auth\n  port: 8080\ndecision: {}\n").unwrap();
+        cfg.decision.upstream_headers = vec!["X-User-Id".into(), name.to_string()];
+        assert_eq!(
+            cfg.validation_error().as_deref(),
+            Some("decision.upstreamHeaders[1] cannot be Host or a framing/hop-by-hop header; use a dedicated identity header"),
+            "{name:?}"
+        );
+    }
+    let mut cfg: ForwardAuthConfig =
+        yaml_serde::from_str("target:\n  name: auth\n  port: 8080\ndecision: {}\n").unwrap();
+    cfg.decision.upstream_headers = vec!["X-Host".into(), "Hosts".into()];
+    assert!(cfg.validation_error().is_none());
+}

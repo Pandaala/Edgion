@@ -11,12 +11,20 @@ knowledge_type: regression-guards
 Executing HeaderCertAuth instances clear their active output names before publishing identity:
 `upstreamHeaders.dnHeader`, `sanHeader`, and `fingerprintHeader` with `skipConsumerLookup: true`;
 otherwise `consumerHeader` and `fingerprintHeader`. Cleanup removes all input field lines,
-including on anonymous continuations. An absent SAN or a DN/SAN skipped for CR/LF/NUL must
-not preserve a client-supplied value. Other invalid header values fail the write and return
-500. Distinct output names express distinct certificate fields.
+including on anonymous continuations. An absent SAN or a certificate value that is not valid
+HTTP header text (`HeaderValue::from_str`; since 2026-11-09, formerly only CR/LF/NUL) must not
+preserve a client-supplied value: in consumer mode it is an invalid identity
+(`allowAnonymous` continuation when allowed), in `skipConsumerLookup` mode the DN/SAN field is
+skipped, and the fingerprint is skipped. Certificate bytes therefore never reach the write as a
+mutation error. Distinct output names express distinct certificate fields.
 
-Removal and write errors terminate with a fixed 500 `ErrResponse`, including anonymous
-identity writes and source-credential removal. They cannot enter `allowAnonymous` fallback.
+Removal and write errors (only configuration-driven now: invalid or gRPC-transcoder-sealed
+names) deny through the plugin's `reject` path — the configured `errorStatus`, the shared
+failure delay, push_err `certificate header mutation failed`, and
+`EdgionErrorCode::AuthHeaderMutationRejected` — including anonymous identity writes and
+source-credential removal (since 2026-11-09; formerly a fixed undelayed 500, changed by user
+decision so the response matches an authentication failure and does not reveal a valid
+certificate by status or timing). They cannot enter `allowAnonymous` fallback.
 Authentication/identity errors retain the existing authentication-failure policy. Static
 PluginLog errors carry no certificate, header name/value, or underlying adapter detail.
 

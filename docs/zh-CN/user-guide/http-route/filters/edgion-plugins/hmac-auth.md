@@ -77,7 +77,7 @@ spec:
 | `minSecretLength` | Integer | ❌ | `32` | 最小密钥长度 |
 | `secretField` | String | ❌ | `"secret"` | `credentials.yaml` 每个列表条目中共享密钥的字段名 |
 | `usernameField` | String | ❌ | `"username"` | `credentials.yaml` 每个列表条目中用户名的字段名 |
-| `upstreamHeaderFields` | Array | ❌ | `[]` | 传递给上游的额外 header |
+| `upstreamHeaderFields` | Array | ❌ | `[]` | 传递给上游的额外 header。头名必须合法，且不能是 `Host` 或报文分帧/逐跳头（`Content-Length`、`Transfer-Encoding`、`TE`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`Upgrade`）（准入时拒绝） |
 
 \* 未设置 `anonymous` 时必填。
 
@@ -203,6 +203,7 @@ HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `D
 | 威胁路径 | 防御 |
 |---|---|
 | 中间人抓包 | **HTTPS**（TLS 阻断签名泄露） |
+| 伪造身份头 | 有凭证和匿名请求在写入前都会删除 `upstreamHeaderFields` 里的每个头名。无法清除或写入某个头、或无法删除被隐藏的凭证时，请求在 `authFailureDelayMs` 之后以该路径凭证错误时的 `401` 拒绝（有凭证请求为 `Invalid signature`，匿名请求为 `Missing Authorization header`），并记录诊断码 `AuthHeaderMutationRejected`——这是访问日志诊断码（`diagnostics` 数组），不是指标，单次出现本身也不是告警条件；该码也覆盖其他鉴权插件中可由客户端触发的凭证删除失败，请通过基于日志的告警按其速率告警。注意：凭证没有值的白名单头会被删除，若上游会重新校验覆盖了该头的客户端签名，校验会失败 |
 | 签名从日志泄露 | 启用 `hideCredentials: true`；access log 不记录 `Authorization`、`Proxy-Authorization` 或 `Signature` 头 |
 | 合法客户端恶意重放 | **业务层 idempotency key**（非网关层职责） |
 | 窗口期调得过大 | 高敏感接口缩短 `clockSkew`（如 `60`） |

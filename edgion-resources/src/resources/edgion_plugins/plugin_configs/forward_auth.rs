@@ -25,7 +25,9 @@ use crate::resources::common::{ExternalHttpConnection, OutboundRequestSpec, Reso
 #[derive(Default)]
 pub struct ForwardAuthDecision {
     /// Headers to copy from the auth service response to the upstream request
-    /// (forwarded to upstream on success).
+    /// (forwarded to upstream on success). Every listed name is removed from the
+    /// request first, so a name the auth service does not return (or returns as
+    /// non-text bytes) stays absent, even when the client sent it.
     ///
     /// Example: ["X-User-ID", "X-User-Role"]
     #[serde(default)]
@@ -176,6 +178,14 @@ impl ForwardAuthConfig {
             return Some(
                 "forwardBody and request.body are mutually exclusive; configure only one body source".to_string(),
             );
+        }
+        // Upstream header names are plugin-owned request outputs: each one is
+        // cleared and rewritten on every pass.
+        if let Err(error) = crate::resources::edgion_plugins::auth_realm::validate_owned_header_names(
+            "decision.upstreamHeaders",
+            &self.decision.upstream_headers,
+        ) {
+            return Some(error);
         }
         // Delegate request-level validation (rejects forward_all on args/cookies)
         for name in &self.decision.client_headers {

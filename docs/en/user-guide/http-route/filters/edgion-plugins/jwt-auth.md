@@ -356,8 +356,16 @@ JwtAuth adds no consumer header by default. To forward `sub`, configure an expli
 When JwtAuth executes, every `claimsToHeaders` destination is cleared before verified
 claims are projected. A missing, empty, unsupported, unsafe, or oversized claim leaves
 its destination absent. All destinations are cleared even when the aggregate budget
-stops projection. Header removal or projection write failure returns a fixed 500 and
-does not forward the request.
+stops projection. Header removal or projection write failure is rejected like an invalid
+token (`401` with `error="invalid_token"`, or the bare challenge on the anonymous path) after
+`authFailureDelayMs`, records the diagnostic `AuthHeaderMutationRejected`, and does not
+forward the request. A `hideCredentials` header or query removal failure is rejected the same
+way; a cookie removal failure keeps the cookie cleanup response (`400` for an unsanitizable
+`Cookie` header, `500` for an internal failure). `AuthHeaderMutationRejected` is an access-log
+diagnostic (an `error` entry in the `diagnostics` array), not a metric, and one occurrence is not
+an alert condition by itself: most causes are operator misconfiguration, but a client can trigger
+it by sending the hidden `query` credential to a gRPC-JSON-transcoded route, whose query is
+sealed. Alert on its rate with log-based alerting.
 
 Anonymous allowance also clears configured destinations before writing the explicit
 anonymous identity. Missing claims do not by themselves invalidate a JWT; require
@@ -367,7 +375,7 @@ not run this cleanup; do not trust these headers on paths that skip authenticati
 If the token input header is also a mapping destination, verification consumes the
 token first; `hideCredentials` retains its existing final removal behavior.
 
-`claimsToHeaders` cannot target `Host` (case-insensitive). Configuration validation rejects it because HTTP/2 `:authority` can recreate that header during protocol conversion. Use a dedicated identity header such as `X-Tenant`.
+`claimsToHeaders` cannot target `Host` or a framing/hop-by-hop header (`Content-Length`, `Transfer-Encoding`, `TE`, `Trailer`, `Expect`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`) (case-insensitive). Configuration validation rejects them: HTTP/2 `:authority` can recreate `Host` during protocol conversion, and destinations are cleared on every request, which would change request framing. Use a dedicated identity header such as `X-Tenant`.
 
 ### Authentication Failure
 

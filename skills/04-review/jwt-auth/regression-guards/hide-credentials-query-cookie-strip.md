@@ -38,6 +38,12 @@ plugins still call these helpers before claiming either source is forwarded.
   query or cookie value is not treated as the authenticated credential when a
   header token won extraction priority.
 - `hideCredentials: false` leaves the request unchanged.
+- Header or query removal failure denies (since 2026-11-09): the request is
+  rejected like a present invalid token (`401` with `error="invalid_token"`)
+  after the failure delay, with PluginLog `credential removal failed` and the
+  diagnostic `AuthHeaderMutationRejected`; the credential is never forwarded.
+  Cookie removal failure keeps the cookie cleanup response above.
+  `strip_query_param` returns the removal result for this purpose.
 
 ## Regression coverage
 

@@ -331,6 +331,14 @@ fn expect_basic_401(session: &mut MockPluginSession) {
     session.expect_shutdown().times(1).returning(|| {});
 }
 
+fn expect_identity_rejected_code(session: &mut MockPluginSession) {
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+}
+
 #[tokio::test(start_paused = true)]
 async fn identity_header_write_failure_denies_without_ok_line() {
     const DELAY_MS: u64 = 400;
@@ -353,6 +361,7 @@ async fn identity_header_write_failure_denies_without_ok_line() {
         .expect_set_request_header_value()
         .times(1)
         .returning(|_, _| Err("header store rejected the value".into()));
+    expect_identity_rejected_code(&mut session);
     expect_basic_401(&mut session);
     let mut log = PluginLog::new("BasicAuth");
     assert_eq!(
@@ -381,6 +390,7 @@ async fn anonymous_header_write_failure_denies_without_allow_line() {
         .expect_set_request_header_value()
         .times(1)
         .returning(|_, _| Err("header store rejected the value".into()));
+    expect_identity_rejected_code(&mut session);
     expect_basic_401(&mut session);
     let mut log = PluginLog::new("BasicAuth");
     assert_eq!(
@@ -396,6 +406,28 @@ async fn anonymous_header_write_failure_denies_without_allow_line() {
 }
 
 #[tokio::test]
+async fn bad_credential_deny_records_no_header_mutation_code() {
+    let plugin = BasicAuth::new(&BasicAuthConfig {
+        resolved_users: Some(make_user_map("testuser", "testpass", "default")),
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", basic_header(b"testuser:wrong").as_str())],
+    );
+    session.expect_record_error().never();
+    session.expect_set_request_header_value().never();
+    expect_basic_401(&mut session);
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(render_log(&log), vec!["Deny bad credential"]);
+}
+
+#[tokio::test]
 async fn successful_auth_writes_identity_then_logs_ok() {
     let plugin = create_basic_auth_with_users();
     let mut session = MockPluginSession::new();
@@ -408,6 +440,69 @@ async fn successful_auth_writes_identity_then_logs_ok() {
         .withf(|name, value| name == "X-Consumer-Username" && value == "testuser")
         .times(1)
         .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(render_log(&log), vec!["OK group=default user testuser"]);
+}
+
+#[tokio::test]
+async fn hidden_credential_removal_failure_denies_without_ok_line() {
+    let plugin = BasicAuth::new(&BasicAuthConfig {
+        resolved_users: Some(make_user_map("testuser", "testpass", "default")),
+        hide_credentials: true,
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", basic_header(b"testuser:testpass").as_str())],
+    );
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Consumer-Username" && value == "testuser")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name.eq_ignore_ascii_case("authorization"))
+        .times(1)
+        .returning(|_| Err("header store rejected the removal".into()));
+    expect_identity_rejected_code(&mut session);
+    expect_basic_401(&mut session);
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    let entries = render_log(&log);
+    assert_eq!(entries, vec!["err: credential removal failed"]);
+}
+
+#[tokio::test]
+async fn hidden_credential_removed_before_ok_line() {
+    let plugin = BasicAuth::new(&BasicAuthConfig {
+        resolved_users: Some(make_user_map("testuser", "testpass", "default")),
+        hide_credentials: true,
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", basic_header(b"testuser:testpass").as_str())],
+    );
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name.eq_ignore_ascii_case("authorization"))
+        .times(1)
+        .returning(|_| Ok(()));
+    session.expect_record_error().never();
     let mut log = PluginLog::new("BasicAuth");
     assert_eq!(
         plugin.run_request(&mut session, &mut log).await,

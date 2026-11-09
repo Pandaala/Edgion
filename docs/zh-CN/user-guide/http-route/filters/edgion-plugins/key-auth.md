@@ -214,6 +214,7 @@ requestPlugins:
 ## 行为细节
 
 - 多个 `keySources` 按顺序检查，第一个找到非空值的来源用于认证
+- 无论有 key 还是匿名访问，写入前都会先从请求中删除 `upstreamHeaderFields` 里的每个头名，因此该 key 没有值的头保持为空，不会留下客户端自带的值。若某个头无法清除或写入，或无法删除被隐藏的请求头或查询参数凭证，请求在 `authFailureDelayMs` 之后以普通的 `401` 拒绝；访问日志记录 `identity header rejected` 或 `credential removal failed` 以及诊断码 `AuthHeaderMutationRejected`。被隐藏的 `cookie` 凭证无法删除时，仍返回 cookie 清理失败的响应（`Cookie` 头无法安全改写时为 `400`，内部错误为 `500`），而不是 `401`。`AuthHeaderMutationRejected` 是访问日志诊断码（`diagnostics` 数组中的 `error` 条目），不是指标，单次出现本身也不是告警条件：多数原因是运维配置错误，但客户端可以把被隐藏的查询参数凭证发到 gRPC-JSON 转码路由（其查询串已封存）来触发它。请通过基于日志的告警按其速率告警。`upstreamHeaderFields` 必须是合法头名，且不能是 `Host` 或报文分帧/逐跳头（`Content-Length`、`Transfer-Encoding`、`TE`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`Upgrade`），因为列表中的每个头名在每次请求都会被删除（链路中后续插件也看不到它，所以不要列出本插件读取 key 的请求头）；`anonymous` 作为 `X-Consumer-Username` 转发时（白名单项不区分大小写匹配）必须是合法的请求头文本。
 - 设置 `hideCredentials: true` 后，认证使用的来源会在转发到上游前从请求中移除：覆盖 `header`、`query`、`cookie` 三种来源（`query` 会从请求 URI 中剥离匹配到的参数，`cookie` 会从 `Cookie` 头中移除匹配到的 cookie）。`ctx` 来源（包括由 [WebhookKeyGet](./webhook-key-get.md) 写入的值）已经在服务端，从不出现在转发请求中，因此无需剥离。WebhookKeyGet 必须排在 KeyAuth **之前**；把 `requestPlugins` 写反是静默认证绕过。
 - `anonymous` 模式下，未提供 Key 的请求也会通过，但会设置 `X-Anonymous-Consumer: true`
 - Key 存储在 Kubernetes Secret 的 `keys.yaml` 字段中，格式为 YAML 数组

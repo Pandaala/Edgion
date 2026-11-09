@@ -92,7 +92,10 @@ the aliases needed by multi-address LB and GeoIP suites.
 
 This guard covers only non-success ForwardAuth responses and only names selected
 by `decision.clientHeaders`. The success-side `decision.upstreamHeaders` path
-retains its existing first-value request-header replacement semantics. Re-evaluate
+copies the first text value per name after clearing every configured name, and a
+mutation failure there answers a fixed 403 that relays no authorizer content; see
+[upstreamHeaders are plugin-owned and fail closed](upstream-headers-owned-fail-closed.md).
+Re-evaluate
 if the decision schema gains explicit set/append operations or the deny path no
 longer writes a Pingora `ResponseHeader` directly.
 

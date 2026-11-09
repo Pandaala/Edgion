@@ -338,6 +338,7 @@ Authorization: Bearer <admin-token>
 | `error` | `RouteNotFound` | 请求无匹配路由 |
 | `error` | `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
 | `error` | `BackendRequestTimeoutRetry` | 某次上游尝试达到单次超时后发生重试 |
+| `error` | `AuthHeaderMutationRejected` | 鉴权插件无法清除或写入身份头、或无法删除被隐藏的凭证，因而拒绝请求；请按速率告警 |
 | `info` | `AcmeChallengeServed` | 网关在本地返回 ACME HTTP-01 挑战响应 |
 
 ## 扩展日志：AccessLogExtern

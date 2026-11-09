@@ -467,7 +467,7 @@ fn check_query_strip(raw: Option<&str>, name: &str, expected: Option<&str>) {
             assert_eq!(owner.current_raw(), expected.as_deref());
             Ok(changed)
         });
-    strip_query_param(&mut session, name);
+    strip_query_param(&mut session, name).unwrap();
 }
 
 #[test]
@@ -664,7 +664,8 @@ fn query_credential_strip_preserves_live_raw_query_boundaries() {
             .expect_remove_request_query_param()
             .times(1)
             .returning(|_| Err(std::io::Error::other("query update rejected").into()));
-        strip_query_param(&mut session, name);
+        // The removal failure is reported to the caller, which must deny.
+        assert!(strip_query_param(&mut session, name).is_err());
     }
 }
 
@@ -1029,4 +1030,23 @@ async fn prepared_auth_challenge_concurrent_descriptions_remain_independent() {
         prepared.challenge(None, "ignored").unwrap().as_bytes(),
         "Bearer realm=\"café \\\"API\\\"\"".as_bytes()
     );
+}
+
+#[test]
+fn is_header_text_matches_header_value_from_str_for_every_byte() {
+    for byte in 0u8..=0x7f {
+        let value = format!("a{}b", byte as char);
+        assert_eq!(
+            super::is_header_text(&value),
+            http::HeaderValue::from_str(&value).is_ok(),
+            "byte {byte:#04x}"
+        );
+    }
+    for value in ["", "plain", "caf\u{e9}", "tab\there", "CN=Jos\u{e9}, O=Ex"] {
+        assert_eq!(
+            super::is_header_text(value),
+            http::HeaderValue::from_str(value).is_ok(),
+            "{value:?}"
+        );
+    }
 }

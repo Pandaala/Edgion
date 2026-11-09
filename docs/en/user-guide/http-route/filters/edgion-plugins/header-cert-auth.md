@@ -125,13 +125,17 @@ requestPlugins:
 Each executing plugin clears its active output destinations before writing identity values:
 `dnHeader`, `sanHeader`, and `fingerprintHeader` when `skipConsumerLookup: true`, or
 `consumerHeader` and `fingerprintHeader` otherwise. This also removes duplicate input fields.
-With distinct output names, a certificate without a SAN leaves the SAN destination absent; DN/SAN values containing
-CR, LF, or NUL are omitted rather than retaining client input. Other invalid header values
-fail the write and return HTTP 500. Anonymous continuations clear the same active
+With distinct output names, a certificate without a SAN leaves the SAN destination absent; DN/SAN and fingerprint values that are
+not valid HTTP header text (for example containing a control character) are omitted rather than
+retaining client input; such a consumer identity is treated as invalid (anonymous continuation
+when `allowAnonymous: true`). Anonymous continuations clear the same active
 destinations before writing the anonymous consumer marker and identity.
 
-Header removal or write failures return HTTP 500 without forwarding, even with
-`allowAnonymous: true`. Authentication failures still use the configured rejection or
+Header removal or write failures (a configuration problem such as a header name the gateway
+cannot write) are rejected like an authentication failure — the configured `errorStatus`
+after `authFailureDelayMs` — without forwarding, even with `allowAnonymous: true`. The access
+log records `certificate header mutation failed` and the diagnostic
+`AuthHeaderMutationRejected`. Authentication failures still use the configured rejection or
 anonymous policy. Disabled or condition-skipped plugins do not perform cleanup, and inactive
 output names and unrelated headers are not reserved.
 

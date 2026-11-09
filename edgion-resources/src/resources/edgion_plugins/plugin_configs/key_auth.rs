@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::common::KeyGet;
 use crate::resources::common::group_name::default_group_name;
-use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use crate::resources::edgion_plugins::auth_realm::{
+    validate_anonymous_header_text, validate_auth_realm, validate_owned_header_names,
+};
 use crate::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::resources::gateway::SecretObjectReference;
 
@@ -166,6 +168,14 @@ impl Default for KeyAuthConfig {
 }
 
 impl KeyAuthConfig {
+    /// Whether the anonymous username is written as `X-Consumer-Username`
+    /// (exact-case whitelist entry). The Gateway and admission share this rule.
+    pub fn forwards_anonymous_username(&self) -> bool {
+        self.upstream_header_fields
+            .iter()
+            .any(|field| field.eq_ignore_ascii_case("X-Consumer-Username"))
+    }
+
     /// Validate configuration. Returns `Err(message)` if invalid.
     pub fn validate(&self) -> Result<(), String> {
         self.validate_and_check()
@@ -213,6 +223,14 @@ impl KeyAuthConfig {
         validate_auth_realm(&self.realm).map_err(str::to_owned)?;
         if self.realm.is_empty() {
             return Err("realm cannot be empty".to_string());
+        }
+
+        // Whitelisted metadata names are cleared and written on every continuation.
+        validate_owned_header_names("upstreamHeaderFields", &self.upstream_header_fields)?;
+
+        // The anonymous username is only written when it is forwarded.
+        if self.forwards_anonymous_username() {
+            validate_anonymous_header_text(self.anonymous.as_deref()).map_err(str::to_string)?;
         }
 
         // Validate secret_groups structure (cross-group raw-key uniqueness

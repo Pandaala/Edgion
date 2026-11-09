@@ -5,6 +5,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{
 };
 
 use super::*;
+use crate::plugins::http::common::auth_common::{CLAIM_HEADER_MUTATION_FAILED, CREDENTIAL_REMOVAL_FAILED};
 
 fn assert_send_sync<T: Send + Sync>() {}
 
@@ -174,18 +175,174 @@ async fn claim_mutation_failures_never_continue_authenticated_or_anonymous_reque
                 .expect_set_request_header_value()
                 .times(if removal { 0 } else { 1 })
                 .returning(|_, _| Err(std::io::Error::other("private write detail").into()));
+            // A token-present failure gets the bad-token challenge; anonymous gets the bare one.
+            expect_header_deny(
+                &mut session,
+                if anonymous {
+                    BARE_CHALLENGE
+                } else {
+                    INVALID_TOKEN_CHALLENGE
+                },
+            );
             let mut log = PluginLog::new("JwtAuth");
             assert_eq!(
                 auth.run_request(&mut session, &mut log).await,
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None
-                }
+                PluginRunningResult::ErrTerminateRequest
             );
-            assert!(log.contains("claim header mutation failed"));
+            assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED));
             assert!(!log.contains("private"));
+            assert!(!log.contains("OK group="), "got: {log:?}");
+            assert!(!log.contains("Anon="), "got: {log:?}");
         }
     }
+}
+
+const BARE_CHALLENGE: &str = "Bearer realm=\"jwt\"";
+const INVALID_TOKEN_CHALLENGE: &str =
+    "Bearer realm=\"jwt\", error=\"invalid_token\", error_description=\"Unauthorized - Invalid or missing JWT\"";
+const FAILURE_BODY: &[u8] = b"401 Unauthorized - Invalid or missing JWT";
+
+/// Expect exactly one recorded `AuthHeaderMutationRejected` and the ordinary
+/// 401 Bearer response with `challenge`, written in order.
+fn expect_header_deny(
+    session: &mut crate::plugins::runtime::traits::session::MockPluginSession,
+    challenge: &'static str,
+) {
+    let mut sequence = mockall::Sequence::new();
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .in_sequence(&mut sequence)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .withf(move |response, end_of_stream| {
+            !end_of_stream
+                && response.status.as_u16() == 401
+                && response
+                    .headers
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok())
+                    == Some(challenge)
+        })
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_write_response_body()
+        .withf(|body, end_of_stream| *end_of_stream && body.as_deref() == Some(FAILURE_BODY))
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_shutdown()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|| {});
+}
+
+fn token_headers(token: &str) -> http::HeaderMap {
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+    headers
+}
+
+#[tokio::test]
+async fn hidden_header_credential_removal_failure_denies_with_invalid_token() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut config = config_with_resolved_credential();
+    config.hide_credentials = true;
+    let auth = JwtAuth::new(&config, "default".into());
+    let mut session = MockPluginSession::new();
+    session
+        .expect_request_header_map()
+        .return_const(token_headers(&signed_projection_token(Some("trusted"))));
+    session.expect_get_query_param_ref().returning(|_| None);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "authorization")
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("private removal detail").into()));
+    expect_header_deny(&mut session, INVALID_TOKEN_CHALLENGE);
+    let mut log = PluginLog::new("JwtAuth");
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains(CREDENTIAL_REMOVAL_FAILED), "got: {log:?}");
+    assert!(!log.contains("private"));
+    assert!(!log.contains("OK group="), "got: {log:?}");
+}
+
+#[tokio::test]
+async fn hidden_query_credential_removal_failure_denies_with_invalid_token() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut config = config_with_resolved_credential();
+    config.hide_credentials = true;
+    config.allow_token_in_query = true;
+    let auth = JwtAuth::new(&config, "default".into());
+    // The mock returns a `'static` borrow.
+    let token: &'static str = Box::leak(signed_projection_token(Some("trusted")).into_boxed_str());
+    let mut session = MockPluginSession::new();
+    session.expect_request_header_map().return_const(http::HeaderMap::new());
+    session
+        .expect_get_query_param_ref()
+        .withf(|name| name == "jwt")
+        .return_const(Some(token));
+    session
+        .expect_remove_request_query_param()
+        .withf(|name| name == "jwt")
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("private removal detail").into()));
+    expect_header_deny(&mut session, INVALID_TOKEN_CHALLENGE);
+    let mut log = PluginLog::new("JwtAuth");
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains(CREDENTIAL_REMOVAL_FAILED), "got: {log:?}");
+    assert!(!log.contains("OK group="), "got: {log:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn header_mutation_deny_applies_the_failure_delay() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use tokio::time::{advance, Duration, Instant};
+    let mut config = config_with_resolved_credential();
+    config.auth_failure_delay_ms = 100;
+    config.claims_to_headers = Some(HashMap::from([("sub".into(), "x-sub".into())]));
+    let auth = JwtAuth::new(&config, "default".into());
+    let mut session = MockPluginSession::new();
+    session
+        .expect_request_header_map()
+        .return_const(token_headers(&signed_projection_token(Some("trusted"))));
+    session.expect_get_query_param_ref().returning(|_| None);
+    session
+        .expect_remove_request_header()
+        .times(1)
+        .returning(|_| Err(std::io::Error::other("injected").into()));
+    expect_header_deny(&mut session, INVALID_TOKEN_CHALLENGE);
+
+    let start = Instant::now();
+    let task = tokio::spawn(async move {
+        let mut log = PluginLog::new("JwtAuth");
+        let result = auth.run_request(&mut session, &mut log).await;
+        (result, log)
+    });
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    advance(Duration::from_millis(99)).await;
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    advance(Duration::from_millis(1)).await;
+    let (result, log) = task.await.unwrap();
+    assert_eq!(Instant::now().duration_since(start), Duration::from_millis(100));
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED));
 }
 
 fn config_with_resolved_credential() -> JwtAuthConfig {
@@ -255,18 +412,19 @@ async fn authenticated_claim_sanitation_runs_for_missing_claim_and_fails_closed(
             });
         session.expect_set_request_header_value().never();
         session.expect_set_ctx_var().returning(|_, _| Ok(()));
-        let result = auth.run_request(&mut session, &mut PluginLog::new("JwtAuth")).await;
-        assert_eq!(
-            result,
-            if fail {
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None,
-                }
-            } else {
-                PluginRunningResult::GoodNext
-            }
-        );
+        if fail {
+            expect_header_deny(&mut session, INVALID_TOKEN_CHALLENGE);
+        }
+        let mut log = PluginLog::new("JwtAuth");
+        let result = auth.run_request(&mut session, &mut log).await;
+        if fail {
+            assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+            assert!(log.contains(CLAIM_HEADER_MUTATION_FAILED));
+            assert!(!log.contains("OK group="), "got: {log:?}");
+        } else {
+            assert_eq!(result, PluginRunningResult::GoodNext);
+            assert!(log.contains("OK group="), "got: {log:?}");
+        }
     }
 }
 

@@ -265,3 +265,96 @@ fn test_validate_secret_groups_empty_refs() {
     };
     assert!(config.validate().unwrap_err().contains("group 'a' has no secretRefs"));
 }
+
+#[test]
+fn upstream_header_field_names_must_be_header_tokens() {
+    for (name, valid) in [
+        ("X-Customer-ID", true),
+        ("X-Mixed!#$%&'*+-.^_`|~09", true),
+        ("", false),
+        ("bad name", false),
+        ("bad:name", false),
+        ("bad\rname", false),
+        ("bad-é", false),
+    ] {
+        let config = KeyAuthConfig {
+            upstream_header_fields: vec!["X-Valid".into(), name.into()],
+            ..Default::default()
+        };
+        if valid {
+            assert!(config.validate().is_ok(), "{name:?}");
+        } else {
+            assert_eq!(
+                config.validate().unwrap_err(),
+                "upstreamHeaderFields[1] must be a valid HTTP header name of at most 256 bytes"
+            );
+        }
+    }
+}
+
+#[test]
+fn anonymous_must_be_header_text_only_when_forwarded() {
+    for (anonymous, valid) in [
+        ("guest", true),
+        ("café", true),
+        ("a\u{1}b", false),
+        ("a\u{7f}b", false),
+        ("a\nb", false),
+    ] {
+        // Header names are case-insensitive, so any spelling forwards it.
+        for field in ["X-Consumer-Username", "x-consumer-username"] {
+            let forwarded = KeyAuthConfig {
+                anonymous: Some(anonymous.into()),
+                upstream_header_fields: vec![field.into()],
+                ..Default::default()
+            };
+            assert!(forwarded.forwards_anonymous_username());
+            if valid {
+                assert!(forwarded.validate().is_ok());
+            } else {
+                assert_eq!(forwarded.validate().unwrap_err(), "anonymous is not valid header text");
+            }
+        }
+
+        // Not written: the whitelist entry is absent.
+        for fields in [vec![], vec!["X-Other".to_string()]] {
+            let unforwarded = KeyAuthConfig {
+                anonymous: Some(anonymous.into()),
+                upstream_header_fields: fields,
+                ..Default::default()
+            };
+            assert!(!unforwarded.forwards_anonymous_username());
+            assert!(unforwarded.validate().is_ok());
+        }
+    }
+}
+
+#[test]
+fn upstream_header_fields_reject_host_ignoring_case() {
+    for name in [
+        "Host",
+        "host",
+        "HOST",
+        "hOsT",
+        "Content-Length",
+        "transfer-encoding",
+        "Connection",
+        "Upgrade",
+        "TE",
+    ] {
+        let config = KeyAuthConfig {
+            upstream_header_fields: vec!["X-Valid".into(), name.into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "upstreamHeaderFields[1] cannot be Host or a framing/hop-by-hop header; use a dedicated identity header",
+            "{name:?}"
+        );
+    }
+    let config = KeyAuthConfig {
+        upstream_header_fields: vec!["X-Host".into(), "Hosts".into()],
+        ..Default::default()
+    };
+    assert!(config.validate().is_ok());
+}

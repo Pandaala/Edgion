@@ -4,7 +4,7 @@
 //! - `mode=Connection`: read mTLS client cert info from request context
 //! - `mode=Header`: parse certificate from request header and verify with configured CA certs
 
-use crate::plugins::http::common::auth_common::set_sensitive_request_header;
+use crate::plugins::http::common::auth_common::{set_sensitive_request_header, CERTIFICATE_HEADER_MUTATION_FAILED};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -23,6 +23,7 @@ use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info_from_
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
 use edgion_resources::resources::refs::plugin_fields::BoundHeaderCertAuth;
+use edgion_resources::EdgionErrorCode;
 
 /// Pre-parsed CA entry kept in the trust pool.
 ///
@@ -129,8 +130,11 @@ impl HeaderCertAuth {
         }
     }
 
-    fn contains_header_control_chars(value: &str) -> bool {
-        value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+    /// A certificate value that is not valid header text (any control byte,
+    /// including CR/LF/NUL) is never written: it is an invalid identity or a
+    /// skipped field, not a header mutation failure.
+    fn is_invalid_header_value(value: &str) -> bool {
+        !crate::plugins::http::common::auth_common::is_header_text(value)
     }
 
     fn clear_identity_headers(&self, session: &mut dyn PluginSession) -> Result<(), HeaderApplicationError> {
@@ -156,12 +160,12 @@ impl HeaderCertAuth {
             .map_err(|_| HeaderApplicationError::Mutation)
     }
 
-    fn header_failure(plugin_log: &mut PluginLog) -> PluginRunningResult {
-        plugin_log.push_err("certificate header mutation failed");
-        PluginRunningResult::ErrResponse {
-            status: 500,
-            body: None,
-        }
+    /// Deny a failed identity-header or credential-hiding mutation with the
+    /// configured authentication-failure response, never an anonymous fallback.
+    async fn header_failure(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        session.record_error(EdgionErrorCode::AuthHeaderMutationRejected);
+        self.reject(session, plugin_log, CERTIFICATE_HEADER_MUTATION_FAILED)
+            .await
     }
 
     fn apply_headers(
@@ -170,12 +174,12 @@ impl HeaderCertAuth {
         cert_info: &ClientCertInfo,
     ) -> Result<(), HeaderApplicationError> {
         if self.config.skip_consumer_lookup {
-            if !Self::contains_header_control_chars(&cert_info.subject) {
+            if !Self::is_invalid_header_value(&cert_info.subject) {
                 set_sensitive_request_header(session, &self.config.upstream_headers.dn_header, &cert_info.subject)
                     .map_err(|_| HeaderApplicationError::Mutation)?;
             }
             if let Some(san) = cert_info.sans.first() {
-                if !Self::contains_header_control_chars(san) {
+                if !Self::is_invalid_header_value(san) {
                     set_sensitive_request_header(session, &self.config.upstream_headers.san_header, san)
                         .map_err(|_| HeaderApplicationError::Mutation)?;
                 }
@@ -184,14 +188,14 @@ impl HeaderCertAuth {
             let identity = self
                 .get_identity(cert_info)
                 .ok_or(HeaderApplicationError::Identity("identity-not-found"))?;
-            if Self::contains_header_control_chars(identity) {
+            if Self::is_invalid_header_value(identity) {
                 return Err(HeaderApplicationError::Identity("invalid-identity"));
             }
             set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, identity)
                 .map_err(|_| HeaderApplicationError::Mutation)?;
         }
 
-        if !Self::contains_header_control_chars(&cert_info.fingerprint) {
+        if !Self::is_invalid_header_value(&cert_info.fingerprint) {
             set_sensitive_request_header(
                 session,
                 &self.config.upstream_headers.fingerprint_header,
@@ -335,7 +339,7 @@ impl RequestFilter for HeaderCertAuth {
         // Extract first: Header mode may use the same name for input and output.
         // Cleanup also applies to anonymous continuations without a certificate.
         if self.clear_identity_headers(session).is_err() {
-            return Self::header_failure(plugin_log);
+            return self.header_failure(session, plugin_log).await;
         }
 
         let cert_info = match cert_info {
@@ -343,7 +347,7 @@ impl RequestFilter for HeaderCertAuth {
             Err(detail) => {
                 if self.config.allow_anonymous {
                     if self.set_anonymous_headers(session).is_err() {
-                        return Self::header_failure(plugin_log);
+                        return self.header_failure(session, plugin_log).await;
                     }
                     if self.config.mode == CertSourceMode::Header
                         && self.config.hide_credentials
@@ -351,7 +355,7 @@ impl RequestFilter for HeaderCertAuth {
                             .remove_request_header(&self.config.certificate_header_name)
                             .is_err()
                     {
-                        return Self::header_failure(plugin_log);
+                        return self.header_failure(session, plugin_log).await;
                     }
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
@@ -364,12 +368,12 @@ impl RequestFilter for HeaderCertAuth {
         if let Err(detail) = self.apply_headers(session, &cert_info) {
             drop(cert_info);
             let detail = match detail {
-                HeaderApplicationError::Mutation => return Self::header_failure(plugin_log),
+                HeaderApplicationError::Mutation => return self.header_failure(session, plugin_log).await,
                 HeaderApplicationError::Identity(detail) => detail,
             };
             if self.config.allow_anonymous {
                 if self.set_anonymous_headers(session).is_err() {
-                    return Self::header_failure(plugin_log);
+                    return self.header_failure(session, plugin_log).await;
                 }
                 if self.config.mode == CertSourceMode::Header
                     && self.config.hide_credentials
@@ -377,7 +381,7 @@ impl RequestFilter for HeaderCertAuth {
                         .remove_request_header(&self.config.certificate_header_name)
                         .is_err()
                 {
-                    return Self::header_failure(plugin_log);
+                    return self.header_failure(session, plugin_log).await;
                 }
                 plugin_log.push("Allow anonymous");
                 return PluginRunningResult::GoodNext;
@@ -392,7 +396,7 @@ impl RequestFilter for HeaderCertAuth {
                 .remove_request_header(&self.config.certificate_header_name)
                 .is_err()
         {
-            return Self::header_failure(plugin_log);
+            return self.header_failure(session, plugin_log).await;
         }
 
         plugin_log.push("cert verify:ok");

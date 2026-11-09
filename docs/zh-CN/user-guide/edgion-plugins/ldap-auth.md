@@ -65,7 +65,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `groupAttribute` | String | `memberOf` | 用户条目上列出组 DN 的属性；必须由目录维护，且用户不能修改 |
 | `nestedGroups` | Boolean | `false` | 用 Active Directory 的链式规则 `1.2.840.113556.1.4.1941` 匹配嵌套组（OpenLDAP 不支持） |
 | `headerType` | String | `ldap` | 认证头方案名 |
-| `hideCredentials` | Boolean | `false` | 是否移除认证头再转发 |
+| `hideCredentials` | Boolean | `false` | 是否移除认证头再转发。若无法移除，请求在 `authFailureDelayMs` 之后以普通的 `401` 拒绝（访问日志记录 `credential removal failed`，诊断码 `AuthHeaderMutationRejected`），凭证不会被转发 |
 | `authFailureDelayMs` | Integer | `0` | 返回凭证相关 401 响应前的延迟，单位为毫秒 |
 | `anonymous` | String | 无 | 匿名用户名；仅当两个凭证头都缺失时生效 |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [字符规则](../http-route/filters/edgion-plugins/README.md#authentication-realm) |

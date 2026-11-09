@@ -2,6 +2,7 @@ use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use bytes::Bytes;
 use edgion_resources::sensitive::SENSITIVE_MODE;
+use edgion_resources::EdgionErrorCode;
 use mockall::Sequence;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -285,6 +286,7 @@ async fn anonymous_path_uses_precomputed_username_forwarding_policy() {
     let mut session = MockPluginSession::new();
     setup_key_headers(&mut session, None);
     session.expect_get_query_param_ref().returning(|_| None);
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
     session
         .expect_set_request_header_value()
         .withf(|name, value| name == "X-Consumer-Username" && value == "guest" && value.is_sensitive())
@@ -328,6 +330,8 @@ async fn valid_key_forwards_metadata_then_hides_credential_and_masks_username() 
         let mut sequence = Sequence::new();
         let mut session = MockPluginSession::new();
         setup_key_headers(&mut session, Some("valid-api-key"));
+        // The key lacks X-Customer-ID: the whitelisted name is still cleared.
+        expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
         session
             .expect_set_request_header_value()
             .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
@@ -559,6 +563,7 @@ fn prepared_metadata_preserves_forwarding_operations_and_raw_username() {
         assert_eq!(prepared.headers.len(), expected.len());
         let mut session = MockPluginSession::new();
         let mut sequence = Sequence::new();
+        expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
         for ((name, value), (expected_name, expected_value)) in prepared.headers.iter().zip(expected) {
             assert_eq!(name, &expected_name);
             assert_eq!(value.as_bytes(), expected_value.as_bytes());
@@ -574,12 +579,261 @@ fn prepared_metadata_preserves_forwarding_operations_and_raw_username() {
                 })
                 .times(1)
                 .in_sequence(&mut sequence)
-                // Failed writes must not prevent later fields from being attempted.
-                .returning(|_, _| Err("test setter rejection".into()));
+                .returning(|_, _| Ok(()));
         }
         let auth = KeyAuth::from_config(&create_test_config());
-        auth.set_upstream_headers(&mut session, &prepared);
+        assert!(auth.set_upstream_headers(&mut session, &prepared).is_ok());
     }
+}
+
+#[test]
+fn upstream_header_projection_stops_at_first_failed_write() {
+    let mut metadata = metadata_with_group("partner-a", Some("alice"));
+    metadata.headers.insert("X-Customer-ID".into(), "cust-001".into());
+    let prepared = PreparedKeyMetadata::new(metadata);
+    let auth = KeyAuth::from_config(&create_test_config());
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err("test setter rejection".into()));
+    assert!(auth.set_upstream_headers(&mut session, &prepared).is_err());
+}
+
+fn expect_owned_clears(session: &mut MockPluginSession, sequence: &mut Sequence, names: &'static [&'static str]) {
+    for name in names {
+        session
+            .expect_remove_request_header()
+            .withf(move |candidate| candidate == *name)
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|_| Ok(()));
+    }
+}
+
+fn expect_rejected_error_code(session: &mut MockPluginSession) {
+    session
+        .expect_record_error()
+        .withf(|code| *code == EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+}
+
+fn keyed_config(hide_credentials: bool) -> KeyAuthConfig {
+    let mut config = create_test_config();
+    config.hide_credentials = hide_credentials;
+    config.resolved_keys = Some(HashMap::from([(
+        "valid-api-key".to_string(),
+        metadata_with_group("partner-a", Some("alice")),
+    )]));
+    config
+}
+
+fn assert_denied_without_success(log: &PluginLog, tag: &str) {
+    let entries = render_log(log);
+    assert!(entries.iter().any(|e| e == &format!("err: {tag}")), "{entries:?}");
+    assert!(!entries.iter().any(|e| e.contains("OK group=")), "{entries:?}");
+    assert!(!entries.iter().any(|e| e.contains("Allow anon")), "{entries:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn keyed_identity_header_write_failure_denies_after_delay_without_ok_line() {
+    const DELAY_MS: u64 = 400;
+    let mut config = keyed_config(true);
+    config.auth_failure_delay_ms = DELAY_MS;
+    let auth = KeyAuth::from_config(&config);
+    let started = tokio::time::Instant::now();
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    setup_key_headers(&mut session, Some("valid-api-key"));
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err("sealed RPC header".into()));
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Invalid API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+    // Same delay as a bad key, so timing does not reveal the key check.
+    assert!(started.elapsed() >= std::time::Duration::from_millis(DELAY_MS));
+}
+
+#[tokio::test]
+async fn keyed_owned_header_clear_failure_denies() {
+    let auth = KeyAuth::from_config(&keyed_config(false));
+    let mut session = MockPluginSession::new();
+    setup_key_headers(&mut session, Some("valid-api-key"));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Consumer-Username")
+        .times(1)
+        .returning(|_| Err("sealed RPC header".into()));
+    session.expect_set_request_header_value().never();
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Invalid API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn hidden_header_credential_removal_failure_denies() {
+    let auth = KeyAuth::from_config(&keyed_config(true));
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    setup_key_headers(&mut session, Some("valid-api-key"));
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-API-Key")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| Err("sealed RPC header".into()));
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Invalid API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "credential removal failed");
+}
+
+#[tokio::test]
+async fn hidden_query_credential_removal_failure_denies() {
+    let auth = KeyAuth::from_config(&keyed_config(true));
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    setup_key_headers(&mut session, None);
+    session
+        .expect_get_query_param_ref()
+        .withf(|name| name == "api_key")
+        .return_const(Some("valid-api-key"));
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_query_param()
+        .withf(|name| name == "api_key")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| Err("non-origin-form target".into()));
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Invalid API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "credential removal failed");
+}
+
+#[tokio::test]
+async fn anonymous_identity_header_write_failure_denies_with_missing_key_body() {
+    let mut config = create_test_config();
+    config.anonymous = Some("guest".to_string());
+    let auth = KeyAuth::from_config(&config);
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    setup_key_headers(&mut session, None);
+    session.expect_get_query_param_ref().returning(|_| None);
+    expect_owned_clears(&mut session, &mut sequence, &["X-Consumer-Username", "X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, _| name == "X-Consumer-Username")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err("sealed RPC header".into()));
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Missing API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn anonymous_owned_header_clear_failure_denies_with_missing_key_body() {
+    let mut config = create_test_config();
+    config.anonymous = Some("guest".to_string());
+    let auth = KeyAuth::from_config(&config);
+    let mut session = MockPluginSession::new();
+    setup_key_headers(&mut session, None);
+    session.expect_get_query_param_ref().returning(|_| None);
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Consumer-Username")
+        .times(1)
+        .returning(|_| Err("sealed RPC header".into()));
+    session.expect_set_request_header_value().never();
+    expect_rejected_error_code(&mut session);
+    expect_auth_response(&mut session, b"401 Unauthorized - Missing API key");
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_denied_without_success(&log, "identity header rejected");
+}
+
+#[tokio::test]
+async fn anonymous_continuation_clears_forged_whitelisted_names_it_does_not_write() {
+    // X-Consumer-Username is not whitelisted, so it is neither owned nor written.
+    let mut config = create_test_config();
+    config.anonymous = Some("guest".to_string());
+    config.upstream_header_fields = vec!["X-Customer-ID".to_string()];
+    let auth = KeyAuth::from_config(&config);
+    assert!(!auth.forward_anonymous_username);
+    let mut session = MockPluginSession::new();
+    let mut sequence = Sequence::new();
+    let mut headers = http::HeaderMap::new();
+    headers.insert("x-customer-id", http::HeaderValue::from_static("forged"));
+    session.expect_request_header_map().return_const(headers);
+    session.expect_key_get().times(0);
+    session.expect_get_query_param_ref().returning(|_| None);
+    expect_owned_clears(&mut session, &mut sequence, &["X-Customer-ID"]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session.expect_record_error().never();
+    let mut log = PluginLog::new(PLUGIN_NAME);
+
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "Allow anon");
 }
 
 #[tokio::test]
@@ -603,6 +857,8 @@ async fn authenticated_cookie_cleanup_failure_returns_static_local_error() {
             http::HeaderValue::from_static("token=valid-cookie-key"),
         );
         session.expect_request_header_map().return_const(headers);
+        session.expect_remove_request_header().times(2).returning(|_| Ok(()));
+        session.expect_set_request_header_value().never();
         session
             .expect_remove_request_cookies()
             .withf(|names| names == ["token"])

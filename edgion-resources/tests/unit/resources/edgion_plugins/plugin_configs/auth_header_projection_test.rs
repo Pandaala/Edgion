@@ -2,7 +2,15 @@ use super::*;
 
 #[test]
 fn authenticated_projection_rejects_host_without_restricting_generic_projection() {
-    for destination in ["Host", "host", "HOST", "hOsT"] {
+    for destination in [
+        "Host",
+        "host",
+        "HOST",
+        "hOsT",
+        "Content-Length",
+        "transfer-encoding",
+        "Connection",
+    ] {
         let mapping = HashMap::from([("tenant".to_string(), destination.to_string())]);
         assert_eq!(
             compile_authenticated_claim_header_projection(Some(&mapping), &[]),

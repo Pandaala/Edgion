@@ -22,3 +22,4 @@ before applying a decision to current code.
 - [Outbound Subrequest Framing Is Owned by Its HTTP Hop — FIXED](regression-guards/outbound-subrequest-framing-owned-by-hop.md)
 - [ForwardAuth Request Body Sources Are Mutually Exclusive — FIXED](regression-guards/request-body-sources-mutually-exclusive.md)
 - [forward_auth::send_error_response Swallows insert_header Errors (P3-g3-016)](regression-guards/send-error-response-header-insert-plugin-log.md)
+- [ForwardAuth `upstreamHeaders` Are Plugin-Owned and Fail Closed](regression-guards/upstream-headers-owned-fail-closed.md)

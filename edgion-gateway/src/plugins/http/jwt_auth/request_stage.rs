@@ -14,6 +14,8 @@ const MAX_JWT_CLAIM_HEADER_VALUE_BYTES: usize = 8 * 1024;
 /// Maximum aggregate size of all JWT claim headers propagated upstream (64KB).
 const MAX_JWT_CLAIM_TOTAL_HEADER_BYTES: usize = 64 * 1024;
 
+pub(super) use crate::plugins::http::common::auth_common::HideCredentialError as HideCredentialsError;
+
 /// Token source for hide_credentials.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TokenSource {
@@ -73,7 +75,8 @@ impl JwtAuth {
     }
 
     /// Handle anonymous access.
-    /// Sets X-Anonymous-Consumer and X-Consumer-Username headers.
+    /// Sets X-Anonymous-Consumer and X-Consumer-Username headers; `Anon=` is
+    /// logged only after every write succeeded.
     pub(super) fn handle_anonymous_access(
         &self,
         session: &mut dyn PluginSession,
@@ -81,9 +84,9 @@ impl JwtAuth {
     ) -> crate::plugins::runtime::PluginSessionResult<bool> {
         if let Some(ref anonymous) = self.config.anonymous {
             crate::plugins::http::common::auth_common::clear_claim_headers(session, &self.claim_header_projection)?;
-            plugin_log.push_fmt("Anon={}", la![sensitive(anonymous)]);
             set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")?;
             set_sensitive_request_header(session, "X-Consumer-Username", anonymous)?;
+            plugin_log.push_fmt("Anon={}", la![sensitive(anonymous)]);
             return Ok(true);
         }
         Ok(false)
@@ -115,21 +118,20 @@ impl JwtAuth {
         &self,
         session: &mut dyn PluginSession,
         source: TokenSource,
-    ) -> Result<(), crate::request_cookie::CookieEditError> {
+    ) -> Result<(), HideCredentialsError> {
         if !self.config.hide_credentials {
             return Ok(());
         }
         match source {
-            TokenSource::Header => {
-                let _ = session.remove_request_header(&self.config.header);
-            }
+            TokenSource::Header => session
+                .remove_request_header(&self.config.header)
+                .map_err(|_| HideCredentialsError::Removal),
             TokenSource::Query => {
-                strip_query_param(session, &self.config.query);
+                strip_query_param(session, &self.config.query).map_err(|_| HideCredentialsError::Removal)
             }
-            TokenSource::Cookie => {
-                strip_cookie(session, &self.config.cookie)?;
-            }
+            TokenSource::Cookie => strip_cookie(session, &self.config.cookie)
+                .map(|_| ())
+                .map_err(HideCredentialsError::Cookie),
         }
-        Ok(())
     }
 }

@@ -15,7 +15,8 @@
 //! 1. Build auth request with current request metadata (all eligible headers by default)
 //! 2. Inject X-Forwarded-Host/Uri/Method/Query so the auth service has full context
 //! 3. Send to external auth service via the shared outbound engine
-//! 4. If auth service returns 2xx → copy `upstream_headers`, forward to upstream
+//! 4. If auth service returns 2xx → clear every `upstream_headers` name, copy the returned
+//!    values, forward to upstream (a mutation failure denies with a fixed 403)
 //! 5. If auth service returns non-2xx → copy `client_headers` + body to client
 //! 6. If auth service is unreachable → return `status_on_error`
 //!
@@ -65,12 +66,16 @@ use pingora_http::ResponseHeader;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
+use crate::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, remove_request_headers, CREDENTIAL_REMOVAL_FAILED, IDENTITY_HEADER_REJECTED,
+};
 use crate::plugins::http::common::http_client::connection_option_tokens;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
 use crate::plugins::http::common::outbound::client::{ManagedOutboundClient, PreparedManagedHttp, PreparedRouteAuth};
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
+use crate::plugins::runtime::{
+    DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, PluginSessionResult, RequestFilter,
+};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::common::success::SuccessOutcome;
 use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
@@ -229,6 +234,44 @@ impl ForwardAuth {
         PluginRunningResult::ErrTerminateRequest
     }
 
+    /// Remove every configured upstream header, then copy the values the
+    /// authorizer returned for those names byte-for-byte (including UTF-8).
+    fn apply_upstream_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        auth_headers: &reqwest::header::HeaderMap,
+    ) -> PluginSessionResult<()> {
+        remove_request_headers(session, &self.decision.upstream_headers)?;
+        for header_name in &self.decision.upstream_headers {
+            if let Some(value) = auth_headers.get(header_name.as_str()) {
+                session.set_request_header_value(header_name, value.clone())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Deny a request whose upstream identity headers or hidden credential
+    /// could not be mutated. The response is a fixed plugin-owned 403: the
+    /// authorizer's success body and `clientHeaders` are never relayed.
+    async fn deny_header_mutation(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        apply_auth_failure_delay(self.decision.auth_failure_delay_ms).await;
+        self.send_error_response(
+            session,
+            plugin_log,
+            http::StatusCode::FORBIDDEN.as_u16(),
+            Bytes::from_static(b"Forbidden"),
+            Some("text/plain"),
+            None,
+        )
+        .await
+    }
+
     async fn handle_outbound_response(
         &self,
         session: &mut dyn PluginSession,
@@ -237,17 +280,20 @@ impl ForwardAuth {
     ) -> PluginRunningResult {
         let outcome = self.client.classify_detail(&response);
         if outcome == SuccessOutcome::Success {
-            // Auth passed: copy specified response headers to the upstream request.
-            for header_name in &self.decision.upstream_headers {
-                if let Some(value) = response.headers.get(header_name.as_str()) {
-                    if let Ok(v) = value.to_str() {
-                        let _ = session.set_request_header(header_name, v);
-                    }
-                }
+            // Optionally strip the client credential first, so an `Authorization`
+            // the authorizer returns through `upstreamHeaders` is still forwarded.
+            if self.decision.hide_credentials && session.remove_request_header("authorization").is_err() {
+                return self
+                    .deny_header_mutation(session, plugin_log, CREDENTIAL_REMOVAL_FAILED)
+                    .await;
             }
-            // Optionally strip credentials so they are not forwarded upstream.
-            if self.decision.hide_credentials {
-                let _ = session.remove_request_header("authorization");
+            // Auth passed: configured upstream headers are plugin-owned outputs.
+            // Clear every configured name first, so a client-sent copy never
+            // survives when the authorizer omits it.
+            if self.apply_upstream_headers(session, &response.headers).is_err() {
+                return self
+                    .deny_header_mutation(session, plugin_log, IDENTITY_HEADER_REJECTED)
+                    .await;
             }
             plugin_log.push_fmt("auth pass {}", la![response.status]);
             return PluginRunningResult::GoodNext;

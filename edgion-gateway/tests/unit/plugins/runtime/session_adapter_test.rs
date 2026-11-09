@@ -262,7 +262,7 @@ async fn stripping_query_credential_preserves_absolute_request_target() {
     }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key").unwrap();
     assert_eq!(adapter.request_query(), Some("keep=1"));
     assert!(adapter.ctx().request_query.projection_is_dirty());
     drop(adapter);
@@ -300,7 +300,7 @@ async fn stripping_query_credential_preserves_h2_authority_without_host() {
     }
 
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+    crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key").unwrap();
     assert_eq!(adapter.request_query(), Some("keep=1"));
     assert!(adapter.ctx().request_query.projection_is_dirty());
     drop(adapter);
@@ -1251,7 +1251,7 @@ async fn query_edits_reach_outbound_origins_and_templates_without_transport_sync
             .url()
             .query_pairs()
             .any(|(k, v)| k == "api_key" && v == "secret"));
-        crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key");
+        crate::plugins::http::common::auth_common::strip_query_param(&mut adapter, "api_key").unwrap();
         assert_eq!(adapter.get_query_param_ref("api_key"), None);
         assert_eq!(adapter.get_query_param("api_key"), None);
         assert_eq!(adapter.get_query_param_ref("keep"), Some("a&b"));

@@ -1578,6 +1578,11 @@ async fn identity_header_write_failure_denies() {
         .expect_set_request_header_value()
         .times(1)
         .returning(|_, _| Err("header store rejected the value".into()));
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
     expect_401(&mut session);
     let mut log = PluginLog::new(PLUGIN_NAME);
     assert_eq!(
@@ -1604,6 +1609,11 @@ async fn anonymous_header_write_failure_denies() {
         .expect_set_request_header_value()
         .times(1)
         .returning(|_, _| Err("header store rejected the value".into()));
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
     expect_401(&mut session);
     let mut log = PluginLog::new(PLUGIN_NAME);
     assert_eq!(
@@ -1640,6 +1650,50 @@ async fn successful_bind_overwrites_spoofed_identity() {
         auth.run_request(&mut session, &mut log).await,
         PluginRunningResult::GoodNext
     );
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn hidden_credential_removal_failure_denies() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let auth = actual_ldap(&LdapAuthConfig {
+        hide_credentials: true,
+        ..test_config()
+    })
+    .unwrap();
+    let peer = scripted_peer(&auth, 4096, bind_response(0));
+    let header = ldap_header("bob:pw");
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", header.as_str())]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Credential-Identifier" && value == "bob")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Anonymous-Consumer")
+        .times(1)
+        .returning(|_| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "authorization")
+        .times(1)
+        .returning(|_| Err("header store rejected the removal".into()));
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+    expect_401(&mut session);
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("credential removal failed"), "{}", log.render_for_test());
+    assert!(!log.contains("OK user"), "{}", log.render_for_test());
     drop(auth);
     peer.await.unwrap();
 }

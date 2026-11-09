@@ -222,9 +222,9 @@ filters:
 
 **访问日志**：认证成功时输出 `OK group=partner-a user alice`（group 来自对应的分组名）。
 
-**安全说明**：失败分支（`Deny no credential`、`Deny bad credential`、`Allow anonymous`、`identity header rejected`）有意**不携带** `group=` 信息，避免未认证的请求方探测出租户拓扑。`Deny bad credential` 不区分"用户名不存在"和"密码错误"，这是有意的安全设计，可防止用户名枚举（username-existence oracle）攻击。
+**安全说明**：失败分支（`Deny no credential`、`Deny bad credential`、`Allow anonymous`、`identity header rejected`、`credential removal failed`）有意**不携带** `group=` 信息，避免未认证的请求方探测出租户拓扑。`Deny bad credential` 不区分"用户名不存在"和"密码错误"，这是有意的安全设计，可防止用户名枚举（username-existence oracle）攻击。
 
-**身份头写入失败**：插件在放行请求前写入 `X-Consumer-Username`（匿名访问时还会写入 `X-Anonymous-Consumer`）。如果某个值无法作为 HTTP 头写入——例如配置的用户名或 `anonymous` 值包含 TAB 以外的控制字符——请求会以 `401` 拒绝（同样先等待 `authFailureDelayMs`），访问日志记录 `identity header rejected`，客户端自带的身份头不会被转发到上游。这样的用户名永远无法登录，请去掉用户名中的控制字符。
+**身份头写入失败**：插件在放行请求前写入 `X-Consumer-Username`（匿名访问时还会写入 `X-Anonymous-Consumer`）。不是合法 HTTP 请求头文本的 `anonymous` 值在插件配置准入时就会被拒绝。配置的用户名若无法作为 HTTP 头写入（例如包含 TAB 以外的控制字符），每次登录仍会以 `401` 拒绝（同样先等待 `authFailureDelayMs`），访问日志记录 `identity header rejected` 和诊断码 `AuthHeaderMutationRejected`，客户端自带的身份头不会被转发到上游。这样的用户名永远无法登录，请去掉用户名中的控制字符。同样，开启 `hideCredentials` 后若无法删除 `Authorization` 头，请求也以同样延迟后的 `401` 拒绝，访问日志记录 `credential removal failed`，凭证不会被转发。
 
 **重复用户名跨组优先级**：若同一 username 出现在多个分组的 Secret 中，首次出现（按 `secretGroups` 数组顺序）的分组胜出，后续重复的 Secret 会被跳过并记录告警日志。这是管理便利性设计，不是租户隔离边界。
 

@@ -127,26 +127,225 @@ async fn pass_copies_upstream_headers() {
     headers.append("x-user-id", HeaderValue::from_static("ignored-second-value"));
     let outbound = response(200, headers, Bytes::from_static(b"ok"));
 
+    // The client credential is hidden before the owned outputs are published.
     let mut session = MockPluginSession::new();
     let mut seq = Sequence::new();
-    session
-        .expect_set_request_header()
-        .withf(|name, value| name == "x-user-id" && value == "user123")
-        .times(1)
-        .in_sequence(&mut seq)
-        .returning(|_, _| Ok(()));
     session
         .expect_remove_request_header()
         .withf(|name| name == "authorization")
         .times(1)
         .in_sequence(&mut seq)
         .returning(|_| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "x-user-id")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| Ok(()));
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "x-user-id" && value.as_bytes() == b"user123")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| Ok(()));
 
     let mut log = PluginLog::new("ForwardAuth");
     let result = fa.handle_outbound_response(&mut session, &mut log, outbound).await;
 
     assert!(matches!(result, PluginRunningResult::GoodNext));
     assert_eq!(log.render_for_test(), "auth pass 200");
+}
+
+#[tokio::test]
+async fn pass_clears_omitted_upstream_headers_and_copies_returned_bytes() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+
+    let fa = make_forward_auth(ForwardAuthDecision {
+        upstream_headers: vec!["X-User-Id".into(), "X-User-Role".into(), "Authorization".into()],
+        ..ForwardAuthDecision::default()
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert("x-user-role", HeaderValue::from_bytes(b"admin\xff").unwrap());
+    let outbound = response(200, headers, Bytes::from_static(b"ok"));
+
+    let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+    for (name, value) in [
+        ("X-User-Id", "forged"),
+        ("x-user-id", "duplicate"),
+        ("X-User-Role", "forged"),
+        ("Authorization", "Bearer client"),
+        ("X-Unrelated", "keep"),
+    ] {
+        session.req_header_mut().append_header(name, value).unwrap();
+    }
+    let mut ctx = EdgionHttpContext::default();
+    let mut log = PluginLog::new("ForwardAuth");
+    let result = fa
+        .handle_outbound_response(
+            &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+            &mut log,
+            outbound,
+        )
+        .await;
+
+    assert_eq!(result, PluginRunningResult::GoodNext);
+    assert_eq!(log.render_for_test(), "auth pass 200");
+    let headers = &session.req_header().headers;
+    for name in ["x-user-id", "authorization"] {
+        assert!(headers.get(name).is_none(), "{name} must not carry a client value");
+    }
+    // Non-ASCII authorizer bytes (for example a UTF-8 identity) are forwarded as-is.
+    let role: Vec<_> = headers.get_all("x-user-role").iter().map(|v| v.as_bytes()).collect();
+    assert_eq!(role, vec![b"admin\xff".as_slice()]);
+    assert_eq!(headers.get("x-unrelated").unwrap(), "keep");
+}
+
+#[tokio::test]
+async fn hidden_client_credential_does_not_drop_authorizer_authorization() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+
+    let fa = make_forward_auth(ForwardAuthDecision {
+        upstream_headers: vec!["Authorization".into()],
+        hide_credentials: true,
+        ..ForwardAuthDecision::default()
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", HeaderValue::from_static("Bearer upstream-token"));
+    let outbound = response(200, headers, Bytes::from_static(b"ok"));
+
+    let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+    session
+        .req_header_mut()
+        .append_header("Authorization", "Bearer client")
+        .unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    let mut log = PluginLog::new("ForwardAuth");
+    let result = fa
+        .handle_outbound_response(
+            &mut PingoraSessionAdapter::new(&mut session, &mut ctx),
+            &mut log,
+            outbound,
+        )
+        .await;
+
+    assert_eq!(result, PluginRunningResult::GoodNext);
+    let values: Vec<_> = session.req_header().headers.get_all("authorization").iter().collect();
+    assert_eq!(values, vec!["Bearer upstream-token"]);
+}
+
+/// Expect the fixed plugin-owned 403 that never relays authorizer content.
+fn expect_fixed_forbidden(session: &mut MockPluginSession) {
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .withf(|resp, end_of_stream| {
+            !end_of_stream
+                && resp.status.as_u16() == 403
+                && resp.headers.get("content-type").and_then(|v| v.to_str().ok()) == Some("text/plain")
+                && resp.headers.get("connection").and_then(|v| v.to_str().ok()) == Some("close")
+                && resp.headers.get("x-auth-reason").is_none()
+                && resp.headers.get("set-cookie").is_none()
+                && resp.headers.len() == 2
+        })
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_write_response_body()
+        .withf(|body, end_of_stream| *end_of_stream && body.as_deref() == Some(&b"Forbidden"[..]))
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+}
+
+#[tokio::test]
+async fn pass_header_mutation_failures_deny_with_fixed_forbidden() {
+    for failure in ["remove", "write", "hide"] {
+        let fa = make_forward_auth(ForwardAuthDecision {
+            upstream_headers: vec!["x-user-id".into()],
+            client_headers: vec!["x-auth-reason".into(), "set-cookie".into()],
+            hide_credentials: true,
+            ..ForwardAuthDecision::default()
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("x-user-id", HeaderValue::from_static("user123"));
+        headers.insert("x-auth-reason", HeaderValue::from_static("ok"));
+        headers.insert("set-cookie", HeaderValue::from_static("session=abc"));
+        let outbound = response(200, headers, Bytes::from_static(b"authorizer-success-body"));
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "authorization")
+            .times(1)
+            .returning(move |_| {
+                if failure == "hide" {
+                    Err("injected secret detail".into())
+                } else {
+                    Ok(())
+                }
+            });
+        if failure != "hide" {
+            session
+                .expect_remove_request_header()
+                .withf(|name| name == "x-user-id")
+                .times(1)
+                .returning(move |_| {
+                    if failure == "remove" {
+                        Err("injected secret detail".into())
+                    } else {
+                        Ok(())
+                    }
+                });
+        }
+        if failure == "write" {
+            session
+                .expect_set_request_header_value()
+                .times(1)
+                .returning(|_, _| Err("injected secret detail".into()));
+        }
+        expect_fixed_forbidden(&mut session);
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let result = fa.handle_outbound_response(&mut session, &mut log, outbound).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        let expected = if failure == "hide" {
+            "err: credential removal failed"
+        } else {
+            "err: identity header rejected"
+        };
+        assert_eq!(log.render_for_test(), expected);
+        assert!(!log.contains("auth pass"));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pass_header_mutation_deny_applies_failure_delay() {
+    let fa = make_forward_auth(ForwardAuthDecision {
+        upstream_headers: vec!["x-user-id".into()],
+        auth_failure_delay_ms: 300,
+        ..ForwardAuthDecision::default()
+    });
+    let outbound = response(200, HeaderMap::new(), Bytes::from_static(b"ok"));
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .times(1)
+        .returning(|_| Err("injected".into()));
+    expect_fixed_forbidden(&mut session);
+
+    let start = tokio::time::Instant::now();
+    let mut log = PluginLog::new("ForwardAuth");
+    let result = fa.handle_outbound_response(&mut session, &mut log, outbound).await;
+
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(start.elapsed() >= std::time::Duration::from_millis(300));
 }
 
 #[tokio::test]

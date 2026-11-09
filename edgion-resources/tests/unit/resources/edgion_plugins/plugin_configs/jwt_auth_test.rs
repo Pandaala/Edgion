@@ -72,6 +72,28 @@ fn test_anonymous_set_no_credential_is_valid() {
 }
 
 #[test]
+fn test_anonymous_must_be_valid_header_text() {
+    for invalid in ["guest\r\nx-injected: 1", "guest\u{7f}", "nul\0name", "tab\u{1}x"] {
+        let cfg = JwtAuthConfig {
+            anonymous: Some(invalid.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.validation_error(),
+            Some("anonymous is not valid header text".to_string()),
+            "{invalid:?}"
+        );
+    }
+    for valid in ["guest", "anonymous user", "guest\tname"] {
+        let cfg = JwtAuthConfig {
+            anonymous: Some(valid.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.validation_error(), None, "{valid:?}");
+    }
+}
+
+#[test]
 fn test_empty_header_returns_error() {
     let cfg = JwtAuthConfig {
         issuer_groups: Some(vec![make_issuer_group("g", "https://a.example")]),

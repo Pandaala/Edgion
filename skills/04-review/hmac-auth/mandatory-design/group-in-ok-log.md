@@ -27,6 +27,12 @@ format is always 2 fields).
 - `Deny missing header`
 - `Deny bad signature`
 - `Allow anonymous` (anonymous has no group attribution)
+- `identity header rejected` / `credential removal failed` — a whitelisted
+  header or anonymous identity could not be cleared or written, or the hidden
+  credential could not be removed (since 2026-11-09; the request is denied with
+  the bad-credential response for that path — `Invalid signature` on the keyed
+  path, `Missing Authorization header` on the anonymous path — and the success
+  line is pushed only after these mutations succeed)
 
 Internal error codes (`no creds configured`) are already non-Deny `push_err`
 calls and are unrelated to group attribution — do not add `group=` to them.

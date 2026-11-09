@@ -29,15 +29,22 @@ on the OK path).
   goes through one `deny` helper that applies `authFailureDelayMs`, so the
   authenticated header-rejection 401 is as slow as a bad-credential 401 and
   timing does not reveal the password check. Consequence (accepted
-  fail-close): a configured username or `anonymous` value the header store
-  rejects (a control character other than TAB) answers 401 permanently.
+  fail-close): a configured username the header store rejects (a control
+  character other than TAB) answers 401 permanently. An `anonymous` value that
+  is not valid header text (`http::HeaderValue::from_str`) is rejected at
+  admission, so it can no longer cause the permanent 401.
+- `credential removal failed` (`push_err`) — with `hideCredentials`, the
+  `Authorization` header could not be removed; the request is denied through
+  the same delayed 401 instead of forwarding the credential. Both tags also
+  record `EdgionErrorCode::AuthHeaderMutationRejected`.
 
 ## Implementation
 
 - `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` — the single
   `OK group={} user {}` `push_fmt` is the only line that carries `group=`; the
-  `Deny no credential`, `Deny bad credential`, `Allow anonymous` and
-  `identity header rejected` calls carry no group/username. Unit tests in
+  `Deny no credential`, `Deny bad credential`, `Allow anonymous`,
+  `identity header rejected` and `credential removal failed` calls carry no
+  group/username. Unit tests in
   `edgion-gateway/tests/unit/plugins/http/basic_auth/plugin_test.rs` assert the
   OK line matches `OK group=...`, the Deny/Allow literals appear verbatim, and a
   rejected header write leaves no `OK group=` or `Allow anonymous` line. (Line numbers

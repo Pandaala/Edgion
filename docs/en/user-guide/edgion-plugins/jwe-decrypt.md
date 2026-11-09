@@ -106,8 +106,16 @@ Payload-header destinations are canonicalized and ordered before request process
 When this plugin executes, all configured projection destinations are removed before
 bounded claim/payload projection. Missing, empty, unsupported, unsafe, or oversized
 values leave their destination absent, including destinations after aggregate-budget
-exhaustion. Removal or projection write failure returns a fixed 500 without forwarding.
-This also applies to non-strict no-token allowance and non-JSON decrypted payloads. `forwardHeader` retains its separate behavior.
+exhaustion. Removal or projection write failure is rejected like a decryption failure
+(`401`, or `401 JWE token required` on the no-token path) after `authFailureDelayMs`, records
+the diagnostic `AuthHeaderMutationRejected`, and does not forward the request.
+This also applies to non-strict no-token allowance and non-JSON decrypted payloads. On the
+non-strict no-token allowance `forwardHeader` is removed as well, so it never carries a
+client-supplied value; a failure to write the decrypted payload to `forwardHeader` keeps its
+separate `400 Invalid JWE format` response. With `hideCredentials`, a failure to remove the
+token header is rejected like a decryption failure after `authFailureDelayMs` (access log
+`credential removal failed`, diagnostic `AuthHeaderMutationRejected`) instead of forwarding the
+token.
 Unconfigured names are unaffected. Disabled or condition-skipped plugins do not run
 cleanup; these paths provide no authenticated-header guarantee.
 

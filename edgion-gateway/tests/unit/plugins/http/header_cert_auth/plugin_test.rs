@@ -65,6 +65,35 @@ fn expect_default_identity_cleanup(session: &mut MockPluginSession) {
     }
 }
 
+/// Expect the configured authentication-failure response for a header mutation deny.
+fn expect_mutation_deny(session: &mut MockPluginSession, status: u16) {
+    session
+        .expect_record_error()
+        .withf(|code| *code == edgion_resources::EdgionErrorCode::AuthHeaderMutationRejected)
+        .times(1)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .withf(move |response, end_of_stream| {
+            !end_of_stream
+                && response.status.as_u16() == status
+                && response
+                    .headers
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("TLSCert realm=\"edgion\"")
+        })
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let expected_body = format!("{status} TLS certificate failed verification");
+    session
+        .expect_write_response_body()
+        .withf(move |body, end_of_stream| *end_of_stream && body.as_deref() == Some(expected_body.as_bytes()))
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+}
+
 fn assert_header_values(session: &pingora_proxy::Session, name: &str, expected: &[&str]) {
     let actual: Vec<_> = session
         .req_header()
@@ -259,9 +288,11 @@ async fn identity_header_mutation_failures_never_downgrade_to_anonymous() {
                     mode: CertSourceMode::Connection,
                     skip_consumer_lookup: true,
                     allow_anonymous: anonymous,
+                    error_status: 403,
                     ..Default::default()
                 });
                 let mut session = MockPluginSession::new();
+                expect_mutation_deny(&mut session, 403);
                 session
                     .expect_client_cert_info()
                     .times(1)
@@ -304,10 +335,7 @@ async fn identity_header_mutation_failures_never_downgrade_to_anonymous() {
                 let mut log = PluginLog::new("HeaderCertAuth");
                 assert_eq!(
                     plugin.run_request(&mut session, &mut log).await,
-                    PluginRunningResult::ErrResponse {
-                        status: 500,
-                        body: None
-                    }
+                    PluginRunningResult::ErrTerminateRequest
                 );
                 assert_eq!(log.render_for_test(), "err: certificate header mutation failed");
             }
@@ -321,6 +349,7 @@ async fn anonymous_identity_writes_fail_closed_after_certificate_outputs_are_cle
         for failed_name in ["X-Anonymous-Consumer", "X-Consumer-Username"] {
             let plugin = connection_plugin(ConsumerBy::SanOrCn, true);
             let mut session = MockPluginSession::new();
+            expect_mutation_deny(&mut session, 401);
             session
                 .expect_client_cert_info()
                 .times(1)
@@ -347,12 +376,10 @@ async fn anonymous_identity_writes_fail_closed_after_certificate_outputs_are_cle
             let mut log = PluginLog::new("HeaderCertAuth");
             assert_eq!(
                 plugin.run_request(&mut session, &mut log).await,
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None
-                }
+                PluginRunningResult::ErrTerminateRequest
             );
             assert!(!log.contains("Allow anonymous"));
+            assert_eq!(log.render_for_test(), "err: certificate header mutation failed");
         }
     }
 }
@@ -365,6 +392,7 @@ async fn header_mode_cleanup_and_credential_hiding_failures_cannot_forward() {
             let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
             plugin.config.allow_anonymous = true;
             let mut session = MockPluginSession::new();
+            expect_mutation_deny(&mut session, 401);
             let mut headers = http::HeaderMap::new();
             if has_cert {
                 headers.insert(
@@ -394,14 +422,123 @@ async fn header_mode_cleanup_and_credential_hiding_failures_cannot_forward() {
             let mut log = PluginLog::new("HeaderCertAuth");
             assert_eq!(
                 plugin.run_request(&mut session, &mut log).await,
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None
-                }
+                PluginRunningResult::ErrTerminateRequest
             );
             assert_eq!(log.render_for_test(), "err: certificate header mutation failed");
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn header_mutation_deny_applies_configured_failure_delay() {
+    let plugin = actual_plugin(&HeaderCertAuthConfig {
+        mode: CertSourceMode::Connection,
+        auth_failure_delay_ms: 250,
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    session
+        .expect_client_cert_info()
+        .times(1)
+        .return_const(Some(sample_cert_fixture()));
+    session
+        .expect_remove_request_header()
+        .times(1)
+        .returning(|_| Err("injected cleanup failure".into()));
+    expect_mutation_deny(&mut session, 401);
+    let mut log = PluginLog::new("HeaderCertAuth");
+    let start = tokio::time::Instant::now();
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(start.elapsed() >= std::time::Duration::from_millis(250));
+    assert_eq!(log.render_for_test(), "err: certificate header mutation failed");
+}
+
+#[tokio::test]
+async fn certificate_values_that_are_not_header_text_never_become_mutation_denies() {
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+
+    let control = |info: &mut ClientCertInfo| {
+        info.subject = "CN=alice\x01, O=edgion".into();
+        info.sans = vec!["alice\x01@example.com".into()];
+        info.cn = Some("alice\x01".into());
+        info.fingerprint = "aa:bb\x01:cc".into();
+    };
+
+    // skipConsumerLookup: DN/SAN/fingerprint with a control byte are skipped fields.
+    let plugin = actual_plugin(&HeaderCertAuthConfig {
+        mode: CertSourceMode::Connection,
+        skip_consumer_lookup: true,
+        ..Default::default()
+    });
+    let mut info = sample_cert_info();
+    control(&mut info);
+    let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+    for name in ["X-Client-Cert-Dn", "X-Client-Cert-San", "X-Client-Cert-Fingerprint"] {
+        session.req_header_mut().append_header(name, "forged").unwrap();
+    }
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.install_tls_info(None, None, Some(info), None, None);
+    let mut log = PluginLog::new("HeaderCertAuth");
+    assert_eq!(
+        plugin
+            .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "cert verify:ok");
+    for name in ["x-client-cert-dn", "x-client-cert-san", "x-client-cert-fingerprint"] {
+        assert_header_values(&session, name, &[]);
+    }
+
+    // Consumer mapping: an invalid identity continues anonymously when allowed.
+    let plugin = connection_plugin(ConsumerBy::SanOrCn, true);
+    let mut info = sample_cert_info();
+    control(&mut info);
+    let mut session = crate::plugins::runtime::session_adapter::record_outcome_tests::test_session().await;
+    session
+        .req_header_mut()
+        .append_header("X-Consumer-Username", "forged")
+        .unwrap();
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.install_tls_info(None, None, Some(info), None, None);
+    let mut log = PluginLog::new("HeaderCertAuth");
+    assert_eq!(
+        plugin
+            .run_request(&mut PingoraSessionAdapter::new(&mut session, &mut ctx), &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "Allow anonymous");
+    assert_header_values(&session, "x-consumer-username", &["anonymous"]);
+    assert_header_values(&session, "x-anonymous-consumer", &["true"]);
+    assert!(ctx.diagnostics.is_empty());
+
+    // Consumer mapping without anonymous: the configured invalid-identity deny.
+    let plugin = connection_plugin(ConsumerBy::Cn, false);
+    let mut info = sample_cert_info();
+    control(&mut info);
+    let mut session = MockPluginSession::new();
+    expect_default_identity_cleanup(&mut session);
+    let info: &'static ClientCertInfo = Box::leak(Box::new(info));
+    session.expect_client_cert_info().times(1).return_const(Some(info));
+    session.expect_record_error().never();
+    session
+        .expect_write_response_header()
+        .withf(|response, _| response.status.as_u16() == 401)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+    let mut log = PluginLog::new("HeaderCertAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert_eq!(log.render_for_test(), "err: invalid-identity");
 }
 
 #[test]

@@ -355,15 +355,16 @@ JwtAuth 默认不添加消费者请求头。要转发 `sub`，请显式配置声
 ### 已配置的身份头
 JwtAuth 执行时，先清除全部 `claimsToHeaders` 目标头，再写入已验证的 claim。
 claim 缺失、为空、类型不支持、含非法字符或超限时，目标头保持不存在；
-总预算耗尽也不会保留后续目标头的客户端值。删除或投影写入失败返回固定 500，
-请求不会转发。
+总预算耗尽也不会保留后续目标头的客户端值。删除或投影写入失败按无效 token 处理：在
+`authFailureDelayMs` 之后返回 `401`（带 `error="invalid_token"`，匿名路径为不带错误码的质询），
+记录诊断码 `AuthHeaderMutationRejected`，请求不会转发。`hideCredentials` 删除请求头或查询参数失败也同样处理；删除 cookie 失败时仍返回 cookie 清理失败的响应（`Cookie` 头无法安全改写时为 `400`，内部错误为 `500`）。`AuthHeaderMutationRejected` 是访问日志诊断码（`diagnostics` 数组中的 `error` 条目），不是指标，单次出现本身也不是告警条件：多数原因是运维配置错误，但客户端可以把被隐藏的 `query` 凭证发到 gRPC-JSON 转码路由（其查询串已封存）来触发它。请通过基于日志的告警按其速率告警。
 
 匿名放行也先清理配置目标，再写入明确的匿名身份。缺失 claim 本身不会使 JWT
 失效；业务必需的身份字段应通过明确的授权策略校验。未配置的头不受影响。
 插件被禁用或条件跳过时不会执行清理，不能在这些路径信任上述身份头。
 凭证输入头与映射目标重名时，先完成令牌验证；`hideCredentials` 保留既有的最终删除行为。
 
-`claimsToHeaders` 的目标不能是 `Host`（不区分大小写）；配置校验会拒绝它，因为 HTTP/2 的 `:authority` 可能在协议转换时重新生成该头。请使用 `X-Tenant` 等专用身份头。
+`claimsToHeaders` 的目标不能是 `Host` 或报文分帧/逐跳头（`Content-Length`、`Transfer-Encoding`、`TE`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`Upgrade`）（不区分大小写）；配置校验会拒绝它们：HTTP/2 的 `:authority` 可能在协议转换时重新生成 `Host`，而目标头在每次请求都会被清除，会改变请求的报文分帧。请使用 `X-Tenant` 等专用身份头。
 
 ### 认证失败
 

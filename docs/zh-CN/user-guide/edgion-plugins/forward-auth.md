@@ -120,7 +120,7 @@ spec:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `decision.upstreamHeaders` | array\<string\> | `[]` | 鉴权成功时，从鉴权响应复制到上游请求的 Header 列表。如 `[X-User-ID, X-User-Role]`。 |
+| `decision.upstreamHeaders` | array\<string\> | `[]` | 鉴权成功时，从鉴权响应复制到上游请求的 Header 列表。复制前会先从请求中删除列表里的每个头名，因此鉴权服务没有返回的头保持为空——包括客户端自己发送的同名头，例如 `Authorization`，链路中后续插件也看不到它。返回的值按原始字节复制（包括 UTF-8）。开启 `hideCredentials` 时会先删除客户端的 `Authorization`，因此鉴权服务返回的 `Authorization` 仍会转发。头名必须合法，且不能是 `Host` 或报文分帧/逐跳头（`Content-Length`、`Transfer-Encoding`、`TE`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`Upgrade`）（准入时拒绝）。若某个头无法清除或写入，或 `hideCredentials` 无法删除 `Authorization`，请求在 `authFailureDelayMs` 之后以固定的 `403 Forbidden` 拒绝（不带鉴权服务的响应体和响应头），诊断码为 `AuthHeaderMutationRejected`。如 `[X-User-ID, X-User-Role]`。 |
 | `decision.clientHeaders` | array\<string\> | `[]` | 鉴权失败时，从鉴权响应复制到客户端响应的 Header 列表。如 `[WWW-Authenticate]`。 |
 | `decision.hideCredentials` | boolean | `false` | 鉴权成功后，从上游请求中移除 `authorization` 头。 |
 | `decision.authFailureDelayMs` | integer | `0` | 鉴权失败响应前的延迟（毫秒），增加暴力破解的时间成本。 |

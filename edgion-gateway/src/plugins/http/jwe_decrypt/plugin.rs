@@ -15,13 +15,18 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers, PreparedAuthChallenge,
+    apply_auth_failure_delay, clear_claim_headers, send_gateway_auth_error_response, set_claims_headers,
+    PreparedAuthChallenge, CLAIM_HEADER_MUTATION_FAILED, CREDENTIAL_REMOVAL_FAILED,
 };
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     ClaimHeaderProjectionPlan, JweContentEncryption, JweDecryptConfig, ResolvedJweCredentialError,
 };
+
+/// Body of the no-token rejection; also the response for a failed projection
+/// cleanup on the non-strict no-token bypass.
+const TOKEN_REQUIRED_MESSAGE: &str = "JWE token required";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JweFailure {
@@ -212,8 +217,9 @@ impl JweDecrypt {
         }
     }
 
+    /// Plaintext that is not valid header text can never be forwarded.
     fn contains_header_control_chars(value: &str) -> bool {
-        value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
+        !crate::plugins::http::common::auth_common::is_header_text(value)
     }
 
     async fn reject(
@@ -236,11 +242,7 @@ impl JweDecrypt {
                 plugin_log.push(failure.log_code());
             }
         }
-        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-        let _ =
-            send_gateway_auth_error_response(session, failure.status(), &self.auth_challenge, None, failure.message())
-                .await;
-        PluginRunningResult::ErrTerminateRequest
+        self.send_rejection(session, failure.status(), failure.message()).await
     }
 
     async fn reject_custom(
@@ -252,6 +254,27 @@ impl JweDecrypt {
         log_code: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
+        self.send_rejection(session, status, message).await
+    }
+
+    /// Deny after an owned-header mutation or a hidden-credential removal
+    /// failed. The response is the one a bad token gets on the same path
+    /// (`status`/`message`); the error code keeps the (usually
+    /// configuration-caused) failure alertable.
+    async fn deny_header(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+        status: u16,
+        message: &str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.send_rejection(session, status, message).await
+    }
+
+    /// Shared delay + challenge response core of every rejection.
+    async fn send_rejection(&self, session: &mut dyn PluginSession, status: u16, message: &str) -> PluginRunningResult {
         apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(session, status, &self.auth_challenge, None, message).await;
         PluginRunningResult::ErrTerminateRequest
@@ -382,17 +405,25 @@ impl RequestFilter for JweDecrypt {
             Some(token) => token,
             None if self.config.strict => {
                 return self
-                    .reject_custom(session, plugin_log, 401, "JWE token required", "no token")
+                    .reject_custom(session, plugin_log, 401, TOKEN_REQUIRED_MESSAGE, "no token")
                     .await;
             }
             None => {
-                if crate::plugins::http::common::auth_common::clear_claim_headers(
-                    session,
-                    &self.claim_header_projection,
-                )
-                .is_err()
+                // The bypass forwards no decrypted payload, so every plugin-owned
+                // output (projections and `forwardHeader`) must not carry a
+                // client-supplied value.
+                if clear_claim_headers(session, &self.claim_header_projection).is_err()
+                    || session.remove_request_header(&self.config.forward_header).is_err()
                 {
-                    return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                    return self
+                        .deny_header(
+                            session,
+                            plugin_log,
+                            CLAIM_HEADER_MUTATION_FAILED,
+                            401,
+                            TOKEN_REQUIRED_MESSAGE,
+                        )
+                        .await;
                 }
                 plugin_log.push("bypass");
                 return PluginRunningResult::GoodNext;
@@ -442,7 +473,16 @@ impl RequestFilter for JweDecrypt {
             )
             .is_err()
             {
-                return crate::plugins::http::common::auth_common::claim_header_failure(plugin_log);
+                let failure = JweFailure::DecryptFail;
+                return self
+                    .deny_header(
+                        session,
+                        plugin_log,
+                        CLAIM_HEADER_MUTATION_FAILED,
+                        failure.status(),
+                        failure.message(),
+                    )
+                    .await;
             }
         }
 
@@ -450,8 +490,20 @@ impl RequestFilter for JweDecrypt {
             let _ = session.set_ctx_var("jwe_payload", &plaintext);
         }
 
-        if self.config.hide_credentials && self.config.header != self.config.forward_header {
-            let _ = session.remove_request_header(&self.config.header);
+        if self.config.hide_credentials
+            && !self.config.header.eq_ignore_ascii_case(&self.config.forward_header)
+            && session.remove_request_header(&self.config.header).is_err()
+        {
+            let failure = JweFailure::DecryptFail;
+            return self
+                .deny_header(
+                    session,
+                    plugin_log,
+                    CREDENTIAL_REMOVAL_FAILED,
+                    failure.status(),
+                    failure.message(),
+                )
+                .await;
         }
 
         plugin_log.push("OK");

@@ -2,6 +2,10 @@ use super::*;
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
 use crate::plugins::runtime::PluginSessionHeaderExt;
 
+/// Fixed 401 body for a missing credential and for every identity-header
+/// mutation deny.
+pub(super) const AUTHENTICATION_REQUIRED_BODY: &str = "Unauthorized - Authentication required";
+
 impl OpenidConnect {
     pub(super) fn extract_bearer_token(&self, session: &dyn PluginSession) -> Option<String> {
         let header = session.header_str("authorization")?.trim();
@@ -43,10 +47,29 @@ impl OpenidConnect {
     /// This switch covers the bearer credential only. Gateway-owned session and
     /// state cookies are always stripped before proxying, including session-cookie
     /// mode.
-    pub(super) fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
+    pub(super) fn hide_credentials_if_needed(
+        &self,
+        session: &mut dyn PluginSession,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
         if self.config.hide_credentials {
-            let _ = session.remove_request_header("authorization");
+            session.remove_request_header("authorization")?;
         }
+        Ok(())
+    }
+
+    /// Deny an authenticated or passing request whose identity-header mutation
+    /// failed. Every OIDC site uses one fixed 401 body: OIDC bad-credential bodies
+    /// vary by reason, and a redirect would loop on a deterministic failure.
+    pub(super) async fn deny_header_mutation(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+        tag: &'static str,
+    ) -> PluginRunningResult {
+        crate::plugins::http::common::auth_common::note_auth_header_mutation_failure(session, plugin_log, tag);
+        self.apply_auth_failure_delay().await;
+        let _ = self.send_unauthorized(session, AUTHENTICATION_REQUIRED_BODY).await;
+        PluginRunningResult::ErrTerminateRequest
     }
 
     pub(super) async fn send_plain_error(

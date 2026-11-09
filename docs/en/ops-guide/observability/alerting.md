@@ -87,6 +87,15 @@ arrays are each individually small.)
 | EdgionOutboundEgressBlocked | outbound egress blocked by the SSRF policy | 5m |
 | EdgionOutboundTemplateFallback | a templated outbound field silently fell back to its default | 5m |
 
+## Log-based signals
+
+Some conditions are access-log `diagnostics` codes rather than metrics, so they have no
+Prometheus rule here; alert on them with log-based alerting.
+
+| code | meaning | suggested severity |
+|------|---------|--------------------|
+| `AuthHeaderMutationRejected` | an auth plugin denied a request because an identity-header write/clear or hidden-credential removal failed (usually misconfiguration; a client can trigger it on a gRPC-JSON-transcoded route by sending a hidden query credential) | warning on a sustained rate, not on a single occurrence |
+
 ## Note on metric categories
 
 The inventory tags each metric `self` or `business`, but that split is documentation

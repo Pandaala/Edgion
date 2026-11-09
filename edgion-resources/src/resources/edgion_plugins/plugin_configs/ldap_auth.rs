@@ -4,7 +4,7 @@ use crate::resources::common::OutboundTlsLocal;
 use crate::resources::gateway::SecretObjectReference;
 
 crate::redact::impl_redacted_debug!(LdapAuthConfig);
-use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use crate::resources::edgion_plugins::auth_realm::{validate_anonymous_header_text, validate_auth_realm};
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -300,10 +300,8 @@ impl LdapAuthConfig {
         if http::HeaderName::from_bytes(self.anonymous_header.as_bytes()).is_err() {
             return Some("anonymousHeader is not a valid header name");
         }
-        if let Some(anonymous) = &self.anonymous {
-            if http::HeaderValue::from_str(anonymous).is_err() {
-                return Some("anonymous is not valid header text");
-            }
+        if let Err(error) = validate_anonymous_header_text(self.anonymous.as_deref()) {
+            return Some(error);
         }
         if let Some(error) = self.search_mode_error() {
             return Some(error);

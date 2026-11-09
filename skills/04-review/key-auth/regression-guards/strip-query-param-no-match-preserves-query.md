@@ -69,8 +69,12 @@ drops empty separators only as part of the changed selection.
 Surviving raw ranges and decoded cells stay in the backing document. Consecutive
 removals do not create a history chain or eagerly render; raw demand renders the
 current selection once. Protected transcoder requests reject mutation before
-publication. Auth retains its existing ignored-setter-error policy for rejected
-operations. The eventual concrete-header barrier preserves target form and fails
+publication. Since 2026-11-09 `strip_query_param` returns the removal result and a
+rejected removal denies the request (KeyAuth invalid-key 401, JwtAuth `invalid_token`
+401, tag `credential removal failed`, diagnostic `AuthHeaderMutationRejected`) instead
+of ignoring the error; a no-match on a protected request still returns `Ok(false)` and
+continues. Because a client can send the credential parameter to a transcoded route,
+this diagnostic is client-triggerable and is alerted on by rate, not per event. The eventual concrete-header barrier preserves target form and fails
 locally rather than forwarding stale credentials.
 
 Names without `%` or `+` compare as borrowed raw spans. Encoded names always use
