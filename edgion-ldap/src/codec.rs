@@ -13,11 +13,21 @@ pub(crate) const INTEGER: u8 = 0x02;
 pub(crate) const OCTET_STRING: u8 = 0x04;
 pub(crate) const ENUMERATED: u8 = 0x0a;
 pub(crate) const SEQUENCE: u8 = 0x30;
+#[cfg(feature = "client")]
 pub(crate) const BIND_REQUEST: u8 = 0x60;
 pub(crate) const BIND_RESPONSE: u8 = 0x61;
+#[cfg(feature = "client")]
+pub(crate) const SEARCH_REQUEST: u8 = 0x63;
+pub(crate) const SEARCH_RESULT_ENTRY: u8 = 0x64;
+pub(crate) const SEARCH_RESULT_DONE: u8 = 0x65;
+pub(crate) const SEARCH_RESULT_REFERENCE: u8 = 0x73;
+pub(crate) const SET: u8 = 0x31;
+#[cfg(feature = "client")]
 pub(crate) const UNBIND_REQUEST: u8 = 0x42;
+#[cfg(feature = "client")]
 pub(crate) const EXTENDED_REQUEST: u8 = 0x77;
 pub(crate) const EXTENDED_RESPONSE: u8 = 0x78;
+#[cfg(feature = "client")]
 pub(crate) const CONTEXT_0_PRIMITIVE: u8 = 0x80;
 
 /// Low five identifier bits set to one select the high-tag-number form.
@@ -114,7 +124,8 @@ impl<'a> Reader<'a> {
         Ok((tag, len))
     }
 
-    fn element(&mut self) -> Result<(u8, &'a [u8]), Error> {
+    /// Read the next element's identifier and content.
+    pub(crate) fn element(&mut self) -> Result<(u8, &'a [u8]), Error> {
         let (tag, len) = self.read_header()?;
         let end = self.pos + len;
         let content = self.buf.get(self.pos..end).ok_or(Error::Truncated)?;
@@ -122,7 +133,8 @@ impl<'a> Reader<'a> {
         Ok((tag, content))
     }
 
-    fn element_with(&mut self, expected: u8) -> Result<&'a [u8], Error> {
+    /// Read the next element, which must carry `expected`, and return its content.
+    pub(crate) fn element_with(&mut self, expected: u8) -> Result<&'a [u8], Error> {
         let (actual, content) = self.element()?;
         if actual != expected {
             return Err(Error::UnexpectedTag { expected, actual });
@@ -173,11 +185,13 @@ fn long_length_octets(len: usize) -> usize {
     bits.div_ceil(8) as usize
 }
 
+#[cfg(feature = "client")]
 /// Total encoded size of an element whose content is `len` bytes.
 pub(crate) fn element_len(len: usize) -> usize {
     header_len(len) + len
 }
 
+#[cfg(feature = "client")]
 /// Content length of the minimal two's-complement encoding of `value`.
 pub(crate) fn u32_content_len(value: u32) -> usize {
     let bits = (u32::BITS - value.leading_zeros()) as usize;
@@ -197,6 +211,7 @@ pub(crate) fn write_header(out: &mut Vec<u8>, tag: u8, len: usize) {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn write_u32(out: &mut Vec<u8>, tag: u8, value: u32) {
     let len = u32_content_len(value);
     write_header(out, tag, len);
@@ -205,6 +220,7 @@ pub(crate) fn write_u32(out: &mut Vec<u8>, tag: u8, value: u32) {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn write_octets(out: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
     write_header(out, tag, bytes.len());
     out.extend_from_slice(bytes);

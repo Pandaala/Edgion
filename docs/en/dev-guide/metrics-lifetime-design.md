@@ -256,7 +256,7 @@ The old cold-slot extraction decision concerned boilerplate, not this lifetime/c
 | edgion_link_sys_es_bulk_channel_full_total | Counter | gateway | Fixed | none |
 | edgion_link_sys_health | Gauge | gateway | Dynamic | link |
 | edgion_link_sys_health_flips_total | Counter | gateway | Dynamic | link, direction (recovered/degraded) |
-| edgion_ldap_auth_errors_total | Counter | gateway | Fixed | kind (unreachable/timeout/bind_fail/tls_san_mismatch) |
+| edgion_ldap_auth_errors_total | Counter | gateway | Fixed | kind (unreachable/timeout/bind_fail/tls_san_mismatch/service_bind_fail/search_fail) |
 | edgion_gateway_outbound_tls_san_mismatch_total | Counter | gateway | Fixed | plugin (ldap_auth/openid_connect) |
 | edgion_webhook_resolve_errors_total | Counter | gateway | Fixed | reason (not_found/unhealthy/rate_limited/status_error/call_failed/authority_rejected) |
 | edgion_outbound_egress_blocked_total | Counter | gateway | Fixed | reason (loopback/link_local/private/unspecified) |

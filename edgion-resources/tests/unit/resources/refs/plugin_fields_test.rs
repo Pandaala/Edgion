@@ -982,3 +982,39 @@ fn checked_entry_namespace_comes_from_current_canonical_owner() {
         assert!(binding.request_entries().next().unwrap().owner_namespace().is_err());
     }
 }
+
+#[test]
+fn ldap_bind_password_reference_is_a_secret_owned_by_the_plugin() {
+    for (namespace, same_namespace) in [(None, true), (Some("directory"), false)] {
+        let mut bind_password_ref = json!({"name": "ldap-svc"});
+        if let Some(namespace) = namespace {
+            bind_password_ref["namespace"] = json!(namespace);
+        }
+        let owner: EdgionPlugins = serde_json::from_value(json!({
+            "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+            "metadata":{"name":"auth", "namespace":"plugins", "uid":"uid", "generation":1},
+            "spec":{"requestPlugins":[{"type":"LdapAuth", "config":{
+                "ldapHost":"ldap.example.com", "baseDn":"dc=example,dc=com", "attribute":"uid",
+                "ldaps":true, "bindDn":"cn=svc,dc=example,dc=com",
+                "bindPasswordRef": bind_password_ref
+            }}]}
+        }))
+        .unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let bindings = prepared.bind(&owner).unwrap();
+        let entry = bindings.request_entries().next().unwrap();
+        let references = entry.references().unwrap();
+        let token = references.ldap_bind_secret().unwrap();
+        let reference = token.validated().unwrap();
+        assert_eq!(reference.target().name(), "ldap-svc");
+        assert_eq!(reference.source().group_kind().kind(), "EdgionPlugins");
+        assert_eq!(reference.target().group_kind().group(), "");
+        assert_eq!(reference.target().group_kind().kind(), "Secret");
+        assert_eq!(
+            reference.target().scope().namespace(),
+            Some(namespace.unwrap_or("plugins"))
+        );
+        assert_eq!(reference.is_same_namespace(), same_namespace);
+        assert!(references.oidc_client_secret().is_none());
+    }
+}

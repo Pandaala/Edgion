@@ -269,3 +269,34 @@ fn access_log_extern_over_count_cap_is_reported_at_ingest() {
         "expected a count-cap error, got {errors:?}"
     );
 }
+
+#[test]
+fn ldap_auth_null_group_list_is_a_validation_error_not_a_decode_failure() {
+    // An empty templated value renders as YAML null. The whole resource must
+    // still decode (a decode error would drop it and break the Kubernetes
+    // list); the LdapAuth entry is then rejected with a status message.
+    let yaml = r#"
+requestPlugins:
+  - type: LdapAuth
+    config:
+      ldapHost: ldap.example.com
+      ldaps: true
+      baseDn: dc=example,dc=com
+      attribute: uid
+      bindDn: cn=svc,dc=example,dc=com
+      bindPasswordRef:
+        name: ldap-svc
+      requiredGroupsAnyOf:
+"#;
+    let spec: EdgionPluginsSpec = yaml_serde::from_str(yaml).unwrap();
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+    let errors = ep.validate_plugins();
+    assert!(
+        errors.iter().any(|error| error.contains("need 1 to 32 groups each")),
+        "{errors:?}"
+    );
+}

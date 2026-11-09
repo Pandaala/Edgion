@@ -93,7 +93,7 @@ pub mod names {
     pub const LINK_SYS_REDIS_CONNECTIONS: &str = "edgion_link_sys_redis_connections";
     // Redis LinkSys topology events from the published generation's recovery loop.
     pub const LINK_SYS_REDIS_TOPOLOGY_EVENTS_TOTAL: &str = "edgion_link_sys_redis_topology_events_total";
-    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail / tls_san_mismatch)
+    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail / tls_san_mismatch / service_bind_fail / search_fail)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // Outbound TLS SAN pinning rejection, by plugin. The alerting signal for a
     // misconfigured `validation.subjectAltNames` or a rotated peer certificate.
@@ -962,7 +962,8 @@ pub fn record_rr_selector_truncated() {
 /// Record a LDAP auth plugin error event.
 ///
 /// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`,
-/// `"tls_san_mismatch"`. Fixed cardinality — safe as a label.
+/// `"tls_san_mismatch"`, `"service_bind_fail"`, `"search_fail"`. Fixed
+/// cardinality — safe as a label.
 pub fn record_ldap_auth_error(kind: &'static str) {
     fixed_counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
 }

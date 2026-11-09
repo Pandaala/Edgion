@@ -572,7 +572,9 @@ fn owning_tls_fixture(variant: &str, stage: &str, enabled: bool, ca_refs: serde_
         }),
         "LdapAuth" => serde_json::json!({
             "ldapHost":"ldap.example", "baseDn":"dc=example", "attribute":"uid", "tls":local,
-            "resolvedCaCertificates":[secret],"resolvedClientCertificate":secret
+            "resolvedCaCertificates":[secret],"resolvedClientCertificate":secret,
+            "ldaps":true, "bindDn":"cn=svc,dc=example", "bindPasswordRef":{"name":"shared"},
+            "resolvedBindPassword":"forged"
         }),
         "ExtProc" => serde_json::json!({"grpcService":{"target":"processor.example:9000","tls":full_tls}}),
         _ => panic!("unsupported fixture variant"),
@@ -632,6 +634,9 @@ async fn owning_tls_handler_clears_forged_material_on_inactive_and_wrong_stages(
                         if let EdgionPlugin::OpenidConnect(config) = &entry.plugin {
                             assert!(config.resolved_oidc_client_secret.is_none());
                             assert!(config.resolved_session_secret.is_none());
+                        }
+                        if let EdgionPlugin::LdapAuth(config) = &entry.plugin {
+                            assert!(config.resolved_bind_password.is_none(), "{stage}");
                         }
                     }
                 };
@@ -7558,7 +7563,8 @@ fn readonly_current_fields_cover_every_material_family_without_dependency_author
         );
         let (condition, calls) = observe_bound_reads(|| readonly_resolved_condition(&mut ep, &ctx));
         assert_eq!(condition.status, "False", "{}", condition.message);
-        let expected = [1, 1, 1, 1, 1, 1, 1, 1, 4, 2, 2, 3, 3, 3, 5, 1, 1, 2, 1][index];
+        // Family 9 (LdapAuth) reads its CA and client identity plus the search-mode bindPasswordRef.
+        let expected = [1, 1, 1, 1, 1, 1, 1, 1, 4, 3, 2, 3, 3, 3, 5, 1, 1, 2, 1][index];
         assert_eq!(
             calls.iter().filter(|call| **call == "authorization").count(),
             expected,
@@ -8944,4 +8950,65 @@ fn authentication_invalid_header_names_are_rejected_in_controller_status() {
         assert_eq!(accepted.reason, "Invalid");
         assert_eq!(accepted.message, errors[0]);
     }
+}
+
+fn ldap_search_plugins(tls: serde_json::Value) -> EdgionPlugins {
+    serde_json::from_value(serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins",
+    "metadata":{"name":"ldap-search","namespace":"default"},
+    "spec":{"requestPlugins":[{"type":"LdapAuth","config":{
+        "ldapHost":"ldap.example", "baseDn":"dc=example", "attribute":"uid", "ldaps":true, "tls":tls,
+        "bindDn":"cn=svc,dc=example", "bindPasswordRef":{"name":"ldap-svc"},
+        "resolvedBindPassword":"forged"
+    }}]}}))
+    .unwrap()
+}
+
+fn resolved_bind_password(ep: &EdgionPlugins) -> Option<String> {
+    match &ep.spec.request_plugins.as_ref().unwrap()[0].plugin {
+        EdgionPlugin::LdapAuth(config) => config.resolved_bind_password.clone(),
+        _ => panic!("LdapAuth expected"),
+    }
+}
+
+#[tokio::test]
+async fn ldap_bind_password_resolves_without_tls_material() {
+    // No TLS references: the resolver must not return early before the password.
+    let (ctx, _runtime) = make_ctx_with_secrets(HashMap::from([(
+        "default/ldap-svc".into(),
+        build_secret("default", "ldap-svc", "password", "svc-password"),
+    )]));
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new()
+        .parse(ldap_search_plugins(serde_json::json!({})), &ctx)
+        .await
+    else {
+        panic!("unexpected skip")
+    };
+    assert_eq!(resolved_bind_password(&parsed).as_deref(), Some("svc-password"));
+}
+
+#[tokio::test]
+async fn ldap_bind_password_missing_secret_clears_forged_value() {
+    let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new()
+        .parse(ldap_search_plugins(serde_json::json!({})), &ctx)
+        .await
+    else {
+        panic!("unexpected skip")
+    };
+    assert_eq!(resolved_bind_password(&parsed), None);
+}
+
+#[tokio::test]
+async fn ldap_bind_password_reads_only_the_password_key() {
+    let (ctx, _runtime) = make_ctx_with_secrets(HashMap::from([(
+        "default/ldap-svc".into(),
+        build_secret("default", "ldap-svc", "bindPassword", "svc-password"),
+    )]));
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler::new()
+        .parse(ldap_search_plugins(serde_json::json!({})), &ctx)
+        .await
+    else {
+        panic!("unexpected skip")
+    };
+    assert_eq!(resolved_bind_password(&parsed), None);
 }

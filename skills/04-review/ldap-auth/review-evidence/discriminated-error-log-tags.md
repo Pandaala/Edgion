@@ -68,8 +68,38 @@ and keeps the auth-plugin family uniform.
 - "Re-rate this Medium/High because logs reveal username existence" — they do
   not; reject re-reports at any severity above the closed convention nit.
 - "Also fold `Deny bad username` into `Deny bad credential`" — out of scope;
-  it fires only on empty username (no existence value) and names a distinct,
+  it fires only on input shape (an unusable username, control characters, an
+  over-long search-mode username; no existence value) and names a distinct,
   legitimate malformed-input case.
+
+## Search mode re-evaluation (2026-11-09)
+
+The search-then-bind trigger below fired when search mode was added. Result: the
+premise still holds. No entry, several entries, sizeLimitExceeded, an unsuitable
+entry and the service account's own entry all take the `InvalidCredentials` arm
+with the uniform `Deny bad credential` tag and the failure delay;
+`search_unique` returns `Option`, so the cases are structurally indistinguishable.
+An entry with an empty or unparsable DN also takes that arm (since the P6
+review; it was a 503 before). `ldap service bind fail` and
+`ldap service credential unavailable` are user-independent. `ldap search fail`
+is mostly directory-wide but can depend on the username: a directory may reject
+the assertion value for some usernames (rc 18/21/87), and a user bind that
+answers a code other than 0/49 maps to `ldap bind fail`; both are the same
+503 class bind mode already has, carry no entry-existence information beyond
+what the directory chose to reveal, and are recorded as accepted limits.
+`Deny bad username` also covers control characters and over-long search-mode
+usernames (input shape only). The deliberate existence signal is timing (one
+LDAP round trip), accepted and recorded in
+[search mode guards](../regression-guards/search-mode-identity-and-filter.md).
+
+## Group requirements (2026-11-09)
+
+`Deny not in required group` (403) is pushed only after the user bind returned
+rc 0, and the group search itself runs only then, so neither the tag nor any
+group-step error or timing is reachable without the user's password. The 401/403
+split does confirm a non-member's password; that is an accepted product
+decision recorded in
+[search mode guards](../regression-guards/search-mode-identity-and-filter.md).
 
 ## Re-evaluation Triggers
 
@@ -78,6 +108,8 @@ Re-open only if:
 - `ldap_auth` is changed to a **search-then-bind** flow that performs an LDAP
   search to locate the DN before binding — a "no such object" search result
   *would* discriminate existence and a distinct tag on that path would leak.
+  (Fired and re-evaluated 2026-11-09, see above; re-open if the search path
+  gains a per-user tag.)
 - A new arm is added that emits a username- or existence-dependent tag on the
   401 path.
 

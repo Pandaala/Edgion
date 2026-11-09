@@ -89,6 +89,7 @@ Only these custom fields accept literal `core` as the empty group:
   BasicAuth/KeyAuth/HmacAuth `secretGroups[].secretRefs[]`, JwtAuth
   `issuerGroups[].secretRefs[]`, HeaderCertAuth `caSecretRefs[]`, Csrf and
   JweDecrypt `secretRef`, OpenidConnect `clientSecretRef`/`sessionSecretRef`,
+  LdapAuth `bindPasswordRef`,
   Wasm `source.fetch.authHeaderSecretRef`/`source.oci.pullSecretRef`,
   CredentialInjector `credentialRef` (Secret branch only), plus SecretMatch and
   HmacMatch condition leaves in their bounded ConditionSet contexts. Source and

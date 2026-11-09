@@ -178,8 +178,15 @@ Fresh results on 2026-11-09, `feature-10-28`:
 
 Re-evaluate when any of these change:
 
-- Search mode or group checks are added (Phase 2; decoders reach depth 5 the same
-  straight-line way).
+- A new search or response kind is added. Search mode (2026-11-09) re-evaluated
+  this page: search frames (entry, reference, done) decode with the same
+  straight-line cursor, at most 2 entries and 8 references per search, each
+  frame bounded by `MAX_FRAME`; the retained-text rule now allows exactly one
+  matched DN and one identity value, never logged
+  ([search mode guards](search-mode-identity-and-filter.md)). Group
+  requirements (Phase 2b, 2026-11-09) reuse the same `search_unique` loop with
+  base scope, sizeLimit 1 and attribute `1.1` (no values retained); the group
+  filter is operator configuration, pre-encoded once.
 - `MAX_FRAME` changes.
 - A buffered reader or speculative read is introduced in `client.rs`.
 - Any recursive helper is introduced in `edgion-ldap`.

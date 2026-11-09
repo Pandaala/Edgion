@@ -11,8 +11,15 @@ publish = false
 # `full` in a whole-workspace build. Keep both version requirements in sync with
 # the workspace `tokio` entry.
 [dependencies]
-tokio = { version = "1.54.1", default-features = false, features = ["io-util"] }
+tokio = { version = "1.54.1", default-features = false, features = ["io-util"], optional = true }
 thiserror.workspace = true
+
+# `client` gates the async bind session and its tokio dependency. The codec,
+# protocol decoders, filter compiler and DN helpers are runtime-free, which lets
+# `edgion-resources` use them for validation (`default-features = false`).
+[features]
+default = ["client"]
+client = ["dep:tokio"]
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt", "macros", "io-util"] }

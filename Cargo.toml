@@ -57,7 +57,7 @@ manual_let_else       = "warn"
 edgion-algo       = { path = "edgion-algo" }
 edgion-waf        = { path = "edgion-waf" }
 edgion-wasm       = { path = "edgion-wasm" }
-edgion-ldap       = { path = "edgion-ldap" }
+edgion-ldap       = { path = "edgion-ldap", default-features = false }
 edgion-dsl        = { path = "edgion-dsl" }
 edgion-resources  = { path = "edgion-resources" }
 edgion-common     = { path = "edgion-common" }

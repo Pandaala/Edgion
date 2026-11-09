@@ -39,4 +39,13 @@ pub enum Error {
     /// The server answered the StartTLS request with a non-success code.
     #[error("ldap StartTLS rejected with result code {0}")]
     StartTlsRejected(u32),
+    /// The search finished with a result code other than success or sizeLimitExceeded.
+    #[error("ldap search failed with result code {0}")]
+    SearchFailed(u32),
+    /// The search returned more continuation references than allowed.
+    #[error("ldap search returned too many references")]
+    TooManyReferences,
+    /// A search entry carried an empty DN.
+    #[error("ldap search entry has an empty DN")]
+    EmptyDn,
 }

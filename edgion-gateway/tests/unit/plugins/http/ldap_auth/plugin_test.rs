@@ -1174,7 +1174,12 @@ async fn malformed_bind_responses_fail_closed() {
         let prefix = reply[..reply.len().min(8)].to_vec();
         let auth = ldap_auth_default();
         let peer = scripted_peer(&auth, 64 * 1024, reply);
-        let result = auth.ldap_bind(BIND_DN, "p").await;
+        let result = auth
+            .ldap_bind(Exchange::Bind {
+                dn: BIND_DN,
+                password: "p",
+            })
+            .await;
         assert!(
             matches!(result, Err(LdapAuthError::BindFailed)),
             "{prefix:02x?}: {result:?}"
@@ -1189,7 +1194,11 @@ async fn scripted_rc_49_is_invalid_credentials() {
     let auth = ldap_auth_default();
     let peer = scripted_peer(&auth, 4096, bind_response(49));
     assert!(matches!(
-        auth.ldap_bind(BIND_DN, "p").await,
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await,
         Err(LdapAuthError::InvalidCredentials)
     ));
     peer.await.unwrap();
@@ -1199,7 +1208,13 @@ async fn scripted_rc_49_is_invalid_credentials() {
 async fn scripted_rc_0_is_ok() {
     let auth = ldap_auth_default();
     let peer = scripted_peer(&auth, 4096, bind_response(0));
-    assert!(auth.ldap_bind(BIND_DN, "p").await.is_ok());
+    assert!(auth
+        .ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await
+        .is_ok());
     peer.await.unwrap();
 }
 
@@ -1259,7 +1274,14 @@ async fn invalid_tls_server_name_fails_per_request_without_dial() {
         Err::<tokio::io::DuplexStream, _>(LdapAuthError::Timeout)
     };
     assert!(matches!(
-        auth.bind_over(dial, BIND_DN, "p").await,
+        auth.bind_over(
+            dial,
+            Exchange::Bind {
+                dn: BIND_DN,
+                password: "p"
+            }
+        )
+        .await,
         Err(LdapAuthError::ConnectionFailed)
     ));
     assert!(!dialed.load(std::sync::atomic::Ordering::SeqCst));
@@ -1287,7 +1309,11 @@ async fn peer_close_before_reply_is_bind_failed() {
         drop(peer);
     });
     assert!(matches!(
-        auth.ldap_bind(BIND_DN, "p").await,
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await,
         Err(LdapAuthError::BindFailed)
     ));
     task.await.unwrap();
@@ -1311,7 +1337,13 @@ async fn extra_frame_and_close_after_success_is_ok() {
         peer.write_all(&reply).await.unwrap();
         drop(peer);
     });
-    assert!(auth.ldap_bind(BIND_DN, "p").await.is_ok());
+    assert!(auth
+        .ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await
+        .is_ok());
     task.await.unwrap();
 }
 
@@ -1337,8 +1369,15 @@ async fn phase2_deadline_bounds_unbind() {
         drop(peer);
     });
     let started = tokio::time::Instant::now();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), auth.ldap_bind(BIND_DN, "p")).await;
-    assert!(matches!(outcome, Ok(Ok(()))), "{outcome:?}");
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p",
+        }),
+    )
+    .await;
+    assert!(matches!(outcome, Ok(Ok(None))), "{outcome:?}");
     // The unbind is cut off by the deadline shared with the bind (1000 ms
     // after phase 2 starts), not by a fresh budget (which would end at 1600 ms).
     assert!(started.elapsed() >= Duration::from_millis(1000));
@@ -1373,7 +1412,17 @@ async fn phase1_timeout_when_dial_never_completes() {
     }
     for auth in &cases {
         let dial = std::future::pending::<Result<tokio::io::DuplexStream, LdapAuthError>>();
-        let outcome = tokio::time::timeout(Duration::from_secs(10), auth.bind_over(dial, BIND_DN, "p")).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            auth.bind_over(
+                dial,
+                Exchange::Bind {
+                    dn: BIND_DN,
+                    password: "p",
+                },
+            ),
+        )
+        .await;
         assert!(
             matches!(outcome, Ok(Err(LdapAuthError::Timeout))),
             "{}: {outcome:?}",
@@ -1397,7 +1446,14 @@ async fn phase2_timeout_when_peer_never_replies() {
         let _ = released.await;
         drop(peer);
     });
-    let outcome = tokio::time::timeout(Duration::from_secs(10), auth.ldap_bind(BIND_DN, "p")).await;
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p",
+        }),
+    )
+    .await;
     assert!(matches!(outcome, Ok(Err(LdapAuthError::Timeout))), "{outcome:?}");
     let _ = release.send(());
     task.await.unwrap();
@@ -1419,7 +1475,11 @@ async fn start_tls_rejection_is_connection_failed() {
     ];
     let peer = scripted_peer(&auth, 4096, rejected);
     assert!(matches!(
-        auth.ldap_bind(BIND_DN, "p").await,
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await,
         Err(LdapAuthError::ConnectionFailed)
     ));
     drop(auth);
@@ -1433,7 +1493,959 @@ async fn peer_close_before_request_is_bind_failed() {
     drop(peer);
     auth.install_scripted_stream(client);
     assert!(matches!(
-        auth.ldap_bind(BIND_DN, "p").await,
+        auth.ldap_bind(Exchange::Bind {
+            dn: BIND_DN,
+            password: "p"
+        })
+        .await,
         Err(LdapAuthError::BindFailed)
     ));
+}
+
+// ── Identity-header hardening (all modes) ──────────────────────────────
+
+fn expect_401(session: &mut crate::plugins::runtime::traits::session::MockPluginSession) {
+    session
+        .expect_write_response_header()
+        .withf(|header, _| header.status.as_u16() == 401)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+}
+
+fn ldap_header(user_and_password: &str) -> String {
+    format!("ldap {}", general_purpose::STANDARD.encode(user_and_password))
+}
+
+#[tokio::test]
+async fn spoofed_identity_with_control_char_username_is_401() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    for payload in [
+        "alice\u{1}:pw",
+        "al\tice:pw",
+        "alice\u{0}x:pw",
+        "al\u{7f}ice:pw",
+        "al\u{85}ice:pw",
+    ] {
+        let auth = ldap_auth_default();
+        // An in-memory peer instead of a dial: a regression fails here, offline.
+        let peer = scripted_conversation(&auth, Vec::new());
+        let header = ldap_header(payload);
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(
+            &mut session,
+            &[("authorization", header.as_str()), ("x-credential-identifier", "admin")],
+        );
+        // No set_request_header_value expectation: any identity write panics the mock.
+        expect_401(&mut session);
+        let mut log = PluginLog::new(PLUGIN_NAME);
+        assert_eq!(
+            auth.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest,
+            "{payload:?}"
+        );
+        assert!(
+            log.contains("Deny bad username"),
+            "{payload:?}: {}",
+            log.render_for_test()
+        );
+        drop(auth);
+        assert!(peer.await.unwrap().is_empty(), "{payload:?}: no LDAP request");
+    }
+}
+
+#[tokio::test]
+async fn identity_header_write_failure_denies() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let auth = ldap_auth_default();
+    let peer = scripted_peer(&auth, 4096, bind_response(0));
+    let header = ldap_header("bob:pw");
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", header.as_str()), ("x-credential-identifier", "admin")],
+    );
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Err("header store rejected the value".into()));
+    expect_401(&mut session);
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("identity header rejected"), "{}", log.render_for_test());
+    assert!(!log.contains("OK user"));
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn anonymous_header_write_failure_denies() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let auth = actual_ldap(&LdapAuthConfig {
+        anonymous: Some("guest".to_string()),
+        ..test_config()
+    })
+    .unwrap();
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-credential-identifier", "admin")]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Err("header store rejected the value".into()));
+    expect_401(&mut session);
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("identity header rejected"));
+    assert!(!log.contains("Allow anonymous"));
+}
+
+#[tokio::test]
+async fn successful_bind_overwrites_spoofed_identity() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let auth = ldap_auth_default();
+    let peer = scripted_peer(&auth, 4096, bind_response(0));
+    let header = ldap_header("bob:pw");
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", header.as_str()), ("x-credential-identifier", "admin")],
+    );
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Credential-Identifier" && value == "bob")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Anonymous-Consumer")
+        .times(1)
+        .returning(|_| Ok(()));
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    drop(auth);
+    peer.await.unwrap();
+}
+
+// ── Search mode ─────────────────────────────────────────────────────────
+
+const SERVICE_DN: &str = "cn=svc,dc=example,dc=com";
+
+fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    assert!(content.len() < 0x80);
+    let mut out = vec![tag, content.len() as u8];
+    out.extend_from_slice(content);
+    out
+}
+
+fn bind_reply(id: u8, rc: u8) -> Vec<u8> {
+    tlv(
+        0x30,
+        &[tlv(0x02, &[id]), tlv(0x61, &[0x0a, 0x01, rc, 0x04, 0x00, 0x04, 0x00])].concat(),
+    )
+}
+
+fn entry_reply(id: u8, dn: &[u8], uid: Option<&[u8]>) -> Vec<u8> {
+    let attributes = uid
+        .map(|value| tlv(0x30, &[tlv(0x04, b"uid"), tlv(0x31, &tlv(0x04, value))].concat()))
+        .unwrap_or_default();
+    tlv(
+        0x30,
+        &[
+            tlv(0x02, &[id]),
+            tlv(0x64, &[tlv(0x04, dn), tlv(0x30, &attributes)].concat()),
+        ]
+        .concat(),
+    )
+}
+
+fn entry_with_uids(id: u8, dn: &[u8], uids: &[&[u8]]) -> Vec<u8> {
+    let values: Vec<u8> = uids.iter().flat_map(|value| tlv(0x04, value)).collect();
+    let attributes = tlv(0x30, &[tlv(0x04, b"uid"), tlv(0x31, &values)].concat());
+    tlv(
+        0x30,
+        &[
+            tlv(0x02, &[id]),
+            tlv(0x64, &[tlv(0x04, dn), tlv(0x30, &attributes)].concat()),
+        ]
+        .concat(),
+    )
+}
+
+fn reference_reply(id: u8) -> Vec<u8> {
+    tlv(0x30, &[tlv(0x02, &[id]), tlv(0x73, &tlv(0x04, b"ldap://x/"))].concat())
+}
+
+fn done_reply(id: u8, rc: u8) -> Vec<u8> {
+    tlv(
+        0x30,
+        &[tlv(0x02, &[id]), tlv(0x65, &[0x0a, 0x01, rc, 0x04, 0x00, 0x04, 0x00])].concat(),
+    )
+}
+
+fn search_config() -> LdapAuthConfig {
+    LdapAuthConfig {
+        ldaps: true,
+        bind_dn: Some(SERVICE_DN.to_string()),
+        bind_password_ref: Some(edgion_resources::resources::gateway::SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "ldap-svc".to_string(),
+            namespace: None,
+        }),
+        resolved_bind_password: Some("svc-pw".to_string()),
+        search_base: Some("dc=example,dc=com".to_string()),
+        search_filter: Some("(&(objectClass=person)(uid={username}))".to_string()),
+        ..test_config()
+    }
+}
+
+/// A search-mode plugin whose transport is switched to plain so the scripted
+/// in-memory peer can answer without a TLS handshake.
+fn search_auth(config: LdapAuthConfig) -> LdapAuth {
+    install_test_crypto_provider();
+    let mut auth = actual_ldap(&config).expect("search-mode plugin must build");
+    assert!(matches!(auth.bind_dn_plan, BindDnPlan::Search(_)));
+    auth.transport = LdapTransport::Plain;
+    auth
+}
+
+/// Peer that answers each request in turn with the next reply and records
+/// every request frame (including a trailing unbind, if any).
+fn scripted_conversation(auth: &LdapAuth, replies: Vec<Vec<u8>>) -> tokio::task::JoinHandle<Vec<Vec<u8>>> {
+    use edgion_ldap::codec::{frame_content_len, length_octets};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (client, mut peer) = tokio::io::duplex(64 * 1024);
+    auth.install_scripted_stream(client);
+    tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let mut replies = replies.into_iter();
+        loop {
+            let mut header = [0u8; 2];
+            if peer.read_exact(&mut header).await.is_err() {
+                return requests;
+            }
+            let Ok(extra) = length_octets(header[0], header[1]) else {
+                return requests;
+            };
+            let mut octets = vec![0u8; extra];
+            if peer.read_exact(&mut octets).await.is_err() {
+                return requests;
+            }
+            let Ok(len) = frame_content_len(header[1], &octets) else {
+                return requests;
+            };
+            let mut body = vec![0u8; len];
+            if peer.read_exact(&mut body).await.is_err() {
+                return requests;
+            }
+            requests.push([header.to_vec(), octets, body].concat());
+            if let Some(reply) = replies.next() {
+                let _ = peer.write_all(&reply).await;
+            }
+        }
+    })
+}
+
+fn search_plan(auth: &LdapAuth) -> &SearchPlan {
+    match &auth.bind_dn_plan {
+        BindDnPlan::Search(plan) => plan,
+        _ => panic!("search plan expected"),
+    }
+}
+
+async fn search_exchange(auth: &LdapAuth, username: &str, password: &str) -> Result<Option<String>, LdapAuthError> {
+    auth.ldap_bind(Exchange::Search {
+        plan: search_plan(auth),
+        service_password: "svc-pw",
+        username,
+        password,
+    })
+    .await
+}
+
+fn user_dn() -> &'static [u8] {
+    b"uid=bob,ou=staff,dc=example,dc=com"
+}
+
+#[tokio::test]
+async fn search_mode_success_returns_canonical_identity_and_binds_found_dn() {
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(
+        &auth,
+        vec![
+            bind_reply(1, 0),
+            [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+            bind_reply(3, 0),
+        ],
+    );
+    assert_eq!(
+        search_exchange(&auth, "BOB", "pw").await.unwrap().as_deref(),
+        Some("bob")
+    );
+    drop(auth);
+    let requests = peer.await.unwrap();
+    assert_eq!(requests.len(), 4, "service bind, search, user bind, unbind");
+    assert!(requests[0]
+        .windows(SERVICE_DN.len())
+        .any(|w| w == SERVICE_DN.as_bytes()));
+    assert!(requests[0].windows(6).any(|w| w == b"svc-pw"));
+    assert_eq!(requests[1][5], 0x63, "SearchRequest");
+    assert!(requests[1].windows(3).any(|w| w == b"BOB"));
+    assert!(requests[2].windows(user_dn().len()).any(|w| w == user_dn()));
+    assert_eq!(requests[3][5], 0x42, "UnbindRequest");
+}
+
+#[tokio::test]
+async fn search_mode_outcome_mapping() {
+    type Expect = fn(&Result<Option<String>, LdapAuthError>) -> bool;
+    let invalid: Expect = |r| matches!(r, Err(LdapAuthError::InvalidCredentials));
+    let search_failed: Expect = |r| matches!(r, Err(LdapAuthError::SearchFailed));
+    let cases: Vec<(&str, Vec<Vec<u8>>, Expect)> = vec![
+        ("not found", vec![bind_reply(1, 0), done_reply(2, 0)], invalid),
+        (
+            "two entries",
+            vec![
+                bind_reply(1, 0),
+                [
+                    entry_reply(2, b"uid=a,dc=example,dc=com", Some(b"a")),
+                    entry_reply(2, b"uid=b,dc=example,dc=com", Some(b"b")),
+                ]
+                .concat(),
+            ],
+            invalid,
+        ),
+        (
+            "size limit",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 4)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "no identity value",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), None), done_reply(2, 0)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "user wrong password",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+                bind_reply(3, 49),
+            ],
+            invalid,
+        ),
+        (
+            "user bind other rc",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+                bind_reply(3, 53),
+            ],
+            |r| matches!(r, Err(LdapAuthError::BindFailed)),
+        ),
+        ("service password rejected", vec![bind_reply(1, 49)], |r| {
+            matches!(r, Err(LdapAuthError::ServiceBindRejected))
+        }),
+        ("service bind other rc", vec![bind_reply(1, 1)], search_failed),
+        (
+            "referral result",
+            vec![bind_reply(1, 0), done_reply(2, 10)],
+            search_failed,
+        ),
+        (
+            "no such object",
+            vec![bind_reply(1, 0), done_reply(2, 32)],
+            search_failed,
+        ),
+        (
+            "unparsable returned dn",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, b"svc@example.com", Some(b"bob")), done_reply(2, 0)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "empty returned dn",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, b"", Some(b"bob")), done_reply(2, 0)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "identity with surrounding space",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), Some(b" admin")), done_reply(2, 0)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "multi-valued identity",
+            vec![
+                bind_reply(1, 0),
+                [entry_with_uids(2, user_dn(), &[b"a", b"b"]), done_reply(2, 0)].concat(),
+            ],
+            invalid,
+        ),
+        (
+            "too many references",
+            vec![
+                bind_reply(1, 0),
+                (0..=edgion_ldap::client::MAX_SEARCH_REFERENCES)
+                    .flat_map(|_| reference_reply(2))
+                    .collect(),
+            ],
+            search_failed,
+        ),
+    ];
+    for (name, replies, expect) in cases {
+        let auth = search_auth(search_config());
+        let peer = scripted_conversation(&auth, replies);
+        let result = search_exchange(&auth, "bob", "pw").await;
+        assert!(expect(&result), "{name}: {result:?}");
+        drop(auth);
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn found_service_dn_spellings_are_all_refused() {
+    for spelling in [
+        "2.5.4.3=svc,0.9.2342.19200300.100.1.25=example,dc=com",
+        "commonName=SVC,domainComponent=example,DC=com",
+        "cn=#0403737663,dc=example,dc=com",
+        "cn= svc ;dc=example;dc=com",
+    ] {
+        let auth = search_auth(search_config());
+        let peer = scripted_conversation(
+            &auth,
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, spelling.as_bytes(), Some(b"svc")), done_reply(2, 0)].concat(),
+            ],
+        );
+        let result = search_exchange(&auth, "svc", "guess").await;
+        assert!(matches!(result, Err(LdapAuthError::InvalidCredentials)), "{spelling}");
+        drop(auth);
+        let requests = peer.await.unwrap();
+        assert_eq!(requests.len(), 3, "{spelling}: no user bind");
+    }
+}
+
+#[tokio::test]
+async fn found_service_dn_is_uniform_401_without_user_bind() {
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(
+        &auth,
+        vec![
+            bind_reply(1, 0),
+            [
+                entry_reply(2, b"CN=svc, DC=example,DC=com", Some(b"svc")),
+                done_reply(2, 0),
+            ]
+            .concat(),
+        ],
+    );
+    assert!(matches!(
+        search_exchange(&auth, "svc", "guess").await,
+        Err(LdapAuthError::InvalidCredentials)
+    ));
+    drop(auth);
+    let requests = peer.await.unwrap();
+    // Service bind, search, then straight to unbind: no bind as the service DN.
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[2][5], 0x42);
+}
+
+#[tokio::test]
+async fn search_mode_injection_username_is_sent_as_raw_assertion_bytes() {
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 0), done_reply(2, 0)]);
+    let hostile = "*)(uid=*";
+    assert!(matches!(
+        search_exchange(&auth, hostile, "pw").await,
+        Err(LdapAuthError::InvalidCredentials)
+    ));
+    drop(auth);
+    let requests = peer.await.unwrap();
+    // The filter keeps its compiled shape: an AND of two equality items whose
+    // second assertion value is exactly the hostile username.
+    let filter = edgion_ldap::filter::SearchFilter::compile("(&(objectClass=person)(uid={username}))").unwrap();
+    let mut expected = Vec::new();
+    filter.encode(hostile.as_bytes(), &mut expected);
+    assert!(requests[1].windows(expected.len()).any(|w| w == expected.as_slice()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn search_mode_phase2_timeout() {
+    let auth = search_auth(LdapAuthConfig {
+        timeout: 1000,
+        ..search_config()
+    });
+    // The peer answers the service bind but never the search.
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 0)]);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), search_exchange(&auth, "bob", "pw")).await;
+    assert!(matches!(outcome, Ok(Err(LdapAuthError::Timeout))), "{outcome:?}");
+    drop(auth);
+    peer.abort();
+}
+
+async fn run_search_request(
+    auth: &LdapAuth,
+    header: &str,
+    status: u16,
+    configure: impl FnOnce(&mut crate::plugins::runtime::traits::session::MockPluginSession),
+) -> (PluginRunningResult, PluginLog) {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", header), ("x-credential-identifier", "admin")],
+    );
+    configure(&mut session);
+    if status != 200 {
+        session
+            .expect_write_response_header()
+            .withf(move |h, _| h.status.as_u16() == status)
+            .times(1)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+        session.expect_shutdown().times(1).returning(|| {});
+    }
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    let result = auth.run_request(&mut session, &mut log).await;
+    (result, log)
+}
+
+#[tokio::test]
+async fn search_mode_run_request_forwards_canonical_identity() {
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(
+        &auth,
+        vec![
+            bind_reply(1, 0),
+            [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+            bind_reply(3, 0),
+        ],
+    );
+    let header = ldap_header("BOB:pw");
+    let (result, _log) = run_search_request(&auth, &header, 200, |session| {
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Credential-Identifier" && value == "bob")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        session.expect_remove_request_header().times(1).returning(|_| Ok(()));
+    })
+    .await;
+    assert_eq!(result, PluginRunningResult::GoodNext);
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn search_mode_run_request_failure_statuses_and_tags() {
+    use metrics_util::debugging::DebuggingRecorder;
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+    // `edgion_ldap_auth_errors_total` value for one `kind` label.
+    let errors = |kind: &str| -> u64 {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| {
+                key.key().name() == crate::observe::metrics::registry::names::LDAP_AUTH_ERRORS_TOTAL
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "kind" && label.value() == kind)
+            })
+            .map(|(_, _, _, value)| match value {
+                metrics_util::debugging::DebugValue::Counter(count) => count,
+                _ => 0,
+            })
+            .sum()
+    };
+
+    // Wrong service password: generic 401 with a fixed tag.
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 49)]);
+    let (result, log) = run_search_request(&auth, &ldap_header("bob:pw"), 401, |_| {}).await;
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(log.contains("ldap service bind fail"), "{}", log.render_for_test());
+    assert_eq!(errors("service_bind_fail"), 1);
+    drop(auth);
+    peer.await.unwrap();
+
+    // Search failure: 503 with the fail-close dye.
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 0), done_reply(2, 32)]);
+    let (result, log) = run_search_request(&auth, &ldap_header("bob:pw"), 503, |session| {
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "ldap-unreachable")
+            .times(1)
+            .return_const(());
+    })
+    .await;
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(log.contains("ldap search fail"), "{}", log.render_for_test());
+    assert_eq!(errors("search_fail"), 1);
+    drop(auth);
+    peer.await.unwrap();
+
+    // Unknown user: the uniform credential tag.
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 0), done_reply(2, 0)]);
+    let (_, log) = run_search_request(&auth, &ldap_header("nobody:pw"), 401, |_| {}).await;
+    assert!(log.contains("Deny bad credential"), "{}", log.render_for_test());
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn search_mode_pre_io_rejections() {
+    // Unresolved service password: generic 401, no LDAP I/O.
+    let auth = search_auth(LdapAuthConfig {
+        resolved_bind_password: None,
+        ..search_config()
+    });
+    let peer = scripted_conversation(&auth, Vec::new());
+    let (result, log) = run_search_request(&auth, &ldap_header("bob:pw"), 401, |_| {}).await;
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(
+        log.contains("ldap service credential unavailable"),
+        "{}",
+        log.render_for_test()
+    );
+    drop(auth);
+    assert!(peer.await.unwrap().is_empty(), "no LDAP request");
+
+    // Over-long username: 401 before any I/O.
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, Vec::new());
+    let long = format!("{}:pw", "u".repeat(MAX_SEARCH_USERNAME_LEN + 1));
+    let (_, log) = run_search_request(&auth, &ldap_header(&long), 401, |_| {}).await;
+    assert!(log.contains("Deny bad username"), "{}", log.render_for_test());
+    drop(auth);
+    assert!(peer.await.unwrap().is_empty(), "no LDAP request");
+
+    // Exactly the cap still searches.
+    let auth = search_auth(search_config());
+    let peer = scripted_conversation(&auth, vec![bind_reply(1, 0), done_reply(2, 0)]);
+    let at_cap = "u".repeat(MAX_SEARCH_USERNAME_LEN);
+    let (_, log) = run_search_request(&auth, &ldap_header(&format!("{at_cap}:pw")), 401, |_| {}).await;
+    assert!(log.contains("Deny bad credential"), "{}", log.render_for_test());
+    drop(auth);
+    let requests = peer.await.unwrap();
+    // The long-form search request carries the full username.
+    assert!(requests[1].windows(at_cap.len()).any(|w| w == at_cap.as_bytes()));
+}
+
+#[test]
+fn constructor_runs_cold_validation() {
+    install_test_crypto_provider();
+    let plain_search = LdapAuthConfig {
+        ldaps: false,
+        start_tls: false,
+        ..search_config()
+    };
+    let error = actual_ldap(&plain_search)
+        .err()
+        .expect("plaintext search mode must not build");
+    assert!(error.contains("bindDn requires ldaps or startTls"), "{error}");
+}
+
+#[tokio::test]
+async fn anonymous_overwrites_spoofed_identity() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let auth = actual_ldap(&LdapAuthConfig {
+        anonymous: Some("guest".to_string()),
+        ..test_config()
+    })
+    .unwrap();
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-credential-identifier", "admin")]);
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Credential-Identifier" && value == "guest")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+}
+
+#[test]
+fn search_plan_time_limit_and_defaults() {
+    let auth = search_auth(LdapAuthConfig {
+        timeout: 1500,
+        search_base: None,
+        search_filter: None,
+        ..search_config()
+    });
+    let plan = search_plan(&auth);
+    assert_eq!(plan.time_limit_secs, 2);
+    assert_eq!(plan.base, "dc=example,dc=com");
+    assert_eq!(plan.attribute, "uid");
+    assert_eq!(plan.bind_dn, SERVICE_DN);
+    let huge = search_auth(LdapAuthConfig {
+        timeout: u64::MAX,
+        ..search_config()
+    });
+    assert_eq!(search_plan(&huge).time_limit_secs, i32::MAX as u32);
+}
+
+#[tokio::test(start_paused = true)]
+async fn input_only_rejections_apply_the_failure_delay() {
+    const DELAY_MS: u64 = 700;
+    // Control character (bind mode) and over-long username (search mode).
+    let control = actual_ldap(&LdapAuthConfig {
+        auth_failure_delay_ms: DELAY_MS,
+        ..test_config()
+    })
+    .unwrap();
+    let search = search_auth(LdapAuthConfig {
+        auth_failure_delay_ms: DELAY_MS,
+        ..search_config()
+    });
+    let long = format!("{}:pw", "u".repeat(MAX_SEARCH_USERNAME_LEN + 1));
+    for (auth, payload) in [(&control, "al\u{1}ice:pw".to_string()), (&search, long)] {
+        let peer = scripted_conversation(auth, Vec::new());
+        let started = tokio::time::Instant::now();
+        let (result, log) = run_search_request(auth, &ldap_header(&payload), 401, |_| {}).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny bad username"), "{}", log.render_for_test());
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(DELAY_MS),
+            "failure delay applied"
+        );
+        drop(peer);
+    }
+}
+
+// ── Group requirements ──────────────────────────────────────────────────
+
+const GROUP_DN: &str = "cn=gw-users,ou=groups,dc=example,dc=com";
+
+fn group_search_config() -> LdapAuthConfig {
+    LdapAuthConfig {
+        required_groups_any_of: Some(vec![format!(" {GROUP_DN} ")]),
+        ..search_config()
+    }
+}
+
+/// Replies for service bind, user search (one entry), user bind rc `user_rc`.
+fn found_then_user_bind(user_rc: u8) -> Vec<Vec<u8>> {
+    vec![
+        bind_reply(1, 0),
+        [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+        bind_reply(3, user_rc),
+    ]
+}
+
+#[tokio::test]
+async fn group_member_rebinds_as_service_and_checks_base_entry() {
+    let auth = search_auth(group_search_config());
+    let mut replies = found_then_user_bind(0);
+    replies.push(bind_reply(4, 0));
+    replies.push([entry_reply(5, user_dn(), None), done_reply(5, 0)].concat());
+    let peer = scripted_conversation(&auth, replies);
+    let result = search_exchange(&auth, "bob", "pw").await;
+    assert_eq!(result.unwrap().as_deref(), Some("bob"));
+    drop(auth);
+    let requests = peer.await.unwrap();
+    // service bind, search, user bind, service re-bind, group search, unbind
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3]
+        .windows(SERVICE_DN.len())
+        .any(|w| w == SERVICE_DN.as_bytes()));
+    assert!(requests[3].windows(6).any(|w| w == b"svc-pw"));
+    assert_eq!(requests[4][5], 0x63, "SearchRequest");
+    // Base = the found DN, baseObject scope, sizeLimit 1, attribute 1.1, trimmed group DN.
+    let base = [&[0x04, user_dn().len() as u8][..], user_dn()].concat();
+    let at = requests[4]
+        .windows(base.len())
+        .position(|w| w == base.as_slice())
+        .unwrap()
+        + base.len();
+    assert_eq!(
+        &requests[4][at..at + 9],
+        &[0x0a, 0x01, 0x00, 0x0a, 0x01, 0x00, 0x02, 0x01, 0x01]
+    );
+    assert!(requests[4].windows(GROUP_DN.len()).any(|w| w == GROUP_DN.as_bytes()));
+    assert!(requests[4].ends_with(&[0x30, 0x05, 0x04, 0x03, b'1', b'.', b'1']));
+    assert_eq!(requests[5][5], 0x42, "UnbindRequest");
+}
+
+#[tokio::test]
+async fn wrong_password_never_reaches_the_group_check() {
+    let auth = search_auth(group_search_config());
+    let peer = scripted_conversation(&auth, found_then_user_bind(49));
+    assert!(matches!(
+        search_exchange(&auth, "bob", "wrong").await,
+        Err(LdapAuthError::InvalidCredentials)
+    ));
+    drop(auth);
+    let requests = peer.await.unwrap();
+    // service bind, search, user bind, unbind: no re-bind, no group search.
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[3][5], 0x42, "UnbindRequest");
+}
+
+#[tokio::test]
+async fn group_check_outcome_mapping() {
+    type Expect = fn(&Result<Option<String>, LdapAuthError>) -> bool;
+    let not_member: Expect = |r| matches!(r, Err(LdapAuthError::NotInRequiredGroup));
+    let search_failed: Expect = |r| matches!(r, Err(LdapAuthError::SearchFailed));
+    let cases: Vec<(&str, Vec<Vec<u8>>, Expect)> = vec![
+        ("no entry", vec![bind_reply(4, 0), done_reply(5, 0)], not_member),
+        ("size limit", vec![bind_reply(4, 0), done_reply(5, 4)], not_member),
+        ("re-bind rejected", vec![bind_reply(4, 49)], |r| {
+            matches!(r, Err(LdapAuthError::ServiceBindRejected))
+        }),
+        ("re-bind other rc", vec![bind_reply(4, 1)], search_failed),
+        (
+            "re-bind protocol error (wrong message id)",
+            vec![bind_reply(9, 0)],
+            search_failed,
+        ),
+        (
+            "second entry",
+            vec![
+                bind_reply(4, 0),
+                [entry_reply(5, user_dn(), None), entry_reply(5, user_dn(), None)].concat(),
+            ],
+            not_member,
+        ),
+        (
+            "group frame protocol error (wrong message id)",
+            vec![bind_reply(4, 0), done_reply(9, 0)],
+            search_failed,
+        ),
+        (
+            "no such object",
+            vec![bind_reply(4, 0), done_reply(5, 32)],
+            search_failed,
+        ),
+        ("referral", vec![bind_reply(4, 0), done_reply(5, 10)], search_failed),
+        (
+            "too many references",
+            vec![
+                bind_reply(4, 0),
+                (0..=edgion_ldap::client::MAX_SEARCH_REFERENCES)
+                    .flat_map(|_| reference_reply(5))
+                    .collect(),
+            ],
+            search_failed,
+        ),
+    ];
+    for (name, tail, expect) in cases {
+        let auth = search_auth(group_search_config());
+        let mut replies = found_then_user_bind(0);
+        replies.extend(tail);
+        let peer = scripted_conversation(&auth, replies);
+        let result = search_exchange(&auth, "bob", "pw").await;
+        assert!(expect(&result), "{name}: {result:?}");
+        drop(auth);
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn group_rebind_timeout() {
+    let auth = search_auth(LdapAuthConfig {
+        timeout: 1000,
+        ..group_search_config()
+    });
+    // The peer never answers the service re-bind.
+    let peer = scripted_conversation(&auth, found_then_user_bind(0));
+    let outcome = tokio::time::timeout(Duration::from_secs(10), search_exchange(&auth, "bob", "pw")).await;
+    assert!(matches!(outcome, Ok(Err(LdapAuthError::Timeout))), "{outcome:?}");
+    drop(auth);
+    peer.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn group_check_timeout() {
+    let auth = search_auth(LdapAuthConfig {
+        timeout: 1000,
+        ..group_search_config()
+    });
+    // The peer answers the re-bind but never the group search.
+    let mut replies = found_then_user_bind(0);
+    replies.push(bind_reply(4, 0));
+    let peer = scripted_conversation(&auth, replies);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), search_exchange(&auth, "bob", "pw")).await;
+    assert!(matches!(outcome, Ok(Err(LdapAuthError::Timeout))), "{outcome:?}");
+    drop(auth);
+    peer.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn not_in_group_is_403_without_identity_and_with_delay() {
+    const DELAY_MS: u64 = 300;
+    let auth = search_auth(LdapAuthConfig {
+        auth_failure_delay_ms: DELAY_MS,
+        ..group_search_config()
+    });
+    let mut replies = found_then_user_bind(0);
+    replies.push(bind_reply(4, 0));
+    replies.push(done_reply(5, 0));
+    let peer = scripted_conversation(&auth, replies);
+    let started = tokio::time::Instant::now();
+    // Status 200 here means "no self-written response": the 403 is an ErrResponse.
+    // No set_request_header expectation: any identity write panics the mock.
+    let (result, log) = run_search_request(&auth, &ldap_header("bob:pw"), 200, |_| {}).await;
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(b"403 Forbidden")),
+        }
+    );
+    assert!(log.contains("Deny not in required group"), "{}", log.render_for_test());
+    assert!(started.elapsed() >= Duration::from_millis(DELAY_MS));
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[test]
+fn group_filter_is_built_from_trimmed_config() {
+    let auth = search_auth(LdapAuthConfig {
+        group_attribute: " memberOf ".to_string(),
+        required_groups_all_of: Some(vec![" cn=a,dc=x ".to_string()]),
+        nested_groups: true,
+        ..group_search_config()
+    });
+    let groups = search_plan(&auth).groups.as_ref().expect("group filter");
+    let expected = SearchFilter::group_requirement("memberOf", &[GROUP_DN], &["cn=a,dc=x"], true).unwrap();
+    assert_eq!(groups, &expected);
+    assert!(search_plan(&search_auth(search_config())).groups.is_none());
 }

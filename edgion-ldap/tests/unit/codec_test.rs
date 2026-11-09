@@ -137,6 +137,7 @@ fn expect_and_skip_stay_inside_their_container() {
     assert!(outer.is_empty());
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn writer_round_trips() {
     for value in [0, 1, 127, 128, 255, 256, 65_535, u32::MAX] {

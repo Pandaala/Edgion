@@ -226,3 +226,171 @@ async fn long_form_non_minimal_outer_length_accepted() {
     assert_eq!(session.simple_bind("cn=a", b"pw").await.unwrap().result_code, 0);
     task.await.unwrap();
 }
+
+// ── Search mode ─────────────────────────────────────────────────────────
+
+fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    assert!(content.len() < 0x80);
+    let mut out = vec![tag, content.len() as u8];
+    out.extend_from_slice(content);
+    out
+}
+
+fn entry(id: u8, dn: &[u8], uid: Option<&[u8]>) -> Vec<u8> {
+    let attributes = uid
+        .map(|value| tlv(0x30, &[tlv(0x04, b"uid"), tlv(0x31, &tlv(0x04, value))].concat()))
+        .unwrap_or_default();
+    let body = [tlv(0x04, dn), tlv(0x30, &attributes)].concat();
+    tlv(0x30, &[tlv(0x02, &[id]), tlv(0x64, &body)].concat())
+}
+
+fn reference(id: u8) -> Vec<u8> {
+    tlv(0x30, &[tlv(0x02, &[id]), tlv(0x73, &tlv(0x04, b"ldap://x/"))].concat())
+}
+
+fn done(id: u8, rc: u8) -> Vec<u8> {
+    tlv(
+        0x30,
+        &[tlv(0x02, &[id]), tlv(0x65, &[0x0a, 0x01, rc, 0x04, 0x00, 0x04, 0x00])].concat(),
+    )
+}
+
+async fn search(reply: Vec<u8>) -> (Result<Option<FoundEntry>, Error>, Vec<u8>) {
+    let (client, peer) = duplex(64 * 1024);
+    let task = answer_once(peer, reply);
+    let mut session = BindSession::new(client);
+    let filter = SearchFilter::compile("(uid={username})").unwrap();
+    let result = session
+        .search_unique("dc=x", Scope::Subtree, &filter, b"bob", "uid", 5)
+        .await;
+    let (_, request) = task.await.unwrap();
+    (result, request)
+}
+
+#[tokio::test]
+async fn search_one_entry_is_found() {
+    let reply = [entry(1, b"uid=bob,dc=x", Some(b"bob")), done(1, 0)].concat();
+    let (result, request) = search(reply).await;
+    assert_eq!(
+        result.unwrap(),
+        Some(FoundEntry {
+            dn: "uid=bob,dc=x".to_string(),
+            identity: Some("bob".to_string())
+        })
+    );
+    assert_eq!(request[0], 0x30);
+    assert!(request.windows(3).any(|window| window == b"bob"));
+}
+
+#[tokio::test]
+async fn search_none_cases() {
+    for reply in [
+        done(1, 0),
+        [entry(1, b"uid=a,dc=x", Some(b"a")), entry(1, b"uid=b,dc=x", Some(b"b"))].concat(),
+        [entry(1, b"uid=a,dc=x", Some(b"a")), done(1, 4)].concat(),
+        done(1, 4),
+    ] {
+        let (result, _) = search(reply).await;
+        assert_eq!(result.unwrap(), None);
+    }
+}
+
+#[tokio::test]
+async fn entry_with_references_is_found() {
+    let reply = [
+        reference(1),
+        entry(1, b"uid=bob,dc=x", Some(b"bob")),
+        reference(1),
+        done(1, 0),
+    ]
+    .concat();
+    let (result, _) = search(reply).await;
+    assert_eq!(result.unwrap().map(|found| found.dn), Some("uid=bob,dc=x".to_string()));
+
+    // Exactly the cap is still accepted.
+    let mut reply: Vec<u8> = (0..MAX_SEARCH_REFERENCES).flat_map(|_| reference(1)).collect();
+    reply.extend(entry(1, b"uid=bob,dc=x", Some(b"bob")));
+    reply.extend(done(1, 0));
+    let (result, _) = search(reply).await;
+    assert!(result.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn search_errors() {
+    let too_many: Vec<u8> = (0..=MAX_SEARCH_REFERENCES).flat_map(|_| reference(1)).collect();
+    let (result, _) = search(too_many).await;
+    assert!(matches!(result, Err(Error::TooManyReferences)));
+
+    let (result, _) = search(done(1, 32)).await;
+    assert!(matches!(result, Err(Error::SearchFailed(32))));
+
+    let (result, _) = search([entry(1, b"", Some(b"bob")), done(1, 0)].concat()).await;
+    assert!(matches!(result, Err(Error::EmptyDn)));
+
+    let (result, _) = search(done(2, 0)).await;
+    assert!(matches!(
+        result,
+        Err(Error::UnexpectedMessageId { expected: 1, actual: 2 })
+    ));
+}
+
+#[tokio::test]
+async fn search_mode_message_ids_in_one_session() {
+    let (client, mut peer) = duplex(64 * 1024);
+    let task = tokio::spawn(async move {
+        let mut ids = Vec::new();
+        for reply in [
+            bind_response(1, 0),
+            [entry(2, b"uid=bob,dc=x", Some(b"bob")), done(2, 0)].concat(),
+            bind_response(3, 0),
+        ] {
+            let request = read_request(&mut peer).await;
+            ids.push(request[4]);
+            peer.write_all(&reply).await.unwrap();
+        }
+        let request = read_request(&mut peer).await;
+        ids.push(request[4]);
+        ids
+    });
+    let mut session = BindSession::new(client);
+    let filter = SearchFilter::compile("(uid={username})").unwrap();
+    assert_eq!(session.simple_bind("cn=svc,dc=x", b"svc").await.unwrap().result_code, 0);
+    let found = session
+        .search_unique("dc=x", Scope::Subtree, &filter, b"bob", "uid", 5)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.simple_bind(&found.dn, b"pw").await.unwrap().result_code, 0);
+    session.unbind().await.unwrap();
+    assert_eq!(task.await.unwrap(), vec![1, 2, 3, 4]);
+}
+
+async fn group_check(reply: Vec<u8>) -> (Result<Option<FoundEntry>, Error>, Vec<u8>) {
+    let (client, peer) = duplex(64 * 1024);
+    let task = answer_once(peer, reply);
+    let mut session = BindSession::new(client);
+    let filter = SearchFilter::group_requirement("memberOf", &["cn=g,dc=x"], &[], false).unwrap();
+    let result = session
+        .search_unique("uid=bob,dc=x", Scope::Base, &filter, b"", "1.1", 5)
+        .await;
+    let (_, request) = task.await.unwrap();
+    (result, request)
+}
+
+#[tokio::test]
+async fn base_scope_group_check_match_and_no_match() {
+    let (result, request) = group_check([entry(1, b"uid=bob,dc=x", None), done(1, 0)].concat()).await;
+    assert_eq!(result.unwrap().map(|found| found.dn), Some("uid=bob,dc=x".to_string()));
+    // baseObject scope (ENUMERATED 0) and sizeLimit 1 follow the base DN.
+    let base = tlv(0x04, b"uid=bob,dc=x");
+    let at = request.windows(base.len()).position(|w| w == base.as_slice()).unwrap() + base.len();
+    assert_eq!(
+        &request[at..at + 9],
+        &[0x0a, 0x01, 0x00, 0x0a, 0x01, 0x00, 0x02, 0x01, 0x01]
+    );
+
+    let (result, _) = group_check(done(1, 0)).await;
+    assert_eq!(result.unwrap(), None);
+    let (result, _) = group_check(done(1, 32)).await;
+    assert!(matches!(result, Err(Error::SearchFailed(32))));
+}

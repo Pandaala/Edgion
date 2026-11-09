@@ -1,4 +1,5 @@
-//! One LDAP bind exchange over an already-connected stream.
+//! One LDAP exchange (bind, search, StartTLS, unbind) over an
+//! already-connected stream.
 //!
 //! The caller owns dialing, egress admission and TLS. [`BindSession`] writes
 //! requests and reads exactly one bounded frame per response.
@@ -6,11 +7,34 @@
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::codec::{frame_content_len, length_octets};
+use crate::filter::SearchFilter;
 use crate::proto::{
-    decode_bind_response, decode_extended_response, encode_bind_request, encode_start_tls_request,
-    encode_unbind_request, LdapResult,
+    decode_bind_response, decode_extended_response, decode_search_frame, encode_bind_request, encode_search_request,
+    encode_start_tls_request, encode_unbind_request, LdapResult, SearchFrame,
 };
 use crate::Error;
+
+/// Maximum continuation references accepted in one search.
+pub const MAX_SEARCH_REFERENCES: usize = 8;
+
+/// Search scope; the size limit follows from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The whole subtree under the base (sizeLimit 2: enough to see a second match).
+    Subtree,
+    /// Only the base entry itself (sizeLimit 1).
+    Base,
+}
+
+/// The single entry a search found.
+///
+/// `identity` is the entry's single value of the requested attribute, when
+/// it has exactly one non-empty, control-free value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundEntry {
+    pub dn: String,
+    pub identity: Option<String>,
+}
 
 /// Longest frame header: identifier, initial length octet, four length octets.
 const MAX_FRAME_HEADER: usize = 6;
@@ -22,7 +46,7 @@ const MAX_FRAME_HEADER: usize = 6;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageId(u32);
 
-/// Bind, unbind and StartTLS over `S`.
+/// Bind, search, unbind and StartTLS over `S`.
 ///
 /// **StartTLS invariant:** a response read consumes exactly the bytes of one
 /// frame and never reads ahead (no buffered reader, no speculative read).
@@ -69,6 +93,60 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
             return Err(Error::StartTlsRejected(result.result_code));
         }
         Ok((self.stream, MessageId(self.next_id)))
+    }
+
+    /// Search `base` with `scope` and `filter`, inserting `username` as raw
+    /// assertion bytes (ignored by a filter without a slot), and return the
+    /// entry only when exactly one entry matched and the search completed with
+    /// success. `attribute` is the one attribute requested (`1.1` requests
+    /// none).
+    ///
+    /// Returns `Ok(None)` for no entry, a second entry, or sizeLimitExceeded;
+    /// callers must not tell these apart. After a second entry the method
+    /// returns without reading the rest of the response, so the session
+    /// holds unread frames: only `unbind` and drop it afterwards.
+    pub async fn search_unique(
+        &mut self,
+        base: &str,
+        scope: Scope,
+        filter: &SearchFilter,
+        username: &[u8],
+        attribute: &str,
+        time_limit_secs: u32,
+    ) -> Result<Option<FoundEntry>, Error> {
+        const SIZE_LIMIT_EXCEEDED: u32 = 4;
+        let id = self
+            .send(|id| encode_search_request(id, base, scope, filter, username, attribute, time_limit_secs))
+            .await?;
+        let mut found: Option<FoundEntry> = None;
+        let mut references = 0usize;
+        loop {
+            self.read_frame().await?;
+            match decode_search_frame(&self.buf, id, attribute)? {
+                SearchFrame::Entry { dn, identity } => {
+                    if dn.is_empty() {
+                        return Err(Error::EmptyDn);
+                    }
+                    if found.is_some() {
+                        return Ok(None);
+                    }
+                    found = Some(FoundEntry { dn, identity });
+                }
+                SearchFrame::Reference => {
+                    references += 1;
+                    if references > MAX_SEARCH_REFERENCES {
+                        return Err(Error::TooManyReferences);
+                    }
+                }
+                SearchFrame::Done(result) => {
+                    return match result.result_code {
+                        0 => Ok(found),
+                        SIZE_LIMIT_EXCEEDED => Ok(None),
+                        code => Err(Error::SearchFailed(code)),
+                    };
+                }
+            }
+        }
     }
 
     /// Send an UnbindRequest, then shut down the write side (on a TLS stream

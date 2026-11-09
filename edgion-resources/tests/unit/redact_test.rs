@@ -59,7 +59,7 @@ fn credential_containers_hide_debug_but_preserve_transport() {
     );
     check_config!(
         LdapAuthConfig,
-        json!({"resolvedCaCertificates": [secret], "resolvedClientCertificate": secret})
+        json!({"resolvedCaCertificates": [secret], "resolvedClientCertificate": secret, "resolvedBindPassword": "private-bind-password"})
     );
     check_config!(HeaderCertAuthConfig, json!({"resolvedCaSecrets": [secret]}));
     check_config!(CsrfConfig, json!({"resolvedKey": "private-key"}));

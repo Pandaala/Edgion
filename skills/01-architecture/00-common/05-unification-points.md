@@ -354,6 +354,11 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   reflected-output fields.
   The [runtime policy matrix](../02-gateway/request-template-runtime.md) defines
   missing values, Secret capability/provenance, escaping, and output budgets.
+- **Exemption — LDAP `searchFilter` `{username}`**: not a request-variable
+  template. The filter is compiled once into a BER op stream and the
+  authenticated-input username is inserted as raw assertion bytes, never
+  rendered into text (rendering would reintroduce filter injection). See
+  `skills/04-review/ldap-auth/regression-guards/search-mode-identity-and-filter.md`.
 
 ### 12. Duration config fields — Two sanctioned styles, one parser
 

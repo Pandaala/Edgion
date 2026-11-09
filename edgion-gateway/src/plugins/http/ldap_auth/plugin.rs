@@ -25,7 +25,8 @@ use edgion_common::link_sys_core::outbound_tls::{
     resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection, EffectiveCa,
     GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection,
 };
-use edgion_ldap::BindSession;
+use edgion_ldap::filter::SearchFilter;
+use edgion_ldap::{BindSession, Scope};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
@@ -68,7 +69,45 @@ enum LdapTransport {
 
 enum BindDnPlan {
     Template(String),
-    AttributeBase { attribute: String, base_dn: String },
+    AttributeBase {
+        attribute: String,
+        base_dn: String,
+    },
+    /// Search mode: service bind, single-entry search, user bind.
+    Search(SearchPlan),
+}
+
+/// Search-mode settings built once per plugin generation.
+struct SearchPlan {
+    bind_dn: String,
+    /// `bind_dn` normalized once for the service-account guard.
+    service_dn: edgion_ldap::dn::NormalizedDn,
+    /// Resolved service-account password; `None` when the Secret is unavailable.
+    password: Option<String>,
+    base: String,
+    filter: SearchFilter,
+    /// Identity attribute requested in the search and forwarded upstream.
+    attribute: String,
+    time_limit_secs: u32,
+    /// Pre-encoded group requirement, checked after a successful user bind.
+    groups: Option<SearchFilter>,
+}
+
+/// Longest username accepted in search mode (bounds the outbound request).
+const MAX_SEARCH_USERNAME_LEN: usize = 1024;
+
+/// What phase 2 of an exchange does on the established session.
+enum Exchange<'a> {
+    /// Bind as `dn` with the client's password.
+    Bind { dn: &'a str, password: &'a str },
+    /// Bind as the service account, find the user's entry, bind as it and,
+    /// with group requirements, re-bind as the service account and check them.
+    Search {
+        plan: &'a SearchPlan,
+        service_password: &'a str,
+        username: &'a str,
+        password: &'a str,
+    },
 }
 
 struct AuthPolicy {
@@ -89,6 +128,13 @@ enum LdapAuthError {
     BindFailed,
     /// Outbound TLS handshake rejected by SAN pinning. Carries the verifier's reason.
     TlsSanMismatch(String),
+    /// Search mode: the directory rejected the service-account credentials (rc 49).
+    ServiceBindRejected,
+    /// Search mode: the service bind or the search failed for another reason.
+    SearchFailed,
+    /// Search mode: the password was correct but the user is not in the
+    /// required groups.
+    NotInRequiredGroup,
 }
 
 /// Classify a TLS handshake error. `bind_over` performs both the implicit-TLS
@@ -157,6 +203,135 @@ async fn bind_phase<S: AsyncRead + AsyncWrite + Unpin>(
         0 => Ok(()),
         49 => Err(LdapAuthError::InvalidCredentials),
         _ => Err(LdapAuthError::BindFailed),
+    }
+}
+
+/// Run phase 2 of `exchange` on an established session. Search mode returns
+/// the entry's canonical identity to forward; bind mode returns `None` (the
+/// client-typed username is forwarded).
+async fn run_exchange<S: AsyncRead + AsyncWrite + Unpin>(
+    session: BindSession<S>,
+    budget: Duration,
+    exchange: Exchange<'_>,
+) -> Result<Option<String>, LdapAuthError> {
+    match exchange {
+        Exchange::Bind { dn, password } => bind_phase(session, budget, dn, password).await.map(|()| None),
+        Exchange::Search {
+            plan,
+            service_password,
+            username,
+            password,
+        } => search_phase(session, budget, plan, service_password, username, password)
+            .await
+            .map(Some),
+    }
+}
+
+/// Search-mode phase 2: service bind, single-entry search, user bind, with
+/// group requirements a service re-bind and a base-scope group check, then a
+/// best-effort unbind, all under one deadline. Returns the canonical identity.
+async fn search_phase<S: AsyncRead + AsyncWrite + Unpin>(
+    mut session: BindSession<S>,
+    budget: Duration,
+    plan: &SearchPlan,
+    service_password: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, LdapAuthError> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let outcome = search_steps(&mut session, deadline, plan, service_password, username, password).await;
+    let _ = tokio::time::timeout_at(deadline, session.unbind()).await;
+    outcome
+}
+
+async fn search_steps<S: AsyncRead + AsyncWrite + Unpin>(
+    session: &mut BindSession<S>,
+    deadline: tokio::time::Instant,
+    plan: &SearchPlan,
+    service_password: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, LdapAuthError> {
+    service_bind(session, deadline, plan, service_password).await?;
+    let found = tokio::time::timeout_at(
+        deadline,
+        session.search_unique(
+            &plan.base,
+            Scope::Subtree,
+            &plan.filter,
+            username.as_bytes(),
+            &plan.attribute,
+            plan.time_limit_secs,
+        ),
+    )
+    .await
+    .map_err(|_| LdapAuthError::Timeout)?
+    .map_err(|error| match error {
+        // An entry the user bind cannot use is a per-user outcome.
+        edgion_ldap::Error::EmptyDn => LdapAuthError::InvalidCredentials,
+        _ => LdapAuthError::SearchFailed,
+    })?;
+    // No entry, several entries, or sizeLimitExceeded: the uniform credential path.
+    let Some(found) = found else {
+        return Err(LdapAuthError::InvalidCredentials);
+    };
+    // A DN this parser cannot read cannot be compared with `bindDn`: deny it
+    // on the uniform path (fail closed, without revealing that it exists).
+    // Never bind as the service account on behalf of a client either: that
+    // would let clients log in as it or lock it out with wrong passwords.
+    match edgion_ldap::dn::normalize(&found.dn) {
+        Some(found_dn) if found_dn != plan.service_dn => {}
+        _ => return Err(LdapAuthError::InvalidCredentials),
+    }
+    let Some(identity) = found.identity else {
+        return Err(LdapAuthError::InvalidCredentials);
+    };
+    let rc = tokio::time::timeout_at(deadline, session.simple_bind(&found.dn, password.as_bytes()))
+        .await
+        .map_err(|_| LdapAuthError::Timeout)?
+        .map_err(|_| LdapAuthError::BindFailed)?
+        .result_code;
+    match (rc, &plan.groups) {
+        (0, None) => Ok(identity),
+        // Group checks run only after the password is verified, so no group
+        // outcome (403, a failing or slow group search) is observable without it.
+        (0, Some(groups)) => {
+            service_bind(session, deadline, plan, service_password).await?;
+            let member = tokio::time::timeout_at(
+                deadline,
+                session.search_unique(&found.dn, Scope::Base, groups, b"", "1.1", plan.time_limit_secs),
+            )
+            .await
+            .map_err(|_| LdapAuthError::Timeout)?
+            .map_err(|_| LdapAuthError::SearchFailed)?;
+            match member {
+                Some(_) => Ok(identity),
+                None => Err(LdapAuthError::NotInRequiredGroup),
+            }
+        }
+        (49, _) => Err(LdapAuthError::InvalidCredentials),
+        _ => Err(LdapAuthError::BindFailed),
+    }
+}
+
+/// Bind as the service account: rc 49 is a rejected service password (the
+/// generic-401 path), any other failure a search-mode dependency error.
+async fn service_bind<S: AsyncRead + AsyncWrite + Unpin>(
+    session: &mut BindSession<S>,
+    deadline: tokio::time::Instant,
+    plan: &SearchPlan,
+    service_password: &str,
+) -> Result<(), LdapAuthError> {
+    let service = tokio::time::timeout_at(
+        deadline,
+        session.simple_bind(&plan.bind_dn, service_password.as_bytes()),
+    )
+    .await
+    .map_err(|_| LdapAuthError::Timeout)?;
+    match service.map(|result| result.result_code) {
+        Ok(0) => Ok(()),
+        Ok(49) => Err(LdapAuthError::ServiceBindRejected),
+        _ => Err(LdapAuthError::SearchFailed),
     }
 }
 
@@ -365,11 +540,23 @@ impl LdapAuth {
         let EdgionPlugin::LdapAuth(config) = entry.config() else {
             return Err("LdapAuth TLS configuration error: invalid owning TLS reference".into());
         };
+        // Cold validation in the constructor too: search mode must never send
+        // the service password over a transport the runtime gate would reject.
+        if let Some(error) = config.get_validation_error() {
+            return Err(format!("LdapAuth configuration error: {error}"));
+        }
         let timeout = Duration::from_millis(config.timeout);
 
+        let mut verification_disabled = false;
         let tls_config = if let Some(proof) = proof {
             let resolved = resolve_validated_outbound_tls(&proof, true, defaults)
                 .map_err(|e| format!("LdapAuth TLS configuration error: {e:?}"))?;
+            verification_disabled = !resolved.verify
+                && resolved
+                    .san
+                    .as_ref()
+                    .and_then(|san| san.subject_alt_names.as_ref())
+                    .is_none_or(|sans| sans.is_empty());
 
             // M4: when verify=false the resolver drops client_identity. Warn the
             // operator that their clientCertificateRef is not being used.
@@ -409,9 +596,52 @@ impl LdapAuth {
             }
         };
 
-        let bind_dn_plan = match &config.bind_dn_template {
-            Some(template) => BindDnPlan::Template(template.clone()),
-            None => BindDnPlan::AttributeBase {
+        let bind_dn_plan = match (&config.bind_dn, &config.bind_dn_template) {
+            (Some(bind_dn), _) => {
+                let filter = SearchFilter::compile(&config.effective_search_filter())
+                    .map_err(|_| "LdapAuth configuration error: searchFilter is invalid".to_string())?;
+                let service_dn = edgion_ldap::dn::normalize(bind_dn)
+                    .ok_or_else(|| "LdapAuth configuration error: bindDn is not a valid DN".to_string())?;
+                let groups = if config.has_group_requirements() {
+                    fn trimmed(groups: &Option<Vec<String>>) -> Vec<&str> {
+                        groups.iter().flatten().map(|group| group.trim()).collect()
+                    }
+                    let any_of = trimmed(&config.required_groups_any_of);
+                    let all_of = trimmed(&config.required_groups_all_of);
+                    let filter = SearchFilter::group_requirement(
+                        config.group_attribute.trim(),
+                        &any_of,
+                        &all_of,
+                        config.nested_groups,
+                    )
+                    .map_err(|_| "LdapAuth configuration error: required groups are invalid".to_string())?;
+                    Some(filter)
+                } else {
+                    None
+                };
+                if verification_disabled {
+                    tracing::warn!(
+                        component = "ldap_auth",
+                        "search mode with TLS verification disabled by the inherited default: the service-account password is exposed to an active man-in-the-middle"
+                    );
+                }
+                BindDnPlan::Search(SearchPlan {
+                    bind_dn: bind_dn.trim().to_string(),
+                    service_dn,
+                    password: config
+                        .resolved_bind_password
+                        .clone()
+                        .filter(|password| !password.is_empty()),
+                    base: config.search_base.clone().unwrap_or_else(|| config.base_dn.clone()),
+                    filter,
+                    attribute: config.attribute.trim().to_string(),
+                    // Within `i32::MAX`, so the cast cannot truncate.
+                    time_limit_secs: config.timeout.div_ceil(1000).min(i32::MAX as u64) as u32,
+                    groups,
+                })
+            }
+            (None, Some(template)) => BindDnPlan::Template(template.clone()),
+            (None, None) => BindDnPlan::AttributeBase {
                 attribute: config.attribute.clone(),
                 base_dn: config.base_dn.clone(),
             },
@@ -499,24 +729,26 @@ impl LdapAuth {
         match &self.bind_dn_plan {
             BindDnPlan::Template(template) => Ok(template.replace("{username}", escaped.as_ref())),
             BindDnPlan::AttributeBase { attribute, base_dn } => Ok(format!("{}={},{}", attribute, escaped, base_dn)),
+            // Search mode finds the DN in the directory; it never builds one.
+            BindDnPlan::Search(_) => Err("search mode builds no bind DN"),
         }
     }
 
-    async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
+    async fn ldap_bind(&self, exchange: Exchange<'_>) -> Result<Option<String>, LdapAuthError> {
         #[cfg(test)]
         if let Some(stream) = self.take_scripted_stream() {
-            return self.bind_over(async { Ok(stream) }, bind_dn, password).await;
+            return self.bind_over(async { Ok(stream) }, exchange).await;
         }
         let dial = connect_admitted_ldap_tcp(&self.egress, &self.ldap_host, self.ldap_port);
-        self.bind_over(dial, bind_dn, password).await
+        self.bind_over(dial, exchange).await
     }
 
     /// Run the bind exchange over the stream produced by `dial`.
     ///
     /// Two deadlines, each `self.timeout`: phase 1 covers dialing, StartTLS
-    /// and the TLS handshake; phase 2 covers the bind and the best-effort
-    /// unbind (see `bind_phase`).
-    async fn bind_over<S, D>(&self, dial: D, bind_dn: &str, password: &str) -> Result<(), LdapAuthError>
+    /// and the TLS handshake; phase 2 covers the exchange (`bind_phase` or
+    /// `search_phase`) and the best-effort unbind.
+    async fn bind_over<S, D>(&self, dial: D, exchange: Exchange<'_>) -> Result<Option<String>, LdapAuthError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
         D: Future<Output = Result<S, LdapAuthError>> + Send,
@@ -526,7 +758,7 @@ impl LdapAuth {
                 let stream = tokio::time::timeout(self.timeout, dial)
                     .await
                     .map_err(|_| LdapAuthError::Timeout)??;
-                bind_phase(BindSession::new(stream), self.timeout, bind_dn, password).await
+                run_exchange(BindSession::new(stream), self.timeout, exchange).await
             }
             LdapTransport::Ldaps { connector, server_name } => {
                 let stream = tokio::time::timeout(self.timeout, async {
@@ -539,7 +771,7 @@ impl LdapAuth {
                 })
                 .await
                 .map_err(|_| LdapAuthError::Timeout)??;
-                bind_phase(BindSession::new(stream), self.timeout, bind_dn, password).await
+                run_exchange(BindSession::new(stream), self.timeout, exchange).await
             }
             LdapTransport::StartTls { connector, server_name } => {
                 let (stream, next_id) = tokio::time::timeout(self.timeout, async {
@@ -557,7 +789,7 @@ impl LdapAuth {
                 })
                 .await
                 .map_err(|_| LdapAuthError::Timeout)??;
-                bind_phase(BindSession::resume(stream, next_id), self.timeout, bind_dn, password).await
+                run_exchange(BindSession::resume(stream, next_id), self.timeout, exchange).await
             }
         }
     }
@@ -572,14 +804,25 @@ impl LdapAuth {
         self.scripted_stream.lock().take()
     }
 
-    fn apply_authenticated_headers(&self, session: &mut dyn PluginSession, username: &str) {
-        let _ = set_sensitive_request_header(session, &self.auth.credential_identifier_header, username);
-        let _ = session.remove_request_header(&self.auth.anonymous_header);
+    /// Write the authenticated identity, replacing any client-supplied value,
+    /// and clear the anonymous marker. A failure must deny the request:
+    /// otherwise a client-supplied identity header would reach the upstream.
+    fn apply_authenticated_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        identity: &str,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
+        set_sensitive_request_header(session, &self.auth.credential_identifier_header, identity)?;
+        session.remove_request_header(&self.auth.anonymous_header)
     }
 
-    fn apply_anonymous_headers(&self, session: &mut dyn PluginSession, anonymous_user: &str) {
-        let _ = set_sensitive_request_header(session, &self.auth.credential_identifier_header, anonymous_user);
-        let _ = set_sensitive_request_header(session, &self.auth.anonymous_header, "true");
+    fn apply_anonymous_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        anonymous_user: &str,
+    ) -> crate::plugins::runtime::PluginSessionResult<()> {
+        set_sensitive_request_header(session, &self.auth.credential_identifier_header, anonymous_user)?;
+        set_sensitive_request_header(session, &self.auth.anonymous_header, "true")
     }
 
     fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
@@ -599,7 +842,7 @@ impl LdapAuth {
         // (`write_response_header`) so the queued dye header op is drained
         // by that write. This is the single choke point for every
         // LDAP-unreachable fail-close branch (connection failed, TLS SAN
-        // mismatch, timeout, bind failure) — credential rejection
+        // mismatch, timeout, bind failure, search failure) — credential rejection
         // (`unauthorized`) never routes through here.
         session.record_outcome(DyeOutcome::FailClose, "ldap-unreachable");
         let _ = send_gateway_plain_error_response(
@@ -624,7 +867,10 @@ impl RequestFilter for LdapAuth {
             ParseAuthResult::Valid(credentials) => credentials,
             ParseAuthResult::Missing => {
                 if let Some(anon_user) = &self.auth.anonymous {
-                    self.apply_anonymous_headers(session, anon_user);
+                    if self.apply_anonymous_headers(session, anon_user).is_err() {
+                        plugin_log.push_err("identity header rejected");
+                        return self.unauthorized(session).await;
+                    }
                     self.hide_credentials_if_needed(session);
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
@@ -641,17 +887,66 @@ impl RequestFilter for LdapAuth {
             }
         };
 
-        let Ok(bind_dn) = self.build_bind_dn(credentials.username()) else {
+        // Control characters (including TAB and NUL) never form a valid
+        // identity: reject before any LDAP I/O so a directory that folds them
+        // away cannot authenticate a name the identity header cannot carry.
+        if credentials.username().chars().any(char::is_control) {
             drop(credentials);
             plugin_log.push("Deny bad username");
+            apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
             return self.unauthorized(session).await;
-        };
+        }
 
-        let bind_result = self.ldap_bind(&bind_dn, credentials.password()).await;
-        drop(bind_dn);
+        let bind_result = if let BindDnPlan::Search(plan) = &self.bind_dn_plan {
+            if credentials.username().len() > MAX_SEARCH_USERNAME_LEN {
+                drop(credentials);
+                plugin_log.push("Deny bad username");
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
+                return self.unauthorized(session).await;
+            }
+            // An unresolved service secret answers with the generic 401
+            // (design rule: misconfigured auth secrets never surface as 5xx)
+            // and is counted so the outage is alertable.
+            let Some(service_password) = plan.password.as_deref() else {
+                drop(credentials);
+                plugin_log.push_err("ldap service credential unavailable");
+                record_ldap_auth_error("service_bind_fail");
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
+                return self.unauthorized(session).await;
+            };
+            self.ldap_bind(Exchange::Search {
+                plan,
+                service_password,
+                username: credentials.username(),
+                password: credentials.password(),
+            })
+            .await
+        } else {
+            let Ok(bind_dn) = self.build_bind_dn(credentials.username()) else {
+                drop(credentials);
+                plugin_log.push("Deny bad username");
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
+                return self.unauthorized(session).await;
+            };
+            let result = self
+                .ldap_bind(Exchange::Bind {
+                    dn: &bind_dn,
+                    password: credentials.password(),
+                })
+                .await;
+            drop(bind_dn);
+            result
+        };
         match bind_result {
-            Ok(()) => {
-                self.apply_authenticated_headers(session, credentials.username());
+            Ok(identity) => {
+                // Search mode forwards the directory's canonical identity, not
+                // the client-typed alias that matched the filter.
+                let forwarded = identity.as_deref().unwrap_or(credentials.username());
+                if self.apply_authenticated_headers(session, forwarded).is_err() {
+                    drop(credentials);
+                    plugin_log.push_err("identity header rejected");
+                    return self.unauthorized(session).await;
+                }
                 self.hide_credentials_if_needed(session);
                 plugin_log.push_fmt("OK user {}", la![sensitive(credentials.username())]);
                 PluginRunningResult::GoodNext
@@ -693,6 +988,32 @@ impl RequestFilter for LdapAuth {
                 plugin_log.push_err("ldap bind fail");
                 record_ldap_auth_error("bind_fail");
                 self.service_unavailable(session).await
+            }
+            Err(LdapAuthError::ServiceBindRejected) => {
+                drop(credentials);
+                // Generic 401 for a misconfigured auth secret; the metric
+                // keeps the whole-plugin outage alertable.
+                plugin_log.push_err("ldap service bind fail");
+                record_ldap_auth_error("service_bind_fail");
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
+                self.unauthorized(session).await
+            }
+            Err(LdapAuthError::SearchFailed) => {
+                drop(credentials);
+                plugin_log.push_err("ldap search fail");
+                record_ldap_auth_error("search_fail");
+                self.service_unavailable(session).await
+            }
+            Err(LdapAuthError::NotInRequiredGroup) => {
+                drop(credentials);
+                // Authenticated but not authorized: reached only after the user
+                // bind succeeded, so it never reveals anything without the password.
+                plugin_log.push("Deny not in required group");
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
+                PluginRunningResult::ErrResponse {
+                    status: 403,
+                    body: Some(Bytes::from_static(b"403 Forbidden")),
+                }
             }
         }
     }

@@ -36,3 +36,52 @@ data:
     sn: Work
     uid: alice+work
     userPassword: plususer-pw
+
+    # Search-mode fixtures: `carol` lives outside ou=people, so no bind-DN template
+    # built from baseDn can reach her; `dup` exists in both OUs (ambiguous search).
+    dn: ou=staff,dc=example,dc=org
+    objectClass: organizationalUnit
+    ou: staff
+
+    dn: uid=carol,ou=staff,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Carol
+    sn: Staff
+    uid: carol
+    userPassword: carol-pw
+
+    dn: uid=dup,ou=people,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Dup People
+    sn: Dup
+    uid: dup
+    userPassword: dup-pw
+
+    dn: uid=dup,ou=staff,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Dup Staff
+    sn: Dup
+    uid: dup
+    userPassword: dup-pw
+
+    # Group-requirement fixtures (memberOf overlay, groupOfUniqueNames): carol is in
+    # gw-users and gw-admins; alice is in gw-users and gw-other; bob is in none.
+    dn: ou=groups,dc=example,dc=org
+    objectClass: organizationalUnit
+    ou: groups
+
+    dn: cn=gw-users,ou=groups,dc=example,dc=org
+    objectClass: groupOfUniqueNames
+    cn: gw-users
+    uniqueMember: uid=carol,ou=staff,dc=example,dc=org
+    uniqueMember: uid=alice,ou=people,dc=example,dc=org
+
+    dn: cn=gw-admins,ou=groups,dc=example,dc=org
+    objectClass: groupOfUniqueNames
+    cn: gw-admins
+    uniqueMember: uid=carol,ou=staff,dc=example,dc=org
+
+    dn: cn=gw-other,ou=groups,dc=example,dc=org
+    objectClass: groupOfUniqueNames
+    cn: gw-other
+    uniqueMember: uid=alice,ou=people,dc=example,dc=org

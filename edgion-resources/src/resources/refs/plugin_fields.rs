@@ -28,6 +28,7 @@ pub(super) enum Role {
     Jwe,
     OidcClient,
     OidcSession,
+    LdapBind,
     WasmAuth,
     WasmPull,
     Credential,
@@ -460,7 +461,10 @@ fn visit_fields<'a>(plugin: &'a EdgionPlugin, visitor: &mut impl FnMut(Atom<'a>)
             single(Role::OidcSession, config.session_secret_ref.as_ref(), visitor);
             tls(Some(&config.tls), None, visitor);
         }
-        EdgionPlugin::LdapAuth(config) => tls(Some(&config.tls), None, visitor),
+        EdgionPlugin::LdapAuth(config) => {
+            single(Role::LdapBind, config.bind_password_ref.as_ref(), visitor);
+            tls(Some(&config.tls), None, visitor);
+        }
         EdgionPlugin::ExtProc(config) => switched_tls(Some(&config.grpc_service.tls), visitor),
         EdgionPlugin::Wasm(config) => {
             visitor(Atom::Presence(Role::WasmAuth, config.source.fetch.is_some()));
@@ -1309,6 +1313,9 @@ impl EntryReferences<'_> {
     }
     pub fn oidc_session_secret(&self) -> Option<ReferenceToken<'_>> {
         self.single(Role::OidcSession)
+    }
+    pub fn ldap_bind_secret(&self) -> Option<ReferenceToken<'_>> {
+        self.single(Role::LdapBind)
     }
     pub fn wasm_auth_header_secret(&self) -> Option<ReferenceToken<'_>> {
         self.single(Role::WasmAuth)

@@ -10,6 +10,10 @@ const TLS_CA_HOST: &str = "ldap-auth-tls-ca.example.com";
 const TLS_MTLS_HOST: &str = "ldap-auth-tls-mtls.example.com";
 const TLS_WRONG_CA_HOST: &str = "ldap-auth-tls-wrong-ca.example.com";
 const TLS_STARTTLS_HOST: &str = "ldap-auth-tls-starttls.example.com";
+const TLS_SEARCH_HOST: &str = "ldap-auth-tls-search.example.com";
+const TLS_SEARCH_WRONG_SVC_HOST: &str = "ldap-auth-tls-search-wrong-svc.example.com";
+const TLS_GROUPS_ANY_HOST: &str = "ldap-auth-tls-groups-any.example.com";
+const TLS_GROUPS_ALL_HOST: &str = "ldap-auth-tls-groups-all.example.com";
 
 impl LdapAuthTlsTestSuite {
     fn encode_header(scheme: &str, username: &str, password: &str) -> String {
@@ -237,6 +241,164 @@ impl LdapAuthTlsTestSuite {
     }
 }
 
+impl LdapAuthTlsTestSuite {
+    /// Search-mode case: send `username:password` to `host` and expect `status`.
+    /// For a 200, the upstream must see the canonical identity `expect_identity`.
+    fn search_case(
+        name: &'static str,
+        description: &'static str,
+        host: &'static str,
+        username: &'static str,
+        password: &'static str,
+        status: u16,
+        expect_identity: Option<&'static str>,
+    ) -> TestCase {
+        TestCase::new(name, description, move |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let url = format!("{}/headers", ctx.http_url());
+                let auth = Self::encode_header("ldap", username, password);
+                let resp = match ctx
+                    .http_client
+                    .get(&url)
+                    .header("host", host)
+                    .header("Authorization", auth)
+                    .header("X-Credential-Identifier", "spoofed-admin")
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                };
+                let actual = resp.status().as_u16();
+                if actual != status {
+                    return TestResult::failed(start.elapsed(), format!("Expected {}, got {}", status, actual));
+                }
+                if let Some(identity) = expect_identity {
+                    // Exact, case-sensitive header value: the client typed a
+                    // different spelling, so only the directory's canonical
+                    // value can match.
+                    let body = resp.text().await.unwrap_or_default();
+                    let forwarded = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|json| json["headers"]["x-credential-identifier"].as_str().map(str::to_owned));
+                    if forwarded.as_deref() != Some(identity) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Upstream saw identity {forwarded:?}, expected {identity:?}: {body}"),
+                        );
+                    }
+                }
+                TestResult::passed_with_message(start.elapsed(), format!("{name}: {status}"))
+            })
+        })
+    }
+
+    fn search_mode_cases() -> Vec<TestCase> {
+        vec![
+            Self::search_case(
+                "search_mode_carol_succeeds",
+                "Search mode finds a user outside baseDn and forwards the canonical uid",
+                TLS_SEARCH_HOST,
+                "CAROL",
+                "carol-pw",
+                200,
+                Some("carol"),
+            ),
+            Self::search_case(
+                "search_mode_wrong_password_401",
+                "Search mode: wrong user password is 401",
+                TLS_SEARCH_HOST,
+                "carol",
+                "wrong",
+                401,
+                None,
+            ),
+            Self::search_case(
+                "search_mode_unknown_user_401",
+                "Search mode: unknown user is 401",
+                TLS_SEARCH_HOST,
+                "nobody",
+                "anything",
+                401,
+                None,
+            ),
+            Self::search_case(
+                "search_mode_ambiguous_user_401",
+                "Search mode: a username matching two entries is 401",
+                TLS_SEARCH_HOST,
+                "dup",
+                "dup-pw",
+                401,
+                None,
+            ),
+            Self::search_case(
+                "search_mode_wrong_service_password_401",
+                "Search mode: a rejected service-account password is the generic 401",
+                TLS_SEARCH_WRONG_SVC_HOST,
+                "carol",
+                "carol-pw",
+                401,
+                None,
+            ),
+            Self::search_case(
+                "groups_any_member_succeeds",
+                "Group requirement (any of gw-users): member carol is admitted with her canonical uid",
+                TLS_GROUPS_ANY_HOST,
+                "carol",
+                "carol-pw",
+                200,
+                Some("carol"),
+            ),
+            Self::search_case(
+                "groups_any_second_member_succeeds",
+                "Group requirement (any of gw-users): alice is also in gw-users and is admitted",
+                TLS_GROUPS_ANY_HOST,
+                "alice",
+                "password123",
+                200,
+                Some("alice"),
+            ),
+            Self::search_case(
+                "groups_any_non_member_403",
+                "Group requirement: non-member bob with the right password is 403",
+                TLS_GROUPS_ANY_HOST,
+                "bob",
+                "password456",
+                403,
+                None,
+            ),
+            Self::search_case(
+                "groups_any_non_member_wrong_password_401",
+                "Group requirement: a wrong password is 401 regardless of membership",
+                TLS_GROUPS_ANY_HOST,
+                "bob",
+                "wrong",
+                401,
+                None,
+            ),
+            Self::search_case(
+                "groups_all_member_succeeds",
+                "Group requirement (all of gw-users, gw-admins): carol is in both and is admitted",
+                TLS_GROUPS_ALL_HOST,
+                "carol",
+                "carol-pw",
+                200,
+                Some("carol"),
+            ),
+            Self::search_case(
+                "groups_all_missing_one_403",
+                "Group requirement (all of gw-users, gw-admins): alice lacks gw-admins and is 403",
+                TLS_GROUPS_ALL_HOST,
+                "alice",
+                "password123",
+                403,
+                None,
+            ),
+        ]
+    }
+}
+
 impl TestSuite for LdapAuthTlsTestSuite {
     fn name(&self) -> &str {
         "LdapAuthTls"
@@ -250,5 +412,8 @@ impl TestSuite for LdapAuthTlsTestSuite {
             Self::test_starttls_with_custom_ca(),
             Self::test_mtls_without_client_cert_returns_503(),
         ]
+        .into_iter()
+        .chain(Self::search_mode_cases())
+        .collect()
     }
 }

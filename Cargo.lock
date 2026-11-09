@@ -1980,6 +1980,7 @@ dependencies = [
  "clap",
  "edgion-algo",
  "edgion-dsl",
+ "edgion-ldap",
  "edgion-waf",
  "hex",
  "http",

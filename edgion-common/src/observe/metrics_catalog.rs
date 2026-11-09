@@ -288,7 +288,14 @@ pub static DEFINITIONS: &[Definition] = &[
         class: MetricClass::Fixed,
         labels: &[LabelDefinition {
             key: "kind",
-            domain: LabelDomain::Closed(&["unreachable", "timeout", "bind_fail", "tls_san_mismatch"]),
+            domain: LabelDomain::Closed(&[
+                "unreachable",
+                "timeout",
+                "bind_fail",
+                "tls_san_mismatch",
+                "service_bind_fail",
+                "search_fail",
+            ]),
             required: true,
         }],
         contribution: false,

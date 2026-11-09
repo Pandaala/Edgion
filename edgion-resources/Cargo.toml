@@ -19,6 +19,8 @@ edgion-algo.workspace = true
 # EdgionDSL language core (compile/validate path shared with the gateway)
 edgion-dsl.workspace = true
 edgion-waf.workspace = true
+# LDAP search-filter compiler and DN helpers (runtime-free; no `client` feature)
+edgion-ldap.workspace = true
 
 # Local-response body representation shared with the Gateway response writer
 bytes.workspace = true

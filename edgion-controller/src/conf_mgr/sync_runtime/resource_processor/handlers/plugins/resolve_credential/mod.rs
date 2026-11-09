@@ -121,6 +121,13 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn bound_cre
                     errors.extend(bound_secret_status_error(ctx, owner, token));
                 }
             }
+            EdgionPlugin::LdapAuth(_) => {
+                errors.extend(
+                    references
+                        .ldap_bind_secret()
+                        .and_then(|token| bound_secret_status_error(ctx, owner, token)),
+                );
+            }
             EdgionPlugin::ForwardAuth(_) | EdgionPlugin::Guardrail(_) | EdgionPlugin::AiGuard(_) => {
                 errors.extend(super::super::super::credential::request_secret_errors_readonly(
                     ctx,
