@@ -43,7 +43,7 @@ jobs:
       - name: Run cargo check
         run: cargo check --locked --workspace --all-targets
 
-  # Minimal Gateway: every optional subsystem (kafka/otlp/ldap/geoip/wasm)
+  # Minimal Gateway: every optional subsystem (kafka/otlp/geoip/wasm)
   # compiled out. Guards the feature gating and the fail-closed placeholders.
   gateway-core:
     name: Gateway Core Features
@@ -92,7 +92,7 @@ jobs:
           grep -qx 'format=edgion-build-capabilities/v1' <<<"$capabilities"
           grep -qx 'body-buffering=enabled' <<<"$capabilities"
           grep -qx 'pingora-mode=edgion-fork' <<<"$capabilities"
-          for subsystem in kafka otlp ldap geoip wasm; do
+          for subsystem in kafka otlp geoip wasm; do
             grep -qx "subsystem-${subsystem}=enabled" <<<"$capabilities"
           done
 

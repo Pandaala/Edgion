@@ -25,7 +25,7 @@ userPassword: spaceuser-pw
 
 # Username contains a RFC 4514 metacharacter ('+'). The DN escapes it in LDIF
 # (\+) but OpenLDAP normalizes it identically to the hex form (\2b) that the
-# Gateway emits via ldap3::dn_escape — this entry proves the escape round-trip.
+# Gateway emits via edgion_ldap::dn::escape — this entry proves the escape round-trip.
 dn: uid=alice\+work,ou=people,dc=example,dc=org
 objectClass: inetOrgPerson
 cn: Alice Plus

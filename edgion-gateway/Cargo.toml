@@ -27,10 +27,9 @@ default = ["allocator-jemalloc", "boringssl", "full"]
 # subsystems) to keep them. Disabling one removes its third-party dependencies
 # from the binary; configuration that needs a compiled-out subsystem fails
 # explicitly instead of being ignored.
-full = ["kafka", "otlp", "ldap", "geoip", "wasm"]
+full = ["kafka", "otlp", "geoip", "wasm"]
 kafka = ["dep:rskafka"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
-ldap = ["dep:ldap3"]
 geoip = ["dep:maxminddb", "dep:memmap2"]
 wasm = ["dep:wasmtime", "dep:edgion-wasm"]
 
@@ -181,7 +180,7 @@ url = { workspace = true }
 md-5.workspace = true
 cookie.workspace = true
 sha1.workspace = true
-ldap3 = { workspace = true, optional = true }
+edgion-ldap.workspace = true
 rskafka = { workspace = true, optional = true }
 tower.workspace = true
 # Runtime body storage (request-body disk spill).

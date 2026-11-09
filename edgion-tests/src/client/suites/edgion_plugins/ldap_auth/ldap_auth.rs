@@ -360,7 +360,7 @@ impl LdapAuthTestSuite {
 
     /// A username containing a RFC 4514 metacharacter ('+') must authenticate
     /// end-to-end. This exercises the actual escape path: the Gateway emits
-    /// `uid=alice\2bwork,...` via ldap3::dn_escape, and OpenLDAP must normalize
+    /// `uid=alice\2bwork,...` via edgion_ldap::dn::escape, and OpenLDAP must normalize
     /// the hex escape back to the original entry. If escape round-tripping
     /// against the real LDAP server ever regresses, this case will catch it.
     fn test_username_with_plus_authenticates() -> TestCase {

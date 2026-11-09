@@ -92,7 +92,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 > implementation of any of these is a bug.
 
 - 🔴 **Outbound HTTP clients are built via `build_outbound_client`** (`edgion-common/src/link_sys_core/http_client.rs`) — *a bare `reqwest::Client::builder()` outside tests is an SSRF/pooling regression* → registry §1.
-- 🔴 **Outbound TLS (CA/mTLS/verify) resolves through the canonical `outbound_tls` resolver** — including non-reqwest dialers (tonic/ldap3/redis-rs/rskafka) — *ad-hoc TLS bypasses trust policy* → registry §2.
+- 🔴 **Outbound TLS (CA/mTLS/verify) resolves through the canonical `outbound_tls` resolver** — including non-reqwest dialers (tonic, the `ldap_auth` tokio-rustls connector, redis-rs, rskafka) — *ad-hoc TLS bypasses trust policy* → registry §2.
 - 🔴 **New egress with a config- or request-influenced destination uses `EgressResolver`** (or at minimum `classify_ip`) at dial time, disables proxy-env pickup, denies redirects unless per-hop re-checked — *SSRF surface* → registry (egress).
 - 🔴 **Operator-configured DNS goes through the shared `ResolverSpec`** (`edgion-common/src/dns/`) — *no second resolver library*.
 - 🔴 **Redis access goes through the LinkSys `RedisLinkClient`**; rate-limit Lua extends the shared `redis_rate_limiter` core — *no bespoke Redis client*.

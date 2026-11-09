@@ -19,6 +19,7 @@ MIGRATED_CRATES = (
     "edgion-algo",
     "edgion-waf",
     "edgion-wasm",
+    "edgion-ldap",
     "edgion-resources",
     "edgion-gateway",
 )
@@ -70,6 +71,7 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
     Path('plugins/http/ext_proc/attached.rs'): ('test_lazy', 'test_state'),
     Path('plugins/http/ext_proc/plugin.rs'): ('build',),
     Path('plugins/http/hmac_auth/plugin.rs'): ('check_body_digest', 'check_body_digest_hash', 'compute_hmac', 'credentials_ptr', 'verify_body_digest'),
+    Path('plugins/http/ldap_auth/plugin.rs'): ('install_scripted_stream', 'take_scripted_stream'),
     Path('plugins/http/openid_connect/jwks_provider.rs'): ('install_scripted_http', 'seed_discovery', 'seed_stale_jwks'),
     Path('plugins/http/openid_connect/plugin.rs'): ('new',),
     Path('plugins/http/request_mirror/budget.rs'): ('for_test',),
@@ -166,6 +168,12 @@ GATEWAY_SOURCE_LOCAL = {
         'InboundState::Test(receiver) => match receiver.recv().await {',
         'Test(tokio::sync::mpsc::Receiver<Result<ProcessingResponse, tonic::Status>>),',
         'if let InboundState::Test(receiver) = &mut self.inbound {',
+    ),
+    # In-memory LDAP peer injection; no field, lock or branch in production builds.
+    Path('plugins/http/ldap_auth/plugin.rs'): (
+        'scripted_stream: parking_lot::Mutex<Option<tokio::io::DuplexStream>>,',
+        'scripted_stream: parking_lot::Mutex::new(None),',
+        'if let Some(stream) = self.take_scripted_stream() {',
     ),
     Path('plugins/http/openid_connect/jwks_provider.rs'): (
         'scripted_http: ScriptMutex::new(None),',

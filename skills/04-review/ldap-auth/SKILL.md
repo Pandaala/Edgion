@@ -15,6 +15,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [LDAP Auth Bounded Response Parsing — FIXED (auth-01, auth-02)](regression-guards/bounded-response-parsing.md)
 - [LDAP Auth Dial-time Egress Policy and TLS Integration Coverage](regression-guards/dial-time-egress-policy.md)
 
 ## Review evidence

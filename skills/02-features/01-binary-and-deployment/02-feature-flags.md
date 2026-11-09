@@ -19,7 +19,7 @@ individual binary crates, so feature-selecting commands must name a package with
 | `rustls` | Dormant | No | No | Unsupported future-development seam; not a build, release, or runtime contract |
 | `fips` | Yes | No | No | Opt-in image build; implies `boringssl`, uses Boring 5's bundled FIPS module source by default |
 | `full` | Yes | No | No | Default; enables every optional Gateway subsystem below |
-| `kafka` / `otlp` / `ldap` / `geoip` / `wasm` | Yes | No | No | Optional subsystems selected by `full`; additive |
+| `kafka` / `otlp` / `geoip` / `wasm` | Yes | No | No | Optional subsystems selected by `full`; additive |
 
 Allocator selection and `#[global_allocator]` live in each binary entry point,
 not in a workspace-root library. Only the Gateway selects a TLS backend.
@@ -63,7 +63,6 @@ that code and its CVE surface from the Gateway binary.
 |---------|---------|----------------------------|
 | `kafka` | `rskafka` | Kafka LinkSys never builds a client (runner logs the build failure); a primary Kafka log output fails Gateway startup; a Kafka fallback output is dropped with a WARN |
 | `otlp` | `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` | Same as `kafka` for OTLP LinkSys and OTLP log outputs; an OTLP SSL-log output also fails startup (the full build only warns that it is unsupported) |
-| `ldap` | `ldap3` | Every `LdapAuth` entry fails TLS preflight and is recorded as an invalid plugin (fail-closed) |
 | `geoip` | `maxminddb`, `memmap2` | No database can load; a configured `geoip.db_path` or `update_url` logs an error, lookups report `Unavailable`, and each `GeoIpLocation` plugin applies its own `failOpen` |
 | `wasm` | `wasmtime`, `edgion-wasm` | Every `Wasm` entry fails preflight and is recorded as an invalid plugin (fail-closed); `wasm_limits` still parses and validates |
 
@@ -76,7 +75,10 @@ reporting is tracked in `tasks/todo/arch-03-build-time-extension-selection.md`.
 
 The `edgion-waf` crate is not optional: `edgion-resources` validates WAF rules
 with it and AI usage parsing reuses its bounded JSON reader. AI, Elasticsearch,
-Redis, etcd, webhook and local-file outputs are always compiled.
+Redis, etcd, webhook and local-file outputs are always compiled. `LdapAuth` is
+also always compiled: its client is the in-tree `edgion-ldap` leaf, which adds
+no third-party dependency beyond tokio's I/O traits and `thiserror`, so a
+feature gate would remove no CVE surface.
 
 `edgion-gateway --print-build-capabilities` reports one
 `subsystem-<name>=enabled|disabled` line per subsystem. The CI `gateway-core`
@@ -117,7 +119,7 @@ cargo build -p edgion-gateway --bin edgion-gateway
 cargo build -p edgion-gateway --bin edgion-gateway --release \
   --no-default-features --features allocator-mimalloc,boringssl,full
 
-# Minimal "core" Gateway: no Kafka, OTLP, LDAP, GeoIP or Wasm
+# Minimal "core" Gateway: no Kafka, OTLP, GeoIP or Wasm
 cargo build -p edgion-gateway --bin edgion-gateway --release \
   --no-default-features --features allocator-jemalloc,boringssl
 

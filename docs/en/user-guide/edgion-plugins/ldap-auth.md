@@ -57,7 +57,7 @@ Use cases:
 | `authFailureDelayMs` | Integer | `0` | Delay before returning a credential-related 401 response, in milliseconds |
 | `anonymous` | String | none | Anonymous username; applies only when both credential headers are missing |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [Character rules](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
-| `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
+| `timeout` | Integer | `10000` | LDAP timeout (milliseconds), applied separately to connecting (DNS resolution, TCP, StartTLS, TLS handshake) and to the bind plus unbind; one LDAP exchange can take up to twice this value, plus `authFailureDelayMs` on a 401 |
 | `keepalive` | Integer | `60000` | Reserved field |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | Header for passing the authenticated username |
 | `anonymousHeader` | String | `X-Anonymous-Consumer` | Anonymous indicator header |

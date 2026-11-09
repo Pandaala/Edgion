@@ -1873,6 +1873,7 @@ dependencies = [
  "edgion-algo",
  "edgion-common",
  "edgion-dsl",
+ "edgion-ldap",
  "edgion-resources",
  "edgion-waf",
  "edgion-wasm",
@@ -1891,7 +1892,6 @@ dependencies = [
  "jsonwebtoken",
  "k8s-openapi",
  "kube",
- "ldap3",
  "maxminddb",
  "md-5",
  "memmap2",
@@ -1957,6 +1957,14 @@ dependencies = [
  "wiremock",
  "x509-parser 0.18.1",
  "yaml_serde",
+]
+
+[[package]]
+name = "edgion-ldap"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -3594,41 +3602,6 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
-
-[[package]]
-name = "lber"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbcf559624bfd9fe8d488329a8959766335a43a9b8b2cdd6a2c379fca02909a5"
-dependencies = [
- "bytes",
- "nom",
-]
-
-[[package]]
-name = "ldap3"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01fe89f5e7cfb7e4701e3a38ff9f00358e026a9aee940355d88ee9d81e5c7503"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "futures-util",
- "lber",
- "log",
- "nom",
- "percent-encoding",
- "rustls",
- "rustls-native-certs 0.8.5",
- "thiserror 2.0.21",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tokio-util",
- "url",
- "x509-parser 0.18.1",
-]
 
 [[package]]
 name = "leb128fmt"

@@ -1,6 +1,6 @@
 ---
 name: ldap-auth-dial-time-egress-policy
-description: Use when reviewing LDAP Auth SSRF or DNS findings that ldap3 resolves ldapHost without EgressResolver, or when a fix proposes URL rewriting, controller pre-resolution, or a plugin-local address HashMap.
+description: Use when reviewing LDAP Auth SSRF or DNS findings that the LDAP client resolves ldapHost without EgressResolver, or when a fix proposes URL rewriting, controller pre-resolution, or a plugin-local address HashMap.
 status: fixed
 finding_id: D0053
 closed: 2026-09-04
@@ -13,29 +13,34 @@ knowledge_type: regression-guards
 
 `ldap_auth` must classify every LDAP destination at connect time through the
 shared Gateway `EgressResolver` and connect only to admitted addresses, while
-keeping the original `ldapHost` URL for LDAPS and StartTLS identity.
+keeping the original `ldapHost` (parsed once into a `ServerName`) as the LDAPS and
+StartTLS identity.
 
 Fix suggestions of the form "rewrite the LDAP URL to a resolved IP", "preflight
 DNS in the Controller or at plugin construction", "store addresses in LinkSys
-or a new plugin HashMap", and "let ldap3 resolve the hostname itself after a
-config-time check" are **not accepted**.
+or a new plugin HashMap", and "let the LDAP client resolve the hostname itself
+after a config-time check" are **not accepted**.
 
 ## Core Rationale
 
 **1. Dial-time classification closes DNS rebinding**
 
 `ldapHost` is an operator-configured hostname, not a Kubernetes Service
-backendRef. ldap3's default `TcpStream::connect(host:port)` uses the system
-resolver and never shows Edgion the candidate IPs. `EgressResolver` classifies
+backendRef. A client-side `TcpStream::connect(host:port)` (the default of the
+former `ldap3` dependency) uses the system resolver and never shows Edgion the
+candidate IPs. `EgressResolver` classifies
 the exact addresses about to be dialed, matching webhook URL targets, Wasm
 callouts, and ext_proc.
 
 **2. The original hostname remains the TLS identity**
 
-ldap3 `LdapConnSettings::set_std_stream` accepts an already-connected TCP
-stream. The plugin still passes `ldap://host:port` or `ldaps://host:port`, so
-SNI, certificate verification, custom CA, SAN pinning, and mTLS keep using
-`ldapHost`.
+The `edgion-ldap` `BindSession` runs over a stream the plugin has already
+dialed through `EgressResolver`; it never resolves or connects by itself. The
+plugin performs the LDAPS and StartTLS handshakes with `tokio-rustls` using a
+`ServerName` parsed once from `ldapHost`, so SNI, certificate verification,
+custom CA, SAN pinning, and mTLS keep using `ldapHost`. (Before 2026-11-09 the
+same contract was met by injecting the admitted socket into `ldap3` through
+`LdapConnSettings::set_std_stream`.)
 
 **3. DNS answers are cached by the canonical egress answer cache**
 
@@ -101,9 +106,9 @@ the canonical egress metric proves that candidates were actually classified.
 The `osixia/openldap:1.5.0` fixture performs the real handshake and bind behind the relay, which
 observes the original ClientHello SNI without terminating TLS.
 
-`LdapAuthConfig.ldap_host` remains the identity used by `LdapAuth.ldap_url`,
-while `egress` selects the fixed socket and `conn_settings` carries the TLS
-policy. Both LDAPS and StartTLS use a DNS-only certificate and exercise wrong
+`LdapAuthConfig.ldap_host` remains the TLS identity (the `server_name` held
+by `LdapAuth.transport`), while `egress` selects the fixed socket and
+`transport` carries the TLS policy. Both LDAPS and StartTLS use a DNS-only certificate and exercise wrong
 hostname, wrong custom CA, SAN match/mismatch, and required mTLS with/without
 the resolved client identity. All-blocked results must be the fixed public
 503 body with the `ldap unreachable` PluginLog tag and `unreachable` error
@@ -113,7 +118,7 @@ The complete matrix repeats twice per invocation.
 This coverage does not prove every OS resolver's DNS behavior, private-network
 policy, arbitrary LDAP-server interoperability, or timeout fairness. The
 system resolver replacement is limited to three reserved fixture names and
-does not replace TCP, the egress filter, ldap3, TLS, or OpenLDAP. Existing
+does not replace TCP, the egress filter, the LDAP client, TLS, or OpenLDAP. Existing
 LDAP integration scenarios remain unchanged. User configuration, defaults,
 and production behavior are unchanged.
 
@@ -203,6 +208,11 @@ Fresh checks on 2026-09-07:
   classification. Existing LDAP test files and product Rust code were not
   modified; the full `cargo test --all` suite was not run.
 
+Fresh run on 2026-11-09 after the LDAP TLS dependency changed (ldap3
+`tls-rustls-ring` replaced by the plugin's own `tokio-rustls` handshake over the
+`edgion-ldap` bind session): `test_ldap_auth_egress.sh` passed 36/36. See
+[bounded response parsing](bounded-response-parsing.md).
+
 The D0053 closure date above is historical implementation evidence. D0054
 adds cross-process verification; it does not reopen or change that runtime
 implementation. Revisit the fixture when libc loader/interposition behavior,
@@ -212,7 +222,8 @@ the LDAP TLS dependency, egress defaults, or diagnostic vocabulary changes.
 
 Re-open this decision only if:
 
-- ldap3 loses the pre-connected stream injection API
+- the LDAP client (`edgion-ldap`) gains its own dialing or DNS resolution
+  instead of running over the admitted stream
 - LDAP gains a Kubernetes Service `backendRef` target that should follow the
   EndpointSlice path instead of hostname egress
 - Gateway egress defaults change so that typical in-cluster LDAP would be

@@ -18,7 +18,7 @@ Use for these tasks:
 
 Migrated crates (`edgion-common`, `edgion-dsl`, `edgion-cli`,
 `edgion-controller`, `edgion-algo`, `edgion-waf`, `edgion-wasm`,
-`edgion-resources`, and `edgion-gateway`) keep unit-test bodies under
+`edgion-ldap`, `edgion-resources`, and `edgion-gateway`) keep unit-test bodies under
 `tests/unit/`, mirroring their owning `src/` paths. Source files keep
 test-gated module declarations and, where shared helpers require them,
 test-only imports or re-exports. This

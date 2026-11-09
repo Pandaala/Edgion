@@ -20,7 +20,7 @@ upstream (Gateway -> backend) TLS. Every TLS channel built on rustls stays on th
   therefore OIDC/JWKS, forward_auth, webhook, Elasticsearch, AI provider and other
   shared outbound HTTP calls;
 - explicit `ring` client configs in `ext_proc/client.rs`, `ldap_auth/plugin.rs`
-  (`ldap3` `tls-rustls-ring`), and `tls/validation/outbound_client.rs`;
+  (handed to `tokio-rustls`), and `tls/validation/outbound_client.rs`;
 - Redis, etcd and Kafka LinkSys TLS through the process-wide rustls provider.
 
 Switching these clients to a FIPS-validated provider (for example `aws-lc-rs` with
@@ -36,7 +36,7 @@ these are backend-independent rustls clients that exist in every build.
 
 - `edgion-common/src/startup.rs` `init_crypto` installs
   `rustls::crypto::ring::default_provider()` unconditionally.
-- Workspace `Cargo.toml`: tonic `tls-ring`, ldap3 `tls-rustls-ring`, reqwest
+- Workspace `Cargo.toml`: tonic `tls-ring`, reqwest
   `rustls-no-provider` with an explicit `ring` `ClientConfig` in
   `apply_default_http_tls`.
 - No `fips`-gated code selects another rustls provider.
@@ -59,7 +59,7 @@ decision. The FIPS build is already documented as not a compliance claim.
 Rejected alternatives (for now):
 
 - Installing an `aws-lc-rs` FIPS provider under `fips` and replacing every explicit
-  `ring` config, plus tonic/ldap3 feature switches.
+  `ring` config, plus the tonic feature switch.
 - Moving egress TLS onto BoringSSL connectors.
 - A CI guard that a `--features fips` build has no `ring` rustls provider.
 

@@ -32,9 +32,9 @@ username-enumeration oracle, downgrade/redact it for that security reason" are
 
 **1. LDAP rc 49 is uniform across nonexistent-user and wrong-password.**
 
-`ldap_bind` (`edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`) calls
-`simple_bind(bind_dn, password)` and maps `rc == 49` →
-`LdapAuthError::InvalidCredentials`. There is no preceding LDAP *search* to
+`bind_phase` (`edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`, reached via
+`ldap_bind` → `bind_over`) calls `simple_bind(bind_dn, password)` and maps
+`rc == 49` → `LdapAuthError::InvalidCredentials`. There is no preceding LDAP *search* to
 test existence; a bind against a DN that does not exist returns 49 exactly as
 a bind with a wrong password does. A log reader sees the same tag in both
 cases, so no existence bit leaks.
@@ -42,7 +42,7 @@ cases, so no existence bit leaks.
 **2. The only username-discriminating tag fires on empty input only.**
 
 `"Deny bad username"` (the `build_bind_dn` Err arm) triggers solely on an
-**empty username** (the only failure branch of `build_bind_dn`; `ldap3::dn_escape`
+**empty username** (the only failure branch of `build_bind_dn`; `edgion_ldap::dn::escape`
 and template substitution do not fail). An empty username is trivially not a
 real account, so this tag carries zero enumeration value either.
 

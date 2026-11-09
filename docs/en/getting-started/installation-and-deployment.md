@@ -75,8 +75,8 @@ When building any of the three binaries from source, select the allocator with
 The dependency crate names `tikv-jemallocator` and `mimalloc` are not Cargo
 feature names for these binaries.
 
-The Gateway also has optional subsystem features: `kafka`, `otlp`, `ldap`,
-`geoip`, and `wasm`. The aggregate `full` feature selects all of them and is part
+The Gateway also has optional subsystem features: `kafka`, `otlp`, `geoip`,
+and `wasm`. The aggregate `full` feature selects all of them and is part
 of the default set. When you build with `--no-default-features` and an explicit
 feature list, add `full` (or the individual subsystems you need); otherwise they
 are compiled out. A compiled-out subsystem never fails open: a primary Kafka/OTLP

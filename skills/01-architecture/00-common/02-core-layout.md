@@ -14,6 +14,7 @@ single-crate `src/core/` layout is gone):
 
 ```
 edgion-wasm/         # Proxy-Wasm compatibility/profile leaf (external deps only)
+edgion-ldap/         # Bounded LDAP bind client leaf (tokio I/O traits + thiserror only)
 edgion-dsl/          # EdgionDSL language core (leaf, no workspace-internal deps)
 edgion-resources/    # Shared resource/config schema (depends on edgion-dsl)
 edgion-common/       # Code shared across bins (depends on edgion-resources)

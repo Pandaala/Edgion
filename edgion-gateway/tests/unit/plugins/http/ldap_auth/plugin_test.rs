@@ -39,6 +39,16 @@ fn install_test_crypto_provider() {
     });
 }
 
+/// Transport kind and, for TLS transports, the parsed server name.
+fn transport_summary(auth: &LdapAuth) -> (&'static str, Option<String>) {
+    let name = |name: &Option<ServerName<'static>>| name.as_ref().map(|name| name.to_str().into_owned());
+    match &auth.transport {
+        LdapTransport::Plain => ("plain", None),
+        LdapTransport::Ldaps { server_name, .. } => ("ldaps", name(server_name)),
+        LdapTransport::StartTls { server_name, .. } => ("starttls", name(server_name)),
+    }
+}
+
 fn ldap_auth_default() -> LdapAuth {
     actual_ldap(&test_config()).expect("default plain LDAP must build")
 }
@@ -129,7 +139,7 @@ fn test_build_bind_dn_injection_escaped() {
     let auth = ldap_auth_default();
 
     // RFC 4514 metacharacters must be escaped so injection becomes a
-    // literal value inside the RDN. ldap3::dn_escape uses the hex form
+    // literal value inside the RDN. edgion_ldap::dn::escape uses the hex form
     // (\HH); both forms are RFC-equivalent for any compliant server.
     let dn = auth.build_bind_dn("alice,admin").unwrap();
     assert_eq!(dn, r"uid=alice\2cadmin,dc=example,dc=com");
@@ -142,7 +152,7 @@ fn test_build_bind_dn_injection_escaped() {
     assert_eq!(dn, r"uid=\23bob\20,dc=example,dc=com");
 
     // Sanity check: no bare injection-relevant metachar remains inside the
-    // attribute value. (`\` is the escape leader produced by dn_escape and
+    // attribute value. (`\` is the escape leader produced by `escape` and
     // is expected to appear; the metachars below would terminate the RDN
     // or change its semantics if they leaked through unescaped.)
     let dn = auth.build_bind_dn(r#"x"y\z<a>b;c=d"#).unwrap();
@@ -228,8 +238,9 @@ fn plain_ldap_preserves_caller_secrets_without_retaining_config() {
     let original_client = config.resolved_client_certificate.clone();
 
     let auth = actual_ldap(&config).expect("plain LDAP must build");
-    assert_eq!(auth.ldap_url, "ldap://ldap.example.com:389");
-    assert!(!auth.conn_settings.starttls());
+    assert_eq!(transport_summary(&auth), ("plain", None));
+    assert_eq!(auth.ldap_host, "ldap.example.com");
+    assert_eq!(auth.ldap_port, 389);
     assert_eq!(config.resolved_ca_certificates, original_ca);
     assert_eq!(config.resolved_client_certificate, original_client);
 }
@@ -266,25 +277,25 @@ async fn prepared_plain_generations_remain_independent() {
     };
     let k2 = actual_ldap(&k2_config).expect("K2 must build");
 
-    assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
+    assert_eq!(transport_summary(&k1), ("plain", None));
     assert_eq!(k1.ldap_host, "ldap-one.example.com");
     assert_eq!(k1.ldap_port, 1389);
     assert_eq!(k1.timeout, Duration::from_millis(111));
-    assert!(!k1.conn_settings.starttls());
     assert_eq!(k1.auth.header_type, "ldap-one");
     assert_prepared_challenge(&k1.auth.auth_challenge, "ldap-one realm=\"Realm One\"").await;
     assert!(matches!(k1.bind_dn_plan, BindDnPlan::AttributeBase { .. }));
 
-    assert_eq!(k2.ldap_url, "ldap://ldap-two.example.com:2389");
+    assert_eq!(transport_summary(&k2), ("plain", None));
+    assert_eq!(k2.ldap_host, "ldap-two.example.com");
+    assert_eq!(k2.ldap_port, 2389);
     assert_eq!(k2.timeout, Duration::from_millis(222));
-    assert!(!k2.conn_settings.starttls());
     assert_eq!(k2.auth.header_type, "ldap-two");
     assert_prepared_challenge(&k2.auth.auth_challenge, "ldap-two realm=\"Realm Two\"").await;
     assert_eq!(k2.auth.anonymous.as_deref(), Some("guest-two"));
     assert!(k2.auth.hide_credentials);
     assert!(matches!(k2.bind_dn_plan, BindDnPlan::Template(_)));
 
-    assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
+    assert_eq!(k1.ldap_host, "ldap-one.example.com");
     assert_prepared_challenge(&k1.auth.auth_challenge, "ldap-one realm=\"Realm One\"").await;
     assert_eq!(k1.build_bind_dn("alice").unwrap(), "uid=alice,dc=one,dc=example");
 }
@@ -388,18 +399,25 @@ fn run_ldap_new_tls_case_table() {
         ..test_config()
     })
     .expect("LDAPS with system roots must build");
-    assert_eq!(ldaps.ldap_url, "ldaps://ldap.example.com:636");
-    assert!(!ldaps.conn_settings.starttls());
-    assert!(!ldaps.conn_settings.clone().starttls());
+    assert_eq!(
+        transport_summary(&ldaps),
+        ("ldaps", Some("ldap.example.com".to_string()))
+    );
+    assert_eq!((ldaps.ldap_host.as_str(), ldaps.ldap_port), ("ldap.example.com", 636));
 
     let starttls = actual_ldap(&LdapAuthConfig {
         start_tls: true,
         ..test_config()
     })
     .expect("StartTLS with system roots must build");
-    assert_eq!(starttls.ldap_url, "ldap://ldap.example.com:389");
-    assert!(starttls.conn_settings.starttls());
-    assert!(starttls.conn_settings.clone().starttls());
+    assert_eq!(
+        transport_summary(&starttls),
+        ("starttls", Some("ldap.example.com".to_string()))
+    );
+    assert_eq!(
+        (starttls.ldap_host.as_str(), starttls.ldap_port),
+        ("ldap.example.com", 389)
+    );
 
     let skip_verify = actual_ldap(&LdapAuthConfig {
         ldaps: true,
@@ -410,7 +428,14 @@ fn run_ldap_new_tls_case_table() {
         ..test_config()
     })
     .expect("effective verify=false must build the explicit skip-verifier path");
-    assert_eq!(skip_verify.ldap_url, "ldaps://ldap.example.com:389");
+    assert_eq!(
+        transport_summary(&skip_verify),
+        ("ldaps", Some("ldap.example.com".to_string()))
+    );
+    assert_eq!(
+        (skip_verify.ldap_host.as_str(), skip_verify.ldap_port),
+        ("ldap.example.com", 389)
+    );
 
     let san_override = actual_ldap(&LdapAuthConfig {
         ldaps: true,
@@ -429,7 +454,14 @@ fn run_ldap_new_tls_case_table() {
         ..test_config()
     })
     .expect("SAN policy must override verify=false and retain secure TLS");
-    assert_eq!(san_override.ldap_url, "ldaps://ldap.example.com:389");
+    assert_eq!(
+        transport_summary(&san_override),
+        ("ldaps", Some("ldap.example.com".to_string()))
+    );
+    assert_eq!(
+        (san_override.ldap_host.as_str(), san_override.ldap_port),
+        ("ldap.example.com", 389)
+    );
 
     let missing_ca = actual_ldap(&LdapAuthConfig {
         ldaps: true,
@@ -659,10 +691,11 @@ fn ldap_rustls_config_verify_false_with_san_forces_secure_path() {
     );
 }
 
-/// A SAN mismatch surfacing from `LdapConnAsync::with_settings` must map to
-/// `TlsSanMismatch`, not the generic `ConnectionFailed`. The mapping closure
-/// is exercised directly because opening a real TLS connection is out of
-/// scope for a unit test.
+/// A SAN mismatch surfacing from the `tokio-rustls` handshake must map to
+/// `TlsSanMismatch`, not the generic `ConnectionFailed`. tokio-rustls reports
+/// handshake failures as `io::Error::new(InvalidData, rustls::Error)`; the
+/// mapping is exercised directly because a real TLS handshake is out of scope
+/// for a unit test.
 #[test]
 fn ldap_error_with_san_mismatch_maps_to_tls_san_mismatch() {
     let rustls_err = rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
@@ -671,11 +704,8 @@ fn ldap_error_with_san_mismatch_maps_to_tls_san_mismatch() {
         }),
     )));
     let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls_err);
-    let ldap_err = ldap3::LdapError::Io { source: io_err };
 
-    let mapped = map_ldap_connect_error(&ldap_err);
-
-    match mapped {
+    match map_ldap_connect_error(&io_err) {
         LdapAuthError::TlsSanMismatch(reason) => {
             assert_eq!(reason, "declared [ldap.example.com], actual [127.0.0.1]");
         }
@@ -685,12 +715,10 @@ fn ldap_error_with_san_mismatch_maps_to_tls_san_mismatch() {
 
 #[test]
 fn ldap_error_without_san_mismatch_maps_to_connection_failed() {
-    let ldap_err = ldap3::LdapError::Io {
-        source: std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused"),
-    };
+    let io_err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
 
     assert!(matches!(
-        map_ldap_connect_error(&ldap_err),
+        map_ldap_connect_error(&io_err),
         LdapAuthError::ConnectionFailed
     ));
 }
@@ -796,10 +824,10 @@ async fn dial_skips_refused_candidate_and_uses_next() {
     });
 
     let refused = "127.0.0.1:1".parse().unwrap();
-    let std_stream = dial_admitted_addrs(vec![refused, admitted])
+    let stream = dial_admitted_addrs(vec![refused, admitted])
         .await
         .expect("second admitted address must be dialed");
-    drop(std_stream);
+    drop(stream);
     accept.await.expect("accepted fallback connection");
 }
 
@@ -939,15 +967,14 @@ fn ldap_actual_tls_identity_controls_both_encrypted_transports() {
                 assert_eq!(actual_key.as_slice(), key.as_slice());
                 let auth = LdapAuth::new(&entry, &defaults).unwrap();
                 assert_eq!(auth.ldap_host, "ldap.example.com");
+                assert_eq!(auth.ldap_port, 389);
                 assert_eq!(
-                    auth.ldap_url,
-                    if start_tls {
-                        "ldap://ldap.example.com:389"
-                    } else {
-                        "ldaps://ldap.example.com:389"
-                    }
+                    transport_summary(&auth),
+                    (
+                        if start_tls { "starttls" } else { "ldaps" },
+                        Some("ldap.example.com".to_string())
+                    )
                 );
-                assert_eq!(auth.conn_settings.starttls(), start_tls);
             } else {
                 assert_eq!(
                     LdapAuth::validate_tls_entry(&entry, &defaults).err().as_deref(),
@@ -1047,8 +1074,8 @@ fn ldap_captured_globals_and_plaintext_activation_are_process_isolated() {
                 let entry = binding.request_entries().next().unwrap();
                 assert!(LdapAuth::validate_tls_entry(&entry, &invalid).unwrap().is_none());
                 let plain = LdapAuth::new(&entry, &invalid).unwrap();
-                assert_eq!(plain.ldap_url, "ldap://ldap.example.com:389");
-                assert!(!plain.conn_settings.starttls());
+                assert_eq!(transport_summary(&plain), ("plain", None));
+                assert_eq!((plain.ldap_host.as_str(), plain.ldap_port), ("ldap.example.com", 389));
                 local.metadata.name = None;
                 let prepared = PreparedPluginReferences::from_plugins(&local);
                 let binding = prepared.bind(&local).unwrap();
@@ -1075,4 +1102,338 @@ async fn assert_prepared_challenge(challenge: &PreparedAuthChallenge, expected: 
     send_gateway_auth_error_response(&mut session, 401, challenge, None, "Denied")
         .await
         .unwrap();
+}
+
+// ── Bounded response parsing (auth-01 / auth-02) over an in-memory peer ──
+
+const BIND_DN: &str = "uid=u,dc=example,dc=com";
+
+fn bind_response(rc: u8) -> Vec<u8> {
+    vec![
+        0x30, 0x0c, 0x02, 0x01, 0x01, 0x61, 0x07, 0x0a, 0x01, rc, 0x04, 0x00, 0x04, 0x00,
+    ]
+}
+
+/// `depth` nested `30 83 L2 L1 L0` headers around `02 01 01`, built iteratively.
+fn nested_sequence_flood(depth: usize) -> Vec<u8> {
+    let mut inner = vec![0x02, 0x01, 0x01];
+    for _ in 0..depth {
+        let len = inner.len();
+        let mut outer = Vec::with_capacity(len + 5);
+        outer.extend_from_slice(&[0x30, 0x83, (len >> 16) as u8, (len >> 8) as u8, len as u8]);
+        outer.extend_from_slice(&inner);
+        inner = outer;
+    }
+    inner
+}
+
+/// Read one LDAP request frame from the peer half.
+async fn read_request(peer: &mut tokio::io::DuplexStream) -> std::io::Result<()> {
+    use edgion_ldap::codec::{frame_content_len, length_octets};
+    use tokio::io::AsyncReadExt;
+    let mut header = [0u8; 2];
+    peer.read_exact(&mut header).await?;
+    let extra = length_octets(header[0], header[1]).map_err(std::io::Error::other)?;
+    let mut octets = vec![0u8; extra];
+    peer.read_exact(&mut octets).await?;
+    let len = frame_content_len(header[1], &octets).map_err(std::io::Error::other)?;
+    let mut body = vec![0u8; len];
+    peer.read_exact(&mut body).await.map(|_| ())
+}
+
+/// Install an in-memory peer that reads the bind request, writes `reply`
+/// (ignoring write errors: the client may hang up mid-flood), then holds its
+/// half until the client side closes.
+fn scripted_peer(auth: &LdapAuth, capacity: usize, reply: Vec<u8>) -> tokio::task::JoinHandle<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (client, mut peer) = tokio::io::duplex(capacity);
+    auth.install_scripted_stream(client);
+    tokio::spawn(async move {
+        if read_request(&mut peer).await.is_err() {
+            return;
+        }
+        let _ = peer.write_all(&reply).await;
+        let mut sink = [0u8; 64];
+        while matches!(peer.read(&mut sink).await, Ok(n) if n > 0) {}
+    })
+}
+
+#[tokio::test]
+async fn malformed_bind_responses_fail_closed() {
+    let replies = [
+        vec![0x30, 0x05, 0x02, 0x01, 0x01, 0x61, 0x00],
+        vec![
+            0x30, 0x0d, 0x02, 0x01, 0x01, 0x61, 0x08, 0x0a, 0x01, 0x00, 0x04, 0x01, 0xff, 0x04, 0x00,
+        ],
+        vec![0x30, 0x05, 0x02, 0x01, 0x01, 0x41, 0x00],
+        vec![0x30, 0x00],
+        nested_sequence_flood(64),
+        nested_sequence_flood(200_000),
+    ];
+    for reply in replies {
+        let prefix = reply[..reply.len().min(8)].to_vec();
+        let auth = ldap_auth_default();
+        let peer = scripted_peer(&auth, 64 * 1024, reply);
+        let result = auth.ldap_bind(BIND_DN, "p").await;
+        assert!(
+            matches!(result, Err(LdapAuthError::BindFailed)),
+            "{prefix:02x?}: {result:?}"
+        );
+        drop(auth);
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn scripted_rc_49_is_invalid_credentials() {
+    let auth = ldap_auth_default();
+    let peer = scripted_peer(&auth, 4096, bind_response(49));
+    assert!(matches!(
+        auth.ldap_bind(BIND_DN, "p").await,
+        Err(LdapAuthError::InvalidCredentials)
+    ));
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn scripted_rc_0_is_ok() {
+    let auth = ldap_auth_default();
+    let peer = scripted_peer(&auth, 4096, bind_response(0));
+    assert!(auth.ldap_bind(BIND_DN, "p").await.is_ok());
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_bind_response_run_request_returns_503_with_bind_fail_tag() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+
+    let auth = ldap_auth_default();
+    let peer = scripted_peer(&auth, 4096, vec![0x30, 0x05, 0x02, 0x01, 0x01, 0x41, 0x00]);
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", "ldap dTpw")]);
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "ldap-unreachable")
+        .times(1)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .withf(|header, _| header.status.as_u16() == 503)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|body, end| {
+        assert_eq!(body.as_deref(), Some(&b"503 An unexpected error occurred"[..]));
+        assert!(end);
+        Ok(())
+    });
+    session.expect_shutdown().times(1).returning(|| {});
+
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        auth.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("ldap bind fail"), "{}", log.render_for_test());
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_tls_server_name_fails_per_request_without_dial() {
+    install_test_crypto_provider();
+    let (owner, _, _) = ldap_tls_owner(false);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let mut auth = LdapAuth::new(&entry, &defaults).expect("LDAPS fixture must build");
+    let LdapTransport::Ldaps { server_name, .. } = &mut auth.transport else {
+        panic!("expected LDAPS transport");
+    };
+    *server_name = None;
+    // The dial future records whether it was polled; the missing server name
+    // must fail before phase 1 dials (no DNS lookup, no connect).
+    let dialed = std::sync::atomic::AtomicBool::new(false);
+    let dial = async {
+        dialed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Err::<tokio::io::DuplexStream, _>(LdapAuthError::Timeout)
+    };
+    assert!(matches!(
+        auth.bind_over(dial, BIND_DN, "p").await,
+        Err(LdapAuthError::ConnectionFailed)
+    ));
+    assert!(!dialed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn unparsable_tls_host_still_builds_without_server_name() {
+    install_test_crypto_provider();
+    let auth = actual_ldap(&LdapAuthConfig {
+        ldaps: true,
+        ldap_host: "ldap host.example.com".to_string(),
+        ..test_config()
+    })
+    .expect("an unparsable TLS host must not fail plugin construction");
+    assert_eq!(transport_summary(&auth), ("ldaps", None));
+}
+
+#[tokio::test]
+async fn peer_close_before_reply_is_bind_failed() {
+    let auth = ldap_auth_default();
+    let (client, mut peer) = tokio::io::duplex(4096);
+    auth.install_scripted_stream(client);
+    let task = tokio::spawn(async move {
+        let _ = read_request(&mut peer).await;
+        drop(peer);
+    });
+    assert!(matches!(
+        auth.ldap_bind(BIND_DN, "p").await,
+        Err(LdapAuthError::BindFailed)
+    ));
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn extra_frame_and_close_after_success_is_ok() {
+    let auth = ldap_auth_default();
+    let (client, mut peer) = tokio::io::duplex(4096);
+    auth.install_scripted_stream(client);
+    let task = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        read_request(&mut peer).await.unwrap();
+        let mut reply = bind_response(0);
+        // A further frame the client never reads (it reads exactly one
+        // response per request), then hang up: the unbind write may fail and
+        // must not change the successful outcome.
+        reply.extend_from_slice(&[
+            0x30, 0x0c, 0x02, 0x01, 0x00, 0x78, 0x07, 0x0a, 0x01, 0x34, 0x04, 0x00, 0x04, 0x00,
+        ]);
+        peer.write_all(&reply).await.unwrap();
+        drop(peer);
+    });
+    assert!(auth.ldap_bind(BIND_DN, "p").await.is_ok());
+    task.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn phase2_deadline_bounds_unbind() {
+    let auth = actual_ldap(&LdapAuthConfig {
+        timeout: 1000,
+        ..test_config()
+    })
+    .unwrap();
+    // Capacity 4 cannot hold the 7-byte UnbindRequest, and the peer never
+    // reads after replying, so the unbind write blocks until the deadline.
+    let (client, mut peer) = tokio::io::duplex(4);
+    auth.install_scripted_stream(client);
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        read_request(&mut peer).await.unwrap();
+        // The bind consumes 600 ms of the shared 1000 ms phase-2 deadline.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        peer.write_all(&bind_response(0)).await.unwrap();
+        let _ = released.await;
+        drop(peer);
+    });
+    let started = tokio::time::Instant::now();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), auth.ldap_bind(BIND_DN, "p")).await;
+    assert!(matches!(outcome, Ok(Ok(()))), "{outcome:?}");
+    // The unbind is cut off by the deadline shared with the bind (1000 ms
+    // after phase 2 starts), not by a fresh budget (which would end at 1600 ms).
+    assert!(started.elapsed() >= Duration::from_millis(1000));
+    assert!(
+        started.elapsed() < Duration::from_millis(1600),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = release.send(());
+    task.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn phase1_timeout_when_dial_never_completes() {
+    install_test_crypto_provider();
+    let plain = actual_ldap(&LdapAuthConfig {
+        timeout: 1000,
+        ..test_config()
+    })
+    .unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let mut cases = vec![plain];
+    for start_tls in [false, true] {
+        let (mut owner, _, _) = ldap_tls_owner(start_tls);
+        if let EdgionPlugin::LdapAuth(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin {
+            config.timeout = 1000;
+        }
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        cases.push(LdapAuth::new(&entry, &defaults).expect("TLS fixture must build"));
+    }
+    for auth in &cases {
+        let dial = std::future::pending::<Result<tokio::io::DuplexStream, LdapAuthError>>();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), auth.bind_over(dial, BIND_DN, "p")).await;
+        assert!(
+            matches!(outcome, Ok(Err(LdapAuthError::Timeout))),
+            "{}: {outcome:?}",
+            transport_summary(auth).0
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn phase2_timeout_when_peer_never_replies() {
+    let auth = actual_ldap(&LdapAuthConfig {
+        timeout: 1000,
+        ..test_config()
+    })
+    .unwrap();
+    let (client, mut peer) = tokio::io::duplex(4096);
+    auth.install_scripted_stream(client);
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        read_request(&mut peer).await.unwrap();
+        let _ = released.await;
+        drop(peer);
+    });
+    let outcome = tokio::time::timeout(Duration::from_secs(10), auth.ldap_bind(BIND_DN, "p")).await;
+    assert!(matches!(outcome, Ok(Err(LdapAuthError::Timeout))), "{outcome:?}");
+    let _ = release.send(());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn start_tls_rejection_is_connection_failed() {
+    install_test_crypto_provider();
+    let (owner, _, _) = ldap_tls_owner(true);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let auth = LdapAuth::new(&entry, &defaults).expect("StartTLS fixture must build");
+    assert_eq!(transport_summary(&auth).0, "starttls");
+    // ExtendedResponse for message 1 with resultCode 2 (protocolError).
+    let rejected = vec![
+        0x30, 0x0c, 0x02, 0x01, 0x01, 0x78, 0x07, 0x0a, 0x01, 0x02, 0x04, 0x00, 0x04, 0x00,
+    ];
+    let peer = scripted_peer(&auth, 4096, rejected);
+    assert!(matches!(
+        auth.ldap_bind(BIND_DN, "p").await,
+        Err(LdapAuthError::ConnectionFailed)
+    ));
+    drop(auth);
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn peer_close_before_request_is_bind_failed() {
+    let auth = ldap_auth_default();
+    let (client, peer) = tokio::io::duplex(4096);
+    drop(peer);
+    auth.install_scripted_stream(client);
+    assert!(matches!(
+        auth.ldap_bind(BIND_DN, "p").await,
+        Err(LdapAuthError::BindFailed)
+    ));
 }

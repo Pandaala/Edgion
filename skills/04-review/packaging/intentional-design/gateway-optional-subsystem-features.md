@@ -1,6 +1,6 @@
 ---
 name: gateway-optional-subsystem-features
-description: Use when reviewing Gateway Cargo features that compile optional subsystems (Kafka, OTLP, LDAP, GeoIP, Wasm) in or out, or a finding that the Gateway links every integration unconditionally.
+description: Use when reviewing Gateway Cargo features that compile optional subsystems (Kafka, OTLP, GeoIP, Wasm) in or out, or a finding that the Gateway links every integration unconditionally.
 knowledge_type: intentional-design
 ---
 
@@ -8,10 +8,13 @@ knowledge_type: intentional-design
 
 ## Conclusion and scope
 
-`edgion-gateway` exposes five additive subsystem features — `kafka`, `otlp`,
-`ldap`, `geoip`, `wasm` — aggregated by `full`, which is in `default`. Each
-feature owns its third-party dependencies (`rskafka`; `opentelemetry*`; `ldap3`;
-`maxminddb` + `memmap2`; `wasmtime` + `edgion-wasm`). The canonical reference is
+`edgion-gateway` exposes four additive subsystem features — `kafka`, `otlp`,
+`geoip`, `wasm` — aggregated by `full`, which is in `default`. Each
+feature owns its third-party dependencies (`rskafka`; `opentelemetry*`;
+`maxminddb` + `memmap2`; `wasmtime` + `edgion-wasm`). The former `ldap` feature
+was removed on 2026-11-09 when `ldap3` was replaced by the in-tree `edgion-ldap`
+leaf: LDAP adds no third-party dependency beyond tokio's I/O traits and
+`thiserror`, which the workspace already uses, so it compiles unconditionally (see `skills/04-review/ldap-auth/regression-guards/bounded-response-parsing.md`). The canonical reference is
 `skills/02-features/01-binary-and-deployment/02-feature-flags.md`.
 
 When a feature is off, the module swaps in a placeholder with the same API:
@@ -23,9 +26,8 @@ When a feature is off, the module swaps in a placeholder with the same API:
   startup. A Kafka/OTLP fallback output is dropped with a WARN by the existing
   fallback policy, and an OTLP SSL-log output fails startup (the full build only
   warns that OTLP is unsupported for SSL logs).
-- LDAP/Wasm: `ldap_auth/plugin_disabled.rs` and `wasm/plugin_disabled.rs` fail
-  `validate_tls_entry`, so the plugin runtime records the entry in
-  `invalid_plugins` and the route fails closed. `wasm/request_disabled.rs` keeps the
+- Wasm: `wasm/plugin_disabled.rs` fails `validate_tls_entry`, so the plugin
+  runtime records the entry in `invalid_plugins` and the route fails closed. `wasm/request_disabled.rs` keeps the
   request-context slot type; `wasm/admission.rs` and `wasm/limits.rs` stay compiled
   so `wasm_limits` configuration still parses and validates.
 - GeoIP: `GeoIpProvider::load_from` and `updater::validate_structural` return an
@@ -61,13 +63,12 @@ disabled client instance can exist.
   Elasticsearch has no dedicated dependency, and the AI gateway is cross-cutting.
   These are follow-up candidates in `tasks/todo/arch-03-build-time-extension-selection.md`.
 - Accepted gap: the Controller does not know which subsystems a Gateway binary
-  contains, so it can report `Accepted=True` for a `Wasm`/`LdapAuth` plugin or a
+  contains, so it can report `Accepted=True` for a `Wasm` plugin or a
   Kafka/OTLP LinkSys that a core Gateway rejects. The Gateway still fails closed;
   only the status is optimistic. Capability reporting is tracked in the task above.
 - Diagnostics: a compiled-out `Wasm` entry is reported with the existing generic
   "plugin construction failed" text, because the runtime's Wasm preflight branch
-  discards the validator error (unlike `LdapAuth`, whose message names the missing
-  `ldap` feature). Fail-closed still holds; surfacing the reason would change the
+  discards the validator error. Fail-closed still holds; surfacing the reason would change the
   default build's error text and its Controller/Gateway parity tests, so it is left
   to the follow-up task. `--print-build-capabilities` shows the missing subsystem.
 - An explicit `--no-default-features` list must name `full` (or individual
@@ -82,7 +83,6 @@ allocator-jemalloc,boringssl`), and each single-subsystem-off build, all warning
 free; and `cargo test -p edgion-gateway --lib` on the core build (all pass).
 Core-only regression tests cover the placeholders:
 `compiled_out_kafka_rejects_a_valid_reference`,
-`compiled_out_ldap_auth_entry_fails_closed`,
 `compiled_out_wasm_request_and_attached_entries_fail_closed` (request-only and
 attached response entries), and
 `compiled_out_geoip_never_loads_a_configured_database`. The CI `gateway-core` job

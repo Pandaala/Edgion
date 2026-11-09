@@ -160,7 +160,7 @@ policy. TLS/client construction failure must never select an unconfigured client
   preconfigured TLS, process bootstrap and live canonical conversion cores remain.
   Scoped source and unit verification does not establish live revocation or conformance.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
-  custom hyper connector), ldap_auth (ldap3), the redis provider (redis-rs), the
+  custom hyper connector), ldap_auth (tokio-rustls over the `edgion-ldap` bind session), the redis provider (redis-rs), the
   kafka provider (rskafka), the etcd link provider, the OTLP LinkSys Tonic 0.14 transport, openid_connect token
   exchange, and health-local HTTPS/GRPCS probes (explicit defaults).
 
@@ -237,8 +237,8 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   not gaps): DSL `http.call` (per the F-018 tradeoff above),
   request_mirror, elasticsearch, health probes, the ext_proc tonic channel.
   ldap_auth and openid_connect are no longer in this list: ldap_auth resolves
-  through `EgressResolver` (`ResolverSpec::System`) and injects the admitted
-  stream into ldap3; openid_connect installs the same resolver on both IdP
+  through `EgressResolver` (`ResolverSpec::System`) and runs the `edgion-ldap`
+  bind session over the admitted stream; openid_connect installs the same resolver on both IdP
   HTTP clients. Redis likewise adapts redis-rs's resolver hook to `EgressResolver`
   with `ResolverSpec::System`, so every actual topology dial is classified.
 - **Native Service strategy**: ordinary Services dial proven EndpointSlice IPs.

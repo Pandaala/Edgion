@@ -71,6 +71,7 @@ not share those binary-feature defaults.
 ```
 edgion-waf/                      # Native WAF parsing, semantics, and matching (leaf crate)
 edgion-wasm/                     # Proxy-Wasm compatibility/profile analysis (leaf crate)
+edgion-ldap/                     # Bounded LDAP bind client: BER codec + bind session (leaf crate)
 edgion-dsl/                      # DSL parser, compiler, and static validator (leaf crate)
 edgion-resources/                # Shared resource/config schemas and validation helpers
 edgion-common/                   # Shared infra: config, observability, secret store, link system, proto codegen
@@ -86,12 +87,16 @@ compiler is consumed by `edgion-resources` for control/data-plane validation
 parity, and its transaction runtime is consumed directly by the Gateway.
 `edgion-wasm` is an external-dependencies-only leaf
 consumed by the Gateway before Wasmtime compilation and by the CLI for local
-Wasm inspection. `edgion-dsl` is a leaf and
+Wasm inspection. `edgion-ldap` is a runtime-light leaf (as opposed to
+runtime-free): besides `thiserror` it depends only on tokio's
+`AsyncRead`/`AsyncWrite` traits, so its bind session runs over any stream the
+Gateway has already dialed, admitted and wrapped in TLS; its sans-IO codec has
+no recursion and a fixed frame cap. `edgion-dsl` is a leaf and
 `edgion-resources` depends on it and `edgion-waf` for real DSL/WAF compilation and static validation;
 `edgion-common` holds backend-agnostic shared infrastructure; controller,
 gateway, and CLI code stay in their owning crates. The in-repo dependency graph
 remains a DAG (`{dsl, waf} → resources → common → {controller, gateway, cli}`,
-plus direct `waf → gateway` and `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
+plus direct `waf → gateway`, `ldap → gateway` and `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
 directly for VM/runtime integration.
 
 ## EdgionHttpContext — per-request state container

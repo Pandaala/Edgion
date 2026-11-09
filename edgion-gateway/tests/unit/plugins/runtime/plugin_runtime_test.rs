@@ -3174,7 +3174,6 @@ fn oidc_actual_tls_preflight_precedes_cache_and_fresh_generations_recover() {
     assert_eq!(first_filter.name(), "OpenidConnect");
 }
 
-#[cfg(feature = "ldap")]
 #[test]
 fn ldap_actual_tls_preflight_precedes_cache_and_fresh_generations_recover() {
     use edgion_common::link_sys_core::outbound_tls::{
@@ -4057,27 +4056,6 @@ async fn region_route_unavailable_policy_survives_compilation_and_real_dispatch(
             }
         }
     }
-}
-
-#[cfg(not(feature = "ldap"))]
-#[test]
-fn compiled_out_ldap_auth_entry_fails_closed() {
-    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
-        "metadata": {"name": "ldap-off", "namespace": "apps"},
-        "spec": {"requestPlugins": [{"type": "LdapAuth",
-            "config": {"ldapHost": "ldap.example.com", "baseDn": "dc=example", "attribute": "uid"}}]}
-    }))
-    .unwrap();
-    let mut runtime = PluginRuntime::new();
-    let errors = runtime.add_resource_filters_with_cache(&owner, &mut EntryCache::default());
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("(LdapAuth)") && error.contains("cargo feature `ldap`")),
-        "{errors:?}"
-    );
-    assert_eq!(runtime.request_plugins_iter().count(), 0);
-    assert!(!runtime.invalid_plugins.is_empty());
 }
 
 #[cfg(not(feature = "wasm"))]

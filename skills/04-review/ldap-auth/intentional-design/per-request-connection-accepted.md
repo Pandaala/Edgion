@@ -19,7 +19,8 @@ proves identity reset, serialization, failure cleanup, and bounded concurrency.
 Operators should size the LDAP service for the protected request rate and use
 the existing `RateLimitLocal` plugin to bound abusive traffic. Re-evaluate this
 decision if production evidence shows connection exhaustion, or if the LDAP
-client gains a pool with first-class per-bind identity-reset semantics.
+client (`edgion-ldap`, bind/unbind/StartTLS only, no pooling) gains a pool with
+first-class per-bind identity-reset semantics.
 
 Source: `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`.
 

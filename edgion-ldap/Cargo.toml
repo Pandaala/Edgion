@@ -1,0 +1,21 @@
+[package]
+name = "edgion-ldap"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish = false
+
+# Runtime-light leaf: only tokio's AsyncRead/AsyncWrite traits (`io-util`) are
+# used. Declared directly instead of `tokio.workspace = true` because the
+# workspace entry enables `full`; Cargo feature unification still selects
+# `full` in a whole-workspace build. Keep both version requirements in sync with
+# the workspace `tokio` entry.
+[dependencies]
+tokio = { version = "1.54.1", default-features = false, features = ["io-util"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "macros", "io-util"] }
+
+[lints]
+workspace = true

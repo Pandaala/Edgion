@@ -1,7 +1,9 @@
 //! LDAP Authentication plugin implementation
 
 use crate::plugins::http::common::auth_common::set_sensitive_request_header;
+use std::future::Future;
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
@@ -23,25 +25,45 @@ use edgion_common::link_sys_core::outbound_tls::{
     resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection, EffectiveCa,
     GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection,
 };
+use edgion_ldap::BindSession;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
-use ldap3::{LdapConnAsync, LdapConnSettings, StdStream};
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
 
 const PLUGIN_NAME: &str = "LdapAuth";
 
 /// LDAP Authentication plugin
 pub struct LdapAuth {
-    ldap_url: String,
     ldap_host: String,
     ldap_port: u16,
-    conn_settings: LdapConnSettings,
+    transport: LdapTransport,
     egress: EgressResolver,
     timeout: Duration,
     bind_dn_plan: BindDnPlan,
     auth: AuthPolicy,
+    /// Unit tests inject an in-memory peer here instead of dialing.
+    #[cfg(test)]
+    scripted_stream: parking_lot::Mutex<Option<tokio::io::DuplexStream>>,
+}
+
+/// How the bind connection is secured. Built once per plugin generation.
+enum LdapTransport {
+    Plain,
+    /// Implicit TLS (`ldaps`).
+    Ldaps {
+        connector: TlsConnector,
+        server_name: Option<ServerName<'static>>,
+    },
+    /// StartTLS extended operation on a plain connection, then TLS.
+    StartTls {
+        connector: TlsConnector,
+        server_name: Option<ServerName<'static>>,
+    },
 }
 
 enum BindDnPlan {
@@ -69,11 +91,13 @@ enum LdapAuthError {
     TlsSanMismatch(String),
 }
 
-/// Classify an `LdapError` raised while opening the connection. ldap3 completes
-/// both the implicit-TLS (`ldaps://`) and the STARTTLS handshake inside
-/// `LdapConnAsync::with_settings`, so this is the only site where a TLS error
-/// can appear; `simple_bind` cannot raise one.
-fn map_ldap_connect_error(err: &ldap3::LdapError) -> LdapAuthError {
+/// Classify a TLS handshake error. `bind_over` performs both the implicit-TLS
+/// (`ldaps`) and the STARTTLS handshake through `tokio-rustls`, which reports
+/// failures as `std::io::Error`. SAN verification runs only inside the
+/// handshake, so `simple_bind` never raises a SAN mismatch; a post-handshake
+/// TLS alert (for example a TLS 1.3 client-certificate rejection) surfaces as a
+/// bind stream error and maps to `BindFailed`.
+fn map_ldap_connect_error(err: &std::io::Error) -> LdapAuthError {
     match outbound_san_mismatch_reason(err) {
         Some(reason) => LdapAuthError::TlsSanMismatch(reason.into_owned()),
         None => LdapAuthError::ConnectionFailed,
@@ -96,7 +120,7 @@ async fn connect_admitted_ldap_tcp(
     resolver: &EgressResolver,
     host: &str,
     port: u16,
-) -> Result<std::net::TcpStream, LdapAuthError> {
+) -> Result<TcpStream, LdapAuthError> {
     let addrs = resolver
         .resolve_socket_addrs(host, port)
         .await
@@ -104,13 +128,36 @@ async fn connect_admitted_ldap_tcp(
     dial_admitted_addrs(addrs).await
 }
 
-async fn dial_admitted_addrs(addrs: Vec<std::net::SocketAddr>) -> Result<std::net::TcpStream, LdapAuthError> {
+async fn dial_admitted_addrs(addrs: Vec<std::net::SocketAddr>) -> Result<TcpStream, LdapAuthError> {
     for addr in addrs {
-        if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
-            return stream.into_std().map_err(|_| LdapAuthError::ConnectionFailed);
+        if let Ok(stream) = TcpStream::connect(addr).await {
+            return Ok(stream);
         }
     }
     Err(LdapAuthError::ConnectionFailed)
+}
+
+/// Phase 2: bind, then a best-effort unbind under the same deadline. The
+/// outcome is decided by the bind result code; an unbind failure or a deadline
+/// hit while unbinding does not change it.
+async fn bind_phase<S: AsyncRead + AsyncWrite + Unpin>(
+    mut session: BindSession<S>,
+    budget: Duration,
+    bind_dn: &str,
+    password: &str,
+) -> Result<(), LdapAuthError> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let rc = tokio::time::timeout_at(deadline, session.simple_bind(bind_dn, password.as_bytes()))
+        .await
+        .map_err(|_| LdapAuthError::Timeout)?
+        .map_err(|_| LdapAuthError::BindFailed)?
+        .result_code;
+    let _ = tokio::time::timeout_at(deadline, session.unbind()).await;
+    match rc {
+        0 => Ok(()),
+        49 => Err(LdapAuthError::InvalidCredentials),
+        _ => Err(LdapAuthError::BindFailed),
+    }
 }
 
 enum ParseAuthResult {
@@ -181,7 +228,7 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
     }
 }
 
-/// Build a rustls `ClientConfig` for ldap3 from the already-resolved outbound TLS settings.
+/// Build the LDAP rustls `ClientConfig` from the already-resolved outbound TLS settings.
 ///
 /// - `verify=false` with no SAN policy → `AcceptAllVerifier` (operator's responsibility).
 /// - `verify=false` with non-empty SAN policy → full webpki + `OutboundSanVerifier` (fail-secure:
@@ -189,7 +236,7 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 /// - `System` → webpki built-in roots (binary-embedded, not OS cert store).
 /// - `Custom(pem)` → private CA bundle, REPLACES public roots entirely.
 /// - Client identity (`client_identity`) → `with_client_auth_cert`; absent → `with_no_client_auth`.
-/// - No ALPN protocols: ldap3 does not negotiate ALPN.
+/// - No ALPN protocols: LDAP does not negotiate ALPN.
 fn build_ldap_rustls_config(
     resolved: &edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls,
 ) -> Result<ClientConfig, String> {
@@ -318,8 +365,6 @@ impl LdapAuth {
         let EdgionPlugin::LdapAuth(config) = entry.config() else {
             return Err("LdapAuth TLS configuration error: invalid owning TLS reference".into());
         };
-        let scheme = if config.ldaps { "ldaps" } else { "ldap" };
-        let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
         let timeout = Duration::from_millis(config.timeout);
 
         let tls_config = if let Some(proof) = proof {
@@ -335,17 +380,34 @@ impl LdapAuth {
                 );
             }
 
-            Some(std::sync::Arc::new(build_ldap_rustls_config(&resolved)?))
+            Some(Arc::new(build_ldap_rustls_config(&resolved)?))
         } else {
             None
         };
 
-        let mut conn_settings = LdapConnSettings::new()
-            .set_conn_timeout(timeout)
-            .set_starttls(config.start_tls);
-        if let Some(tls_config) = tls_config {
-            conn_settings = conn_settings.set_config(tls_config);
-        }
+        // Plain LDAP carries no TLS proof, so `tls_config` is `Some` exactly for
+        // `ldaps` / `startTls` (the validator rejects both together). The
+        // server name is parsed once; an unparsable host fails each request
+        // with `ConnectionFailed` instead of failing plugin construction.
+        let transport = match tls_config {
+            None => LdapTransport::Plain,
+            Some(tls_config) => {
+                let connector = TlsConnector::from(tls_config);
+                let server_name = ServerName::try_from(config.ldap_host.clone()).ok();
+                if server_name.is_none() {
+                    tracing::warn!(
+                        component = "ldap_auth",
+                        ldap_host = %config.ldap_host,
+                        "ldapHost is not a valid TLS server name; every bind fails as ldap unreachable"
+                    );
+                }
+                if config.ldaps {
+                    LdapTransport::Ldaps { connector, server_name }
+                } else {
+                    LdapTransport::StartTls { connector, server_name }
+                }
+            }
+        };
 
         let bind_dn_plan = match &config.bind_dn_template {
             Some(template) => BindDnPlan::Template(template.clone()),
@@ -366,14 +428,15 @@ impl LdapAuth {
         };
 
         Ok(Self {
-            ldap_url,
             ldap_host: config.ldap_host.clone(),
             ldap_port: config.ldap_port,
-            conn_settings,
+            transport,
             egress: ldap_egress_resolver(),
             timeout,
             bind_dn_plan,
             auth,
+            #[cfg(test)]
+            scripted_stream: parking_lot::Mutex::new(None),
         })
     }
 
@@ -431,7 +494,7 @@ impl LdapAuth {
         if username.is_empty() {
             return Err("empty username");
         }
-        let escaped = ldap3::dn_escape(username);
+        let escaped = edgion_ldap::dn::escape(username);
 
         match &self.bind_dn_plan {
             BindDnPlan::Template(template) => Ok(template.replace("{username}", escaped.as_ref())),
@@ -440,33 +503,73 @@ impl LdapAuth {
     }
 
     async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
-        let (conn, mut ldap) = tokio::time::timeout(self.timeout, async {
-            let stream = connect_admitted_ldap_tcp(&self.egress, &self.ldap_host, self.ldap_port).await?;
-            let settings = self.conn_settings.clone().set_std_stream(StdStream::Tcp(stream));
-            LdapConnAsync::with_settings(settings, &self.ldap_url)
-                .await
-                .map_err(|e| map_ldap_connect_error(&e))
-        })
-        .await
-        .map_err(|_| LdapAuthError::Timeout)??;
-
-        ldap3::drive!(conn);
-
-        let bind_rc = tokio::time::timeout(self.timeout, ldap.simple_bind(bind_dn, password))
-            .await
-            .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|_| LdapAuthError::BindFailed)?
-            .rc;
-
-        let _ = ldap.unbind().await;
-
-        if bind_rc == 0 {
-            Ok(())
-        } else if bind_rc == 49 {
-            Err(LdapAuthError::InvalidCredentials)
-        } else {
-            Err(LdapAuthError::BindFailed)
+        #[cfg(test)]
+        if let Some(stream) = self.take_scripted_stream() {
+            return self.bind_over(async { Ok(stream) }, bind_dn, password).await;
         }
+        let dial = connect_admitted_ldap_tcp(&self.egress, &self.ldap_host, self.ldap_port);
+        self.bind_over(dial, bind_dn, password).await
+    }
+
+    /// Run the bind exchange over the stream produced by `dial`.
+    ///
+    /// Two deadlines, each `self.timeout`: phase 1 covers dialing, StartTLS
+    /// and the TLS handshake; phase 2 covers the bind and the best-effort
+    /// unbind (see `bind_phase`).
+    async fn bind_over<S, D>(&self, dial: D, bind_dn: &str, password: &str) -> Result<(), LdapAuthError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send,
+        D: Future<Output = Result<S, LdapAuthError>> + Send,
+    {
+        match &self.transport {
+            LdapTransport::Plain => {
+                let stream = tokio::time::timeout(self.timeout, dial)
+                    .await
+                    .map_err(|_| LdapAuthError::Timeout)??;
+                bind_phase(BindSession::new(stream), self.timeout, bind_dn, password).await
+            }
+            LdapTransport::Ldaps { connector, server_name } => {
+                let stream = tokio::time::timeout(self.timeout, async {
+                    let name = server_name.clone().ok_or(LdapAuthError::ConnectionFailed)?;
+                    let raw = dial.await?;
+                    connector
+                        .connect(name, raw)
+                        .await
+                        .map_err(|e| map_ldap_connect_error(&e))
+                })
+                .await
+                .map_err(|_| LdapAuthError::Timeout)??;
+                bind_phase(BindSession::new(stream), self.timeout, bind_dn, password).await
+            }
+            LdapTransport::StartTls { connector, server_name } => {
+                let (stream, next_id) = tokio::time::timeout(self.timeout, async {
+                    let name = server_name.clone().ok_or(LdapAuthError::ConnectionFailed)?;
+                    let raw = dial.await?;
+                    let (raw, next_id) = BindSession::new(raw)
+                        .start_tls()
+                        .await
+                        .map_err(|_| LdapAuthError::ConnectionFailed)?;
+                    let tls = connector
+                        .connect(name, raw)
+                        .await
+                        .map_err(|e| map_ldap_connect_error(&e))?;
+                    Ok::<_, LdapAuthError>((tls, next_id))
+                })
+                .await
+                .map_err(|_| LdapAuthError::Timeout)??;
+                bind_phase(BindSession::resume(stream, next_id), self.timeout, bind_dn, password).await
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn install_scripted_stream(&self, stream: tokio::io::DuplexStream) {
+        *self.scripted_stream.lock() = Some(stream);
+    }
+
+    #[cfg(test)]
+    fn take_scripted_stream(&self) -> Option<tokio::io::DuplexStream> {
+        self.scripted_stream.lock().take()
     }
 
     fn apply_authenticated_headers(&self, session: &mut dyn PluginSession, username: &str) {

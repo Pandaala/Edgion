@@ -72,7 +72,7 @@ cicd/deploy/standalone/start.sh
 `allocator-mimalloc` 或 `allocator-system` 选择分配器。依赖 crate 名称
 `tikv-jemallocator` 和 `mimalloc` 不是这些二进制的 Cargo feature 名称。
 
-Gateway 还提供可选的子系统 feature：`kafka`、`otlp`、`ldap`、`geoip` 和 `wasm`。
+Gateway 还提供可选的子系统 feature：`kafka`、`otlp`、`geoip` 和 `wasm`。
 聚合 feature `full` 会开启全部子系统，并且包含在默认 feature 中。使用
 `--no-default-features` 加显式 feature 列表构建时，需要加上 `full`（或所需的单个子系统），
 否则这些子系统不会被编译进二进制。被编译掉的子系统不会 fail-open：主日志输出配置为 Kafka/OTLP，或 SSL 日志输出配置为 OTLP 时

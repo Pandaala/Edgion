@@ -56,7 +56,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `authFailureDelayMs` | Integer | `0` | 返回凭证相关 401 响应前的延迟，单位为毫秒 |
 | `anonymous` | String | 无 | 匿名用户名；仅当两个凭证头都缺失时生效 |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [字符规则](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
-| `timeout` | Integer | `10000` | LDAP 超时（毫秒） |
+| `timeout` | Integer | `10000` | LDAP 超时（毫秒），分别作用于建连阶段（DNS 解析、TCP、StartTLS、TLS 握手）和 bind 加 unbind 阶段；一次 LDAP 交互最长为该值的两倍，返回 401 时另加 `authFailureDelayMs` |
 | `keepalive` | Integer | `60000` | 保留字段 |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | 认证用户名透传头 |
 | `anonymousHeader` | String | `X-Anonymous-Consumer` | 匿名标记头 |

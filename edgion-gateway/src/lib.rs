@@ -72,7 +72,6 @@ pub fn build_capabilities() -> &'static str {
         for (name, enabled) in [
             ("kafka", cfg!(feature = "kafka")),
             ("otlp", cfg!(feature = "otlp")),
-            ("ldap", cfg!(feature = "ldap")),
             ("geoip", cfg!(feature = "geoip")),
             ("wasm", cfg!(feature = "wasm")),
         ] {

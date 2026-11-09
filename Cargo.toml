@@ -1,10 +1,10 @@
 [workspace]
-members = ["edgion-algo", "edgion-waf", "edgion-wasm", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
+members = ["edgion-algo", "edgion-waf", "edgion-wasm", "edgion-ldap", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
 # `edgion-tests` is the ~56k-line end-to-end harness. It is a member (so
 # `cargo build -p edgion-tests` works and CI can target it), but is kept out of
 # `default-members` so a bare `cargo build` / `cargo check --all-targets` for
 # production does NOT compile it. Build it explicitly with `-p edgion-tests`.
-default-members = ["edgion-algo", "edgion-waf", "edgion-wasm", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
+default-members = ["edgion-algo", "edgion-waf", "edgion-wasm", "edgion-ldap", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
 # Virtual manifest: after the crate split there is no root `edgion` package — the
 # three binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are peers
 # and no single package owns the workspace. A virtual manifest has no
@@ -57,6 +57,7 @@ manual_let_else       = "warn"
 edgion-algo       = { path = "edgion-algo" }
 edgion-waf        = { path = "edgion-waf" }
 edgion-wasm       = { path = "edgion-wasm" }
+edgion-ldap       = { path = "edgion-ldap" }
 edgion-dsl        = { path = "edgion-dsl" }
 edgion-resources  = { path = "edgion-resources" }
 edgion-common     = { path = "edgion-common" }
@@ -149,8 +150,6 @@ cookie = "0.18.1"
 redis = { version = "1.8.1", default-features = false, features = ["aio", "tokio-comp", "tokio-rustls-comp", "tls-rustls-webpki-roots", "cluster-async"] }
 etcd-client = { version = "0.21.1", features = ["tls"] }
 
-# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
-ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 rskafka = { version = "0.6", default-features = false, features = ["transport-tls"] }
 
 # Crypto / encoding
