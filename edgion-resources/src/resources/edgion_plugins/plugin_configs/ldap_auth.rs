@@ -262,6 +262,10 @@ pub const MAX_GROUP_DN_LEN: usize = 1024;
 pub const MAX_GROUP_ATTRIBUTE_LEN: usize = 256;
 
 impl LdapAuthConfig {
+    /// Secret data keys accepted for `bindPasswordRef` (shared by the
+    /// Controller resolver and its status check).
+    pub const BIND_PASSWORD_KEYS: &'static [&'static str] = &["password"];
+
     /// Validate configuration and return error message when invalid.
     pub fn get_validation_error(&self) -> Option<&str> {
         if let Err(error) = validate_auth_realm(&self.realm) {

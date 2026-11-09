@@ -812,29 +812,36 @@ async fn loopback_literal_is_classified_in_unit_tests() {
     assert_eq!(addrs, vec!["127.0.0.1:389".parse().unwrap()]);
 }
 
+/// In-memory connector: `refused` addresses fail like a refused TCP connect,
+/// any other address "connects" and returns it.
+fn fake_connect(
+    refused: &'static [std::net::SocketAddr],
+) -> impl FnMut(std::net::SocketAddr) -> std::future::Ready<std::io::Result<std::net::SocketAddr>> {
+    move |addr| {
+        std::future::ready(if refused.contains(&addr) {
+            Err(std::io::ErrorKind::ConnectionRefused.into())
+        } else {
+            Ok(addr)
+        })
+    }
+}
+
+const REFUSED: std::net::SocketAddr =
+    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 389);
+const ADMITTED: std::net::SocketAddr =
+    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 2)), 389);
+
 #[tokio::test]
 async fn dial_skips_refused_candidate_and_uses_next() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind admitted fallback listener");
-    let admitted = listener.local_addr().expect("listener addr");
-    let accept = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept fallback connection");
-        stream
-    });
-
-    let refused = "127.0.0.1:1".parse().unwrap();
-    let stream = dial_admitted_addrs(vec![refused, admitted])
+    let connected = dial_admitted_addrs(vec![REFUSED, ADMITTED], fake_connect(&[REFUSED]))
         .await
         .expect("second admitted address must be dialed");
-    drop(stream);
-    accept.await.expect("accepted fallback connection");
+    assert_eq!(connected, ADMITTED);
 }
 
 #[tokio::test]
 async fn all_refused_candidates_fail_closed() {
-    let refused = "127.0.0.1:1".parse().unwrap();
-    let err = dial_admitted_addrs(vec![refused])
+    let err = dial_admitted_addrs(vec![REFUSED], fake_connect(&[REFUSED]))
         .await
         .expect_err("no admitted TCP candidate must fail closed");
     assert!(matches!(err, LdapAuthError::ConnectionFailed));
@@ -1181,7 +1188,7 @@ async fn malformed_bind_responses_fail_closed() {
             })
             .await;
         assert!(
-            matches!(result, Err(LdapAuthError::BindFailed)),
+            matches!(result, Err(LdapAuthError::BindFailed(BindFailure::Protocol))),
             "{prefix:02x?}: {result:?}"
         );
         drop(auth);
@@ -1219,7 +1226,7 @@ async fn scripted_rc_0_is_ok() {
 }
 
 #[tokio::test]
-async fn malformed_bind_response_run_request_returns_503_with_bind_fail_tag() {
+async fn malformed_bind_response_run_request_returns_503_with_protocol_tag() {
     use crate::plugins::runtime::traits::session::MockPluginSession;
 
     let auth = ldap_auth_default();
@@ -1248,7 +1255,8 @@ async fn malformed_bind_response_run_request_returns_503_with_bind_fail_tag() {
         auth.run_request(&mut session, &mut log).await,
         PluginRunningResult::ErrTerminateRequest
     );
-    assert!(log.contains("ldap bind fail"), "{}", log.render_for_test());
+    assert!(log.contains("ldap bind protocol error"), "{}", log.render_for_test());
+    assert!(!log.contains("ldap bind fail"), "{}", log.render_for_test());
     drop(auth);
     peer.await.unwrap();
 }
@@ -1314,7 +1322,7 @@ async fn peer_close_before_reply_is_bind_failed() {
             password: "p"
         })
         .await,
-        Err(LdapAuthError::BindFailed)
+        Err(LdapAuthError::BindFailed(BindFailure::Transport))
     ));
     task.await.unwrap();
 }
@@ -1460,7 +1468,7 @@ async fn phase2_timeout_when_peer_never_replies() {
 }
 
 #[tokio::test]
-async fn start_tls_rejection_is_connection_failed() {
+async fn start_tls_rejection_is_reported_as_rejected() {
     install_test_crypto_provider();
     let (owner, _, _) = ldap_tls_owner(true);
     let prepared = PreparedPluginReferences::from_plugins(&owner);
@@ -1480,7 +1488,7 @@ async fn start_tls_rejection_is_connection_failed() {
             password: "p"
         })
         .await,
-        Err(LdapAuthError::ConnectionFailed)
+        Err(LdapAuthError::StartTlsRejected)
     ));
     drop(auth);
     peer.await.unwrap();
@@ -1498,7 +1506,7 @@ async fn peer_close_before_request_is_bind_failed() {
             password: "p"
         })
         .await,
-        Err(LdapAuthError::BindFailed)
+        Err(LdapAuthError::BindFailed(BindFailure::Transport))
     ));
 }
 
@@ -1856,7 +1864,16 @@ async fn search_mode_outcome_mapping() {
                 [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
                 bind_reply(3, 53),
             ],
-            |r| matches!(r, Err(LdapAuthError::BindFailed)),
+            |r| matches!(r, Err(LdapAuthError::BindFailed(BindFailure::Result))),
+        ),
+        (
+            "user bind protocol error",
+            vec![
+                bind_reply(1, 0),
+                [entry_reply(2, user_dn(), Some(b"bob")), done_reply(2, 0)].concat(),
+                bind_reply(9, 0),
+            ],
+            |r| matches!(r, Err(LdapAuthError::BindFailed(BindFailure::Protocol))),
         ),
         ("service password rejected", vec![bind_reply(1, 49)], |r| {
             matches!(r, Err(LdapAuthError::ServiceBindRejected))
@@ -2448,4 +2465,135 @@ fn group_filter_is_built_from_trimmed_config() {
     let expected = SearchFilter::group_requirement("memberOf", &[GROUP_DN], &["cn=a,dc=x"], true).unwrap();
     assert_eq!(groups, &expected);
     assert!(search_plan(&search_auth(search_config())).groups.is_none());
+}
+
+#[test]
+fn bind_failure_tags_are_distinct_and_static() {
+    assert_eq!(BindFailure::Result.tag(), "ldap bind fail");
+    assert_eq!(BindFailure::Transport.tag(), "ldap bind transport error");
+    assert_eq!(BindFailure::Tls.tag(), "ldap bind tls error");
+    assert_eq!(BindFailure::Protocol.tag(), "ldap bind protocol error");
+}
+
+#[test]
+fn bind_failure_classes() {
+    use edgion_ldap::Error;
+    use std::io::{Error as IoError, ErrorKind};
+    assert_eq!(bind_failure(&Error::Closed), BindFailure::Transport);
+    assert_eq!(
+        bind_failure(&Error::Io(IoError::from(ErrorKind::ConnectionReset))),
+        BindFailure::Transport
+    );
+    // rustls reports a post-handshake alert (for example a rejected client
+    // certificate under TLS 1.3) as InvalidData.
+    assert_eq!(
+        bind_failure(&Error::Io(IoError::new(ErrorKind::InvalidData, "alert"))),
+        BindFailure::Tls
+    );
+    assert_eq!(bind_failure(&Error::Truncated), BindFailure::Protocol);
+    assert_eq!(
+        bind_failure(&Error::UnexpectedMessageId { expected: 1, actual: 2 }),
+        BindFailure::Protocol
+    );
+}
+
+#[tokio::test]
+async fn bind_failure_classes_pick_their_tags() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    // (peer reply or None for "close after the request", expected tag)
+    let cases: [(Option<Vec<u8>>, &str); 3] = [
+        (Some(bind_response(53)), "ldap bind fail"),
+        (None, "ldap bind transport error"),
+        (
+            Some(vec![0x30, 0x05, 0x02, 0x01, 0x09, 0x61, 0x00]),
+            "ldap bind protocol error",
+        ),
+    ];
+    for (reply, tag) in cases {
+        let auth = ldap_auth_default();
+        let peer = match reply {
+            Some(reply) => scripted_peer(&auth, 4096, reply),
+            None => {
+                let (client, mut peer) = tokio::io::duplex(4096);
+                auth.install_scripted_stream(client);
+                tokio::spawn(async move {
+                    let _ = read_request(&mut peer).await;
+                })
+            }
+        };
+        let header = ldap_header("bob:pw");
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("authorization", header.as_str())]);
+        session.expect_record_outcome().times(1).return_const(());
+        session
+            .expect_write_response_header()
+            .withf(|header, _| header.status.as_u16() == 503)
+            .times(1)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+        session.expect_shutdown().times(1).returning(|| {});
+        let mut log = PluginLog::new(PLUGIN_NAME);
+        auth.run_request(&mut session, &mut log).await;
+        assert!(log.contains(tag), "{tag}: {}", log.render_for_test());
+        drop(auth);
+        let _ = peer.await;
+    }
+}
+
+#[tokio::test]
+async fn start_tls_rejection_run_request_tag_and_metric() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    install_test_crypto_provider();
+    let (owner, _, _) = ldap_tls_owner(true);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let auth = LdapAuth::new(&entry, &defaults).expect("StartTLS fixture must build");
+    let rejected = vec![
+        0x30, 0x0c, 0x02, 0x01, 0x01, 0x78, 0x07, 0x0a, 0x01, 0x02, 0x04, 0x00, 0x04, 0x00,
+    ];
+    let peer = scripted_peer(&auth, 4096, rejected);
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+    let header = ldap_header("bob:pw");
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", header.as_str())]);
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "ldap-unreachable")
+        .times(1)
+        .return_const(());
+    session
+        .expect_write_response_header()
+        .withf(|header, _| header.status.as_u16() == 503)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    auth.run_request(&mut session, &mut log).await;
+    assert!(log.contains("ldap starttls rejected"), "{}", log.render_for_test());
+    assert!(!log.contains("ldap unreachable"), "{}", log.render_for_test());
+    let count: u64 = snapshotter
+        .snapshot()
+        .into_vec()
+        .into_iter()
+        .filter(|(key, _, _, _)| {
+            key.key().name() == crate::observe::metrics::registry::names::LDAP_AUTH_ERRORS_TOTAL
+                && key
+                    .key()
+                    .labels()
+                    .any(|label| label.key() == "kind" && label.value() == "starttls_rejected")
+        })
+        .map(|(_, _, _, value)| match value {
+            DebugValue::Counter(count) => count,
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(count, 1, "the catalog must admit kind=starttls_rejected");
+    drop(auth);
+    peer.await.unwrap();
 }

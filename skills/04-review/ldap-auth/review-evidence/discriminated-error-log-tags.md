@@ -84,7 +84,11 @@ review; it was a 503 before). `ldap service bind fail` and
 `ldap service credential unavailable` are user-independent. `ldap search fail`
 is mostly directory-wide but can depend on the username: a directory may reject
 the assertion value for some usernames (rc 18/21/87), and a user bind that
-answers a code other than 0/49 maps to `ldap bind fail`; both are the same
+answers a code other than 0/49 maps to `ldap bind fail` (or, since the
+2026-11-09 follow-ups, to `ldap bind transport error`, `ldap bind tls error` or
+`ldap bind protocol error` by failure class — re-evaluated: these split only
+the same post-search 503, reachable only after a unique entry was found, so
+they add no existence information); both are the same
 503 class bind mode already has, carry no entry-existence information beyond
 what the directory chose to reveal, and are recorded as accepted limits.
 `Deny bad username` also covers control characters and over-long search-mode

@@ -6,23 +6,27 @@ authors.workspace = true
 publish = false
 
 # Runtime-light leaf: only tokio's AsyncRead/AsyncWrite traits (`io-util`) are
-# used. Declared directly instead of `tokio.workspace = true` because the
-# workspace entry enables `full`; Cargo feature unification still selects
-# `full` in a whole-workspace build. Keep both version requirements in sync with
-# the workspace `tokio` entry.
+# used, plus `zeroize` (`alloc` only) to wipe request buffers that carry a bind
+# password; both only with the `client` feature. tokio is declared directly
+# instead of `tokio.workspace = true` because the workspace entry enables
+# `full`; Cargo feature unification still selects `full` in a whole-workspace
+# build. Keep the tokio version requirements here and in `[dev-dependencies]`
+# in sync with the workspace `tokio` entry, and `zeroize` with the workspace
+# `zeroize` entry.
 [dependencies]
 tokio = { version = "1.54.1", default-features = false, features = ["io-util"], optional = true }
 thiserror.workspace = true
+zeroize = { version = "1", default-features = false, features = ["alloc"], optional = true }
 
 # `client` gates the async bind session and its tokio dependency. The codec,
 # protocol decoders, filter compiler and DN helpers are runtime-free, which lets
 # `edgion-resources` use them for validation (`default-features = false`).
 [features]
 default = ["client"]
-client = ["dep:tokio"]
+client = ["dep:tokio", "dep:zeroize"]
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["rt", "macros", "io-util"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "io-util", "time"] }
 
 [lints]
 workspace = true

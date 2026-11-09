@@ -659,6 +659,18 @@ async fn owning_tls_handler_keeps_kind_order_and_revalidates_exact_configmap_gra
     for variant in ["OpenidConnect", "LdapAuth", "ExtProc"] {
         let mut secret = build_secret("default", "shared", "ca.crt", "secret-ca");
         secret.metadata.annotations = Some(BTreeMap::from([(CONTROLLER_CA_SOURCE.into(), "ConfigMap".into())]));
+        // The OIDC and LdapAuth fixtures also point their credential refs at
+        // this Secret; give it usable values so ResolvedRefs reflects only the grant.
+        let data = secret.data.get_or_insert_with(Default::default);
+        data.insert("password".into(), k8s_openapi::ByteString(b"svc-pw".to_vec()));
+        data.insert(
+            "clientSecret".into(),
+            k8s_openapi::ByteString(b"client-secret".to_vec()),
+        );
+        data.insert(
+            "sessionSecret".into(),
+            k8s_openapi::ByteString(b"session-secret-of-at-least-32-bytes".to_vec()),
+        );
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("default/shared".into(), secret)]));
         runtime.configmap_store.replace_all(HashMap::from([(
             "ops/shared".into(),
@@ -9011,4 +9023,164 @@ async fn ldap_bind_password_reads_only_the_password_key() {
         panic!("unexpected skip")
     };
     assert_eq!(resolved_bind_password(&parsed), None);
+}
+
+/// ResolvedRefs (status, reason, message) after parse + status for `ep`.
+async fn credential_resolved_refs(ep: EdgionPlugins, secrets: Vec<(&str, &str, &str)>) -> (String, String, String) {
+    let secret_map = secrets
+        .into_iter()
+        .map(|(name, key, value)| (format!("default/{name}"), build_secret("default", name, key, value)))
+        .collect();
+    let (ctx, _runtime) = make_ctx_with_secrets(secret_map);
+    let handler = EdgionPluginsHandler::new();
+    let ProcessResult::Continue(mut parsed) = handler.parse(ep, &ctx).await else {
+        panic!("unexpected skip")
+    };
+    handler.update_status(&mut parsed, &ctx, &[]);
+    let condition = parsed
+        .status
+        .as_ref()
+        .unwrap()
+        .as_local()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .unwrap()
+        .clone();
+    (condition.status, condition.reason, condition.message)
+}
+
+#[tokio::test]
+async fn ldap_bind_password_status_reports_unusable_material() {
+    let plugins = || ldap_search_plugins(serde_json::json!({}));
+    let (status, reason, _) = credential_resolved_refs(plugins(), vec![("ldap-svc", "password", "svc-pw")]).await;
+    assert_eq!((status.as_str(), reason.as_str()), ("True", "ResolvedRefs"));
+
+    let (status, reason, message) =
+        credential_resolved_refs(plugins(), vec![("ldap-svc", "bindPassword", "svc-pw")]).await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "MissingKeys"),
+        "{message}"
+    );
+    assert!(message.contains("password"), "{message}");
+
+    let (status, reason, message) = credential_resolved_refs(plugins(), vec![("ldap-svc", "password", "   ")]).await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "DecodeError"),
+        "{message}"
+    );
+    assert!(message.contains("bindPasswordRef"), "{message}");
+    assert!(!message.contains("svc-pw"));
+}
+
+fn oidc_plugins(extra: serde_json::Value) -> EdgionPlugins {
+    let mut config = serde_json::json!({
+        "discovery":"https://idp.example/.well-known/openid-configuration", "clientId":"client",
+        "clientSecretRef":{"name":"oidc-client"}, "sessionSecretRef":{"name":"oidc-session"}
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        config[key] = value.clone();
+    }
+    serde_json::from_value(serde_json::json!({"apiVersion":"edgion.io/v1","kind":"EdgionPlugins",
+    "metadata":{"name":"oidc","namespace":"default"},
+    "spec":{"requestPlugins":[{"type":"OpenidConnect","config":config}]}}))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn oidc_secret_status_checks_only_used_secrets() {
+    const SESSION: &str = "a-session-secret-of-at-least-32-bytes";
+    // Interactive login uses both: good material → True.
+    let (status, _, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({})),
+        vec![
+            ("oidc-client", "clientSecret", "c"),
+            ("oidc-session", "sessionSecret", SESSION),
+        ],
+    )
+    .await;
+    assert_eq!(status, "True", "{message}");
+
+    // Used client secret without an accepted key → MissingKeys.
+    let (status, reason, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({})),
+        vec![
+            ("oidc-client", "password", "c"),
+            ("oidc-session", "sessionSecret", SESSION),
+        ],
+    )
+    .await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "MissingKeys"),
+        "{message}"
+    );
+
+    // Used session secret shorter than 32 bytes → DecodeError.
+    let (status, reason, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({})),
+        vec![
+            ("oidc-client", "clientSecret", "c"),
+            ("oidc-session", "sessionSecret", "tiny-value"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "DecodeError"),
+        "{message}"
+    );
+    assert!(
+        message.contains("sessionSecretRef") && message.contains("32"),
+        "{message}"
+    );
+    assert!(!message.contains("tiny-value"), "{message}");
+
+    // Bearer-only JwksOnly uses neither secret: unusable material is not reported.
+    let (status, _, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({"bearerOnly": true, "verificationMode": "JwksOnly"})),
+        vec![
+            ("oidc-client", "password", "c"),
+            ("oidc-session", "sessionSecret", "tiny-value"),
+        ],
+    )
+    .await;
+    assert_eq!(status, "True", "{message}");
+
+    // Bearer-only Auto may introspect an opaque token with the client secret:
+    // the client secret is checked, the unused session secret is not.
+    let (status, reason, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({"bearerOnly": true})),
+        vec![
+            ("oidc-client", "password", "c"),
+            ("oidc-session", "sessionSecret", "tiny-value"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "MissingKeys"),
+        "{message}"
+    );
+    assert!(!message.contains("sessionSecretRef"), "{message}");
+
+    // A non-bearer flow that denies instead of logging in still decodes a
+    // session cookie when one is present: the session secret is checked too.
+    let (status, reason, message) = credential_resolved_refs(
+        oidc_plugins(serde_json::json!({"unauthAction": "Deny"})),
+        vec![
+            ("oidc-client", "clientSecret", "c"),
+            ("oidc-session", "sessionSecret", "tiny-value"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        (status.as_str(), reason.as_str()),
+        ("False", "DecodeError"),
+        "{message}"
+    );
+    assert!(message.contains("sessionSecretRef"), "{message}");
 }

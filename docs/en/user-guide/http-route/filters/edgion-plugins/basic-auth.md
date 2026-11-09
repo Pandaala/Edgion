@@ -222,7 +222,9 @@ filters:
 
 **Access log**: on success, the plugin writes `OK group=partner-a user alice` (the group comes from the matched group's `name`).
 
-**Security note**: Failure branches (`Deny no credential`, `Deny bad credential`, `Allow anonymous`) intentionally **do not** carry `group=`, to prevent unauthenticated callers from probing the tenant topology. `Deny bad credential` does not distinguish "unknown user" from "wrong password" — this is a deliberate security design that prevents the username-existence oracle attack.
+**Security note**: Failure branches (`Deny no credential`, `Deny bad credential`, `Allow anonymous`, `identity header rejected`) intentionally **do not** carry `group=`, to prevent unauthenticated callers from probing the tenant topology. `Deny bad credential` does not distinguish "unknown user" from "wrong password" — this is a deliberate security design that prevents the username-existence oracle attack.
+
+**Identity header write failure**: the plugin writes `X-Consumer-Username` (and, for anonymous access, `X-Anonymous-Consumer`) before letting the request through. If a value cannot be written as an HTTP header — for example a configured username or `anonymous` value containing a control character other than TAB — the request is denied with `401` (after `authFailureDelayMs`) and the access log records `identity header rejected`, so a client-supplied identity header never reaches the upstream. Such a username can never log in; remove control characters from usernames.
 
 **Duplicate username across groups**: if the same username appears in Secrets from multiple groups, the first occurrence (in `secretGroups` array order) wins; later duplicates are skipped and a warning is logged. This is a management-convenience design, not a tenant isolation boundary.
 

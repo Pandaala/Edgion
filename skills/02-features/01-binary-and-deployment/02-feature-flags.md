@@ -77,7 +77,8 @@ The `edgion-waf` crate is not optional: `edgion-resources` validates WAF rules
 with it and AI usage parsing reuses its bounded JSON reader. AI, Elasticsearch,
 Redis, etcd, webhook and local-file outputs are always compiled. `LdapAuth` is
 also always compiled: its client is the in-tree `edgion-ldap` leaf, which adds
-no third-party dependency beyond tokio's I/O traits and `thiserror`, so a
+no third-party dependency beyond tokio's I/O traits, `thiserror` and `zeroize`
+(all already in the workspace), so a
 feature gate would remove no CVE surface.
 
 `edgion-gateway --print-build-capabilities` reports one

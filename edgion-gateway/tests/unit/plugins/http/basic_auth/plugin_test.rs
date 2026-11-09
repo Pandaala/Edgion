@@ -320,3 +320,98 @@ async fn prepared_challenge_tracks_plugin_generations_and_releases_old_owner() {
     drop(inflight);
     assert!(old_weak.upgrade().is_none());
 }
+
+fn expect_basic_401(session: &mut MockPluginSession) {
+    session
+        .expect_write_response_header()
+        .withf(|header, _| header.status.as_u16() == 401)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+}
+
+#[tokio::test(start_paused = true)]
+async fn identity_header_write_failure_denies_without_ok_line() {
+    const DELAY_MS: u64 = 400;
+    let plugin = BasicAuth::new(&BasicAuthConfig {
+        realm: "Test Realm".to_string(),
+        resolved_users: Some(make_user_map("testuser", "testpass", "default")),
+        auth_failure_delay_ms: DELAY_MS,
+        ..Default::default()
+    });
+    let started = tokio::time::Instant::now();
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[
+            ("authorization", basic_header(b"testuser:testpass").as_str()),
+            ("x-consumer-username", "spoofed-admin"),
+        ],
+    );
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Err("header store rejected the value".into()));
+    expect_basic_401(&mut session);
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    let entries = render_log(&log);
+    assert!(
+        entries.iter().any(|e| e == "err: identity header rejected"),
+        "{entries:?}"
+    );
+    assert!(!entries.iter().any(|e| e.contains("group=")), "{entries:?}");
+    // Same delay as a bad credential, so timing does not reveal the password check.
+    assert!(started.elapsed() >= std::time::Duration::from_millis(DELAY_MS));
+}
+
+#[tokio::test]
+async fn anonymous_header_write_failure_denies_without_allow_line() {
+    let plugin = BasicAuth::new(&BasicAuthConfig {
+        anonymous: Some("guest".to_string()),
+        ..Default::default()
+    });
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-consumer-username", "spoofed-admin")]);
+    session
+        .expect_set_request_header_value()
+        .times(1)
+        .returning(|_, _| Err("header store rejected the value".into()));
+    expect_basic_401(&mut session);
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    let entries = render_log(&log);
+    assert!(
+        entries.iter().any(|e| e == "err: identity header rejected"),
+        "{entries:?}"
+    );
+    assert!(!entries.iter().any(|e| e == "Allow anonymous"), "{entries:?}");
+}
+
+#[tokio::test]
+async fn successful_auth_writes_identity_then_logs_ok() {
+    let plugin = create_basic_auth_with_users();
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(
+        &mut session,
+        &[("authorization", basic_header(b"testuser:testpass").as_str())],
+    );
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Consumer-Username" && value == "testuser")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("BasicAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(render_log(&log), vec!["OK group=default user testuser"]);
+}

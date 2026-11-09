@@ -6,6 +6,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential::ca_refs::reso
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::LdapAuthConfig;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
 
@@ -47,7 +48,7 @@ fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, owner: &ResourceRef, ctx: &
             .ldap_bind_secret()
             .and_then(|token| match fetch_bound_secret(ctx, owner, token) {
                 BoundFetchOutcome::Ok(authorized) => {
-                    read_secret_utf8(&authorized.secret, &["password"]).map(str::to_owned)
+                    read_secret_utf8(&authorized.secret, LdapAuthConfig::BIND_PASSWORD_KEYS).map(str::to_owned)
                 }
                 BoundFetchOutcome::Pending(_) | BoundFetchOutcome::Invalid(_) => None,
             });

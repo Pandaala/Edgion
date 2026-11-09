@@ -299,6 +299,12 @@ spec:
 - `clientSecretRef`：读取 `clientSecret` / `client_secret` / `secret`
 - `sessionSecretRef`：读取 `sessionSecret` / `session_secret` / `secret`
 - `sessionSecret` 必须至少 32 字节（用于 AES-256-GCM）
+- 当前模式会用到某个 secret 时，若引用的 Secret 没有可用值，会在资源状态中报告：
+  没有任何可接受的 key 时为 `ResolvedRefs=False`、原因 `MissingKeys`；值为空、不是
+  UTF-8，或 session secret 少于 32 字节时为 `DecodeError`。client secret 除了"bearer-only +
+  `verificationMode: JwksOnly` 且未开启 `revokeTokensOnLogout`"之外都会检查；session secret 在
+  `bearerOnly` 为 false 时检查。当前模式用不到的引用不检查内容是否可用，但 Secret 不存在、引用被拒绝
+  等错误仍会报告。
 
 Controller 通常会解析这两个引用，并将值随插件 generation 下发。Gateway 在构造该
 generation 时消费解析后的值；如果解析值缺失或为空，Gateway 仅在构造期执行一次旧式

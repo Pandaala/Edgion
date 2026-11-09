@@ -254,6 +254,8 @@ Rules and guarantees:
   `userid` for `uid` are not resolved); a multi-valued attribute denies that user.
 - A rejected or unresolved service-account password returns the generic `401` and
   increments `edgion_ldap_auth_errors_total{kind="service_bind_fail"}`; alert on it.
+  A `bindPasswordRef` Secret without a usable `password` value also shows
+  `ResolvedRefs=False` (`MissingKeys` or `DecodeError`) on the resource status.
 - Timing: an unknown user skips the final bind, so it answers one LDAP round trip
   faster than a wrong password. `authFailureDelayMs` slows guessing but does not
   hide this difference; bound probing with `RateLimitLocal`.
@@ -311,6 +313,7 @@ config:
 | Invalid credential format | `401` | Generic authentication failure |
 | Wrong LDAP credentials | `401` | Generic authentication failure |
 | LDAP service unreachable/timeout | `503` | Service unavailable |
+| StartTLS refused by the server (non-zero result code) | `503` | Counted as `starttls_rejected`, separate from `unreachable` |
 | LDAP destination denied by egress policy | `503` | Same generic body as unreachable |
 | Username contains a control character | `401` | Rejected before any LDAP request |
 | Search mode: username longer than 1024 bytes | `401` | Rejected before any LDAP request |

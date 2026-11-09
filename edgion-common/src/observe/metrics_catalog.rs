@@ -295,6 +295,7 @@ pub static DEFINITIONS: &[Definition] = &[
                 "tls_san_mismatch",
                 "service_bind_fail",
                 "search_fail",
+                "starttls_rejected",
             ]),
             required: true,
         }],

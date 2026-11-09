@@ -26,7 +26,8 @@
 //!   `client::BindSession` for the stream handling.
 //!
 //! With the default `client` feature the crate is runtime-light rather than
-//! runtime-free: it depends on tokio's `AsyncRead`/`AsyncWrite` traits only.
+//! runtime-free: it depends on tokio's `AsyncRead`/`AsyncWrite` traits and
+//! on `zeroize` (to wipe request buffers that carry a bind password).
 //! Without it the crate has no runtime dependency. Callers dial, apply egress
 //! policy, and perform TLS handshakes themselves.
 

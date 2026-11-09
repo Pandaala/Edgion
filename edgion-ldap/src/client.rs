@@ -13,6 +13,7 @@ use crate::proto::{
     encode_start_tls_request, encode_unbind_request, LdapResult, SearchFrame,
 };
 use crate::Error;
+use zeroize::Zeroizing;
 
 /// Maximum continuation references accepted in one search.
 pub const MAX_SEARCH_REFERENCES: usize = 8;
@@ -86,7 +87,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
     /// Request StartTLS. On success returns the raw stream, positioned right
     /// after the ExtendedResponse, and the next message ID for [`BindSession::resume`].
     pub async fn start_tls(mut self) -> Result<(S, MessageId), Error> {
-        let id = self.send(encode_start_tls_request).await?;
+        let id = self.send(|id| Zeroizing::new(encode_start_tls_request(id))).await?;
         self.read_frame().await?;
         let result = decode_extended_response(&self.buf, id)?;
         if result.result_code != 0 {
@@ -116,7 +117,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
     ) -> Result<Option<FoundEntry>, Error> {
         const SIZE_LIMIT_EXCEEDED: u32 = 4;
         let id = self
-            .send(|id| encode_search_request(id, base, scope, filter, username, attribute, time_limit_secs))
+            .send(|id| {
+                Zeroizing::new(encode_search_request(
+                    id,
+                    base,
+                    scope,
+                    filter,
+                    username,
+                    attribute,
+                    time_limit_secs,
+                ))
+            })
             .await?;
         let mut found: Option<FoundEntry> = None;
         let mut references = 0usize;
@@ -152,11 +163,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
     /// Send an UnbindRequest, then shut down the write side (on a TLS stream
     /// this sends close_notify). The protocol defines no response.
     pub async fn unbind(&mut self) -> Result<(), Error> {
-        self.send(encode_unbind_request).await?;
+        self.send(|id| Zeroizing::new(encode_unbind_request(id))).await?;
         self.stream.shutdown().await.map_err(io_error)
     }
 
-    async fn send(&mut self, encode: impl FnOnce(u32) -> Vec<u8>) -> Result<u32, Error> {
+    /// Write one request. Every request buffer is zeroized on drop (also on a
+    /// write error or a cancelled future); the type makes callers wrap it, so a
+    /// bind request can never be sent from an unwiped buffer.
+    async fn send(&mut self, encode: impl FnOnce(u32) -> Zeroizing<Vec<u8>>) -> Result<u32, Error> {
         let id = self.next_id;
         self.next_id = id.saturating_add(1);
         let request = encode(id);

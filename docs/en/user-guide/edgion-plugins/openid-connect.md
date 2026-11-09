@@ -327,6 +327,14 @@ spec:
 - `clientSecretRef`: reads from `clientSecret` / `client_secret` / `secret`
 - `sessionSecretRef`: reads from `sessionSecret` / `session_secret` / `secret`
 - `sessionSecret` must be at least 32 bytes (used for AES-256-GCM)
+- When the configured mode uses a secret, a referenced Secret without a usable
+  value is reported on the resource status: no accepted key → `ResolvedRefs=False`
+  with reason `MissingKeys`; an empty or non-UTF-8 value, or a session secret
+  shorter than 32 bytes → `DecodeError`. The client secret is checked unless the
+  plugin is bearer-only with `verificationMode: JwksOnly` and no
+  `revokeTokensOnLogout`; the session secret whenever `bearerOnly` is false. A
+  reference the mode cannot use is not checked for usable content, but missing
+  Secrets and denied references are still reported.
 
 The Controller normally resolves both references and ships their values with a
 plugin generation. The Gateway consumes those resolved values when it constructs

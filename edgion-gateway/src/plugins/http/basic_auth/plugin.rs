@@ -168,14 +168,11 @@ impl BasicAuth {
         Ok(())
     }
 
-    fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
-        if let Some(ref anonymous) = self.config.anonymous {
-            plugin_log.push("Allow anonymous");
-            let _ = set_sensitive_request_header(session, "X-Consumer-Username", anonymous);
-            let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-            return true;
-        }
-        false
+    /// Write the anonymous identity headers.
+    fn set_anonymous_headers(session: &mut dyn PluginSession, anonymous: &str) -> BasicAuthResult<()> {
+        set_sensitive_request_header(session, "X-Consumer-Username", anonymous)?;
+        set_sensitive_request_header(session, "X-Anonymous-Consumer", "true")?;
+        Ok(())
     }
 
     async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> BasicAuthResult<()> {
@@ -187,6 +184,14 @@ impl BasicAuth {
             "Unauthorized - Authentication required",
         )
         .await
+    }
+
+    /// Every 401 of this plugin: the failure delay first (one place, so no
+    /// branch can answer faster than another), then the challenge response.
+    async fn deny(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
+        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+        let _ = self.auth_failed_return(session).await;
+        PluginRunningResult::ErrTerminateRequest
     }
 }
 
@@ -200,13 +205,18 @@ impl RequestFilter for BasicAuth {
         let (username, group) = match self.authenticate_request(session) {
             Ok(result) => result,
             Err(AuthFailure::MissingHeader) => {
-                if self.handle_anonymous_access(session, plugin_log) {
+                if let Some(anonymous) = &self.config.anonymous {
+                    // A failed write must deny: a client-supplied identity
+                    // header would otherwise reach the upstream.
+                    if Self::set_anonymous_headers(session, anonymous).is_err() {
+                        plugin_log.push_err("identity header rejected");
+                        return self.deny(session).await;
+                    }
+                    plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
                 }
                 plugin_log.push("Deny no credential");
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-                let _ = self.auth_failed_return(session).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.deny(session).await;
             }
             Err(AuthFailure::BadCredentials) => {
                 // Unified PluginLog tag blocks log-grep-based enumeration (unknown user vs
@@ -217,16 +227,20 @@ impl RequestFilter for BasicAuth {
                 // with rate limiting at the deployment layer.
                 plugin_log.push("Deny bad credential");
                 // Credentials present but invalid — always reject, never anonymous
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-                let _ = self.auth_failed_return(session).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.deny(session).await;
             }
         };
 
+        // Write the identity header before the success line: a failed write
+        // denies the request (a client-supplied value must never reach the
+        // upstream) and a denied request must not carry `OK group=`. The
+        // shared delay keeps this 401 as slow as a bad-credential 401, so
+        // timing does not reveal the password check.
+        if self.set_consumer_headers(session, &username).is_err() {
+            plugin_log.push_err("identity header rejected");
+            return self.deny(session).await;
+        }
         plugin_log.push_fmt("OK group={} user {}", la![group, sensitive(&username)]);
-
-        // Set consumer headers for upstream
-        let _ = self.set_consumer_headers(session, &username);
 
         // Hide credentials if configured
         if self.config.hide_credentials {

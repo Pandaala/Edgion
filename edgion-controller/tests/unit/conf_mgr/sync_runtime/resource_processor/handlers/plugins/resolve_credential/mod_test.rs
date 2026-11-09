@@ -1,4 +1,4 @@
-use super::read_secret_utf8;
+use super::{read_secret_utf8, LDAP_BIND_PASSWORD, OIDC_CLIENT_SECRET, OIDC_SESSION_SECRET};
 use k8s_openapi::{api::core::v1::Secret, ByteString};
 use std::collections::BTreeMap;
 
@@ -17,4 +17,15 @@ fn secret_utf8_borrows_exact_first_usable_value() {
     assert_eq!(value, "  exact-secret \t");
     assert_eq!(value.as_ptr(), secret.data.as_ref().unwrap()["usable"].0.as_ptr());
     assert!(read_secret_utf8(&secret, &["missing", "invalid", "blank"]).is_none());
+}
+
+#[test]
+fn material_rule_descriptions_match_their_key_lists() {
+    for rule in [&LDAP_BIND_PASSWORD, &OIDC_CLIENT_SECRET, &OIDC_SESSION_SECRET] {
+        let expected = match rule.keys {
+            [single] => (*single).to_string(),
+            keys => format!("one of {}", keys.join(", ")),
+        };
+        assert_eq!(rule.keys_description, expected, "{}", rule.field);
+    }
 }

@@ -13,8 +13,8 @@ knowledge_type: intentional-design
 feature owns its third-party dependencies (`rskafka`; `opentelemetry*`;
 `maxminddb` + `memmap2`; `wasmtime` + `edgion-wasm`). The former `ldap` feature
 was removed on 2026-11-09 when `ldap3` was replaced by the in-tree `edgion-ldap`
-leaf: LDAP adds no third-party dependency beyond tokio's I/O traits and
-`thiserror`, which the workspace already uses, so it compiles unconditionally (see `skills/04-review/ldap-auth/regression-guards/bounded-response-parsing.md`). The canonical reference is
+leaf: LDAP adds no third-party dependency beyond tokio's I/O traits,
+`thiserror` and `zeroize`, which the workspace already uses, so it compiles unconditionally (see `skills/04-review/ldap-auth/regression-guards/bounded-response-parsing.md`). The canonical reference is
 `skills/02-features/01-binary-and-deployment/02-feature-flags.md`.
 
 When a feature is off, the module swaps in a placeholder with the same API:

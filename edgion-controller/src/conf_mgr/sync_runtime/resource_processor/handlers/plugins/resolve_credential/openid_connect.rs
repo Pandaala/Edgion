@@ -5,6 +5,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential::ca_refs::reso
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::OpenidConnectConfig;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::refs::plugin_fields::{BoundPluginEntryMut, PreparedPluginReferences};
 
@@ -48,10 +49,10 @@ fn resolve_entry(mut entry: BoundPluginEntryMut<'_>, owner: &ResourceRef, ctx: &
         (
             references
                 .oidc_client_secret()
-                .and_then(|token| read(token, &["clientSecret", "client_secret", "secret"])),
+                .and_then(|token| read(token, OpenidConnectConfig::CLIENT_SECRET_KEYS)),
             references
                 .oidc_session_secret()
-                .and_then(|token| read(token, &["sessionSecret", "session_secret", "secret"])),
+                .and_then(|token| read(token, OpenidConnectConfig::SESSION_SECRET_KEYS)),
             references.tls().map(|tls| resolve_bound_tls(ctx, owner, tls)),
         )
     };

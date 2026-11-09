@@ -125,7 +125,10 @@ enum LdapAuthError {
     InvalidCredentials,
     ConnectionFailed,
     Timeout,
-    BindFailed,
+    /// The bind did not complete with 0 or 49; the class picks the log tag.
+    BindFailed(BindFailure),
+    /// The server answered the StartTLS request with a non-success code.
+    StartTlsRejected,
     /// Outbound TLS handshake rejected by SAN pinning. Carries the verifier's reason.
     TlsSanMismatch(String),
     /// Search mode: the directory rejected the service-account credentials (rc 49).
@@ -137,12 +140,61 @@ enum LdapAuthError {
     NotInRequiredGroup,
 }
 
+/// Why a bind did not complete with result code 0 or 49.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindFailure {
+    /// The directory answered with another result code.
+    Result,
+    /// The stream closed or failed (for example a plaintext bind to an LDAPS port).
+    Transport,
+    /// A TLS alert after the handshake (rustls reports it as `InvalidData`),
+    /// for example a TLS 1.3 server rejecting the client certificate.
+    Tls,
+    /// The response violated the protocol (malformed BER, wrong message ID).
+    Protocol,
+}
+
+impl BindFailure {
+    /// Static PluginLog tag for this class.
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Result => "ldap bind fail",
+            Self::Transport => "ldap bind transport error",
+            Self::Tls => "ldap bind tls error",
+            Self::Protocol => "ldap bind protocol error",
+        }
+    }
+}
+
+/// Classify a bind error. Exhaustive on purpose: a new error variant must
+/// be classified, not silently fall into one class.
+fn bind_failure(error: &edgion_ldap::Error) -> BindFailure {
+    use edgion_ldap::Error;
+    match error {
+        Error::Io(io) if io.kind() == std::io::ErrorKind::InvalidData => BindFailure::Tls,
+        Error::Closed | Error::Io(_) => BindFailure::Transport,
+        Error::FrameTooLarge { .. }
+        | Error::Truncated
+        | Error::InvalidLength
+        | Error::UnsupportedTag
+        | Error::UnexpectedTag { .. }
+        | Error::InvalidInteger
+        | Error::InvalidUtf8
+        | Error::UnexpectedMessageId { .. }
+        | Error::StartTlsRejected(_)
+        | Error::SearchFailed(_)
+        | Error::TooManyReferences
+        | Error::EmptyDn => BindFailure::Protocol,
+    }
+}
+
 /// Classify a TLS handshake error. `bind_over` performs both the implicit-TLS
 /// (`ldaps`) and the STARTTLS handshake through `tokio-rustls`, which reports
 /// failures as `std::io::Error`. SAN verification runs only inside the
 /// handshake, so `simple_bind` never raises a SAN mismatch; a post-handshake
 /// TLS alert (for example a TLS 1.3 client-certificate rejection) surfaces as a
-/// bind stream error and maps to `BindFailed`.
+/// stream error of the first operation: `BindFailed(BindFailure::Tls)` for a
+/// bind-mode bind, `SearchFailed` for the search-mode service bind.
 fn map_ldap_connect_error(err: &std::io::Error) -> LdapAuthError {
     match outbound_san_mismatch_reason(err) {
         Some(reason) => LdapAuthError::TlsSanMismatch(reason.into_owned()),
@@ -171,12 +223,18 @@ async fn connect_admitted_ldap_tcp(
         .resolve_socket_addrs(host, port)
         .await
         .map_err(|_| LdapAuthError::ConnectionFailed)?;
-    dial_admitted_addrs(addrs).await
+    dial_admitted_addrs(addrs, TcpStream::connect).await
 }
 
-async fn dial_admitted_addrs(addrs: Vec<std::net::SocketAddr>) -> Result<TcpStream, LdapAuthError> {
+/// Try each admitted address in order and keep the first connection. Generic
+/// over the connect step so unit tests can dial in memory.
+async fn dial_admitted_addrs<S, F, Fut>(addrs: Vec<std::net::SocketAddr>, mut connect: F) -> Result<S, LdapAuthError>
+where
+    F: FnMut(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<S>>,
+{
     for addr in addrs {
-        if let Ok(stream) = TcpStream::connect(addr).await {
+        if let Ok(stream) = connect(addr).await {
             return Ok(stream);
         }
     }
@@ -196,13 +254,13 @@ async fn bind_phase<S: AsyncRead + AsyncWrite + Unpin>(
     let rc = tokio::time::timeout_at(deadline, session.simple_bind(bind_dn, password.as_bytes()))
         .await
         .map_err(|_| LdapAuthError::Timeout)?
-        .map_err(|_| LdapAuthError::BindFailed)?
+        .map_err(|error| LdapAuthError::BindFailed(bind_failure(&error)))?
         .result_code;
     let _ = tokio::time::timeout_at(deadline, session.unbind()).await;
     match rc {
         0 => Ok(()),
         49 => Err(LdapAuthError::InvalidCredentials),
-        _ => Err(LdapAuthError::BindFailed),
+        _ => Err(LdapAuthError::BindFailed(BindFailure::Result)),
     }
 }
 
@@ -289,7 +347,7 @@ async fn search_steps<S: AsyncRead + AsyncWrite + Unpin>(
     let rc = tokio::time::timeout_at(deadline, session.simple_bind(&found.dn, password.as_bytes()))
         .await
         .map_err(|_| LdapAuthError::Timeout)?
-        .map_err(|_| LdapAuthError::BindFailed)?
+        .map_err(|error| LdapAuthError::BindFailed(bind_failure(&error)))?
         .result_code;
     match (rc, &plan.groups) {
         (0, None) => Ok(identity),
@@ -310,7 +368,7 @@ async fn search_steps<S: AsyncRead + AsyncWrite + Unpin>(
             }
         }
         (49, _) => Err(LdapAuthError::InvalidCredentials),
-        _ => Err(LdapAuthError::BindFailed),
+        _ => Err(LdapAuthError::BindFailed(BindFailure::Result)),
     }
 }
 
@@ -777,10 +835,12 @@ impl LdapAuth {
                 let (stream, next_id) = tokio::time::timeout(self.timeout, async {
                     let name = server_name.clone().ok_or(LdapAuthError::ConnectionFailed)?;
                     let raw = dial.await?;
-                    let (raw, next_id) = BindSession::new(raw)
-                        .start_tls()
-                        .await
-                        .map_err(|_| LdapAuthError::ConnectionFailed)?;
+                    let (raw, next_id) = BindSession::new(raw).start_tls().await.map_err(|error| match error {
+                        edgion_ldap::Error::StartTlsRejected(_) => LdapAuthError::StartTlsRejected,
+                        // Every other StartTLS failure (stream, close, malformed
+                        // reply) keeps the unreachable class on purpose.
+                        _ => LdapAuthError::ConnectionFailed,
+                    })?;
                     let tls = connector
                         .connect(name, raw)
                         .await
@@ -832,7 +892,10 @@ impl LdapAuth {
         }
     }
 
+    /// Every 401 of this plugin: the failure delay first (one place, so no
+    /// branch can answer faster than another), then the challenge response.
     async fn unauthorized(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
+        apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(session, 401, &self.auth.auth_challenge, None, "Unauthorized").await;
         PluginRunningResult::ErrTerminateRequest
     }
@@ -841,9 +904,9 @@ impl LdapAuth {
         // Record BEFORE `send_gateway_plain_error_response`'s self-write
         // (`write_response_header`) so the queued dye header op is drained
         // by that write. This is the single choke point for every
-        // LDAP-unreachable fail-close branch (connection failed, TLS SAN
-        // mismatch, timeout, bind failure, search failure) — credential rejection
-        // (`unauthorized`) never routes through here.
+        // LDAP-unreachable fail-close branch (connection failed, StartTLS
+        // rejected, TLS SAN mismatch, timeout, bind failure, search failure);
+        // credential rejection (`unauthorized`) never routes through here.
         session.record_outcome(DyeOutcome::FailClose, "ldap-unreachable");
         let _ = send_gateway_plain_error_response(
             session,
@@ -877,12 +940,10 @@ impl RequestFilter for LdapAuth {
                 }
 
                 plugin_log.push("Deny no credentials");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
             ParseAuthResult::Invalid => {
                 plugin_log.push("Deny invalid header");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
         };
@@ -893,7 +954,6 @@ impl RequestFilter for LdapAuth {
         if credentials.username().chars().any(char::is_control) {
             drop(credentials);
             plugin_log.push("Deny bad username");
-            apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
             return self.unauthorized(session).await;
         }
 
@@ -901,7 +961,6 @@ impl RequestFilter for LdapAuth {
             if credentials.username().len() > MAX_SEARCH_USERNAME_LEN {
                 drop(credentials);
                 plugin_log.push("Deny bad username");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
             // An unresolved service secret answers with the generic 401
@@ -911,7 +970,6 @@ impl RequestFilter for LdapAuth {
                 drop(credentials);
                 plugin_log.push_err("ldap service credential unavailable");
                 record_ldap_auth_error("service_bind_fail");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             };
             self.ldap_bind(Exchange::Search {
@@ -925,7 +983,6 @@ impl RequestFilter for LdapAuth {
             let Ok(bind_dn) = self.build_bind_dn(credentials.username()) else {
                 drop(credentials);
                 plugin_log.push("Deny bad username");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             };
             let result = self
@@ -958,13 +1015,20 @@ impl RequestFilter for LdapAuth {
                 // and a wrong password, so this branch cannot — and must not appear to —
                 // discriminate username existence.
                 plugin_log.push("Deny bad credential");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
             Err(LdapAuthError::ConnectionFailed) => {
                 drop(credentials);
                 plugin_log.push_err("ldap unreachable");
                 record_ldap_auth_error("unreachable");
+                self.service_unavailable(session).await
+            }
+            Err(LdapAuthError::StartTlsRejected) => {
+                drop(credentials);
+                // Reachable server that refused StartTLS: a server or
+                // transport-mode misconfiguration, not a network failure.
+                plugin_log.push_err("ldap starttls rejected");
+                record_ldap_auth_error("starttls_rejected");
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::TlsSanMismatch(reason)) => {
@@ -983,9 +1047,9 @@ impl RequestFilter for LdapAuth {
                 record_ldap_auth_error("timeout");
                 self.service_unavailable(session).await
             }
-            Err(LdapAuthError::BindFailed) => {
+            Err(LdapAuthError::BindFailed(failure)) => {
                 drop(credentials);
-                plugin_log.push_err("ldap bind fail");
+                plugin_log.push_err(failure.tag());
                 record_ldap_auth_error("bind_fail");
                 self.service_unavailable(session).await
             }
@@ -995,7 +1059,6 @@ impl RequestFilter for LdapAuth {
                 // keeps the whole-plugin outage alertable.
                 plugin_log.push_err("ldap service bind fail");
                 record_ldap_auth_error("service_bind_fail");
-                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
             Err(LdapAuthError::SearchFailed) => {

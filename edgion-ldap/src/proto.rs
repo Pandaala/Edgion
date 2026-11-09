@@ -48,13 +48,16 @@ fn message(msg_id: u32, op_tag: u8, op_len: usize, write_op: impl FnOnce(&mut Ve
 
 #[cfg(feature = "client")]
 /// `BindRequest ::= [APPLICATION 0] { version 3, name, simple [0] password }`.
-pub(crate) fn encode_bind_request(msg_id: u32, bind_dn: &str, password: &[u8]) -> Vec<u8> {
+///
+/// The buffer holds the password, so it is returned wrapped to be zeroized on
+/// drop. `message` allocates the exact length, so no reallocation leaves a copy.
+pub(crate) fn encode_bind_request(msg_id: u32, bind_dn: &str, password: &[u8]) -> zeroize::Zeroizing<Vec<u8>> {
     let op_len = element_len(u32_content_len(LDAP_VERSION)) + element_len(bind_dn.len()) + element_len(password.len());
-    message(msg_id, BIND_REQUEST, op_len, |out| {
+    zeroize::Zeroizing::new(message(msg_id, BIND_REQUEST, op_len, |out| {
         write_u32(out, INTEGER, LDAP_VERSION);
         write_octets(out, OCTET_STRING, bind_dn.as_bytes());
         write_octets(out, CONTEXT_0_PRIMITIVE, password);
-    })
+    }))
 }
 
 #[cfg(feature = "client")]

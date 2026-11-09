@@ -45,8 +45,12 @@ through `EgressResolver`, builds the rustls `ClientConfig` with
 
 | Phase | Failure | Outcome |
 |---|---|---|
-| bind | any decode or stream error, including a post-handshake TLS alert (for example a TLS 1.3 client-certificate rejection) | `BindFailed` (`ldap bind fail`, `bind_fail`) |
-| StartTLS | decode error, `rc != 0`, peer close | `ConnectionFailed` (`ldap unreachable`, `unreachable`) |
+| bind | result code other than 0/49 | `BindFailed(Result)` (`ldap bind fail`, `bind_fail`) |
+| bind | peer close or stream I/O error | `BindFailed(Transport)` (`ldap bind transport error`, `bind_fail`) |
+| bind | `Io(InvalidData)`: a post-handshake TLS alert (for example a TLS 1.3 client-certificate rejection) | `BindFailed(Tls)` (`ldap bind tls error`, `bind_fail`) |
+| bind | any decode or protocol error | `BindFailed(Protocol)` (`ldap bind protocol error`, `bind_fail`) |
+| StartTLS | `rc != 0` (reachable server refused) | `StartTlsRejected` (`ldap starttls rejected`, `starttls_rejected`) |
+| StartTLS | decode error, peer close, stream I/O error | `ConnectionFailed` (`ldap unreachable`, `unreachable`) |
 | TLS handshake (client-side `connect` future) | SAN pinning rejects | `TlsSanMismatch` |
 | TLS handshake (client-side `connect` future) | anything else | `ConnectionFailed` |
 | either phase | deadline elapsed | `Timeout` |
@@ -88,7 +92,7 @@ asserted with its exact `edgion_ldap::Error` in
 The non-UTF-8 matchedDN vector is well-formed BER. It fails closed because
 RFC 4511 `LDAPString` is UTF-8 (user decision, 2026-11-09). Consequence: a
 non-conforming server that returns rc 49 with a non-UTF-8 diagnosticMessage
-(for example Latin-1) yields 503 `ldap bind fail`, not 401; ldap3 panicked on
+(for example Latin-1) yields 503 `ldap bind protocol error`, not 401; ldap3 panicked on
 the same bytes.
 
 ## Alternatives and limits
@@ -109,7 +113,7 @@ Behavior deltas accepted with the fix, all still fail-closed:
 
 | Case | Before | After |
 |---|---|---|
-| Malformed or non-UTF-8 reply | panic or abort | 503 `ldap bind fail` / `ldap unreachable` |
+| Malformed or non-UTF-8 reply | panic or abort | 503 `ldap bind protocol error` / `ldap unreachable` |
 | Unmatched message ID during bind | dropped; wait for close or phase-2 timeout | immediate `BindFailed` |
 | Unmatched ID or peer close during StartTLS | phase-1 `Timeout` (`ldap timeout`) | immediate `ConnectionFailed` (`ldap unreachable`) |
 | `unbind` | unbounded | bounded by the phase-2 deadline |
@@ -127,13 +131,18 @@ stream seam (`install_scripted_stream`), not loopback sockets. This follows the
 no-network rule and the precedents in
 [JWKS unit tests without network](../../oidc/regression-guards/jwks-unit-tests-without-network.md)
 and [request-mirror unit tests without network](../../request-mirror/regression-guards/unit-tests-without-network.md).
-Release builds contain no seam field, lock, or branch. Two older dial tests in the same file
+Release builds contain no seam field, lock, or branch. The dial tests
 (`dial_skips_refused_candidate_and_uses_next`, `all_refused_candidates_fail_closed`)
-still use loopback addresses; moving them behind a seam is tracked in
-`tasks/todo/ldap-auth-follow-ups.md`.
+use an in-memory connector: `dial_admitted_addrs` is generic over the connect
+step and production passes `TcpStream::connect` (monomorphized, no trait
+object). Every request buffer written by `BindSession::send` is a
+`zeroize::Zeroizing<Vec<u8>>` (the bind encoder returns that type, so the
+password bytes in the request are wiped on drop, also on error or
+cancellation); the decoded per-request credential string is not covered.
 
 The `ldap` cargo feature was removed. LDAP now compiles unconditionally because
-`edgion-ldap` adds no third-party dependency
+`edgion-ldap` adds no heavy third-party dependency (only `thiserror` and, with
+the `client` feature, tokio's I/O traits and `zeroize` (`alloc` only))
 ([optional subsystem features](../../packaging/intentional-design/gateway-optional-subsystem-features.md)).
 
 **Open limitation: interoperability.** OpenLDAP is covered by the integration

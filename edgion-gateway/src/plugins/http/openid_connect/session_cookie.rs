@@ -96,7 +96,7 @@ impl OpenidConnect {
             config.resolved_oidc_client_secret.take(),
             config.client_secret_ref.as_ref(),
             plugin_namespace,
-            &["clientSecret", "client_secret", "secret"],
+            OpenidConnectConfig::CLIENT_SECRET_KEYS,
         )
         .map_or(PreparedValue::Unavailable, PreparedValue::Ready);
 
@@ -104,7 +104,7 @@ impl OpenidConnect {
             config.resolved_session_secret.take(),
             config.session_secret_ref.as_ref(),
             plugin_namespace,
-            &["sessionSecret", "session_secret", "secret"],
+            OpenidConnectConfig::SESSION_SECRET_KEYS,
         )
         .and_then(|secret| Self::session_cipher_from_secret(&secret))
         .map_or(PreparedValue::Unavailable, PreparedValue::Ready);
@@ -116,7 +116,7 @@ impl OpenidConnect {
     }
 
     fn session_cipher_from_secret(secret: &str) -> Option<Aes256Gcm> {
-        if secret.len() < 32 {
+        if secret.len() < OpenidConnectConfig::MIN_SESSION_SECRET_LEN {
             return None;
         }
         let digest = Sha256::digest(secret.as_bytes());

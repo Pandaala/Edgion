@@ -86,7 +86,7 @@ fn auth01_vectors_and_floods_return_exact_errors() {
 #[test]
 fn bind_request_bytes_exact() {
     assert_eq!(
-        encode_bind_request(1, "cn=a", b"pw"),
+        encode_bind_request(1, "cn=a", b"pw").as_slice(),
         [
             0x30, 0x12, 0x02, 0x01, 0x01, 0x60, 0x0d, 0x02, 0x01, 0x03, 0x04, 0x04, b'c', b'n', b'=', b'a', 0x80, 0x02,
             b'p', b'w'

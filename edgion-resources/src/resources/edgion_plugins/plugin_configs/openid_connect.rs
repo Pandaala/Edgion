@@ -386,6 +386,46 @@ impl Default for OpenidConnectConfig {
 }
 
 impl OpenidConnectConfig {
+    /// Secret data keys accepted for `clientSecretRef`, in priority order
+    /// (shared by the Controller resolver, its status check and the Gateway).
+    pub const CLIENT_SECRET_KEYS: &'static [&'static str] = &["clientSecret", "client_secret", "secret"];
+    /// Secret data keys accepted for `sessionSecretRef`, in priority order.
+    pub const SESSION_SECRET_KEYS: &'static [&'static str] = &["sessionSecret", "session_secret", "secret"];
+    /// Shortest usable session secret in bytes; shorter values leave the
+    /// session cipher unavailable.
+    pub const MIN_SESSION_SECRET_LEN: usize = 32;
+
+    /// Whether this configuration requires a client secret (optional only for
+    /// bearer-only JWKS verification without token revocation).
+    fn needs_client_secret(&self) -> bool {
+        !self.bearer_only
+            || self.verification_mode == VerificationMode::IntrospectionOnly
+            || (!self.use_jwks && self.verification_mode == VerificationMode::Auto)
+            || self.revoke_tokens_on_logout
+    }
+
+    /// Whether requests may use the client secret. Broader than
+    /// [`Self::needs_client_secret`]: bearer-only `Auto` verification falls
+    /// back to introspection (which authenticates with the client secret) for
+    /// a token that is not a JWT, so a configured secret must be usable there
+    /// too even though it is not required.
+    pub fn may_use_client_secret(&self) -> bool {
+        self.needs_client_secret() || self.verification_mode == VerificationMode::Auto
+    }
+
+    /// Whether requests may use the session secret: any non-bearer-only
+    /// configuration decodes a session cookie when one is present, whatever
+    /// `unauthAction` is, even if only `Auth` mints new cookies.
+    pub fn may_use_session_secret(&self) -> bool {
+        !self.bearer_only
+    }
+
+    /// Whether this configuration requires and uses a session secret
+    /// (interactive login).
+    fn needs_session_secret(&self) -> bool {
+        !self.bearer_only && self.unauth_action == UnauthAction::Auth
+    }
+
     pub fn compile_claim_header_projection(&self) -> Result<super::ClaimHeaderProjectionPlan, &'static str> {
         let mut owned_destinations = Vec::with_capacity(4);
         if self.set_access_token_header {
@@ -561,15 +601,11 @@ impl OpenidConnectConfig {
         }
 
         // clientSecret is optional only for bearerOnly + JWKS mode.
-        let needs_client_secret = !self.bearer_only
-            || self.verification_mode == VerificationMode::IntrospectionOnly
-            || (!self.use_jwks && self.verification_mode == VerificationMode::Auto)
-            || self.revoke_tokens_on_logout;
-        if needs_client_secret && self.client_secret_ref.is_none() && self.resolved_oidc_client_secret.is_none() {
+        if self.needs_client_secret() && self.client_secret_ref.is_none() && self.resolved_oidc_client_secret.is_none()
+        {
             return Some("clientSecretRef is required for non-bearer-only/introspection flows");
         }
-        let needs_session_secret = !self.bearer_only && self.unauth_action == UnauthAction::Auth;
-        if needs_session_secret && self.session_secret_ref.is_none() && self.resolved_session_secret.is_none() {
+        if self.needs_session_secret() && self.session_secret_ref.is_none() && self.resolved_session_secret.is_none() {
             return Some("sessionSecretRef is required when unauthAction=Auth");
         }
 

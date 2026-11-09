@@ -231,6 +231,8 @@ config:
   `userid` 与 `uid` 之类的别名）；多值属性会拒绝该用户。
 - 服务账号密码被拒绝或未解析时返回通用 `401`，并计入
   `edgion_ldap_auth_errors_total{kind="service_bind_fail"}`，请为它配置告警。
+  `bindPasswordRef` 指向的 Secret 缺少可用的 `password` 值时，资源状态还会显示
+  `ResolvedRefs=False`（`MissingKeys` 或 `DecodeError`）。
 - 时序：不存在的用户会省去最后一次 bind，比密码错误快一次 LDAP 往返。
   `authFailureDelayMs` 能拖慢猜测，但无法抹平这一差异；请用 `RateLimitLocal` 限制探测。
 - 服务账号需要具备在 `searchBase` 下搜索并读取 `attribute` 的权限。
@@ -279,6 +281,7 @@ config:
 | 凭证格式非法 | `401` | 通用认证失败 |
 | LDAP 凭证错误 | `401` | 通用认证失败 |
 | LDAP 服务不可达/超时 | `503` | 服务不可用 |
+| 服务器拒绝 StartTLS（结果码非 0） | `503` | 计入 `starttls_rejected`，与 `unreachable` 区分 |
 | LDAP 目的地被出站流量策略拒绝 | `503` | 与不可达相同的通用响应体 |
 | 用户名包含控制字符 | `401` | 在发起任何 LDAP 请求之前拒绝 |
 | 搜索模式：用户名超过 1024 字节 | `401` | 在发起任何 LDAP 请求之前拒绝 |
