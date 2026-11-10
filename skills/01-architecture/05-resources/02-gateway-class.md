@@ -73,18 +73,27 @@ No special handling; passes through directly.
   `EdgionGatewayConfig`, a valid resource name and namespace unset (even explicit
   empty namespace is invalid). Invalid identity or missing EGC produces `ResolvedRefs=False` and
   `Accepted=False`, both with reason `InvalidParameters`.
-- When the EGC exists, `ResolvedRefs=True`. Its visible `globalPluginsRef`
-  resources use the shared early RequestId validator against current raw plugin
-  generations. Invalid early sources/conditions produce
-  `Accepted=False/InvalidParameters` on this owned class, never on shared EGC.
-  A missing/unwatched plugin retains the existing unknown/not-rejected behavior.
+- When the EGC exists, its visible `globalPluginsRef` resources use the shared
+  early RequestId validator against current raw plugin generations. Invalid early
+  sources/conditions produce `Accepted=False/InvalidParameters` on this owned
+  class, never on shared EGC.
+- `ResolvedRefs` reports this deployment's view of the EGC references (ctrl-proc2-02):
+  outboundTls CA/client material (`egc_tls::unavailable_material`, read-only, no
+  dependency registration), missing `globalPluginsRef` targets when EdgionPlugins
+  is watched, and trusted RealIp IpLists via the shared `resolve_ip_reference`.
+  Any unresolved entry gives `ResolvedRefs=False/InvalidParameters` listing them;
+  otherwise `ResolvedRefs=True`. Unresolved references alone never change
+  `Accepted`. Intrinsic reference errors are not repeated in ResolvedRefs.
+  What the deployment cannot see it cannot ship. The outbound TLS default is
+  aggregated across all EGCs on the Gateway, so a TLS entry here is a reference
+  diagnosis, not an exact map of affected Gateways (see the shared status guard).
 - With no parametersRef or a valid reference to an unwatched EGC kind, remove stale ResolvedRefs and do
   not reject solely for the unknown reference. Other validation errors use
   `Accepted=False/Invalid`; otherwise `Accepted=True/Accepted`.
 - `SupportedVersion`: always True, indicating support for the current Gateway API version
 
-Plugin changes/deletes requeue the registered EGC, which requeues the consuming
-classes. The class lookup reads raw EGC/plugin stores, so it does not depend on
+Plugin, Secret/ConfigMap and IpList changes/deletes requeue the registered EGC
+(its parse owns those dependency edges), which requeues the consuming classes. The class lookup reads raw EGC/plugin stores, so it does not depend on
 whether the EGC's new processed object has already been published. See the
 [shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
 

@@ -4,14 +4,17 @@
 
 #[cfg(test)]
 use crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME;
+use crate::conf_mgr::sync_runtime::resource_processor::credential::egc_tls;
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::gateway_has_class_owner;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_unknown;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    ProcessResult, ProcessorHandler, ResolvedRefsError,
 };
 use crate::conf_mgr::ControllerRuntime;
+use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::prelude_resources::{EdgionGatewayConfig, Gateway, GatewayClass};
+use edgion_resources::refs::condition_fields::PreparedConditionReferences;
 use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature, SUPPORTED_FEATURES};
 use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
 use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
@@ -25,9 +28,12 @@ enum ParamsRefState {
     /// No parametersRef, or the EdgionGatewayConfig kind is not watched — nothing to assert.
     Skip,
     /// parametersRef present, group/kind valid, and the target EdgionGatewayConfig exists.
-    Resolved,
-    /// The target exists, but a deployment-local early plugin attachment is invalid.
-    ResolvedInvalid(String),
+    /// `invalid` holds deployment-local early plugin attachment errors (Accepted);
+    /// `unresolved` lists EGC references this deployment cannot resolve (ResolvedRefs).
+    Resolved {
+        invalid: Option<String>,
+        unresolved: Vec<String>,
+    },
     /// parametersRef present but unusable: bad group/kind, or target not found.
     Invalid(String),
 }
@@ -67,8 +73,11 @@ fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState
                 ));
             };
             // Unlike the shared cluster-scoped EGC, this class is owned by one
-            // deployment and may report that deployment's local plugin validation.
+            // deployment and may report that deployment's local plugin validation
+            // and reference availability. What this deployment cannot see, it
+            // cannot ship to its Gateways, so missing means locally unusable.
             let mut errors = Vec::new();
+            let mut unresolved = egc_tls::unavailable_material(ctx, &egc);
             let plugins_watched = ctx.runtime().processor_registry.get("EdgionPlugins").is_some();
             for (index, reference) in HttpPluginAttachments::EgcGlobals(&egc)
                 .entries()
@@ -93,16 +102,65 @@ fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState
                             .map(|error| format!("globalPluginsRef {key}: {error}")),
                     ),
                     PluginTarget::Ambiguous => errors.push(format!("globalPluginsRef {key} is ambiguous")),
-                    PluginTarget::Missing => {}
+                    PluginTarget::Missing => unresolved.push(format!("globalPluginsRef {key} not found")),
                 }
             }
-            if errors.is_empty() {
-                ParamsRefState::Resolved
-            } else {
-                ParamsRefState::ResolvedInvalid(errors.join("; "))
+            unresolved.extend(unavailable_trusted_ip_lists(&egc, ctx));
+            ParamsRefState::Resolved {
+                invalid: (!errors.is_empty()).then(|| errors.join("; ")),
+                unresolved,
             }
         }
     }
+}
+
+/// Trusted RealIp lists the global EGC policy cannot read in this deployment.
+/// Intrinsic reference errors are skipped; shared EGC Accepted reports them.
+fn unavailable_trusted_ip_lists(egc: &EdgionGatewayConfig, ctx: &HandlerContext) -> Vec<String> {
+    let mut unavailable = Vec::new();
+    let trust = PreparedConditionReferences::from_gateway_config(egc);
+    let _ = trust.visit_gateway_ip(egc, |leaf| {
+        let Ok(tokens) = leaf.references() else {
+            return;
+        };
+        for (index, token) in tokens.enumerate() {
+            let mut present = false;
+            let problem = match super::ip_list_refs::resolve_ip_reference(
+                token,
+                is_reference_grant_validation_enabled(),
+                |namespace, name| {
+                    let data = ctx.runtime().edgion_config_data_store.get(Some(namespace), name);
+                    present = data.is_some();
+                    data
+                },
+                // A cluster owner never consults a namespaced ReferenceGrant.
+                |_| false,
+            )
+            .error
+            {
+                None | Some(ResolvedRefsError::InvalidReference { .. }) => continue,
+                Some(ResolvedRefsError::RefNotPermitted {
+                    target_namespace,
+                    target_name,
+                    ..
+                }) => format!(
+                    "EdgionConfigData '{target_namespace}/{target_name}' must have Cluster visibility for a cluster-scoped reference"
+                ),
+                // The shared resolver reports missing, wrong-type and disabled
+                // lists alike; tell the operator which one it is.
+                Some(ResolvedRefsError::EdgionConfigDataNotFound { namespace, name, .. }) => {
+                    if present {
+                        format!("EdgionConfigData '{namespace}/{name}' is not an enabled IpList")
+                    } else {
+                        format!("EdgionConfigData '{namespace}/{name}' not found")
+                    }
+                }
+                Some(error) => error.message(),
+            };
+            unavailable.push(format!("realIp.trustedIpRefs[{index}]: {problem}"));
+        }
+    });
+    unavailable
 }
 
 /// Deployment ownership of every class with the configured controllerName.
@@ -193,12 +251,24 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
         // ResolvedRefs condition (Edgion extension on GatewayClass; upstream Gateway API
         // defines only Accepted + SupportedVersion here).
         match &ref_state {
-            ParamsRefState::Resolved | ParamsRefState::ResolvedInvalid(_) => update_condition(
+            ParamsRefState::Resolved { unresolved, .. } if unresolved.is_empty() => update_condition(
                 &mut status.conditions,
                 condition_true(
                     condition_types::RESOLVED_REFS,
                     condition_reasons::RESOLVED_REFS,
                     "parametersRef resolved",
+                    generation,
+                ),
+            ),
+            ParamsRefState::Resolved { unresolved, .. } => update_condition(
+                &mut status.conditions,
+                condition_false(
+                    condition_types::RESOLVED_REFS,
+                    condition_reasons::INVALID_PARAMETERS,
+                    format!(
+                        "referenced EdgionGatewayConfig has unresolved references: {}",
+                        unresolved.join("; ")
+                    ),
                     generation,
                 ),
             ),
@@ -220,23 +290,24 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
 
         // Accepted condition. Precedence: a parametersRef problem yields reason
         // InvalidParameters; any other validation error keeps reason Invalid; otherwise Accepted.
-        let accepted = if let ParamsRefState::Invalid(msg) | ParamsRefState::ResolvedInvalid(msg) = &ref_state {
-            condition_false(
-                condition_types::ACCEPTED,
-                condition_reasons::INVALID_PARAMETERS,
-                msg.clone(),
-                generation,
-            )
-        } else if !validation_errors.is_empty() {
-            condition_false(
-                condition_types::ACCEPTED,
-                "Invalid",
-                validation_errors.join("; "),
-                generation,
-            )
-        } else {
-            condition_true("Accepted", "Accepted", "GatewayClass accepted", generation)
-        };
+        let accepted =
+            if let ParamsRefState::Invalid(msg) | ParamsRefState::Resolved { invalid: Some(msg), .. } = &ref_state {
+                condition_false(
+                    condition_types::ACCEPTED,
+                    condition_reasons::INVALID_PARAMETERS,
+                    msg.clone(),
+                    generation,
+                )
+            } else if !validation_errors.is_empty() {
+                condition_false(
+                    condition_types::ACCEPTED,
+                    "Invalid",
+                    validation_errors.join("; "),
+                    generation,
+                )
+            } else {
+                condition_true("Accepted", "Accepted", "GatewayClass accepted", generation)
+            };
         update_condition(&mut status.conditions, accepted);
 
         update_condition(

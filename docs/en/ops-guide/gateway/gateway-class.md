@@ -214,9 +214,28 @@ deployments' observations.
 - `EdgionGatewayConfig` is cluster-scoped, so `parametersRef` carries no `namespace`.
 - Shared `EdgionGatewayConfig.status` reports intrinsic configuration validity.
   If a visible `globalPluginsRef` has an invalid early RequestId source or condition,
-  the consuming GatewayClass reports `Accepted=False/InvalidParameters` while
-  `ResolvedRefs=True` still means the EGC exists. Check the class status for these
-  deployment-local errors. Missing/unwatched plugins are not newly rejected by this check.
+  the consuming GatewayClass reports `Accepted=False/InvalidParameters`. Check the class
+  status for these deployment-local errors.
+- The consuming GatewayClass also reports `ResolvedRefs=False/InvalidParameters` when this
+  Controller cannot resolve a reference declared by its EdgionGatewayConfig, and the message
+  names each unresolved field. The class stays `Accepted`. The condition is visible with
+  `kubectl describe gatewayclass` or `-o yaml` (the default `kubectl get` column shows only
+  `Accepted`). Covered references and what the Gateway does meanwhile:
+  - `globalPluginsRef` target not found (when EdgionPlugins is watched): requests that run
+    the class's global plugins are rejected with `500`.
+  - `realIp.trustedIpRefs` IpList missing, not an enabled IpList, or (with ReferenceGrant
+    validation enabled) not Cluster-visible:
+    forwarded headers are ignored for the class (no trusted list applies while any one is
+    unavailable), so the client IP is the direct peer.
+  - `outboundTls` CA Secret or ConfigMap missing (or a ConfigMap without `ca.crt`), or client
+    certificate Secret missing: inherited outbound TLS fails closed (unless another
+    EdgionGatewayConfig also declares CA refs; that CA conflict falls back to system roots).
+    The Gateway combines the
+    inherited TLS default from all EdgionGatewayConfigs, including ones no class references,
+    so the impact can reach other classes and is not limited to this one.
+
+  A Secret that exists but lacks the expected keys (`ca.crt`, `tls.crt`/`tls.key`) is not
+  detected here; the Gateway still rejects it at use. `dnsResolver.linkSysRef` is not checked.
 - `EdgionGatewayConfig` changes apply dynamically (no Gateway restart); see its page for the
   fields that hot-reload.
 

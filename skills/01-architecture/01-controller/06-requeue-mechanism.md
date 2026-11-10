@@ -99,15 +99,15 @@ existing dependency-before-proof-read barrier for the same publication race.
 
 ### 6. EdgionGatewayConfig → GatewayClass (params revalidation)
 
-**Purpose**: keep the GatewayClass `ResolvedRefs` / `Accepted` conditions in sync with whether the `EdgionGatewayConfig` named by `parametersRef` exists (controller-07)
+**Purpose**: keep the GatewayClass `ResolvedRefs` / `Accepted` conditions in sync with whether the `EdgionGatewayConfig` named by `parametersRef` exists (controller-07) and with this deployment's view of that EGC's references (ctrl-proc2-02). Secret/ConfigMap, EdgionConfigData (IpList) and EdgionPlugins changes requeue the registered EGC through their own reference managers, which then requeues the classes here.
 
 | Direction | Trigger | Target resources | Mechanism |
 |---|---|---|---|
-| EdgionGatewayConfig → GatewayClass | EGC create/update/delete | GatewayClass | `EdgionGatewayConfigHandler::{on_change,on_delete}` requeue **all** GatewayClasses (brute-force; cardinality ~1–3) so each re-resolves `parametersRef` |
+| EdgionGatewayConfig → GatewayClass | EGC create/update/delete, or any EGC reprocess (incl. dependency-driven requeues) | GatewayClass | `EdgionGatewayConfigHandler::{after_publish,after_unpublish}` requeue **all** GatewayClasses (brute-force; cardinality ~1–3) so each re-resolves `parametersRef` |
 | Post-init | `trigger_gatewayclass_params_revalidation()` | All GatewayClasses | One-shot run covering the case where a GatewayClass is processed before its EGC during init |
 
 **Key files**:
-- `handlers/edgion_gateway_config.rs` — on_change/on_delete: `requeue_all_gateway_classes()`
+- `handlers/edgion_gateway_config.rs` — after_publish/after_unpublish: `requeue_all_gateway_classes()`
 - `handlers/gateway_class.rs` — `update_status()` resolves `parametersRef` existence via the processor registry
 - `ref_grant/revalidation_listener.rs` — `trigger_gatewayclass_params_revalidation()`
 

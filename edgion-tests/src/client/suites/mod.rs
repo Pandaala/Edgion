@@ -139,6 +139,7 @@ pub use status::EdgionConfigDataRefGrantTestSuite;
 pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GcParamsFlapMissingTestSuite;
 pub use status::GcParamsFlapPresentTestSuite;
+pub use status::GcParamsFlapUnresolvedTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
 pub use status::HighFreqFinalTestSuite;
 pub use status::HighFreqInitialTestSuite;

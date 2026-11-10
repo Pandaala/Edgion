@@ -280,7 +280,7 @@ async fn actual_global_attachment_identity_precedes_plugin_watch_visibility() {
             ]);
             store.upsert("global".into(), Arc::new(invalid_owner));
             assert!(
-                matches!(resolve_params_ref(&gc, &ctx), ParamsRefState::ResolvedInvalid(error) if error.contains("globalPluginsRef[0]"))
+                matches!(resolve_params_ref(&gc, &ctx), ParamsRefState::Resolved { invalid: Some(error), .. } if error.contains("globalPluginsRef[0]"))
             );
             assert_eq!(plugins.reads.load(Ordering::SeqCst), 0);
         }
@@ -300,10 +300,21 @@ async fn actual_global_attachment_identity_precedes_plugin_watch_visibility() {
             store.upsert("global".into(), Arc::new(egc));
             plugins.reads.store(0, Ordering::SeqCst);
             match resolve_params_ref(&gc, &ctx) {
-                ParamsRefState::Resolved => assert!(!invalid),
-                ParamsRefState::ResolvedInvalid(error) => {
+                ParamsRefState::Resolved {
+                    invalid: None,
+                    unresolved,
+                } => {
+                    assert!(!invalid);
+                    // A valid but absent target is unresolved only when the kind is watched.
+                    assert_eq!(unresolved.len(), usize::from(watched));
+                }
+                ParamsRefState::Resolved {
+                    invalid: Some(error),
+                    unresolved,
+                } => {
                     assert!(invalid);
                     assert!(error.contains("globalPluginsRef[0]"));
+                    assert!(unresolved.is_empty());
                 }
                 _ => panic!("unexpected field outcome"),
             }

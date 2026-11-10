@@ -172,7 +172,8 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
 
     async fn after_publish(&self, _egc: &EdgionGatewayConfig, ctx: &HandlerContext) {
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
-        // EdgionGatewayConfig it references exists, so recompute them on every EGC change.
+        // EdgionGatewayConfig it references exists and on this deployment's view of the
+        // EGC's own references, so recompute them on every EGC (re)processing.
         requeue_all_gateway_classes(ctx).await;
     }
 

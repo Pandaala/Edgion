@@ -1,0 +1,13 @@
+# The EGC now declares a global plugin this deployment cannot find. The shared
+# EGC stays Accepted (intrinsic validation only); the owning GatewayClass reports
+# ResolvedRefs=False while staying Accepted. A plugin ref is used instead of an
+# outbound TLS CA ref because the Gateway aggregates the global TLS default across
+# all EGCs, which would break inherited egress for the shared test Gateway.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: params-flap-egc
+spec:
+  globalPluginsRef:
+    - name: params-flap-missing-plugin
+      namespace: edgion-test

@@ -6,6 +6,8 @@
 //             -> ResolvedRefs=False, Accepted=False
 //   present:  the EdgionGatewayConfig is created (apply updates/to_present)
 //             -> requeue flips the GatewayClass to ResolvedRefs=True, Accepted=True
+//   unresolved: the EdgionGatewayConfig declares a missing global plugin
+//             -> ResolvedRefs=False, Accepted=True (ctrl-proc2-02)
 //   gone:     the EdgionGatewayConfig is deleted again
 //             -> on_delete requeue flips it back to ResolvedRefs=False, Accepted=False
 
@@ -25,6 +27,10 @@ fn present() -> Box<dyn TestSuite> {
     Box::new(suites::GcParamsFlapPresentTestSuite)
 }
 
+fn unresolved() -> Box<dyn TestSuite> {
+    Box::new(suites::GcParamsFlapUnresolvedTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "missing",
@@ -33,6 +39,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "present",
         factory: present,
+    },
+    PhaseSuite {
+        name: "unresolved",
+        factory: unresolved,
     },
     PhaseSuite {
         name: "gone",
@@ -46,6 +56,8 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         ctx.assert_phase(scenario, "missing").await?;
         ctx.apply_dir("updates/to_present").await?;
         ctx.wait_phase(scenario, "present", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_unresolved").await?;
+        ctx.wait_phase(scenario, "unresolved", Duration::from_secs(15)).await?;
         ctx.delete_resources("delete/egc.txt").await?;
         ctx.wait_phase(scenario, "gone", Duration::from_secs(15)).await?;
         Ok(())

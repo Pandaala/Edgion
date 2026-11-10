@@ -295,7 +295,7 @@ Store IP/CIDR collections in the referenced IpList's `items` (IpGroups). Global 
 
 All references must be available before trusting the PROXY-effective peer or any forwarded hop. Missing, disabled, denied or wrong-type lists use the peer for that decision. One ConfigData snapshot covers all hops; content, visibility, deletion and restoration affect new decisions without copying CIDRs or rebuilding listeners. The central IpList compiler retains valid entries and excludes invalid ones; empty/all-invalid matchers trust no addresses.
 
-Intrinsic errors in a typed, published configuration report `Accepted=False` and disable global extraction. Kubernetes required/minItems/namespace/header constraints may reject the update at API admission instead; that rejected update never reaches the Controller/Gateway and the previous admitted generation remains active. Removed inline `trustedIps` or unknown mixed keys survive narrow preservation and invalidate typed publication. Narrow CRD preservation allows typed invalid input to replace a previously valid runtime instead of silently pruning the old field. Clean publication restores extraction. Shared EGC status describes intrinsic structure only; deployment-local list availability adds no shared condition. Nonrecursive resolution uses the rightmost parsed hop if untrusted, otherwise the peer.
+Intrinsic errors in a typed, published configuration report `Accepted=False` and disable global extraction. Kubernetes required/minItems/namespace/header constraints may reject the update at API admission instead; that rejected update never reaches the Controller/Gateway and the previous admitted generation remains active. Removed inline `trustedIps` or unknown mixed keys survive narrow preservation and invalidate typed publication. Narrow CRD preservation allows typed invalid input to replace a previously valid runtime instead of silently pruning the old field. Clean publication restores extraction. Shared EGC status describes intrinsic structure only; deployment-local list availability adds no shared condition and is reported on the consuming GatewayClass as `ResolvedRefs=False`. Nonrecursive resolution uses the rightmost parsed hop if untrusted, otherwise the peer.
 
 ### spec.securityProtect
 
@@ -361,7 +361,8 @@ same rule applies to the Gateway `edgion.io/edgion-plugins` annotation, for
 requests on that Gateway. On a listener served by a single Gateway the rejection
 happens before route matching, so it also blocks ACME HTTP-01 challenges on that
 listener. Create the `EdgionPlugins` resource before referencing it, and remove
-the reference before deleting the resource.
+the reference before deleting the resource. A missing target is reported on the
+consuming GatewayClass as `ResolvedRefs=False` (see the GatewayClass page).
 
 ### spec.accessLogExtern
 

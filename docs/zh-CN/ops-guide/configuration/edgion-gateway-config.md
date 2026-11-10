@@ -242,7 +242,7 @@ IP/CIDR 集合存储在 IpList 的 `items`（IpGroup）中。启用 ReferenceGra
 
 全部引用可用后才信任 PROXY 协议处理后的对端和转发链。列表缺失、禁用、未授权或类型错误时，本次解析使用连接对端。一次快照覆盖所有跳点；列表内容、可见性、删除及恢复在后续解析中生效，不复制 CIDR，也不重建监听器。中央编译器保留有效条目并排除无效条目；空列表或全部无效的列表不信任任何地址。
 
-实际进入类型化发布的配置若存在固有错误，会报告 `Accepted=False` 并关闭全局提取。Kubernetes 的必填项、最小数量、命名空间及请求头约束也可能直接在 API admission 拒绝更新；该更新不会到达 Controller/Gateway，上一份已获准的配置保持有效。混合旧内联 `trustedIps` 或未知字段会被窄范围保留，并使进入类型化发布的配置失效。CRD 仅在 realIp 对象内保留未知字段，让类型化无效状态替换旧运行时，而不是静默剪除旧字段。干净的新一代配置可恢复。共享 EGC 状态仅描述固有结构，不写入部署本地的列表可用性。非递归模式使用最右侧有效跳点（若其不可信），否则使用连接对端。
+实际进入类型化发布的配置若存在固有错误，会报告 `Accepted=False` 并关闭全局提取。Kubernetes 的必填项、最小数量、命名空间及请求头约束也可能直接在 API admission 拒绝更新；该更新不会到达 Controller/Gateway，上一份已获准的配置保持有效。混合旧内联 `trustedIps` 或未知字段会被窄范围保留，并使进入类型化发布的配置失效。CRD 仅在 realIp 对象内保留未知字段，让类型化无效状态替换旧运行时，而不是静默剪除旧字段。干净的新一代配置可恢复。共享 EGC 状态仅描述固有结构，不写入部署本地的列表可用性；列表可用性在消费该配置的 GatewayClass 上报告为 `ResolvedRefs=False`。非递归模式使用最右侧有效跳点（若其不可信），否则使用连接对端。
 
 ### spec.securityProtect
 
@@ -292,7 +292,7 @@ globalPluginsRef:
 全局插件的请求在到达上游之前会被拒绝并返回 `500`，而不是在缺少该插件的情况下继续放行。
 Gateway 上的 `edgion.io/edgion-plugins` 注解遵循同样的规则（作用于该 Gateway 的请求）。
 在只由单个 Gateway 使用的 listener 上，拒绝发生在路由匹配之前，因此该 listener 上的
-ACME HTTP-01 校验请求也会被拒绝。请先创建 `EdgionPlugins` 资源再引用它；删除资源前先移除引用。
+ACME HTTP-01 校验请求也会被拒绝。请先创建 `EdgionPlugins` 资源再引用它；删除资源前先移除引用。目标缺失会在消费该配置的 GatewayClass 上报告为 `ResolvedRefs=False`（见 GatewayClass 页面）。
 
 ### spec.accessLogExtern
 

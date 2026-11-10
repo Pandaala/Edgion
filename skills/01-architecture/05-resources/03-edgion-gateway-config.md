@@ -55,9 +55,9 @@ source validation errors.
 The shared cluster-scoped `Accepted` condition depends only on intrinsic config
 validation, not on which namespaces a deployment can observe. Early RequestId
 validation of referenced `globalPluginsRef` resources runs on the consuming
-GatewayClass and reports `Accepted=False/InvalidParameters` there while keeping
-`ResolvedRefs=True` when the EGC exists. Missing/unwatched plugins retain the
-existing unknown/not-rejected behavior; this is not proof of plugin availability.
+GatewayClass and reports `Accepted=False/InvalidParameters` there. Reference
+availability (TLS material, global plugin targets, trusted IpLists) is reported
+only as the consuming class's deployment-local `ResolvedRefs`, never on shared EGC.
 Plugin dependency registration stays on EGC, preserving plugin → EGC → class
 requeues. See the [shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
 
@@ -168,7 +168,7 @@ HTTPDNS provider lookup remains separate and follows the current typed store.
 
 ### Actual HTTP attachment field binding (C1)
 
-`globalPluginsRef` uses the shared `HttpPluginAttachments::EgcGlobals` actual-field adapter before dependency registration or plugin classification. The actual EGC must have a valid cluster identity (no metadata namespace); an omitted target namespace means `default`, while an explicit empty namespace is invalid. Ordered valid entries, including duplicates, remain intact. Invalid entries have no dependency or lookup. Intrinsic errors do not depend on EdgionPlugins watch visibility. GatewayClass skips when no EGC processor exists; once the EGC is acquired it checks intrinsic identity even when plugins are unwatched. Valid missing/unwatched globals retain their existing unknown/not-rejected class behavior.
+`globalPluginsRef` uses the shared `HttpPluginAttachments::EgcGlobals` actual-field adapter before dependency registration or plugin classification. The actual EGC must have a valid cluster identity (no metadata namespace); an omitted target namespace means `default`, while an explicit empty namespace is invalid. Ordered valid entries, including duplicates, remain intact. Invalid entries have no dependency or lookup. Intrinsic errors do not depend on EdgionPlugins watch visibility. GatewayClass skips when no EGC processor exists; once the EGC is acquired it checks intrinsic identity even when plugins are unwatched. A valid global target that is missing while EdgionPlugins is watched makes the consuming class `ResolvedRefs=False` (never `Accepted=False`); an unwatched plugin kind asserts nothing.
 
 ### ARCH-028 RealIp reference ownership
 

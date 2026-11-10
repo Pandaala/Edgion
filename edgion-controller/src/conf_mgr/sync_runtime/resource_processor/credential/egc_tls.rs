@@ -52,15 +52,69 @@ pub(crate) fn resolve(ctx: &HandlerContext, owner: &ResourceRef, references: Egc
     }
 }
 
-fn fetch(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    selection: EgcTlsMaterialSelection<'_>,
-) -> BoundFetchOutcome<Option<Secret>> {
-    let reference = match selection.reference().validated() {
-        Ok(reference) => reference,
-        Err(error) => return BoundFetchOutcome::Invalid(error),
+/// Deployment-local availability of the declared TLS material, for the
+/// consuming GatewayClass only. Shared EGC status must never use this: another
+/// deployment may see different namespaces. Read-only: it registers no
+/// dependency, because the EGC already owns the material recovery edges.
+/// Intrinsic reference errors are skipped; shared EGC Accepted reports them.
+pub(crate) fn unavailable_material(ctx: &HandlerContext, config: &EdgionGatewayConfig) -> Vec<String> {
+    let prepared = PreparedEgcTlsReferences::from_config(config);
+    let Ok(binding) = prepared.bind(config) else {
+        return Vec::new();
     };
+    let Ok(references) = binding.references() else {
+        return Vec::new();
+    };
+    let owner = ResourceRef::new(
+        ResourceKind::EdgionGatewayConfig,
+        None,
+        config.metadata.name.clone().unwrap_or_default(),
+    );
+    let mut unavailable = Vec::new();
+    for (index, selection) in references.ca_certificates().enumerate() {
+        if let Some(problem) = selection
+            .ok()
+            .and_then(|selection| availability(ctx, &owner, selection))
+        {
+            unavailable.push(format!("outboundTls.validation.caCertificateRefs[{index}]: {problem}"));
+        }
+    }
+    if let Some(problem) = references
+        .client_certificate()
+        .and_then(Result::ok)
+        .and_then(|selection| availability(ctx, &owner, selection))
+    {
+        unavailable.push(format!("outboundTls.clientCertificateRef: {problem}"));
+    }
+    unavailable
+}
+
+fn availability(ctx: &HandlerContext, owner: &ResourceRef, selection: EgcTlsMaterialSelection<'_>) -> Option<String> {
+    let target = locate(owner, selection).ok()?;
+    match read(ctx, &target) {
+        BoundFetchOutcome::Ok(Some(_)) => None,
+        BoundFetchOutcome::Ok(None) => Some(format!(
+            "ConfigMap '{}/{}' has no CA certificate data",
+            target.namespace, target.name
+        )),
+        _ => Some(format!(
+            "{} '{}/{}' not found",
+            if target.configmap { "ConfigMap" } else { "Secret" },
+            target.namespace,
+            target.name
+        )),
+    }
+}
+
+/// A validated EGC TLS material target.
+struct MaterialTarget {
+    configmap: bool,
+    namespace: String,
+    name: String,
+}
+
+fn locate(owner: &ResourceRef, selection: EgcTlsMaterialSelection<'_>) -> Result<MaterialTarget, ReferenceError> {
+    let reference = selection.reference().validated()?;
     if owner.kind != ResourceKind::EdgionGatewayConfig
         || owner.namespace.is_some()
         || owner.name != reference.owner().name()
@@ -69,7 +123,7 @@ fn fetch(
         || reference.source().scope() != ResourceScope::Cluster
         || reference.owner().scope() != ResourceScope::Cluster
     {
-        return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+        return Err(ReferenceError::StaleBinding);
     }
     let target = reference.target();
     let kind = target.group_kind().kind();
@@ -77,28 +131,48 @@ fn fetch(
         || !matches!(kind, "Secret" | "ConfigMap")
         || (selection.is_client_certificate() && kind != "Secret")
     {
-        return BoundFetchOutcome::Invalid(ReferenceError::UnsupportedTarget);
+        return Err(ReferenceError::UnsupportedTarget);
     }
     let Some(namespace) = target.scope().namespace() else {
-        return BoundFetchOutcome::Invalid(ReferenceError::MissingNamespace);
+        return Err(ReferenceError::MissingNamespace);
     };
-    let key = if kind == "ConfigMap" {
-        format!("{CONFIG_MAP_REF_KEY_PREFIX}{namespace}/{}", target.name())
-    } else {
-        format!("{namespace}/{}", target.name())
-    };
-    ctx.secret_ref_manager().add_ref(key, owner.clone());
-    // This capability is the exact cluster administrative selection, not a
-    // namespaced Grant exception. There is no fictitious source namespace.
-    if kind == "ConfigMap" {
-        if let Some(configmap) = ctx.runtime().configmap_store.get(Some(namespace), target.name()) {
-            return BoundFetchOutcome::Ok(configmap_ca_material(&configmap));
-        }
-    } else if let Some(secret) = ctx.runtime().secret_store.get(Some(namespace), target.name()) {
-        return BoundFetchOutcome::Ok(Some(ordinary_secret_material(secret)));
-    }
-    BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
+    Ok(MaterialTarget {
+        configmap: kind == "ConfigMap",
         namespace: namespace.to_string(),
         name: target.name().to_string(),
     })
+}
+
+fn read(ctx: &HandlerContext, target: &MaterialTarget) -> BoundFetchOutcome<Option<Secret>> {
+    // This capability is the exact cluster administrative selection, not a
+    // namespaced Grant exception. There is no fictitious source namespace.
+    if target.configmap {
+        if let Some(configmap) = ctx.runtime().configmap_store.get(Some(&target.namespace), &target.name) {
+            return BoundFetchOutcome::Ok(configmap_ca_material(&configmap));
+        }
+    } else if let Some(secret) = ctx.runtime().secret_store.get(Some(&target.namespace), &target.name) {
+        return BoundFetchOutcome::Ok(Some(ordinary_secret_material(secret)));
+    }
+    BoundFetchOutcome::Pending(PendingReason::SecretNotFound {
+        namespace: target.namespace.clone(),
+        name: target.name.clone(),
+    })
+}
+
+fn fetch(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    selection: EgcTlsMaterialSelection<'_>,
+) -> BoundFetchOutcome<Option<Secret>> {
+    let target = match locate(owner, selection) {
+        Ok(target) => target,
+        Err(error) => return BoundFetchOutcome::Invalid(error),
+    };
+    let key = if target.configmap {
+        format!("{CONFIG_MAP_REF_KEY_PREFIX}{}/{}", target.namespace, target.name)
+    } else {
+        format!("{}/{}", target.namespace, target.name)
+    };
+    ctx.secret_ref_manager().add_ref(key, owner.clone());
+    read(ctx, &target)
 }

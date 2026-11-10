@@ -71,7 +71,7 @@ an always-on metric) not worth the cross-module change. If a
 concrete production need for gateway-side config-time diagnostics surfaces,
 promote it to a proper task rather than re-opening this finding. Controller-side
 status reporting of unresolved references is out of scope for this page (see
-`tasks/improve-issues/ctrl-proc2-02-egc-status-hides-unresolved-references.md`).
+ctrl-proc2-02 in [shared config status](../../status/regression-guards/shared-config-status-deployment-independence.md)).
 
 This page covers logging only. The fail-closed semantics of a missing
 global/Gateway target are owned by

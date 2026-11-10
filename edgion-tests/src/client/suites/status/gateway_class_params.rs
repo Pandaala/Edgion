@@ -4,6 +4,8 @@
 //!                `params-flap-egc`, which does NOT exist → ResolvedRefs=False, Accepted=False.
 //! Present phase: the EdgionGatewayConfig is created → the GatewayClass is requeued (EGC→GatewayClass
 //!                requeue) and flips to ResolvedRefs=True, Accepted=True.
+//! Unresolved phase: the EdgionGatewayConfig declares a missing global plugin → the owning
+//!                GatewayClass reports ResolvedRefs=False while staying Accepted=True.
 //! The scenario then deletes the EdgionGatewayConfig again and re-asserts the Missing phase,
 //! exercising the on_delete requeue path.
 
@@ -182,5 +184,63 @@ impl TestSuite for GcParamsFlapPresentTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![Self::test_resolved_refs_true(), Self::test_accepted_true()]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unresolved phase suite (EGC exists but declares a missing global plugin)
+// ---------------------------------------------------------------------------
+
+pub struct GcParamsFlapUnresolvedTestSuite;
+
+impl GcParamsFlapUnresolvedTestSuite {
+    fn test_resolved_refs_false_but_accepted() -> TestCase {
+        TestCase::new(
+            "gc_params_flap_unresolved_reports_missing_plugin",
+            "A missing EGC global plugin should give GatewayClass ResolvedRefs=False while it stays Accepted=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match helpers::fetch_cluster_resource_status(&ctx, "GatewayClass", GC).await {
+                        Ok(gc) => {
+                            let status = serde_json::to_string(&gc["status"]).unwrap_or_default();
+                            if helpers::has_condition(&gc, "ResolvedRefs", "False")
+                                && helpers::has_condition(&gc, "Accepted", "True")
+                                && status.contains("edgion-test/params-flap-missing-plugin")
+                            {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ResolvedRefs=False naming the missing plugin, Accepted=True".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=False naming the missing plugin and Accepted=True, got status: {}",
+                                        serde_json::to_string_pretty(&gc["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+}
+
+#[async_trait]
+impl TestSuite for GcParamsFlapUnresolvedTestSuite {
+    fn name(&self) -> &str {
+        "GcParamsFlapUnresolved"
+    }
+
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![Self::test_resolved_refs_false_but_accepted()]
     }
 }

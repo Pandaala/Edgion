@@ -267,7 +267,8 @@ was removed from all of them.
 
 Re-evaluate if attachment references gain an explicit optional/required contract,
 or if Controller admission starts withholding Gateways with unresolved plugin refs.
-Related open finding: ctrl-proc2-02 (EGC status hides unresolved references).
+Related: ctrl-proc2-02 (fixed) reports missing global targets as the consuming
+GatewayClass `ResolvedRefs=False`; see [shared config status](../../status/regression-guards/shared-config-status-deployment-independence.md).
 
 ## Actual stream attachment owner boundary (C2)
 

@@ -14,7 +14,9 @@ pub use backend_tls::{
     BackendTlsStatusTestSuite, BtlspFlapInitialTestSuite, BtlspFlapInvalidTestSuite, BtlspFlapValidTestSuite,
 };
 pub use edgion_backend_traffic_policy::EbtpAncestorStatusTestSuite;
-pub use gateway_class_params::{GcParamsFlapMissingTestSuite, GcParamsFlapPresentTestSuite};
+pub use gateway_class_params::{
+    GcParamsFlapMissingTestSuite, GcParamsFlapPresentTestSuite, GcParamsFlapUnresolvedTestSuite,
+};
 pub use gateway_frontend_validation::GatewayFrontendValidationStatusTestSuite;
 pub use grpc_route::GrpcRouteStatusTestSuite;
 pub use hostname_intersection::HostnameIntersectionStatusTestSuite;

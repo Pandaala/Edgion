@@ -16,6 +16,7 @@ struct Deployment {
     egc_raw: Arc<LocalRawStore<EdgionGatewayConfig>>,
     gc_raw: Arc<LocalRawStore<GatewayClass>>,
     plugins_raw: Arc<LocalRawStore<EdgionPlugins>>,
+    runtime: Arc<ControllerRuntime>,
     class: String,
 }
 
@@ -112,6 +113,7 @@ impl Deployment {
             egc_raw,
             gc_raw,
             plugins_raw,
+            runtime,
             class: class.into(),
         }
     }
@@ -163,7 +165,8 @@ impl Deployment {
         }
     }
 
-    fn assert_class(&self, accepted: bool) {
+    /// `resolved` is false when this deployment cannot see the global plugin.
+    fn assert_class(&self, accepted: bool, resolved: bool) {
         let class = self.gc.get(&self.class).unwrap();
         let conditions = &class.status.unwrap().conditions;
         let accepted_condition = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
@@ -175,10 +178,16 @@ impl Deployment {
         if !accepted {
             assert!(accepted_condition.message.contains("globalPluginsRef team-a/ids"));
         }
-        assert_eq!(
-            conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap().status,
-            "True"
-        );
+        let resolved_refs = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        if resolved {
+            assert_eq!(resolved_refs.status, "True");
+        } else {
+            assert_eq!(
+                (&*resolved_refs.status, &*resolved_refs.reason),
+                ("False", "InvalidParameters")
+            );
+            assert!(resolved_refs.message.contains("globalPluginsRef team-a/ids not found"));
+        }
     }
 }
 
@@ -193,7 +202,7 @@ async fn shared_egc_status_converges_with_different_namespace_visibility() {
         assert_eq!(changed, pass == 0, "shared EGC diverged on pass {pass}");
         shared = next;
         deployment.drain_class().await;
-        deployment.assert_class(pass % 2 != 0);
+        deployment.assert_class(pass % 2 != 0, pass % 2 == 0);
     }
     assert_eq!(shared.status.unwrap().conditions[0].status, "True");
 }
@@ -244,7 +253,7 @@ async fn global_request_id_validation_observes_replaced_raw_generation() {
             _ => panic!("plugin dependency must reconcile EGC"),
         }
         deployment.drain_class().await;
-        deployment.assert_class(source != Some("ctx"));
+        deployment.assert_class(source != Some("ctx"), source.is_some());
         // A status-only class WATCH echo must not request another write.
         let raw = (*deployment.gc_raw.get(&deployment.class).unwrap()).clone();
         let echo = deployment
@@ -303,10 +312,10 @@ async fn bare_plugin_event_requeues_global_owner_and_class_reports_collision() {
 
 #[tokio::test]
 async fn parameters_recover_after_target_removal_and_recreation() {
-    let deployment = Deployment::new("parameters-recovery", None).await;
+    let deployment = Deployment::new("parameters-recovery", Some("traceId")).await;
     let (source, _) = deployment.process_egc(config()).await;
     deployment.drain_class().await;
-    deployment.assert_class(true);
+    deployment.assert_class(true, true);
     deployment.egc_raw.remove("shared");
     deployment.egc.on_event_key("shared".into()).await;
     let item = tokio::time::timeout(Duration::from_secs(5), deployment.egc.workqueue().dequeue())
@@ -334,7 +343,163 @@ async fn parameters_recover_after_target_removal_and_recreation() {
     }
     deployment.process_egc(source).await;
     deployment.drain_class().await;
-    deployment.assert_class(true);
+    deployment.assert_class(true, true);
+}
+
+/// ctrl-proc2-02: the shared EGC keeps intrinsic-only status, while the
+/// deployment-owned class reports every EGC reference this deployment cannot
+/// resolve (and therefore cannot ship to its Gateways), then recovers.
+#[tokio::test]
+async fn class_reports_locally_unresolved_global_references_and_recovers() {
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+    use std::collections::{HashMap, HashSet};
+    let deployment = Deployment::new("references", Some("traceId")).await;
+    let shared: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "shared", "generation": 1},
+        "spec": {
+            "globalPluginsRef": [{"name": "ids", "namespace": "team-a"}, {"name": "absent", "namespace": "team-a"}],
+            "realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": "ops"}]},
+            "outboundTls": {
+                "validation": {"caCertificateRefs": [
+                    {"kind": "Secret", "name": "ca", "namespace": "certs"},
+                    {"kind": "ConfigMap", "name": "bundle", "namespace": "certs"}
+                ]},
+                "clientCertificateRef": {"name": "client", "namespace": "certs"}
+            }
+        }
+    }))
+    .unwrap();
+    let (shared, _) = deployment.process_egc(shared).await;
+    assert!(shared
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .all(|condition| condition.type_ != "ResolvedRefs"));
+    assert_eq!(shared.status.as_ref().unwrap().conditions[0].status, "True");
+    deployment.drain_class().await;
+    let class = deployment.gc.get(&deployment.class).unwrap();
+    let conditions = &class.status.as_ref().unwrap().conditions;
+    let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+    assert_eq!(accepted.status, "True", "missing references do not reject the class");
+    let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+    assert_eq!((&*resolved.status, &*resolved.reason), ("False", "InvalidParameters"));
+    for expected in [
+        "outboundTls.validation.caCertificateRefs[0]: Secret 'certs/ca' not found",
+        "outboundTls.validation.caCertificateRefs[1]: ConfigMap 'certs/bundle' not found",
+        "outboundTls.clientCertificateRef: Secret 'certs/client' not found",
+        "globalPluginsRef team-a/absent not found",
+        "realIp.trustedIpRefs[0]: EdgionConfigData 'ops/proxies' not found",
+    ] {
+        assert!(
+            resolved.message.contains(expected),
+            "{expected} in {}",
+            resolved.message
+        );
+    }
+    assert!(!resolved.message.contains("team-a/ids"));
+
+    // A ConfigMap without CA data is reported distinctly from a missing one.
+    let empty: ConfigMap = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "bundle", "namespace": "certs"}, "data": {}
+    }))
+    .unwrap();
+    deployment
+        .runtime
+        .configmap_store
+        .replace_all(HashMap::from([("certs/bundle".into(), empty)]));
+    deployment.process_egc(shared.clone()).await;
+    deployment.drain_class().await;
+    let class = deployment.gc.get(&deployment.class).unwrap();
+    let resolved = class
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "ResolvedRefs")
+        .unwrap()
+        .clone();
+    assert!(resolved
+        .message
+        .contains("ConfigMap 'certs/bundle' has no CA certificate data"));
+
+    let secret = |name: &str| Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("certs".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    deployment.runtime.secret_store.update(
+        HashMap::from([
+            ("certs/ca".into(), secret("ca")),
+            ("certs/client".into(), secret("client")),
+        ]),
+        &HashSet::new(),
+    );
+    let bundle: ConfigMap = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "bundle", "namespace": "certs"}, "data": {"ca.crt": "pem"}
+    }))
+    .unwrap();
+    deployment
+        .runtime
+        .configmap_store
+        .replace_all(HashMap::from([("certs/bundle".into(), bundle)]));
+    let proxies = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "proxies", "namespace": "ops"},
+        "spec": {"visibility": "Cluster", "data": {"type": "IpList", "config": {"items": [{"name": "private", "cidrs": ["10.0.0.0/8"]}]}}}
+    }))
+    .unwrap();
+    deployment
+        .runtime
+        .edgion_config_data_store
+        .update(HashMap::from([("ops/proxies".into(), proxies)]), &HashSet::new());
+    let mut absent = plugins("traceId");
+    absent.metadata.name = Some("absent".into());
+    deployment.plugins_raw.upsert("team-a/absent".into(), Arc::new(absent));
+    let (_, changed) = deployment.process_egc(shared.clone()).await;
+    assert!(!changed, "local availability never changes shared EGC status");
+    deployment.drain_class().await;
+    deployment.assert_class(true, true);
+
+    // Regression direction: material that disappears flips the class back, and a
+    // present list of the wrong type is named as such rather than as missing.
+    deployment
+        .runtime
+        .secret_store
+        .update(HashMap::new(), &HashSet::from(["certs/client".into()]));
+    let wrong_type = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "proxies", "namespace": "ops"},
+        "spec": {"visibility": "Cluster", "data": {"type": "Misc", "config": {}}}
+    }))
+    .unwrap();
+    deployment
+        .runtime
+        .edgion_config_data_store
+        .update(HashMap::from([("ops/proxies".into(), wrong_type)]), &HashSet::new());
+    deployment.process_egc(shared).await;
+    deployment.drain_class().await;
+    let class = deployment.gc.get(&deployment.class).unwrap();
+    let resolved = class
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "ResolvedRefs")
+        .unwrap()
+        .clone();
+    assert_eq!(resolved.status, "False");
+    assert!(resolved
+        .message
+        .contains("outboundTls.clientCertificateRef: Secret 'certs/client' not found"));
+    assert!(resolved
+        .message
+        .contains("realIp.trustedIpRefs[0]: EdgionConfigData 'ops/proxies' is not an enabled IpList"));
+    assert!(!resolved.message.contains("certs/ca'"));
 }
 
 #[tokio::test]
