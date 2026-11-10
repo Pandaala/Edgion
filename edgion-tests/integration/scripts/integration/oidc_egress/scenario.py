@@ -700,6 +700,14 @@ metrics:
         self.start_fixture_servers(certs)
         self.create_base_resources(certs)
         self.start_processes()
+        # Gateway readiness does not wait for the initial plugin's background
+        # discovery prewarm. Its DNS resolution records a rejected candidate, so
+        # let it reach the IdP before the first phase snapshots the drop metric.
+        initial_discovery = "/oidc/initial-default-full/.well-known/openid-configuration"
+        wait_for(
+            "initial discovery prewarm",
+            lambda: self.state.snapshot()["hits"].get(initial_discovery, 0) > 0,
+        )
 
     def exercise(self):
         for branch, san in [("default", False), ("san", True)]:
