@@ -30,6 +30,7 @@ before applying a decision to current code.
 - [OpenID Connect Dial-time Egress Policy — FIXED](regression-guards/dial-time-egress-policy.md)
 - [OpenID Connect Discovery Failure Backoff — FIXED](regression-guards/discovery-failure-backoff.md)
 - [OpenID Connect JWKS unit tests isolate the outbound GET](regression-guards/jwks-unit-tests-without-network.md)
+- [OIDC JWKS interval fields are bounded at admission (auth-03)](regression-guards/jwks-interval-upper-bound.md)
 - [OIDC Outbound TLS Policy Construction Fails Closed](regression-guards/outbound-tls-policy-construction-fails-closed.md)
 - [OIDC Path Redirect URIs Ignore Untrusted `X-Forwarded-Host` — FIXED](regression-guards/redirect-uri-ignores-untrusted-forwarded-host.md)
 - [OIDC Path Redirect URIs Derive the Scheme From the Connection — FIXED](regression-guards/redirect-uri-scheme-from-connection-not-forwarded-proto.md)

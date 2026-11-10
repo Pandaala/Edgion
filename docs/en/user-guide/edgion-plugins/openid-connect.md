@@ -159,8 +159,8 @@ Operational and security notes:
 | `issuers` | Array\<String\> | none | Allowed issuer list |
 | `audiences` | Array\<String\> | none | Allowed audience list |
 | `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |
-| `jwksCacheTtl` | Integer | `300` | JWKS cache TTL (seconds) |
-| `jwksMinRefreshInterval` | Integer | `10` | Minimum JWKS refresh interval (seconds) |
+| `jwksCacheTtl` | Integer | `300` | JWKS cache TTL (seconds). Range: 1 to 31536000 (one year) |
+| `jwksMinRefreshInterval` | Integer | `10` | Minimum JWKS refresh interval (seconds). Range: 1 to 31536000 (one year) |
 | `introspectionEndpoint` | String | none | Custom introspection endpoint URL |
 | `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
 | `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |

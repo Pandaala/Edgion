@@ -209,6 +209,38 @@ fn test_validation_reject_zero_max_session_cookie_bytes() {
 }
 
 #[test]
+fn test_validation_bounds_jwks_intervals() {
+    // auth-03: unbounded values overflowed the Gateway's `Instant + Duration` JWKS deadline.
+    let base = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "my-api".to_string(),
+        bearer_only: true,
+        ..Default::default()
+    };
+    let max = super::MAX_JWKS_INTERVAL_SECS;
+    let ttl_error = Some("jwksCacheTtl must be between 1 and 31536000 seconds");
+    let refresh_error = Some("jwksMinRefreshInterval must be between 1 and 31536000 seconds");
+
+    for (ttl, refresh, expected) in [
+        (max, max, None),
+        (1, 1, None),
+        (0, 10, ttl_error),
+        (max + 1, 10, ttl_error),
+        (u64::MAX, 10, ttl_error),
+        (300, 0, refresh_error),
+        (300, max + 1, refresh_error),
+        (300, u64::MAX, refresh_error),
+    ] {
+        let cfg = OpenidConnectConfig {
+            jwks_cache_ttl: ttl,
+            jwks_min_refresh_interval: refresh,
+            ..base.clone()
+        };
+        assert_eq!(cfg.get_validation_error(), expected, "ttl={ttl} refresh={refresh}");
+    }
+}
+
+#[test]
 fn test_validation_reject_invalid_session_cookie_same_site() {
     let cfg = OpenidConnectConfig {
         discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),

@@ -20,6 +20,11 @@ pub const MAX_SESSION_COOKIE_CHUNKS: u32 = 16;
 pub const MAX_SESSION_COOKIE_TOTAL_BYTES: u64 = 32 * 1024;
 // The validation messages below spell these limits out literally.
 const _: () = assert!(MAX_SESSION_COOKIE_CHUNKS == 16 && MAX_SESSION_COOKIE_TOTAL_BYTES == 32768);
+/// Upper bound (one year, in seconds) for `jwksCacheTtl` and `jwksMinRefreshInterval`.
+/// The Gateway computes JWKS deadlines as `Instant + Duration`, which panics on overflow;
+/// bounding the operator input here keeps that arithmetic safe on every validated path.
+pub const MAX_JWKS_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
+const _: () = assert!(MAX_JWKS_INTERVAL_SECS == 31_536_000);
 
 /// Positive introspection-result cache settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -526,11 +531,11 @@ impl OpenidConnectConfig {
         if !within_budget {
             return Some("maxSessionCookieBytes * maxSessionCookieChunks must not exceed 32768");
         }
-        if self.jwks_cache_ttl == 0 {
-            return Some("jwksCacheTtl must be greater than 0");
+        if !(1..=MAX_JWKS_INTERVAL_SECS).contains(&self.jwks_cache_ttl) {
+            return Some("jwksCacheTtl must be between 1 and 31536000 seconds");
         }
-        if self.jwks_min_refresh_interval == 0 {
-            return Some("jwksMinRefreshInterval must be greater than 0");
+        if !(1..=MAX_JWKS_INTERVAL_SECS).contains(&self.jwks_min_refresh_interval) {
+            return Some("jwksMinRefreshInterval must be between 1 and 31536000 seconds");
         }
         if self.discovery_max_response_bytes == 0 {
             return Some("discoveryMaxResponseBytes must be greater than 0");

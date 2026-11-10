@@ -139,8 +139,8 @@ Cookie 中没有 access token，或到达刷新时间点时触发刷新。刷新
 | `issuers` | Array\<String\> | 无 | 允许的 issuer 列表 |
 | `audiences` | Array\<String\> | 无 | 允许的 audience 列表 |
 | `clockSkewSeconds` | Integer | `120` | 时钟偏差容差（秒） |
-| `jwksCacheTtl` | Integer | `300` | JWKS 缓存 TTL（秒） |
-| `jwksMinRefreshInterval` | Integer | `10` | JWKS 最小刷新间隔（秒） |
+| `jwksCacheTtl` | Integer | `300` | JWKS 缓存 TTL（秒），取值范围 1～31536000（一年） |
+| `jwksMinRefreshInterval` | Integer | `10` | JWKS 最小刷新间隔（秒），取值范围 1～31536000（一年） |
 | `introspectionEndpoint` | String | 无 | 自定义 Introspection 端点 URL |
 | `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection 端点认证方式。可选值：`client_secret_basic` | `client_secret_post` |
 | `introspectionCacheTtl` | Integer | `0` | Introspection 结果缓存 TTL（秒），`0` 禁用 |
